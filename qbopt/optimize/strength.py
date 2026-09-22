@@ -127,6 +127,7 @@ def reduced(
     first = taken + 1
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
+    cuts: dict[int, int] = {}
     replacements: dict[int, Op | tuple[Op, ...]] = {}
     # A carried pointer replaces an address expression with a copy from the
     # loop phi.  Its immediately-following memory use should name that phi
@@ -141,6 +142,10 @@ def reduced(
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
+        stepping = _stepping_point(body, loop, latches[0], at_of)
+        if stepping is None:
+            continue
+        step_at, cut, later = stepping
         candidates = candidate_groups[loop.header]
         # Priced, which is the half of LLVM's LSR this did not have. A
         # derived counter is a value live around the whole loop, and where
@@ -318,6 +323,10 @@ def reduced(
         # proved that updating and loading its spilled recurrence costs less
         # than recomputing it.  Do not apply the register-only budget again
         # here or those pressure-priced choices can never reach allocation.
+        # A counter's reads must come before its step: nothing it replaces may
+        # follow the step point on the way back to the header.
+        stepped = {id(op) for op in at_of[step_at].ops[cut:]} | {id(op) for at in later for op in at_of[at].ops}
+        candidates = [one for one in candidates if id(one.op) not in stepped]
         added = 0
         # One counter an expression. Reads of `t[j]` through two counters
         # stepping alike are one recurrence, and given one each, a round at a
@@ -352,20 +361,21 @@ def reduced(
                 continue
             taken += 1
             start = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
-            step = mir.Value(id=start.id + 1, at=latches[0], variable=taken, version=2)
+            step = mir.Value(id=start.id + 1, at=step_at, variable=taken, version=2)
 
             ahead.setdefault(preheader, []).extend(_starts(start, one, preheader))
             taken += _start_temporary_count(one)
-            behind.setdefault(latches[0], []).append(
+            behind.setdefault(step_at, []).append(
                 _made(
                     mir.Kind.PTR_OFFSET if one.pointer is not None else mir.Kind.ADD,
                     "" if one.pointer is not None else "add",
                     step,
                     (mir.Held(start, width), stride),
-                    latches[0],
+                    step_at,
                     one.op,
                 )
             )
+            cuts[step_at] = cut
             replacements[id(one.op)] = _copying(one.op, start, answer, width)
             if one.pointer is not None:
                 pointer_bindings.append((one.op, answer, start))
@@ -382,7 +392,9 @@ def reduced(
                 block,
                 ops=tuple(
                     _rebased(ssa.substituted(op, pointer_rebases.get(id(op), {})), wide)
-                    for op in _woven(block, ahead.get(block.at, []), behind.get(block.at, []), replacements)
+                    for op in _woven(
+                        block, ahead.get(block.at, []), behind.get(block.at, []), replacements, cuts.get(block.at)
+                    )
                 ),
             )
             for block in body.blocks
@@ -1071,19 +1083,21 @@ def _answer(body: MirBody, op: Op) -> "mir.Value | None":
     return wanted[0]
 
 
-def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> list:
+def _woven(block, ahead: list, behind: list, replacements: dict[int, Op], cut: int | None = None) -> list:
     """The block with the new counter set up and advanced, and the multiply out.
 
     `ahead` goes at the end of the preheader, after everything it may read.
-    `behind` goes before whatever leaves the latch, because a branch reads
-    the flags something before it set and a new add would be read as having
-    changed them.
+    `behind` goes at `cut`, where `_stepping_point` found no condition live,
+    or else before whatever leaves the block.
     """
     kept = [made for op in block.ops for made in _replaced(replacements.get(id(op), op))]
     if ahead or behind:
-        cut = len(kept)
-        while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
-            cut -= 1
+        if cut is None:
+            cut = len(kept)
+            while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
+                cut -= 1
+        else:
+            cut = len([made for op in block.ops[:cut] for made in _replaced(replacements.get(id(op), op))])
         if cut < len(kept):
             at = kept[cut].at
         elif kept:
@@ -1093,6 +1107,39 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
         inserted = [replace(op, at=at, absorbed=()) for op in (*ahead, *behind)]
         kept = kept[:cut] + inserted + kept[cut:]
     return kept
+
+
+def _stepping_point(body: MirBody, loop, latch: int, at_of: dict) -> tuple[int, int, set[int]] | None:
+    """Where a new counter steps, and the blocks after it: the latest point back to the header with no condition live.
+
+    An add there sets the flags, so it may not fall between a compare and the
+    branch reading it -- which, in a rotated loop, is in the block before the
+    latch.
+    """
+    predecessors = loopy.predecessors(body.blocks)
+    at, live, later = latch, frozenset(), set()
+    while True:
+        positions = _live_conditions(at_of[at].ops, live)
+        end = len(at_of[at].ops)
+        while end and at_of[at].ops[end - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
+            end -= 1
+        quiet = [index for index in range(end + 1) if not positions[index]]
+        if quiet:
+            return at, quiet[-1], later
+        before = [one for one in predecessors.get(at, ()) if one in loop.body]
+        if at == loop.header or len(before) != 1 or at_of[before[0]].succ != (at,):
+            return None
+        later.add(at)
+        at, live = before[0], positions[0]
+
+
+def _live_conditions(ops, live_out: frozenset) -> list[frozenset]:
+    """The flag values live before each operation, and after the last."""
+    live = [frozenset()] * len(ops) + [live_out]
+    for index in range(len(ops) - 1, -1, -1):
+        op = ops[index]
+        live[index] = (live[index + 1] - set(op.defines)) | {value for value in op.uses if value.flags}
+    return live
 
 
 def _local_pointer_rebases(

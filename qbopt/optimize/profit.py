@@ -7,7 +7,9 @@ frequency.  A kind without a price makes the answer unknown rather than cheap.
 
 from qbopt.model import mir
 from qbopt.analysis import loops
+from qbopt.analysis import consts
 from qbopt.analysis import liveness
+from qbopt.analysis import induction
 from qbopt.model.passes import OperationCosts
 
 # Trips assumed of a loop, and cells of a fill, whose count is not a number.
@@ -126,10 +128,16 @@ def _frequencies(body: mir.MirBody, trips: dict[int, int] | None = None) -> dict
     """Profile-free block frequencies, or ``None`` for conflicting proofs."""
     frequency = {block.at: 1 for block in body.blocks}
     trips = trips or {}
+    facts = None
     for loop in loops.loops(body.blocks, body.entry):
         exact = {trips[at] for at in loop.latches if at in trips}
         if len(exact) > 1:
             return None
+        if not exact:
+            # A loop nobody named still has its proven count: guessing ten for
+            # an 8-trip loop priced unrolling its inner loop above a 64-cell fill.
+            facts = consts.known(body) if facts is None else facts
+            exact = {induction.trip_count(body, loop, facts)} - {None}
         factor = next(iter(exact), UNKNOWN_TRIPS)
         for at in loop.body:
             if at in frequency:

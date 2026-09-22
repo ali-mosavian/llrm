@@ -211,14 +211,20 @@ def _rejection(
     latch: int,
     count: int,
     where: Where,
+    copied: mir.MirBody | None = None,
 ) -> str | None:
     """Why a structural candidate loses, or ``None`` when it wins.
 
     Keep the decision inspectable rather than returning an unexplained false:
     matmul's locally cheaper rejected peel was first mistaken for a later
     production pass because nothing recorded which gate had refused it.
+
+    `before` is what the candidate is priced against; `copied`, the body the
+    loop was copied from, is what must have lost that loop. A settled
+    `before` may already have turned it into a fill.
     """
-    if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
+    copied = before if copied is None else copied
+    if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(copied.blocks, copied.entry)):
         return "residual-loops"
     if not where.options.grows and _size(after) > _size(before):
         return "size-growth"
@@ -244,7 +250,7 @@ def _rejection(
         return "unpriced"
     total_before = dynamic_before + pressure_before
     total_after = dynamic_after + pressure_after
-    sequence = _expanded_operations(before, after, latch, count)
+    sequence = _expanded_operations(copied, after, latch, count)
     if (
         pressure_after > 0
         and where.options.max_unrolled_operations
@@ -288,20 +294,27 @@ def optimized(body: mir.MirBody, where: Where, *, optimize, tried: set[tuple], w
     if not priced(body, where):
         return body
     rejected: set[int] = set()
+    # Once settled for pricing, the loop left alone is where the fixed point is
+    # going anyway; handing it back saves redoing that work round by round.
+    baseline = None
     while True:
         candidate = expanded(body, where, where.named, skip=frozenset(rejected), tried=tried)
         if candidate is body:
-            return body
+            return baseline or body
         additions = candidate.repetitions[len(body.repetitions) :]
         if len(additions) != 1:
-            return body
+            return baseline or body
         latch, count = additions[0]
         if latch in rejected:
-            return body
+            return baseline or body
         if watch is not None:
             watch("unroll-candidate", candidate)
         result = optimize(candidate)
-        rejection = _rejection(body, result, latch, count, where)
+        # Both sides settled: the loop left as it is gets the same passes the
+        # copy does. Pricing the copy against the loop mid-round let `[0; 8, 8]`
+        # unroll into eight fills that, left alone, merge into one.
+        baseline = baseline or optimize(body)
+        rejection = _rejection(baseline, result, latch, count, where, body)
         if rejection is not None:
             if watch is not None:
                 watch(f"unroll-rejected-{rejection}", result)
@@ -309,6 +322,7 @@ def optimized(body: mir.MirBody, where: Where, *, optimize, tried: set[tuple], w
             tried.add(_signature(body, latch, count, where))
             continue
         body = result
+        baseline = None
         if watch is not None:
             watch("unroll-accepted", body)
         rejected.clear()

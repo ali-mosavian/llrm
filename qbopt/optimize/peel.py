@@ -99,13 +99,15 @@ def optimized(
     if not unroll.priced(body, where):
         return body
     rejected: set[int] = set()
+    baseline = None
     while True:
         found = _candidate(body, where, skip=frozenset(rejected), tried=tried)
         if found is None:
-            return body
+            return baseline or body
         candidate, latch, count, signature = found
         result = optimize(candidate)
-        rejection = unroll._rejection(body, result, latch, count, where)
+        baseline = baseline or optimize(body)  # settled as the copy is: see unroll.optimized
+        rejection = unroll._rejection(baseline, result, latch, count, where, body)
         if rejection is not None:
             if watch is not None:
                 watch(f"peel-rejected-{rejection}", result)
@@ -116,4 +118,5 @@ def optimized(
             watch("peel-candidate", candidate)
             watch("peel-accepted", result)
         body = result
+        baseline = None
         rejected.clear()
