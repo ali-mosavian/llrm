@@ -5,3 +5,4 @@ pub mod ir;
 pub mod lir;
 pub mod memory;
 pub mod mir;
+pub mod passes;

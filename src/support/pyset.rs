@@ -52,6 +52,13 @@ impl PyHash for bool {
     }
 }
 
+/// iced's `Register` is an `int` in Python.
+impl PyHash for iced_x86::Register {
+    fn py_hash(&self) -> i64 {
+        int_hash(*self as i64)
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Slot<T> {
     Unused,
