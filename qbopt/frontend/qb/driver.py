@@ -8,7 +8,7 @@ from pathlib import Path
 from qbopt import hir
 
 ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = ROOT / "Cargo.toml"
+MANIFEST = ROOT / "frontends" / "qb" / "Cargo.toml"
 DIALECTS = frozenset(
     one.value
     for one in (
@@ -95,6 +95,7 @@ def _options(
     array_order: str,
     huge_arrays: bool,
     checked_arrays: bool,
+    unchecked_bounds: bool,
     mbf: bool,
     alternate_math: bool,
 ) -> tuple[str, ...]:
@@ -113,6 +114,7 @@ def _options(
         array_order,
         *(("--huge-arrays",) if huge_arrays else ()),
         *(("--checked-arrays",) if checked_arrays else ()),
+        *(("--unchecked-bounds",) if unchecked_bounds else ()),
         *(("--mbf",) if mbf else ()),
         *(("--alternate-math",) if alternate_math else ()),
         *(part for directory in include_dirs for part in ("--include", str(directory))),
@@ -129,6 +131,7 @@ def syntax_checked(
     array_order: str = "column-major",
     huge_arrays: bool = False,
     checked_arrays: bool = False,
+    unchecked_bounds: bool = False,
     mbf: bool = False,
     alternate_math: bool = False,
 ) -> None:
@@ -145,6 +148,7 @@ def syntax_checked(
                 array_order=array_order,
                 huge_arrays=huge_arrays,
                 checked_arrays=checked_arrays,
+                unchecked_bounds=unchecked_bounds,
                 mbf=mbf,
                 alternate_math=alternate_math,
             ),
@@ -169,6 +173,7 @@ def parsed(
     array_order: str = "column-major",
     huge_arrays: bool = False,
     checked_arrays: bool = False,
+    unchecked_bounds: bool = False,
     mbf: bool = False,
     alternate_math: bool = False,
 ) -> hir.Program:
@@ -183,6 +188,7 @@ def parsed(
                 array_order=array_order,
                 huge_arrays=huge_arrays,
                 checked_arrays=checked_arrays,
+                unchecked_bounds=unchecked_bounds,
                 mbf=mbf,
                 alternate_math=alternate_math,
             ),

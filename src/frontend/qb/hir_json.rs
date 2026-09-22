@@ -14,11 +14,8 @@ use crate::old::hir::{
 
 /// Serializes a typed HIR program in the exact deterministic JSON layout used
 /// by the legacy QB frontend.
-pub(crate) fn write(program: &Program) -> Result<String, Error> {
-    write_cold(program, &BTreeSet::new())
-}
-
-/// `write`, marking `(function, block)` pairs the frontend expects never to run.
+///
+/// `cold` names the `(function, block)` pairs the frontend expects never to run.
 pub(crate) fn write_cold(program: &Program, cold: &BTreeSet<(String, u32)>) -> Result<String, Error> {
     if program
         .modules

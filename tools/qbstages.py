@@ -244,6 +244,7 @@ def dumped(
     array_order: str = "column-major",
     huge_arrays: bool = False,
     checked_arrays: bool = False,
+    unchecked_bounds: bool = False,
     mbf: bool = False,
     alternate_math: bool = False,
     includes: tuple[Path, ...],
@@ -256,6 +257,7 @@ def dumped(
         array_order=array_order,
         huge_arrays=huge_arrays,
         checked_arrays=checked_arrays,
+        unchecked_bounds=unchecked_bounds,
         mbf=mbf,
         alternate_math=alternate_math,
         include_dirs=includes,
@@ -325,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--array-order", choices=("column-major", "row-major"), default="column-major")
     parser.add_argument("--huge-arrays", action="store_true")
     parser.add_argument("--checked-arrays", action="store_true")
+    parser.add_argument("--unchecked-bounds", action="store_true")
     parser.add_argument("--mbf", action="store_true")
     parser.add_argument("--alternate-math", action="store_true")
     parser.add_argument("--include", action="append", default=[], type=Path)
@@ -339,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             array_order=options.array_order,
             huge_arrays=options.huge_arrays,
             checked_arrays=options.checked_arrays,
+            unchecked_bounds=options.unchecked_bounds,
             mbf=options.mbf,
             alternate_math=options.alternate_math,
             includes=tuple(options.include),

@@ -956,6 +956,7 @@ fn huge_array_option_uses_the_measured_hary_contract() {
         false,
         false,
         false,
+        false,
     )
     .unwrap();
     let huge = compile_with_options(
@@ -965,6 +966,7 @@ fn huge_array_option_uses_the_measured_hary_contract() {
         "pds71",
         false,
         true,
+        false,
         false,
         false,
         false,
@@ -992,6 +994,7 @@ fn checked_array_option_routes_static_access_through_hary() {
         false,
         false,
         false,
+        false,
     )
     .unwrap();
     let checked = compile_with_options(
@@ -1002,6 +1005,7 @@ fn checked_array_option_routes_static_access_through_hary() {
         false,
         false,
         true,
+        false,
         false,
         false,
     )
@@ -1856,6 +1860,7 @@ fn mbf_option_remaps_pack_and_unpack_as_one_audited_mode() {
         false,
         false,
         false,
+        false,
     )
     .unwrap();
     let mbf = compile_with_options(
@@ -1863,6 +1868,7 @@ fn mbf_option_remaps_pack_and_unpack_as_one_audited_mode() {
         "mbf",
         Dialect::Pds71,
         "pds71",
+        false,
         false,
         false,
         false,

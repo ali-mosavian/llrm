@@ -122,8 +122,8 @@ def _symbolic_control_body(candidate_start: int) -> mir.MirBody:
     )
 
 
-def test_symbolic_control_refuses_a_nonzero_terminal_recurrence() -> None:
-    """A recurrence seeded at 5 would make the replacement ``jne`` run until wraparound."""
+def test_symbolic_control_rebases_a_nonzero_start_recurrence() -> None:
+    """A recurrence seeded at 5 is rebased by its final value, so its last update is still zero."""
     from qbopt.analysis import induction
     from qbopt.optimize import indvars
 
@@ -132,8 +132,8 @@ def test_symbolic_control_refuses_a_nonzero_terminal_recurrence() -> None:
     (proof,) = induction.counted(body, loop)
     candidate = next(one for one in induction.basics(body, loop).values() if one != proof.counter)
 
-    assert induction.zero_terminating_control(body, loop, proof, candidate) is None
-    assert indvars.symbolically_zeroed(body) is body
+    assert induction.zero_terminating_control(body, loop, proof, candidate) is not None
+    assert indvars.symbolically_zeroed(body) is not body
 
 
 def test_symbolic_control_proves_a_zero_terminal_recurrence() -> None:
