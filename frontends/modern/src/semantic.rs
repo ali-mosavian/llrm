@@ -592,17 +592,16 @@ impl Shape {
             words.push((name, *length));
         }
         words.push(("capacity".into(), self.len()));
-        let strides = self.strides();
-        for (axis, stride) in strides[..strides.len() - 1].iter().enumerate() {
-            words.push((format!("stride{axis}"), *stride));
+        for (axis, stride) in self.strides().into_iter().enumerate() {
+            words.push((format!("stride{axis}"), stride));
         }
         words
     }
 }
 
 /// The descriptor before an array's data, or in a view before its data
-/// pointer: the dimensions, the capacity, then every stride but the last,
-/// each a u16 word. At rank one that is `[length][capacity]`.
+/// pointer: the dimensions, the capacity, then the strides, each a u16 word.
+/// At rank one that is `[length][capacity][stride]`.
 mod descriptor {
     pub fn dim(axis: u8) -> u32 {
         2 * u32::from(axis)
@@ -618,7 +617,7 @@ mod descriptor {
 
     /// The descriptor's size, and so a view's data pointer offset.
     pub fn size(rank: u8) -> u32 {
-        stride(rank, rank - 1)
+        stride(rank, rank)
     }
 }
 
@@ -2086,15 +2085,13 @@ impl<'a> FunctionCompiler<'a> {
                     place,
                     index: hir::Operand::Value(index),
                 },
-                Storage::Slice(descriptor) => {
-                    let pointer = self.slice_data_pointer(descriptor, element, 1);
-                    Storage::Reference(self.indexed_pointer(
-                        pointer,
-                        hir::Operand::Value(index),
-                        element_width,
-                        span,
-                    )?)
-                }
+                Storage::Slice(descriptor) => Storage::Reference(self.view_element(
+                    descriptor,
+                    element,
+                    1,
+                    vec![hir::Operand::Value(index)],
+                    span,
+                )?),
                 Storage::Parameter(_) | Storage::Reference(_) | Storage::ArrayView { .. } => {
                     unreachable!("checked above")
                 }
@@ -3249,29 +3246,7 @@ impl<'a> FunctionCompiler<'a> {
                 ElementAt::Pointer(self.indexed_pointer(pointer, flat, element_width, span)?)
             }
             Storage::Slice(descriptor) => {
-                let strides = (0..rank)
-                    .map(|axis| {
-                        if axis + 1 == rank {
-                            return hir::Operand::Constant(U16, 1);
-                        }
-                        let stride = self.value(TypeName::U16);
-                        self.emit(
-                            "load",
-                            vec![stride],
-                            vec![hir::Operand::IndirectPlace {
-                                base: descriptor,
-                                offset: descriptor::stride(rank, axis),
-                                type_id: U16,
-                                inbounds: false,
-                            }],
-                            None,
-                        );
-                        hir::Operand::Value(stride)
-                    })
-                    .collect();
-                let flat = self.linear(indices, strides, span)?;
-                let data = self.slice_data_pointer(descriptor, element, rank);
-                ElementAt::Pointer(self.indexed_pointer(data, flat, element_width, span)?)
+                ElementAt::Pointer(self.view_element(descriptor, element, rank, indices, span)?)
             }
             Storage::Parameter(_) | Storage::ArrayView { .. } => {
                 return Err(Diagnostic::new(span, "array has no indexable storage"))
@@ -3281,15 +3256,63 @@ impl<'a> FunctionCompiler<'a> {
         Ok((element, at))
     }
 
-    /// `sum(indices[k] * strides[k])` as a u16: the descriptor's u16 counts bound it.
+    /// The address of a view's element, through the strides its descriptor holds.
+    fn view_element(
+        &mut self,
+        descriptor: u32,
+        element: ElementType,
+        rank: u8,
+        indices: Vec<hir::Operand>,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
+        let strides = (0..rank)
+            .map(|axis| {
+                let stride = self.value(TypeName::U16);
+                self.emit(
+                    "load",
+                    vec![stride],
+                    vec![hir::Operand::IndirectPlace {
+                        base: descriptor,
+                        offset: descriptor::stride(rank, axis),
+                        type_id: U16,
+                        inbounds: false,
+                    }],
+                    None,
+                );
+                hir::Operand::Value(stride)
+            })
+            .collect::<Vec<_>>();
+        // Strides in bytes, scaled once: the offset is then one product per
+        // index, which a loop turns into one addition.
+        let width = self.types.width(element.id());
+        let bytes = strides
+            .into_iter()
+            .map(|stride| {
+                let stride = TypedOperand {
+                    operand: Some(stride),
+                    type_name: TypeName::U16,
+                };
+                let width = TypedOperand {
+                    operand: Some(hir::Operand::Constant(U16, i64::from(width))),
+                    type_name: TypeName::U16,
+                };
+                self.folded("mul", stride, width, TypeName::U16)
+            })
+            .collect();
+        let offset = self.linear(indices, bytes, span)?;
+        let data = self.slice_data_pointer(descriptor, element, rank);
+        self.indexed_pointer(data, offset, 1, span)
+    }
+
+    /// `sum(indices[k] * strides[k])` as a u16: a descriptor's u16 counts bound it.
     fn linear(
         &mut self,
         indices: Vec<hir::Operand>,
         strides: Vec<hir::Operand>,
         span: Span,
     ) -> Result<hir::Operand, Diagnostic> {
-        if indices.len() == 1 {
-            return Ok(indices.into_iter().next().expect("one index"));
+        if let ([index], [hir::Operand::Constant(_, 1)]) = (indices.as_slice(), strides.as_slice()) {
+            return Ok(index.clone());
         }
         let typed = |this: &Self, operand: &hir::Operand| match operand {
             hir::Operand::Constant(type_id, _) => *type_id,

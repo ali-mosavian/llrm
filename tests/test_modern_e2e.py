@@ -206,9 +206,9 @@ def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
     assert build(source, tmp_path / "RANKED.EXE", run=True).output == expected
 
 
-def test_native_4x4_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
-    """Quarter-step 24.8 inputs: every entry is the exact rational product."""
-    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul4.mod"
+def test_native_8x8_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
+    """The flat 24.8 matmul's inputs as 8x8 matrices: the same exact checksum."""
+    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul8.mod"
     expected = execute.run(driver.parsed(source), "main").output
-    assert expected == "1.0 1.0 1.25 -4.0\n1.5 4.0 2.75 1.0\n-0.75 2.5 0.75 2.75\n3.5 0.5 1.5 9.5\n"
-    assert build(source, tmp_path / "MM4.EXE", run=True).output == expected
+    assert expected == "matmul: 56974.0\n"
+    assert build(source, tmp_path / "MM8.EXE", run=True).output == expected

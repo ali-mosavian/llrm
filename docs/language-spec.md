@@ -568,11 +568,12 @@ A borrowed view carries a data pointer plus the required dimensions and
 strides. Slicing aliases storage and never copies implicitly.
 
 Ranks are one to four. Arrays are row-major: the last index is contiguous, so
-`a[i, j]` and `a[i, j + 1]` are neighbours. Strides count elements, and the
-last one, always 1, is not stored. A fixed array's descriptor has the same
-words as a vector's, `[dimensions][capacity][strides]`, and a borrowed
-`&[T, N]` view holds them followed by the data pointer. At rank one these are
-the familiar `[length][capacity]`.
+`a[i, j]` and `a[i, j + 1]` are neighbours. Strides count elements; every
+one is stored, the last included, so a view need not be contiguous. A fixed
+array's descriptor has the same words as a vector's,
+`[dimensions][capacity][strides]`, and a borrowed `&[T, N]` view holds them
+followed by the data pointer. At rank one these are
+`[length][capacity][stride]`.
 
 A ranked literal nests one bracket per dimension:
 
