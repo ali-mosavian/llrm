@@ -262,6 +262,17 @@ pub fn private(
             if !publishing.contains(&op.kind) && !op.barrier() && op.exits.is_empty() {
                 continue;
             }
+            // Interprocedural summaries spell a callee's reachable memory as
+            // explicit call loads/stores.  Those canonical objects are
+            // observable even when ABI physicalization has split the pointer
+            // value that originally led to them.
+            if op.kind == Kind::Call {
+                for r#ref in &op.loads {
+                    if let Some(provenance) = pointers.reference(r#ref) {
+                        published.extend(provenance.slices.into_iter().map(|one| one.object));
+                    }
+                }
+            }
             let mut values: BTreeSet<Value> = op.uses.iter().chain(&op.exits).copied().collect();
             values.extend(op.args.iter().filter_map(|arg| match arg {
                 Arg::Held(held) => Some(held.value),

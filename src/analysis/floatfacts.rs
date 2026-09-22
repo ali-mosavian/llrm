@@ -314,6 +314,7 @@ pub(crate) fn repeated(
     initial: &Cells,
     dgroup: &BTreeSet<i64>,
     known: Option<&IndexMap<Value, Known>>,
+    mut queries: Option<&mut consts::_MemoryQueries>,
 ) -> Option<Cells> {
     if *count < BigInt::from(0) || count * BigInt::from(ops.len()) > BigInt::from(100_000) {
         return None;
@@ -373,7 +374,17 @@ pub(crate) fn repeated(
                 store.args = vec![Arg::Const(Const::new(bits, reference.width))];
                 store.stores = vec![reference];
                 store.uses = Vec::new();
-                memory = consts::_kills(&memory, &store, &integers, dgroup, &no_calls, None, None, false, None);
+                memory = consts::_kills(
+                    &memory,
+                    &store,
+                    &integers,
+                    dgroup,
+                    &no_calls,
+                    None,
+                    None,
+                    false,
+                    queries.as_deref_mut(),
+                );
             } else {
                 let Some(Arg::Held(target)) = op.results.first().filter(|_| op.stores.is_empty() && op.results.len() == 1)
                 else {
@@ -467,6 +478,7 @@ pub(crate) fn loop_exits(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMa
             continue;
         }
         let count = counts.pop_first().expect("one count");
+        let mut asked = consts::memory_queries(body, &integers, dgroup);
         let initial = consts::_kills(
             &memory[&(entry.at, entry.ops.len() - 1)],
             entry.ops.last().expect("entry ops"),
@@ -476,9 +488,9 @@ pub(crate) fn loop_exits(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMa
             None,
             None,
             false,
-            None,
+            Some(&mut asked),
         );
-        let Some(last) = repeated(&latch.ops, &count, &initial, dgroup, Some(&integers)) else {
+        let Some(last) = repeated(&latch.ops, &count, &initial, dgroup, Some(&integers), Some(&mut asked)) else {
             continue;
         };
         let facts = stored

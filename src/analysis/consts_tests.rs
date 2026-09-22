@@ -229,3 +229,35 @@ fn test_a_fact_is_never_wider_than_the_operation_that_made_it() {
     assert_eq!(masked(&BigInt::from(0x1FFFF), 2), BigInt::from(0xFFFF));
     assert_eq!(Known::new(5, 2).width, 2);
 }
+
+// ---- tests/test_constant_cells.py ----
+
+#[test]
+fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
+    // A constant cell's key had no object, so it met every call's reach and died at each one.
+    use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
+
+    let address = Addr { index: 5, ..Addr::new(Space::Segment, 6) };
+    let r#static = MemoryObject {
+        identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(5)])),
+        captured: false,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let mut reference = MemRef::new(Some(address), 2);
+    reference.provenance = Some(Provenance::one_with_slice(r#static, 6, 8, 1, 1, BTreeSet::new()).unwrap());
+    let mut reach = MemRef::new(None, 0);
+    reach.provenance = Some(Provenance::one(MemoryObject::new(MemoryKind::Nonlocal)));
+    let mut store = op(0, OpCode::Operation(Operation::Move), "mov", vec![], vec![], Kind::Store);
+    store.args = vec![Arg::Const(Const::new(7, 2))];
+    store.stores = vec![reference.clone()];
+    let mut call = op(1, OpCode::Operation(Operation::Call), "", vec![], vec![], Kind::Call);
+    call.stores = vec![reach];
+    call.memory_complete = true;
+    let mut read = op(2, OpCode::Operation(Operation::Move), "mov", vec![], vec![], Kind::Load);
+    read.loads = vec![reference.clone()];
+    let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![store, call, read], vec![])]);
+
+    let before = super::cells(&body, &BTreeSet::from([5]), &IndexMap::new(), None, None, None, None, None);
+
+    assert_eq!(super::_cell(&before[&(0, 2)], &reference), Some(Known::new(7, 2)));
+}

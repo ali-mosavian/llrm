@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use num_bigint::BigInt;
 
 use crate::analysis::ranges::{Interval, covering};
-use crate::model::memory::{Provenance, Slice, SliceError};
-use crate::model::mir::{MemRef, Symbol, Value, symbolic_ref};
+use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError};
+use crate::model::mir::{MemRef, Reach, Symbol, Value, symbolic_ref};
 use crate::objectfile::module::{Addr, Space};
 
 const FLOOR: i64 = -(1_i64 << 31);
@@ -37,6 +37,8 @@ pub(crate) enum RegionPart {
     Segment(i64),
     Allocation(Symbol),
     Selector(BigInt),
+    // Only the translation to provenance uses this: DGROUP less its uncaptured segments.
+    Nonlocal,
 }
 
 /// A region is a path: a coarser prefix meets each child below it.
@@ -58,6 +60,10 @@ impl Region {
 
     fn named() -> Self {
         Self(vec![RegionPart::Named])
+    }
+
+    fn nonlocal() -> Self {
+        Self(vec![RegionPart::Nonlocal])
     }
 
     fn under(&self, other: &Self) -> bool {
@@ -492,8 +498,22 @@ pub(crate) fn overlapping(
     if typed_apart(one, other) {
         return Ok(false);
     }
+    // Canonical references carry their own object identity. Keep their base
+    // value available to the canonical range query; the legacy covering
+    // rewrite below erases it after widening the address to a byte hull.
     if one.provenance.is_some() && other.provenance.is_some() {
-        return may_alias(one, other, known, other_known, layout);
+        let apart = if one.pointer || other.pointer {
+            None
+        } else {
+            _displaced(&symbolic_ref(one), &symbolic_ref(other))
+        };
+        return match apart {
+            Some(apart) => Ok(!apart),
+            None => may_alias(one, other, known, other_known, layout),
+        };
+    }
+    if (_unescaped(one) && _through_pointer(other)) || (_unescaped(other) && _through_pointer(one)) {
+        return Ok(false);
     }
     if !one.pointer && !other.pointer {
         let have_facts = known.is_some_and(|facts| !facts.is_empty())
@@ -511,21 +531,56 @@ pub(crate) fn overlapping(
         };
         let one = symbolic_ref(&one);
         let other = symbolic_ref(&other);
-        if let (Some(one_address), Some(other_address)) = (one.addr, other.addr) {
-            if one.base == other.base
-                && one_address.space == other_address.space
-                && one_address.index == other_address.index
-                && one.segment == other.segment
-                && (one_address.space != Space::Far || one.segment.is_some())
-            {
-                let one_low = i128::from(one_address.disp);
-                let other_low = i128::from(other_address.disp);
-                return Ok(one_low < other_low + i128::from(other.width)
-                    && other_low < one_low + i128::from(one.width));
-            }
+        if let Some(apart) = _displaced(&one, &other) {
+            return Ok(!apart);
         }
     }
     may_alias(one, other, known, other_known, layout)
+}
+
+/// Python `mir._unescaped`: whether only a reference naming its objects can
+/// reach what `ref` names.
+fn _unescaped(reference: &MemRef) -> bool {
+    reference.provenance.as_ref().is_some_and(|provenance| {
+        !provenance.slices.is_empty()
+            && !provenance
+                .slices
+                .iter()
+                .any(|one| one.object.addressed || one.object.kind == MemoryKind::Absolute)
+    })
+}
+
+/// Python `mir._through_pointer`: whether `ref`'s address is a value rather
+/// than a named object plus an index.
+fn _through_pointer(reference: &MemRef) -> bool {
+    (reference.base.is_some() || reference.segment.is_some())
+        && reference
+            .addr
+            .is_none_or(|addr| matches!(addr.space, Space::Literal | Space::Far))
+}
+
+/// Python `mir._displaced`: whether two references off one base value are
+/// disjoint by displacement; `None` if not one base.
+///
+/// LLVM's constant-offset GEP compare: a fact about values, so it holds
+/// whatever object either reference names.
+fn _displaced(one: &MemRef, other: &MemRef) -> Option<bool> {
+    let (Some(one_address), Some(other_address)) = (one.addr, other.addr) else {
+        return None;
+    };
+    if one.base == other.base
+        && one_address.space == other_address.space
+        && one_address.index == other_address.index
+        && one.segment == other.segment
+        && (one_address.space != Space::Far || one.segment.is_some())
+    {
+        let one_low = i128::from(one_address.disp);
+        let other_low = i128::from(other_address.disp);
+        return Some(
+            !(one_low < other_low + i128::from(other.width) && other_low < one_low + i128::from(one.width)),
+        );
+    }
+    None
 }
 
 /// Python `addresses`: byte-region intersection for two naked addresses.
@@ -537,6 +592,160 @@ pub(crate) fn addresses(
     layout: Option<&RegionLayout>,
 ) -> Result<bool, RegionError> {
     Ok(addressed(one, one_width, layout)?.intersects(&addressed(other, other_width, layout)?))
+}
+
+/// Python `provenance`: the region set as objects, for migrating references
+/// onto provenance alone.
+///
+/// `private` are the segments no pointer reaches unless handed out: their
+/// objects are uncaptured, and a call reaches one only where `beyond` names
+/// it. `spared` are segments some call is proven to miss part of: named by
+/// every reference that reaches them, as GCC's ipa-reference does, so that
+/// the exclusion has an object to be taken from. Holes are subtracted from
+/// the objects they fall in. An exclusion from a coarse region has no object
+/// form, so it widens; see `tools/provdiff.py`.
+#[allow(dead_code)] // Called by the `mir.bodies` raise, not yet ported.
+pub(crate) fn provenance(
+    reference: &MemRef,
+    known: Option<&BTreeMap<Value, Interval>>,
+    layout: Option<&RegionLayout>,
+    private: &BTreeSet<i64>,
+    spared: &BTreeSet<i64>,
+) -> Result<Provenance, RegionError> {
+    let reference = symbolic_ref(reference);
+    let mut spans = spans(&reference, known, layout)?;
+    let root = Span::whole(Region::default(), Origin::Here);
+    if spans.contains(&root) && reference.beyond.is_some() {
+        spans.remove(&root);
+        spans.extend(_reached(reference.beyond.as_ref().expect("checked above"), layout));
+    } else if spans.contains(&root) && floor(reference.addr).is_empty() {
+        // The push area is unaddressed, so a reference that can reach it names it.
+        spans.insert(Span::whole(Region::stack(), Origin::Sp));
+    }
+    let framed = reference.excludes.iter().any(|(address, _)| address.space == Space::Frame);
+    if spans.iter().any(|one| one.region == Region::stack() && one.origin == Origin::Sp) && !framed {
+        // sp and bp displacements are not comparable: a push is anywhere in
+        // the frame, unless proven clear of the locals, which puts it in the
+        // push area alone.
+        spans.insert(Span::whole(Region::stack(), Origin::Bp));
+    }
+    let uncaptured: BTreeSet<i64> = private.union(spared).copied().collect();
+    let mut slices = BTreeSet::new();
+    for Span { region, origin, low, high } in &spans {
+        if *region == Region::dgroup() {
+            // Some segment of the group: the private ones are named, being uncaptured.
+            for one in &uncaptured {
+                let segment = Region(vec![RegionPart::Dgroup, RegionPart::Segment(*one)]);
+                slices.insert(Slice::whole(_object(&segment, &Origin::Here, &uncaptured)));
+            }
+        }
+        if *region == Region::nonlocal() {
+            for one in spared.difference(private) {
+                let segment = Region(vec![RegionPart::Dgroup, RegionPart::Segment(*one)]);
+                slices.insert(Slice::whole(_object(&segment, &Origin::Here, &uncaptured)));
+            }
+        }
+        let object = _object(region, origin, &uncaptured);
+        if (*low, *high) == WHOLE || matches!(object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal) {
+            slices.insert(Slice::whole(object));
+        } else {
+            slices.insert(Slice::new(object, *low, *high, 1, 1).map_err(RegionError::InvalidNarrowedSlice)?);
+        }
+    }
+    for (address, width) in &reference.excludes {
+        let (region, origin) = region(Some(address.space), Some(address.index), layout);
+        let hole = _object(&region, &origin, &uncaptured);
+        let high = endpoint(address.disp, *width)?;
+        slices = slices
+            .iter()
+            .flat_map(|one| _without(one, &hole, address.disp, high))
+            .collect();
+    }
+    Ok(Provenance { slices, restrict: BTreeSet::new() })
+}
+
+/// Python `_reached`: a bounded call's reach, positively: everything but the
+/// program's own segment, and that where handed out.
+fn _reached(beyond: &Reach, layout: Option<&RegionLayout>) -> BTreeSet<Span> {
+    let (owner, reaches) = beyond;
+    let mut out = BTreeSet::from([
+        Span::whole(Region::nonlocal(), Origin::Here),
+        Span::whole(Region::stack(), Origin::Sp),
+    ]);
+    if reaches.iter().any(|(segment, _)| segment == owner) {
+        let (region, origin) = region(Some(Space::Segment), Some(*owner), layout);
+        out.insert(Span::whole(region, origin));
+    }
+    out
+}
+
+/// Python `_without`.
+fn _without(one: &Slice, hole: &MemoryObject, low: i64, high: i64) -> Vec<Slice> {
+    if one.object != *hole || one.stride != 1 || high <= one.low || one.high <= low {
+        return vec![one.clone()];
+    }
+    [(one.low, low), (high, one.high)]
+        .into_iter()
+        .filter(|(start, end)| start < end)
+        .map(|(start, end)| Slice::new(one.object.clone(), start, end, 1, 1).expect("start < end"))
+        .collect()
+}
+
+/// Python `_object`.
+fn _object(region: &Region, origin: &Origin, private: &BTreeSet<i64>) -> MemoryObject {
+    let origin_name = match origin {
+        Origin::Here => String::new(),
+        Origin::Sp => "sp".to_owned(),
+        Origin::Bp => "bp".to_owned(),
+        Origin::External(index) => format!("ext:{index}"),
+    };
+    if *region == Region::stack() {
+        if *origin == Origin::Sp {
+            return MemoryObject {
+                identity: Some(Identity::Str(origin_name)),
+                addressed: false,
+                captured: false,
+                ..MemoryObject::new(MemoryKind::Stack)
+            };
+        }
+        return MemoryObject { identity: Some(Identity::Str(origin_name)), ..MemoryObject::new(MemoryKind::Frame) };
+    }
+    match region.0.as_slice() {
+        [RegionPart::Alloc, RegionPart::Allocation(symbol)] => {
+            return MemoryObject {
+                identity: Some(Identity::Tuple(vec![Identity::Str(crate::support::pyrepr::Repr::repr(symbol))])),
+                ..MemoryObject::new(MemoryKind::Allocation)
+            };
+        }
+        [RegionPart::Absolute, RegionPart::Selector(selector), ..] => {
+            let selector = i64::try_from(selector).expect("a selector is a 16-bit value");
+            return MemoryObject {
+                identity: Some(Identity::Str(format!("{selector:#06x}"))),
+                ..MemoryObject::new(MemoryKind::Absolute)
+            };
+        }
+        _ => {}
+    }
+    if *region == Region::named() {
+        return MemoryObject::new(MemoryKind::Named);
+    }
+    if let Some(RegionPart::Segment(index)) = region.0.last() {
+        return MemoryObject {
+            identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(*index)])),
+            captured: !private.contains(index),
+            ..MemoryObject::new(MemoryKind::Global)
+        };
+    }
+    if *region == Region::linked() {
+        return MemoryObject {
+            identity: (!origin_name.is_empty()).then_some(Identity::Str(origin_name)),
+            ..MemoryObject::new(MemoryKind::External)
+        };
+    }
+    if *region == Region::dgroup() || *region == Region::nonlocal() {
+        return MemoryObject::new(MemoryKind::Nonlocal);
+    }
+    MemoryObject::new(MemoryKind::Unknown)
 }
 
 fn meets(one: &Span, other: &Span) -> bool {
@@ -600,6 +809,8 @@ mod tests {
             identity: Some(Identity::Tuple(vec![Identity::Space(Space::Segment), Identity::Int(index)])),
             generation: 0,
             extent,
+            addressed: true,
+            captured: true,
         }
     }
 
@@ -1100,15 +1311,15 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_delegates_both_provenances_before_base_arithmetic() {
-        // `tests/test_mir_alias.py::test_canonical_subobjects_use_object_identity_and_byte_ranges`:
-        // equal address spellings in distinct objects are disjoint.
+    fn overlapping_settles_one_base_by_displacement_before_provenance() {
+        // One base value (none) and one displacement settle it before the
+        // objects do: Python `mir._displaced`, whatever object either names.
         let mut one = reference(address(Space::Segment, 0, 1), 2);
         one.provenance = Some(Provenance::one(object(1, Some(4))));
         let mut other = one.clone();
         other.provenance = Some(Provenance::one(object(2, Some(4))));
 
-        assert_eq!(overlapping(&one, &other, None, None, None), Ok(false));
+        assert_eq!(overlapping(&one, &other, None, None, None), Ok(true));
     }
 
     #[test]
