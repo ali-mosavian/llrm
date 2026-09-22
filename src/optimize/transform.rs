@@ -86,3 +86,41 @@ mod tests {
         assert_eq!(preheader(&body, &loop_(20, &[20])), None);
     }
 }
+
+// ---- early port (agent F) ----
+
+/// Keep opaque source ownership, but no computation or memory effect.
+///
+/// Direct port of `qbopt/optimize/transform.py:_empty_operation`.
+pub(crate) fn _empty_operation(op: &crate::model::mir::Op) -> crate::model::mir::Op {
+    use crate::model::mir::{Kind, OpCode, OrderedMap};
+    let mut result = op.clone();
+    result.op = Some(OpCode::nothing());
+    result.name.clear();
+    result.kind = Kind::Nothing;
+    result.defines.clear();
+    result.uses.clear();
+    result.array = None;
+    result.memory_values.clear();
+    result.floating = None;
+    result.floating_origin = None;
+    result.args.clear();
+    result.results.clear();
+    result.loads.clear();
+    result.stores.clear();
+    result.merges = OrderedMap::new();
+    result.source_backed = false;
+    result.raised = None;
+    result.target = None;
+    result.cases.clear();
+    result.symbol = Some(false);
+    result.args_known = true;
+    result.memory_complete = true;
+    result.reads_complete = true;
+    result.opaque_defs = Some(std::collections::BTreeSet::new());
+    result.opaque_uses = Some(std::collections::BTreeSet::new());
+    result.stack = None;
+    result.test = None;
+    result.indirect = false;
+    result
+}
