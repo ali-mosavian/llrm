@@ -1741,7 +1741,7 @@ pub fn next_id() -> u32 {
 }
 
 /// Python `_live_outs`: the source values observable at each machine exit.
-fn live_outs(body: &RaisedBody) -> BTreeMap<i64, BTreeSet<Value>> {
+pub fn live_outs(body: &RaisedBody) -> BTreeMap<i64, BTreeSet<Value>> {
     use crate::analysis::liveness as alive_at;
     use crate::model::ir::root;
 
