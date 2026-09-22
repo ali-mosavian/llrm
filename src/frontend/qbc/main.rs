@@ -21,17 +21,17 @@ const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME]
 [--unchecked-bounds] [--alternate-math] [--mbf] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
 [--dump DUMP] source";
 
-struct Arguments {
-    source: PathBuf,
-    frontend: qbstages::Frontend,
-    dump_hir: Option<PathBuf>,
-    mir: bool,
-    output: Option<PathBuf>,
-    options: Options,
-    dump: Option<PathBuf>,
+pub(super) struct Arguments {
+    pub(super) source: PathBuf,
+    pub(super) frontend: qbstages::Frontend,
+    pub(super) dump_hir: Option<PathBuf>,
+    pub(super) mir: bool,
+    pub(super) output: Option<PathBuf>,
+    pub(super) options: Options,
+    pub(super) dump: Option<PathBuf>,
 }
 
-fn parse_args(argv: &[String]) -> Result<Arguments, String> {
+pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
     let mut frontend = qbstages::Frontend {
         dialect: "vbdos".into(),
