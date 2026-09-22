@@ -602,6 +602,12 @@ fn register_repr(register: Register) -> String {
     (register as u32).to_string()
 }
 
+impl Repr for Register {
+    fn repr(&self) -> String {
+        register_repr(*self)
+    }
+}
+
 impl Operation {
     /// The member name.
     pub const fn name(self) -> &'static str {

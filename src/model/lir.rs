@@ -10,9 +10,11 @@ use std::sync::Arc;
 
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{Held, Operation, Semantics};
-use iced_x86::Register;
 
-use super::mir::{self, Arg, Kind, Op, OrderedMap};
+use indexmap::IndexMap;
+
+use super::mir::{self, Arg, Kind, Op};
+use crate::support::pyrepr::{self, Repr};
 
 /// One machine instruction, as the thing that emits it needs it.
 ///
@@ -124,16 +126,14 @@ impl Insn {
 
     /// Python `Insn.name`.
     #[must_use]
-    pub fn name(&self) -> &str {
-        self.source().map_or_else(
-            || {
-                self.what
-                    .as_ref()
-                    .and_then(|what| what.name.as_deref())
-                    .unwrap_or("")
-            },
-            |source| source.name.as_str(),
-        )
+    pub fn name(&self) -> Option<&str> {
+        if let Some(source) = self.source() {
+            return Some(source.name.as_str());
+        }
+        match &self.what {
+            Some(what) => what.name.as_deref(),
+            None => Some(""),
+        }
     }
 
     /// Python `Insn.args`.
@@ -181,6 +181,15 @@ pub struct Phi {
     pub incoming: Vec<(i64, u32)>,
 }
 
+impl Repr for Phi {
+    fn repr(&self) -> String {
+        pyrepr::dataclass(
+            "Phi",
+            &[("result", self.result.repr()), ("incoming", pyrepr::tuple(&self.incoming))],
+        )
+    }
+}
+
 /// One LIR CFG block.
 ///
 /// Direct port of `qbopt.model.lir:LirBlock`.
@@ -218,8 +227,8 @@ pub struct LirBody {
     pub name: String,
     pub entry: i64,
     pub blocks: Vec<LirBlock>,
-    pub origin: OrderedMap<u32, iced_x86::Register>,
-    pub pins: OrderedMap<u32, iced_x86::Register>,
+    pub origin: IndexMap<u32, iced_x86::Register>,
+    pub pins: IndexMap<u32, iced_x86::Register>,
     pub inputs: BTreeSet<u32>,
     pub loop_trip_counts: Vec<(i64, i64)>,
     pub ordered: bool,
@@ -233,8 +242,8 @@ impl LirBody {
         name: impl Into<String>,
         entry: i64,
         blocks: Vec<LirBlock>,
-        origin: OrderedMap<u32, iced_x86::Register>,
-        pins: OrderedMap<u32, iced_x86::Register>,
+        origin: IndexMap<u32, iced_x86::Register>,
+        pins: IndexMap<u32, iced_x86::Register>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -342,23 +351,20 @@ where
                 .is_some_and(|(start, end)| start < end)
                 .then_some(index)
         });
-        if let Some(following) = following {
-            let transfer = {
-                let first = &out[0];
-                let second = &out[following];
-                (drop(first)
-                    && first.covers.is_some()
-                    && first.spread.len() <= 1
-                    && second.spread.len() <= 1
-                    && first.covers.unwrap().1 == second.covers.unwrap().0)
-                    .then_some((first.covers.unwrap().0, second.covers.unwrap().1))
-            };
-            if let Some((first_start, second_end)) = transfer {
-                let mut replacement = (*out[following]).clone();
-                replacement.covers = Some((first_start, second_end));
-                out[following] = Arc::new(replacement);
-                out.remove(0);
-            }
+        let first = Arc::clone(&out[0]);
+        let second = following.map(|index| Arc::clone(&out[index]));
+        if drop(&first)
+            && first.covers.is_some()
+            && second.is_some()
+            && first.spread.len() <= 1
+            && second.as_ref().is_some_and(|second| second.spread.len() <= 1)
+            && first.covers.map(|covers| covers.1) == second.as_ref().and_then(|second| second.covers).map(|covers| covers.0)
+        {
+            let following = following.expect("second is not None");
+            let mut replacement = (*out[following]).clone();
+            replacement.covers = Some((first.covers.expect("checked").0, out[following].covers.expect("checked").1));
+            out[following] = Arc::new(replacement);
+            out.remove(0);
         }
     }
     out
@@ -434,7 +440,7 @@ mod tests {
         assert_eq!(lowered.source().unwrap().id, Some(44));
         assert_eq!(lowered.id(), Some(44));
         assert_eq!(lowered.kind(), Kind::Div);
-        assert_eq!(lowered.name(), "source-divmod");
+        assert_eq!(lowered.name(), Some("source-divmod"));
         assert!(lowered.args().is_empty());
         assert!(lowered.results().is_empty());
         assert!(lowered.raised().is_some());
@@ -544,5 +550,80 @@ mod tests {
         );
         assert!(Arc::ptr_eq(&result[0], &kept));
         assert!(Arc::ptr_eq(&result[1], &refused));
+    }
+
+    #[test]
+    fn without_asks_drop_of_the_first_survivor_even_with_no_heir() {
+        // Python evaluates `drop(first)` before `second is not None`; the
+        // port skipped that call, so drop saw [0, 2] instead of [0, 2, 0].
+        let first = instruction(0, Some((0, 2)));
+        let bare = instruction(2, None);
+        let calls = std::cell::RefCell::new(Vec::new());
+        let _ = without(
+            &[first, bare],
+            |one| {
+                calls.borrow_mut().push(one.at);
+                false
+            },
+            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
+        );
+        assert_eq!(*calls.borrow(), vec![0, 2, 0]);
+    }
+
+    #[test]
+    fn name_of_an_unnamed_semantics_is_none() {
+        // Python returns `what.name`, which is None here; the port said "".
+        let one = instruction(0, None);
+        assert_eq!(one.name(), None);
+    }
+
+    #[test]
+    fn stage_dump_reprs_match_python() {
+        // Expected strings printed by compile._lir_text's pieces in Python.
+        use crate::model::ir::Loc;
+        use crate::support::pyrepr::{self, Repr};
+        use iced_x86::Register;
+
+        let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming }.repr();
+        assert_eq!(phi(vec![(1, 2), (4, 5)]), "Phi(result=3, incoming=((1, 2), (4, 5)))");
+        assert_eq!(phi(vec![(1, 2)]), "Phi(result=3, incoming=((1, 2),))");
+        assert_eq!(phi(vec![]), "Phi(result=3, incoming=())");
+
+        let mut one = Insn::new(
+            16,
+            Some((16, 18)),
+            Some(Semantics {
+                name: Some("call".to_owned()),
+                sources: vec![Loc::Held(Held { value: 1, width: 2 })],
+                target: Some(5),
+                ..Semantics::new(Operation::Call)
+            }),
+            Vec::new(),
+            Vec::new(),
+        );
+        one.requires = vec![
+            (Held { value: 1, width: 2 }, Register::CX),
+            (Held { value: 7, width: 4 }, Register::EBX),
+        ];
+        one.delivers = vec![(Held { value: 9, width: 1 }, Register::AL)];
+        let line = |one: &Insn| {
+            format!(
+                "  {:4} {} req={} del={}",
+                one.at,
+                one.what.repr(),
+                pyrepr::tuple(&one.requires),
+                pyrepr::tuple(&one.delivers)
+            )
+        };
+        assert_eq!(
+            line(&one),
+            "    16 Semantics(op=<Operation.CALL: 'call'>, name='call', dests=(), \
+             sources=(Held(value=1, width=2),), target=5, indirect=False) \
+             req=((Held(value=1, width=2), 22), (Held(value=7, width=4), 40)) \
+             del=((Held(value=9, width=1), 1),)"
+        );
+        assert_eq!(line(&Insn::new(3, None, None, Vec::new(), Vec::new())), "     3 None req=() del=()");
+        assert_eq!(pyrepr::tuple::<i64>(&[2]), "(2,)");
+        assert_eq!(pyrepr::tuple::<i64>(&[2, 3]), "(2, 3)");
     }
 }
