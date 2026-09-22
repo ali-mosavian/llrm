@@ -2142,3 +2142,19 @@ fn space_string_keeps_the_measured_vbdos_runtime_boundary() {
     assert!(hir.contains("\"callee\":\"B$SPAC\""));
     assert!(hir.contains("\"callee\":\"B$SASS\""));
 }
+
+#[test]
+fn def_type_governs_the_procedures_that_follow_it() {
+    // qbdemo puts DEFDBL before SUB fracline and DEFINT after it; applying
+    // every module DEFtype at once typed fracline's parameters INTEGER and
+    // rejected its DECLARE with "declaration and definition do not agree".
+    let module = parse(
+        "declare sub fracline (y%, y1#)\r\n\
+         defint a-z\r\nfracline 1, 2\r\n\
+         defdbl a-z\r\nsub fracline (y%, y1)\r\nprint y1\r\nend sub\r\n\
+         defint a-z\r\nsub other (i)\r\nprint i\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    compile(&module, "deftype_position", Dialect::QuickBasic45, "qb45").unwrap();
+}

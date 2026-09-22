@@ -7,7 +7,7 @@ use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::dialect::Dialect;
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
-    Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
+    Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -260,6 +260,10 @@ struct Compiler {
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
     default_types: [u32; 26],
+    // The table each module-level DEFtype leaves, by source position. A
+    // procedure definition is typed by those before it; module-level code
+    // by those before the first definition, wherever they fall in it.
+    default_changes: Vec<((usize, usize), [u32; 26])>,
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
     data_entries: Vec<u32>,
@@ -322,7 +326,15 @@ pub fn compile_with_options(
         mbf,
         alternate_math,
     );
-    compiler.apply_default_types(&module.statements)?;
+    compiler.record_default_types(&module.statements)?;
+    let module_default_types = compiler.defaults_at(
+        module
+            .procedures
+            .iter()
+            .find(|procedure| !procedure.declaration)
+            .map_or((usize::MAX, 0), |procedure| source_position(procedure.span)),
+    );
+    compiler.default_types = module_default_types;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
     compiler.signatures(module)?;
@@ -334,7 +346,6 @@ pub fn compile_with_options(
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
 
-    let module_default_types = compiler.default_types;
     let module_variables = compiler.variables.clone();
     let module_constants = compiler.constants.clone();
     let module_places = compiler.functions[0].places.clone();
@@ -354,7 +365,7 @@ pub fn compile_with_options(
         } else {
             "local"
         };
-        compiler.default_types = module_default_types;
+        compiler.default_types = compiler.defaults_at(source_position(procedure.span));
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
         for parameter in &procedure.parameters {
@@ -892,6 +903,7 @@ impl Compiler {
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
             default_types: [SINGLE; 26],
+            default_changes: Vec::new(),
             option_base: 0,
             statement_entries: Vec::new(),
             data_entries: Vec::new(),
@@ -1245,6 +1257,39 @@ impl Compiler {
         Ok(self.default_types[(first - b'A') as usize])
     }
 
+    fn defaults_at(&self, position: (usize, usize)) -> [u32; 26] {
+        self.default_changes
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= position)
+            .map_or([SINGLE; 26], |(_, table)| *table)
+    }
+
+    fn record_default_types(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
+        for statement in statements {
+            let Statement::DefType {
+                type_name,
+                ranges,
+                span,
+            } = statement
+            else {
+                continue;
+            };
+            let mut table = self
+                .default_changes
+                .last()
+                .map_or([SINGLE; 26], |(_, table)| *table);
+            let selected = self.resolve_type(Some(type_name))?;
+            for (first, last) in ranges {
+                for letter in (*first as u8)..=(*last as u8) {
+                    table[(letter - b'A') as usize] = selected;
+                }
+            }
+            self.default_changes.push(((span.line, span.start), table));
+        }
+        Ok(())
+    }
+
     fn apply_default_types(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
         for statement in statements {
             let Statement::DefType {
@@ -1264,7 +1309,13 @@ impl Compiler {
     }
 
     fn signatures(&mut self, module: &Module) -> Result<(), SemanticError> {
+        let module_default_types = self.default_types;
         for procedure in &module.procedures {
+            self.default_types = if procedure.declaration {
+                module_default_types
+            } else {
+                self.defaults_at(source_position(procedure.span))
+            };
             let key = canonical(&procedure.name);
             let symbol = self
                 .signatures
@@ -1321,6 +1372,7 @@ impl Compiler {
                 self.signatures.insert(key.into(), signature);
             }
         }
+        self.default_types = module_default_types;
         Ok(())
     }
 
@@ -7364,6 +7416,10 @@ fn suffix(name: &str) -> Option<TypeName> {
         Some(b'$') => Some(TypeName::String),
         _ => None,
     }
+}
+
+fn source_position(span: Span) -> (usize, usize) {
+    (span.line, span.start)
 }
 
 fn canonical(name: &str) -> &str {
