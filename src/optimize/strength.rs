@@ -2057,7 +2057,7 @@ fn _width(op: &Op) -> u32 {
     2
 }
 
-fn _widest(args: &[Arg]) -> u32 {
+pub(crate) fn _widest(args: &[Arg]) -> u32 {
     args.iter()
         .map(|one| match one {
             Arg::Held(held) => held.width,
