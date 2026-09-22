@@ -8,7 +8,7 @@
 use super::*;
 use crate::model::ir::Operation;
 use crate::model::mir::{Const, Held, OpCode};
-use crate::model::passes::OperationCosts;
+use crate::model::passes::{OperationCosts, Options};
 
 fn op(at: i64, operation: Operation, name: &str, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut op = Op::new(at, OpCode::Operation(operation), name, defines, uses);
@@ -133,7 +133,7 @@ fn test_large_complete_peel_must_erase_its_growth_to_cross_the_profile_budget() 
     });
     let r#where = Where {
         costs,
-        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
+        options: Options { max_unroll_iterations: 16, ..Options::default() },
         ..Where::default()
     };
     let original = _loop();
@@ -157,7 +157,7 @@ fn test_default_complete_peel_budget_refuses_sc_init_sized_growth() {
 
     assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &r#where), Some("iteration-growth"));
     let unbounded = Where {
-        options: crate::model::passes::Options { max_unroll_iterations: 0, max_unrolled_operations: 0, ..crate::model::passes::Options::default() },
+        options: Options { max_unroll_iterations: 0, max_unrolled_operations: 0, ..Options::default() },
         ..r#where
     };
     assert_eq!(_rejection(&_loop(), &_straight(25), 1, 25, &unbounded), None);
@@ -173,7 +173,7 @@ fn test_bounded_complete_peel_amortizes_growth_over_its_exact_trip_count() {
     let r#where = Where {
         costs,
         registers: 6,
-        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
+        options: Options { max_unroll_iterations: 16, ..Options::default() },
         ..Where::default()
     };
 
@@ -192,7 +192,7 @@ fn test_bounded_peel_with_spill_risk_pays_its_complete_growth() {
     let r#where = Where {
         costs: costs.clone(),
         registers: 3,
-        options: crate::model::passes::Options { max_unroll_iterations: 16, ..crate::model::passes::Options::default() },
+        options: Options { max_unroll_iterations: 16, ..Options::default() },
         ..Where::default()
     };
 
@@ -212,7 +212,7 @@ fn test_spill_prone_complete_peel_respects_the_sequence_budget() {
     let r#where = Where {
         costs: costs.clone(),
         registers: 3,
-        options: crate::model::passes::Options { max_unroll_iterations: 16, max_unrolled_operations: 200, ..crate::model::passes::Options::default() },
+        options: Options { max_unroll_iterations: 16, max_unrolled_operations: 200, ..Options::default() },
         ..Where::default()
     };
 

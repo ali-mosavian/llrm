@@ -2,8 +2,6 @@
 //!
 //! Port of `qbopt/optimize/unroll.py`.
 
-// Its callers live in transform.py, not yet ported.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use indexmap::IndexMap;
@@ -11,6 +9,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::analysis::loops::{self, Loop};
+use crate::analysis::peelsize::{self, Signature};
 use crate::analysis::{consts, floatfacts, induction, ssa};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, OrderedMap, Value};
 use crate::model::passes::{MIRTransform, Where};
@@ -36,7 +35,7 @@ impl MIRTransform for Unroll {
     }
 
     fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
-        expanded(&body, &self.r#where.dgroup, &self.r#where.named(), &BTreeSet::new())
+        expanded(&body, &self.r#where, &self.r#where.named(), &BTreeSet::new(), None)
     }
 }
 
@@ -46,9 +45,10 @@ fn substitution(error: ssa::SubstitutionError) -> String {
 
 pub fn expanded(
     body: &MirBody,
-    dgroup: &BTreeSet<i64>,
+    r#where: &Where,
     calls: &IndexMap<i64, String>,
     skip: &BTreeSet<i64>,
+    tried: Option<&BTreeSet<Signature>>,
 ) -> Result<MirBody, String> {
     let blocks = body
         .blocks
@@ -56,6 +56,7 @@ pub fn expanded(
         .map(|block| (block.at, block))
         .collect::<BTreeMap<i64, &MirBlock>>();
     let predecessors = loops::predecessors(&body.blocks);
+    let dgroup = &r#where.dgroup;
     let facts = consts::known(body, Some(dgroup), Some(calls), None, None);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         if loop_.latches.len() != 1 {
@@ -204,20 +205,13 @@ pub fn expanded(
         let Some(count) = induction::trip_count(body, &loop_, &facts) else {
             continue;
         };
-        // This is only a compile-time/resource guard.  Whether the expanded
-        // body is worth keeping is decided below with the selected CPU's
-        // operation costs.  Keep enough room to evaluate a useful multi-block
-        // loop while bounding the quadratic scalar analyses on cloned MIR.
-        let emitted = repeated_ops
-            .iter()
-            .copied()
-            .chain(header.ops.iter())
-            .filter(|op| op.kind != Kind::Nothing)
-            .count();
-        if count < BigInt::from(2) || &count * BigInt::from(emitted) > BigInt::from(512) {
+        if count < BigInt::from(2) || !peelsize::admitted(body, &loop_, &count, &facts, r#where) {
             continue;
         }
-        let count = count.to_i64().expect("bounded above");
+        if tried.is_some_and(|tried| tried.contains(&peelsize::signature(body, &loop_, &count, &facts))) {
+            continue;
+        }
+        let count = count.to_i64().expect("count fits");
         if header.phis.iter().any(|phi| {
             phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([entry, latch.at])
         }) {
@@ -295,7 +289,13 @@ pub(crate) fn _rejection(
     if loops::loops(&after.blocks, Some(after.entry)).len() >= loops::loops(&before.blocks, Some(before.entry)).len() {
         return Some("residual-loops");
     }
-    if r#where.options.max_unroll_iterations != 0 && count > r#where.options.max_unroll_iterations && _size(after) > _size(before) {
+    if !r#where.options.grows && _size(after) > _size(before) {
+        return Some("size-growth");
+    }
+    if r#where.options.max_unroll_iterations != 0
+        && count > r#where.options.max_unroll_iterations
+        && _size(after) > _size(before)
+    {
         // A large exact loop may still be an excellent constant-folding
         // vehicle: allow it when scalar optimization erases all expansion
         // growth. Otherwise obey the target's complete-peel budget before an
@@ -347,16 +347,23 @@ pub(crate) fn _rejection(
 }
 
 /// Repeatedly expand one profitable exact loop and re-run scalar MIR.
+///
+/// `tried` outlives this call: the fixed point asks every round, and a loop
+/// it already rejected, unchanged, is not asked about again.
 pub fn optimized(
     body: &MirBody,
     r#where: &Where,
     optimize: &mut dyn FnMut(MirBody) -> Result<MirBody, String>,
+    tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<MirBody, String> {
+    if !priced(body, r#where) {
+        return Ok(body.clone());
+    }
     let mut body = body.clone();
     let mut rejected = BTreeSet::<i64>::new();
     loop {
-        let candidate = expanded(&body, &r#where.dgroup, &r#where.named(), &rejected)?;
+        let candidate = expanded(&body, r#where, &r#where.named(), &rejected, Some(&tried.borrow()))?;
         if candidate == body {
             return Ok(body);
         }
@@ -377,6 +384,7 @@ pub fn optimized(
                 watch(&format!("unroll-rejected-{rejection}"), &result);
             }
             rejected.insert(latch);
+            tried.borrow_mut().insert(_signature(&body, latch, count, r#where));
             continue;
         }
         body = result;
@@ -385,6 +393,27 @@ pub fn optimized(
         }
         rejected.clear();
     }
+}
+
+/// Whether a candidate here could be accepted at all: `_rejection` prices both sides.
+pub(crate) fn priced(body: &MirBody, r#where: &Where) -> bool {
+    profit::r#static(body, &r#where.costs).is_some()
+}
+
+fn _signature(body: &MirBody, latch: i64, count: i64, r#where: &Where) -> Signature {
+    let found = loops::loops(&body.blocks, Some(body.entry))
+        .into_iter()
+        .filter(|one| one.latches.contains(&latch))
+        .collect::<Vec<_>>();
+    let [loop_] = found.as_slice() else {
+        panic!("ValueError: expected one loop with latch {latch}, found {}", found.len());
+    };
+    peelsize::signature(
+        body,
+        loop_,
+        &BigInt::from(count),
+        &consts::known(body, Some(&r#where.dgroup), Some(&r#where.named()), None, None),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

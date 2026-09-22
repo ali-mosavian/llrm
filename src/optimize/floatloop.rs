@@ -128,6 +128,7 @@ pub(crate) fn specialized(
         };
         let entry = blocks[&entry_at];
         let last = entry.ops.len().checked_sub(1).expect("the entry has an operation");
+        let mut asked = consts::memory_queries(body, &facts, dgroup);
         let initial = consts::_kills(
             &memory[&(entry_at, last)],
             &entry.ops[last],
@@ -137,7 +138,7 @@ pub(crate) fn specialized(
             None,
             None,
             false,
-            None,
+            Some(&mut asked),
         );
         let before_last = floatfacts::repeated(
             &latch.ops,
@@ -145,7 +146,7 @@ pub(crate) fn specialized(
             &initial,
             dgroup,
             Some(&facts),
-            None,
+            Some(&mut asked),
         );
         let Some(before_last) = before_last else {
             continue;

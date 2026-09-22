@@ -235,7 +235,8 @@ impl Default for Options {
 }
 
 /// Python `LEVELS`: each `-O` level's options, in declaration order.
-pub fn levels() -> IndexMap<&'static str, Options> {
+#[allow(non_snake_case)]
+pub fn LEVELS() -> IndexMap<&'static str, Options> {
     IndexMap::from([
         ("O2", Options::default()),
         ("Os", Options { level: "Os".to_owned(), grows: false, ..Options::default() }),
@@ -243,8 +244,9 @@ pub fn levels() -> IndexMap<&'static str, Options> {
 }
 
 /// Python `O2`.
-pub fn o2() -> Options {
-    levels()["O2"].clone()
+#[allow(non_snake_case)]
+pub fn O2() -> Options {
+    LEVELS()["O2"].clone()
 }
 
 /// What a pass may be told about the module it is compiling.
@@ -296,3 +298,4 @@ impl Where {
         }
     }
 }
+

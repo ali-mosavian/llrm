@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
 use crate::model::mir::{self, Arg, Held, Kind, MirBlock, MirBody, Op, Value};
-use crate::model::passes::{AddressForm, OperationCosts};
+use crate::model::passes::{AddressForm, OperationCosts, Options};
 use crate::optimize::{edges, lcssa, loopclone, profit, transform};
 
 /// `optimized`'s keyword arguments, with Python's defaults.
@@ -23,8 +23,7 @@ pub(crate) struct Optimized<'a> {
     pub index_scales: Option<BTreeSet<i64>>,
     pub address_forms: Option<Vec<AddressForm>>,
     pub costs: Option<OperationCosts>,
-    pub max_unroll_iterations: i64,
-    pub max_unrolled_operations: i64,
+    pub options: Options,
     pub watch: Option<&'a mut dyn FnMut(&str, &MirBody)>,
 }
 
@@ -45,8 +44,7 @@ pub(crate) fn optimized(
         index_scales,
         address_forms,
         costs,
-        max_unroll_iterations,
-        max_unrolled_operations,
+        options,
         watch,
     } = options;
     let mut stages = vec![("unswitch".to_owned(), candidate.clone())];
@@ -58,14 +56,12 @@ pub(crate) fn optimized(
             dgroup,
             calls,
             transform::Applied {
-                unswitch_: false,
+                options: Options { unswitch: false, ..options },
                 registers,
                 call_registers,
                 index_scales,
                 address_forms,
                 costs,
-                max_unroll_iterations,
-                max_unrolled_operations,
                 watch: Some(&mut collect),
                 ..Default::default()
             },

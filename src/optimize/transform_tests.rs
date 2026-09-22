@@ -592,8 +592,8 @@ mod pipeline_tests {
     #[test]
     fn test_long_pair_recognition_is_not_an_optimizer_pass() {
         let defaults = Applied::default();
-        assert!(defaults.drop_loads);
-        assert!(defaults.drop_stores);
+        assert!(defaults.options.drop_loads);
+        assert!(defaults.options.drop_stores);
 
         assert!(!PASSES.iter().any(|one| one == "widen"));
         assert!(PASSES.iter().any(|one| one == "drop_stores"));

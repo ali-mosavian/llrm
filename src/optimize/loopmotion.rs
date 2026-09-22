@@ -160,7 +160,7 @@ pub fn sunk_stores(
                     if !relocated.contains_key(&id(op))
                         && _unobserved(op, &operations, dgroup, bounds, Some(&intervals), &address_values)?
                     {
-                        let mut value = _exit_value(op, blocks[&source], blocks[&entry], latch, &body, dgroup, bounds)?
+                        let mut value = _exit_value(op, blocks[&source], blocks[&entry], latch, &body, dgroup, bounds, handles_errors)?
                             .map(Arg::Held);
                         if value.is_none() && blocks[&latch].ops.iter().any(|one| std::ptr::eq(op, one)) {
                             value = _invariant_value(op, &invariant, nonempty);
@@ -265,6 +265,7 @@ struct _Exit<'a> {
     blocks: BTreeMap<i64, &'a MirBlock>,
     predecessors: BTreeMap<i64, BTreeSet<i64>>,
     memory: Option<(IndexMap<(i64, usize), Cells>, IndexMap<i64, String>)>,
+    handles_errors: bool,
 }
 
 impl _Exit<'_> {
@@ -329,7 +330,13 @@ impl _Exit<'_> {
         let block = self.blocks[&at];
         for index in (0..block.ops.len()).rev() {
             let previous = &block.ops[index];
-            if previous.barrier() || matches!(previous.kind, Kind::Call | Kind::Escape | Kind::Opaque) {
+            // A call is an operation like any other where its memory effects
+            // are complete: its stores say what it can write.
+            let opaque = previous.kind == Kind::Call && !previous.memory_complete;
+            if previous.barrier() || opaque || matches!(previous.kind, Kind::Escape | Kind::Opaque) {
+                return Ok(false);
+            }
+            if effects::exposes_memory(previous, self.handles_errors) {
                 return Ok(false);
             }
             let mut overlaps = false;
@@ -343,19 +350,21 @@ impl _Exit<'_> {
                 if let Arg::Const(expected) = &expected {
                     let mut fact = consts::initialized(previous, self.reference);
                     if fact.is_none() {
-                        let dgroup = self.dgroup;
+                        let (body, dgroup) = (self.body, self.dgroup);
                         let (facts, barriers) = self.memory()?;
                         let before = facts.get(&(at, index)).cloned().unwrap_or_default();
+                        let nothing = IndexMap::new();
+                        let mut asked = consts::memory_queries(body, &nothing, dgroup);
                         let after = consts::_kills(
                             &before,
                             previous,
-                            &IndexMap::new(),
+                            &nothing,
                             dgroup,
                             barriers,
                             None,
                             None,
                             false,
-                            None,
+                            Some(&mut asked),
                         );
                         fact = consts::_cell(&after, self.reference);
                     }
@@ -412,6 +421,7 @@ fn _exit_value(
     body: &MirBody,
     dgroup: &BTreeSet<i64>,
     bounds: Option<&Bounds>,
+    handles_errors: bool,
 ) -> Result<Option<Held>, String> {
     let values = op
         .args
@@ -439,6 +449,7 @@ fn _exit_value(
         blocks: body.blocks.iter().map(|block| (block.at, block)).collect(),
         predecessors: loops::predecessors(&body.blocks),
         memory: None,
+        handles_errors,
     };
 
     for phi in &header.phis {

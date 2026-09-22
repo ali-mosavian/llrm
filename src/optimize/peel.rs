@@ -5,22 +5,18 @@
 //! retain the residual loop as a correctness fallback, and let the normal
 //! fixed point prove the residual unreachable.
 
-// Its callers live in transform.py, not yet ported.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::analysis::loops::{self, Loop};
+use crate::analysis::peelsize::{self, Signature};
 use crate::analysis::{consts, induction};
 use crate::model::mir::{Kind, MirBlock, MirBody};
 use crate::model::passes::{MIRTransform, Where};
 use crate::optimize::{lcssa, loopclone, unroll};
 
-// Bound the transient MIR of branchy and nested exact loops, leaving room to
-// evaluate a small fixed outer loop after an eight-way inner specialization.
-pub const MAX_SPECULATIVE_OPERATIONS: i64 = 4096;
 // Every conditional floating copy crosses the full strict-FP fixed point
 // before profitability can reject it: an analysis resource limit, not a
 // claim that larger source loops are illegal.
@@ -46,7 +42,7 @@ impl MIRTransform for Peel {
     }
 
     fn transform(&mut self, body: MirBody) -> Result<MirBody, String> {
-        let found = _candidate(&body, &self.r#where, &BTreeSet::new())?;
+        let found = _candidate(&body, &self.r#where, &BTreeSet::new(), &BTreeSet::new())?;
         Ok(match found {
             None => body,
             Some(found) => found.0,
@@ -67,8 +63,13 @@ fn _conditional_floating(loop_: &Loop, blocks: &BTreeMap<i64, &MirBlock>) -> boo
         })
 }
 
-/// Clone the first bounded exact loop, returning body, latch and count.
-fn _candidate(body: &MirBody, r#where: &Where, skip: &BTreeSet<i64>) -> Result<Option<(MirBody, i64, i64)>, String> {
+/// Clone the first bounded exact loop, returning body, latch, count and signature.
+fn _candidate(
+    body: &MirBody,
+    r#where: &Where,
+    skip: &BTreeSet<i64>,
+    tried: &BTreeSet<Signature>,
+) -> Result<Option<(MirBody, i64, i64, Signature)>, String> {
     let closed = lcssa::closed(body)?;
     let facts = consts::known(&closed, Some(&r#where.dgroup), Some(&r#where.named()), None, None);
     for loop_ in loops::loops(&closed.blocks, Some(closed.entry)) {
@@ -85,9 +86,13 @@ fn _candidate(body: &MirBody, r#where: &Where, skip: &BTreeSet<i64>) -> Result<O
         if count < BigInt::from(2) {
             continue;
         }
-        // A resource ceiling, not a profitability claim.  The optimized
-        // candidate is accepted below using the selected CPU's semantic
-        // costs; this only bounds the quadratic scalar analyses on cloned CFG.
+        if !peelsize::admitted(&closed, &loop_, &count, &facts, r#where) {
+            continue;
+        }
+        let signature = peelsize::signature(&closed, &loop_, &count, &facts);
+        if tried.contains(&signature) {
+            continue;
+        }
         let emitted = closed
             .blocks
             .iter()
@@ -96,9 +101,6 @@ fn _candidate(body: &MirBody, r#where: &Where, skip: &BTreeSet<i64>) -> Result<O
             .filter(|op| op.kind != Kind::Nothing)
             .count();
         let size = &count * BigInt::from(emitted);
-        if size > BigInt::from(MAX_SPECULATIVE_OPERATIONS) {
-            continue;
-        }
         let blocks = closed
             .blocks
             .iter()
@@ -109,7 +111,7 @@ fn _candidate(body: &MirBody, r#where: &Where, skip: &BTreeSet<i64>) -> Result<O
         }
         let count = count.to_i64().expect("count fits");
         if let Some(candidate) = loopclone::peeled(&closed, &loop_, count)? {
-            return Ok(Some((candidate, latch, count)));
+            return Ok(Some((candidate, latch, count, signature)));
         }
     }
     Ok(None)
@@ -120,12 +122,17 @@ pub fn optimized(
     body: &MirBody,
     r#where: &Where,
     optimize: &mut dyn FnMut(MirBody) -> Result<MirBody, String>,
+    tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<MirBody, String> {
+    if !unroll::priced(body, r#where) {
+        return Ok(body.clone());
+    }
     let mut body = body.clone();
     let mut rejected = BTreeSet::<i64>::new();
     loop {
-        let Some((candidate, latch, count)) = _candidate(&body, r#where, &rejected)? else {
+        let found = _candidate(&body, r#where, &rejected, &tried.borrow())?;
+        let Some((candidate, latch, count, signature)) = found else {
             return Ok(body);
         };
         let result = optimize(candidate.clone())?;
@@ -134,6 +141,7 @@ pub fn optimized(
                 watch(&format!("peel-rejected-{rejection}"), &result);
             }
             rejected.insert(latch);
+            tried.borrow_mut().insert(signature);
             continue;
         }
         if let Some(watch) = watch.as_deref_mut() {

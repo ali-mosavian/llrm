@@ -136,7 +136,10 @@ pub fn expanded(body: &MirBody) -> Result<MirBody, String> {
             if fallback != target {
                 succ.push(fallback);
             }
-            rebuilt.push(MirBlock::new(at, if index == 0 { block.phis.clone() } else { vec![] }, ops, succ));
+            rebuilt.push(MirBlock {
+                cold: block.cold,
+                ..MirBlock::new(at, if index == 0 { block.phis.clone() } else { vec![] }, ops, succ)
+            });
             incoming.entry((target, block.at)).or_default().push(at);
             if index + 1 == chain.len() {
                 incoming.entry((fallback, block.at)).or_default().push(at);

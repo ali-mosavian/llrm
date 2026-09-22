@@ -79,6 +79,13 @@ pub(crate) fn operation(one: &Op, costs: &OperationCosts) -> Option<i64> {
         costs.multiply
     } else if matches!(one.kind, Kind::Div | Kind::Rem | Kind::Divmod | Kind::Udivmod) {
         costs.divide
+    // A fixed-point product is a widening multiply then a shift back; a
+    // quotient, the shift first. Unpriced, one left nbody's whole body
+    // unpriceable and every loop candidate was built only to be refused.
+    } else if one.kind == Kind::FixedMul {
+        costs.multiply + costs.shift
+    } else if one.kind == Kind::FixedDiv {
+        costs.divide + costs.shift
     } else if matches!(one.kind, Kind::Shl | Kind::Shr | Kind::Sar) {
         costs.shift
     } else if matches!(one.kind, Kind::Address | Kind::PtrOffset) {

@@ -1,46 +1,49 @@
 //! How large a completely peeled loop will be, before anything is cloned.
 //!
-//! GCC's `tree_estimate_loop_size` and `estimated_unrolled_size`
-//! (tree-ssa-loop-ivcanon.cc): an operation whose operands are all constant once
-//! the iteration is fixed -- constants, counters with a constant start and step,
-//! and what those compute -- folds away in every copy; the rest is copied once
-//! per iteration. Unroll and peel both ask this first. Building and optimizing a
-//! candidate only to reject it cost modern nbody 14 times its compile time.
-//!
-//! Direct port of `qbopt/analysis/peelsize.py`.
-// Unroll and peel are its only callers; their sync lands separately.
-#![allow(dead_code)]
+//! Port of `qbopt/analysis/peelsize.py`. GCC's `tree_estimate_loop_size` and
+//! `estimated_unrolled_size` (tree-ssa-loop-ivcanon.cc): an operation whose
+//! operands are all constant once the iteration is fixed folds away in every
+//! copy; the rest is copied once per iteration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 
-use super::consts::Known;
-use super::induction::{self, AffineOperand};
-use super::loops::Loop;
+use crate::analysis::consts::Known;
+use crate::analysis::induction::{self, AffineOperand};
+use crate::analysis::loops::Loop;
 use crate::model::mir::{Arg, Kind, MirBody, Op, Value};
 use crate::model::passes::Where;
-use crate::support::pyrepr::Repr;
 
 const _OPAQUE: [Kind; 5] = [Kind::Call, Kind::Opaque, Kind::Escape, Kind::Arg, Kind::Result];
 
+/// Python's signature tuple: each part rendered once, compared whole.
+pub(crate) type Signature = Vec<String>;
+
 /// Whether a `count`-fold copy of `loop` can pass the target's peel budget.
-pub(crate) fn admitted(body: &MirBody, loop_: &Loop, count: i64, facts: &IndexMap<Value, Known>, r#where: &Where) -> bool {
+pub(crate) fn admitted(
+    body: &MirBody,
+    loop_: &Loop,
+    count: &BigInt,
+    facts: &IndexMap<Value, Known>,
+    r#where: &Where,
+) -> bool {
     let (size, folded) = _sizes(body, loop_, facts);
-    let copied = count * (size - folded);
-    if copied <= size {
+    let copied = count * BigInt::from(size - folded);
+    if copied <= BigInt::from(size) {
         return true;
     }
     if !r#where.options.grows {
         return false;
     }
     let limits = &r#where.options;
-    if limits.max_unroll_iterations != 0 && count > limits.max_unroll_iterations {
+    if limits.max_unroll_iterations != 0 && *count > BigInt::from(limits.max_unroll_iterations) {
         return false;
     }
     // GCC credits a third of what is left as likely to fold after all.
-    limits.max_unrolled_operations == 0 || copied - copied.div_euclid(3) <= limits.max_unrolled_operations
+    limits.max_unrolled_operations == 0
+        || &copied - induction::floor_div(&copied, &BigInt::from(3)) <= BigInt::from(limits.max_unrolled_operations)
 }
 
 /// The loop's operations, and how many of them fold once the iteration is fixed.
@@ -54,11 +57,11 @@ fn _sizes(body: &MirBody, loop_: &Loop, facts: &IndexMap<Value, Known>) -> (i64,
     known.extend(facts.keys().map(|value| value.id));
     let ops = inside
         .iter()
-        .flat_map(|block| &block.ops)
+        .flat_map(|block| block.ops.iter())
         .filter(|op| op.kind != Kind::Nothing)
         .collect::<Vec<_>>();
-    // `id(op)`: each operation's position in `ops`.
-    let mut folded = BTreeSet::new();
+    // `id(op)`: the position in `ops`.
+    let mut folded = BTreeSet::<usize>::new();
     let mut changed = true;
     while changed {
         changed = false;
@@ -76,7 +79,7 @@ fn _sizes(body: &MirBody, loop_: &Loop, facts: &IndexMap<Value, Known>) -> (i64,
     let phis = inside.iter().map(|block| block.phis.len()).sum::<usize>();
     let folded_phis = inside
         .iter()
-        .flat_map(|block| &block.phis)
+        .flat_map(|block| block.phis.iter())
         .filter(|phi| known.contains(&phi.result.id))
         .count();
     ((ops.len() + phis) as i64, (folded.len() + folded_phis) as i64)
@@ -93,66 +96,59 @@ fn _pure(op: &Op) -> bool {
     !(!op.loads.is_empty() || !op.stores.is_empty() || op.barrier() || _OPAQUE.contains(&op.kind))
 }
 
-/// One value as `signature` names it: its renumbering, and its constant if known.
-pub(crate) type Named = (usize, Option<(BigInt, u32)>);
-
-/// One operand as `signature` sees it.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum Operand {
-    Held(Named, u32),
-    Cell(String, u32, (Option<Named>, Option<Named>)),
-    Other(String),
-}
-
-/// One element of the tuple `signature` returns.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum Part {
-    Count(i64),
-    Phis(Vec<(Named, Vec<Named>)>),
-    Op(Kind, Vec<Operand>, Vec<Operand>),
-}
-
 /// The loop as a candidate sees it, with incidental value numbering removed.
 ///
 /// Two rounds of the fixed point renumber every value; the same loop, with
 /// the same constants reaching it, is the same candidate and gets the same
 /// answer. A constant newly reaching it -- after its outer loop is peeled --
 /// makes it a different one.
-pub(crate) fn signature(body: &MirBody, loop_: &Loop, count: i64, facts: &IndexMap<Value, Known>) -> Vec<Part> {
-    let mut names: IndexMap<u32, usize> = IndexMap::new();
+pub(crate) fn signature(body: &MirBody, loop_: &Loop, count: &BigInt, facts: &IndexMap<Value, Known>) -> Signature {
+    let mut names = HashMap::<u32, usize>::new();
 
-    let mut value = |one: &Value| -> Named {
+    let mut value = |one: &Value| -> (usize, Option<(BigInt, u32)>) {
         let next = names.len();
         let name = *names.entry(one.id).or_insert(next);
         (name, facts.get(one).map(|fact| (fact.n.clone(), fact.width)))
     };
 
-    let mut parts = vec![Part::Count(count)];
+    let arg = |one: &Arg, value: &mut dyn FnMut(&Value) -> (usize, Option<(BigInt, u32)>)| -> String {
+        match one {
+            Arg::Held(held) => format!("{:?}", (value(&held.value), held.width)),
+            Arg::Cell(cell) => {
+                let reference = &cell.r#ref;
+                let reached = [reference.base, reference.segment]
+                    .iter()
+                    .map(|part| part.as_ref().map(&mut *value))
+                    .collect::<Vec<_>>();
+                format!("{:?}", (reference.addr, reference.width, reached))
+            }
+            _ => format!("{one:?}"),
+        }
+    };
+
+    let mut parts: Signature = vec![count.to_string()];
     for block in &body.blocks {
         if !loop_.body.contains(&block.at) {
             continue;
         }
-        let mut phis = Vec::new();
-        for phi in &block.phis {
-            let result = value(&phi.result);
-            let mut incoming = phi.incoming.values().map(&mut value).collect::<Vec<_>>();
-            incoming.sort();
-            phis.push((result, incoming));
-        }
-        parts.push(Part::Phis(phis));
-        for op in block.ops.iter().filter(|op| op.kind != Kind::Nothing) {
-            let mut arg = |one: &Arg| match one {
-                Arg::Held(held) => Operand::Held(value(&held.value), held.width),
-                Arg::Cell(cell) => {
-                    let reference = &cell.r#ref;
-                    let reached = (reference.base.as_ref().map(&mut value), reference.segment.as_ref().map(&mut value));
-                    Operand::Cell(reference.addr.repr(), reference.width, reached)
-                }
-                other => Operand::Other(other.repr()),
-            };
-            let args = op.args.iter().map(&mut arg).collect();
-            let results = op.results.iter().map(&mut arg).collect();
-            parts.push(Part::Op(op.kind, args, results));
+        let phis = block
+            .phis
+            .iter()
+            .map(|phi| {
+                let result = value(&phi.result);
+                let mut incoming = phi.incoming.values().map(&mut value).collect::<Vec<_>>();
+                incoming.sort();
+                (result, incoming)
+            })
+            .collect::<Vec<_>>();
+        parts.push(format!("{phis:?}"));
+        for op in &block.ops {
+            if op.kind == Kind::Nothing {
+                continue;
+            }
+            let args = op.args.iter().map(|one| arg(one, &mut value)).collect::<Vec<_>>();
+            let results = op.results.iter().map(|one| arg(one, &mut value)).collect::<Vec<_>>();
+            parts.push(format!("{:?}", (op.kind, args, results)));
         }
     }
     parts

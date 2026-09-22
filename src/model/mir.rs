@@ -801,8 +801,9 @@ impl Repr for Kind {
     }
 }
 
-/// `a test b` is `b MIRRORED[test] a`. Direct port of `mir.MIRRORED`.
-pub fn mirrored(test: Kind) -> Option<Kind> {
+/// `a test b` is `b MIRRORED[test] a`.  `MIRRORED.get(test)`.
+#[allow(non_snake_case)]
+pub fn MIRRORED(test: Kind) -> Option<Kind> {
     Some(match test {
         Kind::Eq => Kind::Eq,
         Kind::Ne => Kind::Ne,
@@ -4188,3 +4189,4 @@ pub(crate) fn extracted_whole(high: &Arg, low: &Arg, definitions: &BTreeMap<Valu
     }
     original
 }
+
