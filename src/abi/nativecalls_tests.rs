@@ -2,11 +2,10 @@
 //!
 //! The four `nativeframe`-only tests live in `backend/nativeframe.rs`.
 //! `test_private_calls_and_explicit_pascal_cleanup_balance_recursive_body`
-//! keeps its cleanup, balance and interface half; its `mir.bodies` and
-//! `lower.lowered` half is skipped until those are ported.
-//! Skipped, needing `mir.bodies`, `lower` and `flow`:
-//! `test_lowering_uses_the_same_per_site_clobbers_as_raising`,
-//! `test_native_register_saves_survive_allocation`.
+//! keeps its cleanup, balance and interface half. Its lowering half and
+//! `test_lowering_uses_the_same_per_site_clobbers_as_raising` and
+//! `test_native_register_saves_survive_allocation` are skipped: they fail in
+//! Python at this commit (`lower.lowered` refuses the opaque op at 0x675).
 
 use std::path::Path;
 
