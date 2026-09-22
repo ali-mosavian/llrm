@@ -145,7 +145,7 @@ fn test_symbolic_control_rebases_a_nonzero_start_recurrence() {
     let body = _symbolic_control_body(5);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None);
+    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None, false);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
@@ -160,7 +160,7 @@ fn test_symbolic_control_proves_a_zero_terminal_recurrence() {
     let body = _symbolic_control_body(0);
     let found = loops::loops(&body.blocks, Some(body.entry));
     let [loop_] = &found[..] else { panic!("one loop") };
-    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None);
+    let proofs = induction::counted(&Rc::new(MirBody::clone(&body)), loop_, None, false);
     let [proof] = &proofs[..] else { panic!("one proof") };
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");

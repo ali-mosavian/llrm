@@ -767,7 +767,7 @@ fn test_reduction_preserves_every_live_product_result() {
             ],
         );
         assert_eq!(
-            _answer(&_Reads::of(&built), occurrence(&built, 1, 1)),
+            _answer(&_Reads::of(&Rc::new(built.clone())), occurrence(&built, 1, 1)),
             if use_ == "low" { Some(low) } else { None }
         );
     }

@@ -27,7 +27,7 @@ use super::{cfg, transform};
 /// pretested shape the counted-loop analyses read, and peeling and
 /// unrolling it in a later round found no loop to work on.
 pub(crate) fn entered(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
-    cfg::merged(&rotated(&_counted_down(body)?)?)
+    cfg::merged(&crate::optimize::canonical::identities(rotated(&_counted_down(body)?)?))
 }
 
 /// Rotate a dead counted counter into a guarded countdown.
@@ -61,7 +61,7 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
     let all_values = ssa::values(body).collect::<Vec<_>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted(body, &loop_, Some(&facts));
+        let proofs = induction::counted(body, &loop_, Some(&facts), true);
         if proofs.len() != 1 {
             continue;
         }
@@ -71,7 +71,8 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
         else {
             continue;
         };
-        let (preheader, latch_at) = (proof.preheader, proof.latch);
+        let (preheader, latch_at) =
+            (proof.preheader.expect("control_replacement proved a preheader"), proof.latch);
         let (header, latch) = (
             &body.blocks[blocks[&loop_.header]],
             &body.blocks[blocks[&latch_at]],
@@ -89,13 +90,12 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
             at,
             width,
             ops: Vec::new(),
-            facts: &facts,
         };
         let count = induction::trips(proof, &mut |kind, args| seeds.computed(kind, args));
         // A constant count is handled more profitably by the ordinary
         // finite-domain induction transforms.  This rewrite exists for a
         // symbolic value which may be zero at run time.
-        let induction::AffineOperand::Held(count) = count else {
+        let Some(induction::AffineOperand::Held(count)) = count else {
             continue;
         };
         let exits = counting::leaving(body, &replacement, &mut seeds);
@@ -406,18 +406,13 @@ pub(crate) fn _step_test(body: &Rc<MirBody>, loop_: &Loop, header: &MirBlock) ->
             continue;
         }
         let width = counter.start.width();
-        let comparisons = header.ops[..header.ops.len() - 1]
-            .iter()
-            .enumerate()
-            .filter(|(_, op)| {
-                induction::_counter_bound(op, branch, counter, width, Some(&made))
-                    == Some(Arg::Const(Const::new(0, width)))
-            })
-            .collect::<Vec<_>>();
-        if comparisons.len() != 1 {
+        let Some(proof) = induction::controlling(body, loop_, counter, &facts) else {
+            continue;
+        };
+        if proof.posttested || proof.bound != induction::AffineOperand::Const(Const::new(0, width)) {
             continue;
         }
-        let (compare_index, compare) = comparisons[0];
+        let (compare_index, compare) = (proof.compare.operation_index(), proof.compare_in(body));
         let flags = compare
             .defines
             .iter()

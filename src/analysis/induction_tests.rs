@@ -1,5 +1,5 @@
-//! Ports of `tests/test_induction_identity.py` and
-//! `tests/test_induction_inequality.py`.
+//! Port of `tests/test_induction_identity.py`; `counted_loops_tests.rs` has
+//! `tests/test_counted_loops.py`.
 //!
 //! Skipped, needing `lower`, `strength`, `transform`, `wholeseg` or the
 //! corpus: `test_nine_dimensional_loop_carries_its_pointer`,
@@ -33,12 +33,12 @@
 //! `test_composed_offset_can_carry_an_invariant_pointer`.
 
 use std::rc::Rc;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_counter_bound, Affine, AffineMap, AffineOperand, Derived, basics, derived, relation, trip_count};
+use super::{_compared, Affine, AffineMap, AffineOperand, Derived, basics, derived, relation, trip_count};
 use crate::analysis::consts;
 use crate::analysis::loops::Loop;
 use crate::analysis::occurrence::operations;
@@ -136,7 +136,7 @@ fn test_an_inclusive_test_at_its_types_maximum_is_not_counted() {
         let body = _unit_loop(start, bound, exit_test);
         let found = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
         let [loop_] = &found[..] else { panic!("one loop") };
-        let proofs = super::counted(&Rc::new(body.clone()), loop_, None);
+        let proofs = super::counted(&Rc::new(body.clone()), loop_, None, false);
 
         let maxima = proofs.iter().map(|proof| proof.maximum.clone()).collect::<Vec<_>>();
         let expected = trips.map(|trips| vec![Some(BigInt::from(trips))]).unwrap_or_default();
@@ -159,16 +159,8 @@ fn test_counter_zero_test_requires_an_unchanged_counter() {
         test.args = vec![source.clone(), if same { source } else { Arg::Const(Const::new(1, 2)) }];
         test.results = vec![held(result, 2)];
         let branch = op(1, Operation::Branch, vec![], vec![flag], Kind::Branch);
-        let counter = Affine {
-            value: value.id,
-            start: constant(-1, 2),
-            step: constant(1, 2),
-            header: 0,
-        };
-        assert_eq!(
-            _counter_bound(&test, &branch, &counter, 2, None),
-            accepted.then(|| Arg::Const(Const::new(0, 2)))
-        );
+        let found = _compared(&test, &branch, &BTreeMap::from([(value.id, false)]), &BTreeMap::new());
+        assert_eq!(found.map(|found| found.2), accepted.then(|| Arg::Const(Const::new(0, 2))));
     }
 }
 
@@ -181,13 +173,8 @@ fn test_counter_zero_test_keeps_its_flags_across_a_partial_result() {
     test.args = vec![source.clone(), source];
     test.results = vec![held(result, 2)];
     let branch = op(1, Operation::Branch, vec![], vec![flag], Kind::Branch);
-    let counter = Affine {
-        value: value.id,
-        start: constant(-1, 2),
-        step: constant(1, 2),
-        header: 0,
-    };
-    assert_eq!(_counter_bound(&test, &branch, &counter, 2, None), Some(Arg::Const(Const::new(0, 2))));
+    let found = _compared(&test, &branch, &BTreeMap::from([(value.id, false)]), &BTreeMap::new());
+    assert_eq!(found.map(|found| found.2), Some(Arg::Const(Const::new(0, 2))));
 }
 
 #[test]
@@ -255,7 +242,7 @@ fn test_posttested_counter_has_an_exact_fixed_trip_count() {
     );
     let loop_ = looped(1, &[2], &[1, 2]);
     let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
-    assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(4)));
+    assert_eq!(trip_count(&Rc::new(MirBody::clone(&body)), &loop_, &facts), Some(BigInt::from(4)));
 }
 
 #[test]
@@ -295,7 +282,7 @@ fn test_posttested_symbolic_sentinel_keeps_its_exact_trip_count() {
     );
     let loop_ = looped(1, &[2], &[1, 2]);
     let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
-    assert_eq!(trip_count(&body, &loop_, &facts), Some(BigInt::from(32)));
+    assert_eq!(trip_count(&Rc::new(MirBody::clone(&body)), &loop_, &facts), Some(BigInt::from(32)));
 }
 
 fn body() -> (MirBody, Loop) {

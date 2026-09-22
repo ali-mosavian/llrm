@@ -130,19 +130,7 @@ pub(crate) fn on_edge(
     }
     let mut kind = branch.test;
     if Some(successor) != branch.target {
-        kind = match kind {
-            Some(Kind::Le) => Some(Kind::Gt),
-            Some(Kind::Lt) => Some(Kind::Ge),
-            Some(Kind::Ge) => Some(Kind::Lt),
-            Some(Kind::Gt) => Some(Kind::Le),
-            Some(Kind::Eq) => Some(Kind::Ne),
-            Some(Kind::Ne) => Some(Kind::Eq),
-            Some(Kind::Above) => Some(Kind::BelowEq),
-            Some(Kind::AboveEq) => Some(Kind::Below),
-            Some(Kind::Below) => Some(Kind::AboveEq),
-            Some(Kind::BelowEq) => Some(Kind::Above),
-            _ => None,
-        };
+        kind = kind.and_then(crate::model::mir::NEGATED);
     }
     let sign = BigInt::from(1_u8) << (left_width * 8 - 1);
     let full = Interval {
@@ -405,27 +393,10 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
             .collect::<IndexMap<_, _>>();
         let counters = induction::basics(body, &loop_).values().cloned().collect::<Vec<_>>();
         let mut trips = BTreeSet::new();
-        for counter in &counters {
-            let width = counter.start.width();
-            let last = induction::_last_counter(body, &loop_, counter, &facts, width);
-            let start = induction::_signed(&counter.start.as_arg(), &facts, width);
-            if let (Some(last), Some(start)) = (last, start) {
-                let phi = *phis.get(&counter.value).ok_or_else(|| counter.value.to_string())?;
-                known.insert(
-                    phi,
-                    Interval {
-                        low: start.clone().min(last.clone()),
-                        high: start.clone().max(last.clone()),
-                        width,
-                    },
-                );
-                let Some(step) = induction::_signed(&counter.step.as_arg(), &facts, width) else {
-                    return Err("unsupported operand type(s) for //: 'int' and 'NoneType'".to_owned());
-                };
-                if step == BigInt::from(0_u8) {
-                    return Err("integer division or modulo by zero".to_owned());
-                }
-                trips.insert(induction::floor_div(&(last - start), &step));
+        for proof in induction::counted(body, &loop_, Some(&facts), false) {
+            if let Some((low, high)) = proof.span() {
+                known.insert(proof.phi_in(body).result, Interval { low, high, width: proof.counter.start.width() });
+                trips.insert(proof.count.expect("a span has a count") - 1_u8);
             }
         }
         if trips.len() == 1 {

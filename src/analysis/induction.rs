@@ -18,19 +18,8 @@ use super::occurrence::{OpOccurrence, PhiOccurrence, operations, phis};
 use super::ranges;
 use super::regions::{RegionError, RegionLayout, overlapping};
 use crate::analysis::loops::{self, Loop, predecessors};
-use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
+use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
 use crate::support::pyset::PySet;
-
-/// The canonical pre-tested, single-latch loop CFG.
-///
-/// Direct port of `qbopt.analysis.induction:LoopShape`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct LoopShape {
-    pub preheader: i64,
-    pub latch: i64,
-    pub entered: i64,
-    pub exit: i64,
-}
 
 /// Python's `mir.Held | mir.Const` affine operand union.
 ///
@@ -54,15 +43,6 @@ impl AffineOperand {
         match self {
             Self::Held(held) => Arg::Held(*held),
             Self::Const(constant) => Arg::Const(constant.clone()),
-        }
-    }
-
-    /// Python's `isinstance(arg, (mir.Held, mir.Const))`, as the union.
-    pub(crate) fn from_arg(arg: &Arg) -> Option<Self> {
-        match arg {
-            Arg::Held(held) => Some(Self::Held(*held)),
-            Arg::Const(constant) => Some(Self::Const(constant.clone())),
-            _ => None,
         }
     }
 }
@@ -114,7 +94,21 @@ pub(crate) struct AffineMap {
     pub width: u32,
 }
 
-/// A canonical zero-or-more loop with an exact symbolic trip-count bound.
+/// The one proof of how many trips a loop makes, shared by every pass.
+///
+///     i = start; loop { [i test bound?] body; i += step; [i test bound?] }
+///
+/// `test` continues the loop, counter first; `step` is a nonzero
+/// constant. A pre-tested loop tests the header value before each trip; a
+/// post-tested one tests after each trip, the stepped value when
+/// `stepped`. `width` is the compare's: a counter read narrower is
+/// counted modulo that width.
+///
+/// `count` is the exact trip count when constant. `trips` places it
+/// when symbolic, which needs a pre-tested unit step: the only proofs with
+/// no `count`. `first` and `last` are the header's signed values on
+/// the first and last trip, given only when nothing up to the exit wraps.
+/// `maximum` bounds the trips when the count is unknown.
 ///
 /// Direct port of `qbopt.analysis.induction:CountedLoop`.  Python stores the
 /// proven phi and operations by object identity; Rust stores snapshot-local
@@ -127,69 +121,127 @@ pub(crate) struct CountedLoop {
     pub branch: OpOccurrence,
     pub start: AffineOperand,
     pub bound: AffineOperand,
-    /// The comparison that continues the loop.
     pub test: Kind,
-    pub preheader: i64,
+    pub preheader: Option<i64>,
     pub latch: i64,
     pub entered: i64,
     pub exit: i64,
     pub maximum: Option<BigInt>,
+    pub step: BigInt,
+    pub posttested: bool,
+    pub stepped: bool,
+    pub count: Option<BigInt>,
+    pub first: Option<BigInt>,
+    pub last: Option<BigInt>,
 }
 
 impl CountedLoop {
     /// Python's `CountedLoop.inclusive` property.
     pub(crate) const fn inclusive(&self) -> bool {
-        matches!(self.test, Kind::Le | Kind::BelowEq)
+        _INCLUSIVE(self.test)
+    }
+
+    /// Python's `CountedLoop.width` property.
+    pub(crate) const fn width(&self) -> u32 {
+        self.bound.width()
+    }
+
+    /// The proven phi in `body`, the snapshot this proof indexes.
+    pub(crate) fn phi_in<'b>(&self, body: &'b MirBody) -> &'b mir::Phi {
+        &body.blocks[self.phi.block_index()].phis[self.phi.phi_index()]
+    }
+
+    /// The proven compare in `body`, the snapshot this proof indexes.
+    pub(crate) fn compare_in<'b>(&self, body: &'b MirBody) -> &'b Op {
+        &body.blocks[self.compare.block_index()].ops[self.compare.operation_index()]
+    }
+
+    /// The proven branch in `body`, the snapshot this proof indexes.
+    pub(crate) fn branch_in<'b>(&self, body: &'b MirBody) -> &'b Op {
+        &body.blocks[self.branch.block_index()].ops[self.branch.operation_index()]
+    }
+
+    /// The signed values the header's counter takes on a trip, lowest first.
+    pub(crate) fn span(&self) -> Option<(BigInt, BigInt)> {
+        let (first, last) = (self.first.as_ref()?, self.last.as_ref()?);
+        Some((first.min(last).clone(), first.max(last).clone()))
     }
 }
 
-/// Python's `_SKIPPED.get(test)`.
 #[allow(non_snake_case)]
-const fn _SKIPPED(test: Kind) -> Option<Kind> {
-    match test {
-        Kind::Below => Some(Kind::BelowEq),
-        Kind::Lt => Some(Kind::Le),
-        Kind::BelowEq => Some(Kind::Below),
-        Kind::Le => Some(Kind::Lt),
-        _ => None,
-    }
+const fn _ASCENDING(test: Kind) -> bool {
+    matches!(test, Kind::Lt | Kind::Le | Kind::Below | Kind::BelowEq)
+}
+
+#[allow(non_snake_case)]
+const fn _DESCENDING(test: Kind) -> bool {
+    matches!(test, Kind::Gt | Kind::Ge | Kind::Above | Kind::AboveEq)
+}
+
+#[allow(non_snake_case)]
+const fn _INCLUSIVE(test: Kind) -> bool {
+    matches!(test, Kind::Le | Kind::BelowEq | Kind::Ge | Kind::AboveEq)
+}
+
+#[allow(non_snake_case)]
+const fn _UNSIGNED(test: Kind) -> bool {
+    matches!(test, Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq)
+}
+
+/// The preheader test `bound SKIPPED start` under which no trip runs: `_SKIPPED[test]`.
+#[allow(non_snake_case)]
+fn _SKIPPED(test: Kind) -> Kind {
+    assert!(_ASCENDING(test) || _DESCENDING(test) || test == Kind::Ne, "KeyError: {test:?}");
+    mir::MIRRORED(mir::NEGATED(test).expect("a comparison negates")).expect("a comparison mirrors")
 }
 
 /// Python's `Computed`: places one preheader operation and returns its result.
 pub(crate) type Computed<'a> = dyn FnMut(Kind, Vec<Arg>) -> AffineOperand + 'a;
 
 /// The preheader comparison, and the test on it, under which the loop runs no trips.
-pub(crate) fn skipped(proof: &CountedLoop) -> ((AffineOperand, AffineOperand), Kind) {
-    let mut test = _SKIPPED(proof.test).expect("KeyError");
-    if test == Kind::BelowEq && proof.start == AffineOperand::Const(Const::new(0, proof.start.width())) {
-        test = Kind::Eq; // nothing is below zero
+pub(crate) fn skipped(proof: &CountedLoop) -> Option<((AffineOperand, AffineOperand), Kind)> {
+    if proof.posttested {
+        return None;
     }
-    ((proof.bound.clone(), proof.start.clone()), test)
+    Some(((proof.bound.clone(), proof.start.clone()), _SKIPPED(proof.test)))
 }
 
-/// Trips on the entered path, exact modulo the counter's width.
+/// Trips on the entered path, exact modulo the compare's width, or None where not expressible.
 ///
 /// `computed(kind, args)` places one preheader operation and returns its
-/// result. `counted` proved the count fits: an exclusive test cannot reach
-/// the width's size, and an inclusive one is proved finite first.
-pub(crate) fn trips(proof: &CountedLoop, computed: &mut Computed<'_>) -> AffineOperand {
-    let width = proof.bound.width();
-    if let (AffineOperand::Const(bound), AffineOperand::Const(start)) = (&proof.bound, &proof.start) {
-        let count = &bound.n - &start.n + BigInt::from(u8::from(proof.inclusive()));
-        return AffineOperand::Const(Const::new(masked(&count, width), width));
+/// result. `counted` proved the count finite.
+pub(crate) fn trips(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineOperand> {
+    let width = proof.width();
+    if proof.posttested {
+        return None;
     }
-    let count = computed(Kind::Sub, vec![proof.bound.as_arg(), proof.start.as_arg()]);
-    computed(Kind::Add, vec![count.as_arg(), Arg::Const(Const::new(u8::from(proof.inclusive()), width))])
+    if let Some(count) = &proof.count {
+        return (count < &(BigInt::from(1_u8) << (8 * width)))
+            .then(|| AffineOperand::Const(Const::new(count.clone(), width)));
+    }
+    let (ahead, behind) =
+        if proof.step > BigInt::from(0_u8) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
+    let count = computed(Kind::Sub, vec![ahead.as_arg(), behind.as_arg()]);
+    Some(computed(Kind::Add, vec![count.as_arg(), Arg::Const(Const::new(u8::from(proof.inclusive()), width))]))
 }
 
-/// The counter as a loop that ran a trip leaves: the first value failing its test.
-pub(crate) fn exit_value(proof: &CountedLoop, computed: &mut Computed<'_>) -> AffineOperand {
-    let width = proof.bound.width();
-    if let AffineOperand::Const(bound) = &proof.bound {
-        let value = &bound.n + BigInt::from(u8::from(proof.inclusive()));
-        return AffineOperand::Const(Const::new(masked(&value, width), width));
+/// The header's counter as a pre-tested loop that ran a trip leaves: the first value failing its test.
+pub(crate) fn exit_value(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineOperand> {
+    let width = proof.width();
+    if proof.posttested {
+        return None;
     }
-    computed(Kind::Add, vec![proof.bound.as_arg(), Arg::Const(Const::new(u8::from(proof.inclusive()), width))])
+    if proof.test == Kind::Ne {
+        return Some(proof.bound.clone());
+    }
+    if let (AffineOperand::Const(start), Some(count)) = (&proof.start, &proof.count) {
+        return Some(AffineOperand::Const(Const::new(masked(&(&start.n + count * &proof.step), width), width)));
+    }
+    let past = Const::new(masked(&(&proof.step * u8::from(proof.inclusive())), width), width);
+    if let AffineOperand::Const(bound) = &proof.bound {
+        return Some(AffineOperand::Const(Const::new(masked(&(&bound.n + &past.n), width), width)));
+    }
+    Some(computed(Kind::Add, vec![proof.bound.as_arg(), Arg::Const(past)]))
 }
 
 /// Proof that a counted loop's source recurrence may be removed.
@@ -350,18 +402,16 @@ fn _quotients(body: &Rc<MirBody>, loop_: &Loop, found: &OrderedMap<u32, Affine>)
         {
             continue;
         }
-        let Some(last) = _last_counter(body, loop_, counter, &facts, 2) else {
+        let Some((low, high)) = domain(body, loop_, counter, &facts) else {
             continue;
         };
-        let quotient_start = floor_div(&start, &denominator);
-        let quotient_last = floor_div(&last, &denominator);
-        if quotient_start < BigInt::from(-32768_i32)
-            || quotient_start > BigInt::from(32767_i32)
-            || quotient_last < BigInt::from(-32768_i32)
-            || quotient_last > BigInt::from(32767_i32)
-        {
+        if ![low, high].iter().all(|value| {
+            let quotient = floor_div(value, &denominator);
+            BigInt::from(-32768_i32) <= quotient && quotient <= BigInt::from(32767_i32)
+        }) {
             continue;
         }
+        let quotient_start = floor_div(&start, &denominator);
         out.push(Derived {
             op: occurrence,
             of: Affine {
@@ -378,36 +428,24 @@ fn _quotients(body: &Rc<MirBody>, loop_: &Loop, found: &OrderedMap<u32, Affine>)
     out
 }
 
-/// Python's `domain(body, loop, affine, facts)`.
-///
-/// `_signed` establishes the initial integer interpretation and
-/// `_last_counter` is the sole finite-loop proof.  Keeping their exact calls
-/// here prevents this consumer from becoming an independent range solver.
+/// The finite inclusive signed domain `affine` takes on a trip.
 pub(crate) fn domain(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     affine: &Affine,
     facts: &IndexMap<Value, Known>,
 ) -> Option<(BigInt, BigInt)> {
-    let width = affine.start.width();
-    let start = _signed(&affine.start.as_arg(), facts, width)?;
-    let last = _last_counter(body, loop_, affine, facts, width)?;
-    Some(if start <= last {
-        (start, last)
-    } else {
-        (last, start)
-    })
+    controlling(body, loop_, affine, facts)?.span()
 }
 
 /// Python's `_extended(body, loop, op, forms, facts)`.
 ///
 /// An extension carries a narrow affine recurrence into a wider one only
 /// after the exact finite-loop proof establishes that the narrow value cannot
-/// wrap.  This is intentionally the Python case split, not a general range
-/// analysis: `_last_counter` supplies the only loop-end fact, and every
+/// wrap.  The counted-loop proof supplies the only loop-end fact, and every
 /// operand must be an exact constant at the narrow recurrence width.
 fn _extended(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     op: &Op,
     forms: &ExtendedForms,
@@ -433,32 +471,24 @@ fn _extended(
     if counter.start.width() != width {
         return None;
     }
-    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
-    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
-    let last = _last_counter(body, loop_, counter, facts, width)?;
+    let raw_start = _constant(&counter.start.as_arg(), facts, width);
+    let raw_step = _constant(&counter.step.as_arg(), facts, width);
+    let count = controlling(body, loop_, counter, facts)
+        .filter(|proof| proof.width() == width)
+        .and_then(|proof| proof.count)
+        .filter(|count| *count != BigInt::from(0_u8));
     let constants = offsets
         .iter()
-        .map(|(argument, coefficient)| {
-            Some((_constant(argument, facts, width)?, coefficient.clone()))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let step = _as_signed(&raw_step, width);
-    if step == BigInt::from(0_u8) {
+        .map(|(argument, coefficient)| Some((_constant(argument, facts, width)?, coefficient.clone())))
+        .collect::<Option<Vec<_>>>();
+    let (Some(raw_start), Some(raw_step), Some(count), Some(constants)) = (raw_start, raw_step, count, constants) else {
         return None;
-    }
-    let start = match op.kind {
-        Kind::SignExtend => _as_signed(&raw_start, width),
-        Kind::ZeroExtend if last >= BigInt::from(0_u8) => raw_start.clone(),
-        _ => return None,
     };
-    let distance = &last - &start;
-    if &distance * &step < BigInt::from(0_u8) || &distance % &step != BigInt::from(0_u8) {
+    let step = _as_signed(&raw_step, width);
+    if step == BigInt::from(0_u8) || !matches!(op.kind, Kind::SignExtend | Kind::ZeroExtend) {
         return None;
     }
-    let count = &distance / &step + 1_u8;
-    if count <= BigInt::from(0_u8) {
-        return None;
-    }
+    let start = if op.kind == Kind::SignExtend { _as_signed(&raw_start, width) } else { raw_start.clone() };
 
     let mask = (BigInt::from(1_u8) << (width * 8)) - 1_u8;
     let sign = BigInt::from(1_u8) << (width * 8 - 1);
@@ -1041,13 +1071,80 @@ pub(crate) fn of(
     Ok(result)
 }
 
-/// Prove every canonical `start ..< bound` or `start ..= bound` unit control recurrence.
+/// Where a single-latch loop with one exit tests whether to go round again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct _Control {
+    block: i64,
+    preheader: Option<i64>,
+    entered: i64,
+    exit: i64,
+    posttested: bool,
+}
+
+/// The block whose final branch is the loop's only exit: its header, or its latch.
+fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
+    // Python's dict comprehension retains the last duplicate address.
+    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    if loop_.latches.len() != 1 || !blocks.contains_key(&loop_.header) {
+        return None;
+    }
+    let latch = *blocks.get(loop_.latches.first()?)?;
+    let header = blocks[&loop_.header];
+    let inside = &loop_.body;
+    let (control, entered) = if latch.succ.as_slice() == [header.at] {
+        (header, header.succ.iter().copied().filter(|at| inside.contains(at)).collect::<Vec<_>>())
+    } else if latch.succ.contains(&header.at) {
+        (latch, vec![header.at])
+    } else {
+        return None;
+    };
+    let exits = control.succ.iter().copied().filter(|at| !inside.contains(at)).collect::<Vec<_>>();
+    if control.succ.len() != 2
+        || entered.len() != 1
+        || exits.len() != 1
+        || control.ops.is_empty()
+        || control.ops.last()?.kind != Kind::Branch
+        || !control.ops.last()?.target.is_some_and(|target| control.succ.contains(&target))
+        || inside.iter().filter(|at| **at != control.at).any(|at| {
+            let block = blocks[at];
+            block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
+        })
+    {
+        return None;
+    }
+    let outside = predecessors(&body.blocks)
+        .get(&header.at)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|at| !inside.contains(at))
+        .collect::<Vec<_>>();
+    let preheader =
+        (outside.len() == 1 && blocks[&outside[0]].succ.as_slice() == [header.at]).then(|| outside[0]);
+    Some(_Control {
+        block: control.at,
+        preheader,
+        entered: entered[0],
+        exit: exits[0],
+        posttested: std::ptr::eq(control, latch),
+    })
+}
+
+/// Prove every counter that alone decides when a single-exit loop leaves.
 ///
-/// An exclusive test stops the counter before it can wrap.  An inclusive
-/// one runs forever where `bound` is its type's maximum, so it is proved
-/// only where that cannot happen: a constant below it, or a finite
-/// `maximum`.
-pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<Value, Known>>) -> Vec<CountedLoop> {
+/// Constant start and bound give an exact `count`, and so does an
+/// equality sentinel a constant distance from the start. Otherwise the
+/// proof is symbolic, and only for a pre-tested unit step whose loop is
+/// proved finite: an exclusive or `!=` test always is; an inclusive one
+/// runs forever where `bound` is the end of its type, so needs a
+/// `maximum`. Only with `inbounds` is one taken from the loop's memory
+/// accesses: that reads `derived`, which asks this for counts.
+pub(crate) fn counted(
+    body: &Rc<MirBody>,
+    loop_: &Loop,
+    facts: Option<&IndexMap<Value, Known>>,
+    inbounds: bool,
+) -> Vec<CountedLoop> {
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -1056,31 +1153,26 @@ pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<
             &computed
         }
     };
-    // Python's `{block.at: block for block in body.blocks}` keeps the last
-    // duplicate address; `canonical` and this semantic phase share it.
-    let blocks = body
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (block.at, (index, block)))
-        .collect::<BTreeMap<_, _>>();
-    let Some(shape) = canonical(body, loop_) else {
+    // Python's `{block.at: block for block in body.blocks}` keeps the last duplicate address.
+    let blocks =
+        body.blocks.iter().enumerate().map(|(index, block)| (block.at, (index, block))).collect::<BTreeMap<_, _>>();
+    let Some(shape) = _control(body, loop_) else {
         return Vec::new();
     };
     let (header_index, _) = blocks[&loop_.header];
-    let header_operations = operations(body)
-        .filter(|(occurrence, _, _)| occurrence.block_index() == header_index)
+    let (control_index, _) = blocks[&shape.block];
+    let control_operations = operations(body)
+        .filter(|(occurrence, _, _)| occurrence.block_index() == control_index)
         .map(|(occurrence, _, operation)| (occurrence, operation))
         .collect::<Vec<_>>();
-    let Some((branch_occurrence, branch)) = header_operations.last().copied() else {
-        return Vec::new();
-    };
+    let (branch_occurrence, branch) = *control_operations.last().expect("_control proved a branch");
     let inside = &loop_.body;
-    let Some(test) = _continuing_test(branch, inside).filter(|test| _SKIPPED(*test).is_some()) else {
-        return Vec::new();
+    let continuing = if branch.target.is_some_and(|target| inside.contains(&target)) {
+        branch.test
+    } else {
+        branch.test.and_then(mir::NEGATED)
     };
-    let unsigned = matches!(test, Kind::Below | Kind::BelowEq);
-    let inclusive = matches!(test, Kind::Le | Kind::BelowEq);
+    let latch = *loop_.latches.first().expect("_control proved one latch");
     let still = invariant(body, inside);
     let mut made = BTreeMap::<u32, &Op>::new();
     for block in &body.blocks {
@@ -1097,34 +1189,38 @@ pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<
 
     let mut proven = Vec::new();
     for counter in basics(body, loop_).values() {
-        let width = counter.start.width();
-        // Python's `isinstance(counter.start, (Held, Const))` is `AffineOperand`'s type.
-        if _signed(&counter.step.as_arg(), facts, width) != Some(BigInt::from(1_u8)) {
-            continue;
-        }
-        let Some((phi_occurrence, phi)) = header_phis
-            .iter()
-            .find(|(_, phi)| phi.result.id == counter.value)
-            .copied()
+        let Some((phi_occurrence, phi)) = header_phis.iter().find(|(_, phi)| phi.result.id == counter.value).copied()
         else {
             continue;
         };
-        if phi.incoming.keys().copied().collect::<BTreeSet<_>>()
-            != BTreeSet::from([shape.preheader, shape.latch])
-        {
+        let Some(update) = phi.incoming.get(&latch).copied() else {
             continue;
+        };
+        // Python's `isinstance(counter.start, (Held, Const))` is `AffineOperand`'s type.
+        let mut tested = BTreeMap::from([(phi.result.id, false)]);
+        if shape.posttested {
+            tested.insert(update.id, true);
         }
-        let comparisons = header_operations[..header_operations.len() - 1]
+        let comparisons = control_operations[..control_operations.len() - 1]
             .iter()
             .filter_map(|(occurrence, operation)| {
-                _counter_bound(operation, branch, counter, width, Some(&made))
-                    .map(|bound| (*occurrence, bound))
+                _compared(operation, branch, &tested, &made).map(|found| (*occurrence, found))
             })
             .collect::<Vec<_>>();
+        let Some(continuing) = continuing else {
+            continue;
+        };
         if comparisons.len() != 1 {
             continue;
         }
-        let (compare_occurrence, bound) = comparisons[0].clone();
+        let (compare_occurrence, (_, width, bound, mirrored, stepped)) = comparisons[0].clone();
+        let test = if mirrored { mir::MIRRORED(continuing).expect("KeyError: a mirrored test") } else { continuing };
+        let Some(step) = _signed(&counter.step.as_arg(), facts, counter.start.width()) else {
+            continue;
+        };
+        if step == BigInt::from(0_u8) || width > counter.start.width() {
+            continue;
+        }
         let bound = match bound {
             Arg::Held(held) if held.width == width => AffineOperand::Held(held),
             Arg::Const(constant) if constant.width == width => AffineOperand::Const(constant),
@@ -1133,75 +1229,252 @@ pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<
         if matches!(&bound, AffineOperand::Held(held) if !still.contains(&held.value.id)) {
             continue;
         }
-        let Some(update) = phi.incoming.get(&shape.latch).copied() else {
-            continue;
-        };
-        let Some(stepping) = made.get(&update.id).copied() else {
-            continue;
-        };
-        if crate::model::mir::stepping(stepping)
-            != Some((
-                Arg::Held(Held {
-                    value: phi.result,
-                    width,
-                }),
-                Arg::Const(Const::new(1, width)),
-            ))
-            || stepping.results
-                != vec![Arg::Held(Held {
-                    value: update,
-                    width,
-                })]
-            || !stepping.loads.is_empty()
-            || !stepping.stores.is_empty()
-            || stepping.barrier()
-            || !stepping.merges.is_empty()
+        let step = _as_signed(&masked(&step, width), width);
+        let zero = BigInt::from(0_u8);
+        if step == zero
+            || !(test == Kind::Ne || (_ASCENDING(test) && step > zero) || (_DESCENDING(test) && step < zero))
         {
             continue;
         }
-        let start = _constant(&counter.start.as_arg(), facts, width);
-        let limit = _constant(&bound.as_arg(), facts, width);
-        let (first, last, top) = if unsigned {
-            (start.clone(), limit.clone(), (BigInt::from(1_u8) << (8 * width)) - 1)
-        } else {
-            (
-                start.as_ref().map(|start| _as_signed(start, width)),
-                limit.as_ref().map(|limit| _as_signed(limit, width)),
-                (BigInt::from(1_u8) << (8 * width - 1)) - 1,
-            )
+        let start = match &counter.start {
+            AffineOperand::Held(held) => AffineOperand::Held(Held { value: held.value, width }),
+            AffineOperand::Const(constant) => AffineOperand::Const(Const::new(masked(&constant.n, width), width)),
         };
-        let one = BigInt::from(u8::from(inclusive));
-        if inclusive && last.as_ref() == Some(&top) {
+        let begin = _constant(&start.as_arg(), facts, width);
+        let limit = _constant(&bound.as_arg(), facts, width);
+        let difference = _difference(&bound, &start, begin.as_ref(), limit.as_ref(), &made, facts, width);
+        let (mut first, mut last, maximum);
+        let count = match (&difference, &begin, &limit) {
+            (Some(difference), _, _) if test == Kind::Ne => {
+                _equal_after(difference, &step, width, shape.posttested, stepped)
+            }
+            (_, Some(begin), Some(limit)) if test != Kind::Ne || difference.is_none() => {
+                _ordered_after(begin, limit, &step, test, width, shape.posttested, stepped)
+            }
+            _ => None,
+        };
+        (first, last) = (None, None);
+        if let Some(count) = &count {
+            maximum = Some(count.clone());
+            if _signed(&counter.step.as_arg(), facts, counter.start.width()).as_ref() == Some(&step) {
+                (first, last) = _signed_span(&counter.start, facts, width, count, &step);
+            }
+        } else if shape.posttested || abs(&step) != BigInt::from(1_u8) {
             continue;
-        }
-        let lowest = first.or_else(|| _range(body, &counter.start, 0, &top));
-        let highest = last.clone().or_else(|| _range(body, &bound, 1, &(&top - &one)));
-        let mut maximum = None;
-        if let (Some(lowest), Some(highest)) = (&lowest, &highest) {
-            maximum = Some(max(BigInt::from(0_u8), highest - lowest + &one));
-        }
-        if maximum.is_none() {
-            maximum = _inbounds_trips(body, loop_, shape.latch);
-        }
-        if inclusive && last.is_none() && maximum.is_none() {
-            continue;
+        } else {
+            maximum = _unit_maximum(body, loop_, &start, &bound, begin.as_ref(), limit.as_ref(), &step, test, inbounds);
+            if maximum.is_none() && _INCLUSIVE(test) {
+                continue;
+            }
         }
         proven.push(CountedLoop {
             counter: counter.clone(),
             phi: phi_occurrence,
             compare: compare_occurrence,
             branch: branch_occurrence,
-            start: start.map_or_else(|| counter.start.clone(), |start| AffineOperand::Const(Const::new(start, width))),
+            start: begin.map_or_else(|| start.clone(), |begin| AffineOperand::Const(Const::new(begin, width))),
             bound: limit.map_or_else(|| bound.clone(), |limit| AffineOperand::Const(Const::new(limit, width))),
             test,
             preheader: shape.preheader,
-            latch: shape.latch,
+            latch,
             entered: shape.entered,
             exit: shape.exit,
             maximum,
+            step,
+            posttested: shape.posttested,
+            stepped,
+            count,
+            first,
+            last,
         });
     }
     proven
+}
+
+/// `(op, width, bound, mirrored, stepped)` where `op` sets `branch`'s flags from a tested counter value.
+pub(crate) fn _compared<'o>(
+    op: &'o Op,
+    branch: &Op,
+    tested: &BTreeMap<u32, bool>,
+    made: &BTreeMap<u32, &Op>,
+) -> Option<(&'o Op, u32, Arg, bool, bool)> {
+    if op.args.len() != 2 || !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
+        return None;
+    }
+    let flags = op.defines.iter().filter(|value| value.flags).copied().collect::<Vec<_>>();
+    if flags.len() != 1 || !branch.uses.contains(&flags[0]) {
+        return None;
+    }
+    for (index, arg) in op.args.iter().enumerate() {
+        let Arg::Held(held) = arg else { continue };
+        let Some(&stepped) = tested.get(&_copied(*held, made).value.id) else { continue };
+        if op.kind == Kind::Sub && op.results.is_empty() && op.defines.len() == 1 {
+            return Some((op, held.width, op.args[1 - index].clone(), index == 1, stepped));
+        }
+        if matches!(op.kind, Kind::And | Kind::Or) && op.args[0] == op.args[1] {
+            return Some((op, held.width, Arg::Const(Const::new(0, held.width)), false, stepped));
+        }
+    }
+    None
+}
+
+/// `bound - start` modulo the width, when constant: both constant, or `bound = start + c`.
+fn _difference(
+    bound: &AffineOperand,
+    start: &AffineOperand,
+    begin: Option<&BigInt>,
+    limit: Option<&BigInt>,
+    made: &BTreeMap<u32, &Op>,
+    facts: &IndexMap<Value, Known>,
+    width: u32,
+) -> Option<BigInt> {
+    if let (Some(begin), Some(limit)) = (begin, limit) {
+        return Some(masked(&(limit - begin), width));
+    }
+    let AffineOperand::Held(held) = bound else { return None };
+    let definition = made.get(&held.value.id).copied()?;
+    if definition.kind != Kind::Add
+        || !definition.loads.is_empty()
+        || !definition.stores.is_empty()
+        || definition.barrier()
+        || !definition.merges.is_empty()
+        || definition.args.len() != 2
+        || definition.results != vec![bound.as_arg()]
+    {
+        return None;
+    }
+    for (index, arg) in definition.args.iter().enumerate() {
+        if let (Arg::Held(arg), AffineOperand::Held(start)) = (arg, start) {
+            if arg.value == start.value {
+                if let Some(offset) = _constant(&definition.args[1 - index], facts, width) {
+                    return Some(offset);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Trips until `start + k*step`, tested as the loop is shaped, first equals `start + difference`.
+fn _equal_after(difference: &BigInt, step: &BigInt, width: u32, posttested: bool, stepped: bool) -> Option<BigInt> {
+    let modulus = BigInt::from(1_u8) << (8 * width);
+    let lead = u8::from(posttested && stepped);
+    let divisor = gcd(mod_floor(step, &modulus), modulus.clone());
+    let remaining = mod_floor(&(difference - step * lead), &modulus);
+    if mod_floor(&remaining, &divisor) != BigInt::from(0_u8) {
+        return None; // never equal: the loop does not end
+    }
+    let period = &modulus / &divisor;
+    let inverse = modular_inverse(&floor_div(&mod_floor(step, &modulus), &divisor), &period)?;
+    Some(BigInt::from(u8::from(posttested)) + mod_floor(&(floor_div(&remaining, &divisor) * inverse), &period))
+}
+
+/// The low and high of a test's integers: unsigned or signed at `width`.
+fn _extent(unsigned: bool, width: u32) -> (BigInt, BigInt) {
+    if unsigned {
+        (BigInt::from(0_u8), (BigInt::from(1_u8) << (8 * width)) - 1_u8)
+    } else {
+        (-(BigInt::from(1_u8) << (8 * width - 1)), (BigInt::from(1_u8) << (8 * width - 1)) - 1_u8)
+    }
+}
+
+/// Trips of an ordered test with constant ends, or None where a tested value would wrap first.
+fn _ordered_after(
+    begin: &BigInt,
+    limit: &BigInt,
+    step: &BigInt,
+    test: Kind,
+    width: u32,
+    posttested: bool,
+    stepped: bool,
+) -> Option<BigInt> {
+    let unsigned = _UNSIGNED(test);
+    let (low, high) = _extent(unsigned, width);
+    let first = (if unsigned { begin.clone() } else { _as_signed(begin, width) }) + step * u8::from(posttested && stepped);
+    let bound = if unsigned { limit.clone() } else { _as_signed(limit, width) };
+    if !(low <= first && first <= high) {
+        return None;
+    }
+    let inclusive = u8::from(_INCLUSIVE(test));
+    let zero = BigInt::from(0_u8);
+    let tested = if step > &zero {
+        let edge = &bound + inclusive;
+        max(zero, -floor_div(&(&first - &edge), step))
+    } else {
+        let edge = &bound - inclusive;
+        max(zero, -floor_div(&(&edge - &first), &-step))
+    };
+    let reached = &first + &tested * step;
+    (low <= reached && reached <= high).then(|| BigInt::from(u8::from(posttested)) + tested)
+}
+
+/// The first and last signed header values over `count` trips, where none up to the exit wraps.
+fn _signed_span(
+    start: &AffineOperand,
+    facts: &IndexMap<Value, Known>,
+    width: u32,
+    count: &BigInt,
+    step: &BigInt,
+) -> (Option<BigInt>, Option<BigInt>) {
+    let Some(begin) = _signed(&start.as_arg(), facts, start.width()) else {
+        return (None, None);
+    };
+    if count < &BigInt::from(1_u8) || _as_signed(&masked(&begin, width), width) != begin {
+        return (None, None);
+    }
+    let last = &begin + (count - 1_u8) * step;
+    let sign = BigInt::from(1_u8) << (8 * width - 1);
+    let after = &last + step;
+    if -&sign <= last && last < sign && -&sign <= after && after < sign {
+        (Some(begin), Some(last))
+    } else {
+        (None, None)
+    }
+}
+
+/// Most trips of a symbolic unit-step loop, where proved; None for an inclusive test that may never end.
+#[allow(clippy::too_many_arguments)]
+fn _unit_maximum(
+    body: &Rc<MirBody>,
+    loop_: &Loop,
+    start: &AffineOperand,
+    bound: &AffineOperand,
+    begin: Option<&BigInt>,
+    limit: Option<&BigInt>,
+    step: &BigInt,
+    test: Kind,
+    inbounds: bool,
+) -> Option<BigInt> {
+    let width = bound.width();
+    if test == Kind::Ne {
+        return Some((BigInt::from(1_u8) << (8 * width)) - 1_u8);
+    }
+    let (unsigned, inclusive) = (_UNSIGNED(test), _INCLUSIVE(test));
+    let (low, high) = _extent(unsigned, width);
+    let ascending = step > &BigInt::from(0_u8);
+    // Walked toward `bound`, as integers in the test's own signedness.
+    let signed = |value: &BigInt| if unsigned { value.clone() } else { _as_signed(value, width) };
+    let begin = begin.map(signed);
+    let limit = limit.map(signed);
+    let end = if ascending { &high } else { &low };
+    if inclusive && limit.as_ref() == Some(end) {
+        return None;
+    }
+    let ends = (
+        _range(body, start, usize::from(!ascending), &high),
+        _range(body, bound, usize::from(ascending), &high),
+    );
+    let origin = begin.or(ends.0);
+    let mut target = limit.clone().or(ends.1);
+    if target.is_some() && limit.is_none() && inclusive && target.as_ref() == Some(end) {
+        target = None;
+    }
+    if let (Some(origin), Some(target)) = (&origin, &target) {
+        if low <= *origin.min(target) && *origin.max(target) <= high {
+            return Some(max(BigInt::from(0_u8), (target - origin) * step + u8::from(inclusive)));
+        }
+    }
+    if inbounds { _inbounds_trips(body, loop_, *loop_.latches.first().expect("one latch")) } else { None }
 }
 
 /// How far each counter and each value affine in one advances per iteration.
@@ -1245,7 +1518,8 @@ fn _range(body: &MirBody, arg: &AffineOperand, end: usize, top: &BigInt) -> Opti
 /// The most iterations an access made every iteration allows, as LLVM's inbounds does.
 ///
 /// Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
-/// wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
+/// wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w). Only
+/// an access its frontend marked `inbounds` is promised that.
 fn _inbounds_trips(body: &Rc<MirBody>, loop_: &Loop, latch: i64) -> Option<BigInt> {
     let step = advances(body, loop_);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
@@ -1257,6 +1531,7 @@ fn _inbounds_trips(body: &Rc<MirBody>, loop_: &Loop, latch: i64) -> Option<BigIn
         .filter(|block| loop_.body.contains(&block.at) && every.contains(&block.at) && block.at != loop_.header)
         .flat_map(|block| &block.ops)
         .flat_map(|op| op.loads.iter().chain(&op.stores))
+        .filter(|reference| reference.inbounds)
         .filter_map(|reference| {
             let advance = step.get(&reference.base?)?;
             Some(
@@ -1265,68 +1540,6 @@ fn _inbounds_trips(body: &Rc<MirBody>, loop_: &Loop, latch: i64) -> Option<BigIn
             )
         })
         .min()
-}
-
-/// Python's `_continuing_test(branch, inside)`.
-fn _continuing_test(branch: &Op, inside: &BTreeSet<i64>) -> Option<Kind> {
-    if branch.target.is_some_and(|target| inside.contains(&target)) {
-        return branch.test;
-    }
-    match branch.test {
-        Some(Kind::Le) => Some(Kind::Gt),
-        Some(Kind::Lt) => Some(Kind::Ge),
-        Some(Kind::Ge) => Some(Kind::Lt),
-        Some(Kind::Gt) => Some(Kind::Le),
-        Some(Kind::Below) => Some(Kind::AboveEq),
-        Some(Kind::BelowEq) => Some(Kind::Above),
-        Some(Kind::Above) => Some(Kind::BelowEq),
-        Some(Kind::AboveEq) => Some(Kind::Below),
-        Some(Kind::Eq) => Some(Kind::Ne),
-        Some(Kind::Ne) => Some(Kind::Eq),
-        _ => None,
-    }
-}
-
-/// Python's `_counter_bound(op, branch, counter, width, made=None)`.
-///
-/// This crate-visible exact spelling is shared by the trip proofs and their
-/// transform consumers. It returns the original MIR operand: recognizing a
-/// comparison is analysis, while choosing what to do with it remains the
-/// caller's job.
-pub(crate) fn _counter_bound(
-    op: &Op,
-    branch: &Op,
-    counter: &Affine,
-    width: u32,
-    made: Option<&BTreeMap<u32, &Op>>,
-) -> Option<Arg> {
-    let first = match op.args.first() {
-        Some(Arg::Held(held)) if op.args.len() == 2 && held.width == width => *held,
-        _ => return None,
-    };
-    if !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
-        return None;
-    }
-    let compared = made.map_or(first, |made| _copied(first, made));
-    if compared.value.id != counter.value {
-        return None;
-    }
-    let flags = op
-        .defines
-        .iter()
-        .filter(|value| value.flags)
-        .copied()
-        .collect::<Vec<_>>();
-    if flags.len() != 1 || !branch.uses.contains(&flags[0]) {
-        return None;
-    }
-    if op.kind == Kind::Sub && op.results.is_empty() && op.defines.len() == 1 {
-        return Some(op.args[1].clone());
-    }
-    if matches!(op.kind, Kind::And | Kind::Or) && op.args[0] == op.args[1] {
-        return Some(Arg::Const(Const::new(0, width)));
-    }
-    None
 }
 
 /// Python's `_constant(arg, facts, width)`.
@@ -1380,477 +1593,53 @@ pub(crate) fn _signed(
     _constant(argument, facts, width).map(|value| _as_signed(&value, width))
 }
 
-/// Python's `_last_counter(body, loop, counter, facts, width)`.
+/// The one positive trip count every counter of a loop proves, if they prove one.
 ///
-/// The comparison's continuation is normalized by `_continuing_test`, so the
-/// arithmetic below is deliberately the Python case split rather than a
-/// generalized range solver.  It proves the update after the last observed
-/// value remains representable; an otherwise plausible wrapping recurrence is
-/// not a finite loop proof.
-pub(crate) fn _last_counter(
-    body: &MirBody,
-    loop_: &Loop,
-    counter: &Affine,
-    facts: &IndexMap<Value, Known>,
-    width: u32,
-) -> Option<BigInt> {
-    if let Some(posttested) = _posttested_last(body, loop_, counter, facts, width) {
-        return Some(posttested);
-    }
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block))
-        .collect::<BTreeMap<_, _>>();
-    if loop_.latches.len() != 1 {
-        return None;
-    }
-    let header = *blocks.get(&loop_.header)?;
-    let latch = *blocks.get(loop_.latches.first()?)?;
-    if latch.succ.as_slice() != [header.at] || header.ops.is_empty() || header.succ.len() != 2 {
-        return None;
-    }
-    let branch = header.ops.last()?;
-    if branch.kind != Kind::Branch
-        || !branch
-            .target
-            .is_some_and(|target| header.succ.contains(&target))
-    {
-        return None;
-    }
-    let inside = &loop_.body;
-    if inside.iter().filter(|at| **at != header.at).any(|at| {
-        let block = blocks[at];
-        block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
-    }) || header.succ.iter().filter(|to| inside.contains(to)).count() != 1
-    {
-        return None;
-    }
-    let test = _continuing_test(branch, inside)?;
-    let mut made = BTreeMap::<u32, &Op>::new();
-    for block in &body.blocks {
-        for operation in &block.ops {
-            for value in &operation.defines {
-                made.insert(value.id, operation);
-            }
-        }
-    }
-    let comparisons = header.ops[..header.ops.len() - 1]
-        .iter()
-        .filter_map(|operation| _counter_bound(operation, branch, counter, width, Some(&made)))
-        .collect::<Vec<_>>();
-    if comparisons.len() != 1 {
-        return None;
-    }
-    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
-    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
-    let raw_bound = _constant(&comparisons[0], facts, width)?;
-    let step = _as_signed(&raw_step, width);
-    if step == BigInt::from(0_u8) {
-        return None;
-    }
-    let unsigned = matches!(
-        test,
-        Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq
-    );
-    let start = if unsigned {
-        raw_start
-    } else {
-        _as_signed(&raw_start, width)
-    };
-    let bound = if unsigned {
-        raw_bound
-    } else {
-        _as_signed(&raw_bound, width)
-    };
-    let distance = if step > BigInt::from(0_u8)
-        && matches!(test, Kind::Le | Kind::Lt | Kind::BelowEq | Kind::Below)
-    {
-        let limit = match test {
-            Kind::Lt | Kind::Below => &bound - 1_u8,
-            _ => bound.clone(),
-        };
-        limit - &start
-    } else if step < BigInt::from(0_u8)
-        && matches!(test, Kind::Ge | Kind::Gt | Kind::AboveEq | Kind::Above)
-    {
-        let limit = match test {
-            Kind::Gt | Kind::Above => &bound + 1_u8,
-            _ => bound.clone(),
-        };
-        &start - limit
-    } else if test == Kind::Ne
-        && (&bound - &start) * &step > BigInt::from(0_u8)
-        && (&bound - &start) % &step == BigInt::from(0_u8)
-    {
-        let difference = &bound - &start;
-        abs(&difference) - abs(&step)
-    } else {
-        return None;
-    };
-    if distance < BigInt::from(0_u8) {
-        return None;
-    }
-    let last = &start + (&distance / abs(&step)) * &step;
-    let after = &last + &step;
-    if unsigned {
-        let limit = BigInt::from(1_u8) << (width * 8);
-        (after >= BigInt::from(0_u8) && after < limit).then_some(last)
-    } else {
-        let sign = BigInt::from(1_u8) << (width * 8 - 1);
-        (after >= -&sign && after < sign).then_some(last)
-    }
+/// A loop may carry an integer counter, a byte address and one or more
+/// derived counters at once.  They are evidence for the same trip count,
+/// not alternatives from which a transform may pick the convenient one.
+/// Refusing disagreement keeps cloning transforms independent of which
+/// recurrence happened to be visited first.
+pub(crate) fn agreed_count(proofs: &[CountedLoop]) -> Option<BigInt> {
+    let zero = BigInt::from(0_u8);
+    let counts = proofs.iter().filter_map(|proof| proof.count.clone()).filter(|count| *count != zero).collect::<BTreeSet<_>>();
+    if counts.len() == 1 { counts.into_iter().next() } else { None }
 }
 
-/// Python's `_posttested_bound(op, branch, counter, width, made)`.
-fn _posttested_bound(
-    op: &Op,
-    branch: &Op,
-    counter: &Affine,
-    width: u32,
-    made: &BTreeMap<u32, &Op>,
-) -> Option<(Arg, Const)> {
-    let following = match op.args.first() {
-        Some(Arg::Held(held)) if op.args.len() == 2 && held.width == width => *held,
-        _ => return None,
-    };
-    if op.kind != Kind::Sub
-        || !op.loads.is_empty()
-        || !op.stores.is_empty()
-        || op.barrier()
-        || !op.results.is_empty()
-        || op.defines.len() != 1
-        || !op
-            .defines
-            .iter()
-            .any(|value| value.flags && branch.uses.contains(value))
-    {
-        return None;
-    }
-    let definition = made.get(&following.value.id).copied()?;
-    if !definition.loads.is_empty()
-        || !definition.stores.is_empty()
-        || definition.barrier()
-        || !definition.merges.is_empty()
-        || !definition.results.contains(&Arg::Held(following))
-    {
-        return None;
-    }
-    let (source, delta) = crate::model::mir::stepping(definition)?;
-    let (Arg::Held(source), Arg::Const(delta)) = (source, delta) else {
-        return None;
-    };
-    if source.width != width
-        || delta.width != width
-        || _copied(source, made).value.id != counter.value
-    {
-        return None;
-    }
-    Some((op.args[1].clone(), delta))
-}
-
-/// Python's `_posttested_last(body, loop, counter, facts, width)`.
-fn _posttested_last(
-    body: &MirBody,
-    loop_: &Loop,
-    counter: &Affine,
-    facts: &IndexMap<Value, Known>,
-    width: u32,
-) -> Option<BigInt> {
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block))
-        .collect::<BTreeMap<_, _>>();
-    if loop_.latches.len() != 1 {
-        return None;
-    }
-    let latch = *blocks.get(loop_.latches.first()?)?;
-    let inside = &loop_.body;
-    if latch.succ.len() != 2
-        || !latch.succ.contains(&loop_.header)
-        || latch.succ.iter().filter(|to| inside.contains(to)).count() != 1
-        || latch.ops.is_empty()
-    {
-        return None;
-    }
-    let branch = latch.ops.last()?;
-    if branch.kind != Kind::Branch
-        || !branch
-            .target
-            .is_some_and(|target| latch.succ.contains(&target))
-    {
-        return None;
-    }
-    if inside
-        .iter()
-        .filter(|at| **at != latch.at)
-        .any(|at| blocks[at].succ.iter().any(|to| !inside.contains(to)))
-    {
-        return None;
-    }
-    let test = _continuing_test(branch, inside)?;
-    let mut made = BTreeMap::<u32, &Op>::new();
-    for block in &body.blocks {
-        for operation in &block.ops {
-            for value in &operation.defines {
-                made.insert(value.id, operation);
-            }
-        }
-    }
-    let comparisons = latch.ops[..latch.ops.len() - 1]
-        .iter()
-        .filter_map(|operation| _posttested_bound(operation, branch, counter, width, &made))
-        .collect::<Vec<_>>();
-    if comparisons.len() != 1 {
-        return None;
-    }
-    let (bound_arg, after_step) = &comparisons[0];
-    let raw_start = _constant(&counter.start.as_arg(), facts, width)?;
-    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
-    let raw_bound = _constant(bound_arg, facts, width)?;
-    let raw_after = _constant(&Arg::Const(after_step.clone()), facts, width)?;
-    let step = _as_signed(&raw_step, width);
-    let after = _as_signed(&raw_after, width);
-    if step == BigInt::from(0_u8) || after != step {
-        return None;
-    }
-    let unsigned = matches!(
-        test,
-        Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq
-    );
-    let start = if unsigned {
-        raw_start
-    } else {
-        _as_signed(&raw_start, width)
-    };
-    let bound = if unsigned {
-        raw_bound
-    } else {
-        _as_signed(&raw_bound, width)
-    };
-    let first = &start + &step;
-    let count = if step > BigInt::from(0_u8) && matches!(test, Kind::Lt | Kind::Below) {
-        if first <= bound {
-            max(BigInt::from(1_u8), (&bound - &first) / &step + 1_u8)
-        } else {
-            BigInt::from(1_u8)
-        }
-    } else if step > BigInt::from(0_u8) && matches!(test, Kind::Le | Kind::BelowEq) {
-        if first <= bound {
-            max(BigInt::from(1_u8), (&bound - &first) / &step + 2_u8)
-        } else {
-            BigInt::from(1_u8)
-        }
-    } else if step < BigInt::from(0_u8) && matches!(test, Kind::Gt | Kind::Above) {
-        if first >= bound {
-            max(BigInt::from(1_u8), (&first - &bound) / -&step + 1_u8)
-        } else {
-            BigInt::from(1_u8)
-        }
-    } else if step < BigInt::from(0_u8) && matches!(test, Kind::Ge | Kind::AboveEq) {
-        if first >= bound {
-            max(BigInt::from(1_u8), (&first - &bound) / -&step + 2_u8)
-        } else {
-            BigInt::from(1_u8)
-        }
-    } else if test == Kind::Ne
-        && (&bound - &start) * &step > BigInt::from(0_u8)
-        && (&bound - &start) % &step == BigInt::from(0_u8)
-    {
-        (&bound - &start) / &step
-    } else {
-        return None;
-    };
-    if count <= BigInt::from(0_u8) {
-        return None;
-    }
-    let last = &start + (&count - 1_u8) * &step;
-    let next_value = &last + &step;
-    if unsigned {
-        let limit = BigInt::from(1_u8) << (width * 8);
-        (last >= BigInt::from(0_u8)
-            && last < limit
-            && next_value >= BigInt::from(0_u8)
-            && next_value < limit)
-            .then_some(last)
-    } else {
-        let sign = BigInt::from(1_u8) << (width * 8 - 1);
-        (last >= -&sign && last < sign && next_value >= -&sign && next_value < sign).then_some(last)
-    }
-}
-
-/// Python's `trip_count(body, loop, facts)`.
-pub(crate) fn trip_count(
-    body: &MirBody,
-    loop_: &Loop,
-    facts: &IndexMap<Value, Known>,
-) -> Option<BigInt> {
-    let mut counts = BTreeSet::new();
-    for counter in basics(body, loop_).values() {
-        let width = counter.start.width();
-        let start = _signed(&counter.start.as_arg(), facts, width);
-        let step = _signed(&counter.step.as_arg(), facts, width);
-        let last = _last_counter(body, loop_, counter, facts, width);
-        if let (Some(start), Some(step), Some(last)) = (start, step, last) {
-            if step != BigInt::from(0_u8) {
-                let distance = &last - &start;
-                if &distance % &step == BigInt::from(0_u8) {
-                    let count = distance / step + 1_u8;
-                    if count > BigInt::from(0_u8) {
-                        counts.insert(count);
-                    }
-                }
-            }
-        }
-        if let Some(symbolic) = _sentinel_trip_count(body, loop_, counter, facts, width) {
-            counts.insert(symbolic);
-        }
-    }
-    if counts.len() != 1 {
-        if !counts.is_empty() {
-            return None;
-        }
-        // Python's `dict(body.loop_trip_counts)` preserves the last duplicate
-        // header fact; reproduce that source-order overwrite explicitly.
+/// `agreed_count`, or the count remembered at this header when nothing proves one now.
+pub(crate) fn trip_count(body: &Rc<MirBody>, loop_: &Loop, facts: &IndexMap<Value, Known>) -> Option<BigInt> {
+    let proofs = counted(body, loop_, Some(facts), false);
+    let zero = BigInt::from(0_u8);
+    if !proofs.iter().any(|proof| proof.count.as_ref().is_some_and(|count| *count != zero)) {
+        // A semantics-preserving loop transform may consume the syntactic
+        // relationship which established this fact.  Nested-recurrence
+        // rewind, for example, replaces `start` with an outer phi after it
+        // has proved the inner loop's exact distance.  Retain that proof at
+        // the same header so rotation and measurement do not fall back to a
+        // guessed trip count.  A newly derived disagreement is still refused.
+        // Python's `dict(body.loop_trip_counts)` keeps the last duplicate header.
         return body
             .loop_trip_counts
             .iter()
             .filter_map(|(header, count)| (*header == loop_.header).then_some(BigInt::from(*count)))
             .last();
     }
-    counts.into_iter().next()
+    agreed_count(&proofs)
 }
 
-/// Python's `_sentinel_trip_count(body, loop, counter, facts, width)`.
-fn _sentinel_trip_count(
-    body: &MirBody,
+/// A counted loop whose first iteration and finite exit are proven.
+pub(crate) fn nonempty(body: &Rc<MirBody>, loop_: &Loop) -> bool {
+    trip_count(body, loop_, &consts::known(body, None, None, None, None)).is_some()
+}
+
+/// The proof in which `counter` decides when `loop` leaves.
+pub(crate) fn controlling(
+    body: &Rc<MirBody>,
     loop_: &Loop,
     counter: &Affine,
     facts: &IndexMap<Value, Known>,
-    width: u32,
-) -> Option<BigInt> {
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block))
-        .collect::<BTreeMap<_, _>>();
-    if loop_.latches.len() != 1 {
-        return None;
-    }
-    let header = *blocks.get(&loop_.header)?;
-    let latch = *blocks.get(loop_.latches.first()?)?;
-    let inside = &loop_.body;
-    let (control, posttested) = if latch.succ.as_slice() == [header.at] && header.succ.len() == 2 {
-        (header, false)
-    } else if latch.succ.len() == 2 && latch.succ.contains(&header.at) {
-        (latch, true)
-    } else {
-        return None;
-    };
-    if control.ops.is_empty() || control.succ.iter().filter(|to| inside.contains(to)).count() != 1 {
-        return None;
-    }
-    let branch = control.ops.last()?;
-    if branch.kind != Kind::Branch
-        || !branch
-            .target
-            .is_some_and(|target| control.succ.contains(&target))
-    {
-        return None;
-    }
-    if inside.iter().filter(|at| **at != control.at).any(|at| {
-        let block = blocks[at];
-        block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
-    }) {
-        return None;
-    }
-    if _continuing_test(branch, inside) != Some(Kind::Ne) {
-        return None;
-    }
-    let mut made = BTreeMap::<u32, &Op>::new();
-    let mut owners = BTreeMap::<u32, i64>::new();
-    for block in &body.blocks {
-        for operation in &block.ops {
-            for value in &operation.defines {
-                made.insert(value.id, operation);
-                owners.insert(value.id, block.at);
-            }
-        }
-    }
-    let (bound, raw_after) = if posttested {
-        let compared = control.ops[..control.ops.len() - 1]
-            .iter()
-            .filter_map(|operation| _posttested_bound(operation, branch, counter, width, &made))
-            .collect::<Vec<_>>();
-        if compared.len() != 1 {
-            return None;
-        }
-        let (bound, after) = compared.into_iter().next()?;
-        (bound, _constant(&Arg::Const(after), facts, width))
-    } else {
-        let compared = control.ops[..control.ops.len() - 1]
-            .iter()
-            .filter_map(|operation| _counter_bound(operation, branch, counter, width, Some(&made)))
-            .collect::<Vec<_>>();
-        if compared.len() != 1 {
-            return None;
-        }
-        (compared.into_iter().next()?, None)
-    };
-    let Arg::Held(bound) = bound else {
-        return None;
-    };
-    let definition = made.get(&bound.value.id).copied()?;
-    if owners
-        .get(&bound.value.id)
-        .is_some_and(|owner| inside.contains(owner))
-        || definition.kind != Kind::Add
-        || !definition.loads.is_empty()
-        || !definition.stores.is_empty()
-        || definition.barrier()
-        || !definition.merges.is_empty()
-        || definition.args.len() != 2
-        || definition.results.len() != 1
-        || definition.results[0] != Arg::Held(bound)
-    {
-        return None;
-    }
-    let starts = definition
-        .args
-        .iter()
-        .filter(|argument| **argument == counter.start.as_arg())
-        .collect::<Vec<_>>();
-    let offsets = definition
-        .args
-        .iter()
-        .filter(|argument| **argument != counter.start.as_arg())
-        .collect::<Vec<_>>();
-    if starts.len() != 1 || offsets.len() != 1 {
-        return None;
-    }
-    let raw_step = _constant(&counter.step.as_arg(), facts, width)?;
-    let delta = _constant(offsets[0], facts, width)?;
-    if raw_step == BigInt::from(0_u8) || (posttested && raw_after != Some(raw_step.clone())) {
-        return None;
-    }
-    let modulus = BigInt::from(1_u8) << (8 * width);
-    let divisor = gcd(raw_step.clone(), modulus.clone());
-    if &delta % &divisor != BigInt::from(0_u8) {
-        return None;
-    }
-    let period = &modulus / &divisor;
-    let count = mod_floor(
-        &(floor_div(&delta, &divisor) * modular_inverse(&floor_div(&raw_step, &divisor), &period)?),
-        &period,
-    );
-    (count != BigInt::from(0_u8)).then_some(count)
-}
-
-/// Python's `nonempty(body, loop)`.
-pub(crate) fn nonempty(body: &Rc<MirBody>, loop_: &Loop) -> bool {
-    let facts = consts::known(body, None, None, None, None);
-    trip_count(body, loop_, &facts).is_some()
+) -> Option<CountedLoop> {
+    counted(body, loop_, Some(facts), false).into_iter().find(|proof| proof.counter.value == counter.value)
 }
 
 fn abs(value: &BigInt) -> BigInt {
@@ -1910,70 +1699,6 @@ pub(crate) fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
         other = remainder;
     }
     one
-}
-
-/// Python's `canonical(body, loop)`.
-///
-/// This keeps every structural refusal in the Python order.  In particular,
-/// Python's final `blocks[at]` lookup is deliberately not softened: an
-/// unknown non-header loop-body address is an invalid hand-built shape and
-/// raises rather than becoming an ordinary structural refusal.
-pub(crate) fn canonical(body: &MirBody, loop_: &Loop) -> Option<LoopShape> {
-    // Python's dict comprehension retains the last duplicate address.
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, block))
-        .collect::<BTreeMap<_, _>>();
-    if loop_.latches.len() != 1 || !blocks.contains_key(&loop_.header) {
-        return None;
-    }
-    let latch_at = *loop_.latches.first()?;
-    let latch = blocks.get(&latch_at);
-    let header = blocks.get(&loop_.header)?;
-    let inside = &loop_.body;
-    let predecessors = predecessors(&body.blocks);
-    let outside = predecessors
-        .get(&header.at)
-        .into_iter()
-        .flatten()
-        .copied()
-        .filter(|at| !inside.contains(at))
-        .collect::<Vec<_>>();
-    let entered = header
-        .succ
-        .iter()
-        .copied()
-        .filter(|at| inside.contains(at) && *at != header.at)
-        .collect::<Vec<_>>();
-    let exits = header
-        .succ
-        .iter()
-        .copied()
-        .filter(|at| !inside.contains(at))
-        .collect::<Vec<_>>();
-
-    let latch = latch?;
-    if outside.len() != 1
-        || blocks.get(&outside[0])?.succ.as_slice() != [header.at]
-        || latch.succ.as_slice() != [header.at]
-        || entered.len() != 1
-        || exits.len() != 1
-        || header.ops.is_empty()
-        || header.ops.last()?.kind != Kind::Branch
-        || inside
-            .iter()
-            .filter(|at| **at != header.at)
-            .any(|at| blocks[at].succ.iter().any(|to| !inside.contains(to)))
-    {
-        return None;
-    }
-    Some(LoopShape {
-        preheader: outside[0],
-        latch: latch_at,
-        entered: entered[0],
-        exit: exits[0],
-    })
 }
 
 /// Python's `test_only(op)`.
@@ -2259,6 +1984,9 @@ pub(crate) fn control_replacement<'a>(
         .map(|(index, block)| (block.at, (index, block)))
         .collect::<BTreeMap<_, _>>();
     let predecessors = predecessors(&body.blocks);
+    if proof.posttested || proof.preheader.is_none() || proof.width() != proof.counter.start.width() {
+        return None;
+    }
     let (header_index, header) = blocks.get(&loop_.header).copied()?;
     let (_, latch) = blocks.get(&proof.latch).copied()?;
     if loop_.body.len() != 2
@@ -2285,6 +2013,18 @@ pub(crate) fn control_replacement<'a>(
         phis(body).find_map(|(occurrence, _, phi)| (occurrence == proof.phi).then_some(phi))?;
     let update = *phi.incoming.get(&proof.latch)?;
     let stepping = *made.get(&update.id)?;
+    let width = proof.width();
+    let stepping_op = &body.blocks[stepping.block_index()].ops[stepping.operation_index()];
+    let counter = Arg::Held(Held { value: phi.result, width });
+    if !mir::stepping(stepping_op).is_some_and(|(one, other)| one == counter || other == counter)
+        || stepping_op.results != vec![Arg::Held(Held { value: update, width })]
+        || !stepping_op.loads.is_empty()
+        || !stepping_op.stores.is_empty()
+        || stepping_op.barrier()
+        || !stepping_op.merges.is_empty()
+    {
+        return None;
+    }
     let (aliases, copies) = transparent_aliases(body, loop_, phi.result);
     let mut allowed = covered.clone();
     allowed.extend(copies.iter().copied());
@@ -2406,3 +2146,7 @@ pub(crate) fn zero_terminating_control<'a>(
 #[cfg(test)]
 #[path = "induction_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "counted_loops_tests.rs"]
+mod counted_loops_tests;

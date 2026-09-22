@@ -49,22 +49,12 @@ pub(crate) fn evaluated(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         if counters.is_empty() {
             continue;
         }
-        let mut counts = BTreeSet::new();
-        for counter in counters.values() {
-            let width = counter.start.width();
-            let last = induction::_last_counter(body, &loop_, counter, &facts, width);
-            let start = induction::_signed(&counter.start.as_arg(), &facts, width);
-            let step = induction::_signed(&counter.step.as_arg(), &facts, width);
-            if let (Some(last), Some(start), Some(step)) = (last, start, step) {
-                if step != BigInt::from(0) {
-                    counts.insert(induction::floor_div(&(last - start), &step) + 1);
-                }
-            }
-        }
-        if counts.len() != 1 {
+        let proofs = induction::counted(body, &loop_, Some(&facts), false);
+        let count = induction::agreed_count(&proofs);
+        // The exit terms below are the header's values as it leaves.
+        let Some(count) = count.filter(|_| !proofs.iter().any(|proof| proof.posttested)) else {
             continue;
-        }
-        let count = counts.pop_first().expect("one count");
+        };
         let exits = _exit_terms(body, &loop_, &counters, &count, &facts)?;
         if exits.is_empty() {
             continue;

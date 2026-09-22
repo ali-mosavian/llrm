@@ -463,22 +463,9 @@ pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &Ind
         {
             continue;
         }
-        let mut counts = BTreeSet::new();
-        for counter in induction::basics(body, &loop_).values() {
-            let width = counter.start.width();
-            let last = induction::_last_counter(body, &loop_, counter, &integers, width);
-            let start = induction::_signed(&counter.start.as_arg(), &integers, width);
-            let step = induction::_signed(&counter.step.as_arg(), &integers, width);
-            if let (Some(last), Some(start), Some(step)) = (last, start, step) {
-                if step != BigInt::from(0) {
-                    counts.insert(induction::floor_div(&(last - start), &step) + 1);
-                }
-            }
-        }
-        if counts.len() != 1 {
+        let Some(count) = induction::agreed_count(&induction::counted(body, &loop_, Some(&integers), false)) else {
             continue;
-        }
-        let count = counts.pop_first().expect("one count");
+        };
         let mut asked = consts::memory_queries(body, &integers, dgroup);
         let initial = consts::_kills(
             memory[&(entry.at, entry.ops.len() - 1)].clone(),

@@ -709,7 +709,7 @@ fn _control_credits(
     let mut selected = BTreeMap::<u32, ((i64, i64, i64), Derived)>::new();
 
     for (loop_, _basics, _derived) in found {
-        let proofs = induction::counted(body, loop_, Some(&facts));
+        let proofs = induction::counted(body, loop_, Some(&facts), true);
         if proofs.len() != 1 {
             continue;
         }
@@ -818,30 +818,21 @@ fn _replacement_credits(
         }
         for affine in affines {
             let phi = header.phis.iter().find(|one| one.result.id == affine.value);
-            let domain = induction::domain(body, loop_, affine, &facts);
-            let (Some(phi), Some(domain)) = (phi, domain) else {
+            let proof = induction::controlling(body, loop_, affine, &facts);
+            let (Some(phi), Some(proof)) = (phi, proof) else {
                 continue;
             };
-            if !phi.incoming.contains_key(&latch) {
+            if !phi.incoming.contains_key(&latch) || proof.posttested || proof.width() != affine.start.width() {
                 continue;
             }
-            let controls = operations(body)
-                .filter(|(at, _, _)| {
-                    at.block_index() == header_index && at.operation_index() + 1 < header.ops.len()
-                })
-                .filter(|(_, _, op)| {
-                    induction::_counter_bound(op, branch, affine, affine.start.width(), Some(&made))
-                        .is_some()
-                })
-                .map(|(at, _, _)| at)
-                .collect::<BTreeSet<_>>();
+            let Some(domain) = proof.span() else {
+                continue;
+            };
+            let controls = BTreeSet::from([proof.compare]);
             let update = made_at.get(&phi.incoming.get(&latch).expect("checked").id);
             let Some(&update) = update else {
                 continue;
             };
-            if controls.len() != 1 {
-                continue;
-            }
 
             let (aliases, copies) = induction::transparent_aliases(body, loop_, phi.result);
 
@@ -1573,7 +1564,7 @@ fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
 /// an add does not do and it stays.
 /// Who reads each value id in one body, indexed once for every `_answer`.
 struct _Reads<'a> {
-    body: &'a MirBody,
+    body: &'a Rc<MirBody>,
     /// Reads of each id by any operation.
     uses: HashMap<u32, u32>,
     /// The phi results each id is an incoming value of.
@@ -1581,7 +1572,7 @@ struct _Reads<'a> {
 }
 
 impl<'a> _Reads<'a> {
-    fn of(body: &'a MirBody) -> Self {
+    fn of(body: &'a Rc<MirBody>) -> Self {
         let mut uses = HashMap::<u32, u32>::default();
         for (_, _, op) in operations(body) {
             for value in &op.uses {
@@ -1912,7 +1903,7 @@ fn _addressed(body: &MirBody, value: Value) -> Option<Vec<MemRef>> {
 /// Exact where the counter starts at a word constant no less than zero and
 /// stops before it could wrap, and nothing reads the flags its step sets.
 fn _widened(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     loop_: &Loop,
     facts: &IndexMap<Value, Known>,
     value: Option<u32>,
@@ -1963,7 +1954,7 @@ fn _widened(
         {
             continue;
         }
-        if induction::_last_counter(body, loop_, affine, facts, 2).is_none() {
+        if induction::domain(body, loop_, affine, facts).is_none() {
             continue;
         }
         let phi = header.phis.iter().find(|phi| phi.result.id == affine.value);

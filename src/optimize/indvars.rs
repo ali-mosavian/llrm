@@ -261,12 +261,6 @@ pub(crate) fn rewound(body: &Rc<MirBody>, registers: i64, costs: Option<&Operati
 pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
-    let made = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .flat_map(|op| op.defines.iter().map(move |value| (value.id, op)))
-        .collect::<BTreeMap<_, _>>();
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let predecessors = loops::predecessors(&body.blocks);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
@@ -282,27 +276,17 @@ pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitution
         let header_index = blocks[&loop_.header];
         let header = &body.blocks[header_index];
         let counters = induction::basics(body, &loop_);
-        for counter in counters.values() {
-            let width = counter.start.width();
-            let last = induction::_last_counter(body, &loop_, counter, &facts, width);
-            let start = induction::_signed(&counter.start.as_arg(), &facts, width);
-            let step = induction::_signed(&counter.step.as_arg(), &facts, width);
-            let (Some(last), Some(start), Some(step)) = (last, start, step) else {
-                continue;
-            };
-            if step == BigInt::from(0_u8) {
+        for proof in induction::counted(body, &loop_, Some(&facts), false) {
+            if proof.posttested || proof.first.is_none() || proof.width() != proof.counter.start.width() {
                 continue;
             }
-            let count = induction::floor_div(&(&last - &start), &step) + 1;
-            let phi = header.phis.iter().find(|phi| phi.result.id == counter.value).expect("a basic counter's phi");
-            let update = *phi.incoming.get(&latch).expect("a latch input");
-            let branch_index = header.ops.len().checked_sub(1).expect("a header's last operation");
-            let branch = &header.ops[branch_index];
-            let compare_index = header.ops[..branch_index]
-                .iter()
-                .position(|op| induction::_counter_bound(op, branch, counter, width, Some(&made)).is_some())
-                .expect("the counter's compare");
-            let compare = &header.ops[compare_index];
+            let (counter, phi) = (&proof.counter, proof.phi_in(body));
+            let count = proof.count.clone().expect("a span has a count");
+            let (last, step) = (proof.last.clone().expect("a span has a last"), proof.step.clone());
+            let width = counter.start.width();
+            let update = *phi.incoming.get(&proof.latch).expect("a latch input");
+            let (branch_index, compare_index) = (proof.branch.operation_index(), proof.compare.operation_index());
+            let (branch, compare) = (proof.branch_in(body), proof.compare_in(body));
             let [exit_at] = header.succ.iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>()[..]
             else {
                 panic!("one exit from the header");
@@ -477,7 +461,7 @@ pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitution
 
 /// Every basic recurrence, with its width and proven domain when finite.
 fn _recurrences(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     facts: &IndexMap<Value, Known>,
 ) -> IndexMap<u32, (Affine, u32, Option<BigInt>, Option<BigInt>)> {
     let mut out = IndexMap::default();
@@ -678,7 +662,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
     let values = ssa::values(body).collect::<Vec<_>>();
 
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted(body, &loop_, Some(&facts));
+        let proofs = induction::counted(body, &loop_, Some(&facts), true);
         if proofs.len() != 1 {
             continue;
         }
@@ -693,15 +677,16 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 continue;
             };
             let control = &symbolic.replacement;
+            let preheader = proof.preheader.expect("control_replacement proved a preheader");
             let width = symbolic.candidate.start.width();
             let step = &symbolic.step;
             let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
                 continue;
             };
-            if phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([proof.preheader, proof.latch]) {
+            if phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([preheader, proof.latch]) {
                 continue;
             }
-            let initial = *phi.incoming.get(&proof.preheader).expect("checked incoming");
+            let initial = *phi.incoming.get(&preheader).expect("checked incoming");
             let update = *phi.incoming.get(&proof.latch).expect("checked incoming");
             let Some(stepping_at) = made.get(&update).copied() else {
                 continue;
@@ -742,17 +727,18 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             }
 
             let compare = &body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()];
-            let ending = body.blocks[blocks[&proof.preheader]].ops.last().unwrap_or(compare);
+            let ending = body.blocks[blocks[&preheader]].ops.last().unwrap_or(compare);
             let mut builder = counting::Seeds {
                 serial: values.iter().map(|value| value.id).max().unwrap_or(0) + 1,
                 variable: values.iter().map(|value| value.variable).max().unwrap_or(0) + 1,
                 at: ending.at,
                 width,
                 ops: Vec::new(),
-                facts: &facts,
             };
 
-            let count = induction::trips(proof, &mut |kind, args| builder.computed(kind, args));
+            let Some(count) = induction::trips(proof, &mut |kind, args| builder.computed(kind, args)) else {
+                continue;
+            };
             let distance = builder.computed(
                 Kind::Mul,
                 vec![count.as_arg(), Arg::Const(Const::new(consts::masked(step, width), width))],
@@ -810,7 +796,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             decrement.symbol = Some(false);
             let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
             let proof_phi = &body.blocks[proof.phi.block_index()].phis[proof.phi.phi_index()];
-            let preheader_input = *proof_phi.incoming.get(&proof.preheader).expect("a preheader input");
+            let preheader_input = *proof_phi.incoming.get(&preheader).expect("a preheader input");
             let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
                 .into_iter()
                 .flatten()
@@ -826,7 +812,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                     .then_some(definition)
                 })
                 .collect::<Vec<_>>();
-            let preheader_index = blocks[&proof.preheader];
+            let preheader_index = blocks[&preheader];
             let mut entry_ops = body.blocks[preheader_index]
                 .ops
                 .iter()
@@ -895,7 +881,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                                 Phi {
                                     result: other.result,
                                     incoming: OrderedMap::from_iter([
-                                        (proof.preheader, begun.value),
+                                        (preheader, begun.value),
                                         (proof.latch, update),
                                     ]),
                                 }
@@ -913,7 +899,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             let rotated = rotate::at_body(
                 &changed,
                 &loop_,
-                proof.preheader,
+                preheader,
                 changed.block(loop_.header).expect("the header remains"),
                 changed.block(proof.latch).expect("the latch remains"),
                 &entry_ops,
@@ -962,9 +948,6 @@ pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<Mir
         .flat_map(|block| &block.phis)
         .flat_map(|phi| phi.incoming.values().copied())
         .collect::<BTreeSet<_>>();
-    // Python passes its value-keyed `made` where `_counter_bound` looks up
-    // ids, so no copy is ever followed there.
-    let by_id = BTreeMap::new();
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         if loop_.latches.len() != 1 {
             continue;
@@ -1003,47 +986,19 @@ pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<Mir
             else {
                 continue;
             };
-            let compares = header.ops[..branch_index]
-                .iter()
-                .enumerate()
-                .flat_map(|(index, op)| {
-                    [2, 4]
-                        .into_iter()
-                        .filter(|compared| {
-                            induction::_counter_bound(op, branch, counter, *compared, Some(&by_id)).is_some()
-                        })
-                        .map(move |compared| (index, compared))
-                })
-                .collect::<Vec<_>>();
-            if compares.len() != 1 {
+            let Some(proof) = induction::controlling(body, &loop_, counter, &facts) else {
+                continue;
+            };
+            if proof.posttested || proof.last.is_none() {
                 continue;
             }
-            let (compare_index, compared) = compares[0];
-            let compare = &header.ops[compare_index];
-            if compare.args[1] == Arg::Const(Const::new(0, compared)) && matches!(branch.test, Some(Kind::Ne | Kind::Eq))
-            {
+            if proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne {
                 continue; // counts to zero already
             }
-            let start = induction::_signed(&counter.start.as_arg(), &facts, counter.start.width());
-            let step = induction::_signed(&counter.step.as_arg(), &facts, counter.step.width());
-            let (Some(start), Some(step)) = (start, step) else {
-                continue;
-            };
-            if step == BigInt::from(0_u8) {
-                continue;
-            }
-            let narrowed = Affine {
-                start: AffineOperand::Const(Const::new(consts::masked(&start, compared), compared)),
-                step: AffineOperand::Const(Const::new(consts::masked(&step, compared), compared)),
-                ..counter.clone()
-            };
-            if induction::_signed(&narrowed.start.as_arg(), &facts, compared).as_ref() != Some(&start) {
-                continue;
-            }
-            let Some(last) = induction::_last_counter(body, &loop_, &narrowed, &facts, compared) else {
-                continue;
-            };
-            let final_ = &last + &step;
+            let (compare_index, compare) = (proof.compare.operation_index(), proof.compare_in(body));
+            let start = proof.first.clone().expect("a last has a first");
+            let step = proof.step.clone();
+            let final_ = proof.last.as_ref().expect("checked") + &step;
             let offsets = _offsets(
                 phi.result,
                 &readers,

@@ -246,8 +246,8 @@ fn _last_counter_value(op: &Op, body: &Rc<MirBody>, loop_: &Loop) -> Option<Cons
     if counter.start.width() != stored.width || op.stores[0].width != stored.width {
         return None;
     }
-    let last = induction::_last_counter(body, loop_, &counter, &consts::known(body, None, None, None, None), stored.width)?;
-    Some(Const::new(consts::masked(&last, stored.width), stored.width))
+    let proof = induction::controlling(body, loop_, &counter, &consts::known(body, None, None, None, None))?;
+    Some(Const::new(consts::masked(proof.last.as_ref()?, stored.width), stored.width))
 }
 
 fn _invariant_value(op: &Op, invariant: &induction::Invariant, nonempty: bool) -> Option<Arg> {
