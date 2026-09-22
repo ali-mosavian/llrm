@@ -6392,15 +6392,15 @@ impl Compiler {
         }
 
         // x87 has no single POW instruction. Keep the mathematical structure
-        // visible as log2(base), exponent multiply, exp2. This identity is
-        // valid for a positive base; reject other domains until their
-        // sign/integer-exponent CFG is represented.
-        let (base_type, base) = self.constant(left).map_err(|_| SemanticError {
-            message: "inline power currently requires a positive constant base".into(),
-        })?;
-        if as_real(&base)? <= 0.0 {
-            return self.fail("inline power currently requires a positive constant base");
-        }
+        // visible as log2(base), exponent multiply, exp2. That identity holds
+        // for a positive base, which a constant one proves here.
+        let Some((base_type, base)) = self
+            .constant(left)
+            .ok()
+            .filter(|(_, base)| as_real(base).is_ok_and(|value| value > 0.0))
+        else {
+            return self.general_power(left, right);
+        };
         let (exponent, exponent_type) = self.expression(right)?;
         let common = common_type(base_type, exponent_type, Binary::Power)?;
         let exponent = self.convert(exponent, exponent_type, common)?;
@@ -6428,6 +6428,164 @@ impl Compiler {
         let result = self.value(common);
         self.emit("fexp2", vec![result], vec![Operand::Value(product)]);
         Ok((Operand::Value(result), common))
+    }
+
+    /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
+    /// 1.414214, -2^3 is -8, 0^0 is 1, 0^2 is 0; 0^-1 and -8^(1/3) raise
+    /// error 5. A float value neither crosses a block nor is read twice, so
+    /// each block reloads x and y from their cells.
+    fn general_power(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Operand, u32), SemanticError> {
+        let (base, base_type) = self.expression(left)?;
+        let (exponent, exponent_type) = self.expression(right)?;
+        let common = common_type(base_type, exponent_type, Binary::Power)?;
+        let base = self.convert(base, base_type, common)?;
+        let exponent = self.convert(exponent, exponent_type, common)?;
+        let [x, y, result] = [
+            self.temporary(common)?,
+            self.temporary(common)?,
+            self.temporary(common)?,
+        ];
+        self.emit("store", Vec::new(), vec![Operand::Place(x), base]);
+        self.emit("store", Vec::new(), vec![Operand::Place(y), exponent]);
+        let load = |this: &mut Self, place: u32| {
+            let value = this.value(common);
+            this.emit("load", vec![value], vec![Operand::Place(place)]);
+            Operand::Value(value)
+        };
+        let compare = |this: &mut Self, op: &'static str, place: u32, literal: &str| {
+            let left = load(this, place);
+            let right = this.floating_literal(literal, common)?;
+            let truth = this.value(BOOLEAN);
+            this.emit(op, vec![truth], vec![left, right]);
+            Ok::<_, SemanticError>(Operand::Value(truth))
+        };
+        // exp2(y * log2(magnitude)) into `result`.
+        let exponential = |this: &mut Self, negate_base: bool| {
+            let mut magnitude = load(this, x);
+            if negate_base {
+                let negated = this.value(common);
+                this.emit("fneg", vec![negated], vec![magnitude]);
+                magnitude = Operand::Value(negated);
+            }
+            let logarithm = this.value(common);
+            this.emit("flog2", vec![logarithm], vec![magnitude]);
+            let exponent = load(this, y);
+            let product = this.value(common);
+            this.emit(
+                "fmul",
+                vec![product],
+                vec![Operand::Value(logarithm), exponent],
+            );
+            let power = this.value(common);
+            this.emit("fexp2", vec![power], vec![Operand::Value(product)]);
+            this.emit(
+                "store",
+                Vec::new(),
+                vec![Operand::Place(result), Operand::Value(power)],
+            );
+        };
+        let positive = self.new_block();
+        let not_positive = self.new_block();
+        let zero = self.new_block();
+        let zero_not_positive = self.new_block();
+        let negative = self.new_block();
+        let negative_integral = self.new_block();
+        let odd = self.new_block();
+        let illegal = self.error_block();
+        let join = self.new_block();
+        let constant = |this: &mut Self, literal: &str| -> Result<(), SemanticError> {
+            let value = this.floating_literal(literal, common)?;
+            this.emit("store", Vec::new(), vec![Operand::Place(result), value]);
+            this.terminate("jump", Vec::new(), vec![join])
+        };
+
+        let truth = compare(self, "gt", x, "0")?;
+        self.terminate("branch", vec![truth], vec![positive, not_positive])?;
+        self.select_block(positive);
+        exponential(self, false);
+        self.terminate("jump", Vec::new(), vec![join])?;
+
+        self.select_block(not_positive);
+        let truth = compare(self, "eq", x, "0")?;
+        self.terminate("branch", vec![truth], vec![zero, negative])?;
+        self.select_block(zero);
+        let truth = compare(self, "gt", y, "0")?;
+        let zero_result = self.new_block();
+        self.terminate("branch", vec![truth], vec![zero_result, zero_not_positive])?;
+        self.select_block(zero_result);
+        constant(self, "0")?;
+        self.select_block(zero_not_positive);
+        let truth = compare(self, "eq", y, "0")?;
+        let one_result = self.new_block();
+        self.terminate("branch", vec![truth], vec![one_result, illegal])?;
+        self.select_block(one_result);
+        constant(self, "1")?;
+
+        // A negative base needs an integral exponent; its parity is the sign.
+        self.select_block(negative);
+        let exponent = load(self, y);
+        let whole = self.convert(exponent, common, LONG)?;
+        let whole_cell = self.temporary(LONG)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(whole_cell), whole]);
+        let whole = self.value(LONG);
+        self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
+        let back = self.convert(Operand::Value(whole), LONG, common)?;
+        let exponent = load(self, y);
+        let truth = self.value(BOOLEAN);
+        self.emit("eq", vec![truth], vec![back, exponent]);
+        self.terminate(
+            "branch",
+            vec![Operand::Value(truth)],
+            vec![negative_integral, illegal],
+        )?;
+        self.select_block(negative_integral);
+        exponential(self, true);
+        let whole = self.value(LONG);
+        self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
+        let parity = self.value(LONG);
+        self.emit(
+            "and",
+            vec![parity],
+            vec![
+                Operand::Value(whole),
+                Operand::Constant(LONG, Number::Integer(1)),
+            ],
+        );
+        let truth = self.value(BOOLEAN);
+        self.emit(
+            "ne",
+            vec![truth],
+            vec![
+                Operand::Value(parity),
+                Operand::Constant(LONG, Number::Integer(0)),
+            ],
+        );
+        self.terminate("branch", vec![Operand::Value(truth)], vec![odd, join])?;
+        self.select_block(odd);
+        let magnitude = load(self, result);
+        let negated = self.value(common);
+        self.emit("fneg", vec![negated], vec![magnitude]);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![Operand::Place(result), Operand::Value(negated)],
+        );
+        self.terminate("jump", Vec::new(), vec![join])?;
+
+        self.select_block(illegal);
+        self.emit_runtime_call(
+            "B$SERR",
+            Vec::new(),
+            vec![Operand::Constant(INTEGER, Number::Integer(5))],
+        );
+        self.terminate("unreachable", Vec::new(), Vec::new())?;
+
+        self.select_block(join);
+        Ok((load(self, result), common))
     }
 
     fn convert(&mut self, operand: Operand, from: u32, to: u32) -> Result<Operand, SemanticError> {

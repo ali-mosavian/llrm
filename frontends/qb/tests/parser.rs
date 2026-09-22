@@ -2293,3 +2293,18 @@ fn graphics_put_and_get_take_an_array_element() {
     let hir = compile(&module, "graphics_element", Dialect::QuickBasic45, "qb45").unwrap();
     assert!(hir.contains("B$GPUT") && hir.contains("B$GGET"), "{hir}");
 }
+
+#[test]
+fn a_power_of_a_variable_base_covers_the_whole_domain() {
+    // deedlines' `SQR(...) ^ 1.5` and `^ meg` were refused: only a positive
+    // constant base had a lowering. B$POW4 raises error 5 for 0 ^ -1 and a
+    // negative base under a fractional exponent.
+    let module = parse(
+        "b! = -2: e! = 3\r\nr! = b! ^ e!\r\ns# = sqr(2#) ^ 1.5\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "general_power", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"op\":\"fexp2\"").count(), 4, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$SERR\"").count(), 2, "{hir}");
+}
