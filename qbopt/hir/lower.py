@@ -407,6 +407,7 @@ def _function(
                     base_width=offset.width,
                     provenance=provenance,
                     volatile=place.volatile,
+                    inbounds=True,
                 )
                 return mir.Cell(ref)
             case model.ProjectedPlace(place_id, indices, field_offset, type_id):
@@ -470,9 +471,10 @@ def _function(
                         base_width=offset.width,
                         provenance=provenance,
                         volatile=place.volatile,
+                        inbounds=True,
                     )
                 )
-            case model.IndirectPlace(base, offset, type_id, volatile):
+            case model.IndirectPlace(base, offset, type_id, volatile, inbounds):
                 type_ = types[type_id]
                 pointer_type = value_types[base]
                 parameter = parameter_numbers.get(base)
@@ -490,6 +492,7 @@ def _function(
                             space=Space.LITERAL,
                             base_width=pointer_type.width,
                             provenance=provenance,
+                            inbounds=inbounds,
                             volatile=volatile,
                         )
                     )
@@ -552,6 +555,7 @@ def _function(
                             space=Space.FAR,
                             base_width=2,
                             provenance=provenance,
+                            inbounds=inbounds,
                             volatile=volatile,
                         )
                     )
@@ -596,6 +600,7 @@ def _function(
                             space=Space.FAR,
                             base_width=2,
                             provenance=provenance,
+                            inbounds=inbounds,
                         )
                     )
                 return mir.Cell(
@@ -606,6 +611,7 @@ def _function(
                         base_width=pointer_type.width,
                         pointer=True,
                         provenance=provenance,
+                        inbounds=inbounds,
                         volatile=volatile,
                     )
                 )

@@ -285,6 +285,8 @@ class MemRef:
     # barrier, but the property belongs on the memory occurrence so cloning,
     # splitting and aggregate expansion cannot silently shed it.
     volatile: bool = False
+    # The source language promises this access stays inside one object.
+    inbounds: bool = field(default=False, compare=False)
 
     @property
     def where(self) -> "Space | None":

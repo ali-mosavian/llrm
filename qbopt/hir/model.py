@@ -165,6 +165,7 @@ class IndirectPlace:
     offset: int
     type: int
     volatile: bool = False
+    inbounds: bool = False  # the language promises the access stays inside one object
 
 
 class DescriptorField(StrEnum):

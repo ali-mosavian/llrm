@@ -513,7 +513,8 @@ def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | No
     """The most iterations an access made every iteration allows, as LLVM's inbounds does.
 
     Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
-    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
+    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w). Only
+    an access its frontend marked `inbounds` is promised that.
     """
     step = advances(body, loop)
     every = loopy.dominators(body.blocks, body.entry).get(latch, frozenset())
@@ -524,7 +525,7 @@ def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | No
         if block.at in loop.body and block.at in every and block.at != loop.header
         for op in block.ops
         for ref in (*op.loads, *op.stores)
-        if ref.base in step
+        if ref.inbounds and ref.base in step
     ]
     return min(limits, default=None)
 

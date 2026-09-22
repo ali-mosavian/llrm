@@ -2302,6 +2302,7 @@ impl<'a> FunctionCompiler<'a> {
                 base: pointer,
                 offset: view.offset + field_offset,
                 type_id: type_id(type_name),
+                inbounds: false,
             }
         } else {
             hir::Operand::ProjectedPlace {
@@ -2429,6 +2430,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
+                                inbounds: false,
                             },
                             Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                             Storage::Dictionary { .. } => {
@@ -2774,6 +2776,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
+                                inbounds: false,
                             }],
                             None,
                         );
@@ -3104,6 +3107,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: address,
                     offset: 0,
                     type_id: element_type,
+                    inbounds: true,
                 })
             }
             Storage::Reference(pointer) => {
@@ -3112,6 +3116,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: address,
                     offset: 0,
                     type_id: element_type,
+                    inbounds: true,
                 })
             }
             Storage::Parameter(_) | Storage::ArrayView { .. } => {
@@ -3143,6 +3148,7 @@ impl<'a> FunctionCompiler<'a> {
                 base: descriptor,
                 offset: 4,
                 type_id: pointer_type,
+                inbounds: false,
             }],
             None,
         );

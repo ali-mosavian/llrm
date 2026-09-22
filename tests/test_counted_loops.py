@@ -16,6 +16,7 @@ from qbopt.model import execute
 from qbopt.optimize import rotate
 from qbopt.frontend.qb import driver
 from qbopt.frontend.qb import compile as qb_compile
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -392,6 +393,51 @@ def test_an_inclusive_test_at_its_types_maximum_is_not_counted(
     assert [proof.maximum for proof in proofs] == ([] if trips is None else [trips])
 
 
+def _indexing_loop(inbounds: bool) -> mir.MirBody:
+    """`for i = 0 to n: load a[i]` over an unknown `n`: only the access can bound its trips."""
+    seed, limit, counter, following, loaded = (
+        mir.Value(n, at, variable=n, version=1) for n, at in enumerate((0, 0, 1, 2, 2), 1)
+    )
+    flags = mir.Value(6, 1, flags=True, variable=6, version=1)
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 1), 1, base=counter, space=Space.SEGMENT, base_width=2, inbounds=inbounds)
+    compare = mir.Op(
+        1, ir.Operation.COMPARE, "cmp", (flags,), (counter, limit),
+        kind=mir.Kind.SUB, args=(mir.Held(counter, 2), mir.Held(limit, 2)),
+    )  # fmt: skip
+    branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.ABOVE, target=3)
+    jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+    returned = mir.Op(3, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN)
+    entry = (
+        mir.computed(0, mir.Kind.COPY, seed, (mir.Const(0, 2),), 2),
+        mir.computed(0, mir.Kind.LOAD, limit, (mir.Cell(mir.MemRef(Addr(Space.SEGMENT, 2, 1), 2)),), 2),
+    )
+    step = (
+        mir.computed(2, mir.Kind.LOAD, loaded, (mir.Cell(cell),), 1),
+        mir.computed(2, mir.Kind.INCREMENT, following, (mir.Held(counter, 2),), 2),
+    )
+    return mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), entry, (1,)),
+            mir.MirBlock(1, (mir.Phi(counter, {0: seed, 2: following}),), (compare, branch), (2, 3)),
+            mir.MirBlock(2, (), (*step, jump), (1,)),
+            mir.MirBlock(3, (), (returned,), ()),
+        ),
+        sealed=True,
+    )
+
+
+@pytest.mark.parametrize(("inbounds", "maximum"), [(True, 0x10000), (False, None)])
+def test_only_a_promised_access_bounds_an_inclusive_loop(inbounds: bool, maximum: int | None) -> None:
+    """Raised BC's `a[i]` may wrap its 16-bit offset, yet it bounded `i <= n` as if it could not."""
+    body = _indexing_loop(inbounds)
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    assert [proof.maximum for proof in induction.counted(body, loop, inbounds=True)] == (
+        [] if maximum is None else [maximum]
+    )
+
+
 PAIRS = """\
 long pairs(unsigned short steps)
 {
@@ -445,3 +491,13 @@ def test_a_c_loop_from_a_runtime_start_runs_its_source_trips(
 
     got = [execute.run(body, {}, argument).returned for body in (before, after, rotate.entered(after))]
     assert got[1:] == got[:1] * 2
+
+
+def test_a_c_array_access_carries_its_languages_inbounds_promise(pairs: tuple[mir.MirBody, mir.MirBody]) -> None:
+    """C's `x[j]` must say it stays in `x`, or no inclusive C loop is bounded by its accesses."""
+    raised, _ = pairs
+    indexed = [
+        ref for block in raised.blocks for op in block.ops for ref in (*op.loads, *op.stores) if ref.base is not None
+    ]
+
+    assert indexed and all(ref.inbounds for ref in indexed)
