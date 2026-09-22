@@ -82,7 +82,18 @@ def _following(body: lir.LirBody) -> dict[int, int]:
 
 
 def _fallthroughs(body: lir.LirBody) -> lir.LirBody:
-    """Make implicit CFG edges explicit when address-order placement breaks them."""
+    """Make implicit CFG edges explicit when address-order placement breaks them.
+
+    To a fixed point: a jump given to an empty block makes it emit, and the
+    block before it, which fell through past it, now falls into the jump.
+    Blocks only ever gain a terminator here, so this settles.
+    """
+    while (settled := _fallthroughs_once(body)) != body:
+        body = settled
+    return body
+
+
+def _fallthroughs_once(body: lir.LirBody) -> lir.LirBody:
     following = _following(body)
     changed = []
     for block in body.blocks:

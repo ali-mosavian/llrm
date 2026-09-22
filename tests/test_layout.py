@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from iced_x86 import OpKind
 from iced_x86 import Decoder
+from iced_x86 import FlowControl
 from iced_x86 import Mnemonic
 from iced_x86 import Register
 
@@ -146,6 +147,44 @@ def test_inverted_fallthrough_branch_targets_the_other_edge():
     last = changed.blocks[0].insns[-1].what
 
     assert last == ir.Semantics(ir.Operation.BRANCH, "jle", target=40)
+
+
+def test_a_jump_given_to_an_empty_block_does_not_steal_its_predecessors_fallthrough():
+    """suite/arrays' second loop never exited: `jle latch; jmp body`.
+
+    The latch was empty, so the test's exit edge fell through past it. Then
+    the latch was given its jump back to the body, came to emit, and the
+    exit edge fell into that jump instead.
+    """
+    from types import SimpleNamespace
+
+    def insn(at, what):
+        return lir.Insn(at, (at, at), what, (), ())
+
+    work = insn(5, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(1, 2),)))
+    test = insn(10, ir.Semantics(ir.Operation.BRANCH, "jle", target=20))
+    exit_ = insn(30, ir.Semantics(ir.Operation.RETURN, "ret"))
+    body = lir.LirBody(
+        "empty-latch",
+        5,
+        (
+            lir.LirBlock(5, (work,), (10,)),
+            lir.LirBlock(10, (test,), (20, 30)),
+            lir.LirBlock(20, (), (5,)),
+            lir.LirBlock(30, (exit_,), ()),
+        ),
+        {},
+        {},
+    )
+    found = SimpleNamespace(code=bytes(40), absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
+
+    emitted = layout.lay_out(layout._fallthroughs(body), 0, found, source=SourceMap())
+
+    assert not isinstance(emitted, str), emitted
+    decoded = {one.ip: one for one in Decoder(16, emitted.code)}
+    ret = next(ip for ip, one in decoded.items() if one.mnemonic == Mnemonic.RET)
+    branch = next(one for one in decoded.values() if one.flow_control == FlowControl.CONDITIONAL_BRANCH)
+    assert ret in (branch.near_branch_target, branch.next_ip)
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
