@@ -3,7 +3,7 @@
 
 use crate::model::floating::{Format, Precision, Rounding, Semantics};
 use crate::model::ir::{Loc, Operation};
-use crate::model::mir::{Arg, Kind, MirBody, Op, OpCode};
+use crate::model::mir::{Arg, Kind, Op, OpCode, RaisedBody};
 
 fn _format(width: u32, integer: bool) -> Option<Format> {
     if integer {
@@ -110,9 +110,8 @@ pub fn semantics(op: &Op) -> Option<Semantics> {
     }
 }
 
-pub fn annotated(body: &MirBody) -> MirBody {
+pub fn annotated(body: RaisedBody) -> RaisedBody {
     let annotated_op = |op: &Op| {
-        let mut op = op.clone();
         if op.op == Some(OpCode::Operation(Operation::Nothing))
             && matches!(op.name.as_str(), "wait" | "fwait")
             && op.defines.is_empty()
@@ -120,22 +119,25 @@ pub fn annotated(body: &MirBody) -> MirBody {
             && op.loads.is_empty()
             && op.stores.is_empty()
         {
+            let mut op = op.clone();
             op.kind = Kind::Fcheck;
             op.name = String::new();
             return op;
         }
-        op.floating = semantics(&op);
-        op
+        let mut made = op.clone();
+        made.floating = semantics(op);
+        made
     };
-    let mut body = body.clone();
-    for block in &mut body.blocks {
-        block.ops = block.ops.iter().map(annotated_op).collect();
-    }
-    body
+    let blocks = body.blocks.iter().map(|block| block.with_ops(block.ops.iter().map(annotated_op).collect())).collect();
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]
 mod tests {
+    //! The `raising_floats` tests of `tests/test_floating.py`.
+    //!
+    //! Skipped, needing `mir.bodies` and `tools/stages.py`:
+    //! `test_dump_exposes_single_rounding`.
     use super::*;
     use crate::model::floating::Exceptions;
     use crate::model::mir::MemRef;
