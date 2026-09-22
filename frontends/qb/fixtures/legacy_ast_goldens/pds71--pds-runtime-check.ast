@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-runtime-check
 # dialect: Pds71
-# source: pds71/pdrtc.bas
+# source: pds71/PDRTC.BAS
 
 Module {
     statements: [

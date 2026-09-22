@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-currency
 # dialect: Pds71
-# source: pds71/pdcur.bas
+# source: pds71/PDCUR.BAS
 
 Module {
     statements: [

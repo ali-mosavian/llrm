@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/operator-precedence
 # dialect: QuickBasic45
-# source: qb45/q45pr48.bas
+# source: qb45/Q45PR48.BAS
 
 Module {
     statements: [

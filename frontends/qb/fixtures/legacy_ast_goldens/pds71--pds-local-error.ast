@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-local-error
 # dialect: Pds71
-# source: pds71/pdlocal.bas
+# source: pds71/PDLOCAL.BAS
 
 Module {
     statements: [

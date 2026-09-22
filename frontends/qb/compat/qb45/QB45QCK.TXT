@@ -1,0 +1,3346 @@
+:l15
+:nSurvival Guide
+                         Welcome to the QB Advisor
+    The QB Advisor displays text about Help topics here in the Help window.
+
+  ■ To close the Help window, press ESC
+  ■ To scroll text in the Help window, press PGDN, PGUP, or DIRECTION keys
+  ■ To move between hyperlinks to topics, press TAB
+    (hyperlinks are words between highlighted brackets)
+        ◄How to Use QB Advisor Help System►
+        ◄How to Use QuickBASIC Menus and Commands►
+        ◄How to Use Dialog Boxes►
+        ◄How to Select Text for Cut, Copy, and Paste Operations►
+
+  ■ To choose a hyperlink, press F1
+
+See Also  ◄Contents►  ◄Index►
+
+:nHow to Use Menus and Commands
+◄Survival Guide►   ◄How to Use Menus and Commands►   ◄Contents►   ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+  Tip: The Reference Bar at the bottom of the screen always contains help
+       about the most useful commands in each QuickBASIC context. If the
+       command name has angle brackets around it, it can be executed from
+       the Reference Bar by choosing it with the mouse.
+
+  Use the Menu Bar at the top of the screen to tell QuickBASIC what to do.
+
+Menu Action             With a mouse...             With a keyboard...
+Pull down a menu        Move mouse cursor to        Press and release ALT to
+                        menu name, then press       highlight menu letters,
+                        and release ("click")       then press letter key
+                        the left mouse button.      for menu you want.
+
+Choose a command        Move mouse cursor to        Press letter key that
+                        command name and            matches the highlighted
+                        click                       letter on the command.
+
+Cancel a command        Move mouse cursor out-      Press ESC
+                        side menu and click
+
+:nHow to Use a Dialog Box
+◄Survival Guide►   ◄How to Use a Dialog Box►   ◄Contents►   ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ Dialog boxes appear immediately after you choose a command in some cases.
+┌─────────────Save As────────────┐
+│                                │    The dialog box pictured at the
+│ File Name: ▒▒▒▒▒▒▒▒▒▒▒▒        │    left gives you the chance to
+│                                │    input three items:
+│ Dirs/Drives         Format     │      ■ a file name
+│ ▒▒▒▒▒▒▒▒▒▒▒    ▒▒▒ QuickBASIC  │      ■ a disk drive or directory
+│ ▒▒▒▒▒▒▒▒▒▒▒    ▒▒▒             │      ■ a choice between two file formats
+│ ▒▒▒▒▒▒▒▒▒▒▒    ▒▒▒ Text        │
+│                                │
+├────────────────────────────────┤◄───Use the choices below this line to:
+│     ▒▒▒       ▒▒▒       ▒▒▒    │      ■ execute the command
+└────────────────────────────────┘      ■ cancel the command, or
+                                        ■ display help about the dialog box.
+
+Dialog Box Action      With a mouse...             With a keyboard...
+Select an input area   Move the mouse cursor to    Press TAB repeatedly
+                       a characteristic shape      until the cursor is in
+                       within the dialog box.      the area you want.
+
+  Tip: Input areas within a dialog box are marked by a rectangle, a list of
+       items within a box, a pair of brackets, or a pair of parentheses.
+
+Choose an item from    Highlight the item by       Highlight the item by
+a list                 moving the mouse and then   pressing the DIRECTION
+                       press the left mouse        keys and then press
+                       button twice in             ENTER.
+                       succession.
+
+Choose an option       Move the mouse cursor       Move the bullet with
+(place a bullet        between the parentheses     the DIRECTION keys
+between a pair of      and click the left
+parentheses)           button.
+
+Turn a check box on    Move the mouse cursor       Use TAB to move the
+or off                 between the square          cursor between the square
+                       brackets and click          brackets, then press the
+                                                   SPACEBAR
+Choose a command       Move the mouse cursor       Use TAB to move the
+button                 between the angle           cursor between the
+                       brackets and click          angle brackets and press
+                                                   ENTER
+
+:nHow to Select Text
+◄Survival Guide►   ◄How to Select Text►   ◄Contents►   ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+You need to select (or highlight) blocks of text to carry out some commands
+
+Action                 With a mouse...             With a keyboard...
+Select (highlight)     Move the mouse cursor       Move the cursor to the
+text                   to the point where you      point you want to begin
+                       want highlighting to        highlighting, using the
+                       begin. Then hold down       DIRECTION keys. Then hold
+                       the left mouse button       down the SHIFT key while
+                       while you drag the mouse    you use the DIRECTION keys
+                       across the text. Release    to highlight your text.
+                       the mouse button to
+                       end the selection.
+
+:nHow to Use QB Advisor Help System
+◄Survival Guide►   ◄How to Use QB Advisor Help►   ◄Contents►   ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+  Tip: The Reference Bar at the bottom of the screen always contains help
+       about the most useful commands in each QuickBASIC context.
+
+QB Advisor help text is available about the BASIC language at all times.
+
+Action                 With a mouse...             With a keyboard...
+Get help on a BASIC    Move the mouse cursor       Move the cursor to the
+keyword from your      to the keyword and click    keyword and press F1.
+program text.          the right mouse button.
+
+To get help on a       Move the mouse cursor       Move the cursor to the
+program object         to the symbol and click     symbol and press F1.
+(a variable, a         the right mouse button.
+procedure, etc.)
+from your program
+text.
+
+To get help on other   Move the mouse cursor       Repeatedly press TAB or
+topics.                to the hyperlink for        the key that corresponds
+                       that topic and click        to the first letter in
+                       the right mouse button.     the hyperlink until the
+                                                   cursor moves into the
+                                                   hyperlink you want. Then
+                                                   press F1.
+
+To retrace a path                                  Repeatedly press ALT+F1
+of hyperlinks                                      until the contents of
+you chose                                          the Help window are
+                                                   restored to what you need.
+
+On-line help is also available about items in the QuickBASIC environment:
+menus, commands, dialog boxes (including error message dialog boxes).
+
+Action                 With a mouse...             With a keyboard...
+Get help on a menu.                                Select the menu name from
+                                                   the menu bar and press F1.
+
+Get help on a                                      Select the command and
+command.                                           press F1.
+
+Get help on a          Move the mouse cursor to    Press F1.
+dialog box.            the <Help> button within
+                       the dialog box and click
+                       the left mouse button.
+
+:l14
+:nHelp on Help
+  ◄Help on Help►     ◄Contents►   ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+  Use help as follows:
+
+    ■ To get help at any time, press F1 or click the right mouse button.
+    ■ To get help on any part of a BASIC statement, a QuickBASIC menu item
+      or dialog box, position the cursor there press F1.
+    ■ To remove the help information from the screen, press ESC.
+    ■ To scroll help information, press PGDN.
+
+  Look for the help display in either
+    ■ The Help window at the top of the screen
+    ■ A dialog box which pops up in the center of the screen
+
+  In the Help window, use hyperlinks to display information about
+  related topics.
+    ■ All BASIC keywords are hyperlinks
+    ■ Other hyperlinks can be identified because
+      - Visually, they are bounded by highlighted arrowheads.
+      - Pressing the TAB key moves the cursor to a hyperlink.
+
+  To display the information that a hyperlink refers to, position the
+  cursor anywhere on the hyperlink and press F1 or click the right
+  mouse button.
+
+  Tip: Press F6 or SHIFT+F6 to move the cursor into the Help window or
+       move the mouse cursor into the Help window and click the left button.
+
+  QuickBASIC saves the twenty most recently used hyperlinks. To review
+  them press ALT+F1, repeatedly.
+
+  You can use QuickBASIC commands to
+    ■ Copy text, such as a programming example, out of the Help window
+      and paste it into the View window
+    ■ Find other uses of a term you want help on in the Help files.
+      This is useful if the term is not a hyperlink.
+
+  An alternative to the Help shortcut keys F1 and ALT+F1 is the Help
+  menu commands. To pull down the Help menu, press ALT+H. Then,
+  to choose a Help menu command, press the letter key that matches
+  the highlighted letter in the command you want.
+
+  Here is a summary of the Help menu commands:
+
+    Command          Action
+    ■ Index          Lists all the BASIC keywords as hyperlinks in the
+                     Help window
+    ■ Contents       Lists a set of general topics about BASIC and
+                     QuickBASIC as hyperlinks in the Help window. For
+                     example, this is the way to display information
+                     about BASIC data types or expression operators.
+    ■ Topic:         Displays help on the item where the cursor is
+    ■ Help on Help   Displays the text you have just finished reading.
+                     To display this help on help text at any time,
+                     press SHIFT+F1.
+
+:nTable of Contents
+  ◄Help on Help►   ◄Contents►   ◄Index►                         ◄Copyright►
+──────────────────────────────────────────────────────────────────────────────
+◄Using QuickBASIC►                      ◄BASIC Programming Language►
+  │                                       │
+  ├─ ◄Shortcut Key Summary►               ├─ ◄Functional Keyword Lists►
+  │      ◄Edit Keys►                      ├─ ◄Syntax Notation Conventions►
+  │      ◄View Keys►                      │
+  │      ◄Search Keys►                    ├─ ◄Fundamental Building Blocks►
+  │      ◄Run and Debug Keys►             ├─ ◄Data Types►
+  │      ◄Help Keys►                      ├─ ◄Expressions and Operators►
+  │                                       ├─ ◄Modules and Procedures►
+  ├─ ◄Limits to QuickBASIC►               ├─ ◄Selected Programs►
+  ├─ ◄Version 4.5 Differences►            │
+  ├─ ◄QB Command Line Options►            ├─ ◄ASCII Character Codes►
+  └─ ◄Survival Guide►                     └─ ◄Keyboard Scan Codes►
+
+:l12
+:nQuickBASIC Language Keyword Index
+  ◄Help on Help►     ◄Contents►     ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+To get help on a particular QuickBASIC keyword in the list below:
+  1. To move the cursor to the sublist of all keywords that start with
+     the same letter, press the key of the first letter of the keyword
+  2. Use the DIRECTION keys to move the cursor to the keyword
+  3. Press F1 to display the help text in the Help window
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ A ║
+                                                                  ╚═══╝
+  ABS Function                       APPEND
+  ACCESS                             AS
+  ALIAS                              ASC Function
+  AND Operator                       ATN Function
+  ANY
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ B ║
+                                                                  ╚═══╝
+  BASE                               BLOAD Statement
+  BASIC Program Lines                BSAVE Statement
+  BEEP Statement                     BYVAL
+  BINARY
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ C ║
+                                                                  ╚═══╝
+  CALL Statement                     CLS Statement
+  CALLS Statement                    COLOR Statement
+  CALL ABSOLUTE Statement            COM Statement
+  CALL INTERRUPT Statement           COMMAND$ Function
+  CASE                               COMMON Statement
+  CDBL Function                      CONST Statement
+  CDECL                              COS Function
+  CHAIN Statement                    CSNG Function
+  CHDIR Statement                    CSRLIN Function
+  CHR$ Function                      CVD Function
+  CINT Function                      CVDMBF Function
+  CIRCLE Statement                   CVI Function
+  CLEAR Statement                    CVL Function
+  CLNG Function                      CVS Function
+  CLOSE Statement                    CVSMBF Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ D ║
+                                                                  ╚═══╝
+  DATA Statement                     DEFINT Statement
+  Data Types                         DEFLNG Statement
+  DATE$ Function                     DEFSNG Statement
+  DATE$ Statement                    DEFSTR Statement
+  DECLARE (BASIC) Statement          DIM Statement
+  DECLARE (Non-BASIC) Statement      DO...LOOP Statement
+  DEF FN Statement                   DOUBLE
+  DEF SEG Statement                  DRAW Statement
+  DEFDBL Statement                   $DYNAMIC Metacommand
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ E ║
+                                                                  ╚═══╝
+  ELSE                               ERDEV Function
+  ELSEIF                             ERDEV$ Function
+  END Statement                      ERL Function
+  ENDIF                              ERR Function
+  ENVIRON Statement                  ERROR Statement
+  ENVIRON$ Function                  EXIT Statement
+  EOF Function                       EXP Function
+  EQV Operator                       Expressions and Operators
+  ERASE Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ F ║
+                                                                  ╚═══╝
+  FIELD Statement                    FOR...NEXT Statement
+  FILEATTR Function                  FRE Function
+  FILES Statement                    FREEFILE Function
+  FIX Function                       FUNCTION Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ G ║
+                                                                  ╚═══╝
+  GET (File I/O) Statement           GOSUB Statement
+  GET (Graphics) Statement           GOTO Statement
+
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ H ║
+                                                                  ╚═══╝
+  HEX$ Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ I ║
+                                                                  ╚═══╝
+  IF...THEN Statement                INPUT$ Function
+  IMP Operator                       INSTR Function
+  $INCLUDE Metacommand               INT Function
+  INKEY$ Function                    INTEGER
+  INP Function                       IOCTL Statement
+  INPUT Statement                    IOCTL$ Function
+  INPUT # Statement                  IS
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ K ║
+                                                                  ╚═══╝
+  KEY Statement                      KILL Statement
+  KEY(n) Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ L ║
+                                                                  ╚═══╝
+  LBOUND Function                    LOCATE Statement
+  LCASE$ Function                    LOCK...UNLOCK Statements
+  LEFT$ Function                     LOF Function
+  LEN Function                       LOG Function
+  LET Statement                      Logical Operator Truth Table
+  LINE (Graphics) Statement          LONG
+  LINE INPUT Statement               LOOP
+  LINE INPUT # Statement             LPOS Function
+  LIST                               LPRINT Statements
+  LOC Function                       LSET Statement
+  LOCAL                              LTRIM$ Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ M ║
+                                                                  ╚═══╝
+  MID$ Function                      MKL$ Function
+  MID$ Statement                     MKS$ Function
+  MKD$ Function                      MKSMBF$ Function
+  MKDIR Statement                    MOD
+  MKDMBF$ Function                   Modules and Procedures
+  MKI$ Function
+
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ N ║
+                                                                  ╚═══╝
+  NAME Statement                     NOT Operator
+  NEXT
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ O ║
+                                                                  ╚═══╝
+  OCT$ Function                      ON UEVENT Statement
+  OFF                                ON...GOSUB Statement
+  ON                                 ON...GOTO Statement
+  ON COM(n) Statement                OPEN (File I/O) Statement
+  ON ERROR Statement                 OPEN COM Statement
+  ON event Statements                Operator Precedence Rules
+  ON KEY(n) Statement                OPTION BASE Statement
+  ON PEN Statement                   OR Operator
+  ON PLAY(n) Statement               OUT Statement
+  ON STRIG(n) Statement              OUTPUT
+  ON TIMER(n) Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ P ║
+                                                                  ╚═══╝
+  PAINT Statement                    POINT Function
+  PALETTE Statements                 POKE Statement
+  PCOPY Statement                    POS Function
+  PEEK Function                      PRESET Statement
+  PEN Function                       PRINT Statement
+  PEN Statement                      PRINT USING Statement
+  PLAY(n) Function                   PRINT # Statement
+  PLAY (Music) Statement             PSET Statement
+  PLAY (Event Trapping) Statements   PUT (File I/O) Statement
+  PMAP Function                      PUT (Graphics) Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ R ║
+                                                                  ╚═══╝
+  RANDOM                             RETURN Statement
+  RANDOMIZE Statement                RIGHT$ Function
+  READ Statement                     RMDIR Statement
+  REDIM Statement                    RND Function
+  REM Statement                      RSET Statement
+  RESET Statement                    RTRIM$ Function
+  RESTORE Statement                  RUN Statement
+  RESUME Statement
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ S ║
+                                                                  ╚═══╝
+  SADD Function                      SPC Function
+  SCREEN Function                    SQR Function
+  SCREEN Statement                   STATIC Statement
+  SEEK Function                      $STATIC Metacommand
+  SEEK Statement                     STEP
+  SELECT CASE Statement              STICK Function
+  SETMEM Function                    STOP Statement
+  SGN Function                       STR$ Function
+  SHARED Statement                   STRIG Function
+  SHELL Statement                    STRIG Statements
+  SIGNAL                             STRING
+  SIN Function                       STRING$ Function
+  SINGLE                             SUB Statement
+  SLEEP Statement                    SWAP Statement
+  SOUND Statement                    SYSTEM Statement
+  SPACE$ Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ T ║
+                                                                  ╚═══╝
+  TAB Function                       TIMER Statement
+  TAN Function                       TO
+  THEN                               TROFF Statement
+  TIME$ Function                     TRON Statement
+  TIME$ Statement                    TYPE Statement
+  TIMER Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ U ║
+                                                                  ╚═══╝
+  UBOUND Function                    UNLOCK Statement
+  UCASE$ Function                    UNTIL
+  UEVENT Statement                   USING
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ V ║
+                                                                  ╚═══╝
+  VAL Function                       VARSEG Function
+  Variable Scope Rules               VIEW (Graphics) Statement
+  VARPTR Function                    VIEW (Text) Statement
+  VARPTR$ Function
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ W ║
+                                                                  ╚═══╝
+  WAIT Statement                     WINDOW Statement
+  WEND                               WRITE (Screen I/O) Statement
+  WHILE...WEND Statement             WRITE (File I/O) Statement
+  WIDTH Statements
+                                                                  ╔═══╗
+══════════════════════════════════════════════════════════════════╣ X ║
+                                                                  ╚═══╝
+  XOR Operator
+
+:nSIGNAL Keyword
+SIGNAL Keyword
+
+  The SIGNAL keyword is reserved for future use.
+
+
+:nLOCAL Keyword
+LOCAL Keyword
+
+  The LOCAL keyword is reserved for future use.
+
+
+:nABS Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ABS - a math function that returns the absolute value of a numeric
+      expression
+
+Syntax
+  ABS(numeric-expression)
+
+
+:nACCESS Clause in the OPEN Statement
+ACCESS Clause
+
+Syntax
+  {ACCESS READ | ACCESS WRITE | ACCESS READ WRITE}
+
+The ACCESS clause is used in the OPEN statement. It works only if you
+are using a version of DOS that supports networking (DOS Versions 3.0
+or later).
+
+  ■ READ          Opens a file for reading only.
+  ■ WRITE         Opens a file for writing only.
+  ■ READ WRITE    Opens a file for both reading and writing. This mode
+                  is valid only for RANDOM and BINARY files and files
+                  opened for APPEND.
+
+See Also  ◄OPEN►
+
+:nALIAS Clause in the DECLARE Statement
+ALIAS Clause
+
+Syntax
+  ALIAS "name-in-Quick-Library"
+
+The ALIAS clause in a DECLARE statement announces to QuickBASIC that the
+name of a procedure in a Quick library is different from the name you will
+use in your program to call that procedure.
+
+See Also  ◄DECLARE (Non-BASIC)►
+
+:nAND Operator QuickSCREEN
+AND Operator
+
+Syntax
+  result=numeric-expression1 AND numeric-expression2
+
+The AND logical-conjunction operator compares corresponding bits in two
+numeric expressions and sets the corresponding bit in the result to 1
+if both bits are 1. The AND operator use this "truth table":
+
+─────────────────────────────────────────────────────────────────
+Bit in First Expression   Bit in Second Expression   Bit in Result
+─────────────────────────────────────────────────────────────────
+           1                       1                      1
+           1                       0                      0
+           0                       1                      0
+           0                       0                      0
+──────────────────────────────────────────────────────────────────
+
+:nANY Clause
+ANY Clause
+
+Syntax
+  variable AS ANY
+
+When used as the variable type in an AS type clause that is part
+of a procedure declaration, ANY disables type checking for that
+parameter.
+
+See Also  ◄DECLARE►
+
+:nAPPEND Keyword in the OPEN Statement
+APPEND Keyword
+
+The APPEND keyword in an OPEN statement specifies that the file is
+to be opened for sequential access, and sets the file pointer to the
+end of the file. PRINT # or WRITE # statements then append to (extend)
+the file.
+
+See Also  ◄OPEN►  ◄PRINT #►  ◄WRITE #►
+
+:nAS Clause - Different Uses
+AS Clause - Different Uses
+See Also
+To specify a variable's type in a declarative statement or parameter list:
+    ◄COMMON►                                ◄FUNCTION►
+    ◄DECLARE SUB►                           ◄REDIM►
+    ◄DECLARE FUNCTION►                      ◄SHARED►
+    ◄DEF FN►                                ◄STATIC►
+    ◄DIM►                                   ◄SUB►
+To specify an element's type in a user-defined data type:
+    ◄TYPE...END TYPE►
+To assign a file number to a file or device in an OPEN statement:
+    ◄OPEN►
+To specify a field name in a random-access record:
+    ◄FIELD►
+To specify a new file name when you rename a file:
+    ◄NAME►
+
+:nASC Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ASC - a string processing function that returns a numeric value
+      that is the ASCII code for the first character in a string
+      expression
+
+Syntax
+  ASC(stringexpression)
+
+See Also  ◄ASCII Character Codes►  ◄CHR$►
+
+:nATN Function QuickSCREEN
+◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ATN - a math function that returns the arctangent of a numeric
+      expression (the angle whose tangent is equal to the numeric
+      expression)
+
+Syntax
+  ATN(numeric-expression)
+
+See Also  ◄TAN►  ◄SIN►  ◄COS►
+
+:nBEEP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+BEEP - a device I/O statement that sounds the speaker
+
+Syntax
+  BEEP
+
+
+:nRANDOM Keyword in the OPEN Statement
+RANDOM Keyword
+
+An optional keyword in the OPEN statement, RANDOM specifies random-access
+file mode. In random-access mode, you may read or write information to any
+record position in the file using GET or PUT statements.
+
+See Also  ◄OPEN►  ◄PUT►  ◄GET►
+
+:nBINARY Keyword in the OPEN Statement
+BINARY Keyword
+
+BINARY is used in an OPEN statement to specify binary file mode. In
+binary mode, you may read or write information to any byte position in
+the file using GET or PUT statements.
+
+See Also  ◄OPEN►  ◄PUT►  ◄GET►
+
+:nBLOAD Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+BLOAD - a file I/O statement that loads a memory-image file,
+        created by BSAVE, into memory from an input file or device
+
+Syntax
+  BLOAD filespec[,offset]
+    ■ filespec is a string expression that specifies the file or device
+      from which to load the memory-image file
+    ■ offset is a ◄Detail► that lets you load the file into a precise
+      memory location
+
+See Also  ◄BSAVE► - to see how to create the memory-image file
+          ◄DEF SEG►
+
+:nBSAVE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+BSAVE - a file I/O statement transfers the contents of an area
+        of memory to an output file or device
+
+Syntax
+  BSAVE filespec,offset,length
+    ■ filespec, a string expression, specifies the file or device on which
+      to save the memory-image file
+    ■ offset, a numeric expression, is the number of bytes beyond the start
+      of the memory segment from which to start saving
+    ■ length, a numeric expression that has an unsigned integer value
+      between 0 and 65,535, is the number of memory bytes to save
+
+See Also  ◄DEF SEG►  ◄BLOAD►
+
+:nBYVAL Clause
+BYVAL Clause
+
+Syntax
+  BYVAL variable [AS type]
+
+The BYVAL attribute in the parameter list of a DECLARE statement causes
+the value of the specified variable to be passed to the procedure, rather
+than the variable's address. BYVAL can only be used in DECLARE statements
+for non-BASIC procedures, and cannot be applied to string parameters.
+
+See Also  ◄CALLS or CALL (Non-BASIC) statements►
+
+:nCALL Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CALL - a statement that transfers control to another procedure, a
+       BASIC SUB
+Syntax
+  CALL name[(argumentlist)]
+    ■ name is the name of the SUB
+    ■ argumentlist lists the variables or constants passed to the SUB
+
+See Also  ◄DECLARE►  ◄SUB...END SUB►
+Other Uses
+  ◄CALLS► - to transfer control to a procedure written in another language
+  ◄CALL ABSOLUTE► - to transfer control to a machine-language procedure
+  ◄CALL INTERRUPT► - to perform a DOS system call
+
+:nCALLS or CALL (Non-BASIC Procedures) Statements QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CALL, CALLS - Statements that transfer control to a procedure written
+              in another programming language
+Syntax
+  CALL name [(call-argumentlist)]
+  name [call-argumentlist]
+  CALLS name [(calls-argumentlist)]
+    ■ name identifies the procedure being called
+    ■ call-argumentlist, if used, has the syntax
+        [{BYVAL|SEG}]argument[()][,{BYVAL|SEG}]argument[()]] ...
+      (see ◄Details►)
+    ■ calls-argumentlist, if used, has the syntax
+        argument[,argument] ...
+
+See Also  ◄DECLARE (Non-BASIC) statement►
+
+:nCALL ABSOLUTE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CALL ABSOLUTE - a statement that transfers control to a machine-language
+                procedure
+Syntax
+  CALL ABSOLUTE([argumentlist,]integervariable)
+    ■ argumentlist, if used, contains the names of values in the current
+      data segment
+    ■ integervariable contains the offset from the current code segment,
+      set by DEF SEG, to the starting location of the called procedure
+
+See Also  ◄CALLS or CALL(Non-BASIC) statements► - which provide a simpler
+          way to call assembly language procedures from BASIC
+
+:nCALL INTERRUPT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CALL INTERRUPT - a statement that allows BASIC programs to perform
+                 DOS system calls
+Syntax
+  CALL INTERRUPT(interruptnum,inregs,outregs)
+  CALL INTERRUPTX(interruptnum,inregs,outregs)
+    ■ interruptnum, an integer expression which has a value between
+      0 and 255, is a DOS interrupt number
+    ■ inregs contains the register values before the interrupt is performed
+      (see Details for how to declare a user-defined type which will
+      contain these register values)
+    ■ outregs contains the register values after the interrupt
+
+:nCDBL Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CDBL - a conversion function that converts a numeric expression to a
+       double-precision number
+
+Syntax
+  CDBL(numeric-expression)
+
+See Also  ◄CINT►  ◄CSNG►  ◄CLNG►
+
+:nCHAIN Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CHAIN - a program control statement that transfers control to another
+        program
+Syntax
+  CHAIN filespec
+    ■ filespec is a string expression that identifies the program to which
+      control is passed. The filespec may include a path specification.
+
+See Also  ◄RUN► - another way to transfer control to a program
+          ◄COMMON► - which enables sharing of variables between chained
+                     programs
+
+:nCHDIR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CHDIR - a statement that uses DOS to change the current default directory
+        for the specified drive
+
+Syntax
+  CHDIR pathspec
+    ■ pathspec is a string expression that identifies the directory that
+      is to become the default directory
+
+See Also  ◄MKDIR►  ◄RMDIR►
+
+:nCHR$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CHR$ - a string processing function that returns a one-character
+       string whose ASCII code is the argument
+
+Syntax
+  CHR$(code)
+    ■ code, a numeric expression that has a value between 0 and 255,
+      is one of the ASCII character codes
+
+See Also  ◄ASC►  ◄ASCII Character Codes►
+
+:nCINT Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CINT - a conversion function that converts a numeric expression to
+       an integer by rounding the fractional part of the expression
+
+Syntax
+  CINT(numeric-expression)
+
+See Also  ◄CDBL►  ◄CSNG►  ◄CLNG►  ◄FIX►  ◄INT►
+
+:nCIRCLE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CIRCLE - a graphics statement that draws an ellipse or circle
+         with a specified center and radius
+Syntax
+  CIRCLE [STEP] (x,y),radius[,[color][,[start][,[end][,aspect]]]]
+    ■ (x,y) are the screen coordinates of the center of the circle or ellipse
+    ■ radius, a numeric expression, is the radius
+    ■ Use STEP if x and y are offsets from the current cursor position,
+      rather than absolute screen coordinates
+    ■ start and end can be used to draw arcs
+    ■ color and aspect are ◄Details►
+
+See Also  ◄SCREEN Statement► - to find out about the different screen
+                               coordinate systems that are available
+          ◄LINE►
+
+:nCLEAR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CLEAR - a memory management statement that reinitializes all program
+        variables, closes files, and optionally sets the stack size.
+
+Syntax
+  CLEAR [,,stack]
+    ■ stack is a ◄Detail►, it lets you set the stack size
+
+See Also  ◄ERASE►
+
+:nCLNG Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CLNG - a conversion function that converts a numeric expression to a
+       long (4-byte) integer by rounding the fractional part of the
+       expression
+
+Syntax
+  CLNG(numeric-expression)
+
+See Also  ◄CINT►  ◄CSNG►  ◄CDBL►
+
+:nCLOSE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CLOSE - a file I/O statement that concludes I/O to a file or device
+
+Syntax
+  CLOSE [[#]filenumber[,[#] filenumber]...]
+    ■ If all arguments are omitted, all open files and devices are closed
+    ■ filenumber is the number of an open file
+
+See Also  ◄OPEN►  ◄RESET►  ◄END►  ◄STOP►
+
+:nCLS Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CLS - a  device I/O statement that clears the display screen
+
+Syntax
+  CLS [{0|1|2}]
+    ■ If all arguments are omitted, either the graphics viewport or the text
+      viewport are cleared, depending upon previous uses of VIEW statement.
+    ■ 0 clears the screen of all text and graphics.
+    ■ 1 clears only the graphics viewport, if it is active.
+    ■ 2 clears only the text viewport, leaving bottom screen line unchanged.
+
+See Also  ◄VIEW► - to see how to activate the graphics viewport
+          ◄VIEW PRINT► - to see how to set the text viewport
+          ◄WINDOW► - to see how to customize the graphics viewport
+
+:nCOLOR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+COLOR - a graphics statement that selects display colors
+
+SCREEN Mode 0 Syntax:  COLOR [foreground][,[background][,border]]
+   ■ foreground is the text color (range = 0-31, with 16-31 blinking)
+   ■ background is the screen color (range = 0-7)
+   ■ border is the color surrounding the screen (range = 0-15)
+     0 = black       4 = red           8 = grey             12 = light red
+     1 = blue        5 = magenta       9 = light blue       13 = light magenta
+     2 = green       6 = brown        10 = light green      14 = yellow
+     3 = cyan        7 = white        11 = light cyan       15 = bright white
+SCREEN Mode 1 Syntax:  COLOR [background][,palette]
+   ■ background is the screen color (range = 0-15)
+   ■ palette is a three-color palette (range = 0-1)
+     0 = green, red, and brown         1 = cyan, magenta, and bright white
+SCREEN Modes 7-10 Syntax:  COLOR [foreground][,background]
+   ■ foreground is the line-drawing color (range = 0-15, except in Mode 10)
+   ■ background is the screen color (ranges vary)
+SCREEN Modes 11-13 Syntax:  COLOR [foreground]
+   ■ foreground is the line-drawing color (ranges vary)
+
+See Also  ◄SCREEN► - to see how the combination of mode set by the SCREEN
+                     statement, the graphics adapter, and the display
+                     determine available color ranges.
+          ◄PALETTE► - to see how to use color attribute numbers in screen
+                      modes 7-10, 12, and 13.
+
+:nCOM(n) Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+COM(n) - an event trapping statement that enables, disables, or inhibits
+         event trapping of communications activity on a specified port
+
+Syntax
+  COM(n) ON
+  COM(n) OFF
+  COM(n) STOP
+
+    ■ n is the number of the communications port, either 1 or 2
+
+See Also  ◄ON COM(n)►
+
+:nCOMMAND$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+COMMAND$ - a function that interfaces with DOS to return the command
+           line used to invoke the program
+
+Syntax
+  COMMAND$
+
+
+:nCOMMON Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+COMMON - a non-executable statement that declares global variables for
+         sharing between modules, or for chaining to another program
+Syntax
+  COMMON [SHARED][/blockname/] variablelist
+    ■ variablelist is one or more variables, separated by commas, that are
+      to be shared between modules or chained-to programs
+    ■ SHARED and /blockname/ are ◄Details►
+
+See Also  ◄SUB►  ◄FUNCTION►  ◄CALL►  ◄CHAIN►
+
+:nCONST Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CONST - a non-executable statement that declares symbolic constants
+        to use in place of numeric or string values
+
+Syntax
+  CONST constantname = expression [,constantname = expression]...
+    ■ constantname is a name following the same naming rules as a BASIC
+      variable. You may add to the name a type-declaration character
+      (%, &, !, #, or $) to indicate its type (this character is not
+      part of the name).
+    ■ expression consists of literals, other constants, or any of the
+      arithmetic and logical operators except exponentiation (^).
+
+:nCOS Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+COS - a math function that returns the cosine of an angle given in
+      radians
+
+Syntax
+  COS(numeric-expression)
+    ■ numeric-expression, which may be of any type, is the angle, expressed
+      in radians. See ◄Details► on how to convert degrees into radians.
+
+See Also  ◄SIN►  ◄TAN►  ◄ATN►
+
+:nCSNG Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CSNG - a conversion function that converts a numeric expression to a
+       single-precision value
+
+Syntax
+  CSNG(numeric-expression)
+
+See Also  ◄CDBL►  ◄CINT►  ◄CLNG►
+
+:nCSRLIN Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CSRLIN - a device I/O function that returns the current line (row)
+         position of the cursor
+Syntax
+  CSRLIN
+
+See Also  ◄POS Function► - which returns the current character position
+                           of the cursor within a line
+          ◄LOCATE► - to see how to move the cursor to a specific location
+
+:nCVSMBF and CVDMBF Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CVSMBF and CVDMBF - conversion functions that convert strings containing
+                    Microsoft Binary format numbers to IEEE-format numbers
+Syntax
+  CVSMBF (4-byte-string)
+  CVDMBF (8-byte-string)
+
+See Also  ◄MKSMBF$, MKDMBF$►  ◄CVD, CVI, CVL, CVS►  ◄MKD$, MKI$, MKS$►
+
+:nCVI, CVS, CVL, and CVD Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+CVI, CVS, CVL, CVD - functions that convert strings containing numeric
+                     values to numbers
+Syntax
+  CVI(2-byte-string)
+  CVS(4-byte-string)
+  CVL(4-byte-string)
+  CVD(8-byte-string)
+
+See Also  ◄MKD$, MKI$, MKS$►  ◄GET (File I/O)►
+
+:nDATA Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DATA - a non-executable statement that stores the numeric and string
+       constants used by a program's READ statements
+
+Syntax
+  DATA  constant[,constant]...
+    ■ constant is any valid numeric or string constant. If a string constant
+      contains commas, colons, or leading or trailing spaces you want to
+      preserve in your program, you must enclose the string in double quotes.
+
+See Also  ◄READ►  ◄RESTORE►
+
+:nDATE$ Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DATE$ - a statement that uses DOS to set the current date
+
+Syntax
+  DATE$ = stringexpression
+    ■ stringexpression must have one of the following forms:
+        mm-dd-yy, mm-dd-yyyy, mm/dd/yy, or mm/dd/yyyy
+      where mm and dd are the month and day, and yy or yyyy are the year
+
+See Also  ◄TIME$►
+
+Other Uses of the DATE$ Keyword
+  ◄DATE$ function► - to get the current date from DOS
+
+:nCDECL Keyword
+CDECL Keyword
+
+  CDECL in a DECLARE statement that declares a non-BASIC procedure
+  indicates that the declared procedure uses the C-language argument order.
+  QuickBASIC will pass the arguments in the argument list from right to
+  left, rather than from left to right as is the BASIC convention.
+
+See Also  ◄CALLS and CALL (Non-BASIC) statements►
+
+:nDECLARE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DECLARE - a non-executable statement that declares references to
+          BASIC procedures and invokes argument type checking
+Syntax
+  DECLARE {FUNCTION | SUB } name [([parameterlist])]
+    ■ name is the name that will be used to call the procedure
+    ■ parameterlist indicates the number and type of arguments that will
+      be used to call the procedure
+
+See Also  ◄FUNCTION►  ◄SUB►  ◄CALL►
+
+Other Uses of the DECLARE Keyword
+  ◄DECLARE► can also be used to declare references to procedures written
+            in other programming languages, such as C
+
+:nDEF FN Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DEF FN - a procedure statement that defines and names a function
+
+Single-Line Syntax
+  DEF FNname[(parameterlist)] = expression
+
+Block Syntax
+  DEF FNname[(parameterlist)]
+     [statements]
+  FNname = expression
+     [statements]
+  END DEF
+
+  ■ The FUNCTION...END FUNCTION statement offers a more straight-forward
+    way to define and name a new function. If you must use DEF FN, see
+    ◄Details► for the meaning of the various arguments.
+
+See Also  ◄FUNCTION► ◄STATIC►
+
+:nDEF SEG Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DEF SEG - a memory statement that sets the current segment address
+          for a subsequent PEEK function or BLOAD, BSAVE, CALL ABSOLUTE,
+          or POKE statement
+
+Syntax
+  DEF SEG [=address]
+    ■ If all arguments are omitted, the BASIC data segment is used.
+    ■ address, a numeric expression has an unsigned integer value between
+      0 and 65,535, is the beginning of the segment to be used by the
+      other statement or function.
+
+:nDEFtype Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DEFtype - BASIC declarations that set the default data type
+          for variables, DEF FN functions, and FUNCTION procedures
+
+Syntax
+  DEFINT letterrange [,letterrange]...
+  DEFSNG letterrange [,letterrange]...
+  DEFDBL letterrange [,letterrange]...
+  DEFLNG letterrange [,letterrange]...
+  DEFSTR letterrange [,letterrange]...
+
+    ■ letterrange has the form
+        letter1[-letter2]
+      where letter1 and letter2 are any of the upper or lowercase letters
+      of the alphabet. Variable and function names beginning with the letters
+      in letterrange have the type specified by the last three letters of
+      the keyword (INT, SNG, DBL, LNG, or STR).
+
+:nDIM Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DIM - a declaration statement that names one or more variables and
+      allocates storage space for them
+Syntax
+  DIM [SHARED] variable[(subscripts)] [AS type]
+               [,variable[(subscripts)] [AS type]...
+    ■ variable is a BASIC variable name
+    ■ Use the SHARED keyword if you want all procedures in this module to
+      be able to use this variable
+    ■ Use the optional (subscripts) to declare the size of arrays (see
+      ◄Details►)
+    ■ AS type is a ◄Detail►
+
+See Also  ◄ERASE►  ◄REDIM►  ◄OPTION BASE►
+
+:nWHILE...WEND Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+WHILE...WEND - a control flow statement that executes a series of
+               statements in a loop, as long as a given condition is true
+Syntax
+  WHILE condition
+    [statements]
+  WEND
+    ■ condition is an expression that will return non-zero (true) or zero
+      (false)
+    ■ statements are one or more BASIC statements to be executed as long as
+      condition is true
+
+See also  ◄DO...LOOP► - to see a more flexible way to build a loop
+          ◄FOR...NEXT►
+
+:nDO...LOOP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DO...LOOP - a control flow statement that repeats a block of statements
+            while a condition is true or until a condition becomes true
+
+Syntax 1
+  DO [{WHILE | UNTIL} booleanexpression]
+    [statementblock]
+  LOOP
+
+Syntax 2
+  DO
+    [statementblock]
+  LOOP [{WHILE | UNTIL} booleanexpression]
+
+  ■ booleanexpression is an expression that will return non-zero (true)
+    or zero (false).
+  ■ statementblock is any number of statements on one or more lines which
+    are to be executed as long as booleanexpression is true.
+
+See Also  ◄WHILE...WEND►  ◄FOR...NEXT►
+
+:nDRAW Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+DRAW - a graphics statement that interprets a string expression and
+       draws an object.
+Syntax
+  DRAW stringexpression
+    ■ stringexpression is a one or more drawing commands.
+                             Drawing Commands
+───Used to Draw a Line or Move the Current Graphics Position (CGP) or Both───
+B   Optional prefix - move, no line   │ N   Optional prefix - line, no move
+Un  Up             Dn  Down           │ Ln  Left             Rn  Right
+En  Up and right   Fn  Down and right │ Gn  Down and left    Hn  Up and left
+Mx,y  Move to screen point x,y (if x has a + or - in front, move is relative)
+─────────────────────────────────Used to Color────────────────────────────────
+Cn  Change drawing (foreground) color │ Pp,b  Fill enclosed shape that has
+    (SCREEN mode determines 'n')      │       border color b with color p
+────────────────────────────Used to Scale and Rotate──────────────────────────
+Sn  Increases or decreases length of  │ An   Rotate (n * 90) degrees,
+    moves (n=4 is default)            │      where n = 0, 1, 2, or 3
+                                      │ TAn  Rotate (0 >= n <= 360) degrees
+──────────────────────────Used to Execute Substrings──────────────────────────
+     X + VARPTR$(string-expression)      Executes another command string
+
+See Also  ◄SCREEN►  ◄PALETTE►  ◄VARPTR$►
+
+:nEND Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+END - a BASIC declaration that ends a BASIC program, procedure,
+      or block
+
+Syntax
+  END [{DEF | FUNCTION | IF | SELECT | SUB | TYPE}]
+
+See Also  ◄DEF FN►  ◄FUNCTION►  ◄IF...THEN...ELSE►
+          ◄SELECT CASE►  ◄SUB►  ◄TYPE►  ◄STOP►
+
+:nENVIRON$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ENVIRON$ - a function that interfaces with DOS to retrieve an
+           environment string from the DOS environment-string table
+
+Syntax
+  ENVIRON$ (environmentstring)
+  ENVIRON$ (n)
+    ■ environmentstring, a string constant or variable, is the name of
+      the environment string whose current value is to be returned
+    ■ n, which is a numeric expression, indicates that the nth string from
+      the environment string table should be returned
+
+See Also  ◄ENVIRON Statement►
+
+:nENVIRON Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ENVIRON - a statement that interfaces with DOS to modify a parameter
+          in the DOS environment-string table
+
+Syntax
+  ENVIRON stringexpression
+    ■ stringexpression must have the form
+        parameterid=text
+      or
+        parameterid text
+
+See Also  ◄ENVIRON$►  ◄SHELL►
+
+:nEOF Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+EOF - a file I/O function that tests for the end-of-file condition
+
+Syntax
+  EOF(filenumber)
+    ■ filenumber is the number of an open file
+
+See Also  ◄LOF►  ◄LOC►  ◄OPEN►
+
+:nEQV Operator
+EQV Operator
+
+Syntax
+  result = numeric-expression1 EQV numeric-expression2
+
+Use the logical-equivalence operator to compare corresponding bits in
+numeric-expression1 and numeric-expression2, and then set the corresponding
+bit in the result according to the following table:
+
+──────────────────────────────────────────────────────────────────
+Bit in First Expression   Bit in Second Expression   Bit in Result
+──────────────────────────────────────────────────────────────────
+       1                         1                          1
+       1                         0                          0
+       0                         1                          0
+       0                         0                          1
+──────────────────────────────────────────────────────────────────
+
+:nERASE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ERASE - a memory management statement that reinitializes the elements
+        of static arrays or deallocates dynamic arrays
+
+Syntax
+  ERASE arrayname [,arrayname...]
+    ■ arrayname is the name of a previously declared array. It is important
+      to know whether this array is static or dynamic.
+
+See Also  ◄$STATIC and $DYNAMIC Metacommands►  ◄DIM►  ◄REDIM►  ◄CLEAR►
+
+:nERDEV and ERDEV$ Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ERDEV and ERDEV$ - error-trapping functions that provide
+                   device-specific status information after an error
+Syntax
+  ERDEV
+  ERDEV$
+
+  ■ ERDEV is an integer function that returns an error code from the
+    last device to return an error
+  ■ ERDEV$ is a string function that returns the name of the device
+    returning the error
+
+:nERL and ERR Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ERL and ERR - error-trapping functions that return program-specific
+              status information after an error
+Syntax
+  ERR
+  ERL
+
+  ■ ERR is an integer function that returns an error code for the last
+    error that occurred
+  ■ ERL is an integer function that returns the line number where the
+    error occurred, or the last line number before the line where the
+    error occurred. ERL returns no line label information.
+
+See Also  ◄ON ERROR►  ◄RESUME►  ◄ERROR►
+
+:nERROR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+ERROR - an error-trapping statement that simulates the occurrence
+        of a BASIC error or allows the user to define error codes
+
+Syntax
+  ERROR integerexpression
+    ■ integerexpression, which has a value between 1 and 255, is
+      the error code
+
+See Also  ◄ON ERROR►  ◄ERR►  ◄ERL►  ◄RESUME►
+
+:nEXIT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+EXIT - a control flow statement that exits a DEF FN function, DO...LOOP,
+       FOR...NEXT loop, FUNCTION, or SUB
+
+Syntax
+  EXIT {DEF | DO | FOR | FUNCTION | SUB}
+
+See Also  ◄DEF FN►  ◄DO...LOOP►  ◄FOR...NEXT►
+          ◄FUNCTION►  ◄SUB►
+
+:nEXP Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+EXP - a math function that calculates the exponential function
+      (e raised to the power of a numeric expression).
+
+Syntax
+  EXP(numeric-expression)
+    ■ numeric-expression, which must have a value less than or equal to
+      88.02969, is the power to which e, the base of natural logarithms,
+      is to be raised.
+
+See Also  ◄LOG►
+
+:nFIELD Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FIELD - a file I/O statement that allocates space for variables in a
+        random-access file buffer
+
+Syntax
+  FIELD [#]filenumber, fieldwidth AS stringvariable
+                     [,fieldwidth AS stringvariable] ...
+    ■ filenumber is the number of an open file
+    ■ fieldwidth is the number of characters in the field
+    ■ stringvariable is the location in the program where the field data
+      is read to or written from
+
+See Also  ◄RSET►  ◄LSET►  ◄GET (File I/O)►  ◄PUT (File I/O)►
+
+:nFILEATTR Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FILEATTR - a file I/O function that returns information about an
+           open file
+Syntax
+  FILEATTR(filenumber,attribute)
+    ■ filenumber is the number of an open file
+    ■ attribute, a numeric expression that with a value of 1 or 2, indicates
+      the type of information to return about the file (see ◄Details►).
+
+See Also  ◄OPEN►
+
+:nFILES Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FILES - a statement that interfaces with DOS to print the names of
+        files residing on the specified disk
+
+Syntax
+  FILES [filespec]
+    ■ If all arguments are omitted, all files in the current directory
+      are listed
+    ■ filespec is a string variable or constant that includes either a
+      filename or pathname, and an optional device name
+
+See Also  ◄CHDIR►
+
+:nFIX Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FIX - a math function that returns the truncated integer part of a
+      numeric expression
+
+Syntax
+  FIX(numeric-expression)
+
+See Also  ◄INT►  ◄CINT►
+
+:nFOR...NEXT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FOR...NEXT - a control flow statement that repeats a block of
+             statements a specified number of times
+Syntax
+  FOR counter = start TO end [STEP increment]
+    [statements]
+  NEXT [counter [,counter...]]
+    ■ counter is a numeric variable used as the loop counter
+    ■ start is the initial value and end is the final value of the counter
+    ■ increment is the amount the counter is incremented each time
+      through the loop
+
+See Also  ◄DO...LOOP►  ◄WHILE...WEND►
+
+:nFRE Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FRE - a memory management function that returns the amount of
+      available memory
+
+Syntax
+  FRE(stringexpression)
+  FRE(numeric-expression)
+    ■ stringexpression, which can have any value, indicates to the
+      function that you want free string memory compacted into a single
+      block and then the size, in bytes, of that block to be returned.
+    ■ numeric-expression, which has the value of -1, -2, or any other
+      numeric value, indicates what type of status information you want
+      returned about string or stack space (see ◄Details►).
+
+:nFREEFILE Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FREEFILE - a file I/O function that returns the next free BASIC file
+           number
+
+Syntax
+  FREEFILE
+
+See Also  ◄OPEN►
+
+:nFUNCTION...END FUNCTION Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+FUNCTION...END FUNCTION - a non-executable statement that declares the
+                          name, the parameters, and the code that form
+                          the body of a FUNCTION procedure
+Syntax
+  FUNCTION name [(parameterlist)][STATIC]
+      [statements]
+    name = expression
+      [statements]
+  END FUNCTION
+    ■ name, which follows the same rules as are used for naming BASIC
+      variables, determines the data type the function returns
+    ■ (parameterlist) is one or more variables, separated by commas,
+      that will be passed to the function when it is called
+    ■ expression is the return value of the function
+    ■ Use of the keyword STATIC is a ◄Detail►
+
+See Also  ◄DECLARE►  ◄STATIC statement►  ◄DEF FN►  ◄SUB►
+
+:nGET (File I/O) Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+GET - a file I/O statement that reads from a disk file into a
+      random-access buffer or variable
+
+Syntax
+  GET [#]filenumber[,[recordnumber][,variable]]
+    ■ filenumber is the number of an open file
+    ■ recordnumber and variable are ◄Details►
+
+See Also  ◄OPEN►  ◄PUT (File I/O)►
+
+Other Uses of the GET Keyword
+◄GET (Graphics)► - to copy a rectangular area of the screen by translating
+                  the image to numeric data and storing that data in an array
+
+:nPUT (File I/O) Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PUT - a file I/O statement that writes from a variable or a random-access
+      buffer to a file
+Syntax
+  PUT [#]filenumber[,[recordnumber][,variable]]
+  PUT [#]filenumber[,{recordnumber|recordnumber,variable|,variable}]
+    ■ filenumber is the number of an open file
+    ■ recordnumber is the file position to write to (a record number for
+      random-access files, a byte number for binary files)
+    ■ variable contains the information to be written
+
+See Also  ◄OPEN►  ◄GET (File I/O)►
+
+Other Uses of the PUT Keyword
+  ◄PUT (Graphics) statement► - to put the contents of a graphics image file
+                               on the screen
+
+:nGOSUB Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+GOSUB...RETURN - a control flow statement that branches to, and
+                 returns from, a subroutine
+Syntax
+  GOSUB {linelabel1 | linenumber1}
+  [statements]
+  RETURN [linelabel2 | linenumber2]
+
+  ■ linelabel1 or linenumber1 is the label of the first line of the
+    subroutine
+  ■ The optional linelabel2 or linenumber2, used on the RETURN statement
+    that ends the subroutine, is a ◄Detail►
+
+See Also  ◄RETURN►  ◄SUB►
+
+:nGOTO Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+GOTO - a control flow statement that branches unconditionally to the
+       specified line
+
+Syntax
+  GOTO {linelabel | linenumber}
+
+  ■ linelabel or linenumber is the label of the line to execute next.
+    This line must be in the same procedure or subroutine as the GOTO
+    statement
+
+See Also  EXIT - which provides an alternative way to branch out of
+          a control structure.
+
+:nHEX$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+HEX$ - a string function that returns a string that represents the
+       hexadecimal value of the decimal argument expression
+
+Syntax
+  HEX$(expression)
+    ■ expression is a numeric expression that has a decimal value
+
+See Also  ◄OCT$►
+
+:nIF...THEN...ELSE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+IF...THEN...ELSE - a control flow statement that allows conditional
+                   execution or branching, based on the evaluation of
+                   an expression that must be either true or false
+
+Block IF...THEN...ELSE Syntax
+  IF booleanexpression1 THEN
+     [statementblock-1]
+  [ELSEIF booleanexpression2 THEN
+     [statementblock-2]
+  . . .
+  [ELSE
+     [statementblock-n]]
+  END IF
+    ■ booleanexpression is an expression that must return non-zero (true)
+      or zero (false)
+    ■ statementblock consists of any number of statements on one or more
+      lines.
+
+Single-line IF...THEN...ELSE Syntax
+  IF booleanexpression THEN thenpart [ELSE elsepart]
+    ■ booleanexpression is an expression that must return non-zero (true)
+      or zero (false)
+    ■ thenpart consists of the statements or branches performed when
+      booleanexpression is true (see ◄Details►)
+    ■ elsepart consists of the statements or branches performed when
+      booleanexpression is false
+
+See Also  ◄SELECT CASE►  ◄ON...GOTO►  ◄ON...GOSUB►
+
+:nIMP Operator
+IMP Logical Operator
+
+Syntax
+  result = numeric-expression1 IMP numeric-expression2
+
+The logical-implication operator, IMP, compares corresponding bits in
+numeric-expression1 and numeric-expression2, and then sets the
+corresponding bit in the result according to the following table:
+
+──────────────────────────────────────────────────────────────────
+Bit in First Expression   Bit in Second Expression   Bit in Result
+──────────────────────────────────────────────────────────────────
+       1                         1                          1
+       1                         0                          0
+       0                         1                          1
+       0                         0                          1
+──────────────────────────────────────────────────────────────────
+
+:nINKEY$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INKEY$ - a device I/O function that reads a character from the
+         keyboard
+
+Syntax
+  INKEY$
+
+See also  ◄ASCII Character Codes►, ◄Keyboard Scan Codes►
+
+:nINP Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INP - a device I/O function that returns the byte read from an
+      I/O port
+
+Syntax
+  INP(port)
+    ■ port, a numeric-expression which has an integer value between
+      0 and 65,535, identifies the hardware I/O port to read
+
+See Also  ◄OUT►  ◄WAIT►
+
+:nINPUT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INPUT - a device I/O statement that reads input from the keyboard
+        during program execution and stores it into a list of variables
+
+Syntax
+  INPUT[;]["promptstring"{;|,}]variablelist
+    ■ variablelist is one or more variables separated by commas
+    ■ promptstring, if used, is displayed on the screen to tell the user
+      of the program what to enter at the keyboard
+    ■ the characters ";" and "," are ◄Details►
+
+See Also  ◄INKEY$►
+Other Uses of the INPUT Keyword
+  ◄LINE INPUT► - to read an entire line of input from the keyboard and store
+               it in one string variable
+  ◄INPUT #► - to retrieve data items (or "fields") from a sequential file
+            record and store them into a list of variables
+  ◄LINE INPUT #► - to retrieve an entire record from a sequential file and
+                 store it into one string variable
+
+:nINPUT$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INPUT$ - a file I/O function that returns a string of characters
+         read from the specified file
+
+Syntax
+  INPUT$(n[,[#]filenumber])
+    ■ n, a numeric expression, is the number of characters to read from
+      the file
+    ■ If the optional filenumber argument is not used, characters are read
+      from the DOS standard input device (see ◄Details►)
+    ■ If used, filenumber must be the number of an open file
+
+See Also  ◄OPEN►
+
+:nINSTR Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INSTR - a string processing function that returns the character
+        position of the first occurrence of a string in another string
+
+Syntax
+  INSTR([start,]stringexpression1,stringexpression2)
+    ■ stringexpression1 is the string to be searched
+    ■ stringexpression2 is the string to look for
+    ■ If the optional start argument is used to begin the search beyond the
+      first character of stringexpression1, it must be a numeric-expression
+      with an integer value between 1 and 32,767.
+
+
+:nINT Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+INT - a math function that returns the largest integer less than
+      or equal to a numeric-expression
+
+Syntax
+  INT(numeric-expression)
+
+See Also  ◄CINT►  ◄FIX►
+
+:nData Type Keywords
+
+Specifies the type (INTEGER, LONG, SINGLE, DOUBLE, STRING, or a
+user-defined type) for a variable in a declarative statement or
+parameter list.
+INTEGER - specifies that a variable is a 16-bit signed integer.
+LONG    - specifies that a variable is a 32-bit signed integer.
+SINGLE  - specifies that a variable is single-precision floating-point.
+DOUBLE  - specifies that a variable is double-precision floating-point.
+STRING  - specifies that a variable is a string, in a COMMON, DIM,
+              REDIM, SHARED or STATIC statement. If is STRING is followed
+              by * n, the string has a fixed length of n bytes. If no
+              specification follows, the string is variable-length.
+
+See Also  ◄AS►  ◄COMMON►  ◄DECLARE►  ◄DEF FN►
+          ◄DIM►  ◄FUNCTION►  ◄SHARED►
+          ◄STATIC►  ◄SUB►  ◄TYPE►
+
+:nIOCTL$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+IOCTL$ - a file I/O function that receives a control data string
+         from a device driver
+
+Syntax
+  IOCTL$([#]filenumber)
+    ■ filenumber is a the number of an open device
+
+    Refer to the device driver documentation to find out what status
+    information the device driver is capable of sending.
+
+See Also  ◄IOCTL►
+
+:nIOCTL Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+IOCTL - a file I/O statement that transmits a control data string to
+        a device driver
+
+Syntax
+  IOCTL [#]filenumber, string
+    ■ filenumber is the number of an open device
+    ■ string, a string-expression, is the command sent to the device.
+      Refer to the device driver documentation to find out what the valid
+      IOCTL command strings are.
+
+See Also  ◄IOCTL$►
+
+:nKEY Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+KEY - a device I/O statement that assigns soft-key string values to
+      function keys and then can be used to display the soft-key values
+      in various ways
+Syntax                     Use
+  KEY LIST                 Displays soft-key string values
+  KEY {ON|OFF}             Turns on and off the soft-key display line at the
+                           bottom of the screen
+  KEY n,stringexpression   Assigns soft-key string values
+
+    ■ n is the number of a specific key, chosen from the values below:
+      1-10   Function keys F1-F10            │ 14     DOWN
+        11   UP                              │ 15-25  User-defined keys
+        12   LEFT                            │ 30-31  Function keys F11-F12
+        13   RIGHT                           │        on 101-key keyboards
+
+    ■ stringexpression, for all values of n except 15 through 25, is the
+      is the string that is input by the program when the key is pressed.
+      For n = 15 through 25, stringexpression has the syntax
+        CHR$(keyboardflag) + CHR$(scancode)
+
+See Also  ◄ON KEY(n)►  ◄Keyboard Scan Code Table►
+Other Uses of the KEY Keyword
+  ◄KEY(n)► - to trap a full range of keypress events
+
+:nKILL Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+KILL - a statement that uses DOS to delete a disk file
+
+Syntax
+  KILL filespec
+    ■ filespec is a string expression that identifies the file to delete.
+      The filespec may include a path specification.
+
+See Also  ◄FILES►  ◄RMDIR►
+
+:nLBOUND Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LBOUND - a memory function that returns the lower bound (smallest
+         available subscript) for the indicated dimension of an array
+
+Syntax
+  LBOUND(array[,dimension])
+    ■ array identifies the array
+    ■ dimension, a numeric-expression with an integer value, indicates
+      the dimension of the array for which you want to see the smallest
+      available subscript. Use 1 for the first dimension, 2 for the second
+      dimension, etc. This is an optional argument for one-dimensional
+      arrays.
+
+See Also  ◄UBOUND►
+
+:nLCASE$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LCASE$ - a string processing function that returns a string expression
+         with all letters in lower-case
+
+Syntax
+  LCASE$(stringexpression)
+    ■ stringexpression may be a string constant, string variable, or
+      string expression. It may refer to a fixed- or variable-length
+      string.
+
+See Also  ◄UCASE$►
+
+:nLEFT$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LEFT$ - a string processing function that returns a string consisting
+        of the leftmost n characters of a string
+
+Syntax
+  LEFT$(stringexpression,n)
+    ■ stringexpression is a string constant, string variable, or string
+      expression
+    ■ n, a numeric expression, must have a value between 0 and 32,767.
+      If n is zero, the null string (a zero-length string) is returned.
+
+See Also  ◄MID$ Function► - to see how to extract n characters from the
+                            middle of a screen
+          ◄RIGHT$► - to see how to extract the n right-most characters
+
+:nLEN Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LEN - a string processing function that returns the number of
+      characters in a string or the number of bytes required by a variable
+
+Syntax
+  LEN(stringexpression)
+  or
+  LEN(variable)
+    ■ stringexpression is a string constant or string expression
+    ■ variable identifies the object for which you want the number of
+      required bytes
+
+:nLET (Assignment) Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LET - the expression evaluation statement that assigns the value
+      of an expression to a variable
+
+Syntax
+  [LET] variable=expression
+
+See Also  ◄LSET► - to see how to assign record variables of different
+                     user-defined types
+
+:nLINE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LINE - a graphics statement that draws a line or box on the screen
+
+Syntax
+  LINE [[STEP] (x1,y1)]-[STEP] (x2,y2) [,[color][,[B[F]][,style]]]
+    ■ (x2,y2) are the screen coordinates of the end of the line
+    ■ (x1,y1), if used, is the start of the line
+    ■ STEP, if used, enables you to specify relative screen coordinates
+    ■ color, B, BF, and style are ◄Details►
+
+See Also  ◄SCREEN statement►  ◄CIRCLE►  ◄PSET►
+  Tip: SCREEN is especially important because it determines the range of
+       numbers you can use to specify (x2,y2).
+
+Other Uses of the LINE Keyword
+  ◄LINE INPUT► - to read an entire line of input from the keyboard and store
+               it in one string variable
+  ◄LINE INPUT #► - to retrieve an entire record from a sequential file and
+                 store it into one string variable
+
+:nLOC Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LOC - a file I/O function that returns the current position within
+      the file
+
+Syntax
+  LOC(filenumber)
+    ■ filenumber is the number of an open file or device
+    ■ See ◄Details► for the differences in the meaning of the value returned
+      by the LOC function for random-access files, sequential files, binary
+      files, and communications devices.
+
+See Also  ◄LOF►  ◄EOF►  ◄OPEN►
+
+:nLOCATE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LOCATE - a device I/O statement that moves the cursor to the
+         specified position
+
+Syntax
+  LOCATE [row][,[column][,[cursor][,[start,stop]]]]
+    ■ You may omit any argument. See ◄Details► about how QuickBASIC assigns
+      default values to omitted arguments
+    ■ row and column to move the cursor
+    ■ cursor, start, and stop define the visibility and shape of the cursor
+
+See Also  ◄CSRLIN►  ◄POS►
+
+:nLOCK...UNLOCK Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LOCK...UNLOCK - file I/O statements that control access by other
+                processes to all or part of an opened file
+
+Tip: LOCK and UNLOCK are only useful in network environments where
+     several processes may need access to the same file, and only
+     function if you are using DOS version 3.1 or later.
+
+Syntax
+  LOCK [#]filenumber [,{record |[start] TO end}]
+  [statements]
+  UNLOCK [#]filenumber [,{record | [start] TO end}]
+
+    ■ filenumber is the number of an open file
+    ■ record, start, and end indicate the range of records or bytes to
+      be locked
+
+:nLOF Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LOF - a file I/O function that returns the length of the named file
+      in bytes
+
+Syntax
+  LOF(filenumber)
+    ■ filenumber is the number of an open file
+
+See Also  ◄LOC►  ◄EOF► ◄OPEN►
+
+:nLOG Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LOG - a math function that returns the natural logarithm of a
+      numeric expression
+
+Syntax
+  LOG(numeric-expression)
+    ■ numeric-expression, which must have a value greater than zero, is
+      the number for which you want the natural logarithm
+
+See Also  ◄EXP►
+
+:nLPOS Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LPOS - a device I/O function that returns the current position of
+       the line printer's print head within the printer buffer
+
+Syntax
+  LPOS(n)
+    ■ n, a numeric expression that has an integer value between 0 and 3,
+      is the index of the printer port being tested. 1 means LPT1:, 2 means
+      LPT2:, etc.
+
+:nLPRINT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LPRINT, LPRINT USING - file I/O statements that print data on the
+                       printer LPT1:
+Syntax 1
+  LPRINT [expressionlist][{;|,}]
+Syntax 2
+  LPRINT USING formatstring; expressionlist[{;|,}]
+
+    ■ If all arguments are omitted from the LPRINT statement, the printer
+      prints a blank line
+    ■ expressionlist is one or more expressions, separated by semicolons
+    ■ The optional characters ";" or "," are ◄Details►
+    ■ formatstring in the LPRINT USING statement is a string literal or
+      variable containing literal characters to print and special
+      formatting characters.
+
+See Also  ◄PRINT►  ◄PRINT USING►  ◄WIDTH►
+
+:nLSET Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LSET - a file I/O statement that moves data from memory to a
+       random-access file buffer (in preparation for a PUT statement),
+       left-justifies the value of a string in a string variable, or
+       copies one record variable to another.
+
+Tip: LSET is a way of copying one record to another without regard to
+     datatype equivalence.
+
+Syntax
+LSET {stringvariable=stringexpression | stringexpression1=stringexpression2}
+  ■ stringvariable is any string variable
+  ■ stringexpression is the value assigned to stringvariable and
+    left-justified
+
+See Also  ◄PUT (File I/O)►  ◄MKD$, MKI$, MKL$, MKS$►  ◄RSET►
+
+:nRSET Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RSET - a string processing statement that moves data from memory
+       to a random-access file buffer (in preparation for a PUT statement)
+       or right-justifies the value of a string in a string variable
+
+Syntax
+  RSET stringvariable=stringexpression
+    ■ stringvariable may be a random-access file field defined in a FIELD
+      statement, or any other string variable
+    ■ stringexpression is the value assigned to stringvariable
+
+See also  ◄PUT (File I/O)►  ◄MKD$, MKI$, MKL$, MKS$►  ◄LSET►
+
+:nLTRIM$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+LTRIM$ - a function that returns a copy of a string with leading
+         spaces removed
+
+Syntax
+  LTRIM$(stringexpression)
+
+See Also  ◄RTRIM$►
+
+:nMID$ Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+MID$ - a string processing statement that replaces a portion of a
+       string variable with another string
+
+Syntax
+  MID$(stringvariable,start[,length])=stringexpression
+    ■ stringvariable is the name of the string you want to change
+    ■ start, a numeric expression, is the character position at which the
+      change starts
+    ■ length, an optional numeric expression, is the number of characters
+      to use from stringexpression
+    ■ stringexpression supplies the new characters
+
+Other Uses of the MID$ Statement
+  ◄MID$ function► - to extract a given number of characters from a string
+See Also  ◄LEFT$►  ◄RIGHT$►
+
+:nMKDIR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+MKDIR - a statement that uses DOS to create a new directory
+
+Syntax
+  MKDIR pathspec
+    ■ pathspec is a string expression that identifies the directory to be
+      created
+
+See Also  ◄RMDIR►  ◄CHDIR►
+
+:nMKSMBF$ and MKDMBF$ Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+MKSMBF$ and MKDMBF$ - conversion functions that convert an IEEE-format
+                      number to a string containing a Microsoft Binary
+                      format number.
+Syntax
+  MKSMBF$(single-precision-expression)
+  MKDMBF$(double-precision-expression)
+
+See Also  ◄CVDMBF, CVSMBF►  ◄CVD, CVI, CVL, CVS►  ◄MKD$, MKI$, MKL$, MKS$►
+
+:nMKD$, MKI$, MKL$, and MKS$ Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+MKD$, MKI$, MKL$, MKS$ - functions that convert numeric values to
+                         string values
+Syntax
+  MKI$(integerexpression)
+  MKS$(single-precision-expression)
+  MKL$(long-integer-expression)
+  MKD$(double-precision-expression)
+
+See Also  ◄CVD, CVI, CVL, CVS►  ◄GET (File I/O)►
+
+:nMOD Arithmetic Operator
+MOD Arithmetic Operator
+
+Syntax
+  numeric-expression1 MOD numeric-expression2
+
+The modulus or "remainder" operator. Divides one number by another
+(rounding real values to integers, if required) and returns the
+remainder. For example, 19 MOD 6.7 equals five.
+
+
+:nNAME Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+NAME - a statement that uses DOS to change the name of a disk file
+       or directory
+Syntax
+  NAME oldfilename AS newfilename
+    ■ oldfilename, a string expression, is the name of an existing file.
+    ■ newfilename, a string expression, must be a filename that does not
+      exist
+
+Tip:  oldfilename and/or newfilename may contain a pathname. If the path
+      in oldfilename is different than the path in newfilename, the NAME
+      statement moves the file and renames it. Both files must be on the
+      same drive.
+
+:nNEXT Keyword - Different Uses
+NEXT Keyword - Different Uses
+
+Syntax 1
+  NEXT [loopvar]
+    ■ The terminating line of a FOR...NEXT structure. Should include the
+      name of the loop control variable for readability, but is not
+      required to.
+Syntax 2
+  RESUME NEXT
+    ■ Returns control from an error-handling routine to the statement
+      following the one that caused the error.
+
+See Also  ◄FOR...NEXT►  ◄RESUME►
+
+:nNOT Operator
+NOT Operator
+
+Syntax
+  result = NOT numeric-expression
+
+The logical-complement operator evaluates each bit in numeric-expression,
+then sets the corresponding bit in the result according to the following
+table:
+              ─────────────────────────────────────────
+              Bit in Expression         Bit in Result
+              ─────────────────────────────────────────
+                       1                       0
+                       0                       1
+              ─────────────────────────────────────────
+This inverts the bit values of any variable. If an integer variable has
+the value 0 (false), the variable becomes -1 (true), and vice-versa.
+
+:nOCT$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+OCT$ - a string function that returns a string representing the
+       octal value of the numeric argument
+
+Syntax
+  OCT$(numeric-expression)
+    ■ numeric-expression can be of any type
+
+See Also  ◄HEX$►
+
+:nOFF Keyword - Different Uses
+OFF Keyword - Different Uses
+
+  ■ The OFF keyword is used in various statements to disable trapping of
+    the following events:
+      COM(n) OFF   - events on communications port n
+      KEY(n) OFF   - a keypress event on key n
+      PEN OFF      - lightpen events
+      PLAY OFF     - background music buffer events
+      STRIG(n) OFF - events on joystick trigger n
+      TIMER OFF    - timer events
+      UEVENT OFF   - user-defined events
+
+  ■ The OFF keyword is also used to turn off the display of soft-key
+    assignments on the bottom line of the screen:
+      KEY OFF
+
+:nON Keyword - Different Uses
+ON Keyword - Different Uses
+
+The ON keyword is used in various statements to trap events:
+Specifies a trap          Type of event                    Enables the trap
+◄ON COM(n)►         events on communications port n          ◄COM(n) ON►
+◄ON KEY(n)►         a keystroke on key n                     ◄KEY(n) ON►
+◄ON PEN►            lightpen events                          ◄PEN ON►
+◄ON PLAY(n)►        less than n notes in music buffer        ◄PLAY ON►
+◄ON STRIG(n)►       events on joystick trigger n             ◄STRIG(n) ON►
+◄ON TIMER(n)►       timer events                             ◄TIMER ON►
+◄ON UEVENT►         user-defined events                      ◄UEVENT ON►
+
+Other uses of the ON keyword are:
+◄ON ERROR► - to enable error handling and specify the error-handling routine
+◄ON...GOSUB► - to branch to one of a list of subroutines
+◄ON...GOTO►  - to branch to one of a list of line labels
+
+:nOPEN (File I/O) Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+OPEN - a file I/O statement that enables I/O to a file or device
+Syntax
+  OPEN file [FOR mode] [ACCESS access] [lock] AS [#]filenum [LEN=reclen]
+    ■ file is a string expression that specifies an optional device name,
+      followed by a file name or path name
+    ■ mode is one of the following keywords:
+
+RANDOM   Read or write from a random- │ INPUT   Read only from sequential file
+         access file (the default)    │ OUTPUT  Write to a sequential file
+BINARY   Read or write from a binary  │ APPEND  Write to the end of a
+         file                         │         sequential file
+
+    ■ access and lock are ◄Details► used only in a networking environment
+    ■ filenum is an integer expression whose value is between 1 and 255
+    ■ reclen defaults to 128 for random-access files, to 512 for sequential
+      files, and is not needed at all for binary files
+See Also  ◄FREEFILE►
+Other Uses of the OPEN Keyword
+  OPEN mode,[#]filenum,file[,reclen] - an alternate syntax (see ◄Details►)
+  ◄OPEN COM► - to open a communications channel
+
+:nOPTION BASE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+OPTION BASE - a BASIC declaration that declares the default
+              lower bound for array subscripts
+
+Syntax
+  OPTION BASE n
+    ■ n, a numeric expression, must have a value of 0 or 1.
+
+See Also  ◄LBOUND►  ◄DIM►
+
+:nOR Operator
+OR Operator
+
+Syntax
+  result = numeric-expression1 OR numeric-expression2
+
+The logical "inclusive or" operator compares corresponding bits in
+numeric-expression1 and numeric-expression2, then sets the corresponding
+bit in the result according to the following table:
+
+──────────────────────────────────────────────────────────────────
+Bit in First Expression   Bit in Second Expression   Bit in Result
+──────────────────────────────────────────────────────────────────
+        1                        1                        1
+        1                        0                        1
+        0                        1                        1
+        0                        0                        0
+──────────────────────────────────────────────────────────────────
+
+:nOUT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+OUT - a device I/O statement that sends a byte to a machine I/O port
+
+Syntax
+  OUT port, data
+    ■ port, a numeric-expression which has an integer value between
+      0 and 65,535, identifies the destination hardware I/O port
+    ■ data, a numeric expression that has an integer value between
+      0 and 255, is the data to be sent out the port
+
+See Also  ◄INP►  ◄WAIT►
+
+:nOUTPUT Keyword
+OUTPUT
+
+In the FOR mode clause of an OPEN statement, if mode is OUTPUT, the file
+is opened for sequential writing.
+
+See Also  ◄OPEN►
+
+:nPAINT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PAINT - a graphics statement that fills an area with the color or
+        pattern specified
+
+Syntax
+  PAINT [STEP] (x,y)[,[paint] [,[bordercolor] [,background]]]
+    ■ (x,y) are the screen coordinates that indicate the area to be filled.
+    ■ Use the optional STEP keyword if (x,y) are coordinate values which
+      are relative to the most recently drawn point
+    ■ paint is a numeric expression that specifies the color to paint with,
+      or a string expression that indicates the pattern (or "tiling") to
+      paint with
+    ■ bordercolor and background are ◄Details►
+
+See Also  ◄DRAW►  ◄CIRCLE►
+
+:nPALETTE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PALETTE, PALETTE USING - graphics statements that change one or
+                         more of the colors in the palette
+Tip:  The PALETTE statement works only on systems equipped with EGA, VGA,
+      or MCGA adapters.
+
+Syntax
+  PALETTE [attribute,color]
+  PALETTE USING array-name [(array-index)]
+    ■ attribute is the palette attribute to be changed
+    ■ color is the display color assigned to the attribute
+    ■ array-name and array-index are used to change more that one palette
+      assignment with a single statement (see ◄Details►)
+
+See Also  ◄SCREEN►  ◄COLOR►
+
+:nPCOPY Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PCOPY - a graphics statement that copies one screen page to another
+
+Syntax
+  PCOPY sourcepage, destinationpage
+    ■ sourcepage, a numeric expression that has an integer value between
+      0 and n, identifies the segment of video memory that contains the
+      source. The value of n is determined by the current size of video
+      memory and the current screen mode.
+    ■ destinationpage, also a numeric expression that has an integer value
+      between 0 and n, identifies the video memory location of the copy
+
+See Also  ◄SCREEN Statement► - to see how the current SCREEN mode
+                               determines the number of pages available
+
+:nPEEK Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PEEK - a memory function that returns the byte stored at a specified
+       memory location
+
+Syntax
+  PEEK(address)
+    ■ address, a numeric expression with a value between 0 and 65,535, is
+      an offset into the memory segment specified by the most recently
+      executed DEF SEG statement
+
+See Also  ◄DEF SEG►  ◄POKE►  ◄VARPTR$►  ◄VARPTR►  ◄VARSEG►
+
+:nPEN Statements QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PEN - an event-trapping statement that enables, disables, or suspends
+      lightpen-event trapping
+Syntax
+  PEN ON
+  PEN OFF
+  PEN STOP
+
+See Also  ◄ON PEN►
+Other Uses of the PEN Keyword
+◄PEN function► - to read the lightpen coordinates
+
+:nPLAY Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PLAY - a device I/O statement that plays music
+
+Syntax
+  PLAY commandstring
+    ■ commandstring is a stringexpression that contains music commands:
+──────────────────────────Set Octaves and Play Tones──────────────────────────
+ On  Sets current octave (n = 0-6)    │  < or >  Up or down one octave
+ Nn  Plays note n (n = 0-84, 0 is a   │  A-G  Plays A, B, ..., G in current
+     rest)                            │      octave (+ = sharp, - = flat)
+──────────────────────────Set Tone Duration and Tempo─────────────────────────
+ Ln  Sets length of a note (L1 is     │  MS  Each note plays 3/4 of length
+     whole note, L4 is quarter note,  │  MN  Each note plays 7/8 of length
+     etc.)  n = 1-64                  │  ML  Each note plays full length
+ Tn  Sets number of quarter notes per │  Pn  Pause for the duration of
+     minute (n = 32-255, 120 default  │      n quarternotes (n = 1-64)
+────────────────────────────────Set Operation─────────────────────────────────
+ MF  Plays music in foreground        │  MB  Plays music in background
+───────────────────────────────Execute Substrings─────────────────────────────
+       X + VARPTR$(string-expression)     Executes another command string
+
+See Also  ◄SOUND►  ◄BEEP►  ◄ON PLAY(n)►
+Other Uses of the PLAY Keyword
+  ◄PLAY ON, PLAY OFF, and PLAY STOP► - to enable, disable, or suspend play
+                                       event trapping
+  ◄PLAY function► - to return the number of notes in the background music
+                    queue
+
+:nPMAP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PMAP - a graphics function that maps view-coordinate expressions to
+       physical locations or maps physical expressions to a view-coordinate
+       location
+
+Syntax
+  PMAP (expression, function)
+    ■ expression indicates the coordinate to be mapped
+    ■ function, a numeric expression which has an integer value
+      between 0 and 3, specifies one of four different mapping functions
+      to be done (see ◄Details►).
+
+See Also  ◄WINDOW►  ◄VIEW►  ◄POINT►
+
+:nPOINT Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+POINT - a graphics function that reads the color number of a pixel from
+        the screen or returns the pixel's coordinates
+Syntax
+  POINT (x,y)
+  POINT (number)
+    ■ (x,y) are the pixel coordinates for which you want the color number
+    ■ number, a numeric expression that has an integer value between 0 and 3,
+      indicates one of four possible ways you want the current location of
+      the graphics cursor to be reported (see ◄Details►).
+
+See Also  ◄SCREEN► - to see the range of coordinates that are available
+                     in the various screen modes and the meaning of color
+                     numbers in those various modes
+          ◄PMAP►
+
+:nPOKE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+POKE - a memory statement that writes a byte into a memory location
+
+Syntax
+  POKE address,byte
+    ■ address, a numeric expression that returns a value between
+      0 and 65,535, is an offset into the memory segment specified by
+      the most recently executed DEF SEG statement
+    ■ byte, a numeric expression that returns an integer value between
+      0 and 255, is the data to be written into the memory location
+
+See Also  ◄DEF SEG►  ◄PEEK►  ◄VARPTR$►  ◄VARPTR►  ◄VARSEG►
+
+:nPOS Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+POS - a device I/O function that returns the current horizontal
+      position of the cursor
+
+Syntax
+  POS(0)
+
+See Also  ◄CSRLIN►
+
+:nPRESET Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PRESET - a graphics statement that draws a specified point on the
+         screen
+Syntax
+  PRESET [STEP](x,y)[,color]
+    ■ (x,y) specify the screen coordinates where you want the point drawn
+    ■ Use the optional STEP keyword if the (x,y) values are relative to
+      the current location of the graphics cursor
+    ■ If color is omitted, the current background color is used
+
+See Also  ◄PSET►  ◄SCREEN statement►
+
+:nPRINT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PRINT - a device I/O statement that outputs data on the screen
+
+Syntax
+  PRINT [expressionlist][{,|;}]
+    ■ If all arguments are omitted, a blank line is printed.
+    ■ If expressionlist is included, the values of the expressions are
+      printed on the screen.
+    ■ The expressions in the list may be numeric or string expressions.
+      (String literals must be enclosed in quotation marks.)
+    ■ The optional characters "," and ";" are ◄Details►.
+
+Other Uses of the PRINT Keyword
+  ◄PRINT USING► - to output formatted text to the screen
+  ◄PRINT #► - to output data to a sequential file
+
+:nPSET Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+PSET - a graphics statement that draws a point on the screen
+
+Syntax
+  PSET [STEP](x,y) [,color]
+    ■ (x,y) specify the screen coordinates where you want the point drawn
+    ■ Use the optional STEP keyword if the (x,y) values are relative to
+      the current location of the graphics cursor
+    ■ If color is omitted, the current foreground color is used
+
+See Also  ◄PRESET►  ◄SCREEN statement►
+
+:nRANDOMIZE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RANDOMIZE - a math statement that initializes (reseeds) the
+            random-number generator
+Syntax
+  RANDOMIZE [expression]
+    ■ If the argument is omitted, the user will be prompted for a random
+      number seed.
+    ■ expression may be any type of expression
+
+See Also  ◄RND►
+
+:nREAD Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+READ - an I/O statement that reads values from a DATA statement
+       and assigns the values to variables
+
+Syntax
+  READ variablelist
+    ■ variablelist is made up of one or more variables, separated by
+      commas, which are to receive the data. The variables may be string
+      or numeric. See ◄Details► about data type conversion performed by
+      QuickBASIC.
+
+See also  ◄DATA►  ◄RESTORE►
+
+:nREDIM Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+REDIM - a BASIC declaration that changes the space allocated to an
+        array that has been declared $DYNAMIC
+
+Syntax
+  REDIM [SHARED] variable(subscripts)[AS type]
+                 [,variable(subscripts)[AS type]]...
+
+    ■ variable is a BASIC variable name
+    ■ Use the SHARED keyword if you want all procedures in this module to
+      be able to use this variable
+    ■ Use the (subscripts) to declare the size of arrays
+      (see ◄Details►)
+    ■ Use the optional AS type clause to declare a data type for the
+      array (see ◄Details►)
+
+See Also  ◄DIM►  ◄ERASE►
+
+:nREM Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+REM - a BASIC declaration that allows explanatory remarks to be
+      inserted in a program
+
+Syntax
+  REM remark
+  ' remark
+
+    ■ remark is any explanation you think will be useful to a reader of
+      the program text, and which will fit on the rest of the program line
+
+See Also  ◄$STATIC and $DYNAMIC Metacommands►  ◄$INCLUDE Metacommand►
+
+:nRESET Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RESET - a file I/O statement that closes all disk files
+
+Syntax
+  RESET
+
+See Also  ◄CLOSE►
+
+:nRESTORE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RESTORE - an I/O statement that allows DATA statements to be
+          reread from a specified line
+
+Syntax
+  RESTORE [{linelabel | linenumber}]
+    ■ If the argument is omitted, the next READ statement which executes
+      will read the first item in the first DATA statement in the program
+    ■ linelabel or linenumber identifies the DATA statement you want the
+      next READ statement to use. The first item from that line will be
+      read.
+
+See Also  ◄DATA►  ◄READ►
+
+:nRESUME Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RESUME - an error-trapping statement that continues program execution
+         after an error-trapping routine has been invoked
+
+Syntax
+  RESUME [0]
+  RESUME NEXT
+  RESUME {linelabel | linenumber}
+
+  ■ If the argument is omitted, or is 0, program execution resumes with
+    the statement that caused the error
+  ■ NEXT resumes program execution with the statement immediately following
+    the one that caused the error
+  ■ linelabel or linenumber are ◄Details►
+
+See Also  ◄ON ERROR►
+
+:nRETURN Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RETURN - a control flow statement that returns control from a subroutine
+
+Syntax
+  RETURN [{linelabel | linenumber}]
+    ■ If the argument is omitted, RETURN continues execution where an event
+      occurred (for event handling) or at the statement following the GOSUB
+      (for subroutine calls)
+    ■ linelabel or linenumber, if used, must identify a line in the
+      module-level code to execute next
+
+See Also  ◄GOSUB►
+
+:nRIGHT$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RIGHT$ - a string function that returns the rightmost n characters
+         of a string
+
+Syntax
+  RIGHT$(stringexpression,n)
+    ■ stringexpression is a string constant, string variable, or string
+      expression
+    ■ n, a numeric expression which must have a value between 0 and 32,767,
+      specifies how many right-most characters the function should return.
+      If n is zero, the null string (a zero-length string) is returned.
+
+See Also  ◄LEFT$►  ◄MID$ function►
+
+:nRMDIR Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RMDIR - a statement that interfaces with DOS to remove an existing
+        directory
+
+Syntax
+  RMDIR pathspec
+    ■ pathspec is a string expression that identifies the directory
+      to be removed
+
+See Also  ◄MKDIR►  ◄CHDIR►
+
+:nRND Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RND - a math function that returns a single-precision random number
+      between 0 and 1
+
+Syntax
+  RND[(n)]
+    ■ If the argument is omitted, the RND function returns the next
+      number in the random number sequence
+    ■ n is a numeric expression that specifies a value less than zero,
+      zero, or greater than zero. See ◄Details► on how the RND function
+      interprets each of these types of values.
+
+See also  ◄RANDOMIZE► - to see how to generate a different random number
+                        sequence each time the program is run
+
+:nRTRIM$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RTRIM$ - a string processing function that returns a string with
+         trailing (right-hand) spaces removed
+
+Syntax
+  RTRIM$(stringexpression)
+
+See Also  ◄LTRIM$►
+
+:nRUN Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+RUN - a control flow statement that restarts the program currently in
+      memory, or executes a specified program
+
+Syntax
+  RUN [{linenumber | filespec}]
+    ■ If the argument is omitted, execution begins at the first executable
+      statement in the main module of the currently loaded program
+    ■ linenumber explicitly identifies a line where execution of the main
+      module begins
+    ■ filespec, a string expression, specifies a file to load into memory
+      and run
+
+See Also  ◄CHAIN►
+
+:nSADD Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SADD - a memory function that returns the address of the specified
+       string expression
+Tip:  The SADD function is most often used in mixed-languages programming.
+
+Syntax
+  SADD(stringvariable)
+    ■ stringvariable identifies the string for which you want the
+      memory location
+
+See Also  ◄FRE►  ◄PEEK►  ◄POKE►  ◄VARPTR$►  ◄VARPTR►
+
+:nSCREEN Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SCREEN - a graphics statement that sets the specifications for the
+         display screen
+
+Syntax
+  SCREEN [mode] [,[colorswitch]][,[apage]][,[vpage]]
+    ■ mode is an integer constant or expression that selects a screen mode
+      for a particular combination of display and adapter:
+
+        ◄MDPA, CGA, EGA, or VGA (Text Only)►
+        ◄CGA, EGA, VGA, or MCGA Low- and Medium-Resolution Graphics►
+        ◄EGA and VGA Medium- and High-Resolution Graphics►
+        ◄EGA and VGA Monochrome High-Resolution Graphics►
+        ◄VGA and MCGA High-Resolution Graphics►
+        ◄Hercules and Other Adapters►
+    ■ colorswitch, apage, and vpage are ◄Details►
+
+See Also  ◄COLOR►  ◄PALETTE►  ◄WIDTH►
+Other Uses of the SCREEN Keyword
+  ◄SCREEN function► - to read a character's ASCII value or its color from
+                    a specific screen location
+
+:nSEEK Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SEEK - a file I/O statement that sets the position in a file for
+       the next read or write
+Syntax
+  SEEK [#]filenumber,position
+    ■ filenumber is an integer used in an OPEN statement to open the file
+    ■ position is a numeric expression indicating where the next read or
+      write is to be done:
+        - for files opened in RANDOM mode, position is a record number.
+        - for files opened in BINARY, INPUT, OUTPUT, or APPEND modes,
+          position is the number of a byte from the beginning of the file.
+
+See Also  ◄OPEN►  ◄GET(File I/O)►  ◄PUT(File I/O)►
+
+:nSELECT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SELECT CASE - a control flow statement that executes one of several
+              statement blocks depending on the value of an expression
+Syntax
+  SELECT CASE testexpression
+  [CASE expressionlist1]
+    [statementblock-1]
+  [CASE expressionlist2
+    [statementblock-2]] ...
+
+  [CASE ELSE
+    [statementblock-n]]
+  END SELECT
+
+    ■ testexpression is any numeric or string expression.
+    ■ expressionlist contains one or more expressions of the same type as
+      testexpression. The IS keyword must precede any relational operators
+      in an expression.
+    ■ statementblock consists of any number of statements on one or more
+      lines.
+
+:nSETMEM Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SETMEM - a memory management function that changes the amount of memory
+         used by the far heap - the area where far objects and internal
+         tables are stored
+
+Syntax
+  SETMEM(numeric-expression)
+    ■ numeric-expression has a value that is less than zero, zero, or
+      greater than zero. See ◄Details► about how the SETMEM function
+      interprets each of these values.
+
+:nSGN Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SGN - a math function that indicates the sign of a numeric expression
+
+Syntax
+  SGN(numeric-expression)
+    ■ If numeric-expression is positive, the SGN function returns +1.
+    ■ If numeric-expression is zero, the SGN function returns 0.
+    ■ If numeric-expression is negative, the SGN function returns -1.
+
+:nSHARED Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SHARED - a statement that gives a SUB or FUNCTION procedure access to
+         variables declared at the module level without passing them as
+         parameters
+Syntax
+  SHARED variable [AS type] [,variable [AS type]]...
+    ■ variable identifies the module-level variable the procedure will use.
+      It is either an array name followed by (), or a variable name.
+    ■ The optional AS type clause is a ◄Detail►.
+
+See Also  ◄SHARED keyword in COMMON statement►
+          ◄SHARED keyword in DIM statement►
+
+:nSHELL Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SHELL - a statement that interfaces with DOS to exit the BASIC program,
+        run a .COM, .EXE, or .BAT program, or a DOS command, and return
+        to the program at the line following the SHELL statement
+
+Syntax
+  SHELL [commandstring]
+    ■ If all arguments are omitted, DOS will give you a new COMMAND.COM
+      shell and DOS commands can be entered at the DOS prompt
+    ■ commandstring is a string expression that contains the name of a
+      program to run and any program options
+
+:nSIN Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SIN - a math function that returns the sine of an angle given in radians
+
+Syntax
+  SIN(numeric-expression)
+    ■ numeric-expression, which may be of any type, is the angle, expressed
+      in radians. See ◄Details► on how to convert degrees into radians.
+
+See Also  ◄COS►  ◄TAN►  ◄ATN►
+
+:nSLEEP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SLEEP - a control flow statement that suspends execution of the
+        calling program
+Syntax
+  SLEEP [seconds]
+    ■ If the argument is omitted, the program is suspended until a key is
+      pressed or an enabled event occurs
+    ■ If the optional seconds argument is used, the program will stay
+      suspended until the number of seconds elapses, a key is pressed,
+      or an enabled event occurs, whichever happens first.
+
+See Also  ◄WAIT►
+
+:nSOUND Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SOUND - a device I/O statement that generates sound through the
+        speaker
+Syntax
+  SOUND frequency,duration
+    ■ frequency, a numeric expression that has an integer value between
+      37 and 32,767, is the frequency of the sound in cycles/second,
+      or hertz
+    ■ duration, a numeric expression that has an unsigned integer value
+      between 0 and 65,535, is the number of system clock ticks the
+      sound lasts. There are 18.2 clock ticks per second.
+
+See Also  ◄PLAY►
+
+:nSPACE$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SPACE$ - string processing function that returns a string of spaces
+         of length n
+Syntax
+  SPACE$(n)
+    ■ n, a numeric expression that has an integer value between 0 and 32,767,
+      is the number of spaces you want in the string
+
+See Also  ◄STRING$►  ◄SPC►  ◄TAB►  ◄PRINT USING►
+          ◄RSET►  ◄LSET►
+
+:nSPC Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SPC - a device I/O function that skips n spaces in a PRINT or LPRINT
+      statement
+
+Syntax
+  SPC(n)
+    ■ n, a numeric expression that returns an integer value between
+      0 and 32,767, is the number of spaces you want in print line
+
+See Also  ◄SPACE$►  ◄TAB►
+
+:nSQR Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SQR - a math function that returns the square root of numeric expression
+
+Syntax
+  SQR(numeric-expression)
+    ■ numeric-expression must have a value greater than or equal to zero
+
+:nSTATIC Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STATIC - BASIC declaration that makes simple variables or arrays local
+         to a procedure (or a DEF FN function) and preserves the variable
+         values between procedure calls
+
+Syntax
+  STATIC variablelist
+    ■ variablelist has the following syntax:
+        variable[()][AS type][,variable[()][AS type]...
+      Use the "()" characters to identify an array. See ◄Details► for
+      more information about the AS type clause.
+
+See Also  ◄SUB►  ◄FUNCTION►  ◄DEF FN►
+
+:nSTEP Keyword - Different Uses
+
+Use the STEP keyword to
+
+  ■ indicate how much to increase or decrease the loop counter after
+    each iteration of a FOR...NEXT loop.
+
+  ■ in graphics statements, to indicate that the pixel coordinates that
+    follow STEP are relative offsets from the last location of the
+    graphics cursor on the screen, rather than absolute distances
+    from the upper left corner of the screen.
+
+See Also  ◄FOR...NEXT►  ◄CIRCLE►  ◄LINE►  ◄PAINT►
+        ◄PRESET►  ◄PSET►
+        ◄GET (Graphics)►  ◄PUT (Graphics)►
+
+:nSTICK Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STICK - a device I/O function that returns the x and y coordinates
+        of the two joysticks
+
+Syntax
+  STICK(n)
+    ■ n, a numeric expression that has an unsigned integer value between
+      0 and 3, tells the STICK function which one of four possible
+      joystick coordinate values to return (see ◄Details►)
+
+:nSTOP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STOP - a control flow statement that terminates the program
+
+Syntax
+  STOP
+
+See Also  ◄END►
+Other Uses of the STOP Keyword
+  The STOP keyword is used in various statements to suspend trapping of
+  various events in the following statements:
+      Statement       Type of Event Trapping Suspended
+      COM(n) STOP   - events on communications port n
+      KEY(n) STOP   - a keypress event on key n
+      PEN STOP      - lightpen events
+      PLAY STOP     - background music buffer events
+      STRIG(n) STOP - events on joystick trigger n
+      TIMER STOP    - timer events
+      UEVENT STOP   - user-defined events
+
+:nSTR$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STR$ - a string function that returns a string representation of the
+       value of a numeric expression
+
+Syntax
+  STR$(numeric-expression)
+
+See Also  ◄VAL►
+
+:nSTRIG Statements QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STRIG(n) - an event-trapping statement that enables, disables, or
+           inhibits trapping of joystick activity
+Syntax
+  STRIG(n) ON
+  STRIG(n) OFF
+  STRIG(n) STOP
+
+See Also  ◄ON event statements►
+Other Uses of the STRIG Keyword
+  ◄STRIG function► - to return the status of a specified joystick trigger
+
+:nSTRING$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+STRING$ - string processing function that returns a string whose
+          characters all have a given ASCII code or whose characters
+          are all the first character of a string expression
+
+Syntax
+  STRING$(m,n)
+  STRING$(m,stringexpression)
+    ■ m, a numeric expression, is the length of the string to return
+    ■ n, a numeric expression that has an integer value between 0 and 255,
+      is the ASCII character code of the character that fills the string
+    ■ stringexpression identifies a string whose first character can
+      be used to fill the string
+
+See Also  ◄ASCII Character Codes►
+
+:nSUB...END SUB Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SUB...END SUB - a procedure statement that marks the beginning and
+                end of a subprogram
+Syntax
+  SUB globalname[parameterlist][STATIC]
+    [statements]
+  [EXIT SUB]
+    [statements]
+  END SUB
+
+    ■ globalname is a variable name up to 40 characters long, which does
+      not appear in any other SUB or FUNCTION statement in the same program
+    ■ parameterlist contains the names of the simple variables and arrays
+      passed to the SUB when it is called (see ◄Details► for the syntax of
+      the parameter list)
+    ■ use the optional STATIC keyword to preserve local variable values
+      between calls
+
+See also  ◄DECLARE►  ◄CALL►  ◄SHARED►  ◄STATIC Statement►
+
+:nSWAP Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SWAP - an assignment statement that exchanges the values of two variables
+
+Syntax
+  SWAP variable1,variable2
+    ■ variable1 and variable2 must be of exactly the same type
+
+:nSYSTEM Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+SYSTEM - a statement that closes all open files and returns
+         control to the operating system
+
+Syntax
+  SYSTEM
+
+See Also  ◄END►  ◄STOP►
+
+:nTAB Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TAB - a device I/O function that moves the print position when used
+          in the PRINT or LPRINT statements
+
+Syntax
+  TAB(column)
+    ■ column, a numeric expression that has an integer value between
+      1 and (column-width of the display device - 1)
+
+See also  ◄SPC►  ◄SPACE$►  ◄PRINT►  ◄LPRINT►
+
+:nTAN Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TAN - a math function that returns the tangent of an angle expressed
+          in radians
+Syntax
+  TAN(numeric-expression)
+    ■ numeric-expression, which may be of any type, is the angle, expressed
+      in radians. See ◄Details► on how to convert degrees into radians.
+
+See Also  ◄ATN►  ◄SIN►  ◄COS►
+
+:nTIME$ Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TIME$ - a statement that uses DOS to set the current time
+
+Syntax
+  TIME$=stringexpression
+    ■ stringexpression must have one of the following forms:
+        hh, hh:mm, or hh:mm:ss
+      where hh is the hour on a 24-hour clock, mm is the minutes, and
+      ss is the seconds
+
+See Also  ◄DATE$►
+
+Other Uses of the TIME$ Keyword
+  ◄TIME$ function► - to get the current time from DOS
+
+:nTIMER Statements QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TIMER - an event trapping statement that enables, disables, or inhibits
+        timer event trapping
+Syntax
+  TIMER ON
+  TIMER OFF
+  TIMER STOP
+
+See Also  ◄ON TIMER(n)►
+Other Uses of the TIMER Keyword
+  ◄TIMER function► - to return the number of seconds elapsed since midnight
+
+:nTO Keyword - Different Uses
+
+The TO keyword is used to specify ranges in the following statements:
+
+  ■ Specify a range in the CASE clause of a SELECT CASE statement.
+  ■ Specify the range for the loop counter in a FOR...NEXT loop.
+  ■ Specify a range of records to lock or unlock in a networked
+    environment, in the LOCK...UNLOCK statement.
+  ■ Separate the lower and upper bounds of an array specification
+    in a DIM or REDIM statement.
+
+
+:nTRON and TROFF Statements QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TRON and TROFF - debugging statements that trace the execution of
+                 program statements
+Syntax
+  TRON
+  TROFF
+
+:nTYPE Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+TYPE - a BASIC declaration that defines a data type containing one
+       or more elements
+
+Syntax
+  TYPE usertype
+    elementname AS typename
+    [elementname AS typename]
+    . . .
+
+  END TYPE
+
+    ■ usertype is a name that will identify the user-defined type. Use
+      BASIC variable naming rules to coin this name.
+    ■ elementname will identify this element of the user-defined type.
+      Use BASIC variable naming rules.
+    ■ typename is INTEGER, LONG, SINGLE, DOUBLE, STRING*n, or another
+      user-defined type
+
+:nUBOUND Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+UBOUND - a memory function that returns the upper bound (largest
+         available subscript) for the indicated dimension of an array
+
+Syntax
+  UBOUND(array[,dimension])
+    ■ array identifies the array
+    ■ dimension, an numeric-expression that has an integer value, indicates
+      the dimension of the array for which you want to see the smallest
+      available subscript. Use 1 for the first dimension, 2 for the second
+      dimension, etc. This is an optional argument for one-dimensional
+      arrays.
+
+See Also  ◄LBOUND►
+
+:nUCASE$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+UCASE$ - a string processing function that returns a string expression
+         with all letters in uppercase
+
+Syntax
+  UCASE$(stringexpression)
+
+See Also  ◄LCASE$►
+
+:nUEVENT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+UEVENT - an event-trapping statement that enables, disables or suspends
+         event trapping for a user-defined event
+
+Syntax
+  UEVENT ON
+  UEVENT OFF
+  UEVENT STOP
+
+See Also  ◄ON UEVENT►
+
+:nUNLOCK Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+UNLOCK - a file I/O statement that releases locks applied to parts
+         of a file
+  Tip: LOCK and UNLOCK are only useful in networked environments where
+       several processes my need access to the same file. They only
+       function if you are using DOS version 3.1 or later.
+
+Syntax
+  UNLOCK [#] filenumber [,{record| [start] TO end}]
+    ■ filenumber is the number of an open file
+    ■ record, start, and end indicate the range of records or bytes to
+      be locked
+
+See Also  ◄LOCK►
+
+:nUSING Keyword QuickSCREEN
+──────────────────Characters Used to Format a Numeric Expression──────────────
+ #   Digit position                     │ -     Placed after digit positions,
+ .   Decimal point position             │       prints trailing sign for
+ ,   Placed left of the decimal point,  │       negative numbers only
+     prints a comma every third digit   │ $$    Prints leading $
+ +   Position of number's sign          │ **    Fills leading spaces with *
+^^^^ Prints number in exponential format│ **$   Combines ** and $
+───────────────────Characters Used to Format a String Expression──────────────
+ &   Prints entire string               │     Prints first 'n' characters,
+ !   Prints only the first character    │       where n is the number of
+     of the string                      │       blanks between slashes + 2
+─────────────────────────────Characters Used as Literals──────────────────────
+ _   Prints the following formatting    │       Any character not in this
+     character as a literal             │       table is printed as a literal
+See Also  ◄PRINT USING►  ◄PRINT►
+Other Uses of the USING Keyword
+  ◄PALETTE USING► - to specify the colors used in a graphics display
+
+:nVAL Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+VAL - a string-processing function that returns the numeric value of
+      a string of digits
+
+Syntax
+  VAL(stringexpression)
+
+See Also  ◄STR$►  ◄ASC►
+
+:nVARPTR and VARSEG Functions QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+VARPTR and VARSEG - memory functions that return the address of a
+                    variable
+Syntax
+  VARPTR(variablename)
+  VARSEG(variablename)
+    ■ variablename is the name of any BASIC variable, including a record
+      variable or record element
+
+See Also  ◄VARPTR$►  ◄DEF SEG►  ◄PEEK►  ◄POKE►  ◄SADD►
+
+:nVARPTR$ Function QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+VARPTR$ - a memory function that returns a string representation of
+          a variable's address for use in DRAW and PLAY statements
+
+Syntax
+  VARPTR$(variablename)
+
+See Also  ◄VARPTR►
+
+
+:nVIEW Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+VIEW - a graphics statement that defines screen limits for graphics
+       output
+Syntax
+  VIEW [[SCREEN] (x1,y1)-(x2,y2) [,[color][,border]]]
+    ■ If all arguments are omitted, the entire screen is the viewport
+    ■ (x1,y1) and (x2,y2) are numeric expressions that are the coordinates
+      of diagonally opposite corners of the viewport
+    ■ Use the optional SCREEN keyword to specify the coordinates are absolute
+      to the screen, not relative to an already established viewport
+    ■ color and border are ◄Details►
+
+See Also  ◄SCREEN statement►
+
+Other Uses of the VIEW Keyword
+  ◄VIEW PRINT statement► - to set the boundaries of the text viewport on the
+                           screen
+
+:nWAIT Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+WAIT - a control flow statement that suspends program execution while
+       monitoring the status of a machine input port
+
+Syntax
+  WAIT portnumber,and-expression[,xor-expression]
+    ■ portnumber, a numeric expression that has an integer value between
+      0 and 255, is the number of the machine input port
+    ■ and-expression is an integer expression that is combined with the
+      data at the port with an AND operation. Only if the result is
+      non-zero will the WAIT statement pass control to the next
+      statement in the program.
+    ■ xor-expression is a ◄Detail►
+
+See Also  ◄INP►  ◄OUT►
+
+
+:nWIDTH Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+WIDTH - a file I/O statement that assigns an output-line width to
+        a file or device or changes the number of columns and lines
+        displayed on the screen
+
+Syntax
+  WIDTH [columns][,lines]
+  WIDTH {#filenumber | device},width
+  WIDTH LPRINT width
+
+    ■ See ◄Details► for the different ways the WIDTH statement arguments
+      can be used
+
+See Also  ◄SCREEN statement►  ◄VIEW PRINT►
+
+:nWINDOW Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+WINDOW - a graphics statement that defines the dimensions of the
+         current viewport
+Syntax
+  WINDOW [[SCREEN] (x1,y1)-(x2,y2)]
+    ■ If all arguments are omitted, the view coordinates will be the
+      same as the screen coordinates
+    ■ (x1,y1)-(x2,y2) are a set of single-precision numbers that specify
+      the "view coordinate" values for the border coordinates of the screen.
+    ■ The optional SCREEN keyword is a ◄Detail►
+
+See Also  ◄SCREEN statement►  ◄VIEW►  ◄WIDTH►
+
+:nWRITE # Statement QuickSCREEN
+  ◄QuickSCREEN►      ◄Details►      ◄Example►      ◄Contents►      ◄Index►
+──────────────────────────────────────────────────────────────────────────────
+WRITE # - a file I/O statement that writes data to a sequential file
+
+Syntax
+  WRITE #filenumber[,expressionlist]
+    ■ filenumber is an integer used in an OPEN statement for the file.
+      The file must be opened in OUTPUT or APPEND mode.
+    ■ expressionlist is one or more string or numeric expressions,
+      separated by commas.
+    ■ If you omit expressionlist, a blank line is written to the file
+
+See Also  ◄OPEN►  ◄PRINT #►
+
+Other Uses of the WRITE Keyword
+  ◄WRITE statement► - to send data to the screen
+
+:nXOR Operator
+XOR Operator
+
+Syntax
+  result = numeric-expression1 XOR numeric-expression2
+
+The logical "exclusive or" operator compares corresponding bits in
+numeric-expression1 and numeric-expression2, then sets the corresponding
+bit in the result according to the following table:
+
+─────────────────────────────────────────────────────────────────
+Bit in First Expression   Bit in Second Expression   Bit in Result
+──────────────────────────────────────────────────────────────────
+       1                         1                          0
+       1                         0                          1
+       0                         1                          1
+       0                         0                          0
+──────────────────────────────────────────────────────────────────
+

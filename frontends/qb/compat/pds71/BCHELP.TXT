@@ -1,0 +1,753 @@
+:l3
+.title
+BASIC CodeView Expression Help
+                                    -♦-
+
+:nBASIC Expressions
+:l25
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     BASIC expressions can contain the following elements when used in
+     CodeView Command or Watch windows:
+
+     ◄Operators►
+     ◄Constants►
+     ◄Symbols►
+     ◄Strings►
+     ◄Arrays►
+     ◄Records (User-Defined Types)►
+     ◄Intrinsic Functions►
+
+     NOTE:    When a BASIC expression is used as an argument with a
+              CodeView command that takes multiple arguments, the expression
+              cannot contain spaces.
+
+     In addition to the format specifiers that can be used with the Display
+     Expression (?) command, BASIC expressions can use the letter m as the
+     format specifier for expressions of the CURRENCY data type. See the
+     ◄Display Expression Command► for information on the
+     other format specifiers.
+                                    -♦-
+
+:nBASIC Operators
+:l45
+:z3
+                                              ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     CodeView BASIC expressions can contain numeric operations. Expressions
+     containing operations on strings are not supported. CodeView also cannot
+     evaluate expressions containing the BASIC exponentiation operator (^).
+     For all other BASIC operators, the order of precedence is the same as
+     used in the BASIC language:
+
+       1. Arithmetic Operations
+          a. Negation (-)
+          b. Multiplication and division (*, /)
+          c. Integer division (\)
+          d. Modulo arithmetic (MOD)
+          e. Addition and subtraction (+, -)
+
+       2. Relational Operations (=, >, <, <>, <=, >=)
+
+       3. Logical Operations
+          a. NOT
+          b. AND
+          c. OR
+          d. XOR
+          e. EQV
+          f. IMP
+
+       4. Assignment (?LET =), CodeView Command window only
+
+     Relational operators return true (nonzero) or false (zero) when used
+     in the Command or Watch windows.
+
+     In addition to the standard BASIC operators, CodeView uses the BASIC
+     LET statement in combination with the assignment operator (=) to assign
+     values to numeric data elements from the Command window. You must
+     precede LET with the CodeView expression evaluation command (?).
+
+     For example:
+
+     ?LET A%=37
+
+     This example assigns 37 to the variable A%. Without LET, CodeView
+     interprets the expression as a test for equality and will return true
+     (nonzero) or false (zero).
+                                    -♦-
+
+:nBASIC Constants
+:l41
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Syntax: digits                     Integer, default radix
+             fixed-point-number[#|!]    Single or double, fixed-point format,
+                                        decimal radix
+             floating-point-number[#|!] Single or double, floating-point
+                                        format, decimal radix
+             &Odigits                   Integer, octal radix
+             &digits                    Integer, octal radix (alternate
+                                        format)
+             &Hdigits                   Integer, hexadecimal radix
+
+     Constants can be entered in the Command, Watch, and Local windows as
+     integer, long integers, single-precision, or double-precision data
+     objects. Constants are evaluated according to the rules of the BASIC
+     language. For information about the format and ranges of constants in
+     BASIC, see ◄BASIC Literal Constants►.
+
+     By default, CodeView displays numbers in decimal format. This format
+     is referred to as the system radix. If you change the system radix to
+     octal or hexadecimal, you cannot enter fixed-point or floating-point
+     numbers. For information on how to change the system radix, see the
+     CodeView ◄Radix command►.
+
+     You can use the BASIC long-integer type identifier (&) to store an
+     integer constant as a long (4-byte) integer, rather than as a short
+     (2-byte) integer.
+
+     If the system radix is set to hexadecimal, it is possible to enter a
+     value or argument that could be interpreted either as a symbol or as
+     a hexadecimal number. CodeView resolves this ambiguity by first
+     searching for a symbol with that name. If no symbol is found, CodeView
+     interprets the value as a number.
+
+     To enter a value as a number when a symbol exists with the same name,
+     use the hexadecimal format (&Hdigits). For example, to enter the
+     hexadecimal number ABC when your program contains a symbol named ABC,
+     enter it as &HABC.
+                                    -♦-
+
+:nBASIC Symbols
+:l17
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Syntax:   name
+
+     A symbol is a name that represents a register, segment address, offset
+     address, or full 32-bit address. At the BASIC source level, a symbol is
+     the name of a constant, variable, or procedure; you do not necessarily
+     need to know what kind of address it represents.
+
+     In the CodeView Command, Local, and Watch windows, BASIC symbols follow
+     the naming rules used in the BASIC language. In particular, data type
+     identifiers used in BASIC ($, %, &, !, #, and @) are accepted. Symbols
+     are never case sensitive to BASIC, whether or not the Case Sensitivity
+     option is on.
+                                    -♦-
+
+:nBASIC Strings
+:l29
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You cannot perform operations on strings in the Command or Watch windows.
+
+     You also cannot use LET and the assignment operator in an expression
+     that changes the value of a string variable. CodeView does not support
+     BASIC's dynamic strings the way they are supported in the QuickBASIC
+     environments. However, you can make limited changes to a string within
+     a program by using CodeView's EA (Enter ASCII) command.
+
+     To do this, you must give the address of the string data as the first
+     argument, and be sure that any modification you make does not change the
+     length of the string. For example, if the value of MyName$ =
+     "Bill Brownlee", you can use the following syntax to change it:
+
+     EA SSEGADD(MyName$)  "Bill Brown   "
+
+     SSEGADD returns the full address of the string variable, so it can be
+     used with both near and far strings. Since the EA command bypasses the
+     normal BASIC string assignment system, the trailing blanks are necessary
+     to actually change the value of MyName$. MyName$ would not compare
+     equally to Bill Brown, but RTRIM$(MyName$) would. Assigning a string of
+     length greater than the original string length corrupts BASIC's string
+     space.
+
+     See: ◄Enter Commands (E) Command-Window Commands►
+                                    -♦-
+
+:nBASIC Arrays
+:l8
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You cannot expand BASIC arrays in the Local or Watch windows in the
+     way you can with C arrays. To see data in a BASIC array, you must add
+     watches for each element you want to view.
+                                    -♦-
+
+:nBASIC Records (User-Defined Types)
+:l8
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     BASIC records (user-defined types) can be expanded in the Local and
+     Watch windows. To expand a BASIC record, double click on the symbol name
+     in the Local or Watch window.
+                                    -♦-
+
+:nBASIC Intrinsic Functions
+:l69
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     CodeView expressions cannot contain BASIC procedures from the program
+     being debugged. CodeView expressions can contain a limited number of
+     BASIC intrinsic functions, as shown in the following table:
+
+     Function    Returns/Performs     Argument type           Return type
+     ────────────────────────────────────────────────────────────────────
+     ASC         ASCII value of       STRING                  INTEGER
+                 first character
+
+     CINT        Data type conversion Numeric expression      INTEGER
+
+     CLNG        Data type conversion Numeric expression      LONG
+
+     CSNG        Data type conversion Numeric expression      SINGLE
+
+     CDBL        Data type conversion Numeric expression      DOUBLE
+
+     CCUR        Data type conversion Numeric expression      CURRENCY
+
+     CVI         Data type conversion 2-byte STRING           INTEGER
+
+     CVL         Data type conversion 4-byte STRING           LONG
+
+     CVS         Data type conversion 4-byte STRING           SINGLE
+
+     CVD         Data type conversion 8-byte STRING           DOUBLE
+
+     CVC         Data type conversion 8-byte STRING           CURRENCY
+
+     FIX         Conversion, with     Numeric expression      INTEGER
+                 truncation
+
+     INT         Conversion, with     Numeric expression      INTEGER
+                 truncation
+
+     VAL         Numeric value of     STRING                  INTEGER, LONG,
+                 string                                       SINGLE, DOUBLE,
+                                                              CURRENCY
+
+     SADD        Offset portion of    STRING                  INTEGER
+                 address of string
+                 data
+
+     SSEG        Segment portion of   STRING                  INTEGER
+                 address of string
+                 data
+
+     SSEGADD     Segment and offset   STRING                  LONG
+                 of string data
+
+     VARPTR      Offset portion of    Variable name           INTEGER
+                 address of variable
+
+     VARSEG      Segment portion of   Variable name           INTEGER
+                 address of variable
+
+     VARPTRSEG   Segment and offset   Variable name           LONG
+                 of variable
+
+     LBOUND      Lower bound of an    Array name, dimension   INTEGER
+                 array dimension
+
+     UBOUND      Highest bound of an  Array name, dimension   INTEGER
+                 array dimension
+                                    -♦-
+
+:nBASIC Errors
+:l41
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     The following table lists all of the BASIC errors that you can trap.
+
+     Code Message                    ║ Code  Message
+                                     ║
+      1   NEXT without FOR           ║  52   Bad file name or number
+      2   Syntax error               ║  53   File not found
+      3   RETURN without GOSUB       ║  54   Bad file mode
+      4   Out of DATA                ║  55   File already open
+      5   Illegal function call      ║  56   FIELD statement active
+      6   Overflow                   ║  57   Device I/O error
+      7   Out of memory              ║  58   File already exists
+      8   Label not defined          ║  59   Bad record length
+      9   Subscript out of range     ║  61   Disk full
+     10   Duplicate definition       ║  62   Input past end of file
+     11   Division by zero           ║  63   Bad record number
+     12   Illegal in direct mode     ║  64   Bad file name
+     13   Type mismatch              ║  67   Too many files
+     14   Out of string space        ║  68   Device unavailable
+     16   String formula too complex ║  69   Communication-buffer overflow
+     17   Cannot continue            ║  70   Permission denied
+     18   Function not defined       ║  71   Disk not ready
+     19   No RESUME                  ║  72   Disk-media error
+     20   RESUME without error       ║  73   Feature unavailable
+     24   Device timeout             ║  74   Rename across disks
+     25   Device fault               ║  75   Path/File access error
+     26   FOR without NEXT           ║  76   Path not found
+     27   Out of paper               ║  80   Feature removed
+     29   WHILE without WEND         ║  81   Invalid name
+     30   WEND without WHILE         ║  82   Table not found
+     33   Duplicate label            ║  83   Index not found
+     35   Subprogram not defined     ║  84   Invalid column
+     37   Argument-count mismatch    ║  85   No current record
+     38   Array not defined          ║  86   Duplicate value for unique index
+     40   Variable required          ║  87   Invalid operation on null index
+     50   FIELD overflow             ║  88   Database needs repair
+     51   Internal error             ║  89   Insufficient ISAM buffers
+                                    -♦-
+
+:nCodeView Error
+:l8
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     There is more than one variable with this name. You must include the
+     type declaration character with the variable name to indicate which
+     variable you mean.
+                                    -♦-
+
+:nCodeView Error
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     The argument you specified was not of the correct data type.
+     See ◄BASIC Intrinsic Functions► for a list of the valid argument types.
+                                    -♦-
+
+:nCodeView Error
+:l13
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You specified an illegal numeric constant or an invalid radix specifier
+     in an expression. For example, you may have used the digits 8 or 9 in
+     an octal number or you may have typed a letter other than O or H after
+     an ampersand (&) when explicitly specifying a radix.
+
+     You can change the current system radix for displaying and entering
+     values with the N[radixnumber] command. For more information on changing
+     the system radix, see the CodeView ◄Radix command►.
+                                    -♦-
+
+:nCodeView Error
+:l8
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You specified a base for a floating-point number or a value that will
+     not fit in the required data type. Floating-point numbers can only be
+     entered as decimal values.
+                                    -♦-
+
+:nCodeView Error
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You have requested an operation that requires an array, but the symbol
+     you specified is not an array.
+                                    -♦-
+
+:nCodeView Error
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     The array has fewer dimensions than you specified. You must provide
+     the correct number of subscripts to perform this operation.
+                                    -♦-
+
+:nCodeView Error
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     The subscript you specified for the array is not a legal integer.
+     Check the data types of the subscripts.
+                                    -♦-
+
+:nCodeView Error
+:l8
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     One or more of the subscripts specified for the array exceed the bounds
+     of the array. You can check the bounds of an array in CodeView with the
+     LBOUND() and UBOUND() intrinsic functions.
+                                    -♦-
+
+:nCodeView Error
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     The array has more dimensions than you specified. You must specify
+     subscripts for all of the dimensions to perform this operation.
+                                    -♦-
+
+:nCodeView Error
+:l9
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     You specified a non-integer value while the current radix is octal
+     or hexadecimal. Floating-point values are allowed only when the
+     radix is decimal. To change the current radix from the command
+     window, use the N[radixnumber] command.
+                                    -♦-
+
+:l2
+BASIC Dialog and Error Help for PWB
+
+:nUsing BASIC Compiler Options
+:l24
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Use the BASIC Compiler Options command to set compile options for a
+     project. To receive more information, select a category below:
+
+     ┌─────────────────BASIC Compiler Options ────────────────┐
+     │    ┌─────────────────┐       ┌──────────────────────┐  │
+     │    │ ◄EXE Type►      │       │ ◄Target Environment► │  │
+     │    └─────────────────┘       └──────────────────────┘  │
+     │    ┌─────────────────┐       ┌──────────────────────┐  │
+     │    │ ◄Speed►         │       │ ◄Size/Capacity►      │  │
+     │    └─────────────────┘       └──────────────────────┘  │
+     │    ┌─────────────────┐       ┌──────────────────────┐  │
+     │    │ ◄Error Handling►│       │ ◄Event Handling►     │  │
+     │    └─────────────────┘       └──────────────────────┘  │
+     │                                                        │
+     │     ◄Additional Options [▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]►  │
+     │     ◄<Set Debug Options>►    ◄<Show Debug Options>►    │
+     │     ◄<Set Release Options>►  ◄<Show Release Options>►  │
+     │                                                        │
+     └─────────────────────────────────────────────────────────┘
+                                    -♦-
+
+:nSetting EXE Type
+:l13
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     ┌─────────── EXE Type ────────┐
+     │                             │   The program runs without
+     │ ▒ Stand-Alone EXE       /O ◄─── the BASIC run-time
+     │                             │   module being present.
+     │                             │
+     │ ▒ EXE Requiring BRT Module ◄─── The program requires the
+     │                             │   BASIC run-time module.
+     └─────────────────────────────┘
+                                    -♦-
+
+:nSetting Speed Options
+:l20
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+                                         Compiler generates
+     ┌───────────── Speed ────────────┐  in-line instructions
+     │                                │  for floating-point
+     │ ▒ 80x87 or Emulator Math /FPi ◄── operations.
+     │                                │
+     │                                │  Program uses
+     │ ▒ Alternate Math         /FPa ◄── alternate-math library.
+     │                                │
+     │                                │  Compiler generates
+     │ ▒ Code Generation for 286 /G2 ◄── 286-specific
+     │                                │  instructions.
+     └────────────────────────────────┘
+
+     /G2 is on by default if you are running on a 286 or higher
+     processor.
+                                    -♦-
+
+:nSetting Error Handling Options
+:l14
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     ┌─────────Error Handling─────────┐  Program uses
+     │                                │  ON ERROR with
+     │ ▒ ON ERROR Checking       /E ◄─── RESUME linenumber
+     │                                │  statements.
+     │                                │
+     │ ▒ RESUME NEXT Support     /X ◄─── Program uses ON ERROR,
+     │                                │  with RESUME, RESUME
+     └────────────────────────────────┘  NEXT, or RESUME 0.
+                                    -♦-
+                                    -♦-
+
+:nSetting Target Environment
+:l12
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+                              ┌────── Target Environment ──────┐
+     Creates a real-mode      │                                │
+     .OBJ file. ───────────────►▒ DOS or OS/2 Real Mode    /Lr │
+                              │                                │
+     Creates a protected-mode ─►▒ OS/2 Protected Mode      /Lp │
+     .OBJ file.               │                                │
+                              └────────────────────────────────┘
+                                    -♦-
+
+:nSetting Size and Capacity Options
+:l14
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+                              ┌──────── Size/Capacity ─────────┐
+     Enables far string       │                                │
+     support. ─────────────────►▒ Far Strings              /Fs │
+                              │                                │
+     Allows dynamic           │ ▒ Near Strings                 │
+     arrays to be             │                                │
+     greater than 64K. ────────►▒ Huge Dynamic Arrays      /Ah │
+                              │                                │
+                              └────────────────────────────────┘
+                                    -♦-
+
+:nSetting Event Handling Options
+:l12
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Checks at each line    ┌──────── Event Handling ────────┐
+     number or label for    │                                │
+     events. ───────────────►▒ ON EVENT Check Each Label  /W │
+                            │                                │
+     Checks between each ───►▒ ON EVENT Check Each Line   /V │
+     statement for events.  │                                │
+                            └────────────────────────────────┘
+                                    -♦-
+
+:nSetting Additional Compiler Options
+:l13
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Use Additional Options to set command-line switches that are not
+     shown in the dialog box.
+
+     Use the slash (/) form of compiler options; using the dash (-) will
+     cause a compiler error. Also, do not specify additional options that
+     conflict, such as /Lp and /Lr.
+
+     See also: ◄BASIC Command-Line Options►
+                                    -♦-
+
+:nSetting BASIC Compiler Debug Options
+:l21
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Use the Set Debug Options command to set compile options for
+     the debug build of a project. To receive more information,
+     select a category below:
+
+     ┌────────────── BASIC Compiler Debug Options ────────────┐
+     │    ┌────────────────────┐    ┌─────────────────────┐   │
+     │    │ ◄Error Checking►   │    │ ◄Optimization►      │   │
+     │    └────────────────────┘    └─────────────────────┘   │
+     │    ┌────────────────────┐    ┌─────────────────────┐   │
+     │    │ ◄Debug Information►│    │ ◄Browse Information►│   │
+     │    └────────────────────┘    └─────────────────────┘   │
+     │                                                        │
+     │     ◄Additional Options [▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]►    │
+     │     ◄<Show Options>►                                   │
+     │                                                        │
+     └────────────────────────────────────────────────────────┘
+                                    -♦-
+
+:nSetting Error Checking Options
+:l14
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     ┌──────── Error Checking ────────┐
+     │                                │  Generates debugging code
+     │ ▒ Run-Time Error Checking  /D ◄── for run-time error
+     │                                │  checking and enables
+     └────────────────────────────────┘  Ctrl+Break.
+
+     For ISAM programs, compiling with /D causes BASIC to write open
+     database buffers to disk after every DELETE, INSERT, UPDATE, or
+     CLOSE statement.
+                                    -♦-
+
+:nSetting CodeView Options
+:l12
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     ┌─────── Debug Information ──────┐  Produces an object
+     │                                │  file with source file line number
+     │ ▒ Limited CodeView Info   /Zd ◄── records for use in CodeView.
+     │                                │
+     │ ▒ Full CodeView Info      /Zi ◄── Produces an object file with
+     │                                │  line number records and symbolic
+     └────────────────────────────────┘  information for use in CodeView.
+                                    -♦-
+
+:nSetting Optimization Options
+:l15
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+      Reduces stack frame     ┌──────── Optimizations ──────────┐
+      generated in some       │                                 │
+      situations. ─────────────►▒ Quick Call Optimization   /Ot │
+                              │                                 │
+      Writes quoted strings ───►▒ Disable String Compression /S │
+      to object file instead  │                                 │
+      of symbol table.        └─────────────────────────────────┘
+
+      For details on /Ot, see the BASIC Programmer's Guide Chapter
+      15, "Optimizing Program Size and Speed."
+                                    -♦-
+
+:nSetting Browse Information Options
+:l17
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+      Generates Browser       ┌────── Browse Information ──────┐
+      files containing global │                                │
+      symbol information. ─────►▒ Restricted Browse Info  /FBr │
+                              │                                │
+      Generates Browser ───────►▒ Extended Browse Info    /FBx │
+      files containing global │                                │
+      and local symbol        └────────────────────────────────┘
+      information.
+
+      You must select Generate Browse Information from the Browse
+      Options dialog box before you can specify either of these options.
+      For more information, see ◄Using the Source Browser►.
+                                    -♦-
+
+:nSetting BASIC Compiler Release Options
+:l21
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Use the Set Release Options command to set compile options for
+     the release build of a project. To receive more information,
+     select a category below:
+
+     ┌───────────── BASIC Compiler Release Options ───────────┐
+     │    ┌────────────────────┐    ┌─────────────────────┐   │
+     │    │ ◄Error Checking►   │    │ ◄Optimization►      │   │
+     │    └────────────────────┘    └─────────────────────┘   │
+     │    ┌────────────────────┐    ┌─────────────────────┐   │
+     │    │ ◄Debug Information►│    │ ◄Browse Information►│   │
+     │    └────────────────────┘    └─────────────────────┘   │
+     │                                                        │
+     │     ◄Additional Options [▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒]►    │
+     │     ◄<Show Options>►                                   │
+     │                                                        │
+     └────────────────────────────────────────────────────────┘
+                                    -♦-
+
+:nShow Debug Options
+:l7
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Select Show Debug Options to see the command-line compiler
+     options that PWB will use for the debug build.
+                                    -♦-
+
+:l8
+:Show Release Options
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     Select Show Release Options to see the command-line compiler
+     options that PWB will use for the release build.
+                                    -♦-
+
+:nInitial Build Options Not Supported
+:l13
+:z3
+                                             ◄Up► ◄Contents► ◄Index► ◄Back►
+────────────────────────────────────────────────────────────────────────────
+
+     BASIC does not support the build options currently selected from the
+     Build Options dialog box. To correct this, set your main language to
+     BASIC and then choose one of the selections from the Initial Build
+     Options dialog box. For more information, see the following topics:
+
+     ◄Setting Build Options►
+     ◄Setting Main Language►
+     ◄Setting Initial Build Options►
+                                    -♦-
+
+:nPWB Error
+:l2
+     PWB could not add the command you specified as a menu item.
+                                    -♦-
+
+:nPWB Error
+:l3
+     Check the options you specified in the Additional Options field. One
+     or more were not recognized by PWB.
+                                    -♦-
+
+:nPWB Error
+:l4
+     Check the options you specified in the Additional Options field. You
+     may have to modify your PWB .MAK file by choosing Edit Program List
+     from the Make menu.
+                                    -♦-
+
+:nPWB Error
+:l3
+     PWB cannot edit source files saved in QBX binary format. You must load
+     the file in QBX and save the file as text in order to edit it using PWB.
+                                    -♦-
+

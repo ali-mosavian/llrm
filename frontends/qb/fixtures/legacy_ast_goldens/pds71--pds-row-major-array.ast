@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: pds71/pds-row-major-array
 # dialect: Pds71
-# source: pds71/pdrow.bas
+# source: pds71/PDROW.BAS
 
 Module {
     statements: [

@@ -1,7 +1,7 @@
 # qbfront legacy-derived AST snapshot; schema migrations require projection proof.
 # case-id: qb45/loop-forms
 # dialect: QuickBasic45
-# source: qb45/q45lp57.bas
+# source: qb45/Q45LP57.BAS
 
 Module {
     statements: [
