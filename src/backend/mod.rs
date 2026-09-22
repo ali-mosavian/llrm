@@ -12,6 +12,7 @@ pub mod lower_int64;
 pub mod lower_switches;
 pub mod pointers;
 pub mod rmw;
+pub mod select;
 pub mod target;
 pub mod timing;
 pub mod verify;
