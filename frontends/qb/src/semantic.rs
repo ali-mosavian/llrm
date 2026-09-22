@@ -4665,6 +4665,14 @@ impl Compiler {
     }
 
     fn string_descriptor(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Expr::Unary {
+            op: Unary::Grouped,
+            operand,
+            ..
+        } = expression
+        {
+            return self.string_descriptor(operand);
+        }
         if let Expr::Name(name, _) = expression {
             if let Some(intrinsic) = intrinsics::find(canonical(name), self.dialect) {
                 if intrinsic.accepts(0) {
@@ -5110,14 +5118,14 @@ impl Compiler {
             }
             Expr::Unary { op, operand, .. } => {
                 let (operand, type_id) = self.expression(operand)?;
-                if *op == Unary::Positive {
+                if matches!(op, Unary::Positive | Unary::Grouped) {
                     return Ok((operand, type_id));
                 }
                 let operation = match op {
                     Unary::Negative if matches!(type_id, SINGLE | DOUBLE) => "fneg",
                     Unary::Negative => "neg",
                     Unary::Not => "not",
-                    Unary::Positive => unreachable!(),
+                    Unary::Positive | Unary::Grouped => unreachable!(),
                 };
                 if *op == Unary::Not && !matches!(type_id, INTEGER | LONG | BOOLEAN) {
                     return self.fail("NOT requires an integral operand");
@@ -6365,6 +6373,14 @@ impl Compiler {
     }
 
     fn string_syntax(&self, expression: &Expr) -> bool {
+        if let Expr::Unary {
+            op: Unary::Grouped,
+            operand,
+            ..
+        } = expression
+        {
+            return self.string_syntax(operand);
+        }
         if self
             .place_syntax_type(expression)
             .is_some_and(|type_id| self.string_width(type_id).is_some())
@@ -6812,7 +6828,7 @@ impl Compiler {
             Expr::Unary { op, operand, .. } => {
                 let (type_id, value) = self.constant(operand)?;
                 match (op, value) {
-                    (Unary::Positive, value) => Ok((type_id, value)),
+                    (Unary::Positive | Unary::Grouped, value) => Ok((type_id, value)),
                     (Unary::Negative, Number::Integer(value)) => {
                         Ok((type_id, Number::Integer(narrow(-value, type_id))))
                     }

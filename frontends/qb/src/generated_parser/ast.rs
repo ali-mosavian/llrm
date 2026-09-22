@@ -2223,7 +2223,21 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             if !consume_named(state, "tkRParen") {
                 return Err(ParseResult::BadSyntax);
             }
-            Ok(value)
+            // Grouping only changes meaning around a reference.
+            Ok(match value {
+                Expr::Name(..) | Expr::Apply { .. } | Expr::Index { .. } | Expr::Field { .. } => {
+                    Expr::Unary {
+                        op: Unary::Grouped,
+                        span: Span {
+                            line: token.span.line,
+                            start: token.span.start,
+                            end: previous_end(state),
+                        },
+                        operand: Box::new(value),
+                    }
+                }
+                value => value,
+            })
         }
         TokenKind::Reserved(id)
             if tables::T_FUNC_DISPATCH

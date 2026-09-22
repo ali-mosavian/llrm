@@ -2343,3 +2343,23 @@ fn a_dynamic_dim_allocates_where_it_runs() {
     let dim = hir.find("\"callee\":\"B$DDIM\"").expect("DIM");
     assert!(screen < dim && store < dim, "{hir}");
 }
+
+#[test]
+fn a_parenthesized_argument_passes_a_copy() {
+    // qbdemo's `drawbob (bob(bobptr))` advanced the array element itself,
+    // so `undrawbob` erased the wrong trail: parentheses make a value.
+    let module = parse(
+        "declare sub inc (v%)\r\na% = 1: b% = 1\r\ninc (a%)\r\ninc b%\r\nprint a%; b%\r\n\
+         sub inc (v%)\r\nv% = v% + 1\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "grouped", Dialect::QuickBasic45, "qb45").unwrap();
+    let address = |place: u32| {
+        hir.matches(&format!(
+            "\"op\":\"address\",\"operands\":[{{\"place\":{place},\"tag\":\"place\"}}]"
+        ))
+        .count()
+    };
+    assert_eq!((address(1), address(2)), (0, 1), "{hir}");
+}

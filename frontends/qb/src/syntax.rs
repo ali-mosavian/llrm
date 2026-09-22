@@ -108,6 +108,8 @@ pub enum Unary {
     Positive,
     Negative,
     Not,
+    /// A parenthesized reference: a value, so a BYREF formal gets a copy.
+    Grouped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
