@@ -28,7 +28,8 @@ use crate::model::mir::{
 };
 use crate::model::passes::{MIRTransform, Options};
 use crate::objectfile::module::{Addr, Module, Space};
-use crate::optimize::{testcorpus, transform, wholephis, wholestores};
+use crate::optimize::{transform, wholephis, wholestores};
+use crate::support::testing;
 
 fn value(id: u32, at: i64) -> Value {
     Value::new(id, at)
@@ -1205,9 +1206,9 @@ fn test_zero_difference_requires_a_complete_pure_value() {
 }
 
 fn raised_main(path: &str) -> (Rc<Module>, Rc<Vec<Block>>, Rc<MirBody>) {
-    let found = testcorpus::loaded(path);
-    let blocks = testcorpus::partitioned(&found);
-    let body = testcorpus::main_body(&found, &blocks);
+    let found = testing::module(path);
+    let blocks = testing::blocks_of(&found);
+    let body = testing::main_body(&found, &blocks);
     (found, blocks, body)
 }
 

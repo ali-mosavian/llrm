@@ -30,7 +30,8 @@ use crate::model::mir::{
 };
 use crate::model::passes::{MIRTransform, Options, Where};
 use crate::objectfile::module::{self, Addr, Module, Space};
-use crate::optimize::{testcorpus, transform};
+use crate::optimize::{transform};
+use crate::support::testing;
 
 fn value(id: u32, at: i64) -> Value {
     Value {
@@ -817,9 +818,9 @@ fn test_split_initializer_requires_every_byte() {
 }
 
 fn raised_main(path: &str) -> (Rc<Module>, Rc<Vec<Block>>, Rc<MirBody>) {
-    let found = testcorpus::loaded(path);
-    let blocks = testcorpus::partitioned(&found);
-    let body = testcorpus::main_body(&found, &blocks);
+    let found = testing::module(path);
+    let blocks = testing::blocks_of(&found);
+    let body = testing::main_body(&found, &blocks);
     (found, blocks, body)
 }
 

@@ -26,8 +26,6 @@ pub(crate) mod profit;
 pub(crate) mod promote;
 pub(crate) mod rotate;
 pub(crate) mod strength;
-#[cfg(test)]
-pub(crate) mod testcorpus;
 pub(crate) mod transform;
 pub(crate) mod unroll;
 pub(crate) mod unswitch;

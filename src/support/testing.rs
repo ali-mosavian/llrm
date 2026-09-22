@@ -2,12 +2,15 @@
 //! Python test idioms the Rust API spells differently.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::analysis::regions::{self, RegionLayout};
 use crate::frontend::blocks::{self, Block, CodeMap};
 use crate::model::ir::decode::{self, BodyIR};
 use crate::model::mir::{self, Arg, MemRef, MirBody, Op, RaisedBodies};
+use crate::abi::runtime::Contract;
 use crate::objectfile::module::{self, Group, Module};
+use crate::support::hash::IndexMap;
 use crate::objectfile::omf;
 
 /// A path from the repo root, where Python's tests run.
@@ -87,4 +90,24 @@ pub fn width(arg: &Arg) -> u32 {
 pub fn overlapping(one: &MemRef, other: &MemRef, dgroup: Option<&Group>) -> bool {
     let layout = dgroup.map(|group| RegionLayout { shared_segments: Some(group.shared.clone()), landmarks: Default::default() });
     regions::overlapping(one, other, None, None, layout.as_ref()).unwrap()
+}
+
+/// `corpus.loaded`, shared the way the optimizer's `Where.found` holds it.
+pub fn module(relative: &str) -> Rc<Module> {
+    Rc::new(_module(relative))
+}
+
+/// `corpus.partitioned`, of a module already loaded.
+pub fn blocks_of(found: &Module) -> Rc<Vec<Block>> {
+    Rc::new(blocks::partition(found, &blocks::code_map(found).expect("mapped")))
+}
+
+/// `mir.bodies(found, blocks, contracts)`, with Python's keyword defaults.
+pub fn raised_from(found: &Module, blocks: &[Block], contracts: Option<&mut IndexMap<i64, Contract>>) -> RaisedBodies {
+    mir::bodies(found, blocks, contracts, false, false).expect("raised")
+}
+
+/// `mir.bodies(found, blocks)[0][1]`: the main body.
+pub fn main_body(found: &Module, blocks: &[Block]) -> Rc<MirBody> {
+    raised_from(found, blocks, None).values[0].1.clone()
 }

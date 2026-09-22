@@ -19,12 +19,12 @@ use crate::model::mir::{self, Kind, MirBody, RaisedBodies};
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf;
 use crate::optimize::transform;
+use crate::support::testing;
 
-fn raised(stem: &str) -> (Module, Vec<Block>, RaisedBodies) {
-    let data = std::fs::read(format!("fixtures/omf/{}.obj", stem.to_lowercase())).unwrap();
-    let found = module::of(&omf::parse(&data).unwrap()).unwrap();
-    let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
-    let bodies = mir::bodies(&found, &blocks, None, false, false).unwrap();
+fn raised(stem: &str) -> (Rc<Module>, Rc<Vec<Block>>, RaisedBodies) {
+    let found = testing::module(&format!("fixtures/omf/{}.obj", stem.to_lowercase()));
+    let blocks = testing::blocks_of(&found);
+    let bodies = testing::raised_from(&found, &blocks, None);
     (found, blocks, bodies)
 }
 
@@ -187,13 +187,12 @@ fn test_lowering_is_one_instruction_per_operation_unless_something_expands() {
 fn test_an_allocatable_value_stays_a_value_through_lowering() {
     // pressx printed R= 6460 for 7500.
     let (found, blocks, raised) = raised("harr-v-g3");
-    let found = Rc::new(found);
     let (name, body) = &raised.values[0];
     let body = transform::applied(
         body,
         &found.dgroup.members,
         &found.calls,
-        transform::Applied { blocks: Some(Rc::new(blocks)), found: Some(found.clone()), ..Default::default() },
+        transform::Applied { blocks: Some(blocks), found: Some(found.clone()), ..Default::default() },
     )
     .unwrap();
     let contracts = runtime::for_module(&found, None).unwrap();
@@ -255,7 +254,6 @@ fn test_an_increment_is_its_own_operation() {
 fn test_a_stores_address_is_the_value_that_computed_it() {
     // arrprm printed ' 0  0' for ' 7  8'.
     let (found, blocks, raised) = raised("addrm-p-g2");
-    let (found, blocks) = (Rc::new(found), Rc::new(blocks));
     let contracts = runtime::for_module(&found, None).unwrap();
     let mut seen = 0;
     for (name, body) in &raised.values {

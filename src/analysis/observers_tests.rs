@@ -14,7 +14,7 @@ use crate::frontend::blocks::Block;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, FrameAddress, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};
 use crate::objectfile::module::{Addr, Module, Space};
-use crate::optimize::testcorpus;
+use crate::support::testing;
 
 const NBODY: &str = "fixtures/bench/nbody-v-g3.obj";
 
@@ -102,9 +102,9 @@ fn test_an_unresolved_address_cannot_read_a_private_cell_but_its_name_can() {
 }
 
 fn nbody() -> (Rc<Module>, Rc<Vec<Block>>, Vec<(String, Rc<MirBody>)>) {
-    let found = testcorpus::loaded(NBODY);
-    let blocks = testcorpus::partitioned(&found);
-    let bodies = testcorpus::raised(&found, &blocks, None).values;
+    let found = testing::module(NBODY);
+    let blocks = testing::blocks_of(&found);
+    let bodies = testing::raised_from(&found, &blocks, None).values;
     (found, blocks, bodies)
 }
 

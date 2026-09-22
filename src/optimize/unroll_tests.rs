@@ -29,7 +29,8 @@ use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, Const, MemRef, MirBlock, OpCode};
 use crate::model::passes::Options;
 use crate::objectfile::module::{Addr, Module, Space};
-use crate::optimize::{testcorpus, transform};
+use crate::optimize::{transform};
+use crate::support::testing;
 
 fn op(at: i64, operation: Operation, name: &str, kind: Kind) -> Op {
     let mut op = Op::new(at, OpCode::Operation(operation), name, vec![], vec![]);
@@ -104,8 +105,8 @@ fn applied(found: &Rc<Module>, body: &Rc<MirBody>, options: Options) -> Rc<MirBo
 /// FPDEEP's improvements previously required an out-of-band unroll wrapper.
 #[test]
 fn test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point() {
-    let found = testcorpus::loaded("fixtures/omf/fpdeep-p-g2.obj");
-    let original = testcorpus::main_body(&found, &testcorpus::partitioned(&found));
+    let found = testing::module("fixtures/omf/fpdeep-p-g2.obj");
+    let original = testing::main_body(&found, &testing::blocks_of(&found));
     let changed = applied(&found, &original, Options::default());
     assert_eq!(changed.repetitions, vec![(0x66, 3)]);
     assert!(loops::loops(&changed.blocks, Some(changed.entry)).is_empty());
@@ -116,8 +117,8 @@ fn test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point() {
 /// FPCSE computed its exact 487.5 sum ten times despite fitting the bounded expansion budget.
 #[test]
 fn test_fpcse_exact_ten_iteration_sum_folds_in_source_order() {
-    let found = testcorpus::loaded("fixtures/omf/fpcse-p-g2.obj");
-    let original = testcorpus::main_body(&found, &testcorpus::partitioned(&found));
+    let found = testing::module("fixtures/omf/fpcse-p-g2.obj");
+    let original = testing::main_body(&found, &testing::blocks_of(&found));
     let changed = applied(&found, &original, Options::default());
     assert!(changed.repetitions.is_empty());
     assert!(loops::loops(&changed.blocks, Some(changed.entry)).is_empty());

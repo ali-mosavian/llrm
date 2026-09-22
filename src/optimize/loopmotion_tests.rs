@@ -22,17 +22,17 @@ use crate::abi::runtime;
 use crate::analysis::loops;
 use crate::model::mir::{Arg, Const, Kind, MemRef, MirBody};
 use crate::objectfile::module::{self, Space};
-use crate::optimize::testcorpus;
+use crate::support::testing;
 use crate::optimize::{promote, transform};
 use crate::support::hash::IndexMap;
 
 type Bounds = IndexMap<(Space, i64), Vec<i64>>;
 
 fn hotlop() -> (Rc<MirBody>, BTreeSet<i64>, Bounds, MemRef) {
-    let found = testcorpus::loaded("fixtures/omf/hotlop-p-g2.obj");
-    let blocks = testcorpus::partitioned(&found);
+    let found = testing::module("fixtures/omf/hotlop-p-g2.obj");
+    let blocks = testing::blocks_of(&found);
     let mut contracts = runtime::for_module(&found, None).unwrap();
-    let body = testcorpus::raised(&found, &blocks, Some(&mut contracts)).values[0].1.clone();
+    let body = testing::raised_from(&found, &blocks, Some(&mut contracts)).values[0].1.clone();
     let counter =
         body.blocks.iter().flat_map(|block| &block.ops).find(|op| op.at == 0x5E).unwrap().stores[0].clone();
     let bounds = module::landmarks(&found);
@@ -44,9 +44,9 @@ fn hotlop() -> (Rc<MirBody>, BTreeSet<i64>, Bounds, MemRef) {
 /// NESTED's accumulator is sunk past the outer loop or folded to its final 675.
 #[test]
 fn test_nested_accumulator_is_stored_only_after_the_outer_loop() {
-    let found = testcorpus::loaded("fixtures/omf/nested-p-g2.obj");
-    let partition = testcorpus::partitioned(&found);
-    let body = testcorpus::main_body(&found, &partition);
+    let found = testing::module("fixtures/omf/nested-p-g2.obj");
+    let partition = testing::blocks_of(&found);
+    let body = testing::main_body(&found, &partition);
     let accumulator =
         body.blocks.iter().flat_map(|block| &block.ops).find(|op| op.at == 0x7E).unwrap().stores[0].clone();
     let body = transform::applied(

@@ -19,7 +19,8 @@
 
 use std::rc::Rc;
 use crate::analysis::{consts, loops};
-use crate::optimize::{testcorpus, transform};
+use crate::optimize::{transform};
+use crate::support::testing;
 use crate::model::mir::{
     Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value,
 };
@@ -238,10 +239,10 @@ fn constant_exit_replaces_an_unobserved_accumulator() {
 /// ADDRM's 1..20 long sum reaches PRINT as 210, with no remaining loop arithmetic.
 #[test]
 fn test_addrm_long_sum_is_computed_outside_the_store_loop() {
-    let found = testcorpus::loaded("fixtures/omf/addrm-v-g3.obj");
-    let partition = testcorpus::partitioned(&found);
+    let found = testing::module("fixtures/omf/addrm-v-g3.obj");
+    let partition = testing::blocks_of(&found);
     let body = transform::applied(
-        &testcorpus::main_body(&found, &partition),
+        &testing::main_body(&found, &partition),
         &found.dgroup.members,
         &found.calls,
         transform::Applied { blocks: Some(partition), found: Some(found.clone()), ..Default::default() },
