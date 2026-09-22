@@ -279,15 +279,24 @@ pub(crate) fn _computed(
     if !matches!(result.width, 2 | 4) {
         return None;
     }
-    let args = op
-        .args
-        .iter()
-        .map(|arg| _operand(arg, known, facts))
-        .collect::<Vec<_>>();
-    if args.is_empty() || args.iter().any(Option::is_none) {
+    // Every other kind answers None below, whatever its operands.
+    if !matches!(
+        op.kind,
+        Kind::SignExtend | Kind::Copy | Kind::Increment | Kind::Decrement | Kind::Shl | Kind::Add | Kind::Sub | Kind::Mul
+    ) {
         return None;
     }
-    let args = args.into_iter().flatten().collect::<Vec<_>>();
+    let operand = |arg: &Arg| match arg {
+        Arg::Held(held) => match known.get(&held.value) {
+            Some(interval) if interval.width == held.width => Some(Cow::Borrowed(interval)),
+            _ => _operand(arg, known, facts).map(Cow::Owned),
+        },
+        _ => _operand(arg, known, facts).map(Cow::Owned),
+    };
+    let args = op.args.iter().map(operand).collect::<Option<Vec<_>>>()?;
+    if args.is_empty() {
+        return None;
+    }
     let first = &args[0];
     let fits = |low: &BigInt, high: &BigInt, width: u32| {
         let sign = BigInt::from(1_u8) << (width * 8 - 1);
@@ -304,7 +313,7 @@ pub(crate) fn _computed(
         return None;
     }
     if op.kind == Kind::Copy && args.len() == 1 {
-        return Some(first.clone());
+        return Some(first.clone().into_owned());
     }
     if matches!(op.kind, Kind::Increment | Kind::Decrement) && args.len() == 1 {
         let step = if op.kind == Kind::Increment { 1 } else { -1 };
@@ -474,7 +483,9 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
                 }
             }
             loop {
-                let before = scoped.clone();
+                // What each value set in this sweep held before it, so the
+                // sweep is compared with its start without copying `scoped`.
+                let mut before = IndexMap::<Value, Option<Interval>>::default();
                 for op in &operations {
                     let Some(mut interval) = _computed(op, &scoped, &facts) else {
                         continue;
@@ -496,9 +507,10 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
                             };
                         }
                     }
-                    scoped.insert(held.value, interval);
+                    let previous = scoped.insert(held.value, interval);
+                    before.entry(held.value).or_insert(previous);
                 }
-                if scoped == before {
+                if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
                     break;
                 }
             }
