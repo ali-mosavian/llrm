@@ -4,22 +4,26 @@
 
 **The Rust port is a 1:1 translation of the Python compiler.** The Python
 code and its tests are the specification. Rust is how it is written down,
-not a chance to redesign it.
+not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
 
-- Port Python's data structures and algorithms as they are: MIR, LIR,
-  passes, allocator, ABI and emission. Rust module and function names map
-  to the Python ones. LLVM-style restructuring waits until parity.
-  `docs/rust-ir.md` does not override this.
-- Every port names the Python `file:function` it replaces and ports that
-  function's tests and regressions in the same commit.
+- The crate is `llrm`; every command is `llrm-*`.
+- The layout mirrors Python: `qbopt/<pkg>/<mod>.py` is `src/<pkg>/<mod>.rs`,
+  and every Python function has a Rust function of the same name. Frontends
+  move to `src/frontends/{c,qb,modern,bc}` only after cutover.
+- `src/old/` is the frozen LLVM-style pipeline. Do not edit it; consult it
+  only. It is deleted when the ported drivers take over.
 - Behaviour, refusals, ordering and emitted code match Python. Correct
   output by a different mechanism is a failed port. So is a "safe subset",
   a textbook version of a pass with the same name, or a new abstraction the
   Python code does not have.
-- Acceptance is a `tools/stages.py` dump that matches Python stage by stage,
-  not a passing Rust test.
-- A sub-agent brief restates this section and names the Python source and
-  tests to port. Anything not traceable to Python is rejected.
+- Every port names the Python `file:function` it replaces and ports that
+  module's tests in the same commit, with expected values produced by
+  Python.
+- Acceptance is `tools/port_diff.py`: stage dumps identical to Python's for
+  every fixture, not a passing Rust test.
+- A sub-agent forks with full context (`fork_turns: "all"`) or a brief that
+  restates this section and names the Python source, tests and stage.
+  Anything not traceable to Python is rejected.
 
 ## Measurements — the second rule
 
