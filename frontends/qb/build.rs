@@ -204,8 +204,8 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
     let mut extensions = Vec::new();
     let mut fields = std::collections::BTreeMap::<String, String>::new();
     let finish = |line_number: usize,
-                      fields: &mut std::collections::BTreeMap<String, String>,
-                      extensions: &mut Vec<DialectExtension>|
+                  fields: &mut std::collections::BTreeMap<String, String>,
+                  extensions: &mut Vec<DialectExtension>|
      -> Result<(), String> {
         if fields.is_empty() {
             return Ok(());
@@ -223,8 +223,10 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
             .map(|item| {
                 item.strip_prefix("token:")
                     .map(|name| ExtensionPattern::GrammarToken(name.to_string()))
-                    .or_else(|| item.strip_prefix("keyword:")
-                        .map(|word| ExtensionPattern::Keyword(word.to_ascii_uppercase())))
+                    .or_else(|| {
+                        item.strip_prefix("keyword:")
+                            .map(|word| ExtensionPattern::Keyword(word.to_ascii_uppercase()))
+                    })
                     .or_else(|| (item == "capture:label").then_some(ExtensionPattern::Label))
                     .or_else(|| {
                         (item == "capture:identifier").then_some(ExtensionPattern::Identifier)
@@ -270,7 +272,10 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
         if !matches!(key, "identity" | "action" | "pattern" | "tail") {
             return Err(format!("line {line_number}: unknown field {key}"));
         }
-        if fields.insert(key.to_string(), value[1..value.len() - 1].to_string()).is_some() {
+        if fields
+            .insert(key.to_string(), value[1..value.len() - 1].to_string())
+            .is_some()
+        {
             return Err(format!("line {line_number}: duplicate field {key}"));
         }
     }
@@ -286,29 +291,44 @@ fn validate_dialect_extensions(
     let mut actions = std::collections::BTreeSet::new();
     for extension in extensions {
         if !identities.insert(extension.identity.as_str()) {
-            return Err(format!("duplicate extension identity {}", extension.identity));
+            return Err(format!(
+                "duplicate extension identity {}",
+                extension.identity
+            ));
         }
         if !actions.insert(extension.action.as_str()) {
             return Err(format!("duplicate extension action {}", extension.action));
         }
         if extension.pattern.is_empty() {
-            return Err(format!("extension {} has an empty pattern", extension.identity));
+            return Err(format!(
+                "extension {} has an empty pattern",
+                extension.identity
+            ));
         }
         if !extension.action.chars().enumerate().all(|(index, ch)| {
             ch.is_ascii_alphanumeric() && (index != 0 || ch.is_ascii_uppercase())
         }) {
-            return Err(format!("extension action {} is not a Rust enum variant", extension.action));
+            return Err(format!(
+                "extension action {} is not a Rust enum variant",
+                extension.action
+            ));
         }
         for item in &extension.pattern {
             match item {
                 ExtensionPattern::GrammarToken(name) if !tokens.tk_to_irw.contains_key(name) => {
-                    return Err(format!("extension {} names unknown grammar token {name}", extension.identity));
+                    return Err(format!(
+                        "extension {} names unknown grammar token {name}",
+                        extension.identity
+                    ));
                 }
                 ExtensionPattern::Keyword(keyword)
                     if keyword.is_empty()
                         || !keyword.bytes().all(|byte| byte.is_ascii_uppercase()) =>
                 {
-                    return Err(format!("extension {} has invalid keyword {keyword}", extension.identity));
+                    return Err(format!(
+                        "extension {} has invalid keyword {keyword}",
+                        extension.identity
+                    ));
                 }
                 ExtensionPattern::Label => {}
                 ExtensionPattern::Identifier | ExtensionPattern::StringLiteral => {}
@@ -607,7 +627,11 @@ fn render_dialect_extensions(
     out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ExtensionTail {\n    None,\n    FunctionSignature,\n}\n\n");
     out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ExtensionSpec {\n    pub identity: &'static str,\n    pub action: GeneratedExtensionAction,\n    pub pattern: &'static [ExtensionPatternToken],\n    pub tail: ExtensionTail,\n}\n\n");
     for (index, extension) in extensions.iter().enumerate() {
-        writeln!(out, "const EXTENSION_PATTERN_{index}: &[ExtensionPatternToken] = &[").unwrap();
+        writeln!(
+            out,
+            "const EXTENSION_PATTERN_{index}: &[ExtensionPatternToken] = &["
+        )
+        .unwrap();
         for item in &extension.pattern {
             match item {
                 ExtensionPattern::GrammarToken(name) => {
@@ -666,10 +690,7 @@ fn render_dialect_extensions(
 
 fn render_action_value(mapping: &ActionMapping) -> String {
     if let Some(operand) = mapping.operand.as_deref() {
-        format!(
-            "AstAction::{}({operand:?})",
-            mapping.action,
-        )
+        format!("AstAction::{}({operand:?})", mapping.action,)
     } else {
         format!("AstAction::{}", mapping.action)
     }

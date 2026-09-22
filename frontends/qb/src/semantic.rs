@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::dialect::Dialect;
+use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
@@ -116,7 +116,8 @@ struct Signature {
 
 fn signatures_compatible(left: &Signature, right: &Signature) -> bool {
     left.result == right.result
-        && left.callee == right.callee
+        // `f%` and a DEFINT `f` are one FUNCTION; the result type decides.
+        && canonical(&left.callee) == canonical(&right.callee)
         && left.cdecl == right.cdecl
         && left.parameters.len() == right.parameters.len()
         && left
@@ -507,7 +508,11 @@ pub fn compile_with_options(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported { "external" } else { "internal" },
+            if procedure.exported {
+                "external"
+            } else {
+                "internal"
+            },
         );
     }
     Ok(compiler.json())
@@ -593,14 +598,20 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
                 Statement::OnError { label, .. } if label != "0" => {
                     targets.insert(canonical(label).into());
                 }
-                Statement::If { then_branch, else_branch, .. } => {
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
                     error_targets(then_branch, targets);
                     error_targets(else_branch, targets);
                 }
                 Statement::For { body, .. }
                 | Statement::While { body, .. }
                 | Statement::Do { body, .. } => error_targets(body, targets),
-                Statement::Select { arms, otherwise, .. } => {
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
                     for (_, body) in arms {
                         error_targets(body, targets);
                     }
@@ -615,15 +626,22 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         match statement {
             Statement::Resume { .. } => true,
             Statement::Runtime { name, .. } if matches!(name.as_str(), "END" | "SYSTEM") => true,
-            Statement::If { then_branch, else_branch, .. } => {
+            Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 then_branch.iter().any(ends_error_handler)
                     || else_branch.iter().any(ends_error_handler)
             }
             Statement::For { body, .. }
             | Statement::While { body, .. }
             | Statement::Do { body, .. } => body.iter().any(ends_error_handler),
-            Statement::Select { arms, otherwise, .. } => {
-                arms.iter().any(|(_, body)| body.iter().any(ends_error_handler))
+            Statement::Select {
+                arms, otherwise, ..
+            } => {
+                arms.iter()
+                    .any(|(_, body)| body.iter().any(ends_error_handler))
                     || otherwise.iter().any(ends_error_handler)
             }
             _ => false,
@@ -634,14 +652,20 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         for statement in statements {
             match statement {
                 Statement::OnError { local, .. } => *local = true,
-                Statement::If { then_branch, else_branch, .. } => {
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
                     localize_error_handlers(then_branch);
                     localize_error_handlers(else_branch);
                 }
                 Statement::For { body, .. }
                 | Statement::While { body, .. }
                 | Statement::Do { body, .. } => localize_error_handlers(body),
-                Statement::Select { arms, otherwise, .. } => {
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
                     for (_, body) in arms {
                         localize_error_handlers(body);
                     }
@@ -666,12 +690,12 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         .statements
         .iter()
         .filter_map(|statement| match statement {
-            Statement::Call { name, arguments, .. } if name == "GOSUB" => {
-                match arguments.as_slice() {
-                    [Expr::Name(target, _)] => Some(canonical(target).to_string()),
-                    _ => None,
-                }
-            }
+            Statement::Call {
+                name, arguments, ..
+            } if name == "GOSUB" => match arguments.as_slice() {
+                [Expr::Name(target, _)] => Some(canonical(target).to_string()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -701,9 +725,14 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             if covered.contains(&index) {
                 continue;
             }
-            if let Statement::Call { name, arguments, .. } = statement {
+            if let Statement::Call {
+                name, arguments, ..
+            } = statement
+            {
                 if name == "GOSUB" {
-                    let [Expr::Name(target, _)] = arguments.as_slice() else { unreachable!() };
+                    let [Expr::Name(target, _)] = arguments.as_slice() else {
+                        unreachable!()
+                    };
                     statements.extend(regions[canonical(target)].clone());
                     continue;
                 }
@@ -1508,11 +1537,18 @@ impl Compiler {
             );
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
-                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+                (
+                    0,
+                    self.module_data(module_symbol.clone(), descriptor_extent),
+                )
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                    if matches!(storage, "local" | "parameter") {
+                        0
+                    } else {
+                        1
+                    },
                 )
             };
             let descriptor_place = self.next_place;
@@ -1570,9 +1606,7 @@ impl Compiler {
             for dimension in (0..declaration.bounds.len()).rev() {
                 order.extend([2 * dimension, 2 * dimension + 1]);
             }
-            order.extend(
-                2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3,
-            );
+            order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
             self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
                 variable_key(&declaration.name).into(),
@@ -1607,11 +1641,18 @@ impl Compiler {
             );
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
-                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+                (
+                    0,
+                    self.module_data(module_symbol.clone(), descriptor_extent),
+                )
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                    if matches!(storage, "local" | "parameter") {
+                        0
+                    } else {
+                        1
+                    },
                 )
             };
             let descriptor_place = self.next_place;
@@ -1805,12 +1846,7 @@ impl Compiler {
         symbol
     }
 
-    fn basic_global_name(
-        &self,
-        name: &str,
-        declared: Option<&TypeName>,
-        type_id: u32,
-    ) -> String {
+    fn basic_global_name(&self, name: &str, declared: Option<&TypeName>, type_id: u32) -> String {
         if suffix(name).is_some() {
             return name.to_ascii_uppercase();
         }
@@ -2182,9 +2218,8 @@ impl Compiler {
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
-                            return self.fail(
-                                "the audited RANDOMIZE form requires one seed expression",
-                            );
+                            return self
+                                .fail("the audited RANDOMIZE form requires one seed expression");
                         };
                         let (seed, seed_type) = self.expression(seed)?;
                         let seed = self.convert(seed, seed_type, DOUBLE)?;
@@ -2328,10 +2363,7 @@ impl Compiler {
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
                 Statement::Print {
-                    file,
-                    using,
-                    items,
-                    ..
+                    file, using, items, ..
                 } => {
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
@@ -2352,9 +2384,7 @@ impl Compiler {
                     }
                     for item in items {
                         if let Expr::Apply {
-                            name,
-                            arguments,
-                            ..
+                            name, arguments, ..
                         } = &item.value
                         {
                             if canonical(name) == "TAB" {
@@ -2432,11 +2462,16 @@ impl Compiler {
                         // flag bit 0 as prompt-comma (no '?') and bit 1 as the
                         // leading semicolon's keep-cursor behavior.
                         let empty_prompt = Expr::Literal(Literal::String(String::new()), *span);
-                        let prompt = self.string_descriptor(prompt.as_ref().unwrap_or(&empty_prompt))?;
-                        let count = u16::try_from(destinations.len() + 1)
-                            .map_err(|_| SemanticError { message: "INPUT has too many destinations".into() })?;
+                        let prompt =
+                            self.string_descriptor(prompt.as_ref().unwrap_or(&empty_prompt))?;
+                        let count =
+                            u16::try_from(destinations.len() + 1).map_err(|_| SemanticError {
+                                message: "INPUT has too many destinations".into(),
+                            })?;
                         let mut table = Vec::from(count.to_le_bytes());
-                        table.push(u8::from(*suppress_question_mark) | (u8::from(*keep_cursor) << 1));
+                        table.push(
+                            u8::from(*suppress_question_mark) | (u8::from(*keep_cursor) << 1),
+                        );
                         for (_, type_id) in &resolved_destinations {
                             table.push(match type_id {
                                 &INTEGER | &BOOLEAN | &BYTE => 0x02,
@@ -2460,7 +2495,11 @@ impl Compiler {
                             // constant segment. QB/PDS put the block in
                             // DGROUP and pass DS:offset, as documented by
                             // QB45 runtime/rt/inptty.asm's pBlock contract.
-                            address: if self.runtime == "vbdos" { "far" } else { "near" },
+                            address: if self.runtime == "vbdos" {
+                                "far"
+                            } else {
+                                "near"
+                            },
                         });
                         let place = self.next_place;
                         self.next_place += 1;
@@ -2673,7 +2712,8 @@ impl Compiler {
                             if let Some(argument) = arguments.get(index) {
                                 if !matches!(argument, Expr::Omitted(_)) {
                                     let (value, type_id) = self.expression(argument)?;
-                                    let value = self.stored_float_argument(value, type_id, SINGLE)?;
+                                    let value =
+                                        self.stored_float_argument(value, type_id, SINGLE)?;
                                     self.emit_runtime_call(callee, Vec::new(), vec![value]);
                                 }
                             }
@@ -2700,7 +2740,9 @@ impl Compiler {
                     }
                     "LINE" => {
                         if !(4..=6).contains(&arguments.len()) {
-                            return self.fail("LINE expects two coordinate pairs, an optional color, and B or BF");
+                            return self.fail(
+                                "LINE expects two coordinate pairs, an optional color, and B or BF",
+                            );
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
@@ -2728,7 +2770,8 @@ impl Compiler {
                     }
                     "PAINT" => {
                         if !(3..=4).contains(&arguments.len()) {
-                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                            return self
+                                .fail("PAINT expects coordinates, fill, and optional border");
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let (fill, fill_type) = self.expression(&arguments[2])?;
@@ -2743,7 +2786,8 @@ impl Compiler {
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
-                            return self.fail(format!("{name} expects coordinates and optional color"));
+                            return self
+                                .fail(format!("{name} expects coordinates and optional color"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let color = if let Some(argument) = arguments.get(2) {
@@ -2760,11 +2804,17 @@ impl Compiler {
                     "GET" | "PUT" => {
                         let expected = if name == "GET" { 5 } else { 4 };
                         if arguments.len() != expected {
-                            return self.fail(format!("graphics {name} has the wrong number of operands"));
+                            return self
+                                .fail(format!("graphics {name} has the wrong number of operands"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let array_index = if name == "GET" {
-                            self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
+                            self.graphics_coordinate(
+                                "B$N2I2",
+                                "B$N2R4",
+                                &arguments[2],
+                                &arguments[3],
+                            )?;
                             4
                         } else {
                             2
@@ -2784,7 +2834,11 @@ impl Compiler {
                             };
                             operands.push(Operand::Constant(INTEGER, Number::Integer(mode)));
                         }
-                        self.emit_runtime_call(if name == "GET" { "B$GGET" } else { "B$GPUT" }, Vec::new(), operands);
+                        self.emit_runtime_call(
+                            if name == "GET" { "B$GGET" } else { "B$GPUT" },
+                            Vec::new(),
+                            operands,
+                        );
                     }
                     "POKE" => {
                         if arguments.len() != 2 {
@@ -2828,11 +2882,9 @@ impl Compiler {
                         if left_type != right_type {
                             return self.fail("SWAP variables must have identical types");
                         }
-                        let aggregate = self
-                            .udts
-                            .values()
-                            .any(|record| record.type_id == left_type)
-                            || self.string_width(left_type).is_some_and(|width| width != 0);
+                        let aggregate =
+                            self.udts.values().any(|record| record.type_id == left_type)
+                                || self.string_width(left_type).is_some_and(|width| width != 0);
                         if aggregate {
                             let temporary = Operand::Place(self.temporary(left_type)?);
                             let width = self.width(left_type);
@@ -2844,16 +2896,8 @@ impl Compiler {
                             self.emit("load", vec![left_value], vec![left.clone()]);
                             let right_value = self.value(right_type);
                             self.emit("load", vec![right_value], vec![right.clone()]);
-                            self.emit(
-                                "store",
-                                Vec::new(),
-                                vec![left, Operand::Value(right_value)],
-                            );
-                            self.emit(
-                                "store",
-                                Vec::new(),
-                                vec![right, Operand::Value(left_value)],
-                            );
+                            self.emit("store", Vec::new(), vec![left, Operand::Value(right_value)]);
+                            self.emit("store", Vec::new(), vec![right, Operand::Value(left_value)]);
                         }
                     }
                     "COLOR" => {
@@ -2877,18 +2921,17 @@ impl Compiler {
                     "RESTORE" => {
                         let row = match arguments.as_slice() {
                             [] => None,
-                            [Expr::Name(label, _)] => Some(*self
-                                .data_labels
-                                .get(canonical(label))
-                                .ok_or_else(|| SemanticError {
-                                    message: format!("unknown RESTORE label {label}"),
-                                })?),
+                            [Expr::Name(label, _)] => {
+                                Some(*self.data_labels.get(canonical(label)).ok_or_else(|| {
+                                    SemanticError {
+                                        message: format!("unknown RESTORE label {label}"),
+                                    }
+                                })?)
+                            }
                             _ => return self.fail("RESTORE expects zero or one label"),
                         };
-                        let callee = row.map_or_else(
-                            || "B$RSTB".to_string(),
-                            |row| format!("$QB$RSTB:{row}"),
-                        );
+                        let callee = row
+                            .map_or_else(|| "B$RSTB".to_string(), |row| format!("$QB$RSTB:{row}"));
                         self.emit_runtime_call(
                             &callee,
                             Vec::new(),
@@ -3231,11 +3274,7 @@ impl Compiler {
         self.terminate("jump", Vec::new(), vec![test_block])?;
         self.select_block(test_block);
         let step_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![step_value],
-            vec![Operand::Place(step_place)],
-        );
+        self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
         let direction = self.value(BOOLEAN);
         let zero = if matches!(counter_type, SINGLE | DOUBLE) {
             self.floating_literal("0.0", counter_type)?
@@ -3256,11 +3295,7 @@ impl Compiler {
         self.select_block(positive_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![end_value],
-            vec![Operand::Place(end_place)],
-        );
+        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
             "le",
@@ -3276,11 +3311,7 @@ impl Compiler {
         self.select_block(negative_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![end_value],
-            vec![Operand::Place(end_place)],
-        );
+        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
             "ge",
@@ -3300,11 +3331,7 @@ impl Compiler {
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(counter_type);
-            self.emit(
-                "load",
-                vec![step_value],
-                vec![Operand::Place(step_place)],
-            );
+            self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
             let advanced = self.value(counter_type);
             self.emit(
                 if matches!(counter_type, SINGLE | DOUBLE) {
@@ -4119,7 +4146,7 @@ impl Compiler {
         self.terminate("jump", Vec::new(), vec![done])?;
 
         if let Some(call) = call {
-    self.select_block(call);
+            self.select_block(call);
             let called = self.value(INTEGER);
             self.emit_runtime_call(
                 if upper { "B$UBND" } else { "B$LBND" },
@@ -5081,7 +5108,11 @@ impl Compiler {
             let pointer_type = self.pointer_type(SINGLE);
             let pointer = self.value(pointer_type);
             self.emit_runtime_call(
-                if operands.is_empty() { "B$RND0" } else { "B$RND1" },
+                if operands.is_empty() {
+                    "B$RND0"
+                } else {
+                    "B$RND1"
+                },
                 vec![pointer],
                 operands,
             );
@@ -5322,8 +5353,7 @@ impl Compiler {
                                 }
                             }
                         }
-                        let (numerator, numerator_type) =
-                            self.expression(numerator_expression)?;
+                        let (numerator, numerator_type) = self.expression(numerator_expression)?;
                         if matches!(numerator_type, INTEGER | BOOLEAN | BYTE) {
                             // INTEGER operands are exact in QB's SINGLE division.
                             // Keep floor(n / positive-constant) integral until the
@@ -5366,10 +5396,7 @@ impl Compiler {
                             self.emit(
                                 "lt",
                                 vec![negative],
-                                vec![
-                                    numerator,
-                                    Operand::Constant(INTEGER, Number::Integer(0)),
-                                ],
+                                vec![numerator, Operand::Constant(INTEGER, Number::Integer(0))],
                             );
                             let has_remainder = self.value(BOOLEAN);
                             self.emit(
@@ -5638,7 +5665,11 @@ impl Compiler {
         ))
     }
 
-    fn floor_float(&mut self, operand: Operand, type_id: u32) -> Result<(Operand, u32), SemanticError> {
+    fn floor_float(
+        &mut self,
+        operand: Operand,
+        type_id: u32,
+    ) -> Result<(Operand, u32), SemanticError> {
         // INT is floor, while x87's current conversion rounds to nearest.
         // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
         // Express the correction in ordinary HIR so optimization sees every
@@ -5711,7 +5742,9 @@ impl Compiler {
     fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
         let name = match expression {
             Expr::Name(name, _) => name,
-            Expr::Apply { name, arguments, .. } if arguments.is_empty() => name,
+            Expr::Apply {
+                name, arguments, ..
+            } if arguments.is_empty() => name,
             _ => return self.fail("graphics GET/PUT requires a bare array"),
         };
         let variable = self.variable(name)?;
@@ -5743,11 +5776,7 @@ impl Compiler {
         }
 
         let (path, offset, supplied) = match arguments {
-            [path] => (
-                path,
-                Operand::Constant(INTEGER, Number::Integer(0)),
-                0,
-            ),
+            [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
             [path, offset] => {
                 let (offset, offset_type) = self.expression(offset)?;
                 (path, self.convert(offset, offset_type, INTEGER)?, 1)
@@ -5941,11 +5970,7 @@ impl Compiler {
                             }
                             let near = self.pointer_type(*parameter_type);
                             let address = self.value(near);
-                            self.emit(
-                                "address",
-                                vec![address],
-                                vec![Operand::Place(temporary)],
-                            );
+                            self.emit("address", vec![address], vec![Operand::Place(temporary)]);
                             operands.push(Operand::Value(address));
                             byref_copybacks.push((original, temporary, *parameter_type));
                         } else if offset == 0 {
@@ -6025,10 +6050,7 @@ impl Compiler {
         // Pascal evaluates actuals left-to-right but BC copies aliased far
         // fields back from the last formal to the first.
         for (destination, temporary, type_id) in byref_copybacks.into_iter().rev() {
-            let aggregate = self
-                .udts
-                .values()
-                .any(|record| record.type_id == type_id)
+            let aggregate = self.udts.values().any(|record| record.type_id == type_id)
                 || self.string_width(type_id).is_some_and(|width| width != 0);
             if aggregate {
                 self.aggregate_assignment(
@@ -6039,7 +6061,11 @@ impl Compiler {
             } else {
                 let value = self.value(type_id);
                 self.emit("load", vec![value], vec![Operand::Place(temporary)]);
-                self.emit("store", Vec::new(), vec![destination, Operand::Value(value)]);
+                self.emit(
+                    "store",
+                    Vec::new(),
+                    vec![destination, Operand::Value(value)],
+                );
             }
         }
         // BC ends the lifetime of each descriptor it materialized solely for
@@ -6222,7 +6248,10 @@ impl Compiler {
 
     fn place_syntax_type(&self, expression: &Expr) -> Option<u32> {
         match expression {
-            Expr::Name(name, _) => self.variables.get(variable_key(name)).map(|one| one.type_id),
+            Expr::Name(name, _) => self
+                .variables
+                .get(variable_key(name))
+                .map(|one| one.type_id),
             Expr::Apply { name, .. } => self
                 .variables
                 .get(variable_key(name))

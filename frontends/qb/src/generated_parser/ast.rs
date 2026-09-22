@@ -2,8 +2,8 @@ use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintItem, PrintSeparator,
-    Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
+    Binary, Bound, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintItem,
+    PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
@@ -61,23 +61,53 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                     });
                     ParseResult::GoodSyntax
                 }
-                ExtensionAction::CdeclAliasFunction { name, alias, .. } => {
-                    extension_procedure(&mut state, name, Some(alias), true, ProcedureKind::Function, function_span)
-                }
+                ExtensionAction::CdeclAliasFunction { name, alias, .. } => extension_procedure(
+                    &mut state,
+                    name,
+                    Some(alias),
+                    true,
+                    ProcedureKind::Function,
+                    function_span,
+                ),
                 ExtensionAction::AliasFunction { name, alias, .. } => extension_procedure(
-                    &mut state, name, Some(alias), false, ProcedureKind::Function, function_span,
+                    &mut state,
+                    name,
+                    Some(alias),
+                    false,
+                    ProcedureKind::Function,
+                    function_span,
                 ),
                 ExtensionAction::CdeclFunction { name, .. } => extension_procedure(
-                    &mut state, name, None, true, ProcedureKind::Function, function_span,
+                    &mut state,
+                    name,
+                    None,
+                    true,
+                    ProcedureKind::Function,
+                    function_span,
                 ),
                 ExtensionAction::CdeclAliasSub { name, alias, .. } => extension_procedure(
-                    &mut state, name, Some(alias), true, ProcedureKind::Sub, function_span,
+                    &mut state,
+                    name,
+                    Some(alias),
+                    true,
+                    ProcedureKind::Sub,
+                    function_span,
                 ),
                 ExtensionAction::AliasSub { name, alias, .. } => extension_procedure(
-                    &mut state, name, Some(alias), false, ProcedureKind::Sub, function_span,
+                    &mut state,
+                    name,
+                    Some(alias),
+                    false,
+                    ProcedureKind::Sub,
+                    function_span,
                 ),
                 ExtensionAction::CdeclSub { name, .. } => extension_procedure(
-                    &mut state, name, None, true, ProcedureKind::Sub, function_span,
+                    &mut state,
+                    name,
+                    None,
+                    true,
+                    ProcedureKind::Sub,
+                    function_span,
                 ),
             }
         } else {
@@ -164,7 +194,9 @@ fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
             return ParseResult::BadSyntax;
         }
         state.at += 1;
-        state.statements.push(Statement::Label(value.to_string(), span));
+        state
+            .statements
+            .push(Statement::Label(value.to_string(), span));
         if !at_named(state, "tkNewLine") && !at_named(state, "tkColon") {
             state.tokens.insert(
                 state.at,
@@ -604,10 +636,14 @@ fn argument_list(state: &mut ParseState) -> ParseResult {
             break;
         }
         if at_named(state, "tkNewLine") || at_named(state, "tkColon") {
-            let span = state
-                .tokens
-                .get(state.at.saturating_sub(1))
-                .map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
+            let span = state.tokens.get(state.at.saturating_sub(1)).map_or(
+                Span {
+                    line: 1,
+                    start: 0,
+                    end: 0,
+                },
+                |token| token.span,
+            );
             state.expressions.push(Expr::Omitted(span));
             break;
         }
@@ -637,7 +673,10 @@ fn const_assignment(state: &mut ParseState) -> ParseResult {
         _ => return ParseResult::NotFound,
     };
     state.at += 1;
-    while matches!(state.token().map(|token| &token.kind), Some(TokenKind::Period)) {
+    while matches!(
+        state.token().map(|token| &token.kind),
+        Some(TokenKind::Period)
+    ) {
         state.at += 1;
         let Some(field) = state.token().cloned() else {
             return ParseResult::BadSyntax;
@@ -669,10 +708,14 @@ fn const_assignment(state: &mut ParseState) -> ParseResult {
 }
 
 fn def_type_list(state: &mut ParseState, type_name: TypeName) -> ParseResult {
-    let span = state
-        .tokens
-        .get(state.at.saturating_sub(1))
-        .map_or(Span { line: 1, start: 0, end: 0 }, |token| token.span);
+    let span = state.tokens.get(state.at.saturating_sub(1)).map_or(
+        Span {
+            line: 1,
+            start: 0,
+            end: 0,
+        },
+        |token| token.span,
+    );
     let mut ranges = Vec::new();
     loop {
         let Some(first) = default_type_letter(state) else {
@@ -999,8 +1042,7 @@ fn synthesize_statement(
         Some(StatementShape::LineInput)
     } else {
         dispatched.or(emitted)
-    })
-    else {
+    }) else {
         return false;
     };
     let arguments = state.expressions.split_off(expression_base);
@@ -1028,7 +1070,9 @@ fn synthesize_statement(
             let mut arguments = arguments.into_iter();
             let file = channel.then(|| arguments.next()).flatten();
             let prompt = has_prompt.then(|| arguments.next()).flatten();
-            let Some(destination) = arguments.next() else { return false };
+            let Some(destination) = arguments.next() else {
+                return false;
+            };
             if arguments.next().is_some()
                 || (channel && file.is_none())
                 || (has_prompt && prompt.is_none())
@@ -1213,37 +1257,54 @@ fn synthesize_statement(
         StatementShape::Runtime(name) => {
             let mut arguments = arguments;
             if name == "CIRCLE" {
-                arguments.extend(actions.iter().filter_map(|action| match action {
-                    AstAction::Mark { slot: u8::MAX, token } => state
-                        .tokens
-                        .get(*token)
-                        .map(|token| Expr::Omitted(token.span)),
-                    _ => None,
+                arguments.extend(actions.iter().filter_map(|action| {
+                    match action {
+                        AstAction::Mark {
+                            slot: u8::MAX,
+                            token,
+                        } => state
+                            .tokens
+                            .get(*token)
+                            .map(|token| Expr::Omitted(token.span)),
+                        _ => None,
+                    }
                 }));
                 arguments.sort_by_key(|argument| {
                     let span = argument.span();
                     (span.line, span.start)
                 });
-                if actions.iter().any(
-                    |action| matches!(action, AstAction::Unsupported("opCircleAspect")),
-                ) && arguments.len() == 6
+                if actions
+                    .iter()
+                    .any(|action| matches!(action, AstAction::Unsupported("opCircleAspect")))
+                    && arguments.len() == 6
                 {
                     let span = arguments[5].span();
                     arguments.insert(5, Expr::Omitted(span));
                 }
             }
             if name == "PUT" {
-                if let Some((mode, mode_span)) = state.tokens[..state.at]
-                    .iter()
-                    .rev()
-                    .find_map(|token| match token.kind {
-                        TokenKind::Reserved(id) if id == named("tkAND") => Some(("AND", token.span)),
-                        TokenKind::Reserved(id) if id == named("tkOR") => Some(("OR", token.span)),
-                        TokenKind::Reserved(id) if id == named("tkPRESET") => Some(("PRESET", token.span)),
-                        TokenKind::Reserved(id) if id == named("tkPSET") => Some(("PSET", token.span)),
-                        TokenKind::Reserved(id) if id == named("tkXOR") => Some(("XOR", token.span)),
-                        _ => None,
-                    })
+                if let Some((mode, mode_span)) =
+                    state.tokens[..state.at]
+                        .iter()
+                        .rev()
+                        .find_map(|token| match token.kind {
+                            TokenKind::Reserved(id) if id == named("tkAND") => {
+                                Some(("AND", token.span))
+                            }
+                            TokenKind::Reserved(id) if id == named("tkOR") => {
+                                Some(("OR", token.span))
+                            }
+                            TokenKind::Reserved(id) if id == named("tkPRESET") => {
+                                Some(("PRESET", token.span))
+                            }
+                            TokenKind::Reserved(id) if id == named("tkPSET") => {
+                                Some(("PSET", token.span))
+                            }
+                            TokenKind::Reserved(id) if id == named("tkXOR") => {
+                                Some(("XOR", token.span))
+                            }
+                            _ => None,
+                        })
                 {
                     arguments.push(Expr::Name(mode.into(), mode_span));
                 }
@@ -1306,11 +1367,10 @@ fn synthesize_statement(
             }
         }
         StatementShape::Call => {
-            let [(name, _)]: [(String, Span); 1] =
-                match procedure_references.try_into() {
-                    Ok(names) => names,
-                    Err(_) => return false,
-                };
+            let [(name, _)]: [(String, Span); 1] = match procedure_references.try_into() {
+                Ok(names) => names,
+                Err(_) => return false,
+            };
             Statement::Call {
                 name,
                 arguments,
@@ -1505,10 +1565,7 @@ fn synthesize_statement(
                 Err(_) => return false,
             };
             Statement::FileTransfer {
-                write: matches!(
-                    descriptor,
-                    StatementShape::FileTransferWriteUnpositioned
-                ),
+                write: matches!(descriptor, StatementShape::FileTransferWriteUnpositioned),
                 file,
                 position: None,
                 target,
@@ -1596,7 +1653,10 @@ fn block_until_next(state: &mut ParseState) -> Option<Vec<Statement>> {
     loop {
         while consume_named(state, "tkNewLine") || consume_named(state, "tkColon") {}
         if consume_named(state, "tkNEXT") {
-            if matches!(state.token().map(|token| &token.kind), Some(TokenKind::Identifier(_))) {
+            if matches!(
+                state.token().map(|token| &token.kind),
+                Some(TokenKind::Identifier(_))
+            ) {
                 state.at += 1;
             }
             return Some(body);
@@ -2166,13 +2226,11 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
                 .to_ascii_uppercase();
             name_or_apply(state, name, token.span)
         }
-        TokenKind::Reserved(id) if contextual_reserved_name(id).is_some() => {
-            name_or_apply(
-                state,
-                contextual_reserved_name(id).expect("guard checked name"),
-                token.span,
-            )
-        }
+        TokenKind::Reserved(id) if contextual_reserved_name(id).is_some() => name_or_apply(
+            state,
+            contextual_reserved_name(id).expect("guard checked name"),
+            token.span,
+        ),
         _ => {
             state.at -= 1;
             Err(ParseResult::NotFound)
@@ -2183,7 +2241,10 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
 fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Expr, ParseResult> {
     let mut value = Expr::Name(name, start);
     loop {
-        if matches!(state.token().map(|token| &token.kind), Some(TokenKind::Period)) {
+        if matches!(
+            state.token().map(|token| &token.kind),
+            Some(TokenKind::Period)
+        ) {
             state.at += 1;
             let Some(field) = state.token().cloned() else {
                 return Err(ParseResult::BadSyntax);
@@ -2298,7 +2359,10 @@ fn contextual_name(kind: &TokenKind) -> Option<String> {
 
 fn contextual_reserved_name(id: u16) -> Option<String> {
     let spelling = tables::token_spelling(id)?.to_ascii_uppercase();
-    if !spelling.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+    if !spelling
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
         || matches!(
             spelling.as_str(),
             "ALIAS"
@@ -2463,22 +2527,33 @@ mod tests {
 
     #[test]
     fn generated_let_retains_precedence_target_and_action() {
-        let output = parse_vertical_slice("let total& = 2 + 3 * 4\r\n", Dialect::QuickBasic45).unwrap();
+        let output =
+            parse_vertical_slice("let total& = 2 + 3 * 4\r\n", Dialect::QuickBasic45).unwrap();
         let parsed = output.module;
         assert_eq!(parsed.statements.len(), 1);
         let (target, value) = assignment(&parsed.statements[0]);
         assert_eq!(name(target), "TOTAL&");
-        let Expr::Binary { op: Binary::Add, left, right, .. } = value else {
+        let Expr::Binary {
+            op: Binary::Add,
+            left,
+            right,
+            ..
+        } = value
+        else {
             panic!("expected addition, got {value:#?}");
         };
         assert_eq!(integer(left), 2);
-        let Expr::Binary { op: Binary::Multiply, left, right, .. } = &**right else {
+        let Expr::Binary {
+            op: Binary::Multiply,
+            left,
+            right,
+            ..
+        } = &**right
+        else {
             panic!("expected multiply on add right, got {right:#?}");
         };
         assert_eq!((integer(left), integer(right)), (3, 4));
-        assert!(output
-            .actions
-            .contains(&AstAction::Unsupported("opStLet")));
+        assert!(output.actions.contains(&AstAction::Unsupported("opStLet")));
     }
 
     #[test]
@@ -2486,13 +2561,29 @@ mod tests {
         let parsed = module("answer# = sin(1#) + cos(2#)\r\n", Dialect::QuickBasic45);
         let (target, value) = assignment(&parsed.statements[0]);
         assert_eq!(name(target), "ANSWER#");
-        let Expr::Binary { op: Binary::Add, left, right, .. } = value else {
+        let Expr::Binary {
+            op: Binary::Add,
+            left,
+            right,
+            ..
+        } = value
+        else {
             panic!("expected intrinsic addition, got {value:#?}");
         };
-        let Expr::Apply { name: left_name, arguments: left_args, .. } = &**left else {
+        let Expr::Apply {
+            name: left_name,
+            arguments: left_args,
+            ..
+        } = &**left
+        else {
             panic!("expected sin application, got {left:#?}");
         };
-        let Expr::Apply { name: right_name, arguments: right_args, .. } = &**right else {
+        let Expr::Apply {
+            name: right_name,
+            arguments: right_args,
+            ..
+        } = &**right
+        else {
             panic!("expected cos application, got {right:#?}");
         };
         assert_eq!((left_name.as_str(), right_name.as_str()), ("SIN", "COS"));
@@ -2506,10 +2597,22 @@ mod tests {
             "if leftValue < rightValue then result = leftValue else result = rightValue\r\n",
             Dialect::QuickBasic45,
         );
-        let Statement::If { condition, then_branch, else_branch, .. } = &parsed.statements[0] else {
+        let Statement::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } = &parsed.statements[0]
+        else {
             panic!("expected if, got {:#?}", parsed.statements[0]);
         };
-        let Expr::Binary { op: Binary::Less, left, right, .. } = condition else {
+        let Expr::Binary {
+            op: Binary::Less,
+            left,
+            right,
+            ..
+        } = condition
+        else {
             panic!("expected comparison, got {condition:#?}");
         };
         assert_eq!((name(left), name(right)), ("LEFTVALUE", "RIGHTVALUE"));
@@ -2529,7 +2632,12 @@ mod tests {
         );
         let parsed = module(source, Dialect::QuickBasic45);
         assert_eq!(parsed.statements.len(), 2);
-        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else {
+        let Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &parsed.statements[0]
+        else {
             panic!("expected block if, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(name(assignment(&then_branch[0]).1), "LEFTVALUE");
@@ -2540,9 +2648,13 @@ mod tests {
     #[test]
     fn generated_labels_are_distinct_from_the_following_statement() {
         let symbolic = module("handler:\r\nobserved = 7\r\n", Dialect::QuickBasic45);
-        assert!(matches!(&symbolic.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "HANDLER"));
+        assert!(
+            matches!(&symbolic.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "HANDLER")
+        );
         let numbered = module("100 observed = 7 \\ divisor\r\n", Dialect::QuickBasic45);
-        assert!(matches!(&numbered.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "100"));
+        assert!(
+            matches!(&numbered.statements[..], [Statement::Label(label, _), Statement::Assign { .. }] if label == "100")
+        );
     }
 
     #[test]
@@ -2559,13 +2671,25 @@ mod tests {
     fn generated_implicit_call_keeps_arguments_and_explicitness() {
         let source = "visit firstValue, secondValue + 1\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Call { name: call_name, arguments, explicit, .. } = &parsed.statements[0] else {
+        let Statement::Call {
+            name: call_name,
+            arguments,
+            explicit,
+            ..
+        } = &parsed.statements[0]
+        else {
             panic!("expected implicit call, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(call_name, "VISIT");
         assert!(!explicit);
         assert_eq!(name(&arguments[0]), "FIRSTVALUE");
-        assert!(matches!(&arguments[1], Expr::Binary { op: Binary::Add, .. }));
+        assert!(matches!(
+            &arguments[1],
+            Expr::Binary {
+                op: Binary::Add,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2576,24 +2700,55 @@ mod tests {
             "qglMousePos (screenWidth - 1) * yaw / 360, screenHeight * pitch\r\n",
             Dialect::VbDos,
         );
-        let Statement::Call { name, arguments, explicit, .. } = &parsed.statements[0] else {
+        let Statement::Call {
+            name,
+            arguments,
+            explicit,
+            ..
+        } = &parsed.statements[0]
+        else {
             panic!("expected implicit call, got {:#?}", parsed.statements[0]);
         };
         assert_eq!(name, "QGLMOUSEPOS");
         assert!(!explicit);
         assert_eq!(arguments.len(), 2);
-        assert!(matches!(arguments[0], Expr::Binary { op: Binary::Divide, .. }));
-        assert!(matches!(arguments[1], Expr::Binary { op: Binary::Multiply, .. }));
+        assert!(matches!(
+            arguments[0],
+            Expr::Binary {
+                op: Binary::Divide,
+                ..
+            }
+        ));
+        assert!(matches!(
+            arguments[1],
+            Expr::Binary {
+                op: Binary::Multiply,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn generated_simple_statement_descriptors_have_specific_ast_nodes() {
-        assert!(matches!(module("option base 1\r\n", Dialect::QuickBasic45).statements[0], Statement::OptionBase(1, _)));
-        assert!(matches!(module("call updateShared(observedValue)\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: true, .. } if name == "UPDATESHARED"));
-        assert!(matches!(module("screen 1\r\n", Dialect::QuickBasic45).statements[0], Statement::Runtime { ref name, .. } if name == "SCREEN"));
-        assert!(matches!(module("randomize seedValue\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "RANDOMIZE"));
-        assert!(matches!(module("environ \"QBCOMPAT=Alpha42\"\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "ENVIRON"));
-        assert!(matches!(module("gosub firstPart\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, ref arguments, explicit: false, .. } if name == "GOSUB" && matches!(&arguments[..], [Expr::Name(label, _)] if label == "FIRSTPART")));
+        assert!(matches!(
+            module("option base 1\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::OptionBase(1, _)
+        ));
+        assert!(
+            matches!(module("call updateShared(observedValue)\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: true, .. } if name == "UPDATESHARED")
+        );
+        assert!(
+            matches!(module("screen 1\r\n", Dialect::QuickBasic45).statements[0], Statement::Runtime { ref name, .. } if name == "SCREEN")
+        );
+        assert!(
+            matches!(module("randomize seedValue\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "RANDOMIZE")
+        );
+        assert!(
+            matches!(module("environ \"QBCOMPAT=Alpha42\"\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "ENVIRON")
+        );
+        assert!(
+            matches!(module("gosub firstPart\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, ref arguments, explicit: false, .. } if name == "GOSUB" && matches!(&arguments[..], [Expr::Name(label, _)] if label == "FIRSTPART"))
+        );
     }
 
     #[test]
@@ -2645,21 +2800,64 @@ mod tests {
 
     #[test]
     fn generated_file_and_error_statements_have_specific_ast_nodes() {
-        assert!(matches!(module("def seg = varseg(values(1))\r\n", Dialect::QuickBasic45).statements[0], Statement::DefSeg { value: Some(_), .. }));
-        assert!(matches!(module("erase cacheList\r\n", Dialect::QuickBasic45).statements[0], Statement::Erase(_)));
-        assert!(matches!(module("open \"ITEM.DAT\" for output as #fileNumber\r\n", Dialect::QuickBasic45).statements[0], Statement::Open { mode: FileMode::Output, .. }));
-        assert!(matches!(module("close #fileNumber\r\n", Dialect::QuickBasic45).statements[0], Statement::Close { .. }));
-        assert!(matches!(module("restore secondData\r\n", Dialect::QuickBasic45).statements[0], Statement::Runtime { ref name, .. } if name == "RESTORE"));
-        assert!(matches!(module("resume next\r\n", Dialect::QuickBasic45).statements[0], Statement::Resume { target: ResumeTarget::Next, .. }));
-        assert!(matches!(module("return finished\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "RETURN"));
+        assert!(matches!(
+            module("def seg = varseg(values(1))\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::DefSeg { value: Some(_), .. }
+        ));
+        assert!(matches!(
+            module("erase cacheList\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::Erase(_)
+        ));
+        assert!(matches!(
+            module(
+                "open \"ITEM.DAT\" for output as #fileNumber\r\n",
+                Dialect::QuickBasic45
+            )
+            .statements[0],
+            Statement::Open {
+                mode: FileMode::Output,
+                ..
+            }
+        ));
+        assert!(matches!(
+            module("close #fileNumber\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::Close { .. }
+        ));
+        assert!(
+            matches!(module("restore secondData\r\n", Dialect::QuickBasic45).statements[0], Statement::Runtime { ref name, .. } if name == "RESTORE")
+        );
+        assert!(matches!(
+            module("resume next\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::Resume {
+                target: ResumeTarget::Next,
+                ..
+            }
+        ));
+        assert!(
+            matches!(module("return finished\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == "RETURN")
+        );
     }
 
     #[test]
     fn generated_declarations_preserve_const_default_type_and_udt_fields() {
-        assert!(matches!(module("const limit = 7\r\n", Dialect::QuickBasic45).statements[0], Statement::Const { ref name, ref value, .. } if name == "LIMIT" && integer(value) == 7));
-        assert!(matches!(module("defint a-c, x-z\r\n", Dialect::QuickBasic45).statements[0], Statement::DefType { ref ranges, .. } if ranges == &vec![('A', 'C'), ('X', 'Z')]));
-        let parsed = module(concat!("type Vertex\r\n", "x as integer\r\n", "label as string * 12\r\n", "end type\r\n"), Dialect::QuickBasic45);
-        let Statement::TypeDecl { name, fields, .. } = &parsed.statements[0] else { panic!("expected UDT") };
+        assert!(
+            matches!(module("const limit = 7\r\n", Dialect::QuickBasic45).statements[0], Statement::Const { ref name, ref value, .. } if name == "LIMIT" && integer(value) == 7)
+        );
+        assert!(
+            matches!(module("defint a-c, x-z\r\n", Dialect::QuickBasic45).statements[0], Statement::DefType { ref ranges, .. } if ranges == &vec![('A', 'C'), ('X', 'Z')])
+        );
+        let parsed = module(
+            concat!(
+                "type Vertex\r\n",
+                "x as integer\r\n",
+                "label as string * 12\r\n",
+                "end type\r\n"
+            ),
+            Dialect::QuickBasic45,
+        );
+        let Statement::TypeDecl { name, fields, .. } = &parsed.statements[0] else {
+            panic!("expected UDT")
+        };
         assert_eq!(name, "VERTEX");
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[1].fixed_length.as_ref().map(integer), Some(12));
@@ -2667,28 +2865,91 @@ mod tests {
 
     #[test]
     fn generated_loop_blocks_collect_bodies_and_conditions() {
-        let parsed = module(concat!("for index = 1 to 4 step 2\r\n", "total = total + index\r\n", "next index\r\n"), Dialect::QuickBasic45);
-        assert!(matches!(&parsed.statements[0], Statement::For { counter, start, end, step: Some(step), body, .. } if name(counter) == "INDEX" && integer(start) == 1 && integer(end) == 4 && integer(step) == 2 && body.len() == 1));
-        let pre = module(concat!("do while index < 4\r\n", "index = index + 1\r\n", "loop\r\n"), Dialect::QuickBasic45);
-        assert!(matches!(&pre.statements[0], Statement::Do { pre: Some((true, _)), post: None, body, .. } if body.len() == 1));
-        let post = module(concat!("do\r\n", "index = index + 1\r\n", "loop until index = 4\r\n"), Dialect::QuickBasic45);
-        assert!(matches!(&post.statements[0], Statement::Do { pre: None, post: Some((false, _)), body, .. } if body.len() == 1));
+        let parsed = module(
+            concat!(
+                "for index = 1 to 4 step 2\r\n",
+                "total = total + index\r\n",
+                "next index\r\n"
+            ),
+            Dialect::QuickBasic45,
+        );
+        assert!(
+            matches!(&parsed.statements[0], Statement::For { counter, start, end, step: Some(step), body, .. } if name(counter) == "INDEX" && integer(start) == 1 && integer(end) == 4 && integer(step) == 2 && body.len() == 1)
+        );
+        let pre = module(
+            concat!(
+                "do while index < 4\r\n",
+                "index = index + 1\r\n",
+                "loop\r\n"
+            ),
+            Dialect::QuickBasic45,
+        );
+        assert!(
+            matches!(&pre.statements[0], Statement::Do { pre: Some((true, _)), post: None, body, .. } if body.len() == 1)
+        );
+        let post = module(
+            concat!(
+                "do\r\n",
+                "index = index + 1\r\n",
+                "loop until index = 4\r\n"
+            ),
+            Dialect::QuickBasic45,
+        );
+        assert!(
+            matches!(&post.statements[0], Statement::Do { pre: None, post: Some((false, _)), body, .. } if body.len() == 1)
+        );
     }
 
     #[test]
     fn generated_specialized_statements_remain_distinct_from_runtime_fallbacks() {
-        let while_block = module(concat!("while index < 4\r\n", "index = index + 1\r\n", "wend\r\n"), Dialect::QuickBasic45);
-        assert!(matches!(&while_block.statements[0], Statement::While { body, .. } if body.len() == 1));
-        assert!(matches!(module("seek #fileNumber, 3\r\n", Dialect::QuickBasic45).statements[0], Statement::Seek { .. }));
-        for source in ["put #fileNumber, 1, firstValue\r\n", "get #fileNumber, 3, readValue\r\n"] {
-            assert!(matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::FileTransfer { .. }), "{source:?}");
+        let while_block = module(
+            concat!("while index < 4\r\n", "index = index + 1\r\n", "wend\r\n"),
+            Dialect::QuickBasic45,
+        );
+        assert!(
+            matches!(&while_block.statements[0], Statement::While { body, .. } if body.len() == 1)
+        );
+        assert!(matches!(
+            module("seek #fileNumber, 3\r\n", Dialect::QuickBasic45).statements[0],
+            Statement::Seek { .. }
+        ));
+        for source in [
+            "put #fileNumber, 1, firstValue\r\n",
+            "get #fileNumber, 3, readValue\r\n",
+        ] {
+            assert!(
+                matches!(
+                    module(source, Dialect::QuickBasic45).statements[0],
+                    Statement::FileTransfer { .. }
+                ),
+                "{source:?}"
+            );
         }
-        assert!(matches!(module("mid$(dynamicText, 2, 3) = \"XYZ\"\r\n", Dialect::QuickBasic45).statements[0], Statement::Assign { .. }));
-        for (source, expected) in [("lset leftFixed = sourceText\r\n", "LSET"), ("rset rightFixed = sourceText\r\n", "RSET")] {
-            assert!(matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == expected), "{source:?}");
+        assert!(matches!(
+            module(
+                "mid$(dynamicText, 2, 3) = \"XYZ\"\r\n",
+                Dialect::QuickBasic45
+            )
+            .statements[0],
+            Statement::Assign { .. }
+        ));
+        for (source, expected) in [
+            ("lset leftFixed = sourceText\r\n", "LSET"),
+            ("rset rightFixed = sourceText\r\n", "RSET"),
+        ] {
+            assert!(
+                matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == expected),
+                "{source:?}"
+            );
         }
-        for (source, expected) in [("bsave \"ITEM.BSV\", varptr(sourceText), 4\r\n", "BSAVE"), ("bload \"ITEM.BSV\", varptr(targetText)\r\n", "BLOAD")] {
-            assert!(matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == expected), "{source:?}");
+        for (source, expected) in [
+            ("bsave \"ITEM.BSV\", varptr(sourceText), 4\r\n", "BSAVE"),
+            ("bload \"ITEM.BSV\", varptr(targetText)\r\n", "BLOAD"),
+        ] {
+            assert!(
+                matches!(module(source, Dialect::QuickBasic45).statements[0], Statement::Call { ref name, explicit: false, .. } if name == expected),
+                "{source:?}"
+            );
         }
     }
 
@@ -2703,7 +2964,15 @@ mod tests {
             "end select\r\n",
         );
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Select { selector, arms, otherwise, .. } = &parsed.statements[0] else { panic!("expected select") };
+        let Statement::Select {
+            selector,
+            arms,
+            otherwise,
+            ..
+        } = &parsed.statements[0]
+        else {
+            panic!("expected select")
+        };
         assert_eq!(name(selector), "CHOICE");
         assert_eq!(arms.len(), 1);
         assert_eq!(arms[0].0.len(), 2);
@@ -2722,9 +2991,22 @@ mod tests {
             "end if\r\n",
         );
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else { panic!("expected if") };
-        assert!(matches!(then_branch[0], Statement::DefSeg { value: None, .. }));
-        assert!(matches!(else_branch[0], Statement::DefSeg { value: None, .. }));
+        let Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &parsed.statements[0]
+        else {
+            panic!("expected if")
+        };
+        assert!(matches!(
+            then_branch[0],
+            Statement::DefSeg { value: None, .. }
+        ));
+        assert!(matches!(
+            else_branch[0],
+            Statement::DefSeg { value: None, .. }
+        ));
     }
 
     #[test]
@@ -2738,15 +3020,22 @@ mod tests {
     fn generated_if_span_includes_a_nested_exit_statement() {
         let source = "if index = 3 then exit for\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::If { then_branch, .. } = &parsed.statements[0] else { panic!("expected if") };
-        assert!(matches!(then_branch[0], Statement::Exit(ExitTarget::For, _)));
+        let Statement::If { then_branch, .. } = &parsed.statements[0] else {
+            panic!("expected if")
+        };
+        assert!(matches!(
+            then_branch[0],
+            Statement::Exit(ExitTarget::For, _)
+        ));
     }
 
     #[test]
     fn generated_dim_preserves_bounds_types_and_shared_action() {
         let source = "dim shared cells(1 to 7, 3) as long, label as string * 12\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Dim(declarations) = &parsed.statements[0] else { panic!("expected dim") };
+        let Statement::Dim(declarations) = &parsed.statements[0] else {
+            panic!("expected dim")
+        };
         assert_eq!(declarations.len(), 2);
         assert!(declarations[0].shared && declarations[0].array);
         assert_eq!(declarations[0].bounds.len(), 2);
@@ -2757,7 +3046,14 @@ mod tests {
     fn generated_print_preserves_file_channel_and_item_separators() {
         let source = "print #fileNumber, \"A\"; value\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
-        let Statement::Print { file: Some(_), items, .. } = &parsed.statements[0] else { panic!("expected file print") };
+        let Statement::Print {
+            file: Some(_),
+            items,
+            ..
+        } = &parsed.statements[0]
+        else {
+            panic!("expected file print")
+        };
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].separator, PrintSeparator::Semicolon);
         assert_eq!(items[1].separator, PrintSeparator::End);
@@ -2770,25 +3066,36 @@ mod tests {
             Dialect::QuickBasic45,
         )
         .unwrap();
-        assert!(matches!(&output.module.statements[..], [Statement::Dim(_), Statement::Call { name, explicit: false, .. }] if name == "RANDOMIZE"));
+        assert!(
+            matches!(&output.module.statements[..], [Statement::Dim(_), Statement::Call { name, explicit: false, .. }] if name == "RANDOMIZE")
+        );
         assert!(output.actions.contains(&AstAction::Dim));
-        assert!(output.actions.contains(&AstAction::LegacyImplicitCall("RANDOMIZE")));
+        assert!(output
+            .actions
+            .contains(&AstAction::LegacyImplicitCall("RANDOMIZE")));
     }
 
     #[test]
     fn generated_goto_preserves_symbolic_and_numeric_targets() {
         for (source, label) in [("goto handler\r\n", "HANDLER"), ("goto 32000\r\n", "32000")] {
             let output = parse_vertical_slice(source, Dialect::QuickBasic45).unwrap();
-            assert!(matches!(&output.module.statements[0], Statement::Goto(actual, _) if actual == label));
+            assert!(
+                matches!(&output.module.statements[0], Statement::Goto(actual, _) if actual == label)
+            );
             assert!(output.actions.contains(&AstAction::Goto));
         }
     }
 
     #[test]
     fn generated_on_error_distinguishes_disable_zero_from_a_label() {
-        for (source, label) in [("on error goto handler\r\n", "HANDLER"), ("on error goto 0\r\n", "0")] {
+        for (source, label) in [
+            ("on error goto handler\r\n", "HANDLER"),
+            ("on error goto 0\r\n", "0"),
+        ] {
             let parsed = module(source, Dialect::QuickBasic45);
-            assert!(matches!(&parsed.statements[0], Statement::OnError { label: actual, local: false, .. } if actual == label));
+            assert!(
+                matches!(&parsed.statements[0], Statement::OnError { label: actual, local: false, .. } if actual == label)
+            );
         }
     }
 
@@ -2797,8 +3104,12 @@ mod tests {
         let source = "declare sub probe\r\ndeclare function value&\r\n";
         let parsed = module(source, Dialect::QuickBasic45);
         assert_eq!(parsed.procedures.len(), 2);
-        assert!(matches!(&parsed.procedures[0], Procedure { name, kind: ProcedureKind::Sub, declaration: true, parameters, .. } if name == "PROBE" && parameters.is_empty()));
-        assert!(matches!(&parsed.procedures[1], Procedure { name, kind: ProcedureKind::Function, result: Some(TypeName::Long), declaration: true, .. } if name == "VALUE&"));
+        assert!(
+            matches!(&parsed.procedures[0], Procedure { name, kind: ProcedureKind::Sub, declaration: true, parameters, .. } if name == "PROBE" && parameters.is_empty())
+        );
+        assert!(
+            matches!(&parsed.procedures[1], Procedure { name, kind: ProcedureKind::Function, result: Some(TypeName::Long), declaration: true, .. } if name == "VALUE&")
+        );
     }
 
     #[test]
@@ -2813,8 +3124,12 @@ mod tests {
         );
         let parsed = module(source, Dialect::QuickBasic45);
         assert_eq!(parsed.procedures.len(), 2);
-        assert!(matches!(&parsed.procedures[0], Procedure { name, kind: ProcedureKind::Sub, body, declaration: false, .. } if name == "PROBE" && body.len() == 1));
-        assert!(matches!(&parsed.procedures[1], Procedure { name, kind: ProcedureKind::Function, body, declaration: false, .. } if name == "VALUE&" && body.len() == 1));
+        assert!(
+            matches!(&parsed.procedures[0], Procedure { name, kind: ProcedureKind::Sub, body, declaration: false, .. } if name == "PROBE" && body.len() == 1)
+        );
+        assert!(
+            matches!(&parsed.procedures[1], Procedure { name, kind: ProcedureKind::Function, body, declaration: false, .. } if name == "VALUE&" && body.len() == 1)
+        );
     }
 
     #[test]

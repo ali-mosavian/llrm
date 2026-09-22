@@ -46,7 +46,10 @@ fn view_print_preserves_the_reset_and_bounded_runtime_forms() {
     let hir = compile(&module, "view_print", Dialect::VbDos, "vbdos").unwrap();
     assert_eq!(hir.matches("B$VWPT").count(), 2);
     assert!(hir.contains("\"value\":-1"), "reset sentinels: {hir}");
-    assert!(hir.contains("\"value\":3") && hir.contains("\"value\":22"), "bounds: {hir}");
+    assert!(
+        hir.contains("\"value\":3") && hir.contains("\"value\":22"),
+        "bounds: {hir}"
+    );
 }
 
 #[test]
@@ -69,11 +72,7 @@ fn console_input_retains_its_prompt_and_destination() {
         } if prompt == "How many" && destinations.len() == 1
     ));
 
-    let unprompted = parse(
-        "dim answer as string\r\ninput answer\r\n",
-        Dialect::VbDos,
-    )
-    .unwrap();
+    let unprompted = parse("dim answer as string\r\ninput answer\r\n", Dialect::VbDos).unwrap();
     assert!(matches!(
         &unprompted.statements[1],
         Statement::Input { prompt: None, destinations, .. } if destinations.len() == 1
@@ -166,7 +165,11 @@ fn circle_retains_coordinates_radius_and_color() {
 
 #[test]
 fn circle_retains_omitted_angles_before_aspect() {
-    let module = parse("circle (x, y), radius, color, , , aspect\r\n", Dialect::VbDos).unwrap();
+    let module = parse(
+        "circle (x, y), radius, color, , , aspect\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
     assert!(matches!(
         &module.statements[..],
         [Statement::Runtime { name, arguments, .. }]
@@ -180,11 +183,7 @@ fn circle_retains_omitted_angles_before_aspect() {
 fn line_input_with_prompt_is_not_a_graphics_line() {
     // Gorillas uses the console form; dispatching only on the shared LINE
     // keyword silently turned it into a two-operand graphics statement.
-    let module = parse(
-        "line input \"Name: \"; player$\r\n",
-        Dialect::QuickBasic45,
-    )
-    .unwrap();
+    let module = parse("line input \"Name: \"; player$\r\n", Dialect::QuickBasic45).unwrap();
     assert!(matches!(
         &module.statements[..],
         [Statement::LineInput { file: None, prompt: Some(_), destination: Expr::Name(name, _), .. }]
@@ -247,7 +246,9 @@ fn print_tab_retains_position_without_printing_it_as_a_number() {
     let Statement::Print { items, .. } = &module.statements[0] else {
         panic!("expected PRINT")
     };
-    assert!(matches!(&items[1].value, Expr::Apply { name, arguments, .. } if name == "TAB" && arguments.len() == 1));
+    assert!(
+        matches!(&items[1].value, Expr::Apply { name, arguments, .. } if name == "TAB" && arguments.len() == 1)
+    );
 }
 
 #[test]
@@ -271,7 +272,11 @@ fn rnd_loads_the_single_returned_by_the_vbdos_runtime() {
     assert!(hir.contains("\"callee\":\"B$RND1\""), "{hir}");
     assert!(hir.contains("\"op\":\"load\""), "{hir}");
     let call = hir.find("\"callee\":\"B$RND1\"").unwrap();
-    assert!(hir[call..].starts_with("\"callee\":\"B$RND1\"") && hir[call..call + 180].contains("\"tag\":\"place\""), "{hir}");
+    assert!(
+        hir[call..].starts_with("\"callee\":\"B$RND1\"")
+            && hir[call..call + 180].contains("\"tag\":\"place\""),
+        "{hir}"
+    );
 }
 
 #[test]
@@ -338,7 +343,10 @@ fn print_using_retains_format_separately_from_values() {
     ));
     let hir = compile(&module, "print_using", Dialect::VbDos, "vbdos").unwrap();
     for callee in ["B$USNG", "B$PSI2", "B$PEI2"] {
-        assert!(hir.contains(&format!("\"callee\":\"{callee}\"")), "{callee}: {hir}");
+        assert!(
+            hir.contains(&format!("\"callee\":\"{callee}\"")),
+            "{callee}: {hir}"
+        );
     }
 }
 
@@ -553,7 +561,10 @@ fn colon_statements_stay_inside_a_single_line_if_arm() {
         panic!("expected single-line IF")
     };
     assert!(matches!(then_branch[0], Statement::Assign { .. }));
-    assert!(matches!(then_branch[1], Statement::Exit(ExitTarget::Function, _)));
+    assert!(matches!(
+        then_branch[1],
+        Statement::Exit(ExitTarget::Function, _)
+    ));
     assert!(matches!(body[1], Statement::Assign { .. }));
 
     let hir = compile(&module, "colon_if", Dialect::VbDos, "vbdos").unwrap();
@@ -1221,7 +1232,9 @@ fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
     let hir = compile(&module, "dynamic_local", Dialect::QuickBasic45, "qb45").unwrap();
     assert!(hir.contains("\"callee\":\"B$DDIM\""));
     assert!(hir.contains("\"callee\":\"B$ERAS\""));
-    assert!(hir.contains("\"name\":\"COUNTS$descriptor\"") && hir.contains("\"storage\":\"local\""));
+    assert!(
+        hir.contains("\"name\":\"COUNTS$descriptor\"") && hir.contains("\"storage\":\"local\"")
+    );
 }
 
 #[test]
@@ -2156,5 +2169,21 @@ fn def_type_governs_the_procedures_that_follow_it() {
         Dialect::QuickBasic45,
     )
     .unwrap();
-    compile(&module, "deftype_position", Dialect::QuickBasic45, "qb45").unwrap();
+    // BC 4.5's listing prints fracline's y1 with B$PER8.
+    let hir = compile(&module, "deftype_position", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("B$PER8"), "{hir}");
+}
+
+#[test]
+fn a_declared_function_suffix_matches_its_default_typed_definition() {
+    // oimad declares `FUNCTION DMADone% (lengy%)` and defines it under
+    // DEFINT as `FUNCTION DMADone (lengy)`; the callee kept the suffix and
+    // the two were rejected as disagreeing.
+    let module = parse(
+        "declare function dmadone% (lengy%)\r\ndefint a-z\r\nprint dmadone(1)\r\n\
+         function dmadone (lengy)\r\ndmadone = lengy\r\nend function\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    compile(&module, "function_suffix", Dialect::QuickBasic45, "qb45").unwrap();
 }

@@ -327,12 +327,22 @@ pub enum Statement {
 impl Statement {
     pub fn span(&self) -> Span {
         match self {
-            Self::Dim(items) | Self::Static(items) | Self::Redim(items) => items
-                .first()
-                .map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span),
-            Self::Erase(items) => items
-                .first()
-                .map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
+            Self::Dim(items) | Self::Static(items) | Self::Redim(items) => items.first().map_or(
+                Span {
+                    line: 0,
+                    start: 0,
+                    end: 0,
+                },
+                |item| item.span,
+            ),
+            Self::Erase(items) => items.first().map_or(
+                Span {
+                    line: 0,
+                    start: 0,
+                    end: 0,
+                },
+                Expr::span,
+            ),
             Self::DefType { span, .. }
             | Self::TypeDecl { span, .. }
             | Self::Const { span, .. }
