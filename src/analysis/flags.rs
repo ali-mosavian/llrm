@@ -1,14 +1,13 @@
 //! Port of `qbopt/analysis/flags.py`: which flags are live.
-//!
-//! Ported so far: `Flag`, `ALL`, `DIVERGENT`. The block liveness functions
-//! (`reads`, `writes`, `live_in`, `live_after`, `written_by`) follow with the
-//! BC decode path they read.
 
 use std::fmt;
 use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 
-use iced_x86::RflagsBits;
+use iced_x86::{FlowControl, RflagsBits};
 
+use crate::frontend::blocks::Block;
+use crate::frontend::declen::Insn;
+use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
 
 /// `class Flag(IntFlag)`, valued as iced's `RflagsBits`.
@@ -51,6 +50,78 @@ pub const ALL: Flag = Flag(Flag::CF.0 | Flag::PF.0 | Flag::AF.0 | Flag::ZF.0 | F
 
 /// The three whose value widening changes.
 pub const DIVERGENT: Flag = Flag(Flag::ZF.0 | Flag::PF.0 | Flag::AF.0);
+
+/// `CLOBBERS`: a call does not itself write a flag, but its callee does.
+pub const CLOBBERS: [FlowControl; 3] = [FlowControl::Call, FlowControl::IndirectCall, FlowControl::Interrupt];
+
+pub fn written_by(insn: &Insn) -> Flag {
+    if CLOBBERS.contains(&insn.flow()) { ALL } else { Flag(insn.writes() & ALL.0) }
+}
+
+/// What the block reads before writing it.
+pub fn reads(block: &Block) -> Flag {
+    let (mut uses, mut written) = (Flag::NONE, Flag::NONE);
+    for insn in &block.insns {
+        uses |= Flag(insn.reads() & ALL.0) & !written;
+        written |= written_by(insn);
+    }
+    uses
+}
+
+pub fn writes(block: &Block) -> Flag {
+    let mut found = Flag::NONE;
+    for insn in &block.insns {
+        found |= written_by(insn);
+    }
+    found
+}
+
+/// The flags live on entry to each block, to a fixed point.
+pub fn live_in(blocks: &[Block]) -> IndexMap<usize, Flag> {
+    let known: std::collections::BTreeSet<usize> = blocks.iter().map(|block| block.at).collect();
+    let mut live: IndexMap<usize, Flag> = blocks.iter().map(|block| (block.at, Flag::NONE)).collect();
+    let uses: IndexMap<usize, Flag> = blocks.iter().map(|block| (block.at, reads(block))).collect();
+    let defs: IndexMap<usize, Flag> = blocks.iter().map(|block| (block.at, writes(block))).collect();
+
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for block in blocks.iter().rev() {
+            // Everything this cannot see leaves every flag live.
+            let mut out = if block.leaves() { ALL } else { Flag::NONE };
+            for successor in &block.succ {
+                out |= if known.contains(successor) { live[successor] } else { ALL };
+            }
+            let now = uses[&block.at] | (out & !defs[&block.at]);
+            if now != live[&block.at] {
+                live.insert(block.at, now);
+                changing = true;
+            }
+        }
+    }
+    live
+}
+
+/// The flags something reads after `offset`, without them being rewritten first.
+pub fn live_after(block: &Block, offset: usize, live: &IndexMap<usize, Flag>) -> Flag {
+    let mut out = if block.leaves() { ALL } else { Flag::NONE };
+    for successor in &block.succ {
+        out |= live.get(successor).copied().unwrap_or(ALL);
+    }
+
+    let (mut needed, mut written) = (Flag::NONE, Flag::NONE);
+    for insn in &block.insns {
+        if insn.at < offset {
+            continue;
+        }
+        needed |= Flag(insn.reads() & ALL.0) & !written;
+        written |= written_by(insn);
+        if written == ALL {
+            return needed;
+        }
+    }
+    needed | (out & !written)
+}
 
 impl BitOr for Flag {
     type Output = Flag;
