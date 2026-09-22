@@ -748,3 +748,47 @@ fn test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() {
     let silent = Emitted::new(vec![0x99]);
     assert!(silent.places().is_empty() && silent.relocated_at().is_none());
 }
+
+/// `divides` has no Python test of its own; these are Python's answers.
+#[test]
+fn divides_matches_python() {
+    use crate::model::mir::{self, Arg, Kind, MemRef, OpCode};
+
+    let cell = |disp, base| Arg::Cell(mir::Cell { r#ref: MemRef::new(Some(a(Space::Segment, disp, 1, base, Register::None)), 4) });
+    let constant = |n: i64| Arg::Const(mir::Const::new(n, 4));
+    let args = |key| match key {
+        "cc" => vec![constant(100), constant(7)],
+        "mm" => vec![cell(0x10, Register::None), cell(0x20, Register::None)],
+        "mb" => vec![cell(0x10, Register::SI), cell(0x20, Register::BX)],
+        "cm" => vec![constant(-5), cell(0x20, Register::None)],
+        _ => vec![Arg::Held(mir::Held { value: mir::Value::new(1, 1), width: 4 }), constant(7)],
+    };
+    let (eax, ecx, edx, ebx) = (Register::EAX, Register::ECX, Register::EDX, Register::EBX);
+    let held = "Held(value=v1, width=4) is not an operand a divide can read yet";
+    let rows: [(&str, (Register, Register), bool, Result<(&str, Vec<usize>), &str>); 16] = [
+        ("cc", (eax, edx), true, Ok(("66b86400000066b907000000669966f7f96650585a", vec![]))),
+        ("cc", (edx, eax), false, Ok(("66b86400000066b907000000669966f7f96687c2", vec![]))),
+        ("cc", (ebx, eax), true, Ok(("66b86400000066b907000000669966f7f9668bd8668bc26650585a", vec![]))),
+        ("cc", (eax, ebx), false, Ok(("66b86400000066b907000000669966f7f9668bda", vec![]))),
+        ("cc", (ecx, edx), true, Ok(("66b86400000066b907000000669966f7f9668bc86650585a", vec![]))),
+        ("mm", (eax, edx), true, Ok(("66a10000668b0e0000669966f7f96650585a", vec![2, 7]))),
+        ("mm", (edx, eax), false, Ok(("66a10000668b0e0000669966f7f96687c2", vec![2, 7]))),
+        ("mm", (ebx, eax), false, Ok(("66a10000668b0e0000669966f7f9668bd8668bc2", vec![2, 7]))),
+        ("mb", (eax, edx), false, Ok(("668b840000668b8f0000669966f7f9", vec![3, 8]))),
+        ("mb", (eax, ebx), true, Ok(("668b840000668b8f0000669966f7f9668bda6650585a", vec![3, 8]))),
+        ("mb", (ecx, edx), false, Ok(("668b840000668b8f0000669966f7f9668bc8", vec![3, 8]))),
+        ("cm", (eax, edx), true, Ok(("66b8fbffffff668b0e0000669966f7f96650585a", vec![9]))),
+        ("cm", (edx, eax), true, Ok(("66b8fbffffff668b0e0000669966f7f96687c26650585a", vec![9]))),
+        ("cm", (ebx, eax), false, Ok(("66b8fbffffff668b0e0000669966f7f9668bd8668bc2", vec![9]))),
+        ("held", (eax, edx), true, Err(held)),
+        ("held", (edx, eax), false, Err(held)),
+    ];
+    for (key, seats, restore, want) in rows {
+        let op = mir::Op { kind: Kind::Divmod, args: args(key), ..mir::Op::new(0, OpCode::Operation(Operation::Call), "B$DVI4", vec![], vec![]) };
+        let got = divides(&op, seats, restore).map(|made| (hex(&made.code), made.fields));
+        let want = want.map(|(code, fields)| (code.to_owned(), fields)).map_err(str::to_owned);
+        assert_eq!(got, want, "{key} {seats:?} {restore}");
+    }
+    let op = mir::Op { kind: Kind::Mul, args: args("cc"), ..mir::Op::new(0, OpCode::Operation(Operation::Call), "B$DVI4", vec![], vec![]) };
+    assert_eq!(divides(&op, (eax, edx), true).map(|made| made.code), Err("B$DVI4: not a divide over two operands".to_owned()));
+}
