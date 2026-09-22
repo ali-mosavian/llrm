@@ -19,7 +19,11 @@ use num_bigint::BigInt;
 
 use super::{hir, libfunc, raise_hir, stream};
 use crate::analysis::alias;
-use crate::backend::{cpu, lower, lower_int64};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::backend::{cpu, farcall, frame, lower, lower_int64};
+use crate::model::passes::LIRTransform;
 use crate::flow;
 use crate::model::lir;
 use crate::model::mir::{self, Arg, Const, MemRef, MirBody};
@@ -123,10 +127,36 @@ pub fn assembled(
         let low = flow::verified(low, "lower", true).map_err(|error| hir::Unsupported(error.0))?;
         write(dump, &format!("passes/{}.lir-lower", raised.name), &_lir_text(&raised.name, &low))?;
         lirs.push(_lir_text(&raised.name, &low));
+        let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
+        let frame = Rc::new(RefCell::new(frame));
+        // `flow.machine`, as far as it is ported.
+        let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(farcall::FarIndirectCalls::new(Rc::clone(&frame)))];
+        let in_ssa = true;
+        let mut low = low;
+        for (number, phase) in phases.iter_mut().enumerate() {
+            low = flow::checked(low, phase.as_mut(), in_ssa).map_err(|error| {
+                hir::Unsupported(match error {
+                    flow::Checked::Refused(message) => message,
+                    flow::Checked::Malformed(malformed) => malformed.0,
+                })
+            })?;
+            write(
+                dump,
+                &format!("phases/{}.{number:02}-{}", raised.name, phase.class_name()),
+                &_lir_text(&raised.name, &low),
+            )?;
+        }
+        // Stopping here must not truncate `mir`: the rest of the unit still raised.
+        let index = raised_procedures.iter().position(|one| one.name == raised.name).unwrap();
+        for rest in &raised_procedures[index + 1..] {
+            mirs.push(_mir_text(&rest.name, &bodies[&rest.name]));
+        }
+        write(dump, "mir", &mirs.join("\n"))?;
+        return Err(CompileError::NotPorted("qbopt.backend.floatalloc.FloatAlloc"));
     }
     write(dump, "mir", &mirs.join("\n"))?;
     let _ = lirs;
-    Err(CompileError::NotPorted("qbopt.backend.frame.of"))
+    Err(CompileError::NotPorted("qbopt.backend.floatalloc.FloatAlloc"))
 }
 
 pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
