@@ -57,6 +57,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "num-bigint",
+ "num-traits",
  "toml",
 ]
 

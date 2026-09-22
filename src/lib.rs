@@ -2,6 +2,7 @@
 
 pub mod abi;
 pub mod analysis;
+pub mod backend;
 pub mod cfront;
 pub mod cycles;
 pub mod frontend;
