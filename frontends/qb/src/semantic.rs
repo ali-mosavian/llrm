@@ -270,6 +270,8 @@ struct Compiler {
     // attribute.
     module_variables: BTreeMap<String, Variable>,
     shared_keys: BTreeSet<String>,
+    // A dynamic array is declared up front but allocated where its DIM runs.
+    pending_allocations: BTreeMap<((usize, usize), String), (Declaration, u32, u32, u32)>,
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
     data_entries: Vec<u32>,
@@ -943,6 +945,7 @@ impl Compiler {
             position: (0, 0),
             module_variables: BTreeMap::new(),
             shared_keys: BTreeSet::new(),
+            pending_allocations: BTreeMap::new(),
             option_base: 0,
             statement_entries: Vec::new(),
             data_entries: Vec::new(),
@@ -1535,6 +1538,62 @@ impl Compiler {
         Ok(())
     }
 
+    /// Run a dynamic array's B$DDIM where its DIM statement executes, so its
+    /// bounds read the values they have there.
+    fn allocate(&mut self, item: &Declaration) -> Result<(), SemanticError> {
+        let key = self.declaration_key(item)?;
+        let Some((declaration, descriptor_place, descriptor_type, element)) =
+            self.pending_allocations.remove(&(self.position, key))
+        else {
+            return Ok(());
+        };
+        let declaration = &declaration;
+        let pointer_type = self.pointer_type(descriptor_type);
+        let descriptor = self.value(pointer_type);
+        self.emit(
+            "address",
+            vec![descriptor],
+            vec![Operand::Place(descriptor_place)],
+        );
+        let mut operands = Vec::new();
+        for bound in &declaration.bounds {
+            let lower = if let Some(lower) = &bound.lower {
+                let (lower, type_id) = self.expression(lower)?;
+                self.convert(lower, type_id, INTEGER)?
+            } else {
+                Operand::Constant(INTEGER, Number::Integer(self.option_base))
+            };
+            let (upper, type_id) = self.expression(&bound.upper)?;
+            let upper = self.convert(upper, type_id, INTEGER)?;
+            operands.push(lower);
+            operands.push(upper);
+        }
+        operands.extend([
+            Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
+            Operand::Constant(
+                INTEGER,
+                Number::Integer(
+                    declaration.bounds.len() as i64
+                        | if element == STRING {
+                            0x8000
+                        } else if self.huge_arrays {
+                            0x0200
+                        } else {
+                            0x0100
+                        },
+                ),
+            ),
+            Operand::Value(descriptor),
+        ]);
+        let mut order = Vec::new();
+        for dimension in (0..declaration.bounds.len()).rev() {
+            order.extend([2 * dimension, 2 * dimension + 1]);
+        }
+        order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
+        self.emit_call("B$DDIM", Vec::new(), operands, order, false);
+        Ok(())
+    }
+
     fn declare_as(
         &mut self,
         declaration: &Declaration,
@@ -1630,49 +1689,15 @@ impl Compiler {
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
-            let pointer_type = self.pointer_type(descriptor_type);
-            let descriptor = self.value(pointer_type);
-            self.emit(
-                "address",
-                vec![descriptor],
-                vec![Operand::Place(descriptor_place)],
-            );
-            let mut operands = Vec::new();
-            for bound in &declaration.bounds {
-                let lower = if let Some(lower) = &bound.lower {
-                    let (lower, type_id) = self.expression(lower)?;
-                    self.convert(lower, type_id, INTEGER)?
-                } else {
-                    Operand::Constant(INTEGER, Number::Integer(self.option_base))
-                };
-                let (upper, type_id) = self.expression(&bound.upper)?;
-                let upper = self.convert(upper, type_id, INTEGER)?;
-                operands.push(lower);
-                operands.push(upper);
-            }
-            operands.extend([
-                Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
-                Operand::Constant(
-                    INTEGER,
-                    Number::Integer(
-                        declaration.bounds.len() as i64
-                            | if element == STRING {
-                                0x8000
-                            } else if self.huge_arrays {
-                                0x0200
-                            } else {
-                                0x0100
-                            },
-                    ),
+            self.pending_allocations.insert(
+                (self.position, key.clone()),
+                (
+                    declaration.clone(),
+                    descriptor_place,
+                    descriptor_type,
+                    element,
                 ),
-                Operand::Value(descriptor),
-            ]);
-            let mut order = Vec::new();
-            for dimension in (0..declaration.bounds.len()).rev() {
-                order.extend([2 * dimension, 2 * dimension + 1]);
-            }
-            order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
-            self.emit_call("B$DDIM", Vec::new(), operands, order, false);
+            );
             self.variables.insert(
                 key.clone(),
                 Variable {
@@ -2129,8 +2154,12 @@ impl Compiler {
                 self.begin_resumable_statement(line);
             }
             match statement {
-                Statement::Dim(_)
-                | Statement::Static(_)
+                Statement::Dim(items) => {
+                    for item in items {
+                        self.allocate(item)?;
+                    }
+                }
+                Statement::Static(_)
                 | Statement::Shared(_)
                 | Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
@@ -2951,18 +2980,29 @@ impl Compiler {
                             let xor = self.value(BYTE);
                             self.emit("load", vec![xor], vec![Operand::Place(xor_cell)]);
                             let flipped = self.value(BYTE);
-                            self.emit("xor", vec![flipped], vec![Operand::Value(read), Operand::Value(xor)]);
+                            self.emit(
+                                "xor",
+                                vec![flipped],
+                                vec![Operand::Value(read), Operand::Value(xor)],
+                            );
                             read = flipped;
                         }
                         let and = self.value(BYTE);
                         self.emit("load", vec![and], vec![Operand::Place(and_cell)]);
                         let masked = self.value(BYTE);
-                        self.emit("and", vec![masked], vec![Operand::Value(read), Operand::Value(and)]);
+                        self.emit(
+                            "and",
+                            vec![masked],
+                            vec![Operand::Value(read), Operand::Value(and)],
+                        );
                         let ready = self.value(BOOLEAN);
                         self.emit(
                             "ne",
                             vec![ready],
-                            vec![Operand::Value(masked), Operand::Constant(BYTE, Number::Integer(0))],
+                            vec![
+                                Operand::Value(masked),
+                                Operand::Constant(BYTE, Number::Integer(0)),
+                            ],
                         );
                         self.terminate("branch", vec![Operand::Value(ready)], vec![done, poll])?;
                         self.select_block(done);

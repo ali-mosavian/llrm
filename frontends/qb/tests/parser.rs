@@ -2322,7 +2322,24 @@ fn port_io_statements_reach_the_ports_and_bound_their_byte() {
     assert_eq!(hir.matches("\"op\":\"port_out\"").count(), 1, "{hir}");
     assert_eq!(hir.matches("\"op\":\"port_in\"").count(), 2, "{hir}");
     let module = parse("OUT 5, 298\r\n", Dialect::QuickBasic45).unwrap();
-    let error = compile(&module, "overflow", Dialect::QuickBasic45, "qb45")
-        .expect_err("298 is no byte");
+    let error =
+        compile(&module, "overflow", Dialect::QuickBasic45, "qb45").expect_err("298 is no byte");
     assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
+}
+
+#[test]
+fn a_dynamic_dim_allocates_where_it_runs() {
+    // qbdemo's `$DYNAMIC` DIMs ran at entry, ahead of SCREEN 13, which
+    // then had no memory: "Illegal function call". Bounds read at entry
+    // also saw n before its assignment.
+    let module = parse(
+        "'$DYNAMIC\r\nscreen 13\r\nn% = 5\r\ndim a%(n%)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "dynamic_dim", Dialect::QuickBasic45, "qb45").unwrap();
+    let screen = hir.find("\"callee\":\"B$CSCN\"").expect("SCREEN");
+    let store = hir.find("\"value\":5}").expect("n% = 5");
+    let dim = hir.find("\"callee\":\"B$DDIM\"").expect("DIM");
+    assert!(screen < dim && store < dim, "{hir}");
 }
