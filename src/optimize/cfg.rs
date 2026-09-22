@@ -1,19 +1,16 @@
 //! Exact MIR control-flow cleanup.
 //!
-//! Direct port of `qbopt/optimize/cfg.py:_empty` and `merged`.  This is not
-//! a general CFG simplifier: it combines only the forward, single-entry
-//! shape Python combines, retaining source ownership as inert MIR operations.
+//! Direct port of `qbopt/optimize/cfg.py`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::loops;
 use crate::analysis::ssa::{self, SubstitutionError};
-use crate::model::mir::{Kind, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi};
+use crate::model::mir::{Kind, MirBlock, MirBody, Op, OpCode, Phi};
+use crate::optimize::transform::_empty_operation;
 
-/// Whether `op` is an inert ownership marker.
-///
 /// Direct port of `qbopt/optimize/cfg.py:_empty`.
-fn empty(op: &Op) -> bool {
+fn _empty(op: &Op) -> bool {
     op.kind == Kind::Nothing
         && op.name.is_empty()
         && op.defines.is_empty()
@@ -25,45 +22,9 @@ fn empty(op: &Op) -> bool {
         && op.merges.is_empty()
         && !op.barrier()
         && op.floating.is_none()
-        && op.stack.is_none()
+        // Python tests `op.stack` for truth: a zero depth counts as empty.
+        && op.stack.unwrap_or(0) == 0
         && op.floating_origin.is_none()
-}
-
-/// Keep opaque source ownership, but no computation or memory effect.
-///
-/// This is the local exact equivalent of
-/// `qbopt/optimize/transform.py:_empty_operation`.  It is intentionally not
-/// `mir::cleared`: the two Python functions clear different fields.
-fn empty_operation(op: &Op) -> Op {
-    let mut result = op.clone();
-    result.op = Some(OpCode::nothing());
-    result.name.clear();
-    result.kind = Kind::Nothing;
-    result.defines.clear();
-    result.uses.clear();
-    result.array = None;
-    result.memory_values.clear();
-    result.floating = None;
-    result.floating_origin = None;
-    result.args.clear();
-    result.results.clear();
-    result.loads.clear();
-    result.stores.clear();
-    result.merges = OrderedMap::new();
-    result.source_backed = false;
-    result.raised = None;
-    result.target = None;
-    result.cases.clear();
-    result.symbol = Some(false);
-    result.args_known = true;
-    result.memory_complete = true;
-    result.reads_complete = true;
-    result.opaque_defs = Some(BTreeSet::new());
-    result.opaque_uses = Some(BTreeSet::new());
-    result.stack = None;
-    result.test = None;
-    result.indirect = false;
-    result
 }
 
 /// Merge forward single-entry chains, retaining every original byte owner.
@@ -118,7 +79,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                     || !block.phis.is_empty()
                     || !block.succ.is_empty()
                     || !predecessors[&block.at].is_empty()
-                    || block.ops.iter().any(|op| !empty(op))
+                    || block.ops.iter().any(|op| !_empty(op))
             }) {
                 continue;
             }
@@ -147,7 +108,7 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
                         continue;
                     }
                     let last = ops.pop().expect("last operation exists");
-                    let mut erased = empty_operation(&last);
+                    let mut erased = _empty_operation(&last);
                     erased.target = None;
                     erased.test = None;
                     ops.push(erased);
@@ -240,6 +201,11 @@ pub(crate) fn merged(body: &MirBody) -> Result<MirBody, SubstitutionError> {
 
 #[cfg(test)]
 mod tests {
+    //! Ports of `tests/test_cfg_merge.py`. Skipped (need frontend/wholeseg ports):
+    //! test_end_guards_have_no_return_edge_in_raised_control_flow,
+    //! test_udtrng_bounds_compare_explicit_values, test_udtrng_guards_constrain_subsequent_reads_of_slot,
+    //! test_only_established_terminal_contracts_remove_return_edges,
+    //! test_bools_constant_program_is_one_live_block, test_localp_keeps_termination_after_interleaved_procedure.
     use super::merged;
     use crate::model::ir::Operation;
     use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, Phi, Value};
@@ -299,7 +265,7 @@ mod tests {
     /// argument. Direct port of
     /// `tests/test_cfg_merge.py:test_single_entry_phi_is_replaced_and_jump_bytes_are_retained`.
     #[test]
-    fn single_entry_phi_is_replaced_and_jump_bytes_are_retained() {
+    fn test_single_entry_phi_is_replaced_and_jump_bytes_are_retained() {
         let result = merged(&chain()).unwrap();
         assert_eq!(result.blocks.len(), 1);
         let block = &result.blocks[0];
@@ -323,7 +289,7 @@ mod tests {
     /// evaluation. Direct port of
     /// `tests/test_cfg_merge.py:test_cloned_chain_without_source_bytes_merges`.
     #[test]
-    fn cloned_chain_without_source_bytes_merges() {
+    fn test_cloned_chain_without_source_bytes_merges() {
         let mut body = chain();
         for block in &mut body.blocks {
             for op in &mut block.ops {
@@ -345,7 +311,7 @@ mod tests {
     /// chain. Direct port of
     /// `tests/test_cfg_merge.py:test_transferred_byte_ownership_does_not_block_chain_merge`.
     #[test]
-    fn transferred_byte_ownership_does_not_block_chain_merge() {
+    fn test_transferred_byte_ownership_does_not_block_chain_merge() {
         let mut body = chain();
         let mut owner = Op::new(
             -1,
@@ -378,7 +344,7 @@ mod tests {
     /// intervening block must keep their original layout. Direct port of
     /// `tests/test_cfg_merge.py:test_merge_preserves_alternate_entries_and_layout`.
     #[test]
-    fn merge_preserves_alternate_entries_and_layout() {
+    fn test_merge_preserves_alternate_entries_and_layout() {
         let mut entry = chain();
         entry.entry = 10;
         assert_eq!(merged(&entry).unwrap(), entry);
@@ -405,7 +371,7 @@ mod tests {
     /// Direct port of
     /// `tests/test_cfg_merge.py:test_successor_phi_edge_is_renamed_to_the_surviving_block`.
     #[test]
-    fn successor_phi_edge_is_renamed_to_the_surviving_block() {
+    fn test_successor_phi_edge_is_renamed_to_the_surviving_block() {
         let mut body = chain();
         let value = body.blocks[0].ops[0].defines[0];
         let joined = Value::new(3, 20);
@@ -434,7 +400,7 @@ mod tests {
     /// Direct port of
     /// `tests/test_cfg_merge.py:test_unreachable_ownership_between_blocks_moves_without_losing_spans`.
     #[test]
-    fn unreachable_ownership_between_blocks_moves_without_losing_spans() {
+    fn test_unreachable_ownership_between_blocks_moves_without_losing_spans() {
         let mut body = chain();
         body.blocks[0].ops[1].absorbed = vec![2];
         let mut empty = Op::new(
@@ -465,5 +431,15 @@ mod tests {
                 (10, vec![4])
             ]
         );
+    }
+
+    /// Python `_empty` tests `op.stack` for truth, so `stack=0` is empty
+    /// (checked against Python); the draft's `is_none` refused it.
+    #[test]
+    fn test_empty_accepts_zero_stack_depth() {
+        let mut op = Op::new(5, OpCode::Operation(Operation::Nothing), "", Vec::new(), Vec::new());
+        op.kind = Kind::Nothing;
+        op.stack = Some(0);
+        assert!(super::_empty(&op));
     }
 }
