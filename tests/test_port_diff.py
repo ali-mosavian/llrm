@@ -144,3 +144,56 @@ def test_the_select_sweep_is_what_this_checkouts_select_emits() -> None:
     import select_sweep
 
     assert select_sweep.OUT.read_text() == select_sweep.rendered(select_sweep.sweep())
+
+
+def _succeeding(commands: list) -> object:
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    return run
+
+
+def test_a_refusal_left_by_an_earlier_run_is_not_this_runs_divergence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reused work dir kept Python's old refusal, so a run both sides passed was reported as refused."""
+    work = tmp_path / "work"
+    (work / "python").mkdir(parents=True)
+    (work / "python" / port_diff.REFUSAL).write_text("an earlier run's refusal\n")
+    monkeypatch.setattr(port_diff.subprocess, "run", _succeeding([]))
+    assert port_diff.run(tmp_path / "one.cgs", work, Path("llrm-c"), False).first is None
+
+
+BC = {
+    "s00-mir-omf.txt": "raised\n",
+    "s11-mir-r01-gvn.txt": "gvn\n",
+    "s100-lir-jumps.txt": "jumps\n",
+    "s101-asm-emitted.txt": "emitted\n",
+}
+
+
+def test_a_bc_dump_diverges_first_at_its_lower_numbered_stage(tmp_path: Path) -> None:
+    """s100 sorts before s11 by name; the BC-only emission is not compared until it is ported."""
+    python = _dump(tmp_path / "python", BC)
+    rust = _dump(
+        tmp_path / "rust", {"s00-mir-omf.txt": "raised\n", "s11-mir-r01-gvn.txt": "x\n", "s100-lir-jumps.txt": "y\n"}
+    )
+    matched, total, first = port_diff.compare(python, rust, bc=True)
+    assert (matched, total) == (1, 3)
+    assert first == port_diff.Divergence("s11-mir-r01-gvn.txt", 1, "gvn", "x")
+
+
+def test_bc_mode_dumps_both_sides_of_one_object(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The BC oracle is tools/stages.py --dump; the port is llrm-omf --dump, and a stale refusal is gone."""
+    (tmp_path / "rust").mkdir()
+    (tmp_path / "rust" / port_diff.REFUSAL).write_text("an earlier run's refusal\n")
+    commands: list = []
+    monkeypatch.setattr(port_diff.subprocess, "run", _succeeding(commands))
+    source = port_diff.ROOT / "fixtures/omf/hotlop-p-g2.obj"
+    assert port_diff.run_bc(source, tmp_path, Path("llrm-omf")).first is None
+    assert commands == [
+        [sys.executable, str(port_diff.ROOT / "tools/stages.py"), str(source), "--dump", str(tmp_path / "python")],
+        ["llrm-omf", str(source), "--dump", str(tmp_path / "rust")],
+    ]
+    assert not (tmp_path / "rust" / port_diff.REFUSAL).exists()
