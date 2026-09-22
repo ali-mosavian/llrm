@@ -87,7 +87,7 @@ fn library_routine(cg_op: &str) -> Option<&'static str> {
 }
 
 /// Borland's pseudo-function laying its constant arguments down as code.
-const EMITTED: [&str; 1] = ["__emit__"];
+pub(crate) const EMITTED: [&str; 1] = ["__emit__"];
 const EXTENDED: Format = Format::Extended80;
 
 fn formats(width: u32) -> Format {
@@ -145,7 +145,7 @@ fn signed(type_: &str) -> bool {
     matches!(type_, "TY_INT_1" | "TY_INT_2" | "TY_INT_4" | "TY_INT_8" | "TY_INTEGER")
 }
 
-fn far_pointers(type_: &str) -> bool {
+pub(crate) fn far_pointers(type_: &str) -> bool {
     matches!(type_, "TY_LONG_POINTER" | "TY_HUGE_POINTER")
 }
 

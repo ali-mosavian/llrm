@@ -22,7 +22,7 @@ use crate::analysis::alias;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::backend::{cpu, farcall, frame, lower, lower_int64};
+use crate::backend::{cpu, farcall, frame, lower, lower_int64, masm};
 use crate::model::passes::LIRTransform;
 use crate::flow;
 use crate::model::lir;
@@ -175,6 +175,103 @@ pub fn _lir_text(name: &str, body: &lir::LirBody) -> String {
         }));
     }
     out.join("\n") + "\n"
+}
+
+fn _externs(unit: &hir::Unit) -> Vec<(String, String)> {
+    unit.symbols
+        .values()
+        .filter(|one| one.imported() && one.code.is_none() && !raise_hir::EMITTED.contains(&one.name.as_str()))
+        .map(|one| {
+            let kind = if one.proc() {
+                if one.far() { "far" } else { "near" }
+            } else if unit.grouped(one) {
+                "byte"
+            } else {
+                "far-byte"
+            };
+            (one.object_name(), kind.to_owned())
+        })
+        .collect()
+}
+
+/// Each data segment's items.
+fn _data(unit: &hir::Unit, kept: Option<&BTreeSet<i64>>) -> Result<Vec<(String, Vec<masm::Datum>)>, hir::Unsupported> {
+    let mut out = vec![];
+    for segment in unit.segments.values() {
+        if segment.items.is_empty() || segment.attr & 0x1 != 0 {
+            continue; // EXEC: code has no data items
+        }
+        let mut items = vec![];
+        let spans = _data_labels(unit);
+        let dropped: BTreeSet<usize> = spans
+            .iter()
+            .filter(|(symbol, (segment_id, _, _))| {
+                kept.is_some_and(|kept| *segment_id == segment.id && !kept.contains(symbol))
+            })
+            .map(|(_, (_, start, _))| *start)
+            .collect();
+        let mut skip = false;
+        let label_name = |back: &str| {
+            let symbol = unit.backs[&hir::handle(back)];
+            if symbol != 0 { unit.symbols[&symbol].object_name() } else { format!("L_b{}", hir::handle(back)) }
+        };
+        for (at, (call, args)) in segment.items.iter().enumerate() {
+            if dropped.contains(&at) {
+                skip = true;
+            } else if call == "DGLabel" {
+                skip = false;
+            }
+            if skip {
+                continue;
+            }
+            let args: Vec<&str> = args.0.iter().map(String::as_str).collect();
+            let number = |text: &str| text.parse::<i64>().map_err(|_| hir::Unsupported(format!("not a number: {text}")));
+            items.push(match (call.as_str(), &args[..]) {
+                ("DGLabel", [back]) => masm::Datum::Label(masm::Label { name: label_name(back) }),
+                ("DGUBytes", [size]) => masm::Datum::Fill(masm::Fill {
+                    size: number(size)?,
+                    byte: if segment.name == "_BSS" { None } else { Some(0) },
+                }),
+                ("DGIBytes", [size, byte]) => {
+                    masm::Datum::Fill(masm::Fill { size: number(size)?, byte: Some(number(byte)? as u8) })
+                }
+                ("DGBytes", [_size, data]) => masm::Datum::Bytes(hex_bytes(data)),
+                ("DGInteger", [value, type_]) => {
+                    // The shim prints a negative item as its 32-bit two's complement.
+                    let width = raise_hir::widths(type_).unwrap_or(2) as usize;
+                    let value = number(value)?;
+                    masm::Datum::Bytes(value.to_le_bytes()[..width].to_vec())
+                }
+                ("DGFEPtr", [symbol, type_, offset]) => {
+                    let far = raise_hir::far_pointers(type_) || matches!(*type_, "TY_LONG_CODE_PTR" | "TY_CODE_PTR");
+                    masm::Datum::Pointer(masm::Pointer {
+                        name: unit.symbols[&hir::handle(symbol)].object_name(),
+                        offset: number(offset)?,
+                        far,
+                    })
+                }
+                ("DGBackPtr", [back, _segment, offset, type_]) => masm::Datum::Pointer(masm::Pointer {
+                    name: label_name(back),
+                    offset: number(offset)?,
+                    far: raise_hir::far_pointers(type_),
+                }),
+                ("DGAlign", [align]) => masm::Datum::Align(masm::Align { to: number(align)? }),
+                _ => return Err(hir::Unsupported(format!("data item {call} {}", args.join(" ")))),
+            });
+        }
+        out.push((segment.name.clone(), items));
+    }
+    Ok(out)
+}
+
+/// The float constants the raise placed, in DGROUP's constant segment.
+fn _literals(shared: &raise_hir::Shared) -> Vec<(String, Vec<masm::Datum>)> {
+    let mut lines = vec![];
+    for (packed, number) in &shared.literals {
+        lines.push(masm::Datum::Label(masm::Label { name: format!("L_f{number}") }));
+        lines.push(masm::Datum::Bytes(packed.clone()));
+    }
+    if lines.is_empty() { vec![] } else { vec![("CONST".to_owned(), lines)] }
 }
 
 /// Each named data object's `(segment, first item, after item)` span.
