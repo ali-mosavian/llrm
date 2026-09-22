@@ -1333,9 +1333,10 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
-                        if storage == "local" && !item.shared {
-                            // An explicit procedure DIM shadows an implicit
-                            // module variable of the same name. Gorillas'
+                        if storage != "module" && !item.shared {
+                            // An explicit procedure DIM shadows a module
+                            // variable of the same name, STATIC or not:
+                            // STATIC changes lifetime, not scope. Gorillas'
                             // module GOSUB creates INTEGER i, while
                             // DrawGorilla deliberately declares a local
                             // SINGLE i.
