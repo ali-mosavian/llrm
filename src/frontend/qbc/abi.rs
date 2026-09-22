@@ -169,7 +169,7 @@ fn _stack_argument_parts(argument: &Arg) -> Result<Vec<Arg>, AbiError> {
         .collect())
 }
 
-fn _contract(
+pub(crate) fn _contract(
     name: &str,
     cleanup: model::StackCleanup,
     pushed: i64,
