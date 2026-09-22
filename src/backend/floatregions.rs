@@ -1,11 +1,12 @@
 //! Port of `qbopt/backend/floatregions.py`: owned extended-precision storage
 //! between independently allocated x87 regions.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::support::hash::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops;
 use crate::backend::frame::{self as frames, Frame};
@@ -85,9 +86,9 @@ pub fn bridged(
     regions: &HashMap<(i64, i64), i64>,
     mut frame: Option<&mut Frame>,
 ) -> Result<LirBody, Raised> {
-    let mut definitions: IndexMap<u32, Vec<(i64, i64)>> = IndexMap::new();
-    let mut readers: IndexMap<u32, Vec<(i64, i64)>> = IndexMap::new();
-    let mut widths: HashMap<u32, BTreeSet<u32>> = HashMap::new();
+    let mut definitions: IndexMap<u32, Vec<(i64, i64)>> = IndexMap::default();
+    let mut readers: IndexMap<u32, Vec<(i64, i64)>> = IndexMap::default();
+    let mut widths: HashMap<u32, BTreeSet<u32>> = HashMap::default();
     let pinned: HashSet<u32> = body.pins.keys().copied().collect();
     let mut identifiers: HashSet<u32> = body.origin.keys().copied().collect();
     identifiers.extend(&pinned);
@@ -198,7 +199,7 @@ pub fn bridged(
         }
     }
     let crossing: BTreeSet<u32> = crossing.iter().map(|value| *value as u32).collect();
-    let mut cells: IndexMap<u32, Mem> = IndexMap::new();
+    let mut cells: IndexMap<u32, Mem> = IndexMap::default();
     for value in &crossing {
         cells.insert(*value, frame.cell(("floating-region", i64::from(*value)), 10)?);
     }
@@ -206,13 +207,13 @@ pub fn bridged(
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        let mut resident: IndexMap<u32, Held> = IndexMap::new();
+        let mut resident: IndexMap<u32, Held> = IndexMap::default();
         for one in &block.insns {
             if boundary(one) {
                 resident.clear();
             }
             let explicit: HashSet<u32> = match &one.what {
-                None => HashSet::new(),
+                None => HashSet::default(),
                 Some(what) => what
                     .sources
                     .iter()
@@ -242,7 +243,7 @@ pub fn bridged(
                 insns.push(Arc::clone(one));
                 continue;
             };
-            let mut renamed: IndexMap<u32, Held> = IndexMap::new();
+            let mut renamed: IndexMap<u32, Held> = IndexMap::default();
             for arg in &what.sources {
                 if let Loc::Held(arg) = arg {
                     if crossing.contains(&arg.value) && !renamed.contains_key(&arg.value) {
@@ -318,13 +319,13 @@ pub fn bridged(
         replaced.phis = block.phis.iter().filter(|phi| !floating.contains(&phi.result)).cloned().collect();
         blocks.push(replaced);
     }
-    let mut transfers: IndexMap<(i64, i64), Vec<(u32, u32)>> = IndexMap::new();
+    let mut transfers: IndexMap<(i64, i64), Vec<(u32, u32)>> = IndexMap::default();
     for (index, phi) in &phis {
         for (where_, value) in &phi.incoming {
             transfers.entry((*where_, body.blocks[*index].at)).or_default().push((phi.result, *value));
         }
     }
-    let mut selected: IndexMap<(i64, i64), Vec<Arc<Insn>>> = IndexMap::new();
+    let mut selected: IndexMap<(i64, i64), Vec<Arc<Insn>>> = IndexMap::default();
     for (edge, pairs) in &transfers {
         let (where_, _) = *edge;
         let at = at_of[&where_].insns.last().map_or(where_, |last| last.at);

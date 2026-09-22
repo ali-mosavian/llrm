@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::model::ir::nodes::Node;
 use crate::model::ir::{Held, Operation, Semantics};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::mir::{self, Arg, Kind, Op};
 use crate::support::pyrepr::{self, Repr};
@@ -215,6 +215,12 @@ impl LirBlock {
         }
     }
 
+    /// Python's `replace(block, insns=insns)`: the old insns are never copied.
+    #[must_use]
+    pub fn with_insns(&self, insns: Vec<Arc<Insn>>) -> Self {
+        Self { at: self.at, insns, succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+    }
+
     /// Python `LirBlock.arrives`.
     #[must_use]
     pub fn arrives(&self) -> Vec<u32> {
@@ -258,6 +264,22 @@ impl LirBody {
             loop_trip_counts: Vec::new(),
             ordered: false,
             noreturn: false,
+        }
+    }
+
+    /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
+    #[must_use]
+    pub fn with_blocks(&self, blocks: Vec<LirBlock>) -> Self {
+        Self {
+            name: self.name.clone(),
+            entry: self.entry,
+            blocks,
+            origin: self.origin.clone(),
+            pins: self.pins.clone(),
+            inputs: self.inputs.clone(),
+            loop_trip_counts: self.loop_trip_counts.clone(),
+            ordered: self.ordered,
+            noreturn: self.noreturn,
         }
     }
 

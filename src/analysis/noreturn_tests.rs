@@ -8,7 +8,7 @@
 use std::rc::Rc;
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::{after_terminal_calls, inferred};
 use crate::model::ir::Operation;
@@ -35,8 +35,8 @@ fn test_closed_local_terminal_scc_is_noreturn() {
 
     assert_eq!(
         inferred(
-            &IndexMap::from([(0x30, first), (0x40, second)]),
-            &IndexMap::from([(2, 0x40), (4, 0x30)]),
+            &IndexMap::from_iter([(0x30, first), (0x40, second)]),
+            &IndexMap::from_iter([(2, 0x40), (4, 0x30)]),
             &BTreeSet::new(),
         ),
         BTreeSet::from([0x30, 0x40])

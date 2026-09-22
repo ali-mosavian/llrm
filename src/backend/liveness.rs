@@ -8,7 +8,7 @@
 //! it again.
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _register_effects, Lanes};
 use crate::backend::target;
@@ -51,7 +51,7 @@ pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
             // for instructions that fall through. It writes nothing.
             let what = one.what.as_ref().expect("a terminator has semantics");
             if what.op == Operation::Branch {
-                live = live.union(&_branch_reads(what)).copied().collect();
+                live = live.or(&_branch_reads(what));
             }
             continue;
         }
@@ -64,7 +64,7 @@ pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
             live = universe.clone();
             continue;
         };
-        live = live.difference(&writes).copied().collect::<Lanes>().union(&reads).copied().collect();
+        live = live.minus(&writes).or(&reads);
     }
     live
 }
@@ -87,7 +87,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
         for register in _RETURN_STATE {
             reads.extend(_lanes(register));
         }
-        let writes = _universe().difference(&reads).copied().collect();
+        let writes = _universe().minus(&reads);
         return Some((reads, writes));
     }
     if one.clobbers.is_empty() || one.symbol == Some(true) {
@@ -126,7 +126,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
 /// Per block, the lanes live on entry -- with its successors and the universe.
 pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
     let universe = _universe();
-    let at_of: std::collections::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
+    let at_of: crate::support::hash::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     let successors: IndexMap<i64, Vec<i64>> = body
         .blocks
         .iter()
@@ -163,7 +163,7 @@ pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
             } else {
                 successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
             };
-            (*at, universe.difference(&live).copied().collect())
+            (*at, universe.minus(&live))
         })
         .collect()
 }
@@ -173,7 +173,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::live_into;
     use crate::backend::peephole::_lanes;
@@ -205,7 +205,7 @@ mod tests {
                 _insn(2, Operation::Return, "ret", vec![], vec![]),
             ],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
@@ -232,7 +232,7 @@ mod tests {
             1,
             vec![_insn(1, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)]), Arc::new(ret)],
         );
-        let body = LirBody::new("f", 1, vec![block], IndexMap::new(), IndexMap::new());
+        let body = LirBody::new("f", 1, vec![block], IndexMap::default(), IndexMap::default());
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
         assert!(_lanes(Register::SI).is_disjoint(&into[&1]));

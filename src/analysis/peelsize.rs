@@ -5,9 +5,10 @@
 //! operands are all constant once the iteration is fixed folds away in every
 //! copy; the rest is copied once per iteration.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use crate::support::hash::HashMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::analysis::consts::Known;
@@ -103,7 +104,7 @@ fn _pure(op: &Op) -> bool {
 /// answer. A constant newly reaching it -- after its outer loop is peeled --
 /// makes it a different one.
 pub(crate) fn signature(body: &MirBody, loop_: &Loop, count: &BigInt, facts: &IndexMap<Value, Known>) -> Signature {
-    let mut names = HashMap::<u32, usize>::new();
+    let mut names = HashMap::<u32, usize>::default();
 
     let mut value = |one: &Value| -> (usize, Option<(BigInt, u32)>) {
         let next = names.len();

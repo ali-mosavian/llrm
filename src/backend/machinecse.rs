@@ -7,7 +7,7 @@
 //! retain an anchor for the virtual/data-source ownership of a redundant
 //! occurrence.
 
-use std::collections::{HashMap, HashSet};
+use crate::support::hash::{HashMap, HashSet};
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -190,7 +190,7 @@ pub type State = HashMap<Lane, Token>;
 /// Physical values leaving one block and redundant occurrences within it.
 fn _transfer(block: &LirBlock, incoming: &State) -> Result<(State, HashSet<usize>), String> {
     let mut state = incoming.clone();
-    let mut redundant: HashSet<usize> = HashSet::new();
+    let mut redundant: HashSet<usize> = HashSet::default();
     for one in &block.insns {
         let candidate = _candidate(one)?;
         if let Some((expression, reads, writes)) = candidate {
@@ -222,7 +222,7 @@ fn _transfer(block: &LirBlock, incoming: &State) -> Result<(State, HashSet<usize
 /// The physical lane values every incoming edge agrees on.
 fn _merged(states: &[&State]) -> State {
     let Some(first) = states.first() else {
-        return State::new();
+        return State::default();
     };
     let mut common = (*first).clone();
     for state in &states[1..] {
@@ -247,7 +247,7 @@ fn _lanes_used(body: &LirBody) -> Result<Lanes, String> {
 /// Value-number deterministic register computations across the CFG.
 pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     let mut predecessors: HashMap<i64, HashSet<i64>> =
-        body.blocks.iter().map(|block| (block.at, HashSet::new())).collect();
+        body.blocks.iter().map(|block| (block.at, HashSet::default())).collect();
     for block in &body.blocks {
         for successor in &block.succ {
             if let Some(found) = predecessors.get_mut(successor) {
@@ -256,9 +256,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         }
     }
     let entry: State = _lanes_used(body)?.into_iter().map(|lane| (lane, Token::Entry(lane))).collect();
-    let empty = State::new();
-    let mut outgoing: HashMap<i64, State> = HashMap::new();
-    let mut redundant: HashMap<i64, HashSet<usize>> = HashMap::new();
+    let empty = State::default();
+    let mut outgoing: HashMap<i64, State> = HashMap::default();
+    let mut redundant: HashMap<i64, HashSet<usize>> = HashMap::default();
     // Acyclic facts normally settle in layout order in one pass. Reversed
     // blocks and conservative loop joins may need more; refusal to converge
     // keeps the body unchanged rather than trusting a partial physical state.
@@ -294,18 +294,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         .blocks
         .iter()
         .map(|block| match redundant.get(&block.at) {
-            Some(gone) if !gone.is_empty() => LirBlock {
-                insns: block
+            Some(gone) if !gone.is_empty() => block.with_insns(block
                     .insns
                     .iter()
                     .map(|one| if gone.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect(),
-                ..block.clone()
-            },
+                    .collect()),
             _ => block.clone(),
         })
         .collect();
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 #[cfg(test)]
@@ -313,7 +310,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::eliminated;
     use crate::model::ir::{Addr, Address, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -344,7 +341,7 @@ mod tests {
     }
 
     fn _body(insns: Vec<Arc<Insn>>) -> LirBody {
-        LirBody::new("machine-cse", 0, vec![LirBlock::new(0, insns)], IndexMap::new(), IndexMap::new())
+        LirBody::new("machine-cse", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
     }
 
     fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
@@ -409,8 +406,8 @@ mod tests {
             "machine-cse",
             0,
             vec![block(0, vec![first], vec![5]), block(5, vec![Arc::clone(&repeated)], vec![])],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let result = eliminated(&body).unwrap();
@@ -431,8 +428,8 @@ mod tests {
                 block(2, vec![second], vec![5]),
                 block(5, vec![repeated], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let result = eliminated(&body).unwrap();
@@ -452,8 +449,8 @@ mod tests {
                 block(2, vec![overwrite(2, (2, 4), 2)], vec![5]),
                 block(5, vec![Arc::clone(&repeated)], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let result = eliminated(&body).unwrap();
@@ -476,8 +473,8 @@ mod tests {
             "machine-cse",
             0,
             vec![block(0, vec![first], vec![3]), block(3, vec![call], vec![5]), block(5, vec![Arc::clone(&repeated)], vec![])],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let result = eliminated(&body).unwrap();

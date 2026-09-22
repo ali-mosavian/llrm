@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::abi::{_contract, physicalize};
 use super::compile::{self as qb_compile, Stage, StageObserver, StageValue};
@@ -79,7 +79,7 @@ fn machine(
     contracts: &IndexMap<i64, Contract>,
     pointer_model: Option<pointers::Model>,
 ) -> lir::LirBody {
-    let occurrences = IndexMap::new();
+    let occurrences = IndexMap::default();
     lower_mir::lowered(
         name,
         body,
@@ -842,7 +842,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
     assert!(last.body.insns().iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)));
     let assembly = masm::text(&masm::Module {
         code: "TRIG_TEXT".into(),
-        names: IndexMap::new(),
+        names: IndexMap::default(),
         externs: vec![],
         publics: vec!["wave".into()],
         data: vec![],
@@ -875,8 +875,8 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
         "callee",
         1,
         vec![lir::LirBlock::new(1, vec![Arc::new(returned)])],
-        IndexMap::new(),
-        IndexMap::new(),
+        IndexMap::default(),
+        IndexMap::default(),
     );
     let last = finalized(&body, 6).expect("finalizes");
     let returned = last.body.insns()[0].what.clone().expect("a return");

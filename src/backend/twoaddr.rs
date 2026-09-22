@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::intervals as ranges;
 use crate::backend::{allocate, coalesce, spiller};
@@ -53,7 +53,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut alive = leaving[&block.at].clone();
-        let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::new();
+        let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
         for one in block.insns.iter().rev() {
             live_after.insert(ranges::key(one), alive.clone());
             for value in &one.defines {
@@ -75,14 +75,14 @@ pub fn tied(body: &LirBody) -> LirBody {
             insns.extend(fix);
             changed = true;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    if changed { LirBody { blocks, ..body.clone() } } else { body.clone() }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
 /// Which values each value is copied to or from.
 fn _copy_destinations(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::new();
+    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             let Some(what) = &one.what else {
@@ -148,7 +148,7 @@ fn _commuted(
     if !(into.width == first.width && first.width == second.width) || into.value == first.value {
         return None;
     }
-    let no_copies = IndexMap::new();
+    let no_copies = IndexMap::default();
     let copies = copies.unwrap_or(&no_copies);
     let empty = BTreeSet::new();
     let affinities = copies.get(&into.value).unwrap_or(&empty);
@@ -288,7 +288,7 @@ mod tests {
 
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{_commuted, _untied};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};

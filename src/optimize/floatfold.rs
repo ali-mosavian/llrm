@@ -7,7 +7,7 @@
 use std::rc::Rc;
 use std::collections::BTreeMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::consts::Known;
 use crate::analysis::floatfacts::{self, Finite};
@@ -161,10 +161,7 @@ pub fn checks(body: &MirBody) -> MirBody {
         block.ops = ops;
         blocks.push(block);
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }
 
 /// Write exact storage bits and retain checks for the now-unused computation.
@@ -230,10 +227,7 @@ pub fn stored(body: &Rc<MirBody>, facts: &IndexMap<Value, Finite>) -> Rc<MirBody
         blocks.push(block);
     }
     Rc::new(_dead_values(
-        MirBody {
-            blocks,
-            ..MirBody::clone(body)
-        },
+        body.with_blocks(blocks),
         facts,
     ))
 }
@@ -336,10 +330,7 @@ pub fn discarded(body: &Rc<MirBody>, converted: &IndexMap<Value, Known>) -> Rc<M
         block.ops = ops;
         blocks.push(block);
     }
-    Rc::new(MirBody {
-        blocks,
-        ..MirBody::clone(body)
-    })
+    Rc::new(body.with_blocks(blocks))
 }
 
 #[cfg(test)]

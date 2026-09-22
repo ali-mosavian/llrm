@@ -98,7 +98,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::combined;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -174,7 +174,7 @@ mod tests {
             } else {
                 vec![LirBlock::new(0, vec![low, marker, high])]
             };
-            let body = LirBody::new("stores", 0, blocks, IndexMap::new(), IndexMap::new());
+            let body = LirBody::new("stores", 0, blocks, IndexMap::default(), IndexMap::default());
             let result = combined(&body);
             if guard.is_some() {
                 assert_eq!(result, body, "{guard:?}");

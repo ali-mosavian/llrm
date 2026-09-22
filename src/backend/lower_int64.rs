@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
@@ -225,9 +225,9 @@ impl<'a> _Legalizer<'a> {
             contracts: contracts.clone(),
             origins: hints.origins.clone(),
             pins: hints.pins.clone(),
-            inline: IndexMap::new(),
+            inline: IndexMap::default(),
             next_value: values.iter().map(|one| one.id).max().unwrap_or(0) + 1,
-            pairs: IndexMap::new(),
+            pairs: IndexMap::default(),
         };
         for value in wide.iter() {
             let pair = (legalizer.fresh(value.at, false), legalizer.fresh(value.at, false));
@@ -547,7 +547,7 @@ impl<'a> _Legalizer<'a> {
             .any(|arg| matches!(arg, Arg::Held(one) if one.width == 8) || matches!(arg, Arg::Const(one) if one.width == 8));
         if !wide {
             // A whole value observed through a narrower Held view reads its low dword once split.
-            let mut narrowed: IndexMap<Value, Value> = IndexMap::new();
+            let mut narrowed: IndexMap<Value, Value> = IndexMap::default();
             let mut view = |arg: &Arg| match arg {
                 Arg::Held(one) if self.pairs.contains_key(&one.value) => {
                     let (low, _high) = self.pairs[&one.value];
@@ -731,8 +731,8 @@ pub fn expanded(
     contracts: Option<&IndexMap<i64, runtime::Contract>>,
     hints: Option<&AllocationHints>,
 ) -> R<Legalized> {
-    let empty_calls = IndexMap::new();
-    let empty_contracts = IndexMap::new();
+    let empty_calls = IndexMap::default();
+    let empty_contracts = IndexMap::default();
     let calls = calls.unwrap_or(&empty_calls);
     let contracts = contracts.unwrap_or(&empty_contracts);
     let hints = hints.cloned().unwrap_or_default();
@@ -745,7 +745,7 @@ pub fn expanded(
             calls: calls.clone(),
             contracts: contracts.clone(),
             hints,
-            inline: IndexMap::new(),
+            inline: IndexMap::default(),
         });
     }
     _Legalizer::new(body, calls, contracts, &hints).run()

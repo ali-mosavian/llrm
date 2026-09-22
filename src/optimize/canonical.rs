@@ -9,14 +9,14 @@
 use std::rc::Rc;
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::ssa;
 use crate::model::ir::Operation;
 use crate::model::mir::{self, Arg, Held, Kind, MirBody, Op, OpCode, Value};
 
 pub(crate) fn compares(body: Rc<MirBody>) -> Rc<MirBody> {
-    let mut readers = IndexMap::<Value, Vec<&Op>>::new();
+    let mut readers = IndexMap::<Value, Vec<&Op>>::default();
     for block in &body.blocks {
         for op in &block.ops {
             for value in &op.uses {

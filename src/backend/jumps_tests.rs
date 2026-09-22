@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use std::cell::RefCell;
@@ -64,7 +64,7 @@ fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
 }
 
 fn body(name: &str, entry: i64, blocks: Vec<LirBlock>) -> LirBody {
-    LirBody::new(name, entry, blocks, IndexMap::new(), IndexMap::new())
+    LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
 }
 
 fn listed(body: LirBody, name: &str) -> Vec<String> {
@@ -74,9 +74,9 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         far: false,
         body,
         reserve: 0,
-        callees: IndexMap::new(),
+        callees: IndexMap::default(),
     };
-    masm::_procedure(&procedure, &IndexMap::new(), 0)
+    masm::_procedure(&procedure, &IndexMap::default(), 0)
         .unwrap()
         .iter()
         .map(|line| line.trim().to_owned())
@@ -174,7 +174,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::new(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::new()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()
@@ -377,7 +377,7 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::new(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::new()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()

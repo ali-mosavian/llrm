@@ -4,14 +4,14 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn};
 
 /// Select private `mov offset,[p]; mov selector,[p+2]` pairs as `les`.
 pub fn selected(insns: &[Arc<Insn>], selectors: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
-    let mut made: IndexMap<usize, Arc<Insn>> = IndexMap::new();
+    let mut made: IndexMap<usize, Arc<Insn>> = IndexMap::default();
     let mut erased: BTreeSet<usize> = BTreeSet::new();
     for (at, first) in insns[..insns.len().saturating_sub(1)].iter().enumerate() {
         if erased.contains(&at) {

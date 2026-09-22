@@ -6,11 +6,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use std::collections::HashMap;
+use crate::support::hash::HashMap;
 use std::sync::Arc;
 
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, Register};
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::backend::frame::Frame;
@@ -48,7 +48,7 @@ fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
 }
 
 fn body(name: &str, entry: i64, blocks: Vec<LirBlock>) -> LirBody {
-    LirBody::new(name, entry, blocks, IndexMap::new(), IndexMap::new())
+    LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default())
 }
 
 fn mem(addr: Option<Addr>, width: u32, through: Register, offset: i64, disp_width: u32) -> Mem {
@@ -368,7 +368,7 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
                 let mask = (1u64 << (width * 8)) - 1;
                 let execute = |operations: &[Arc<Insn>]| {
                     let mut values: HashMap<Reg, u64> =
-                        HashMap::from([(accumulator, seed & mask), (temporary, 42), (term, addend & mask)]);
+                        HashMap::from_iter([(accumulator, seed & mask), (temporary, 42), (term, addend & mask)]);
                     for one in operations {
                         let what = one.what.as_ref().unwrap();
                         let operands: Vec<u64> = what
@@ -2664,7 +2664,7 @@ fn test_peephole_sees_slots_added_after_it_was_built() {
     let shared = Rc::new(RefCell::new(Frame::new(-16)));
     let phase = Peephole::new(Some(Rc::clone(&shared)), "386").unwrap();
     shared.borrow_mut().cell(1i64, 2).unwrap();
-    let calls = IndexMap::from([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
+    let calls = IndexMap::from_iter([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
     let reserved = prologue::reserved(&procedure(), &shared.borrow(), Some(&calls)).unwrap();
     let result = phase._frame(reserved);
     assert_eq!(result.insns().iter().filter(|one| one.frame_adjust).count(), 0);
@@ -2693,7 +2693,7 @@ fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
             let one = Arc::new(insn(4, Some((4, 4)), what, vec![], vec![]));
             input.blocks[0].insns.push(one);
         }
-        let calls = IndexMap::from([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
+        let calls = IndexMap::from_iter([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
         let reserved = prologue::reserved(&input, &slots, Some(&calls)).unwrap();
         let result = Peephole::new(Some(Rc::new(RefCell::new(slots))), "386").unwrap()._frame(reserved);
         assert_eq!(

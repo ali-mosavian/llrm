@@ -9,7 +9,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -92,7 +92,7 @@ pub(crate) fn optimized(
 
 pub(crate) fn specialized(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
     let closed = lcssa::closed(body)?;
-    let mut owners: IndexMap<Value, i64> = IndexMap::new();
+    let mut owners: IndexMap<Value, i64> = IndexMap::default();
     for block in &closed.blocks {
         let values = block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()));
         for value in values {
@@ -268,7 +268,7 @@ pub(crate) fn _specialized(
         }
         changed.push(block);
     }
-    let mut result = MirBody { blocks: changed, ..copied.clone() };
+    let mut result = copied.with_blocks(changed);
     for header in [loop_.header, cloned_header] {
         let label = edges::fresh(&result);
         result = edges::split(&result, entry, header, label, Vec::new())?;

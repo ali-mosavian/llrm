@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::model::ir::Operation;
@@ -77,7 +77,7 @@ fn _caller(use_clobber: bool) -> (MirBody, Value) {
 }
 
 fn leaf_available(leaf: MirBody, parameters: Vec<MemRef>) -> IndexMap<String, Candidate> {
-    IndexMap::from([("leaf".to_owned(), Candidate { body: Rc::new(leaf), parameters })])
+    IndexMap::from_iter([("leaf".to_owned(), Candidate { body: Rc::new(leaf), parameters })])
 }
 
 #[test]
@@ -85,8 +85,8 @@ fn test_inline_splices_return_before_the_original_successor_phi() {
     let (body, result) = _caller(false);
     let made = expanded(
         &Rc::new(MirBody::clone(&body)),
-        &IndexMap::from([(2, "leaf".to_owned())]),
-        &IndexMap::from([(2, BTreeSet::new())]),
+        &IndexMap::from_iter([(2, "leaf".to_owned())]),
+        &IndexMap::from_iter([(2, BTreeSet::new())]),
         &leaf_available(_leaf(), vec![]),
         None,
     )
@@ -106,8 +106,8 @@ fn test_inline_refuses_a_live_unmodelled_call_result() {
     assert_eq!(
         expanded(
             &Rc::new(MirBody::clone(&body)),
-            &IndexMap::from([(2, "leaf".to_owned())]),
-            &IndexMap::from([(2, BTreeSet::new())]),
+            &IndexMap::from_iter([(2, "leaf".to_owned())]),
+            &IndexMap::from_iter([(2, BTreeSet::new())]),
             &leaf_available(_leaf(), vec![]),
             None,
         )
@@ -142,8 +142,8 @@ fn test_inline_materializes_an_actual_whose_id_is_a_callee_substitution_key() {
 
     let made = expanded(
         &Rc::new(MirBody::clone(&caller)),
-        &IndexMap::from([(3, "leaf".to_owned())]),
-        &IndexMap::from([(3, BTreeSet::from([2]))]),
+        &IndexMap::from_iter([(3, "leaf".to_owned())]),
+        &IndexMap::from_iter([(3, BTreeSet::from([2]))]),
         &leaf_available(leaf, vec![parameter]),
         None,
     )
@@ -175,13 +175,13 @@ fn test_inline_policy_refuses_repeated_work_without_a_call_cost() {
     let leaf_set = BTreeSet::from(["leaf".to_owned()]);
     assert_eq!(
         candidates(
-            &IndexMap::from([("leaf".to_owned(), Rc::new(leaf))]),
-            &IndexMap::from([("leaf".to_owned(), vec![])]),
-            &Counter::from([("leaf".to_owned(), 2)]),
+            &IndexMap::from_iter([("leaf".to_owned(), Rc::new(leaf))]),
+            &IndexMap::from_iter([("leaf".to_owned(), vec![])]),
+            &Counter::from_iter([("leaf".to_owned(), 2)]),
             &leaf_set,
             &leaf_set,
             0,
         ),
-        IndexMap::new()
+        IndexMap::default()
     );
 }

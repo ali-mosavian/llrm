@@ -9,7 +9,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 use num_traits::Signed;
 
@@ -252,7 +252,7 @@ pub(crate) fn rewound(body: &Rc<MirBody>, registers: i64, costs: Option<&Operati
             }
             let mut counts = body.loop_trip_counts.iter().copied().collect::<BTreeMap<_, _>>();
             counts.insert(inner.header, i64::try_from(&count).expect("trip count fits the MIR table"));
-            return Rc::new(MirBody { blocks: changed, loop_trip_counts: counts.into_iter().collect(), ..MirBody::clone(body) });
+            return Rc::new(MirBody { loop_trip_counts: counts.into_iter().collect(), ..body.with_blocks(changed) });
         }
     }
     body.clone()
@@ -313,7 +313,7 @@ pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitution
             {
                 continue;
             }
-            let mut closed = IndexMap::<Value, &Phi>::new();
+            let mut closed = IndexMap::<Value, &Phi>::default();
             for other in &exit_block.phis {
                 if other.incoming.len() == 1 {
                     for (predecessor, value) in other.incoming.iter() {
@@ -466,7 +466,7 @@ pub(crate) fn simplified(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitution
                     if block.at == preheader {
                         _before_leaving(&mut ops, vec![seed.clone()]);
                     }
-                    out.push(MirBlock { ops, ..block.clone() });
+                    out.push(block.with_ops(ops));
                 }
                 return Ok(Rc::new(MirBody { blocks: out, ..changed }));
             }
@@ -480,7 +480,7 @@ fn _recurrences(
     body: &MirBody,
     facts: &IndexMap<Value, Known>,
 ) -> IndexMap<u32, (Affine, u32, Option<BigInt>, Option<BigInt>)> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         for affine in induction::basics(body, &loop_).values() {
             let width = affine.start.width();
@@ -909,7 +909,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 };
                 rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
             }
-            let changed = MirBody { blocks: rewritten, ..MirBody::clone(body) };
+            let changed = body.with_blocks(rewritten);
             let rotated = rotate::at_body(
                 &changed,
                 &loop_,
@@ -1086,7 +1086,7 @@ pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<Mir
             {
                 continue;
             }
-            let mut closed = IndexMap::<Value, &Phi>::new();
+            let mut closed = IndexMap::<Value, &Phi>::default();
             for other in &exit_block.phis {
                 if other.incoming.len() == 1 {
                     for (predecessor, value) in other.incoming.iter() {
@@ -1408,7 +1408,7 @@ fn _offsets(
                         unreachable!("added checked the result");
                     };
                     let result = result.value;
-                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::new(), invariant.width)
+                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::default(), invariant.width)
                         .expect("a constant is known");
                     let forms = readers
                         .get(&result)
@@ -1459,7 +1459,7 @@ fn _offsets(
                 && constants[0].width == held[0].width
                 && held[0].width == result_width(op)
             {
-                scale = induction::_signed(&Arg::Const(constants[0].clone()), &IndexMap::new(), constants[0].width);
+                scale = induction::_signed(&Arg::Const(constants[0].clone()), &IndexMap::default(), constants[0].width);
             }
         }
         if form.is_none() {

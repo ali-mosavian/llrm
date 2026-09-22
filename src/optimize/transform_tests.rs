@@ -68,7 +68,7 @@ mod preheader_tests {
 mod subexpressions_tests {
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use crate::model::ir::Operation;
     use crate::model::mir::{Arg, Const, FrameAddress, Held, Kind, MirBlock, MirBody, Op, OpCode, Value};
@@ -143,7 +143,7 @@ mod subexpressions_tests {
     #[test]
     fn test_cse_refuses_an_operand_that_is_only_half_its_value() {
         let low = Held { value: versioned(1, 0, 1), width: 2 };
-        let whole = |width: u32| IndexMap::from([(1u32, width)]);
+        let whole = |width: u32| IndexMap::from_iter([(1u32, width)]);
         assert!(_full(&low, &whole(2)));
         assert!(!_full(&low, &whole(4)), "half of a long passed as the whole of it");
 
@@ -154,20 +154,20 @@ mod subexpressions_tests {
             results: vec![Arg::Held(Held { value: defined, width: 2 })],
             ..Op::new(0, None, "not", vec![defined], vec![])
         };
-        assert!(_computation(&fake, &IndexMap::new(), &whole(4)).is_none());
-        assert!(_computation(&fake, &IndexMap::new(), &whole(2)).is_some());
+        assert!(_computation(&fake, &IndexMap::default(), &whole(4)).is_none());
+        assert!(_computation(&fake, &IndexMap::default(), &whole(2)).is_some());
     }
 }
 // Skipped: test_a_served_read_names_the_value_and_not_a_register (corpus fixture).
 mod b_tests {
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use crate::model::ir::Operation;
     use crate::model::mir::{Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};
     use crate::objectfile::module::{Addr, Space};
-    use crate::optimize::transform::{forwarded, without_dead_stores};
+    use crate::optimize::transform::{forwarded, placed, without_dead_stores};
 
     fn cell(disp: i64, width: u32) -> MemRef {
         MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, disp) }), width)
@@ -215,7 +215,7 @@ mod b_tests {
         let mut used = op(9, Operation::Push, "push", vec![], vec![loaded], Kind::Arg);
         used.args = vec![Arg::Held(Held { value: loaded, width: 2 })];
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![first, written, read, overwrite, used], vec![])]);
-        let done = without_dead_stores(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::new(), None, None, true).unwrap();
+        let done = without_dead_stores(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::default(), None, None, true).unwrap();
         let ops = &done.blocks[0].ops;
         assert!(ops.iter().any(|op| op.defines.contains(&loaded)));
         assert_eq!(ops.iter().filter(|op| !op.stores.is_empty()).count(), 1);
@@ -232,17 +232,26 @@ mod b_tests {
         let read = load(2, loaded, &target);
         let neighbor = load(2, unrelated, &other);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![first, written, read, neighbor.clone()], vec![])]);
-        let done = forwarded(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::new(), false).unwrap();
+        let done = forwarded(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::from([5]), &IndexMap::default(), false).unwrap();
         let done = &done.blocks[0].ops;
         assert_eq!(done[2].args, vec![Arg::Held(Held { value: source, width: 4 })]);
         assert!(done[2].loads.is_empty());
         assert_eq!(done[3], neighbor);
     }
+
+    /// placed copied a body it left alone, so the proof caches keyed on it missed.
+    #[test]
+    fn test_placed_returns_an_unchanged_body_as_itself() {
+        let source = Value::new(1, 0);
+        let body = std::rc::Rc::new(MirBody::new(0, vec![MirBlock::new(0, vec![], vec![copy(0, source, 7, 2)], vec![])]));
+        let done = placed(&body, &BTreeSet::from([5]), &IndexMap::default()).unwrap();
+        assert!(std::rc::Rc::ptr_eq(&done, &body));
+    }
 }
 mod hoist_tests {
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use crate::model::ir::{Operation, Semantics};
     use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
@@ -264,7 +273,7 @@ mod hoist_tests {
             &BTreeSet::new(),
             stores,
             &BTreeSet::new(),
-            &IndexMap::new(),
+            &IndexMap::default(),
             phis,
             None,
             starts,
@@ -481,7 +490,7 @@ mod d_tests {
     }
 }
 mod folded_tests {
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use crate::analysis::consts::Known;
     use crate::model::ir::Operation;
@@ -509,7 +518,7 @@ mod folded_tests {
                 Arg::Held(Held { value: quotient, width: 4 }),
                 Arg::Held(Held { value: remainder, width: 4 }),
             ];
-            let done = _constant_operands(&op, &IndexMap::from([(divisor, Known::new(number, 4))]), None, None);
+            let done = _constant_operands(&op, &IndexMap::from_iter([(divisor, Known::new(number, 4))]), None, None);
             assert_eq!(
                 done.args,
                 vec![Arg::Held(Held { value: dividend, width: 4 }), Arg::Const(Const::new(number, 4))]
@@ -517,7 +526,7 @@ mod folded_tests {
             assert_eq!(done.uses, vec![dividend]);
             assert_eq!(crate::optimize::transform::_cannot_fault(&done), safe);
             assert_eq!(
-                _constant_operands(&op, &IndexMap::from([(divisor, Known::new(number, 2))]), None, None),
+                _constant_operands(&op, &IndexMap::from_iter([(divisor, Known::new(number, 2))]), None, None),
                 op
             );
         }
@@ -526,7 +535,7 @@ mod folded_tests {
 mod pipeline_tests {
     use std::collections::BTreeSet;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
     use num_bigint::BigInt;
 
     use crate::model::ir::Operation;
@@ -551,7 +560,7 @@ mod pipeline_tests {
         let result = applied(
             &std::rc::Rc::new(MirBody::clone(&body)),
             &BTreeSet::new(),
-            &IndexMap::new(),
+            &IndexMap::default(),
             Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },
         )
         .unwrap();
@@ -571,7 +580,7 @@ mod pipeline_tests {
         let result = applied(
             &std::rc::Rc::new(MirBody::clone(&body)),
             &BTreeSet::new(),
-            &IndexMap::new(),
+            &IndexMap::default(),
             Applied { only: Some("no-such-pass".to_owned()), ..Default::default() },
         )
         .unwrap();

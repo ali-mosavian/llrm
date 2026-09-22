@@ -6,9 +6,10 @@
 
 use std::rc::Rc;
 use std::cmp::max;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::HashSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use num_bigint::BigInt;
 
@@ -1210,7 +1211,7 @@ pub(crate) fn counted(body: &Rc<MirBody>, loop_: &Loop, facts: Option<&IndexMap<
 pub(crate) fn advances(body: &Rc<MirBody>, loop_: &Loop) -> IndexMap<Value, BigInt> {
     let found = basics(body, loop_);
     let header = body.blocks.iter().find(|block| block.at == loop_.header).expect("the loop's header is a block");
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for phi in &header.phis {
         if let Some(Affine { step: AffineOperand::Const(step), .. }) = found.get(&phi.result.id) {
             out.insert(phi.result, _as_signed(&step.n, step.width));

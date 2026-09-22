@@ -7,11 +7,12 @@
 //! `placed` orders the blocks; `threaded` keeps that order and drops the jumps
 //! and the blocks nothing reaches.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::intervals;
@@ -91,14 +92,14 @@ pub fn placed(body: &LirBody) -> Result<LirBody, String> {
     let tests = _tests(&natural, body.entry, &by_at);
     // loops() is innermost first.  A block in nested loops follows the nearest
     // loop's trace before an exit from it; the outer trace resumes afterwards.
-    let mut inside: IndexMap<i64, BTreeSet<i64>> = IndexMap::new();
+    let mut inside: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for found in &natural {
         for at in &found.body {
             inside.entry(*at).or_insert_with(|| found.body.clone());
         }
     }
     let mut order: Vec<LirBlock> = Vec::new();
-    let mut done: HashSet<i64> = HashSet::new();
+    let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
     let mut source: Option<i64> = None;
     let empty = BTreeSet::new();
@@ -127,7 +128,7 @@ pub fn placed(body: &LirBody) -> Result<LirBody, String> {
         done.insert(at);
         (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at)), Some(at));
     }
-    Ok(LirBody { blocks: order, ..body.clone() })
+    Ok(body.with_blocks(order))
 }
 
 /// The block to place next: where the final jump goes, or else where the branch before it goes.
@@ -193,7 +194,7 @@ pub(crate) fn _tests(
     entry: i64,
     by_at: &IndexMap<i64, LirBlock>,
 ) -> IndexMap<i64, (i64, BTreeSet<i64>)> {
-    let mut found = IndexMap::new();
+    let mut found = IndexMap::default();
     for found_loop in natural {
         let block = &by_at[&found_loop.header];
         let real: Vec<&Semantics> = block
@@ -246,13 +247,13 @@ pub fn merged(body: &LirBody) -> Result<LirBody, String> {
     }
     let mut body = body.clone();
     loop {
-        let mut groups: IndexMap<TailKey, Vec<&LirBlock>> = IndexMap::new();
+        let mut groups: IndexMap<TailKey, Vec<&LirBlock>> = IndexMap::default();
         for block in &body.blocks {
             if let Some(key) = _tail_key(block) {
                 groups.entry(key).or_default().push(block);
             }
         }
-        let mut redirect: IndexMap<i64, i64> = IndexMap::new();
+        let mut redirect: IndexMap<i64, i64> = IndexMap::default();
         for copies in groups.values() {
             if copies.len() < 2 {
                 continue;
@@ -308,7 +309,7 @@ pub fn _tail_key(block: &LirBlock) -> Option<TailKey> {
 /// Redirect every explicit edge, remove duplicate blocks, and fold diamonds.
 pub fn _redirected(body: &LirBody, redirect: &IndexMap<i64, i64>) -> LirBody {
     let target = |mut at: i64| -> i64 {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         while redirect.contains_key(&at) && !seen.contains(&at) {
             seen.insert(at);
             at = redirect[&at];
@@ -335,14 +336,10 @@ pub fn _redirected(body: &LirBody, redirect: &IndexMap<i64, i64>) -> LirBody {
             insns.push(one);
         }
         let successors: IndexSet<i64> = block.succ.iter().map(|at| target(*at)).collect();
-        blocks.push(_fold_converged(LirBlock {
-            insns,
-            succ: successors.into_iter().collect(),
-            ..block.clone()
-        }));
+        blocks.push(_fold_converged(LirBlock { succ: successors.into_iter().collect(), ..block.with_insns(insns) }));
     }
     let entry = target(body.entry);
-    LirBody { entry, blocks, ..body.clone() }
+    LirBody { entry, ..body.with_blocks(blocks) }
 }
 
 /// A conditional whose two CFG edges became one is an unconditional edge.
@@ -540,7 +537,7 @@ pub fn _with_return(parent: &LirBlock, tail: &LirBlock) -> LirBlock {
         .insns
         .iter()
         .map(|one| Arc::new(Insn { at: anchor, covers: Some((anchor, anchor)), spread: Vec::new(), ..(**one).clone() }));
-    LirBlock { insns: kept.chain(copies).collect(), succ: tail.succ.clone(), ..parent.clone() }
+    LirBlock { succ: tail.succ.clone(), ..parent.with_insns(kept.chain(copies).collect()) }
 }
 
 pub fn _step(body: &LirBody) -> (LirBody, bool) {
@@ -698,7 +695,7 @@ pub fn _through(
     target: Option<i64>,
     protected: &BTreeSet<i64>,
 ) -> Option<i64> {
-    let (start, mut seen) = (target, HashSet::new());
+    let (start, mut seen) = (target, HashSet::default());
     let mut target = target;
     while let Some(current) = target {
         if protected.contains(&current) || !at.contains_key(&current) {
@@ -722,19 +719,15 @@ pub fn _retargeted(block: &LirBlock, last: &Arc<Insn>, target: i64) -> LirBlock 
     let moved = Arc::new(Insn { what: Some(Semantics { target: Some(target), ..what.clone() }), ..(**last).clone() });
     let succ: IndexSet<i64> =
         block.succ.iter().map(|one| if Some(*one) == old { target } else { *one }).collect();
-    LirBlock {
-        insns: block
+    LirBlock { succ: succ.into_iter().collect(), ..block.with_insns(block
             .insns
             .iter()
             .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) })
-            .collect(),
-        succ: succ.into_iter().collect(),
-        ..block.clone()
-    }
+            .collect()) }
 }
 
 pub fn _predecessors(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<i64>> {
-    let mut found: IndexMap<i64, BTreeSet<i64>> = IndexMap::new();
+    let mut found: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for block in blocks {
         for one in &block.succ {
             found.entry(*one).or_default().insert(block.at);
@@ -745,7 +738,7 @@ pub fn _predecessors(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<i64>> {
 
 pub fn _reachable(body: &LirBody, blocks: Vec<LirBlock>) -> LirBody {
     let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
-    let (mut reached, mut work) = (HashSet::new(), vec![body.entry]);
+    let (mut reached, mut work) = (HashSet::default(), vec![body.entry]);
     while let Some(one) = work.pop() {
         if reached.contains(&one) || !by_at.contains_key(&one) {
             continue;
@@ -775,16 +768,13 @@ pub fn _reachable(body: &LirBody, blocks: Vec<LirBlock>) -> LirBody {
         })
         .map(|block| block.at)
         .collect();
-    LirBody {
-        blocks: blocks
+    body.with_blocks(blocks
             .iter()
             .filter(|block| reached.contains(&block.at) || ownership.contains(&block.at))
             .map(|block| {
                 if ownership.contains(&block.at) { LirBlock { succ: Vec::new(), ..block.clone() } } else { block.clone() }
             })
-            .collect(),
-        ..body.clone()
-    }
+            .collect())
 }
 
 #[cfg(test)]

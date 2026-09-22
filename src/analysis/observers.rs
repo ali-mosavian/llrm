@@ -24,7 +24,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::alias::{self, PointsTo};
 use super::frameescape;
@@ -59,7 +59,7 @@ fn _descriptor(symbol: &Symbol) -> (Space, i64, i64, u32) {
 /// the address value itself, so the ownership edge from descriptor to current
 /// allocation is tracked separately here.
 fn _descriptor_values(body: &MirBody) -> IndexMap<Value, BTreeSet<(Space, i64, i64, u32)>> {
-    let mut values: IndexMap<Value, BTreeSet<(Space, i64, i64, u32)>> = IndexMap::new();
+    let mut values: IndexMap<Value, BTreeSet<(Space, i64, i64, u32)>> = IndexMap::default();
     loop {
         let before = values.clone();
         for block in &body.blocks {
@@ -116,7 +116,7 @@ fn _descriptor_publications(
     calls: &IndexMap<i64, String>,
 ) -> BTreeSet<MemoryObject> {
     let values = _descriptor_values(body);
-    let mut owned: IndexMap<(Space, i64, i64, u32), BTreeSet<MemoryObject>> = IndexMap::new();
+    let mut owned: IndexMap<(Space, i64, i64, u32), BTreeSet<MemoryObject>> = IndexMap::default();
     let mut provenances: Vec<_> = pointers.values.values().cloned().collect();
     for block in &body.blocks {
         for op in &block.ops {
@@ -238,12 +238,12 @@ pub fn private(
         if !body.sealed {
             return Ok(None);
         }
-        Exposure { data: None, main: None, everywhere: Vec::new(), direct: IndexMap::new() }
+        Exposure { data: None, main: None, everywhere: Vec::new(), direct: IndexMap::default() }
     } else {
         return Err("observers.exposure needs objectfile.module.Module, which is not ported".to_owned());
     };
     // `found` is None past this point, so `found.calls` is never read.
-    let calls: IndexMap<i64, String> = IndexMap::new();
+    let calls: IndexMap<i64, String> = IndexMap::default();
     let escapes = frameescape::analysed(body);
     let pointers = alias::points_to(body, None, None)?;
     let mut published: BTreeSet<MemoryObject> = pointers.escaped.clone();

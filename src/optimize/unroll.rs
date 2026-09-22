@@ -5,7 +5,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
@@ -303,7 +303,7 @@ pub(crate) fn _rejection(
         // expensive branch makes arbitrary duplication look free.
         return Some("iteration-growth");
     }
-    let trips = IndexMap::from([(latch, count)]);
+    let trips = IndexMap::from_iter([(latch, count)]);
     let dynamic_before = profit::weighted(before, &r#where.costs, Some(&trips));
     let dynamic_after = profit::weighted(after, &r#where.costs, None);
     let (Some(dynamic_before), Some(dynamic_after)) = (dynamic_before, dynamic_after) else {
@@ -447,7 +447,7 @@ fn _expanded(
 
     let mut clone = |op: &Op, owns: bool, swap: &mut BTreeMap<u32, Value>| -> Result<Op, String> {
         let read = ssa::substituted(op, swap).map_err(substitution)?;
-        let mut defined = IndexMap::<u32, Value>::new();
+        let mut defined = IndexMap::<u32, Value>::default();
         for value in &op.defines {
             let fresh = Value {
                 id: next_id,
@@ -626,14 +626,7 @@ fn _expanded(
     let integer_ranges = ssa::cloned_integer_ranges(body, copies.iter());
     let mut repetitions = body.repetitions.clone();
     repetitions.push((latch.at, count));
-    Ok(MirBody {
-        blocks: changed,
-        repetitions,
-        pointer_values,
-        pointer_seeds,
-        integer_ranges,
-        ..body.clone()
-    })
+    Ok(MirBody { repetitions, pointer_values, pointer_seeds, integer_ranges, ..body.with_blocks(changed) })
 }
 
 #[cfg(test)]

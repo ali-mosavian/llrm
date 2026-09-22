@@ -47,9 +47,9 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
     loop {
         // `sort` is stable, preserving original order for duplicate source
         // addresses just as Python's `sorted` does.
-        let mut ordered = body.blocks.clone();
+        let mut ordered = body.blocks.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|block| block.at);
-        let predecessors = loops::predecessors(&ordered);
+        let predecessors = loops::predecessors(&body.blocks);
         // Python's dict comprehension retains the final duplicate address.
         let positions = ordered
             .iter()
@@ -69,7 +69,7 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
             if target == body.entry || target_position <= index || repeated.contains_key(&target) {
                 continue;
             }
-            let second = &ordered[target_position];
+            let second = ordered[target_position];
             if predecessors.get(&target) != Some(&BTreeSet::from([first.at])) {
                 continue;
             }
@@ -99,8 +99,8 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                 continue;
             }
 
-            let mut ops = first.ops.clone();
-            if let Some(last) = ops.last() {
+            let mut erased = None;
+            if let Some(last) = first.ops.last() {
                 if last.barrier() || last.kind == Kind::Opaque {
                     continue;
                 }
@@ -108,11 +108,10 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                     if last.kind != Kind::Jump || last.target != Some(target) {
                         continue;
                     }
-                    let last = ops.pop().expect("last operation exists");
-                    let mut erased = _empty_operation(&last);
-                    erased.target = None;
-                    erased.test = None;
-                    ops.push(erased);
+                    let mut empty = _empty_operation(last);
+                    empty.target = None;
+                    empty.test = None;
+                    erased = Some(empty);
                 }
             }
 
@@ -132,7 +131,9 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                 continue;
             }
 
-            let mut moved = ops;
+            let kept = first.ops.len() - usize::from(erased.is_some());
+            let mut moved = first.ops[..kept].to_vec();
+            moved.extend(erased);
             moved.extend(between.iter().flat_map(|block| block.ops.iter().cloned()));
             let mut marker = Op::new(target, OpCode::nothing(), "", Vec::new(), Vec::new());
             marker.kind = Kind::Nothing;

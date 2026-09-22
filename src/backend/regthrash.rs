@@ -63,7 +63,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let done = _block(&blocks[index], exits[&blocks[index].at].clone());
         if let Some(done) = done {
             blocks[index] = done;
-            return Some(LirBody { blocks, ..body.clone() });
+            return Some(body.with_blocks(blocks));
         }
     }
     None
@@ -72,12 +72,12 @@ fn _once(body: &LirBody) -> Option<LirBody> {
 /// Per instruction, the register lanes dead once it has run.
 pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
     let mut dead = dead;
-    let mut out = DeadAfter::new();
+    let mut out = DeadAfter::default();
     for one in block.insns.iter().rev() {
         out.insert(id(one), dead.clone());
         if liveness::_terminator(one.what.as_ref()) {
             if one.what.as_ref().is_some_and(|what| what.op == Operation::Branch) {
-                dead = dead.difference(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
+                dead = dead.minus(&_flag_lanes(0xFFFF_FFFF));
             }
             continue;
         }
@@ -95,7 +95,7 @@ pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
             }
         }
         let (reads, writes) = effects.expect("checked above");
-        dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+        dead = dead.or(&writes).minus(&reads);
     }
     out
 }
@@ -137,7 +137,7 @@ fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
                     }
                 })
                 .collect();
-            return Some(LirBlock { insns, ..block.clone() });
+            return Some(block.with_insns(insns));
         }
         // Two-address: the producer reads Y as well as writing it, so the
         // renamed form reads Z and Z has to arrive first. Watcom's
@@ -155,7 +155,7 @@ fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
                 insns.push(Arc::clone(insn));
             }
         }
-        return Some(LirBlock { insns, ..block.clone() });
+        return Some(block.with_insns(insns));
     }
     None
 }
@@ -269,9 +269,9 @@ fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) ->
     let reads: Lanes = if result_only || was.0.is_disjoint(&mine) {
         was.0.clone()
     } else {
-        was.0.difference(&mine).copied().collect::<Lanes>().union(&theirs).copied().collect()
+        was.0.minus(&mine).or(&theirs)
     };
-    let writes: Lanes = was.1.difference(&mine).copied().collect::<Lanes>().union(&theirs).copied().collect();
+    let writes: Lanes = was.1.minus(&mine).or(&theirs);
     if now != (reads, writes) {
         return None;
     }
@@ -280,11 +280,11 @@ fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::thrashed;
     use crate::backend::{select, verify};
@@ -374,7 +374,7 @@ mod tests {
                 .collect(),
         );
         let first = LirBlock { succ: vec![1], ..LirBlock::new(0, insns.into_iter().map(Arc::new).collect()) };
-        LirBody::new("thrash", 0, vec![first, after], IndexMap::new(), IndexMap::new())
+        LirBody::new("thrash", 0, vec![first, after], IndexMap::default(), IndexMap::default())
     }
 
     #[test]
@@ -422,7 +422,7 @@ mod tests {
             Register::EDX,
         );
         let result = thrashed(body);
-        let start = HashMap::from([(Register::ECX, 5), (Register::EDX, 7)]);
+        let start = HashMap::from_iter([(Register::ECX, 5), (Register::EDX, 7)]);
         assert_eq!(_run(&result.blocks[0], &start)[&Register::EDX], 12);
     }
 

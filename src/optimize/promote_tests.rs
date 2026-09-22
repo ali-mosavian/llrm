@@ -436,11 +436,11 @@ fn test_sroa_uses_a_singleton_index_range_as_an_exact_leaf() {
         width: 2,
     };
     assert_eq!(
-        _bounded_ref(&one, &IndexMap::from([(first, interval(4, 5))])).provenance,
+        _bounded_ref(&one, &IndexMap::from_iter([(first, interval(4, 5))])).provenance,
         Some(whole.clone())
     );
     assert_eq!(
-        _bounded_ref(&one, &IndexMap::from([(first, interval(12, 12))])).provenance,
+        _bounded_ref(&one, &IndexMap::from_iter([(first, interval(12, 12))])).provenance,
         Some(whole)
     );
 }

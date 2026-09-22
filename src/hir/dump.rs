@@ -1,7 +1,7 @@
 //! Port of `qbopt/hir/dump.py`: stable semantic projection used to diff
 //! source and object frontends.
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::hir::lower::Lowered;
 use crate::model::ir::Operation;
@@ -19,8 +19,8 @@ impl _Names {
     fn new(body: &mir::MirBody) -> Self {
         Self {
             blocks: body.blocks.iter().enumerate().map(|(number, block)| (block.at, number + 1)).collect(),
-            values: IndexMap::new(),
-            objects: IndexMap::new(),
+            values: IndexMap::default(),
+            objects: IndexMap::default(),
         }
     }
 

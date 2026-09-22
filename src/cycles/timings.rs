@@ -15,7 +15,7 @@
 
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 pub const ARCHS: [&str; 7] = ["486", "P5", "P6", "K5", "K6", "K7", "Core"];
 
@@ -73,7 +73,7 @@ static _MODULE: LazyLock<(
     IndexMap<&'static str, [i64; 7]>,
 )> = LazyLock::new(|| {
     //                         486  P5  P6  K5  K6  K7 Core
-    let mut cost: IndexMap<&'static str, [i64; 7]> = IndexMap::from([
+    let mut cost: IndexMap<&'static str, [i64; 7]> = IndexMap::from_iter([
         ("alu_rr", [1, 1, 1, 1, 1, 1, 1]), // add/and/or/xor/sub/cmp reg,reg
         ("alu_rm", [2, 2, 1, 1, 1, 1, 1]), // ... reg,[mem]
         ("alu_mr", [3, 3, 1, 1, 1, 1, 1]), // ... [mem],reg
@@ -108,7 +108,7 @@ static _MODULE: LazyLock<(
     ]);
 
     //                            486  P5  P6  K5  K6  K7 Core
-    let mut latency: IndexMap<&'static str, [i64; 7]> = IndexMap::from([
+    let mut latency: IndexMap<&'static str, [i64; 7]> = IndexMap::from_iter([
         ("alu_rr", [1, 1, 1, 1, 1, 1, 1]),
         ("alu_rm", [2, 2, 4, 3, 3, 3, 4]), // + load
         ("alu_mr", [3, 3, 4, 3, 3, 3, 4]),

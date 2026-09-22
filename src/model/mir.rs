@@ -8,6 +8,7 @@
 //! raising-copy provenance regressions belong to the raiser/liveness/source-
 //! map ports, not to this public schema slice.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -496,17 +497,20 @@ pub fn same_bytes(one: &MemRef, other: &MemRef) -> bool {
 ///
 /// Analyses that need an address-based view of a reference must use this
 /// normalization rather than spelling symbolic resolution themselves.
-pub(crate) fn symbolic_ref(reference: &MemRef) -> MemRef {
+pub(crate) fn symbolic_ref(reference: &MemRef) -> Cow<'_, MemRef> {
     let Some(symbol) = reference.symbolic else {
-        return reference.clone();
+        return Cow::Borrowed(reference);
     };
-    let mut resolved = reference.clone();
     let mut address = Addr::new(symbol.space, symbol.offset + symbol.addend);
     address.index = symbol.index;
+    if reference.addr == Some(address) && reference.base.is_none() && reference.segment.is_none() {
+        return Cow::Borrowed(reference);
+    }
+    let mut resolved = reference.clone();
     resolved.addr = Some(address);
     resolved.base = None;
     resolved.segment = None;
-    resolved
+    Cow::Owned(resolved)
 }
 
 /// What an operation computes in MIR terms.
@@ -1224,6 +1228,11 @@ impl MirBlock {
             cold: false,
         }
     }
+
+    /// Python's `replace(block, ops=ops)`: the old ops are never copied.
+    pub fn with_ops(&self, ops: Vec<Op>) -> Self {
+        Self { at: self.at, phis: self.phis.clone(), ops, succ: self.succ.clone(), cold: self.cold }
+    }
 }
 
 /// One source-neutral MIR body.  Direct port of `qbopt.model.mir:MirBody`.
@@ -1274,6 +1283,23 @@ impl MirBody {
             pointer_seeds: OrderedMap::new(),
             integer_ranges: OrderedMap::new(),
             loop_trip_counts: Vec::new(),
+        }
+    }
+
+    /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
+    pub fn with_blocks(&self, blocks: Vec<MirBlock>) -> Self {
+        Self {
+            entry: self.entry,
+            blocks,
+            initial: self.initial.clone(),
+            repetitions: self.repetitions.clone(),
+            cloned: self.cloned,
+            sealed: self.sealed,
+            stack_in_data: self.stack_in_data,
+            pointer_values: self.pointer_values.clone(),
+            pointer_seeds: self.pointer_seeds.clone(),
+            integer_ranges: self.integer_ranges.clone(),
+            loop_trip_counts: self.loop_trip_counts.clone(),
         }
     }
 
@@ -1781,7 +1807,7 @@ fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 }
 
 /// Python `_through_frame`.
-fn through_frame(body: MirBody, framed: &indexmap::IndexMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
+fn through_frame(body: MirBody, framed: &crate::support::hash::IndexMap<Value, BTreeSet<(i64, i64)>>) -> MirBody {
     if framed.is_empty() {
         return body;
     }

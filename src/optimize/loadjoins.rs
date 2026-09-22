@@ -6,7 +6,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::regions::RegionLayout;
@@ -156,8 +156,8 @@ pub fn reused(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, insert: bool) -
     definitions.extend(
         body.blocks.iter().flat_map(|block| block.phis.iter().map(move |phi| (phi.result, (block.at, -1)))),
     );
-    let mut insertions: IndexMap<i64, Vec<(usize, Op)>> = IndexMap::new();
-    let mut bridges: IndexMap<(i64, i64), (i64, Vec<Op>)> = IndexMap::new();
+    let mut insertions: IndexMap<i64, Vec<(usize, Op)>> = IndexMap::default();
+    let mut bridges: IndexMap<(i64, i64), (i64, Vec<Op>)> = IndexMap::default();
     let mut label = edges::fresh(body);
     let mut blocks: Vec<MirBlock> = Vec::new();
     for block in &body.blocks {
@@ -169,8 +169,8 @@ pub fn reused(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, insert: bool) -
         let (mut phis, mut ops) = (block.phis.clone(), Vec::new());
         for (index, op) in block.ops.iter().enumerate() {
             let loaded = if op.kind == Kind::Load { _value(op) } else { None };
-            let mut incoming: IndexMap<i64, Value> = IndexMap::new();
-            let mut missing: IndexMap<i64, (usize, Vec<Value>, MemRef)> = IndexMap::new();
+            let mut incoming: IndexMap<i64, Value> = IndexMap::default();
+            let mut missing: IndexMap<i64, (usize, Vec<Value>, MemRef)> = IndexMap::default();
             let Some((r#ref, result)) = loaded else {
                 ops.push(op.clone());
                 continue;
@@ -275,7 +275,7 @@ pub fn reused(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, insert: bool) -
             copy.symbol = Some(false);
             ops.push(copy);
         }
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     for block in &mut blocks {
         let mut ordered = insertions.get(&block.at).cloned().unwrap_or_default();
@@ -284,7 +284,7 @@ pub fn reused(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, insert: bool) -
             block.ops.insert(cut, load);
         }
     }
-    let mut result = MirBody { blocks, ..MirBody::clone(body) };
+    let mut result = body.with_blocks(blocks);
     for ((parent, target), (label, loads)) in bridges {
         result = edges::split(&result, parent, target, label, loads)?;
     }

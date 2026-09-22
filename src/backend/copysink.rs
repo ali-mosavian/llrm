@@ -7,10 +7,11 @@
 //! sound while the destination is read nowhere in the loop and the source is
 //! not written between the copy and the exit, which is what this checks.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops as loopy;
 use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
@@ -144,8 +145,8 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
 
-    let mut moved: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::new();
-    let mut removed: HashSet<usize> = HashSet::new();
+    let mut moved: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
+    let mut removed: HashSet<usize> = HashSet::default();
     for found_loop in &found {
         let inside: BTreeSet<i64> = found_loop.body.iter().copied().filter(|at| at_of.contains_key(at)).collect();
         let leaving: Vec<(i64, i64)> = inside
@@ -185,7 +186,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .filter(|to| inside.contains(to))
                     .flat_map(|to| round_into[to].iter().copied())
                     .collect();
-                let rest_of_block = LirBlock { insns: block.insns[index + 1..].to_vec(), ..block.clone() };
+                let rest_of_block = block.with_insns(block.insns[index + 1..].to_vec());
                 if !written.is_disjoint(&_backwards(&rest_of_block, after, &universe)) {
                     continue;
                 }
@@ -196,7 +197,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .iter()
                     .chain(rest.iter().flat_map(|at| at_of[at].insns.iter()))
                     .collect();
-                let both: Lanes = written.union(&read).copied().collect();
+                let both: Lanes = written.or(&read);
                 if later
                     .iter()
                     .any(|other| _touches(other, &both, false) || _touches(other, &written, true))
@@ -221,18 +222,18 @@ pub fn sunk(body: &LirBody) -> LirBody {
         if let Some(moved) = moved.get(&block.at) {
             insns = moved.iter().cloned().chain(insns).collect();
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::sunk;
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
@@ -315,8 +316,8 @@ mod tests {
                 block(86, vec![_move(86, SI, AX), _jump(87, 31)], vec![31]),
                 block(91, vec![_return(91)], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         assert_eq!(_copies(&sunk(&body))[&38], vec![r(CX)]);
     }
@@ -334,8 +335,8 @@ mod tests {
                 block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _jump(7, 3)], vec![3]),
                 block(9, vec![_return(9)], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
         assert!(copies[&5].is_empty() && copies[&9] == vec![r(DI)]);
@@ -355,7 +356,7 @@ mod tests {
 
     /// What the pushes along `path` write, running register moves and adds.
     fn _pushed(body: &LirBody, path: &[i64]) -> Vec<i64> {
-        let mut held: HashMap<Register, i64> = HashMap::new();
+        let mut held: HashMap<Register, i64> = HashMap::default();
         let mut pushed = Vec::new();
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
         for at in path {
@@ -410,8 +411,8 @@ mod tests {
                 ),
                 block(0x30, vec![_raw_insn(0x30, sem(Operation::Return, "ret", vec![], vec![], None))], vec![]),
             ],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         assert_eq!(_pushed(&sunk(&body), &[0, 0x10, 0x10, 0x10]), vec![0, 1, 2]);
     }

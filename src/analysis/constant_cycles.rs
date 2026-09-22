@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::consts::{self, Known};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Phi, Value};
@@ -45,7 +45,7 @@ pub(crate) fn propagated(
     seeds: &IndexMap<Value, Known>,
     successors: Option<Successors<'_>>,
 ) -> IndexMap<Value, Known> {
-    let mut recipes = IndexMap::new();
+    let mut recipes = IndexMap::default();
     for block in &body.blocks {
         for phi in &block.phis {
             recipes.insert(phi.result, Recipe::Phi(phi));
@@ -70,7 +70,7 @@ pub(crate) fn propagated(
     for (value, fact) in seeds {
         states.insert(*value, State::Known(fact.clone()));
     }
-    let mut consumers = IndexMap::<Value, PySet<Value>>::new();
+    let mut consumers = IndexMap::<Value, PySet<Value>>::default();
     for (value, recipe) in &recipes {
         let inputs = match recipe {
             Recipe::Phi(phi) => phi.incoming.values().copied().collect::<Vec<_>>(),
@@ -88,7 +88,7 @@ pub(crate) fn propagated(
         }
     }
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
-    let mut owners = IndexMap::new();
+    let mut owners = IndexMap::default();
     for block in &body.blocks {
         for phi in &block.phis {
             owners.insert(phi.result, block.at);

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::model::ir::{self, Held, Loc, Operation};
 use crate::model::lir::{self, Insn};
@@ -183,7 +183,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::selected;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};

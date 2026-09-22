@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::mir::MirBlock;
 
@@ -161,8 +161,8 @@ pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
     let doms = dominators(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>());
 
-    let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::new();
-    let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::new();
+    let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
+    let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     for (latch, header) in back_edges(blocks, &doms) {
         latches.entry(header).or_default().insert(latch);
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));

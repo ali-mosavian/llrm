@@ -4,10 +4,11 @@
 
 // Its callers live in transform.py, not yet ported.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use crate::support::hash::HashMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::consts::{self, Cells, Known};
 use crate::analysis::loops::{self, Loop};
@@ -45,6 +46,9 @@ fn overlapping(
         .map_err(|error: RegionError| format!("{error:?}"))
 }
 
+/// Each op's value intervals, shared by the ops of one block.
+type Intervals = HashMap<usize, Rc<BTreeMap<Value, Interval>>>;
+
 pub fn sunk_stores(
     body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
@@ -58,14 +62,15 @@ pub fn sunk_stores(
         // With constants, as hoist asks: a store through the literal selector
         // 0A000h otherwise observes every frame and descriptor cell.
         let constant: BTreeMap<Value, Interval> = ranges::constants(&body, Some(dgroup), None).into_iter().collect();
-        let mut intervals = HashMap::<usize, BTreeMap<Value, Interval>>::new();
+        let mut intervals = Intervals::default();
         for block in &body.blocks {
             let mut here = constant.clone();
             if let Some(found) = scoped.get(&block.at) {
                 here.extend(found.iter().map(|(value, interval)| (*value, interval.clone())));
             }
+            let here = Rc::new(here);
             for op in &block.ops {
-                intervals.insert(id(op), here.clone());
+                intervals.insert(id(op), Rc::clone(&here));
             }
         }
         let blocks = body
@@ -201,7 +206,7 @@ pub fn sunk_stores(
             continue;
         }
         let identities = moved.iter().map(|op| id(op)).collect::<BTreeSet<usize>>();
-        let mut updates = IndexMap::<i64, MirBlock>::new();
+        let mut updates = IndexMap::<i64, MirBlock>::default();
         for block in &inside {
             let mut changed = (*block).clone();
             changed.ops = block
@@ -354,10 +359,10 @@ impl _Exit<'_> {
                         let (body, dgroup) = (self.body, self.dgroup);
                         let (facts, barriers) = self.memory()?;
                         let before = facts.get(&(at, index)).cloned().unwrap_or_default();
-                        let nothing = IndexMap::new();
+                        let nothing = IndexMap::default();
                         let mut asked = consts::memory_queries(body, &nothing, dgroup);
                         let after = consts::_kills(
-                            &before,
+                            before,
                             previous,
                             &nothing,
                             dgroup,
@@ -485,7 +490,7 @@ fn _unobserved(
     operations: &[&Op],
     dgroup: &BTreeSet<i64>,
     bounds: Option<&Bounds>,
-    intervals: Option<&HashMap<usize, BTreeMap<Value, Interval>>>,
+    intervals: Option<&Intervals>,
     address_values: &BTreeSet<Value>,
 ) -> Result<bool, String> {
     let _ = dgroup;
@@ -506,12 +511,12 @@ fn _unobserved(
     {
         return Ok(false);
     }
-    let known = intervals.and_then(|intervals| intervals.get(&id(op)));
+    let known = intervals.and_then(|intervals| intervals.get(&id(op))).map(|one| &**one);
     for one in operations {
         if std::ptr::eq(*one, op) {
             continue;
         }
-        let other_known = intervals.and_then(|intervals| intervals.get(&id(one)));
+        let other_known = intervals.and_then(|intervals| intervals.get(&id(one))).map(|one| &**one);
         for other in one.loads.iter().chain(one.stores.iter()) {
             if overlapping(reference, other, bounds, known, other_known)? {
                 return Ok(false);

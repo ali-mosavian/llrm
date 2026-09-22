@@ -5,7 +5,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::mir::{Kind, MirBody};
 use crate::optimize::transform;

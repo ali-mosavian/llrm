@@ -9,8 +9,9 @@
 //! and four `indvars` rewrites that have no Rust port.
 
 use std::rc::Rc;
-use indexmap::IndexMap;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use crate::support::hash::IndexMap;
+use std::collections::{BTreeMap, BTreeSet};
+use crate::support::hash::{HashMap, HashSet};
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -182,7 +183,7 @@ pub(crate) fn reduced(
     let facts = if !scales.is_empty() || !address_forms.is_empty() {
         consts::known(body, None, None, None, None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     for (loop_, _basics, _derived) in &found {
         let preheader = transform::_preheader(body, loop_);
@@ -471,7 +472,7 @@ pub(crate) fn reduced(
                 u32,
             ),
             Value,
-        >::new();
+        >::default();
         for one in &candidates {
             // Once each: a multiply in a nest is derived in every loop.
             let mut one = one.clone();

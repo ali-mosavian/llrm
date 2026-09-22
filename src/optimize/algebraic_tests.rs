@@ -142,7 +142,7 @@ fn test_offset_composition_preserves_modular_values_and_observers() {
                 &definitions(&[(middle, &first)]),
                 &set(&[flags]),
                 &uses,
-            );
+            ).into_owned();
             if guard != "none" {
                 assert_eq!(done, last, "{guard}");
                 continue;
@@ -216,7 +216,7 @@ fn test_associative_bitwise_constants_combine_without_losing_observers() {
                 &definitions(&[(middle, &first_op)]),
                 &set(&[flags]),
                 &uses,
-            );
+            ).into_owned();
             if !matches!(guard, "none" | "last_flags") {
                 assert_eq!(changed, last_op, "{guard}");
                 continue;
@@ -278,7 +278,7 @@ fn test_scaled_chain_preserves_modular_values_and_observed_intermediates() {
             &definitions(&[(middle, &first)]),
             &set(&[flags]),
             &uses,
-        );
+        ).into_owned();
         if guard != "none" {
             assert_eq!(done, last, "{guard}");
             continue;
@@ -747,7 +747,7 @@ fn test_reversed_difference_preserves_observed_values_and_flags() {
             &definitions(&[(middle, &difference)]),
             &set(&[flags]),
             &uses,
-        );
+        ).into_owned();
         if guard != "none" {
             assert_eq!(done, negate, "{guard}");
             continue;
@@ -807,7 +807,7 @@ fn test_shift_combination_preserves_count_flag_and_use_boundaries() {
                 &definitions(&[(middle, &first)]),
                 &wanted,
                 &counter(&[(middle, uses)])
-            ),
+            ).into_owned(),
             last
         );
     }
@@ -972,7 +972,7 @@ fn test_integer_identities() {
                 vec![held(source, width), constant(number, count_width)],
                 vec![held(result, width)],
             );
-            let changed = _simplified(&op, &set(&[result]), &BTreeSet::new());
+            let changed = _simplified(&op, &set(&[result]), &BTreeSet::new()).into_owned();
             assert_eq!(changed.kind, Kind::Copy);
             let expected = match answer {
                 None => held(source, width),
@@ -984,7 +984,7 @@ fn test_integer_identities() {
             assert_eq!(changed.args, vec![expected]);
             assert_eq!(changed.defines, vec![result]);
             if width == 2 {
-                assert_eq!(_simplified(&op, &set(&[result]), &set(&[result])), op);
+                assert_eq!(_simplified(&op, &set(&[result]), &set(&[result])).into_owned(), op);
             }
             let flags = flag(12, 1);
             let observed_flags = Op {
@@ -992,7 +992,7 @@ fn test_integer_identities() {
                 ..op.clone()
             };
             assert_eq!(
-                _simplified(&observed_flags, &set(&[result, flags]), &BTreeSet::new()),
+                _simplified(&observed_flags, &set(&[result, flags]), &BTreeSet::new()).into_owned(),
                 observed_flags
             );
         }
@@ -1031,7 +1031,7 @@ fn test_product_projection_retains_observed_outputs() {
         } else {
             BTreeSet::new()
         };
-        let changed = _product(&op, &wanted, &wide);
+        let changed = _product(&op, &wanted, &wide).into_owned();
         if observed == "none" {
             assert_eq!(changed.results, vec![held(low, 2)]);
             assert_eq!(changed.defines, vec![low]);
@@ -1055,7 +1055,7 @@ fn test_a_symbol_plus_zero_is_the_symbol() {
         vec![constant(0, 2), Arg::Symbol(symbol)],
         vec![held(result, 2)],
     );
-    let done = _simplified(&add, &BTreeSet::new(), &BTreeSet::new());
+    let done = _simplified(&add, &BTreeSet::new(), &BTreeSet::new()).into_owned();
     assert_eq!(
         (done.kind, done.args),
         (Kind::Copy, vec![Arg::Symbol(symbol)])
@@ -1124,7 +1124,7 @@ fn test_redundant_extension_requires_every_output_bit_to_be_known() {
             _ => second.defines = vec![result, flags],
         }
         assert_eq!(
-            _redundant_extension(&second, &definitions(&[(middle, &first)])),
+            _redundant_extension(&second, &definitions(&[(middle, &first)])).into_owned(),
             second,
             "{guard}"
         );
@@ -1160,7 +1160,7 @@ fn test_subtracting_from_a_copied_zero_is_negation() {
         vec![held(result, 4)],
     );
 
-    let changed = _zero_difference(&subtract, &definitions(&[(zero, &constant_op)]));
+    let changed = _zero_difference(&subtract, &definitions(&[(zero, &constant_op)])).into_owned();
 
     assert_eq!(changed.kind, Kind::Neg);
     assert_eq!(changed.args, vec![held(source, 4)]);
@@ -1201,7 +1201,7 @@ fn test_zero_difference_requires_a_complete_pure_value() {
             }
         }
         assert_eq!(
-            _zero_difference(&subtract, &definitions(&[(zero, &constant_op)])),
+            _zero_difference(&subtract, &definitions(&[(zero, &constant_op)])).into_owned(),
             subtract,
             "{guard}"
         );

@@ -85,13 +85,7 @@ pub(crate) fn joined(body: &MirBody) -> MirBody {
             }
             ops.push(op.clone());
         }
-        blocks.push(MirBlock {
-            ops,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(ops));
     }
-    MirBody {
-        blocks,
-        ..body.clone()
-    }
+    body.with_blocks(blocks)
 }

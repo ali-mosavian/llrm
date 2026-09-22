@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{hir, libfunc, raise_hir, stream};
@@ -107,7 +107,7 @@ pub fn assembled(
     let known = libfunc::summaries(callees.iter().map(String::as_str));
     let modref = alias::summaries(&aliases, Some(&known)).map_err(hir::Unsupported)?;
     let initial = _constant_initializers(&unit);
-    let mut bodies: IndexMap<String, Rc<MirBody>> = IndexMap::new();
+    let mut bodies: IndexMap<String, Rc<MirBody>> = IndexMap::default();
     for one in &raised_procedures {
         let mut body = alias::calls_annotated(&aliases[&one.name], &modref).map_err(hir::Unsupported)?;
         body.initial = _body_initializers(&body, &initial);
@@ -787,7 +787,7 @@ fn _reachable_data(unit: &hir::Unit, bodies: &IndexMap<String, Rc<MirBody>>) -> 
 }
 
 fn _data_labels(unit: &hir::Unit) -> IndexMap<i64, (i64, usize, usize)> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for segment in unit.segments.values() {
         let labels: Vec<(usize, Option<i64>)> = segment
             .items

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::abi::physicalize;
 use super::compile as qb_compile;

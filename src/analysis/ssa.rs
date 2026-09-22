@@ -329,9 +329,9 @@ pub(crate) fn renumbered(body: &MirBody, variable: u32) -> MirBody {
                 ..op.clone()
             })
             .collect();
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
-    MirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Reconstruct SSA for only the supplied variable names.

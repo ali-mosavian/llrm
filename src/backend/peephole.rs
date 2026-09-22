@@ -2,12 +2,13 @@
 //! final physical register assignment.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, OpAccess, Register, RflagsBits};
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
@@ -21,10 +22,7 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::mir;
 use crate::model::passes::LIRTransform;
 
-/// One byte of a register root, or one flag bit against `Register::None`.
-pub type Lane = (Register, u32);
-/// Python's `set[tuple[Register_, int]]`.
-pub type Lanes = BTreeSet<Lane>;
+pub use crate::backend::lanes::{Lane, Lanes};
 /// Python's `dict[int, set]` keyed by `id(one)`.
 pub type DeadAfter = HashMap<usize, Lanes>;
 /// Python's `Counter[int]`: read with a 0 default.
@@ -118,10 +116,7 @@ impl Peephole {
         let blocks = body
             .blocks
             .iter()
-            .map(|block| LirBlock {
-                insns: lir::without(&block.insns, |one| one.frame_adjust, None::<fn(&Arc<Insn>) -> Arc<Insn>>),
-                ..block.clone()
-            })
+            .map(|block| block.with_insns(lir::without(&block.insns, |one| one.frame_adjust, None::<fn(&Arc<Insn>) -> Arc<Insn>>)))
             .collect();
         LirBody { blocks, ..body }
     }
@@ -253,9 +248,9 @@ pub fn concatenated(body: &LirBody) -> LirBody {
             insns[index + 1] = Arc::new(with_what(&low_push, shifted));
             insns[index + 2] = Arc::new(with_what(&wide_pop, funnelled));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Use a dead GPR for an allocated frame-to-frame parallel copy.
@@ -362,9 +357,9 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
             insns[index] = Arc::new(load);
             insns[index + 1] = Arc::new(store);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Fold a load or transitive extension into one widening instruction.
@@ -377,7 +372,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
 /// incidental register byte.  A plain load may use another register only
 /// when its SSA value has no other reader.
 pub fn extensions(body: &LirBody) -> LirBody {
-    let mut users = Counter::new();
+    let mut users = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -424,9 +419,9 @@ pub fn extensions(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Whether widening the load at its original position crosses no register use.
@@ -442,7 +437,7 @@ fn _extension_may_move_before(made: &Insn, first: &Insn, crossed: &[Arc<Insn>]) 
     let (Some(original), Some(combined)) = (original, combined) else {
         return false;
     };
-    let newly_written: Lanes = combined.1.difference(&original.1).copied().collect();
+    let newly_written: Lanes = combined.1.minus(&original.1);
     for one in crossed {
         let effects = _register_effects(one, false, true);
         match effects {
@@ -541,7 +536,7 @@ fn _extension(first: &Insn, second: &Insn, users: &Counter) -> Option<Arc<Insn>>
             .copied()
             .chain(second.uses.iter().copied().filter(|value| !first.defines.contains(value))),
     );
-    let mut widths: IndexMap<u32, u32> = IndexMap::new();
+    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for (value, width) in first.widths.iter().chain(&second.widths) {
         widths.insert(*value, *width);
     }
@@ -612,9 +607,9 @@ pub fn pushed_constants(body: &LirBody) -> LirBody {
             }
             out.push(Arc::clone(one));
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout.
@@ -673,9 +668,9 @@ pub fn pushes(body: &LirBody) -> LirBody {
             out.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -749,9 +744,9 @@ pub fn narrowed_moves(body: &LirBody) -> LirBody {
             }
             insns.push(changed.unwrap_or_else(|| Arc::clone(one)));
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Use a saved accumulator in place for commutative two-address operations.
@@ -759,7 +754,7 @@ pub fn commuted(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = block.insns.clone();
-        let mut removed: HashSet<usize> = HashSet::new();
+        let mut removed: HashSet<usize> = HashSet::default();
         for index in 2..insns.len() {
             let (saved, copied, combined) =
                 (Arc::clone(&insns[index - 2]), Arc::clone(&insns[index - 1]), Arc::clone(&insns[index]));
@@ -806,9 +801,9 @@ pub fn commuted(body: &LirBody) -> LirBody {
             }
         }
         let insns = lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Write a commutative result directly into its copied destination.
@@ -837,9 +832,9 @@ pub fn transferred(body: &LirBody) -> LirBody {
             insns.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _transferred(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
@@ -916,7 +911,7 @@ fn _transferred(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<I
 /// selected `mov`/`shr` pair converges to that same final form.
 pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let mut virtual_uses = Counter::new();
+    let mut virtual_uses = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -959,9 +954,9 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
             insns.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 fn _register_high_extract(
@@ -1018,9 +1013,9 @@ fn _register_high_extract(
     let Some(effects) = _register_effects(&with_what(kept, shift.clone()), false, true) else {
         return Ok(None);
     };
-    let upper: Lanes = _lanes(wide_high.register).difference(&_lanes(high.register)).copied().collect();
-    let flags: Lanes = effects.1.intersection(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
-    if !upper.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(kept)]) {
+    let upper: Lanes = _lanes(wide_high.register).minus(&_lanes(high.register));
+    let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
+    if !upper.or(&flags).is_subset(&dead_after[&id(kept)]) {
         return Ok(None);
     }
     let old_cost = cpu.cost("push_r")? + 2 * cpu.cost("pop_r")?;
@@ -1141,7 +1136,7 @@ fn _selected_register_high_extract(
         return Ok(None);
     };
     let low = target::named(destination.register, 2);
-    let upper: Lanes = _lanes(destination.register).difference(&_lanes(low)).copied().collect();
+    let upper: Lanes = _lanes(destination.register).minus(&_lanes(low));
     let flags: Lanes = old_effects
         .1
         .union(&new_effects.1)
@@ -1150,7 +1145,7 @@ fn _selected_register_high_extract(
         .intersection(&_flag_lanes(0xFFFF_FFFF))
         .copied()
         .collect();
-    if !upper.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(shift)]) {
+    if !upper.or(&flags).is_subset(&dead_after[&id(shift)]) {
         return Ok(None);
     }
     let new_cost = cpu.cost("shift_ri")?;
@@ -1225,10 +1220,10 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     };
 
     let low = reg(target::named(wide.register, 2), 2);
-    let preserved: Lanes = _lanes(wide.register).difference(&_lanes(low.register)).copied().collect();
+    let preserved: Lanes = _lanes(wide.register).minus(&_lanes(low.register));
     let effects = _register_effects(shift, false, true)?;
-    let flags: Lanes = effects.1.intersection(&_flag_lanes(0xFFFF_FFFF)).copied().collect();
-    if !preserved.union(&flags).copied().collect::<Lanes>().is_subset(&dead_after[&id(shift)]) {
+    let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
+    if !preserved.or(&flags).is_subset(&dead_after[&id(shift)]) {
         return None;
     }
 
@@ -1268,9 +1263,9 @@ pub fn shuttles(body: &LirBody) -> LirBody {
             out.push(Arc::clone(&block.insns[index]));
             index += 1;
         }
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Remove a synthetic save/restore when the source survives between them.
@@ -1287,7 +1282,7 @@ pub fn restored_copies(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
         let mut insns = block.insns.clone();
-        let mut changed: HashSet<usize> = HashSet::new();
+        let mut changed: HashSet<usize> = HashSet::default();
         // `enumerate(insns)` walks the live list: later replacements are seen.
         for index in 0..insns.len() {
             let saved = Arc::clone(&insns[index]);
@@ -1332,15 +1327,15 @@ pub fn restored_copies(body: &LirBody) -> LirBody {
                     break;
                 };
                 if !reads.is_disjoint(&temporary_lanes)
-                    || !writes.is_disjoint(&temporary_lanes.union(&source_lanes).copied().collect())
+                    || !writes.is_disjoint(&temporary_lanes.or(&source_lanes))
                 {
                     break;
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _synthetic_register_copy(one: &Insn) -> bool {
@@ -1507,7 +1502,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
             return None;
         }
         if flags {
-            let read: Lanes = _flag_lanes(insn.rflags_read()).difference(&writes).copied().collect();
+            let read: Lanes = _flag_lanes(insn.rflags_read()).minus(&writes);
             reads.extend(read);
             // An undefined flag is no more the incoming flag than a defined
             // result is. LLVM models both as physical-register definitions;
@@ -1524,7 +1519,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
         for (register, access) in &used {
             let lanes = _lanes(*register);
             if declen::READS.contains(access) {
-                let read: Lanes = lanes.difference(&writes).copied().collect();
+                let read: Lanes = lanes.minus(&writes);
                 reads.extend(read);
             }
         }
@@ -1540,7 +1535,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
 }
 
 pub fn _flag_lanes(mask: u32) -> Lanes {
-    (0..32).filter(|bit| mask & (1 << bit) != 0).map(|bit| (Register::None, bit)).collect()
+    Lanes::flags(mask)
 }
 
 /// A bp-relative slot whose bytes the displacement alone names.
@@ -1599,12 +1594,12 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut dead = exits[&block.at].clone();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             if liveness::_terminator(one.what.as_ref()) {
                 let what = one.what.as_ref().expect("a terminator has semantics");
                 if what.op == Operation::Branch {
-                    dead = dead.difference(&_branch_reads(what)).copied().collect();
+                    dead = dead.minus(&_branch_reads(what));
                 }
                 continue;
             }
@@ -1678,16 +1673,16 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                 }
             }
             let (reads, writes) = effects;
-            dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+            dead = dead.or(&writes).minus(&reads);
         }
         let insns = block
             .insns
             .iter()
             .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 const _FUSED_BINARY: [&str; 5] = ["add", "sub", "and", "or", "xor"];
@@ -1760,9 +1755,9 @@ pub fn fused(body: &LirBody) -> LirBody {
                 at += 1;
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// Whether `load` may read its cell after this register materialization.
@@ -1813,8 +1808,8 @@ fn _delays_memory_read(load: &Insn, crossed: &Insn) -> bool {
         }
         _ => return false,
     };
-    let crossed_all: Lanes = crossed_reads.union(&crossed_writes).copied().collect();
-    let load_all: Lanes = load_reads.union(&address_lanes).copied().collect();
+    let crossed_all: Lanes = crossed_reads.or(&crossed_writes);
+    let load_all: Lanes = load_reads.or(&address_lanes);
     !(!load_writes.is_disjoint(&crossed_all)
         || !load_all.is_disjoint(&crossed_writes)
         || load.defines.iter().any(|value| crossed.uses.contains(value)))
@@ -1970,7 +1965,7 @@ pub fn far_loads(body: &LirBody) -> LirBody {
             .filter(|(_, one)| !_skippable_nothing(one))
             .map(|(index, _)| index)
             .collect();
-        let mut removed: HashSet<usize> = HashSet::new();
+        let mut removed: HashSet<usize> = HashSet::default();
         let mut at = 0;
         while at + 1 < work.len() {
             let Some(made) = _far_load(&insns[work[at]], &insns[work[at + 1]]) else {
@@ -1987,9 +1982,9 @@ pub fn far_loads(body: &LirBody) -> LirBody {
             .filter(|(index, _)| !removed.contains(index))
             .map(|(_, one)| one)
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _far_load(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
@@ -2281,7 +2276,7 @@ fn _loaded_scaled_add<'a>(
 
 /// Select physically adjacent load/scale/add tails across inert anchors.
 fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
-    let mut dead: HashSet<usize> = HashSet::new();
+    let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = false;
     for one in block.insns.iter().rev() {
         if flags_dead {
@@ -2297,7 +2292,7 @@ fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<
         .filter(|(_, one)| !_skippable_nothing(one))
         .map(|(index, _)| index)
         .collect();
-    let mut removed: HashSet<usize> = HashSet::new();
+    let mut removed: HashSet<usize> = HashSet::default();
     let mut at = 0;
     while at + 2 < work.len() {
         let indexes = &work[at..at + 3];
@@ -2329,7 +2324,7 @@ fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<
     }
     let insns =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
-    Ok(LirBlock { insns, ..block.clone() })
+    Ok(block.with_insns(insns))
 }
 
 /// Whether replacing `parts` drops a value read outside that region.
@@ -2349,7 +2344,7 @@ fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, users: &Counter)
     if eliminated.is_empty() {
         return false;
     }
-    let mut local = Counter::new();
+    let mut local = Counter::default();
     for one in parts {
         for value in &one.uses {
             *local.entry(*value).or_insert(0) += 1;
@@ -2366,7 +2361,7 @@ fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, users: &Counter)
 /// Select LEA for allocated arithmetic when the replaced flags are dead.
 pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let target_cpu = targets::profile(cpu)?;
-    let mut virtual_uses = Counter::new();
+    let mut virtual_uses = Counter::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
@@ -2391,7 +2386,7 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let block = _loaded_addresses(block, &virtual_uses, target_cpu)?;
-        let mut dead: HashSet<usize> = HashSet::new();
+        let mut dead: HashSet<usize> = HashSet::default();
         let mut flags_dead = false;
         for one in block.insns.iter().rev() {
             if flags_dead {
@@ -2458,9 +2453,9 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
                 index += 1;
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// `ir.ROOT.get(register)`: `ROOT` itself is private to `ir`, and its keys
@@ -2499,8 +2494,8 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         return Ok(body.clone());
     };
 
-    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::new();
-    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::new();
+    let mut definitions: IndexMap<u32, Option<Arc<Insn>>> = IndexMap::default();
+    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.insns() {
         for value in &one.defines {
             if definitions.contains_key(value) {
@@ -2605,9 +2600,9 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         })
     };
 
-    let mut substitutions: IndexMap<u32, (u32, Register)> = IndexMap::new();
-    let mut remove: HashSet<usize> = HashSet::new();
-    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::new();
+    let mut substitutions: IndexMap<u32, (u32, Register)> = IndexMap::default();
+    let mut remove: HashSet<usize> = HashSet::default();
+    let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
     for (candidate, definition) in definitions.clone() {
         let Some(definition) = definition else {
             continue;
@@ -2635,7 +2630,7 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         }
         let trial_substitutions: IndexMap<u32, (u32, Register)> =
             group.iter().map(|(value, _made, _consumers)| (*value, (candidate, root))).collect();
-        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::new();
+        let mut consumers: IndexMap<usize, Arc<Insn>> = IndexMap::default();
         for (_v, _d, found) in &group {
             for one in found {
                 consumers.insert(id(one), rewritten(one, &trial_substitutions));
@@ -2709,9 +2704,9 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
                 insns.push(Arc::clone(extension));
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    Ok(LirBody { blocks, ..body.clone() })
+    Ok(body.with_blocks(blocks))
 }
 
 /// Fold `mov result,left; add result,term` into one 67h LEA.
@@ -2958,9 +2953,9 @@ pub fn increments(body: &LirBody) -> LirBody {
             }
             insns.push(one);
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
@@ -3087,9 +3082,9 @@ pub fn tested(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
@@ -3147,9 +3142,9 @@ pub fn zero_compares(body: &LirBody) -> LirBody {
                 }
             }
         }
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// A plain move, writing nothing that shares a root with `register`.
@@ -3215,7 +3210,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
     // No calling convention passes the adjust flag in or out: a callee, a
     // caller after a return, and whatever runs after the body leaves may read
     // any other flag, but only an instruction here that reads AF reads it.
-    let exits: Lanes = every.difference(&_ADJUST).copied().collect();
+    let exits: Lanes = every.minus(&_ADJUST);
 
     let effects = |one: &Insn| -> (Lanes, Lanes) {
         if let Some(what) = &one.what {
@@ -3252,7 +3247,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         .map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect()))
         .collect();
     let mut live_in: HashMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
-    let mut out: HashMap<i64, Lanes> = HashMap::new();
+    let mut out: HashMap<i64, Lanes> = HashMap::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -3265,7 +3260,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
             out.insert(block.at, after.clone());
             let mut live = after;
             for (reads, writes) in steps[&block.at].iter().rev() {
-                live = live.difference(writes).copied().collect::<Lanes>().union(reads).copied().collect();
+                live = live.minus(writes).or(reads);
             }
             if live != live_in[&block.at] {
                 live_in.insert(block.at, live);
@@ -3321,9 +3316,9 @@ pub fn zeroes(body: &LirBody) -> LirBody {
             insns.push(one);
         }
         insns.reverse();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 const _WAITING: [&str; 36] = [
@@ -3340,7 +3335,7 @@ pub fn waits(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut following: Option<&Semantics> = None;
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             let what = one.what.as_ref();
             if what.is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty)) {
@@ -3357,9 +3352,9 @@ pub fn waits(body: &LirBody) -> LirBody {
             }
         }
         let insns = lir::without(&block.insns, |one| redundant.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// What `constants` believes a register holds: a literal, or a fresh
@@ -3375,8 +3370,8 @@ pub fn constants(body: &LirBody) -> LirBody {
     let mut objects = 0usize;
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut held: IndexMap<Reg, Known> = IndexMap::new();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut held: IndexMap<Reg, Known> = IndexMap::default();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in &block.insns {
             let what = one.what.as_ref();
             if what.is_some_and(|what| {
@@ -3456,9 +3451,9 @@ pub fn constants(body: &LirBody) -> LirBody {
             .iter()
             .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
             .collect();
-        blocks.push(LirBlock { insns, ..block.clone() });
+        blocks.push(block.with_insns(insns));
     }
-    LirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]

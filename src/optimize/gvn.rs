@@ -6,7 +6,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -125,7 +125,7 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
         .copied()
         .filter(|kind| !matches!(kind, Kind::Div | Kind::Rem | Kind::Convert | Kind::Copy))
         .collect::<BTreeSet<_>>();
-    let no_stands = IndexMap::new();
+    let no_stands = IndexMap::default();
 
     let key = |op: &Op| {
         let single = match &op.results[..] {
@@ -148,8 +148,8 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
         Some((expression.kind, expression.operands, expression.results))
     };
 
-    let mut expressions = IndexMap::<_, Vec<(i64, usize, Value)>>::new();
-    let mut definitions = IndexMap::<Value, (i64, i64)>::new();
+    let mut expressions = IndexMap::<_, Vec<(i64, usize, Value)>>::default();
+    let mut definitions = IndexMap::<Value, (i64, i64)>::default();
     let by_at = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let mut values = BTreeSet::<Value>::new();
     for block in &body.blocks {
@@ -168,7 +168,7 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
     let mut changed = false;
     let mut fresh = values.iter().map(|value| value.id).max().unwrap_or(0) + 1;
     let mut replacements = BTreeMap::<u32, Value>::new();
-    let mut insertions = IndexMap::<i64, Vec<(usize, Op)>>::new();
+    let mut insertions = IndexMap::<i64, Vec<(usize, Op)>>::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let parents = &predecessors[&block.at];
@@ -180,7 +180,7 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
         for (index, op) in block.ops.iter().enumerate() {
             let expression = key(op);
             let mut incoming = OrderedMap::<i64, Value>::new();
-            let mut missing = IndexMap::<i64, (usize, Op)>::new();
+            let mut missing = IndexMap::<i64, (usize, Op)>::default();
             if expression.is_some() && !op.defines.iter().any(|value| value.flags && live.contains(value)) {
                 for &parent in parents {
                     let substituted = ssa::substituted(op, &replacements).map_err(|error| error.to_string())?;
@@ -279,7 +279,7 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
             ops.push(erased);
             changed = true;
         }
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     if !changed {
         return Ok(body.clone());
@@ -314,5 +314,5 @@ pub(crate) fn joined(body: &Rc<MirBody>, insert: bool) -> Result<Rc<MirBody>, St
             .map_err(|error| error.to_string())?;
         out.push(MirBlock { phis, ops, ..block });
     }
-    Ok(Rc::new(MirBody { blocks: out, ..MirBody::clone(body) }))
+    Ok(Rc::new(body.with_blocks(out)))
 }

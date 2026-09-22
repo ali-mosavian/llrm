@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::regions::{RegionLayout, overlapping};
 use super::{effects, loops, pointerfacts};
@@ -195,7 +195,7 @@ pub fn built(body: &MirBody) -> MemorySSA<'_> {
     let live = Access::new(0, Kind::Live);
     let entries: IndexMap<i64, usize> =
         body.blocks.iter().enumerate().map(|(index, block)| (block.at, index + 1)).collect();
-    let mut sites: IndexMap<Site, Access> = IndexMap::new();
+    let mut sites: IndexMap<Site, Access> = IndexMap::default();
     let mut outgoing: BTreeMap<i64, usize> = BTreeMap::new();
     let mut next_id = entries.len() + 1;
     for block in &body.blocks {

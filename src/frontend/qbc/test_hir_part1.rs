@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::abi::physicalize;
@@ -55,7 +55,7 @@ fn machine(
     contracts: &IndexMap<i64, crate::abi::runtime::Contract>,
     pointer_model: Option<crate::backend::pointers::Model>,
 ) -> lir::LirBody {
-    let occurrences = IndexMap::new();
+    let occurrences = IndexMap::default();
     lower_mir::lowered(
         name,
         body,
@@ -329,8 +329,8 @@ fn test_machine_stage_dump_is_masm_intel_not_python_repr() {
         "sum",
         10,
         vec![lir::LirBlock::new(10, vec![Arc::new(insn.clone())])],
-        IndexMap::new(),
-        IndexMap::new(),
+        IndexMap::default(),
+        IndexMap::default(),
     );
 
     let dumped = qbstages::_lir(&body, None);
@@ -345,7 +345,7 @@ fn test_machine_stage_dump_is_masm_intel_not_python_repr() {
     };
     let mut call_body = body.clone();
     call_body.blocks[0].insns = vec![Arc::new(call)];
-    let callees = IndexMap::from([(
+    let callees = IndexMap::from_iter([(
         11,
         masm::Callee { code: vec![masm::InlinePart::Bytes(vec![0xd9, 0xfe])], ..masm::Callee::new("$inline_fsin", false) },
     )]);

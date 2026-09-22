@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
@@ -413,9 +413,9 @@ pub fn scheduled<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
             }
         }
         flush(&mut window, &mut out, &mut changed);
-        blocks.push(LirBlock { insns: out, ..block.clone() });
+        blocks.push(block.with_insns(out));
     }
-    Ok(if changed { LirBody { blocks, ..body.clone() } } else { body.clone() })
+    Ok(if changed { body.with_blocks(blocks) } else { body.clone() })
 }
 
 #[cfg(test)]

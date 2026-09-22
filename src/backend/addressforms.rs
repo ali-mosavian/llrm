@@ -2,11 +2,12 @@
 //! the memory operands that read it.
 
 use std::rc::Rc;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use crate::support::hash::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 use num_bigint::BigInt;
 
 use crate::analysis::induction::mod_floor;
@@ -17,7 +18,7 @@ use crate::model::mir::{self, Arg, Kind, MirBody, Op};
 use crate::model::passes::{AddressForm, OperationCosts};
 
 pub fn offsets(body: &MirBody) -> IndexMap<u32, (ir::Held, BigInt)> {
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
             if !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
@@ -195,7 +196,7 @@ pub fn indexed(
         .flat_map(|block| block.ops.iter().map(move |op| (op as *const Op, block.at)))
         .collect();
     let constant_offsets = offsets(body);
-    let mut frame_bases: IndexMap<u32, ir::Address> = IndexMap::new();
+    let mut frame_bases: IndexMap<u32, ir::Address> = IndexMap::default();
     for op in made.values() {
         if op.kind == Kind::Address
             && op.loads.is_empty()
@@ -308,8 +309,8 @@ pub fn indexed(
         }
     }
     // Python's `Counter`-like dicts: a missing value counts zero.
-    let mut bases: IndexMap<u32, i64> = IndexMap::new();
-    let mut other: IndexMap<u32, i64> = IndexMap::new();
+    let mut bases: IndexMap<u32, i64> = IndexMap::default();
+    let mut other: IndexMap<u32, i64> = IndexMap::default();
     let mut constant_bases: BTreeSet<u32> = BTreeSet::new();
     let mut unencodable_constant_bases: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
@@ -411,7 +412,7 @@ pub fn indexed(
         }
     }
 
-    let mut forms: IndexMap<u32, FoldedForm> = IndexMap::new();
+    let mut forms: IndexMap<u32, FoldedForm> = IndexMap::default();
     // `selected` puts a copied-and-constant-adjusted 16-bit address directly
     // in every based cell.  When cells are the result's only readers, the
     // operation that produced that result is part of the same address fold.
@@ -551,7 +552,7 @@ pub fn indexed(
         .filter(|secondary| secondary.before_spill(costs));
     let mut promoted: BTreeSet<u32> = BTreeSet::new();
     if let Some(secondary) = secondary {
-        let mut use_ops: IndexMap<u32, Vec<&Op>> = IndexMap::new();
+        let mut use_ops: IndexMap<u32, Vec<&Op>> = IndexMap::default();
         for block in &body.blocks {
             for op in &block.ops {
                 for value in &op.uses {
@@ -801,7 +802,7 @@ pub fn promote(
     if values.is_empty() {
         return Ok(blocks.clone());
     }
-    let mut definitions: IndexMap<u32, (i64, usize)> = IndexMap::new();
+    let mut definitions: IndexMap<u32, (i64, usize)> = IndexMap::default();
     for (&at, insns) in blocks {
         for (index, one) in insns.iter().enumerate() {
             for &value in &one.defines {
@@ -1002,7 +1003,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{FoldedForm, IndexedBase, indexed, scaled};
     use crate::backend::cpu;
@@ -1139,7 +1140,7 @@ mod tests {
 
         let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
-        assert_eq!(forms, IndexMap::new());
+        assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[address.id]));
     }
 
@@ -1363,7 +1364,7 @@ mod tests {
 
         let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[derived.id]), &[], None).unwrap();
 
-        assert_eq!(forms, IndexMap::new());
+        assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[]));
     }
 

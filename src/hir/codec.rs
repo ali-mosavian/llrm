@@ -7,7 +7,7 @@
 
 use std::any::Any;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::hir::model;
 use crate::hir::verify::{InvalidHIR, verify};
@@ -116,7 +116,7 @@ macro_rules! plain_record {
     ($name:ident, $tag:expr, $($field:ident => $key:literal),*) => {
         impl _Plain for model::$name {
             fn _plain(&self) -> JSON {
-                let mut out: IndexMap<String, JSON> = IndexMap::new();
+                let mut out: IndexMap<String, JSON> = IndexMap::default();
                 $(out.insert($key.to_owned(), self.$field._plain());)*
                 let tag: Option<&str> = $tag;
                 if let Some(tag) = tag {
@@ -333,7 +333,7 @@ fn _record(type_: &_Record, value: &JSON, where_: &str, tagged: bool) -> Result<
         missing.sort();
         return Err(InvalidHIR(format!("{where_}: missing fields {}", pyrepr::list(&missing))));
     }
-    let mut args = _Args::new();
+    let mut args = _Args::default();
     for (name, hint, _) in type_.fields {
         if let Some(one) = value.get(*name) {
             args.insert(name, _make(hint, one, &format!("{where_}.{name}"))?);

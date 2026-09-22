@@ -8,7 +8,7 @@
 //! control flow, trapping arithmetic, x87 work and relocations are deliberately
 //! outside it.
 
-use std::collections::HashSet;
+use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -95,13 +95,13 @@ fn _once(body: &LirBody) -> Option<LirBody> {
     let mut changed = false;
     for block in &body.blocks {
         let mut dead = exits[&block.at].clone();
-        let mut redundant: HashSet<usize> = HashSet::new();
+        let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
             let what = one.what.as_ref();
             if liveness::_terminator(what) {
                 let what = what.expect("a terminator has semantics");
                 if what.op == Operation::Branch {
-                    dead = dead.difference(&_branch_reads(what)).copied().collect();
+                    dead = dead.minus(&_branch_reads(what));
                 }
                 continue;
             }
@@ -118,22 +118,19 @@ fn _once(body: &LirBody) -> Option<LirBody> {
                 changed = true;
                 continue;
             }
-            dead = dead.union(&writes).copied().collect::<Lanes>().difference(&reads).copied().collect();
+            dead = dead.or(&writes).minus(&reads);
         }
         blocks.push(if redundant.is_empty() {
             block.clone()
         } else {
-            LirBlock {
-                insns: block
+            block.with_insns(block
                     .insns
                     .iter()
                     .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect(),
-                ..block.clone()
-            }
+                    .collect())
         });
     }
-    if changed { Some(LirBody { blocks, ..body.clone() }) } else { None }
+    if changed { Some(body.with_blocks(blocks)) } else { None }
 }
 
 /// Remove dead pure machine work to a fixed point across CFG edges.
@@ -154,7 +151,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::eliminated;
     use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
@@ -187,7 +184,7 @@ mod tests {
     }
 
     fn body(blocks: Vec<LirBlock>) -> LirBody {
-        LirBody::new("machine-dce", 0, blocks, IndexMap::new(), IndexMap::new())
+        LirBody::new("machine-dce", 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
     fn branch(at: i64, name: &str, uses: Vec<u32>) -> Arc<Insn> {

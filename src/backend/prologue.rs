@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::backend::frame::{self as frames, Frame};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
@@ -103,7 +103,7 @@ pub fn reserved(
     } else {
         body
     };
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let calls = calls.unwrap_or(&empty);
     let entry = body.blocks.iter().find(|block| block.at == body.entry);
     let Some(entry) = entry.filter(|entry| !entry.insns.is_empty()) else {
@@ -283,7 +283,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::reserved;
     use crate::backend::frame::{self, Frame};
@@ -311,11 +311,11 @@ mod tests {
             instruction(3, Operation::Return, "retf", vec![], vec![]),
         ];
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("procedure", 0, vec![block], IndexMap::new(), IndexMap::new())
+        LirBody::new("procedure", 0, vec![block], IndexMap::default(), IndexMap::default())
     }
 
     fn runtime() -> IndexMap<i64, String> {
-        IndexMap::from([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())])
+        IndexMap::from_iter([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())])
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
         body.blocks[0].insns.truncate(3);
         let mut slots = Frame::new(-16);
         slots.slot(1_i64, 4).unwrap();
-        let result = reserved(&body, &slots, Some(&IndexMap::from([(2, "B$CEND".to_owned())]))).unwrap();
+        let result = reserved(&body, &slots, Some(&IndexMap::from_iter([(2, "B$CEND".to_owned())]))).unwrap();
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().name.as_deref(), Some("sub"));
     }
 }

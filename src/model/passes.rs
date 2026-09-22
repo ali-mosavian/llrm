@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::ir::Space;
 use crate::model::lir::LirBody;
@@ -238,7 +238,7 @@ impl Default for Options {
 /// Python `LEVELS`: each `-O` level's options, in declaration order.
 #[allow(non_snake_case)]
 pub fn LEVELS() -> IndexMap<&'static str, Options> {
-    IndexMap::from([
+    IndexMap::from_iter([
         ("O2", Options::default()),
         ("Os", Options { level: "Os".to_owned(), grows: false, ..Options::default() }),
     ])
@@ -295,7 +295,7 @@ impl Where {
     pub fn named(&self) -> IndexMap<i64, String> {
         match &self.calls {
             Some(calls) if !calls.is_empty() => calls.clone(),
-            _ => IndexMap::new(),
+            _ => IndexMap::default(),
         }
     }
 }

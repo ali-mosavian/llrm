@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 /// `repr(value)`.
 pub trait Repr {

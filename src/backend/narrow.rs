@@ -7,9 +7,10 @@
 //! and a word is this target's natural load. Extracting the high word of a dword
 //! register otherwise costs a push and two pops.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use crate::support::hash::HashMap;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::mir::{self, Arg, Kind, MirBlock, MirBody, Op, Value};
 
@@ -29,7 +30,7 @@ type Id = (usize, usize);
 
 /// `body` with every narrowable dword load split into its read words.
 pub fn narrowed(body: &MirBody) -> MirBody {
-    let mut readers: HashMap<Value, Vec<Id>> = HashMap::new();
+    let mut readers: HashMap<Value, Vec<Id>> = HashMap::default();
     for (b, block) in body.blocks.iter().enumerate() {
         for (o, op) in block.ops.iter().enumerate() {
             for value in &op.uses {
@@ -40,7 +41,7 @@ pub fn narrowed(body: &MirBody) -> MirBody {
     let phis: BTreeSet<Value> =
         body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values().copied()).collect();
     let op_at = |(b, o): Id| &body.blocks[b].ops[o];
-    let mut halves: IndexMap<Id, Vec<(i64, Value)>> = IndexMap::new();
+    let mut halves: IndexMap<Id, Vec<(i64, Value)>> = IndexMap::default();
     let mut gone: BTreeSet<Id> = BTreeSet::new();
     for (b, block) in body.blocks.iter().enumerate() {
         for (o, op) in block.ops.iter().enumerate() {
@@ -69,23 +70,17 @@ pub fn narrowed(body: &MirBody) -> MirBody {
     if halves.is_empty() {
         return body.clone();
     }
-    MirBody {
-        blocks: body
+    body.with_blocks(body
             .blocks
             .iter()
             .enumerate()
-            .map(|(b, block)| MirBlock {
-                ops: block
+            .map(|(b, block)| block.with_ops(block
                     .ops
                     .iter()
                     .enumerate()
                     .flat_map(|(o, op)| _rewritten(op, (b, o), &halves, &gone))
-                    .collect(),
-                ..block.clone()
-            })
-            .collect(),
-        ..body.clone()
-    }
+                    .collect()))
+            .collect())
 }
 
 fn _result(op: &Op) -> Value {
@@ -144,7 +139,7 @@ fn _rewritten(op: &Op, id: Id, halves: &IndexMap<Id, Vec<(i64, Value)>>, gone: &
     let [r#ref] = op.loads.as_slice() else {
         unreachable!("_loaded matched one load")
     };
-    let mut made: HashMap<i64, Value> = HashMap::new();
+    let mut made: HashMap<i64, Value> = HashMap::default();
     let mut out = Vec::new();
     let mut sorted = found.clone();
     sorted.sort_by_key(|one| one.0);

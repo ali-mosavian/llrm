@@ -5,7 +5,7 @@
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
@@ -64,7 +64,7 @@ pub(crate) fn _closed_loop(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBod
         return Ok(body.clone());
     }
 
-    let mut defined: IndexMap<Value, i64> = IndexMap::new();
+    let mut defined: IndexMap<Value, i64> = IndexMap::default();
     for block in body.blocks.iter().filter(|block| loop_.body.contains(&block.at)) {
         let values = block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()));
         for value in values.filter(|value| !value.flags) {
@@ -77,7 +77,7 @@ pub(crate) fn _closed_loop(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBod
 
     // Phi inputs are used on their incoming edge.  A phi in the dedicated
     // exit is already the LCSSA boundary, so only downstream phis count here.
-    let mut use_sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::new();
+    let mut use_sites: IndexMap<Value, BTreeSet<i64>> = IndexMap::default();
     for block in &body.blocks {
         if loop_.body.contains(&block.at) {
             continue;
@@ -185,11 +185,11 @@ pub(crate) fn _closed_loop(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBod
         } else {
             block.ops.clone()
         };
-        Ok(MirBlock { phis: existing, ops, ..block.clone() })
+        Ok(MirBlock { phis: existing, ..block.with_ops(ops) })
     };
 
     let blocks = body.blocks.iter().map(rewritten).collect::<Result<Vec<_>, _>>()?;
-    Ok(Rc::new(MirBody { blocks, ..MirBody::clone(body) }))
+    Ok(Rc::new(body.with_blocks(blocks)))
 }
 
 #[cfg(test)]

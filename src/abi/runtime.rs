@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::frontend::blocks::INLINE_TABLE;
 use crate::support::pyrepr::{self, Repr};
@@ -384,7 +384,7 @@ pub const SLOTS: [Reg; 11] = Reg::ALL;
 // the same statements in the same order.
 pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> = LazyLock::new(
     || {
-        let mut variants: IndexMap<(&'static str, &'static str), Contract> = IndexMap::new();
+        let mut variants: IndexMap<(&'static str, &'static str), Contract> = IndexMap::default();
 
         for _family in ["pds71", "vbdos"] {
             variants.insert(
@@ -1561,7 +1561,7 @@ fn _entry(variants: &mut IndexMap<(&'static str, &'static str), Contract>, famil
 // machine code of the program's choosing.
 pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'static str>>> =
     LazyLock::new(|| {
-        IndexMap::from([(
+        IndexMap::from_iter([(
             ("b$seg", "qb45"),
             BTreeSet::from([
                 "B$DSEG",
@@ -1847,7 +1847,7 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
     let rows: toml::Table = text
         .parse()
         .map_err(|error: toml::de::Error| error.to_string())?;
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for (name, row) in &rows {
         let row = row
             .as_table()
@@ -1967,7 +1967,7 @@ pub fn never_returns(name: &str) -> bool {
 // ERROR handler or B$FERROR; neither reads a register its caller left.
 pub static ERROR_FUNNEL_INPUTS: LazyLock<IndexMap<&'static str, BTreeSet<Reg>>> =
     LazyLock::new(|| {
-        IndexMap::from([
+        IndexMap::from_iter([
             ("B$RUNERR", BTreeSet::from([Reg::Bx])),
             ("B$RUNERRINFO", BTreeSet::from([Reg::Bx])),
         ])
@@ -1989,7 +1989,7 @@ mod tests {
 
     /// `{0: name}`.
     fn at_zero(name: &str) -> IndexMap<i64, String> {
-        IndexMap::from([(0, name.to_owned())])
+        IndexMap::from_iter([(0, name.to_owned())])
     }
 
     /// `runtime.per_call({0: name}, family)[0]`.

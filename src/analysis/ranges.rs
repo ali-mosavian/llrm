@@ -2,10 +2,11 @@
 //!
 //! Port of `qbopt/analysis/ranges.py`.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{consts, induction, loops};
@@ -27,7 +28,7 @@ pub(crate) struct Interval {
 /// A non-wrapping near indexed access as the static byte interval it can touch.
 ///
 /// Direct port of `qbopt.analysis.ranges:covering`.
-pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) -> MemRef {
+pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interval>) -> Cow<'a, MemRef> {
     let reference = symbolic_ref(reference);
     let Some(address) = reference.addr else {
         return reference;
@@ -58,7 +59,7 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
     let (Ok(disp), Ok(width)) = (i64::try_from(&low), u32::try_from(&width)) else {
         return reference;
     };
-    let mut covered = reference.clone();
+    let mut covered = reference.into_owned();
     covered.addr = Some(crate::objectfile::module::Addr {
         disp,
         base: iced_x86::Register::None,
@@ -66,7 +67,7 @@ pub(crate) fn covering(reference: &MemRef, known: &BTreeMap<Value, Interval>) ->
     });
     covered.base = None;
     covered.width = width;
-    covered
+    Cow::Owned(covered)
 }
 
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
@@ -81,7 +82,7 @@ pub(crate) fn on_edge(
     if !block.succ.contains(&successor) {
         return Err("not a successor".to_owned());
     }
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
     let mut result = known.clone();
     if block.ops.is_empty() || block.succ.len() != 2 {
@@ -255,8 +256,8 @@ pub(crate) fn _operand(
         if fact.width >= held.width {
             return _operand(
                 &Arg::Const(Const::new(fact.n.clone(), held.width)),
-                &IndexMap::new(),
-                &IndexMap::new(),
+                &IndexMap::default(),
+                &IndexMap::default(),
             );
         }
     }
@@ -376,13 +377,13 @@ fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width: u32
 /// Direct port of `qbopt.analysis.ranges:bounded`.
 pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body, None, None, None, None);
-    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::new();
+    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::default();
     let predecessors = loops::predecessors(&body.blocks);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let mut inside = loop_.body.iter().copied().collect::<PySet<i64>>();
         inside.discard(&loop_.header);
-        let mut known: IndexMap<Value, Interval> = IndexMap::new();
+        let mut known: IndexMap<Value, Interval> = IndexMap::default();
         let header = body
             .blocks
             .iter()
@@ -549,9 +550,9 @@ pub(crate) fn dominated_edges(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexM
         })
         .collect::<Vec<_>>();
     edges.sort_by_key(|(_, successor)| dominators.get(successor).map_or(0, BTreeSet::len));
-    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::new();
+    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::default();
     for block in &body.blocks {
-        let mut known: IndexMap<Value, Interval> = IndexMap::new();
+        let mut known: IndexMap<Value, Interval> = IndexMap::default();
         // Apply the path from outermost to innermost dominator once. Repeating
         // a relational `a < b` constraint would falsely walk both open
         // intervals inward rather than intersecting with one original fact.
@@ -594,7 +595,7 @@ pub(crate) fn constants(
 /// Exact values computed without consulting memory.
 #[allow(dead_code)] // transform.py's, not yet ported
 pub(crate) fn singletons(body: &MirBody) -> IndexMap<Value, Interval> {
-    let mut known = IndexMap::<Value, Interval>::new();
+    let mut known = IndexMap::<Value, Interval>::default();
     loop {
         let before = known.len();
         for block in &body.blocks {
@@ -605,7 +606,7 @@ pub(crate) fn singletons(body: &MirBody) -> IndexMap<Value, Interval> {
                 let incoming = phi.incoming.values().map(|value| known.get(value)).collect::<Vec<_>>();
                 if !incoming.is_empty()
                     && !incoming.contains(&None)
-                    && incoming.iter().collect::<std::collections::HashSet<_>>().len() == 1
+                    && incoming.iter().collect::<crate::support::hash::HashSet<_>>().len() == 1
                 {
                     let interval = incoming[0].expect("known").clone();
                     known.insert(phi.result, interval);
@@ -618,7 +619,7 @@ pub(crate) fn singletons(body: &MirBody) -> IndexMap<Value, Interval> {
                 if known.contains_key(&result.value) {
                     continue;
                 }
-                if let Some(interval) = _computed(op, &known, &IndexMap::new()) {
+                if let Some(interval) = _computed(op, &known, &IndexMap::default()) {
                     if interval.low == interval.high {
                         known.insert(result.value, interval);
                     }

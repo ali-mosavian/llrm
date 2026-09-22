@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::abi::runtime;
@@ -82,8 +82,8 @@ fn test_module_constant_returns_require_every_exit_to_agree() {
     let mut disagrees = agrees.clone();
     disagrees.blocks = vec![left, right];
     assert_eq!(
-        constant_returns(&IndexMap::from([("yes".to_owned(), Rc::new(agrees)), ("no".to_owned(), Rc::new(disagrees))])),
-        IndexMap::from([("yes".to_owned(), vec![Const::new(37, 2)])])
+        constant_returns(&IndexMap::from_iter([("yes".to_owned(), Rc::new(agrees)), ("no".to_owned(), Rc::new(disagrees))])),
+        IndexMap::from_iter([("yes".to_owned(), vec![Const::new(37, 2)])])
     );
 }
 
@@ -91,21 +91,21 @@ fn test_module_constant_returns_require_every_exit_to_agree() {
 fn test_parameter_specialization_requires_every_call_to_agree() {
     let (seven, nine) = (Const::new(7, 2), Const::new(9, 2));
     let (a_calls, b_calls) = (calls(&[(1, "leaf")]), calls(&[(2, "leaf")]));
-    let a_constants = IndexMap::from([(1, vec![Some(seven.clone())])]);
-    let b_constants = IndexMap::from([(2, vec![Some(nine)])]);
-    let procedures = IndexMap::from([
+    let a_constants = IndexMap::from_iter([(1, vec![Some(seven.clone())])]);
+    let b_constants = IndexMap::from_iter([(2, vec![Some(nine)])]);
+    let procedures = IndexMap::from_iter([
         ("a".to_owned(), (&a_calls, &a_constants)),
         ("b".to_owned(), (&b_calls, &b_constants)),
     ]);
-    assert_eq!(constant_parameters(&procedures, &names(&["leaf"])), Parameters::new());
-    let b_constants = IndexMap::from([(2, vec![Some(seven.clone())])]);
-    let procedures = IndexMap::from([
+    assert_eq!(constant_parameters(&procedures, &names(&["leaf"])), Parameters::default());
+    let b_constants = IndexMap::from_iter([(2, vec![Some(seven.clone())])]);
+    let procedures = IndexMap::from_iter([
         ("a".to_owned(), (&a_calls, &a_constants)),
         ("b".to_owned(), (&b_calls, &b_constants)),
     ]);
     assert_eq!(
         constant_parameters(&procedures, &names(&["leaf"])),
-        IndexMap::from([("leaf".to_owned(), vec![Some(seven)])])
+        IndexMap::from_iter([("leaf".to_owned(), vec![Some(seven)])])
     );
 }
 
@@ -120,13 +120,13 @@ fn test_current_parameter_constants_reads_a_sccp_returned_actual() {
     let body = sealed(1, vec![MirBlock::new(1, vec![], vec![materialized, argument, call], vec![])]);
     assert_eq!(
         current_parameter_constants(
-            &IndexMap::from([("caller".to_owned(), Rc::new(body))]),
-            &IndexMap::from([("caller".to_owned(), calls(&[(2, "choose")]))]),
-            &IndexMap::from([("caller".to_owned(), IndexMap::from([(2, BTreeSet::from([1]))]))]),
-            &IndexMap::from([("choose".to_owned(), vec![frame_parameter()])]),
+            &IndexMap::from_iter([("caller".to_owned(), Rc::new(body))]),
+            &IndexMap::from_iter([("caller".to_owned(), calls(&[(2, "choose")]))]),
+            &IndexMap::from_iter([("caller".to_owned(), IndexMap::from_iter([(2, BTreeSet::from([1]))]))]),
+            &IndexMap::from_iter([("choose".to_owned(), vec![frame_parameter()])]),
             &names(&["choose"]),
         ),
-        IndexMap::from([("choose".to_owned(), vec![Some(Const::new(4, 2))])])
+        IndexMap::from_iter([("choose".to_owned(), vec![Some(Const::new(4, 2))])])
     );
 }
 
@@ -140,22 +140,22 @@ fn test_current_call_constants_keeps_a_per_call_fact_when_another_call_is_dynami
     let second = argument(3, Arg::Held(Held { value: dynamic, width: 2 }));
     let second_call = op(4, Operation::Nothing, Kind::Call);
     let body = sealed(0, vec![MirBlock::new(0, vec![], vec![known, first, first_call, second, second_call], vec![])]);
-    let parameters = IndexMap::from([("choose".to_owned(), vec![frame_parameter()])]);
+    let parameters = IndexMap::from_iter([("choose".to_owned(), vec![frame_parameter()])]);
     let calls = calls(&[(2, "choose"), (4, "choose")]);
-    let arguments = IndexMap::from([(2, BTreeSet::from([1])), (4, BTreeSet::from([3]))]);
+    let arguments = IndexMap::from_iter([(2, BTreeSet::from([1])), (4, BTreeSet::from([3]))]);
     assert_eq!(
         current_call_constants(&Rc::new(MirBody::clone(&body)), &calls, &arguments, &parameters),
-        IndexMap::from([(2, vec![Some(Const::new(4, 2))]), (4, vec![None])])
+        IndexMap::from_iter([(2, vec![Some(Const::new(4, 2))]), (4, vec![None])])
     );
     assert_eq!(
         current_parameter_constants(
-            &IndexMap::from([("caller".to_owned(), Rc::new(body))]),
-            &IndexMap::from([("caller".to_owned(), calls)]),
-            &IndexMap::from([("caller".to_owned(), arguments)]),
+            &IndexMap::from_iter([("caller".to_owned(), Rc::new(body))]),
+            &IndexMap::from_iter([("caller".to_owned(), calls)]),
+            &IndexMap::from_iter([("caller".to_owned(), arguments)]),
             &parameters,
             &names(&["choose"]),
         ),
-        Parameters::new()
+        Parameters::default()
     );
 }
 
@@ -175,7 +175,7 @@ fn test_pure_call_removal_drops_its_exact_argument_pushes() {
     contract.cleanup = Some(0);
     contract.caller_cleanup = 2;
 
-    let sites = argument_sites(&body, &IndexMap::from([(2, contract)]));
+    let sites = argument_sites(&body, &IndexMap::from_iter([(2, contract)]));
     let made = remove_dead_pure_calls(&Rc::new(MirBody::clone(&body)), &calls(&[(2, "leaf")]), &names(&["leaf"]), &sites).unwrap();
     assert_eq!(made.blocks[0].ops.iter().map(|op| op.kind).collect::<Vec<_>>(), vec![Kind::Copy, Kind::Return]);
 }
@@ -189,9 +189,9 @@ fn test_purity_refuses_nontermination_and_nonlocal_stores() {
     store.stores = vec![global()];
     let returned = _returned(1, 1).blocks[0].ops.last().unwrap().clone();
     let writing = sealed(1, vec![MirBlock::new(1, vec![], vec![store, returned], vec![])]);
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     assert_eq!(
-        pure_procedures(&IndexMap::from([
+        pure_procedures(&IndexMap::from_iter([
             ("loop".to_owned(), (&looping, &empty)),
             ("write".to_owned(), (&writing, &empty)),
         ])),
@@ -221,9 +221,9 @@ fn test_readonly_procedure_allows_only_direct_nonvolatile_static_reads() {
     store.results = vec![Arg::Cell(Cell { r#ref: global() })];
     store.stores = vec![global()];
     let writing = sealed(1, vec![MirBlock::new(1, vec![], vec![store, returned], vec![])]);
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     assert_eq!(
-        readonly_procedures(&IndexMap::from([
+        readonly_procedures(&IndexMap::from_iter([
             ("read".to_owned(), (&body, &empty)),
             ("volatile".to_owned(), (&volatile_body, &empty)),
             ("write".to_owned(), (&writing, &empty)),
@@ -238,8 +238,8 @@ fn test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail() {
     let call = op(2, Operation::Nothing, Kind::Call);
     let returned = op(3, Operation::Nothing, Kind::Return);
     let caller = sealed(2, vec![MirBlock::new(2, vec![], vec![call.clone(), returned], vec![])]);
-    let (spin_calls, caller_calls) = (IndexMap::new(), calls(&[(2, "spin")]));
-    let procedures = IndexMap::from([
+    let (spin_calls, caller_calls) = (IndexMap::default(), calls(&[(2, "spin")]));
+    let procedures = IndexMap::from_iter([
         ("spin".to_owned(), (&spin, &spin_calls)),
         ("caller".to_owned(), (&caller, &caller_calls)),
     ]);
@@ -253,10 +253,10 @@ fn test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail() {
 #[test]
 fn test_noreturn_summary_does_not_make_an_exported_body_a_private_fact() {
     let spin = sealed(1, vec![MirBlock::new(1, vec![], vec![], vec![1])]);
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
 
     assert_eq!(
-        noreturn_procedures(&IndexMap::from([("exported".to_owned(), (&spin, &empty))]), &BTreeSet::new()),
+        noreturn_procedures(&IndexMap::from_iter([("exported".to_owned(), (&spin, &empty))]), &BTreeSet::new()),
         BTreeSet::new()
     );
 }
@@ -271,7 +271,7 @@ fn test_mutually_recursive_private_terminal_bodies_are_noreturn() {
 
     assert_eq!(
         noreturn_procedures(
-            &IndexMap::from([
+            &IndexMap::from_iter([
                 ("first".to_owned(), (&first, &first_calls)),
                 ("second".to_owned(), (&second, &second_calls)),
             ]),
@@ -287,11 +287,11 @@ fn test_noreturn_scc_rejects_a_member_with_a_normal_return() {
     let returned = op(4, Operation::Nothing, Kind::Return);
     let first = sealed(1, vec![MirBlock::new(1, vec![], vec![call_b], vec![])]);
     let second = sealed(3, vec![MirBlock::new(3, vec![], vec![returned], vec![])]);
-    let (first_calls, second_calls) = (calls(&[(2, "second")]), IndexMap::new());
+    let (first_calls, second_calls) = (calls(&[(2, "second")]), IndexMap::default());
 
     assert_eq!(
         noreturn_procedures(
-            &IndexMap::from([
+            &IndexMap::from_iter([
                 ("first".to_owned(), (&first, &first_calls)),
                 ("second".to_owned(), (&second, &second_calls)),
             ]),

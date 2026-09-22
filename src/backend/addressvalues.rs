@@ -57,10 +57,7 @@ pub fn converted(body: &LirBody) -> LirBody {
     converted.blocks = body
         .blocks
         .iter()
-        .map(|block| LirBlock {
-            insns: block.insns.iter().map(instruction).collect(),
-            ..block.clone()
-        })
+        .map(|block| block.with_insns(block.insns.iter().map(instruction).collect()))
         .collect();
     converted
 }
@@ -69,7 +66,7 @@ pub fn converted(body: &LirBody) -> LirBody {
 mod tests {
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
     use iced_x86::Register;
 
     use super::converted;
@@ -117,8 +114,8 @@ mod tests {
                     insn(2, semantics(Operation::Move, vec![held(9)], vec![Loc::Mem(seg)])),
                 ],
             )],
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
 
         let printed: Vec<String> = converted(&body).blocks[0].insns.iter().map(|one| one.what.repr()).collect();

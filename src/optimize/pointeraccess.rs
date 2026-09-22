@@ -202,10 +202,7 @@ pub(crate) fn split(body: Rc<MirBody>) -> Rc<MirBody> {
             });
             changed = true;
         }
-        blocks.push(mir::MirBlock {
-            ops: operations,
-            ..block.clone()
-        });
+        blocks.push(block.with_ops(operations));
     }
 
     if changed {

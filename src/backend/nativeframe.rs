@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::{Code, FlowControl, Register};
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::frontend::blocks::Block;
 use crate::frontend::declen::{Insn, WRITES, instruction_info_factory};
@@ -91,7 +91,7 @@ pub fn bound(body: &LirBody, layout: &Plan) -> LirBody {
 #[must_use]
 pub fn pins(body: &LirBody, layout: &Plan) -> IndexMap<u32, Register> {
     let registers: IndexMap<i64, Register> = layout.registers.iter().copied().collect();
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         let Some(register) = registers.get(&one.at) else { continue };
@@ -116,7 +116,7 @@ pub fn checked(blocks: &[Block], layout: &Plan, cleanup: &IndexMap<usize, i64>) 
         .iter()
         .find(|block| block.insns.iter().any(|insn| insn.at as i64 == layout.entry.reserve_at))?;
     let mut outgoing: BTreeSet<(i64, i64, u32)> = BTreeSet::new();
-    let mut depths: IndexMap<usize, i64> = IndexMap::from([(first.at, layout.entry.floor)]);
+    let mut depths: IndexMap<usize, i64> = IndexMap::from_iter([(first.at, layout.entry.floor)]);
     let mut pending = vec![first.at];
     while let Some(at) = pending.pop() {
         let block = by_start[&at];
@@ -442,7 +442,7 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::FlowControl;
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::{balanced, entry, plan};
     use crate::backend::{frame, prologue};
@@ -571,8 +571,8 @@ mod tests {
                     )
                 })
                 .collect(),
-            IndexMap::new(),
-            IndexMap::new(),
+            IndexMap::default(),
+            IndexMap::default(),
         );
         let mut slots = frame::of(&low, None, "", Some(plan.clone())).unwrap();
         assert_eq!(slots.slot(1_i64, 4), Ok(-80));
@@ -593,7 +593,7 @@ mod tests {
             panic!("a lost release anchor is refused");
         };
         assert!(message.contains("release anchor"));
-        assert!(balanced(&parts, &plan, &IndexMap::from([(0x6BF, 0)])));
+        assert!(balanced(&parts, &plan, &IndexMap::from_iter([(0x6BF, 0)])));
         // Address folding changed allocation: POP's spill store shared its address
         // and the frame release gate refused a unique real restore as duplicated.
         let spill = Arc::new(lir::Insn::new(0x6C5, Some((0x6C5, 0x6C5)), None, vec![], vec![]));
@@ -607,9 +607,9 @@ mod tests {
         }
         let released = prologue::reserved(&expanded, &slots, None).unwrap();
         assert_eq!(released.insns().iter().filter(|one| one.frame_adjust).count(), 2);
-        assert!(!balanced(&parts, &plan, &IndexMap::new()));
-        assert!(!balanced(&parts, &plan, &IndexMap::from([(0x6BF, 2)])));
-        assert!(!balanced(&without(&parts, 0x6C2), &plan, &IndexMap::from([(0x6BF, 0)])));
+        assert!(!balanced(&parts, &plan, &IndexMap::default()));
+        assert!(!balanced(&parts, &plan, &IndexMap::from_iter([(0x6BF, 2)])));
+        assert!(!balanced(&without(&parts, 0x6C2), &plan, &IndexMap::from_iter([(0x6BF, 0)])));
     }
 
     #[test]
@@ -619,7 +619,7 @@ mod tests {
             let parts = owned(&all, start);
             let plan = plan(&parts, start).unwrap();
             assert!(parts.iter().all(|block| block.insns.iter().all(|insn| insn.flow() != FlowControl::Call)));
-            assert!(balanced(&parts, &plan, &IndexMap::new()));
+            assert!(balanced(&parts, &plan, &IndexMap::default()));
         }
     }
 }

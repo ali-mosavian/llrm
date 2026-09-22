@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::{liveness, loops};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Value};
@@ -127,7 +127,7 @@ pub(crate) fn r#static(body: &MirBody, costs: &OperationCosts) -> Option<i64> {
 /// Profile-free block frequencies, or `None` for conflicting proofs.
 pub(crate) fn _frequencies(body: &MirBody, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let mut frequency = body.blocks.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
-    let empty = IndexMap::new();
+    let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();

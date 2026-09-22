@@ -253,16 +253,9 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
                     })
                     .collect()
             };
-            rewritten.push(MirBlock {
-                ops,
-                phis,
-                ..block.clone()
-            });
+            rewritten.push(MirBlock { phis, ..block.with_ops(ops) });
         }
-        let changed = MirBody {
-            blocks: rewritten,
-            ..MirBody::clone(body)
-        };
+        let changed = body.with_blocks(rewritten);
         let changed_header = changed.block(header.at).expect("header is a block");
         let changed_latch = changed.block(latch.at).expect("latch is a block");
         return _counted_down(&Rc::new(at_body(
@@ -523,15 +516,9 @@ pub(crate) fn _step_test(body: &Rc<MirBody>, loop_: &Loop, header: &MirBlock) ->
                 };
                 ops.push(op);
             }
-            rewritten.push(MirBlock {
-                ops,
-                ..block.clone()
-            });
+            rewritten.push(block.with_ops(ops));
         }
-        return Rc::new(MirBody {
-            blocks: rewritten,
-            ..MirBody::clone(body)
-        });
+        return Rc::new(body.with_blocks(rewritten));
     }
     body.clone()
 }

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBody, Op, Value};

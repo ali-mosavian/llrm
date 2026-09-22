@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use iced_x86::Register;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
@@ -137,7 +137,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
 /// so the caller passes them, or `None` for a plain `MirBody`.
 pub fn _pinned(
     pins: Option<&crate::model::mir::OrderedMap<crate::model::mir::Value, iced_x86::Register>>,
-) -> indexmap::IndexMap<u32, iced_x86::Register> {
+) -> crate::support::hash::IndexMap<u32, iced_x86::Register> {
     pins.map(|pins| pins.iter().map(|(value, register)| (value.id, *register)).collect())
         .unwrap_or_default()
 }
@@ -147,7 +147,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use indexmap::IndexMap;
+    use crate::support::hash::IndexMap;
 
     use super::*;
     use crate::model::ir::{self, Loc, Operation};
@@ -182,7 +182,7 @@ mod tests {
         };
         let source = Insn::new(1, Some((1, 1)), Some(what), vec![2], vec![1]);
         let mut body =
-            LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::new(), IndexMap::new());
+            LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::default(), IndexMap::default());
         body.inputs = BTreeSet::from([1]);
         let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false) else {
             panic!("the gate let a lost definition through");
@@ -198,7 +198,7 @@ mod tests {
         let mut pins = OrderedMap::new();
         pins.insert(Value::new(7, 0x10), Register::SI);
         pins.insert(Value::new(3, 0x12), Register::DI);
-        assert_eq!(_pinned(Some(&pins)), IndexMap::from([(7, Register::SI), (3, Register::DI)]));
+        assert_eq!(_pinned(Some(&pins)), IndexMap::from_iter([(7, Register::SI), (3, Register::DI)]));
         assert!(_pinned(None).is_empty());
     }
 }

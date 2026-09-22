@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::model::ir::{Loc, Mem, Operation, Reg, Semantics};
@@ -60,10 +60,10 @@ fn test_current_mir_decides_whether_a_call_invalidates_memory() {
             } else {
                 op(10, Operation::Nothing, vec![], vec![], Kind::Nothing)
             };
-            let held: Holders = IndexMap::from([(r#ref, Holder::Value(value))]);
-            let calls = if metadata { calls(&[(10, "B$HARY")]) } else { IndexMap::new() };
-            let expected = if real_call { IndexMap::new() } else { held.clone() };
-            assert_eq!(_after(&call, &held, None, &calls, None), expected);
+            let held: Holders = IndexMap::from_iter([(r#ref, Holder::Value(value))]);
+            let calls = if metadata { calls(&[(10, "B$HARY")]) } else { IndexMap::default() };
+            let expected = if real_call { IndexMap::default() } else { held.clone() };
+            assert_eq!(_after(&call, held.clone(), None, &calls, None), expected);
         }
     }
 }
@@ -149,7 +149,7 @@ fn test_runtime_name_cannot_override_unknown_mir_effects() {
 fn test_disjoint_mir_effects_keep_values_without_runtime_names() {
     let body = body_with_call(beyond(1), true);
     let shared = Rc::new(body.clone());
-    let forwarded = forwardable(&shared, None, &IndexMap::new(), &BTreeSet::from([2]));
+    let forwarded = forwardable(&shared, None, &IndexMap::default(), &BTreeSet::from([2]));
     assert_eq!(forwarded.len(), 1);
     assert_eq!(forwarded[0].value, Holder::Value(body.blocks[0].ops[0].uses[0]));
 }
@@ -162,7 +162,7 @@ fn test_dead_store_uses_call_memory_effects() {
         let mut again = body.blocks[0].ops[0].clone();
         again.at = 2;
         body.blocks[0].ops[2] = again;
-        let calls = if disjoint { IndexMap::new() } else { calls(&[(1, "B$MUI4")]) };
+        let calls = if disjoint { IndexMap::default() } else { calls(&[(1, "B$MUI4")]) };
         let removed = dead_stores(&body, None, &calls, None, None, true);
         assert_eq!(!removed.is_empty(), disjoint);
     }
@@ -179,7 +179,7 @@ fn test_opaque_memory_footprint_preserves_only_disjoint_values() {
         barrier.op = Some(OpCode::Operation(Operation::Barrier));
         barrier.kind = Kind::Opaque;
         barrier.memory_complete = complete;
-        assert_eq!(!forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([2])).is_empty(), reused);
+        assert_eq!(!forwardable(&Rc::new(body.clone()), None, &IndexMap::default(), &BTreeSet::from([2])).is_empty(), reused);
     }
 }
 
@@ -194,7 +194,7 @@ fn test_complete_write_only_call_does_not_make_prior_store_observable() {
     again.at = 2;
     body.blocks[0].ops[2] = again;
 
-    let removed = dead_stores(&body, None, &IndexMap::new(), None, None, true);
+    let removed = dead_stores(&body, None, &IndexMap::default(), None, None, true);
     assert_eq!(removed, vec![&body.blocks[0].ops[0]]);
     assert!(std::ptr::eq(removed[0], &body.blocks[0].ops[0]));
 }
@@ -217,7 +217,7 @@ fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
     body.blocks[0].ops = vec![store, load];
 
     let private = |one: &MemRef| *one == cell;
-    let removed = dead_stores(&body, None, &IndexMap::new(), Some(&private), None, true);
+    let removed = dead_stores(&body, None, &IndexMap::default(), Some(&private), None, true);
     assert_eq!(removed, vec![&body.blocks[0].ops[0]]);
 }
 
@@ -265,7 +265,7 @@ fn loop_body(alias: bool) -> MirBody {
 fn test_preheader_store_serves_a_loop_read() {
     let body = loop_body(false);
     let shared = Rc::new(body.clone());
-    let found = forwardable(&shared, None, &IndexMap::new(), &BTreeSet::from([1]));
+    let found = forwardable(&shared, None, &IndexMap::default(), &BTreeSet::from([1]));
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].value, Holder::Value(body.blocks[0].ops[0].uses[0]));
 }
@@ -273,7 +273,7 @@ fn test_preheader_store_serves_a_loop_read() {
 #[test]
 fn test_aliasing_backedge_keeps_the_load() {
     let body = loop_body(true);
-    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::default(), &BTreeSet::from([1])).is_empty());
 }
 
 #[test]
@@ -281,12 +281,12 @@ fn test_store_on_only_one_entry_path_cannot_supply_the_load() {
     let mut body = loop_body(false);
     body.entry = 4;
     body.blocks.push(MirBlock::new(4, vec![], vec![], vec![0, 1]));
-    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::default(), &BTreeSet::from([1])).is_empty());
 }
 
 #[test]
 fn test_call_on_backedge_invalidates_the_preheader_store() {
     let mut body = loop_body(false);
     body.blocks[2].ops = vec![op(2, Operation::Call, vec![], vec![], Kind::Call)];
-    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::new(), &BTreeSet::from([1])).is_empty());
+    assert!(forwardable(&Rc::new(body.clone()), None, &IndexMap::default(), &BTreeSet::from([1])).is_empty());
 }

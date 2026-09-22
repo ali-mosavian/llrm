@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use indexmap::{IndexMap, IndexSet};
+use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
@@ -82,8 +82,8 @@ pub struct Indexes {
 
 /// Number every point a value can start or stop being live.
 pub fn indexed(body: &LirBody) -> Indexes {
-    let mut at = IndexMap::new();
-    let mut span = IndexMap::new();
+    let mut at = IndexMap::default();
+    let mut span = IndexMap::default();
     let mut next_slot = 0;
     for block in &body.blocks {
         let first = next_slot;
@@ -137,7 +137,7 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// and nothing reads it in order.
 fn _ranges(body: &LirBody, index: &Indexes) -> IndexMap<u32, Interval> {
     let (live_in, live_out) = allocate::live(body);
-    let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::new();
+    let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     for block in &body.blocks {
         let (first, last) = index.span[&block.at];
         let mut alive: IndexMap<u32, i64> = live_out[&block.at].iter().map(|one| (*one, last)).collect();
@@ -255,7 +255,7 @@ pub fn weights(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, f64> {
 /// `references weighted by loop depth / (live slots + grace)`.
 fn _weights(body: &LirBody, _index: &Indexes, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
     let deep = depths(body);
-    let mut total: IndexMap<u32, f64> = IndexMap::new();
+    let mut total: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = level(deep.get(&block.at).copied().unwrap_or(0));
         for one in &block.insns {

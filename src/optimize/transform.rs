@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::occurrence::OpOccurrence;
@@ -90,16 +90,16 @@ pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_s
     let demanded = halves(body);
 
     let exact = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
-        floatfacts::known(body, dgroup, &IndexMap::new(), None)
+        floatfacts::known(body, dgroup, &IndexMap::default(), None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let bounded = floatbounds::exact(body, &exact, dgroup)?;
 
-    let mut seen: IndexMap<_Computation, Vec<(usize, usize, Op)>> = IndexMap::new();
+    let mut seen: IndexMap<_Computation, Vec<(usize, usize, Op)>> = IndexMap::default();
     // What a name numbers as -- copies included.  `standing` mirrors it for
     // `_provider`, which takes an ordered map.
-    let mut stands: IndexMap<u32, Value> = IndexMap::new();
+    let mut stands: IndexMap<u32, Value> = IndexMap::default();
     let mut standing: BTreeMap<u32, Value> = BTreeMap::new();
     let mut swap: BTreeMap<u32, Value> = BTreeMap::new(); // what a name is rewritten to -- only what folded
     let mut gone: BTreeSet<OpOccurrence> = BTreeSet::new();
@@ -219,7 +219,7 @@ pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_s
             .map(|op| _substituted(op, &swap))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
-        blocks.push(MirBlock { phis, ops, ..block.clone() });
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
     }
     Ok(Rc::new(MirBody { blocks, ..body }))
 }
@@ -399,8 +399,7 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
         .blocks
         .iter()
         .enumerate()
-        .map(|(block_index, block)| MirBlock {
-            ops: block
+        .map(|(block_index, block)| block.with_ops(block
                 .ops
                 .iter()
                 .enumerate()
@@ -411,11 +410,9 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
                         op.clone()
                     }
                 })
-                .collect(),
-            ..block.clone()
-        })
+                .collect()))
         .collect();
-    MirBody { blocks, ..body.clone() }
+    body.with_blocks(blocks)
 }
 
 /// The width each value was defined at, keyed by value id.
@@ -423,7 +420,7 @@ pub(crate) fn _reclaimed(body: &MirBody, gone: &BTreeSet<OpOccurrence>) -> MirBo
 /// A half of one is `Held(value, 2)` and so is the other half, so anything
 /// narrow is refused rather than told apart.
 pub(crate) fn _widths(body: &MirBody) -> IndexMap<u32, u32> {
-    let mut out: IndexMap<u32, u32> = IndexMap::new();
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
             for one in &op.results {
@@ -506,7 +503,7 @@ pub(crate) struct _Computation {
 
 /// What this operation computes, or None where that is not only its operands.
 pub(crate) fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &IndexMap<u32, u32>) -> Option<_Computation> {
-    use std::collections::HashSet;
+    use crate::support::hash::HashSet;
 
     let floating = op.floating.is_some()
         && matches!(op.kind, Kind::Fload | Kind::Fadd | Kind::Fsub | Kind::Fmul | Kind::Fdiv | Kind::Fsqrt);
@@ -547,7 +544,7 @@ pub(crate) fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &Index
                 if !mir::same_bytes(&reference, &reference) {
                     return None;
                 }
-                named.push(Arg::Cell(mir::Cell { r#ref: reference }));
+                named.push(Arg::Cell(mir::Cell { r#ref: reference.into_owned() }));
             }
             _ => return None,
         }
@@ -619,7 +616,7 @@ pub(crate) fn reused_divides(
         return Ok(body.clone());
     }
     let alive = live(body);
-    let mut into: IndexMap<*const Op, Op> = IndexMap::new();
+    let mut into: IndexMap<*const Op, Op> = IndexMap::default();
     for (_at, earlier, one) in pairs_found {
         if one.results.len() != 2 || earlier.results.len() != 2 {
             continue;
@@ -665,12 +662,9 @@ pub(crate) fn reused_divides(
     let blocks = body
         .blocks
         .iter()
-        .map(|block| MirBlock {
-            ops: block.ops.iter().map(|op| into.get(&std::ptr::from_ref(op)).unwrap_or(op).clone()).collect(),
-            ..block.clone()
-        })
+        .map(|block| block.with_ops(block.ops.iter().map(|op| into.get(&std::ptr::from_ref(op)).unwrap_or(op).clone()).collect()))
         .collect();
-    Ok(Rc::new(MirBody { blocks, ..MirBody::clone(body) }))
+    Ok(Rc::new(body.with_blocks(blocks)))
 }
 
 /// Each divide whose answers the divide before it already computed, as
@@ -726,30 +720,25 @@ pub(crate) fn _undisturbed(one: &Op, _earlier: &Op, between: &[Op], _dgroup: &BT
 
 /// Anything standing inside a call's argument run, moved ahead of it.
 pub(crate) fn placed(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<Rc<MirBody>, String> {
-    let mut out = Vec::new();
-    let mut changed = false;
-    for block in &body.blocks {
-        let mut ops = block.ops.clone();
-        for index in (0..ops.len()).rev() {
+    // Copied on the first move, so an unchanged body comes back as itself.
+    let mut out: Option<MirBody> = None;
+    for number in 0..body.blocks.len() {
+        for index in (0..body.blocks[number].ops.len()).rev() {
+            let ops = &out.as_ref().unwrap_or(body).blocks[number].ops;
             if ops[index].kind != Kind::Call {
                 continue;
             }
-            let Some((first, standing)) = _argument_run(&ops, index, dgroup, calls) else {
+            let Some((first, standing)) = _argument_run(ops, index, dgroup, calls) else {
                 continue;
             };
-            let kept = ops
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| !standing.contains(at))
-                .map(|(_, one)| one.clone())
-                .collect::<Vec<_>>();
-            let ahead = standing.iter().map(|at| ops[*at].clone()).collect::<Vec<_>>();
-            ops = kept[..first].iter().cloned().chain(ahead).chain(kept[first..].iter().cloned()).collect();
-            changed = true;
+            let kept = (0..ops.len()).filter(|at| !standing.contains(at)).collect::<Vec<_>>();
+            let order = kept[..first].iter().chain(&standing).chain(&kept[first..]).copied().collect::<Vec<_>>();
+            let block = &mut out.get_or_insert_with(|| MirBody::clone(body)).blocks[number];
+            let mut ops = std::mem::take(&mut block.ops).into_iter().map(Some).collect::<Vec<_>>();
+            block.ops = order.into_iter().map(|at| ops[at].take().expect("each once")).collect();
         }
-        out.push(MirBlock { ops, ..block.clone() });
     }
-    Ok(if changed { Rc::new(MirBody { blocks: out, ..MirBody::clone(body) }) } else { body.clone() })
+    Ok(out.map_or_else(|| Rc::clone(body), Rc::new))
 }
 
 /// (where the run starts, which of its operations do not belong to it).
@@ -916,17 +905,17 @@ pub(crate) fn forwarded(
     if want.is_empty() {
         return Ok(body.clone());
     }
-    let mut served: IndexMap<*const Op, Holder> = IndexMap::new();
+    let mut served: IndexMap<*const Op, Holder> = IndexMap::default();
     for one in avail::forwardable(body, None, calls, &want) {
         if let Some(op) = one.op {
             served.insert(op as *const Op, one.value);
         }
     }
     if avoid_store_crossing {
-        let mut locations: IndexMap<*const Op, (i64, usize)> = IndexMap::new();
-        let mut definitions: IndexMap<Value, (i64, usize)> = IndexMap::new();
-        let mut by_at: IndexMap<i64, &MirBlock> = IndexMap::new();
-        let mut op_by_id: IndexMap<*const Op, &Op> = IndexMap::new();
+        let mut locations: IndexMap<*const Op, (i64, usize)> = IndexMap::default();
+        let mut definitions: IndexMap<Value, (i64, usize)> = IndexMap::default();
+        let mut by_at: IndexMap<i64, &MirBlock> = IndexMap::default();
+        let mut op_by_id: IndexMap<*const Op, &Op> = IndexMap::default();
         for block in &body.blocks {
             by_at.insert(block.at, block);
             for (index, op) in block.ops.iter().enumerate() {
@@ -1122,7 +1111,7 @@ pub(crate) fn _preheader(body: &MirBody, loop_: &Loop) -> Option<i64> {
 pub(crate) fn _effective(body: &MirBody, calls: &IndexMap<i64, String>) -> BTreeSet<Value> {
     let _ = calls;
     let mut wanted: BTreeSet<Value> = BTreeSet::new();
-    let mut carrying: IndexMap<Value, BTreeSet<Value>> = IndexMap::new();
+    let mut carrying: IndexMap<Value, BTreeSet<Value>> = IndexMap::default();
     for block in &body.blocks {
         for phi in &block.phis {
             for value in phi.incoming.values() {
@@ -1248,7 +1237,7 @@ pub(crate) fn _invariant_run<'a>(
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
     starts: Option<&BTreeSet<Value>>,
     readable: Option<&BTreeSet<Value>>,
-    intervals: Option<&std::collections::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
+    intervals: Option<&crate::support::hash::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
     nonempty: bool,
     floating_allowed: &BTreeSet<usize>,
 ) -> Result<Vec<&'a Op>, String> {
@@ -1485,7 +1474,7 @@ pub(crate) fn _leaving(body: &MirBody) -> std::collections::BTreeSet<crate::mode
 pub(crate) const LOW: u8 = 0;
 pub(crate) const HIGH: u8 = 1;
 
-type _HalvesReuse = std::collections::HashMap<usize, (Rc<MirBody>, BTreeSet<(Value, u8)>)>;
+type _HalvesReuse = crate::support::hash::HashMap<usize, (Rc<MirBody>, BTreeSet<(Value, u8)>)>;
 
 thread_local! {
     /// Python's `_halves_reuse` context variable.  Holding the body keeps its
@@ -1502,7 +1491,7 @@ thread_local! {
 
 /// Share half-liveness for immutable states in one transaction.
 pub(crate) fn _reusing_halves<T>(inside: impl FnOnce() -> T) -> T {
-    let token = _halves_reuse.with(|reuse| reuse.replace(Some(std::collections::HashMap::new())));
+    let token = _halves_reuse.with(|reuse| reuse.replace(Some(crate::support::hash::HashMap::default())));
     let result = inside();
     _halves_reuse.with(|reuse| *reuse.borrow_mut() = token);
     result
@@ -1948,7 +1937,7 @@ pub(crate) fn _threaded(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
             }
             *ops.last_mut().expect("a last operation") = last;
         }
-        blocks.push(MirBlock { ops, succ: successors, ..block.clone() });
+        blocks.push(MirBlock { succ: successors, ..block.with_ops(ops) });
     }
 
     // If both arms reach the same block through otherwise empty jump
@@ -1973,7 +1962,7 @@ pub(crate) fn _threaded(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         converged.push(MirBlock { ops, succ: vec![target], ..block });
         changed = true;
     }
-    Ok(if changed { Rc::new(_unreachable(&MirBody { blocks: converged, ..MirBody::clone(body) })) } else { body.clone() })
+    Ok(if changed { Rc::new(_unreachable(&body.with_blocks(converged))) } else { body.clone() })
 }
 
 /// A branch on two numbers, resolved.
@@ -2024,7 +2013,7 @@ pub(crate) fn decided(
             };
             let mut ops = block.ops.clone();
             *ops.last_mut().expect("a last operation") = jump;
-            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+            out.push(MirBlock { succ: vec![target], ..block.with_ops(ops) });
             changed = true;
             continue;
         }
@@ -2062,18 +2051,14 @@ pub(crate) fn decided(
             };
             let mut ops = block.ops.clone();
             *ops.last_mut().expect("a last operation") = jump;
-            out.push(MirBlock { ops, succ: vec![target], ..block.clone() });
+            out.push(MirBlock { succ: vec![target], ..block.with_ops(ops) });
         } else {
             let kept = _absorb(&block.ops, &BTreeSet::from([last.at]));
             if kept == block.ops {
                 out.push(block.clone());
                 continue;
             }
-            out.push(MirBlock {
-                ops: kept,
-                succ: block.succ.iter().copied().filter(|at| *at != target).collect(),
-                ..block.clone()
-            });
+            out.push(MirBlock { succ: block.succ.iter().copied().filter(|at| *at != target).collect(), ..block.with_ops(kept) });
         }
     }
     if !changed {
@@ -2103,16 +2088,11 @@ pub(crate) fn _unreachable(body: &MirBody) -> MirBody {
             if reached.contains(&block.at) {
                 block.clone()
             } else {
-                crate::model::mir::MirBlock {
-                    succ: Vec::new(),
-                    phis: Vec::new(),
-                    ops: block.ops.iter().map(_empty_operation).collect(),
-                    ..block.clone()
-                }
+                crate::model::mir::MirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_ops(block.ops.iter().map(_empty_operation).collect()) }
             }
         })
         .collect();
-    MirBody { blocks: kept, ..body.clone() }
+    body.with_blocks(kept)
 }
 
 /// Resolve single-valued joins after an edge disappears, without discarding
@@ -2153,7 +2133,7 @@ pub(crate) fn _trivial_phis(body: &MirBody) -> Result<MirBody, String> {
                 .map(|op| ssa::substituted(op, &swaps))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| error.to_string())?;
-            out.push(MirBlock { phis, ops, ..block.clone() });
+            out.push(MirBlock { phis, ..block.with_ops(ops) });
         }
         body = MirBody { blocks: out, ..body };
         if !changed {
@@ -2233,7 +2213,7 @@ pub(crate) fn dead(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
             .map(|(index, op)| if gone.contains(&index) { _empty_operation(op) } else { op.clone() })
             .collect();
         changed = true;
-        out.push(MirBlock { ops, ..block.clone() });
+        out.push(block.with_ops(ops));
     }
     if !changed {
         return Ok(body.clone());
@@ -2247,8 +2227,7 @@ pub(crate) fn dead(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         .filter(|value| !after.contains(value))
         .copied()
         .collect::<BTreeSet<_>>();
-    Ok(Rc::new(MirBody {
-        blocks: out
+    Ok(Rc::new(body.with_blocks(out
             .into_iter()
             .map(|block| MirBlock {
                 ops: block
@@ -2272,9 +2251,7 @@ pub(crate) fn dead(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
                     .collect(),
                 ..block
             })
-            .collect(),
-        ..MirBody::clone(body)
-    }))
+            .collect())))
 }
 
 /// Results replaced before reaching an opaque reader or a block exit.
@@ -2516,7 +2493,7 @@ pub(crate) fn _folded_phi_edges(
                 }
 
                 let width = results[0].width;
-                let mut numbers: IndexMap<i64, num_bigint::BigInt> = IndexMap::new();
+                let mut numbers: IndexMap<i64, num_bigint::BigInt> = IndexMap::default();
                 for &parent in parents {
                     let swap = phis
                         .iter()
@@ -2567,15 +2544,12 @@ pub(crate) fn _folded_phi_edges(
                         ops.len()
                     };
                     ops.insert(position, copy);
-                    changed[&parent_at] = MirBlock { ops, ..parent.clone() };
+                    changed[&parent_at] = parent.with_ops(ops);
                 }
 
                 changed[&block.at].phis.push(Phi { result: target, incoming });
                 changed[&operation_block.at].ops[index] = _empty_operation(op);
-                return Ok(Rc::new(MirBody {
-                    blocks: body.blocks.iter().map(|one| changed[&one.at].clone()).collect(),
-                    ..MirBody::clone(body)
-                }));
+                return Ok(Rc::new(body.with_blocks(body.blocks.iter().map(|one| changed[&one.at].clone()).collect())));
             }
         }
     }
@@ -2592,7 +2566,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
     let floating_facts = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
         floatfacts::known(body, dgroup, calls, None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let conversions = floatfacts::converted(body, dgroup, calls, Some(&floating_facts));
     let mut argument_facts = facts.clone();
@@ -2604,7 +2578,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
     {
         consts::cells(body, dgroup, calls, Some(&facts), None, Some(&edges), None, None)
     } else {
-        IndexMap::new()
+        IndexMap::default()
     };
     let symbols = _symbol_copies(body);
     if facts.is_empty() && memory.is_empty() && argument_facts.is_empty() && symbols.is_empty() {
@@ -2614,7 +2588,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
     // Live, not merely mentioned: see live()'s own note on hotlop's dx.
     let wanted = live(body);
 
-    let nothing = consts::Cells::new();
+    let nothing = consts::Cells::default();
     let mut out = Vec::new();
     let mut changed = false;
     for block in &body.blocks {
@@ -2638,10 +2612,10 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
             changed = changed || made != *op;
             ops.push(made);
         }
-        out.push(MirBlock { ops, ..block.clone() });
+        out.push(block.with_ops(ops));
     }
 
-    let result = if changed { Rc::new(MirBody { blocks: out, ..MirBody::clone(body) }) } else { body.clone() };
+    let result = if changed { Rc::new(body.with_blocks(out)) } else { body.clone() };
     let result = _folded_phi_edges(&result, &facts, &wanted)?;
     // An exact exit fact describes only the path leaving a numeric loop.  It
     // may fold a successor load, but it is not permission for ordinary
@@ -2742,8 +2716,8 @@ pub(crate) fn _constant_operands(
     use crate::analysis::consts;
     use crate::model::mir::Const;
 
-    let no_memory = consts::Cells::new();
-    let no_symbols = _SymbolCopies::new();
+    let no_memory = consts::Cells::default();
+    let no_symbols = _SymbolCopies::default();
     let memory = memory.unwrap_or(&no_memory);
     let symbols = symbols.unwrap_or(&no_symbols);
     if op.kind == Kind::Arg {
@@ -3035,7 +3009,7 @@ pub(crate) fn _reparented(body: &MirBody, crossed: &crate::support::pyset::PySet
         .unwrap_or(0);
     let mut sorted = crossed.iter().copied().collect::<Vec<_>>();
     sorted.sort_by_key(|one| (one.variable, one.version));
-    let mut instead: IndexMap<Value, Value> = IndexMap::new();
+    let mut instead: IndexMap<Value, Value> = IndexMap::default();
     for (number, one) in sorted.into_iter().enumerate() {
         instead.insert(
             one,
@@ -3180,7 +3154,7 @@ pub(crate) fn hoisted(
     calls: &IndexMap<i64, String>,
     bounds: Option<&IndexMap<(crate::objectfile::module::Space, i64), Vec<i64>>>,
 ) -> Result<Rc<MirBody>, String> {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use crate::analysis::ranges::{self, Interval};
     use crate::support::pyset::PySet;
@@ -3215,9 +3189,9 @@ pub(crate) fn hoisted(
     let effective = _effective(body, calls);
     let mut crossed: PySet<Value> = PySet::new();
     let demanded = halves(body);
-    let mut moved: IndexMap<i64, Vec<Op>> = IndexMap::new();
+    let mut moved: IndexMap<i64, Vec<Op>> = IndexMap::default();
     let mut gone: BTreeSet<usize> = BTreeSet::new();
-    let mut placing: IndexMap<i64, usize> = IndexMap::new();
+    let mut placing: IndexMap<i64, usize> = IndexMap::default();
 
     for loop_ in &inside {
         let Some(into) = _preheader(body, loop_) else {
@@ -3641,7 +3615,7 @@ pub(crate) fn pipeline(
 
 // The order, from the pipeline itself rather than beside it.
 pub(crate) static PASSES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-    pipeline(&crate::model::passes::Where::default(), &IndexMap::new())
+    pipeline(&crate::model::passes::Where::default(), &IndexMap::default())
         .iter()
         .map(|one| one.name().to_owned())
         .collect()
@@ -3823,7 +3797,7 @@ fn _applied(
         watch,
     } = options;
     // Every pass can be turned off, which is how a miscompile is bisected.
-    let wanted = IndexMap::from([
+    let wanted = IndexMap::from_iter([
         ("lcssa", options.lcssa),
         ("floatloop", options.floatloop),
         ("fold", options.fold),

@@ -7,7 +7,7 @@
 //! `test_exact_pair_keeps_checks_and_refuses_observable_results` omits its
 //! `lower.semantics` and `transform.dead` asserts (transform unported).
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::*;
@@ -130,7 +130,7 @@ fn test_storage_requires_exact_bits() {
         store.stores = vec![cell.clone()];
         store.floating = Some(Semantics::new([Format::Extended80], format, Precision::Destination, Rounding::Dynamic));
         let body = body(0, vec![MirBlock::new(0, vec![], vec![load, store], vec![])]);
-        let facts = IndexMap::from([(source, Finite::new(number, false))]);
+        let facts = IndexMap::from_iter([(source, Finite::new(number, false))]);
         let changed = stored(&Rc::new(MirBody::clone(&body)), &facts);
         let Some(expected) = expected else {
             assert_eq!(changed, Rc::new(body));
@@ -165,10 +165,10 @@ fn test_exact_pair_keeps_checks_and_refuses_observable_results() {
             Precision::Destination,
             Rounding::Dynamic,
         ));
-        let mut converted = IndexMap::from([(result, Known::new(144, 4))]);
+        let mut converted = IndexMap::from_iter([(result, Known::new(144, 4))]);
         let mut extra = vec![];
         match guard {
-            "unknown" => converted = IndexMap::new(),
+            "unknown" => converted = IndexMap::default(),
             "memory" => conversion.stores = vec![cell.clone()],
             "barrier" => conversion.op = Some(OpCode::Operation(Operation::Barrier)),
             "live" | "shared" => {

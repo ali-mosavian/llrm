@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use super::*;
 use crate::backend::lower as lower_mir;
@@ -54,13 +54,13 @@ fn indirect(base: i64, offset: i64, r#type: i64) -> model::Operand {
 }
 
 fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
-    let occurrences = IndexMap::new();
+    let occurrences = IndexMap::default();
     lower_mir::lowered(
         name,
         body,
-        Some(&IndexMap::new()),
+        Some(&IndexMap::default()),
         BTreeSet::new(),
-        Some(&IndexMap::new()),
+        Some(&IndexMap::default()),
         "386",
         lower_mir::Lowered { occurrences: Some(&occurrences), ..Default::default() },
     )
@@ -207,13 +207,13 @@ fn test_hir_lowers_long_float_memory_and_control_to_existing_mir() {
     );
     assert_eq!(operations[3].args.len(), 1);
     assert!(matches!(operations[3].results[0], Arg::Cell(_)));
-    let occurrences = IndexMap::new();
+    let occurrences = IndexMap::default();
     let machine = lower_mir::lowered(
         "store",
         &lowered.body,
-        Some(&IndexMap::new()),
+        Some(&IndexMap::default()),
         BTreeSet::new(),
-        Some(&IndexMap::new()),
+        Some(&IndexMap::default()),
         "386",
         lower_mir::Lowered { occurrences: Some(&occurrences), ..Default::default() },
     )

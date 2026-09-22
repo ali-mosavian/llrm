@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::analysis::alias::Summary;
 use crate::model::memory::{Identity, MemoryKind, MemoryObject, Slice};
@@ -33,11 +33,11 @@ fn _readonly(parameters: &[i64]) -> Summary {
 // readonly, argmemonly and nocapture(0). Open Watcom's implementation advances
 // a local pointer while reading `*p` and performs no store.
 static _SOURCE: LazyLock<IndexMap<&'static str, Summary>> =
-    LazyLock::new(|| IndexMap::from([("strlen", _readonly(&[0]))]));
+    LazyLock::new(|| IndexMap::from_iter([("strlen", _readonly(&[0]))]));
 
 /// Known summaries under the object names used at these call sites.
 pub fn summaries<'a>(names: impl IntoIterator<Item = &'a str>) -> IndexMap<String, Summary> {
-    let mut result = IndexMap::new();
+    let mut result = IndexMap::default();
     for name in names {
         let source_name = name.strip_prefix('_').unwrap_or(name);
         if let Some(summary) = _SOURCE.get(source_name) {

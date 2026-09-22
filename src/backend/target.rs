@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
-use indexmap::IndexMap;
+use crate::support::hash::IndexMap;
 
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::mir;
@@ -66,7 +66,7 @@ impl Occurrence {
 ///
 /// The one place those are written down; `reads` and `writes` read it too.
 pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     if _on_the_stack(what) {
         return out;
     }
@@ -179,7 +179,7 @@ pub fn tied(what: &Semantics) -> Option<Register> {
 /// Registers this operation reads whether or not it names them, keyed on
 /// the root it reads.
 pub fn reads(what: &Semantics) -> IndexMap<Register, Need> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     for (r#where, register) in requirements(what) {
         if r#where.side == "source" {
             out.insert(
@@ -222,7 +222,7 @@ pub fn reads(what: &Semantics) -> IndexMap<Register, Need> {
 
 /// Registers this operation writes whether or not it names them.
 pub fn writes(what: &Semantics) -> IndexMap<Register, Need> {
-    let mut out = IndexMap::new();
+    let mut out = IndexMap::default();
     if _on_the_stack(what) {
         return out;
     }
@@ -302,7 +302,7 @@ pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| {
 // Built from the three rows rather than from ir.ROOT, which has no
 // byte-wide entries.
 pub static WIDTHS: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
-    let mut widths = IndexMap::new();
+    let mut widths = IndexMap::default();
     for (_row, _size) in [(&*WIDE, 4), (&*NARROW, 2), (&*BYTE, 1)] {
         for _one in _row.iter() {
             widths.insert(*_one, _size);
@@ -311,7 +311,7 @@ pub static WIDTHS: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
     widths
 });
 pub static AT_WIDTH: LazyLock<IndexMap<Register, IndexMap<i64, Register>>> = LazyLock::new(|| {
-    let mut at_width: IndexMap<Register, IndexMap<i64, Register>> = IndexMap::new();
+    let mut at_width: IndexMap<Register, IndexMap<i64, Register>> = IndexMap::default();
     for (_row, _size) in [(&*WIDE, 4), (&*NARROW, 2), (&*BYTE, 1)] {
         for _one in _row.iter() {
             // setdefault, not assignment: al and ah both root to eax, and
@@ -373,7 +373,7 @@ pub const SELECTORS: [Register; 3] = [Register::ES, Register::FS, Register::GS];
 // One far load per selector: its selector result is in the class, not pinned,
 // and the rewriter spells the instruction for the register it was given.
 pub static FAR_LOADS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs")])
+    IndexMap::from_iter([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs")])
 });
 
 pub fn far_load(what: &Semantics) -> bool {
@@ -402,7 +402,7 @@ pub fn width_of(register: Register) -> Option<i64> {
 // with four lanes. `ir.ROOT` answers "same register file entry", not "same
 // bytes", and al and ah are where those differ.
 pub static LANES: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
-    let mut lanes = IndexMap::new();
+    let mut lanes = IndexMap::default();
     for (_row, _mask) in [(&*WIDE, 0b1111), (&*NARROW, 0b0011)] {
         for _one in _row.iter() {
             lanes.insert(*_one, _mask);
@@ -554,7 +554,7 @@ mod tests {
 
         assert_eq!(
             requirements(&what),
-            IndexMap::from([(Occurrence::new("dest", 1), Register::ES)])
+            IndexMap::from_iter([(Occurrence::new("dest", 1), Register::ES)])
         );
     }
 
