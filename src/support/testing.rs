@@ -126,6 +126,20 @@ pub fn main_body(found: &Module, blocks: &[Block]) -> Rc<MirBody> {
     raised_from(found, blocks, None).values[0].1.clone()
 }
 
+/// `corpus.runtime_library`: the BC runtime a fixture links against, or
+/// None where Python's test skips because it is not installed.
+pub fn runtime_library(obj: &str) -> Option<PathBuf> {
+    let home = PathBuf::from(std::env::var("HOME").ok()?);
+    let name = Path::new(obj).file_name()?.to_str()?;
+    let compiler = ["-p-", "-q-", "-v-"].into_iter().find(|one| name.contains(one))?;
+    let library = match compiler {
+        "-p-" => home.join("work/other/d32x/toolchains/pds71/LIB/BCL71ENR.LIB"),
+        "-q-" => home.join("work/42-labs/mini-qb/dosbox/qb45/LIB/BCOM45.LIB"),
+        _ => home.join("work/other/d32x/toolchains/vbdos/LIB/VBDCL10E.LIB"),
+    };
+    library.exists().then_some(library)
+}
+
 /// `wholeseg.emitted(data)`, with Python's keyword defaults.
 pub fn emitted(data: &[u8]) -> Emitted {
     emitted_watching(data, None)

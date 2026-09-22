@@ -1,17 +1,18 @@
 //! Ports of `tests/test_array_access.py` and `tests/test_huge_array_access.py`.
 //!
-//! Skipped, needing `wholeseg` or `rewrite`:
+//! Skipped, monkeypatching `raising_array_access._checked` or `descriptor`:
 //! `test_checked_constant_indices_can_use_native_addressing`,
-//! `test_checked_access_proofs_reach_fixed_point`,
-//! `test_hary_supports_nine_and_sixty_dimensions`,
-//! `test_array_checks_are_independent_of_numeric_semantics`,
-//! `test_bounds_policy_is_recorded_separately`,
-//! `test_unsupported_checked_helper_is_not_unchecked_success`,
-//! `test_dynamic_far_address_arithmetic_is_native`,
-//! `test_huge_helper_becomes_whole_pointer_mir_and_emitted_accesses`.
+//! `test_unsupported_checked_helper_is_not_unchecked_success`.
+
+use std::collections::BTreeSet;
 
 use super::*;
+use crate::abi::linkunit::LinkUnit;
+use crate::objectfile::omf;
+use crate::rewrite::{rewrite, Rewrite};
+use crate::support::pyjson::{self, Json};
 use crate::support::testing::{self, nth, ops};
+use crate::wholeseg::Emission;
 
 const HARR: &str = "fixtures/regressions/harr-bounds-p-g2.obj";
 
@@ -245,4 +246,165 @@ fn test_offset_overwrite_keeps_a_transitively_observed_high_half() {
     let ops: Vec<Op> = copies.iter().cloned().chain([read]).collect();
     let body = MirBody::new(0, vec![MirBlock::new(0, vec![], ops, vec![])]);
     assert!(!_overwrites_offset(&body, &copies[0], old));
+}
+
+fn hary_calls(found: &Module) -> usize {
+    found.calls.values().filter(|name| *name == "B$HARY").count()
+}
+
+fn retains_hary(found: &Module, body: &MirBody) -> bool {
+    ops(body).iter().any(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$HARY"))
+}
+
+/// NDMAX retained three HARY checks after its first proven store; two also have constant valid indices.
+#[test]
+fn test_checked_access_proofs_reach_fixed_point() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let path = format!("fixtures/regressions/ndmax-{tag}.obj").to_lowercase();
+        let found = testing::loaded(&path).unwrap();
+        let mut sites: Vec<i64> = found.calls.iter().filter(|(_, name)| *name == "B$HARY").map(|(at, _)| *at).collect();
+        sites.sort();
+        let body = nth(&testing::raised_with(&path, false, true), 0);
+        let retained: Vec<i64> = ops(&body)
+            .iter()
+            .filter(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$HARY"))
+            .map(|op| op.at)
+            .collect();
+        assert_eq!(retained, sites[sites.len() - 1..], "{tag}");
+        let emitted = testing::emitted_with(&testing::data(&path), false, true);
+        assert_eq!(emitted.outcome, Emission::Lir, "{tag}: {}", emitted.reason);
+        assert_eq!(hary_calls(&testing::loaded_bytes(&emitted.data).unwrap()), 1, "{tag}");
+    }
+}
+
+/// NDARR (1,12,2) and NDMAX (11,22) were refused by an invented eight-dimension cap.
+///
+/// ndarr-v-g3 fails in Python at this commit (Unlowered opaque) and is left out.
+#[test]
+fn test_hary_supports_nine_and_sixty_dimensions() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        for program in ["ndarr", "ndmax"] {
+            if (tag, program) == ("v-g3", "ndarr") {
+                continue;
+            }
+            let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+            let found = testing::loaded(&path).unwrap();
+            assert!(hary_calls(&found) > 0, "{path}");
+            assert!(!retains_hary(&found, &nth(&testing::raised(&path), 0)), "{path}");
+            let result = testing::emitted_lir(&path);
+            assert_eq!(hary_calls(&testing::loaded_bytes(&result.data).unwrap()), 0, "{path}");
+        }
+    }
+}
+
+/// ARRIDX's three HARY calls must become address arithmetic, not deleted pointer definitions.
+///
+/// The `basic_semantics` cases fail in Python at this commit (Unlowered
+/// opaque) and are left out.
+#[test]
+fn test_array_checks_are_independent_of_numeric_semantics() {
+    let basic_semantics = false;
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        for bounds_checks in [false, true] {
+            let path = format!("fixtures/regressions/arridx-bounds-{tag}.obj").to_lowercase();
+            let found = testing::loaded(&path).unwrap();
+            let body = nth(&testing::raised_with(&path, basic_semantics, bounds_checks), 0);
+            let calls = ops(&body)
+                .iter()
+                .filter(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$HARY"))
+                .count();
+            let checks = if bounds_checks { 3 } else { 0 };
+            assert_eq!(calls, checks, "{path}");
+            if !bounds_checks {
+                assert!(ops(&body).iter().filter(|op| op.kind == Kind::Mul).count() >= 3, "{path}");
+            }
+            let output = testing::emitted_with(&testing::data(&path), basic_semantics, bounds_checks);
+            assert_eq!(output.outcome, Emission::Lir, "{path}: {}", output.reason);
+            let after = testing::loaded_bytes(&output.data).unwrap();
+            assert_eq!(hary_calls(&after), checks, "{path}");
+            let lina = |one: &Module| one.calls.values().filter(|name| *name == "B$LINA").count();
+            assert_eq!(lina(&after), lina(&found), "{path}");
+        }
+    }
+}
+
+/// Numeric compatibility must not silently enable array checks or reuse unchecked output.
+#[test]
+fn test_bounds_policy_is_recorded_separately() {
+    let source = "fixtures/regressions/arridx-bounds-p-g2.obj";
+    let Some(library) = testing::runtime_library(source) else {
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("checked.obj");
+    let argv: Vec<String> =
+        [source, library.to_str().unwrap(), "-o", output.to_str().unwrap(), "--bounds-checks"].map(str::to_owned).into();
+    assert_eq!(crate::rewrite::main(&argv).unwrap(), 0);
+    let unit = LinkUnit::read(&[testing::path(source), library]).unwrap().fingerprint;
+    let report = pyjson::loads(&std::fs::read_to_string(output.with_extension("json")).unwrap()).unwrap();
+    let Json::Dict(report) = report else { panic!("{report:?}") };
+    assert_eq!(report["bounds_checks"], Json::Bool(true));
+    assert_eq!(report["semantics"], Json::Str("native".to_owned()));
+    let data = std::fs::read(&output).unwrap();
+    let checked = Rewrite { bounds_checks: true, contract_fingerprint: Some(unit.clone()), ..Rewrite::new(false) };
+    assert_eq!(rewrite(&data, &checked).unwrap().0, data);
+    let unchecked = Rewrite { contract_fingerprint: Some(unit), ..Rewrite::new(false) };
+    assert_eq!(rewrite(&data, &unchecked).unwrap_err().kind, "Finalised");
+}
+
+/// HARR computes both addresses via HARY each iteration; they must be MIR, not retained calls.
+#[test]
+fn test_dynamic_far_address_arithmetic_is_native() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        for program in ["harr-bounds", "dynsz"] {
+            let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+            let found = testing::loaded(&path).unwrap();
+            let body = nth(&testing::raised(&path), 0);
+            assert!(!retains_hary(&found, &body), "{path}");
+            assert!(ops(&body).iter().any(|op| op.kind == Kind::Mul), "{path}");
+            let result = testing::emitted_lir(&path);
+            assert_eq!(hary_calls(&testing::loaded_bytes(&result.data).unwrap()), 0, "{path}");
+            if program == "dynsz" {
+                assert!(!ops(&body).iter().any(|op| op.array.is_some()), "{path}");
+            }
+        }
+    }
+}
+
+/// HUGE2 and HUGELP's HARY helpers become whole-pointer MIR and relocated emitted accesses.
+///
+/// hugelp fails in Python at this commit and is left out.
+#[test]
+fn test_huge_helper_becomes_whole_pointer_mir_and_emitted_accesses() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let (program, count) = ("huge2", 10);
+        let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+        let found = testing::loaded(&path).unwrap();
+        let ops = ops(&nth(&testing::raised(&path), 0));
+        assert_eq!(ops.iter().filter(|op| op.kind == Kind::PtrOffset).count(), count, "{path}");
+        let pointers: BTreeSet<mir::Value> =
+            ops.iter().filter(|op| op.kind == Kind::PtrOffset).flat_map(|op| op.defines.clone()).collect();
+        assert!(
+            !ops.iter().any(|op| op.kind == Kind::Extract && op.uses.iter().any(|value| pointers.contains(value))),
+            "{path}"
+        );
+        assert!(!ops.iter().any(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$HARY")));
+        let refs: Vec<&MemRef> = ops.iter().flat_map(|op| op.loads.iter().chain(&op.stores)).filter(|one| one.pointer).collect();
+        assert_eq!(refs.len(), count, "{path}");
+        assert!(refs.iter().all(|one| one.addr.is_none() && one.segment.is_none() && one.base_width == 4), "{path}");
+        let result = testing::emitted_lir(&path);
+        let output = testing::loaded_bytes(&result.data).unwrap();
+        assert_eq!(hary_calls(&output), 0, "{path}");
+        let names = omf::externals(&output.records);
+        let fixups = omf::fixups(&output.records);
+        assert!(fixups.iter().any(|fix| fix.target == "external" && names[fix.index as usize] == "b$HugeShift"), "{path}");
+        // VBDOS printed 123,789,789 when all newly introduced descriptor
+        // loads read DS:0: zero displacement bytes had no linker relocation.
+        let descriptors: BTreeSet<i64> = fixups
+            .iter()
+            .filter(|fix| fix.seg == Some(output.seg) && fix.target == "segment" && fix.index == 5)
+            .map(|fix| fix.disp)
+            .collect();
+        assert!(BTreeSet::from([6, 22, 24, 26]).is_subset(&descriptors), "{path}");
+    }
 }
