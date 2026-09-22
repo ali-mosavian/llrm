@@ -4,7 +4,9 @@
 
 Each lands as `<hash>/<name>.mod` beside `<name>.flags`, which `port_diff
 --modern` passes to both compilers. A parsed source is recorded at default
-flags; one compiled is recorded again with its `--entry` and `-O`.
+flags; one compiled is recorded again with its `--entry` and `-O`. Nothing
+runs: an executable build, and the interpreter checking it, are refused once
+the source is recorded.
 `fixtures/modern` sources at default flags are skipped: port_diff runs those
 already.
 """
@@ -66,6 +68,29 @@ class ModernRecorder(Recorder):
 
         driver.parsed = parsing
         modern.assembled = assembling
+
+        import modernexe
+
+        def undosed(*_: object, **__: object) -> None:
+            raise modernexe.BuildError("the corpus records sources; it runs no DOSBox")
+
+        modernexe.launch = undosed
+        self.build = modernexe.build
+
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
+        # A test that builds an executable runs the interpreter only to check it,
+        # and matmul takes the interpreter half an hour.
+        module = getattr(item, "module", None)
+        if getattr(module, "build", None) is self.build and hasattr(module, "execute"):
+            module.execute = Unexecuted
+
+
+class Unexecuted:
+    """The interpreter, refused where only an executable's reference output wants it."""
+
+    @staticmethod
+    def run(*_: object, **__: object) -> None:
+        raise RuntimeError("the corpus records sources; it runs no interpreter here")
 
 
 def main() -> int:
