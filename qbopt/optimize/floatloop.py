@@ -69,8 +69,10 @@ def specialized(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.M
             continue
         entry_at, = [at for at in predecessors[header.at] if at not in loop.body]
         entry = blocks[entry_at]
-        initial = consts._kills(memory[entry_at, len(entry.ops) - 1], entry.ops[-1], facts, dgroup, calls)
-        before_last = floatfacts.repeated(latch.ops, proof.count - 1, initial, dgroup, facts)
+        asked = consts.memory_queries(body, facts, dgroup)
+        initial = consts._kills(memory[entry_at, len(entry.ops) - 1], entry.ops[-1], facts, dgroup, calls,
+                                queries=asked)
+        before_last = floatfacts.repeated(latch.ops, proof.count - 1, initial, dgroup, facts, asked)
         if before_last is None:
             continue
         seeds = []

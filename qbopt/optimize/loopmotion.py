@@ -190,7 +190,8 @@ def _exit_value(
                     fact = consts.initialized(previous, ref)
                     if fact is None:
                         facts, barriers = memory()
-                        after = consts._kills(facts.get((at, index), {}), previous, {}, dgroup, barriers)
+                        asked = consts.memory_queries(body, {}, dgroup)
+                        after = consts._kills(facts.get((at, index), {}), previous, {}, dgroup, barriers, queries=asked)
                         fact = consts._cell(after, ref)
                     if fact == consts.Known(consts.masked(expected.n, expected.width), expected.width):
                         return True

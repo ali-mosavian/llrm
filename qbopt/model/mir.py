@@ -3248,13 +3248,14 @@ def _provenanced(body: MirBody, found: Module) -> MirBody:
                     stores=tuple(map(moved, op.stores)),
                     args=tuple(map(operand, op.args)),
                     results=tuple(map(operand, op.results)),
+                    memory_values=tuple((moved(ref), value) for ref, value in op.memory_values),
                 )
                 for op in block.ops
             ),
         )
         for block in body.blocks
     )
-    return replace(body, blocks=blocks)
+    return replace(body, blocks=blocks, initial=tuple((moved(ref), value) for ref, value in body.initial))
 
 
 def _sites(found: Module, blocks: list[Block]) -> dict:

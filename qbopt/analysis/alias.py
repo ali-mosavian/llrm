@@ -738,6 +738,41 @@ def congruences(body: mir.MirBody) -> dict[mir.Value, tuple[int, int]]:
             return result
 
 
+def named_bytes(body: mir.MirBody) -> dict:
+    """The object and offset each directly addressed byte is, as the body's own references name it.
+
+    Keyed by address, and by (space, index) for a space that is one object
+    at its own displacements. A cell known only by its address takes its
+    object from here, so it carries the same object facts every other
+    reference to it does.
+    """
+    out: dict = {}
+    refs = [ref for ref, _ in body.initial]
+    for block in body.blocks:
+        for op in block.ops:
+            cells = (arg.ref for arg in (*op.args, *op.results) if isinstance(arg, mir.Cell))
+            refs.extend((*op.loads, *op.stores, *cells, *(ref for ref, _ in op.memory_values)))
+    for ref in map(mir._symbolic_ref, refs):
+        if ref.provenance is None or ref.base is not None or ref.segment is not None or ref.addr is None:
+            continue
+        if ref.addr.base or len(ref.provenance.slices) != 1:
+            continue
+        one = next(iter(ref.provenance.slices))
+        if one.stride != 1 or one.high + one.width - 1 - one.low != ref.width:
+            continue
+        for byte in range(ref.width):
+            at, named = ref.addr.plus(byte), (one.object, one.low + byte)
+            out[at] = named if out.get(at, named) == named else None
+    named = {at: one for at, one in out.items() if one is not None}
+    # A space whose every named byte is one object at its own displacement
+    # is that object throughout: BC's segments and frame are.
+    spaces: dict = {}
+    for at, (object_, offset) in named.items():
+        key = (at.space, at.index)
+        spaces[key] = object_ if offset == at.disp and spaces.get(key, object_) == object_ else None
+    return named | {key: object_ for key, object_ in spaces.items() if object_ is not None}
+
+
 def annotated(body: mir.MirBody) -> mir.MirBody:
     """Attach solved provenance to every indirect reference in a body."""
     facts = points_to(body)

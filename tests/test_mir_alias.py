@@ -1001,3 +1001,16 @@ def test_provenance_diff_compares_the_legacy_answer() -> None:
     totals, _, _ = provdiff.compared(Path(__file__).resolve().parents[1] / "fixtures/omf/procs-p-noO.obj", 120)
 
     assert totals["widened"] > 0
+
+
+def test_a_lane_form_slice_names_every_byte_it_covers() -> None:
+    """A narrowed word slice [6, 7) of width 2 covers bytes 6 and 7; reading its end as 7 named neither."""
+    static = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 5))
+    provenance = memory.Provenance(frozenset({memory.Slice(static, 6, 7, 1, 2)}))
+    ref = mir.MemRef(Addr(Space.SEGMENT, 6, 5), 2, provenance=provenance)
+    store = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(7, 2),), stores=(ref,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store,), ()),))
+
+    named = alias.named_bytes(body)
+
+    assert named[Addr(Space.SEGMENT, 7, 5)] == (static, 7)

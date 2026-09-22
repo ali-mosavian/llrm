@@ -192,3 +192,25 @@ def test_cells_reuses_overlap_answers_within_one_fact_epoch(monkeypatch: pytest.
     consts.cells(body, frozenset({5}), {}, initial=initial)
 
     assert calls == len(initial)
+
+
+def test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() -> None:
+    """A constant cell's key had no object, so it met every call's reach and died at each one.
+
+    The key takes the object the body's own reference names, uncaptured
+    static included, so a call reaching only NONLOCAL leaves it standing.
+    """
+    from qbopt.model import memory
+
+    address = Addr(Space.SEGMENT, 6, 5)
+    static = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 5), captured=False)
+    ref = mir.MemRef(address, 2, provenance=memory.Provenance.one(static, 6, 8))
+    reach = mir.MemRef(None, 0, provenance=memory.Provenance.one(memory.Object(memory.Kind.NONLOCAL)))
+    store = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(7, 2),), stores=(ref,))
+    call = mir.Op(1, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(reach,), memory_complete=True)
+    read = mir.Op(2, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.LOAD, loads=(ref,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store, call, read), ()),))
+
+    before = consts.cells(body, frozenset({5}), {})
+
+    assert consts._cell(before[(0, 2)], ref) == consts.Known(7, 2)

@@ -29,6 +29,7 @@ from contextlib import contextmanager
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.abi import runtime
 from qbopt.objectfile.module import Space
 
@@ -72,6 +73,8 @@ class _MemoryQueries:
 
     known: dict[mir.Value, "Known"]
     dgroup: frozenset[int]
+    # Which object each directly addressed byte is; see alias.named_bytes.
+    named: dict = field(default_factory=dict)
     facts: dict = field(init=False, default_factory=dict)
     addressed: dict[int, mir.MemRef] = field(init=False, default_factory=dict)
     overlaps: dict[tuple[tuple, int], bool] = field(init=False, default_factory=dict)
@@ -87,11 +90,32 @@ class _MemoryQueries:
             self.addressed[key] = _addressed(ref, self.known)
         return self.addressed[key]
 
+    def learn(self, ref: mir.MemRef) -> None:
+        """The space a resolved store lands in is its object, where its displacement is its offset there."""
+        if ref.provenance is None or len(ref.provenance.slices) != 1 or ref.addr is None:
+            return
+        one = next(iter(ref.provenance.slices))
+        if one.stride == 1 and one.low <= ref.addr.disp and ref.addr.disp + ref.width <= one.high + one.width - 1:
+            self.named.setdefault((ref.addr.space, ref.addr.index), one.object)
+
     def may_overlap(self, where: tuple, ref: mir.MemRef) -> bool:
         key = (where, id(ref))
         if key not in self.overlaps:
+            cell = mir.MemRef(where[0], where[1], None, None)
+            named = [self.named.get(where[0].plus(byte)) for byte in range(where[1])]
+            whole = self.named.get((where[0].space, where[0].index))
+            if (
+                named
+                and named[0] is not None
+                and all(one == (named[0][0], named[0][1] + i) for i, one in enumerate(named))
+            ):
+                cell = replace(cell, provenance=memory.Provenance.one(named[0][0], named[0][1], named[0][1] + where[1]))
+            elif whole is not None and all(
+                one is None or one == (whole, where[0].disp + i) for i, one in enumerate(named)
+            ):
+                cell = replace(cell, provenance=memory.Provenance.one(whole, where[0].disp, where[0].disp + where[1]))
             self.overlaps[key] = mir.overlapping(
-                mir.MemRef(where[0], where[1], None, None),
+                cell,
                 ref,
                 self.dgroup,
                 known=self.facts,
@@ -233,6 +257,13 @@ def updated(op: mir.Op, known: dict, here: Cells) -> Known | None:
     return Known(masked(result, width), width)
 
 
+def memory_queries(body: mir.MirBody, known: dict[mir.Value, Known], dgroup: frozenset[int]) -> _MemoryQueries:
+    """Alias questions about `body`'s cells, each cell carrying the object its references name."""
+    from qbopt.analysis import alias
+
+    return _MemoryQueries(known, dgroup, alias.named_bytes(body))
+
+
 def _fragments(ref: mir.MemRef, fact: Known) -> Cells:
     return {
         (ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
@@ -319,17 +350,15 @@ def _kills(
             # so an absolute segment reaches none of them.
             assume.add(selector)
             continue
-        here = {
-            where: fact
-            for where, fact in here.items()
-            if not queries.may_overlap(where, ref)
-        }
+        here = {where: fact for where, fact in here.items() if not queries.may_overlap(where, ref)}
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
+            queries.learn(ref)
             here.update(_fragments(ref, put))
     if op.kind is mir.Kind.CALL and op.memory_values:
         here = dict(here)
         for ref, value in op.memory_values:
             if ref.addr is not None and ref.base is None and ref.segment is None:
+                queries.learn(ref)
                 here.update(_fragments(ref, Known(masked(value.n, value.width), value.width)))
     return here
 
@@ -363,7 +392,7 @@ def cells(
     7 even though the entry block says so three instructions earlier.
     """
     known = known if known is not None else {}
-    queries = _MemoryQueries(known, dgroup)
+    queries = memory_queries(body, known, dgroup)
     if initial is None:
         initial = {}
         for ref, value in body.initial:
