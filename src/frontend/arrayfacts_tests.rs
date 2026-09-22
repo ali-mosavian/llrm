@@ -1,16 +1,30 @@
 //! Port of `tests/test_array_facts.py`: unknown branches must not erase
 //! independently proven constant array extents.
 //!
-//! Skipped, needing `mir.bodies`, corpus loaders and `wholeseg`:
+//! Skipped, needing `wholeseg`:
+//! `test_hugerg_has_an_inductive_extent_proof_with_a_small_budget`.
+//! Skipped, monkeypatching `arrayfacts.proven` or `raising_array_bounds.proven`
+//! out of `mir.bodies`:
 //! `test_guarded_record_stores_only_exclude_proven_disjoint_statics`,
-//! `test_arrphi_proves_both_unknown_branches_and_the_join`,
-//! `test_hugerg_has_an_inductive_extent_proof_with_a_small_budget`,
 //! `test_inductive_proof_must_preserve_its_own_preconditions`.
 
 use super::*;
 use crate::frontend::addressfacts::region;
 use crate::model::ir::Operation;
 use crate::model::mir::{ArrayRequest, Const, MirBody, OpCode};
+use crate::support::testing;
+
+/// ARRPHI prints 10,9; its six bounded accesses used to lose all allocation facts.
+#[test]
+fn test_arrphi_proves_both_unknown_branches_and_the_join() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let ops = testing::all_ops(&testing::raised(format!("fixtures/regressions/arrphi-{tag}.obj").to_lowercase()));
+        let pointers: Vec<&MemRef> =
+            ops.iter().flat_map(|op| op.loads.iter().chain(&op.stores)).filter(|one| one.pointer).collect();
+        assert_eq!(pointers.len(), 6, "{tag}");
+        assert!(pointers.iter().all(|one| one.allocation.is_some()), "{tag}");
+    }
+}
 
 fn op(at: i64, operation: Operation, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut made = Op::new(at, OpCode::Operation(operation), "", defines, uses);

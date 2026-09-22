@@ -1,22 +1,99 @@
 //! Port of `tests/test_raising_arrays.py`.
 //!
-//! Skipped, needing `mir.bodies` and corpus loaders:
-//! `test_dim_normal_return_supplies_descriptor_constants`,
-//! `test_descriptor_fields_have_proven_addresses_without_new_relocations`,
-//! `test_real_array_requests`.
-//!
-//! `tests/test_array_bounds.py` is skipped whole, needing `mir.bodies`,
-//! corpus loaders and `wholeseg`:
-//! `test_nine_dimensional_loop_proves_its_element_store_extent`,
+//! Also ports `tests/test_array_bounds.py`'s
+//! `test_nine_dimensional_loop_proves_its_element_store_extent`. The rest of
+//! that file is skipped, monkeypatching `raising_array_bounds.proven` out of
+//! `mir.bodies`:
 //! `test_unknown_logical_loop_condition_proves_no_array_extent`,
 //! `test_huge_loop_descriptor_loads_leave_the_loop`,
 //! `test_huge_proof_does_not_assume_its_own_disjointness`,
 //! `test_harr_dimension_survives_element_stores`,
 //! `test_failed_path_proof_discards_all_disjointness`.
 
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::model::ir::Operation;
-use crate::model::mir::{MirBlock, MirBody, Op, OpCode};
+use crate::model::mir::{self, MirBlock, MirBody, Op, OpCode};
+use crate::support::testing::{self, nth, ops, overlapping};
+
+const TAGS: [&str; 3] = ["p-g2", "q-O", "v-g3"];
+
+/// HARR's 21-element dimensions were unknown immediately after DDIM returned.
+#[test]
+fn test_dim_normal_return_supplies_descriptor_constants() {
+    for tag in TAGS {
+        let path = format!("fixtures/omf/harr-{tag}.obj").to_lowercase();
+        let found = testing::loaded(&path).unwrap();
+        let body = nth(&testing::raised(&path), 0);
+        let call = ops(&body).into_iter().find(|op| op.array.is_some()).unwrap();
+        let (dgroup, none) = (&found.dgroup.members, IndexMap::default());
+        let facts = consts::_kills(Default::default(), &call, &none, dgroup, &found.calls, None, None, false, None);
+        let field = |disp: i64| MemRef::new(Some(Addr { index: found.program_data.unwrap(), ..Addr::new(Space::Segment, disp) }), 2);
+        assert_eq!(consts::_cell(&facts, &field(20)), Some(consts::Known::new(21, 2)), "{tag}");
+        assert_eq!(consts::_cell(&facts, &field(24)), Some(consts::Known::new(21, 2)), "{tag}");
+        let mut unknown = call.clone();
+        unknown.kind = Kind::Store;
+        unknown.memory_values = vec![];
+        assert!(consts::_kills(facts, &unknown, &none, dgroup, &IndexMap::default(), None, None, false, None).is_empty(), "{tag}");
+    }
+}
+
+/// HARR's descriptor fields looked like arbitrary pointer accesses to alias analysis.
+#[test]
+fn test_descriptor_fields_have_proven_addresses_without_new_relocations() {
+    for tag in TAGS {
+        let path = format!("fixtures/omf/harr-{tag}.obj").to_lowercase();
+        let found = testing::loaded(&path).unwrap();
+        let body = nth(&testing::raised(&path), 0);
+        let fields: Vec<MemRef> =
+            ops(&body).into_iter().flat_map(|op| op.loads).filter(|one| one.symbolic.is_some()).collect();
+        let offsets: BTreeSet<i64> = fields.iter().map(|one| one.symbolic.as_ref().unwrap().offset).collect();
+        assert!(offsets.is_superset(&BTreeSet::from([8, 16])), "{tag}");
+        for reference in &fields {
+            let addr = reference.addr.unwrap();
+            assert!(addr.space == Space::Literal && reference.base.is_some(), "{tag}");
+            let symbol = reference.symbolic.as_ref().unwrap();
+            let direct = MemRef::new(Some(Addr { index: symbol.index, ..Addr::new(Space::Segment, symbol.offset) }), reference.width);
+            assert!(mir::same_bytes(reference, &direct), "{tag}");
+            assert!(overlapping(reference, &direct, Some(&found.dgroup)), "{tag}");
+            let unrelated = MemRef {
+                addr: Some(Addr { index: symbol.index, ..Addr::new(Space::Segment, symbol.offset + i64::from(reference.width)) }),
+                ..direct.clone()
+            };
+            assert!(!overlapping(reference, &unrelated, Some(&found.dgroup)), "{tag}");
+        }
+    }
+}
+
+#[test]
+fn test_real_array_requests() {
+    for tag in TAGS {
+        for (name, bounds) in [("harr", vec![(0, 20), (0, 20)]), ("segld", vec![(0, 100)])] {
+            let path = format!("fixtures/omf/{name}-{tag}.obj").to_lowercase();
+            let found = testing::loaded(&path).unwrap();
+            let requests: Vec<ArrayRequest> =
+                testing::all_ops(&testing::raised(&path)).into_iter().filter_map(|op| op.array).collect();
+            assert_eq!(requests.len(), 1, "{name} {tag}");
+            let request = &requests[0];
+            assert_eq!(request.bounds, bounds, "{name} {tag}");
+            assert_eq!(request.element_width, 2, "{name} {tag}");
+            assert_eq!(Some(request.descriptor.index), found.program_data, "{name} {tag}");
+            assert!(!request.replaces, "{name} {tag}");
+        }
+    }
+}
+
+/// NDARR's OR-based zero test defeated the extent proof despite valid 1,12,2 output.
+#[test]
+fn test_nine_dimensional_loop_proves_its_element_store_extent() {
+    for tag in TAGS {
+        let body = nth(&testing::raised(format!("fixtures/regressions/ndarr-{tag}.obj").to_lowercase()), 0);
+        let stores: Vec<MemRef> = ops(&body).into_iter().flat_map(|op| op.stores).filter(|one| one.pointer).collect();
+        assert!(!stores.is_empty(), "{tag}");
+        assert!(stores.iter().all(|one| one.allocation.is_some()), "{tag}");
+    }
+}
 
 /// Unequal dimensions must not be swapped: the last pushed bound lives at descriptor +14.
 #[test]

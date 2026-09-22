@@ -1,7 +1,9 @@
 //! Port of `tests/test_fpstack.py`.
 //!
-//! Skipped, needing `mir.bodies` and `tools/stages.py`:
-//! `test_fpcse_store_reads_product_not_original_load`,
+//! Skipped, the module's autouse fixture monkeypatching
+//! `raising_float_values.raised` out of `mir.bodies`:
+//! `test_fpcse_store_reads_product_not_original_load`.
+//! Skipped, needing `tools/stages.py` and that fixture:
 //! `test_stage_dump_exposes_floating_value_chain`.
 
 use super::*;
