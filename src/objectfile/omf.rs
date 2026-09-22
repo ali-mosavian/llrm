@@ -476,13 +476,13 @@ pub fn rename_external(
             let n = r.body[i] as usize;
             seen += 1;
             let entry_name = if seen == index {
-                encode_latin1(name)
+                encode_latin1(name)?
             } else {
                 slice(&r.body, i + 1, i + 1 + n).to_vec()
             };
             let j = i + 1 + n;
             let (_, k) = _index(&r.body, j);
-            body.extend(bytes(&[entry_name.len() as i64]));
+            body.extend(bytes(&[entry_name.len() as i64])?);
             body.extend_from_slice(&entry_name);
             body.extend_from_slice(slice(&r.body, j, k));
             changed = changed || seen == index;
@@ -883,21 +883,25 @@ pub fn extdef_entries(record: &Record) -> Vec<(Vec<u8>, Vec<u8>)> {
 }
 
 /// An EXTDEF record holding exactly these names.
-pub fn extdef_record(entries: &[(Vec<u8>, Vec<u8>)]) -> Rc<Record> {
+pub fn extdef_record(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Rc<Record>, ValueError> {
     let mut body = Vec::new();
     for (name, kind) in entries {
-        body.extend(bytes(&[name.len() as i64]));
+        // bytearray.append
+        if name.len() > 255 {
+            return Err(ValueError("byte must be in range(0, 256)".to_owned()));
+        }
+        body.push(name.len() as u8);
         body.extend_from_slice(name);
         body.extend_from_slice(kind);
     }
-    Rc::new(Record::new(EXTDEF, body))
+    Ok(Rc::new(Record::new(EXTDEF, body)))
 }
 
 /// Add a linker dependency without renumbering any existing external.
-pub fn with_external(records: &[Rc<Record>], name: &str) -> (Vec<Rc<Record>>, i64) {
+pub fn with_external(records: &[Rc<Record>], name: &str) -> Result<(Vec<Rc<Record>>, i64), ValueError> {
     let names = externals(records);
     if let Some(at) = names.iter().position(|one| one == name) {
-        return (records.to_vec(), at as i64);
+        return Ok((records.to_vec(), at as i64));
     }
     let position = records
         .iter()
@@ -906,11 +910,11 @@ pub fn with_external(records: &[Rc<Record>], name: &str) -> (Vec<Rc<Record>>, i6
         .map(|(index, _record)| index + 1)
         .max()
         .unwrap_or(1);
-    let added = extdef_record(&[(encode_latin1(name), b"\x00".to_vec())]);
+    let added = extdef_record(&[(encode_latin1(name)?, b"\x00".to_vec())])?;
     let mut out = slice_records(records, 0, position).to_vec();
     out.push(added);
     out.extend_from_slice(slice_records(records, position, records.len()));
-    (out, names.len() as i64)
+    Ok((out, names.len() as i64))
 }
 
 // A comment class no tool in this toolchain writes: BC's own are 0x00, 0x9f
@@ -929,7 +933,7 @@ pub fn finalised(records: &[Rc<Record>], made_by: &str) -> Result<Vec<Rc<Record>
         ));
     }
     let (attribute, kind) = FINALISED;
-    let text = encode_ascii(made_by);
+    let text = encode_ascii(made_by)?;
     if text.len() > 240 {
         return Err(ValueError("the marker does not hold that much".to_owned()));
     }
@@ -1082,7 +1086,7 @@ pub fn offset_fixup(
     group: i64,
 ) -> Result<Fixup, ValueError> {
     let method = target_method(target);
-    let mut raw = bytes(&[0xC4, 0, 0x10 | method]);
+    let mut raw = bytes(&[0xC4, 0, 0x10 | method])?;
     raw.extend(as_index(group)?);
     raw.extend(as_index(index)?);
     raw.extend(pack(disp));
@@ -1120,7 +1124,7 @@ pub fn target_offset_fixup(
     // Frame method 5 means "the target's frame" and carries no frame datum.
     // d32x's independent OMF writer emits 54/56 for the zero-displacement
     // forms; clearing P (bit 2) to 50/52 adds the displacement below.
-    let mut raw = bytes(&[0xC4, 0, 0x50 | method]);
+    let mut raw = bytes(&[0xC4, 0, 0x50 | method])?;
     raw.extend(as_index(index)?);
     raw.extend(pack(disp));
     let record = fixupp_record(&[raw.clone()]);
@@ -1176,7 +1180,7 @@ pub fn ledata_record(seg: i64, offset: i64, payload: &[u8]) -> Result<Rc<Record>
             payload.len()
         )));
     }
-    let mut body = _emit_index(seg);
+    let mut body = _emit_index(seg)?;
     body.extend(pack(offset));
     body.extend_from_slice(payload);
     Ok(Rc::new(Record::new(LEDATA, body)))
@@ -1186,7 +1190,7 @@ pub fn fixupp_record(subrecords: &[Vec<u8>]) -> Rc<Record> {
     Rc::new(Record::new(FIXUPP, subrecords.concat()))
 }
 
-pub fn _emit_index(value: i64) -> Vec<u8> {
+pub fn _emit_index(value: i64) -> Result<Vec<u8>, ValueError> {
     if value < 0x80 {
         bytes(&[value])
     } else {
@@ -1350,13 +1354,10 @@ fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
 }
 
 /// `bytes([...])`.
-fn bytes(values: &[i64]) -> Vec<u8> {
+fn bytes(values: &[i64]) -> Result<Vec<u8>, ValueError> {
     values
         .iter()
-        .map(|&value| {
-            u8::try_from(value)
-                .unwrap_or_else(|_| panic!("ValueError: bytes must be in range(0, 256)"))
-        })
+        .map(|&value| u8::try_from(value).map_err(|_| ValueError("bytes must be in range(0, 256)".to_owned())))
         .collect()
 }
 
@@ -1365,23 +1366,42 @@ fn decode_latin1(b: &[u8]) -> String {
     b.iter().map(|&byte| byte as char).collect()
 }
 
+/// `str.encode(codec)` for a codec that maps code points below `limit` to
+/// themselves. The error is `UnicodeEncodeError`, a `ValueError`, spelled as
+/// CPython spells it: one error over the first run of unencodable characters.
+fn encode_below(s: &str, codec: &str, limit: u32) -> Result<Vec<u8>, ValueError> {
+    let chars: Vec<char> = s.chars().collect();
+    let Some(start) = chars.iter().position(|&one| one as u32 >= limit) else {
+        return Ok(chars.iter().map(|&one| one as u8).collect());
+    };
+    let end = chars[start..].iter().position(|&one| (one as u32) < limit).map_or(chars.len(), |run| start + run);
+    let text = if end - start == 1 {
+        let code = chars[start] as u32;
+        let escaped = if code < 0x100 {
+            format!("\\x{code:02x}")
+        } else if code < 0x10000 {
+            format!("\\u{code:04x}")
+        } else {
+            format!("\\U{code:08x}")
+        };
+        format!("'{codec}' codec can't encode character '{escaped}' in position {start}: ordinal not in range({limit})")
+    } else {
+        format!(
+            "'{codec}' codec can't encode characters in position {start}-{}: ordinal not in range({limit})",
+            end - 1
+        )
+    };
+    Err(ValueError(text))
+}
+
 /// `str.encode("latin1")`.
-fn encode_latin1(s: &str) -> Vec<u8> {
-    s.chars()
-        .map(|character| {
-            u8::try_from(character as u32).unwrap_or_else(|_| {
-                panic!("UnicodeEncodeError: 'latin-1' codec can't encode character")
-            })
-        })
-        .collect()
+fn encode_latin1(s: &str) -> Result<Vec<u8>, ValueError> {
+    encode_below(s, "latin-1", 256)
 }
 
 /// `str.encode("ascii")`.
-fn encode_ascii(s: &str) -> Vec<u8> {
-    if !s.is_ascii() {
-        panic!("UnicodeEncodeError: 'ascii' codec can't encode character");
-    }
-    s.as_bytes().to_vec()
+fn encode_ascii(s: &str) -> Result<Vec<u8>, ValueError> {
+    encode_below(s, "ascii", 128)
 }
 
 /// `bytes.decode("ascii", "replace")`.
@@ -1920,7 +1940,7 @@ mod tests {
                 .join(format!("fixtures/regressions/huge2-{tag}.obj").to_lowercase());
             let records = read(path).unwrap();
             let before = externals(&records);
-            let (added, index) = with_external(&records, "b$HugeShift");
+            let (added, index) = with_external(&records, "b$HugeShift").unwrap();
             assert_eq!(index, before.len() as i64);
             let mut want = before.clone();
             want.push("b$HugeShift".to_owned());
@@ -1935,12 +1955,53 @@ mod tests {
                 [&extdef_record(&[(
                     b"b$HugeShift".to_vec(),
                     b"\x00".to_vec()
-                )])]
+                )])
+                .unwrap()]
             );
-            let (repeated, again) = with_external(&added, "b$HugeShift");
+            let (repeated, again) = with_external(&added, "b$HugeShift").unwrap();
             assert!(again == index && repeated == added);
             let emitted: Vec<u8> = added.iter().flat_map(|record| record.emit()).collect();
             assert_eq!(parse(&emitted).unwrap(), added);
         }
+    }
+
+    /// The encode and `bytes()` errors are `ValueError`s Python's callers
+    /// catch; they panicked here, so a refusal became a crash.
+    #[test]
+    fn test_value_error_subclasses_are_results_with_python_text() {
+        // Python: str(error) for each call below.
+        let records = jumptable();
+        let error = |result: Result<(), ValueError>| result.unwrap_err().0;
+        assert_eq!(
+            error(with_external(&records, "b$\u{100}").map(|_| ())),
+            "'latin-1' codec can't encode character '\\u0100' in position 2: ordinal not in range(256)"
+        );
+        assert_eq!(
+            error(with_external(&records, "x\u{100}\u{101}y").map(|_| ())),
+            "'latin-1' codec can't encode characters in position 1-2: ordinal not in range(256)"
+        );
+        assert_eq!(
+            error(finalised(&records, "1:\u{e9}").map(|_| ())),
+            "'ascii' codec can't encode character '\\xe9' in position 2: ordinal not in range(128)"
+        );
+        assert_eq!(
+            error(finalised(&records, "a\u{1F600}").map(|_| ())),
+            "'ascii' codec can't encode character '\\U0001f600' in position 1: ordinal not in range(128)"
+        );
+        assert_eq!(
+            error(rename_external(&records, 1, &"x".repeat(300)).map(|_| ())),
+            "bytes must be in range(0, 256)"
+        );
+        assert_eq!(
+            error(extdef_record(&[(vec![b'x'; 256], vec![0])]).map(|_| ())),
+            "byte must be in range(0, 256)"
+        );
+        assert_eq!(
+            error(with_external(&records, &"z".repeat(256)).map(|_| ())),
+            "byte must be in range(0, 256)"
+        );
+        assert_eq!(error(_emit_index(-1).map(|_| ())), "bytes must be in range(0, 256)");
+        assert_eq!(error(ledata_record(-1, 0, &[]).map(|_| ())), "bytes must be in range(0, 256)");
+        assert_eq!(_emit_index(0x8000).unwrap(), vec![0x80, 0x00]);
     }
 }
