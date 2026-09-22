@@ -208,7 +208,6 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
 
     facts = consts.known(body)
     blocks = {block.at: block for block in body.blocks}
-    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     dominators = loops.dominators(body.blocks, body.entry)
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
@@ -219,20 +218,13 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             continue
         header = blocks[loop.header]
         counters = induction.basics(body, loop)
-        for counter in counters.values():
-            width = counter.start.width
-            last = induction._last_counter(body, loop, counter, facts, width)
-            start = induction._signed(counter.start, facts, width)
-            step = induction._signed(counter.step, facts, width)
-            if last is None or start is None or not step:
+        for proof in induction.counted(body, loop, facts):
+            if proof.posttested or proof.first is None or proof.width != proof.counter.start.width:
                 continue
-            count = (last - start) // step + 1
-            phi = next(phi for phi in header.phis if phi.result.id == counter.value)
-            update = phi.incoming[next(iter(loop.latches))]
-            branch = header.ops[-1]
-            compare = next(
-                op for op in header.ops[:-1] if induction._counter_bound(op, branch, counter, width, made) is not None
-            )
+            counter, count, phi = proof.counter, proof.count, proof.phi
+            width = counter.start.width
+            update = phi.incoming[proof.latch]
+            branch, compare = proof.branch, proof.compare
             (exit_at,) = [at for at in header.succ if at not in loop.body]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
                 continue
@@ -310,7 +302,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                     mir.Kind.COPY,
                     "",
                     final,
-                    (mir.Const(consts.masked(last + step, width), width),),
+                    (mir.Const(consts.masked(proof.last + proof.step, width), width),),
                     exit_at,
                     blocks[exit_at].ops[0],
                 )
@@ -588,6 +580,8 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
             )
 
             count = induction.trips(proof, builder.computed)
+            if count is None:
+                continue
             distance = builder.computed(mir.Kind.MUL, (count, mir.Const(consts.masked(step, width), width)))
             final = builder.computed(mir.Kind.ADD, (mir.Held(initial, width), distance))
             rebased: dict[int, mir.Op] = {}
@@ -756,32 +750,13 @@ def zeroed(body: mir.MirBody, *, address_offsets: bool = False) -> mir.MirBody:
             width = stepping.results[0].width
             if seed.kind is not mir.Kind.COPY or len(seed.args) != 1 or not isinstance(seed.args[0], mir.Const):
                 continue
-            compares = [
-                (op, compared)
-                for op in header.ops[:-1]
-                for compared in (2, 4)
-                if induction._counter_bound(op, branch, counter, compared, made) is not None
-            ]
-            if len(compares) != 1:
+            proof = induction.controlling(body, loop, counter, facts)
+            if proof is None or proof.posttested or proof.last is None:
                 continue
-            compare, compared = compares[0]
-            if compare.args[1] == mir.Const(0, compared) and branch.test in (mir.Kind.NE, mir.Kind.EQ):
+            if proof.bound == mir.Const(0, proof.width) and proof.test is mir.Kind.NE:
                 continue  # counts to zero already
-            start = induction._signed(counter.start, facts, counter.start.width)
-            step = induction._signed(counter.step, facts, counter.step.width)
-            if start is None or not step:
-                continue
-            narrowed = replace(
-                counter,
-                start=mir.Const(consts.masked(start, compared), compared),
-                step=mir.Const(consts.masked(step, compared), compared),
-            )
-            if induction._signed(narrowed.start, facts, compared) != start:
-                continue
-            last = induction._last_counter(body, loop, narrowed, facts, compared)
-            if last is None:
-                continue
-            final = last + step
+            compare, start, step = proof.compare, proof.first, proof.step
+            final = proof.last + step
             offsets = _offsets(
                 phi.result,
                 readers,

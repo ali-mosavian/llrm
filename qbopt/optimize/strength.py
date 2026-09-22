@@ -533,11 +533,12 @@ def _replacement_credits(
             domain = induction.domain(body, loop, affine, facts)
             if phi is None or latch not in phi.incoming or domain is None:
                 continue
-            controls = {
-                id(op)
-                for op in header.ops[:-1]
-                if induction._counter_bound(op, branch, affine, affine.start.width, made) is not None
-            }
+            proof = induction.controlling(body, loop, affine, facts)
+            controls = (
+                {id(proof.compare)}
+                if proof is not None and not proof.posttested and proof.width == affine.start.width
+                else set()
+            )
             update = made.get(phi.incoming[latch].id)
             if len(controls) != 1 or update is None:
                 continue
@@ -1255,7 +1256,7 @@ def _widened(body: MirBody, loop, facts: dict, value: int | None = None) -> "lis
             continue
         if induction._signed(affine.start, facts, 2) != 0 or induction._signed(affine.step, facts, 2) != 1:
             continue
-        if induction._last_counter(body, loop, affine, facts, 2) is None:
+        if induction.domain(body, loop, affine, facts) is None:
             continue
         phi = next((phi for phi in header.phis if phi.result.id == affine.value), None)
         if phi is None or len(phi.incoming) != 2:

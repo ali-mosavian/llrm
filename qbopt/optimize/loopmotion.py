@@ -111,8 +111,10 @@ def _last_counter_value(op: mir.Op, body: mir.MirBody, loop) -> mir.Const | None
     counter = induction.basics(body, loop).get(stored.value.id)
     if counter is None or counter.start.width != stored.width or op.stores[0].width != stored.width:
         return None
-    last = induction._last_counter(body, loop, counter, consts.known(body), stored.width)
-    return mir.Const(consts.masked(last, stored.width), stored.width) if last is not None else None
+    proof = induction.controlling(body, loop, counter, consts.known(body))
+    if proof is None or proof.last is None:
+        return None
+    return mir.Const(consts.masked(proof.last, stored.width), stored.width)
 
 
 def _invariant_value(op: mir.Op, invariant: set[int], nonempty: bool) -> mir.Arg | None:

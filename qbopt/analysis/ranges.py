@@ -55,18 +55,7 @@ def on_edge(block, successor, known, facts=None):
         return result
     kind = branch.test
     if successor != branch.target:
-        kind = {
-            mir.Kind.LE: mir.Kind.GT,
-            mir.Kind.LT: mir.Kind.GE,
-            mir.Kind.GE: mir.Kind.LT,
-            mir.Kind.GT: mir.Kind.LE,
-            mir.Kind.EQ: mir.Kind.NE,
-            mir.Kind.NE: mir.Kind.EQ,
-            mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
-            mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
-            mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
-            mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
-        }.get(kind)
+        kind = mir.NEGATED.get(kind)
     sign = 1 << (left.width * 8 - 1)
     full = Interval(-sign, sign - 1, left.width)
     first = _operand(left, known, facts or {}) or full
@@ -222,14 +211,11 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
         phis = {phi.result.id: phi.result for phi in header.phis}
         counters = induction.basics(body, loop).values()
         trips = set()
-        for counter in counters:
-            width = counter.start.width
-            last = induction._last_counter(body, loop, counter, facts, width)
-            start = induction._signed(counter.start, facts, width)
-            if last is not None and start is not None:
-                known[phis[counter.value]] = Interval(min(start, last), max(start, last), width)
-                step = induction._signed(counter.step, facts, width)
-                trips.add((last - start) // step)
+        for proof in induction.counted(body, loop, facts):
+            if proof.first is not None and proof.last is not None:
+                span = min(proof.first, proof.last), max(proof.first, proof.last)
+                known[proof.phi.result] = Interval(*span, proof.counter.start.width)
+                trips.add(proof.count - 1)
         if len(trips) == 1:
             advances = next(iter(trips))
             for counter in counters:

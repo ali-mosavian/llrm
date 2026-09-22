@@ -50,8 +50,8 @@ def test_counter_zero_test_requires_an_unchanged_counter(kind, same, accepted):
         results=(mir.Held(result, 2),),
     )
     branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
-    counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
-    assert induction._counter_bound(op, branch, counter, 2) == (mir.Const(0, 2) if accepted else None)
+    found = induction._compared(op, branch, {value.id: False}, {})
+    assert (found[2] if found else None) == (mir.Const(0, 2) if accepted else None)
 
 
 def test_counter_zero_test_keeps_its_flags_across_a_partial_result():
@@ -71,8 +71,8 @@ def test_counter_zero_test_keeps_its_flags_across_a_partial_result():
         results=(mir.Held(result, 2),),
     )
     branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
-    counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
-    assert induction._counter_bound(op, branch, counter, 2) == mir.Const(0, 2)
+    found = induction._compared(op, branch, {value.id: False}, {})
+    assert found is not None and found[2] == mir.Const(0, 2)
 
 
 def test_affine_map_carries_the_modular_injectivity_proof() -> None:

@@ -1,4 +1,4 @@
-"""`induction.counted` over any unit loop: runtime start, `<` or `<=`, signed or not."""
+"""`induction.counted`, the one trip-count proof, against what the loops it names actually do."""
 
 import re
 import functools
@@ -149,6 +149,142 @@ def _unit_loop(start: int, bound: int, exit_test: mir.Kind) -> mir.MirBody:
         ),
         sealed=True,
     )
+
+
+def _loop(
+    start: int, bound: int, test: mir.Kind, step: int, shape: str, mirrored: bool = False, width: int = 1
+) -> mir.MirBody:
+    """`i = start` stepping by `step` while `i test bound`, returning trips and the last trip's `i`.
+
+    `shape` is "pre" (tested before each trip), or "post" or "post-stepped"
+    (after each, reading `i` or `i + step`). `mirrored` compares `bound` to `i`.
+    """
+    serial = iter(range(1, 100))
+
+    def value(at: int, **flags: bool) -> mir.Value:
+        n = next(serial)
+        return mir.Value(n, at, variable=n, version=1, **flags)
+
+    posttested = shape != "pre"
+    body_at, exit_at = (1, 2) if posttested else (2, 3)
+    seed, zero, counter, trips, seen = value(0), value(0), value(1), value(1), value(1)
+    following, counted_up, saw, flags = value(body_at), value(body_at), value(body_at), value(1, flags=True)
+    tested = mir.Held(following if shape == "post-stepped" else counter, width)
+    args = (mir.Const(bound, width), tested) if mirrored else (tested, mir.Const(bound, width))
+    compare = mir.Op(
+        1, ir.Operation.COMPARE, "cmp", (flags,), (tested.value,), kind=mir.Kind.SUB, args=args
+    )  # fmt: skip
+    continuing = mir.MIRRORED[test] if mirrored else test
+    branch = mir.Op(
+        1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
+        test=continuing if posttested else mir.NEGATED[continuing], target=1 if posttested else exit_at,
+    )  # fmt: skip
+    trip = (
+        mir.computed(body_at, mir.Kind.ADD, counted_up, (mir.Held(trips, 2), mir.Const(1, 2)), 2),
+        mir.computed(body_at, mir.Kind.COPY, saw, (mir.Held(counter, width),), width),
+        mir.computed(body_at, mir.Kind.ADD, following, (mir.Held(counter, width), mir.Const(step, width)), width),
+    )
+    phis = (
+        mir.Phi(counter, {0: seed, body_at: following}),
+        mir.Phi(trips, {0: zero, body_at: counted_up}),
+        mir.Phi(seen, {0: seed, body_at: saw}),
+    )
+    left = (
+        (mir.Held(trips, 2), mir.Held(seen, width))
+        if not posttested
+        else (mir.Held(counted_up, 2), mir.Held(saw, width))
+    )
+    returned = mir.Op(exit_at, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN, args=left)
+    entry = mir.MirBlock(
+        0,
+        (),
+        (
+            mir.computed(0, mir.Kind.COPY, seed, (mir.Const(start, width),), width),
+            mir.computed(0, mir.Kind.COPY, zero, (mir.Const(0, 2),), 2),
+        ),
+        (1,),
+    )
+    if posttested:
+        blocks = (
+            entry,
+            mir.MirBlock(1, phis, (*trip, compare, branch), (1, 2)),
+            mir.MirBlock(2, (), (returned,), ()),
+        )
+    else:
+        jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+        blocks = (
+            entry,
+            mir.MirBlock(1, phis, (compare, branch), (2, 3)),
+            mir.MirBlock(2, (), (*trip, jump), (1,)),
+            mir.MirBlock(3, (), (returned,), ()),
+        )
+    return mir.MirBody(0, blocks, sealed=True)
+
+
+def _signed(n: int, width: int) -> int:
+    return n - (1 << 8 * width) if n >> 8 * width - 1 else n
+
+
+TESTS = (*induction._ASCENDING, *induction._DESCENDING, mir.Kind.NE)
+ENDS = (0, 1, 0x7F, 0x80, 0xFE, 0xFF)
+
+
+@pytest.mark.parametrize("shape", ["pre", "post", "post-stepped"])
+@pytest.mark.parametrize("step", [1, -1, 3, -3])
+def test_every_counted_loop_runs_its_proved_trips(shape: str, step: int) -> None:
+    """The proof, over every byte loop of these ends and tests, against running it.
+
+    A loop the executor sees end has its exact count, or no proof; one that
+    never ends has no proof. The last trip's counter is `last` wherever given.
+    """
+    counted = []
+    for test in TESTS:
+        for start in ENDS:
+            for bound in ENDS:
+                for mirrored in (False, True):
+                    body = _loop(start, bound, test, step, shape, mirrored)
+                    (loop,) = loops.loops(body.blocks, body.entry)
+                    proofs = induction.counted(body, loop)
+                    try:
+                        trips, seen = execute.run(body, limit=1_700).returned
+                    except execute.ExecutionError:
+                        assert not proofs, (test, start, bound, mirrored)
+                        continue
+                    if not proofs:
+                        continue
+                    (proof,) = proofs
+                    where = (test, start, bound, mirrored, trips)
+                    assert proof.count == trips and proof.test is test, where
+                    if proof.last is not None:
+                        assert (proof.first, proof.last) == (_signed(start, 1), _signed(seen, 1)), where
+                    counted.append(test)
+    # Every test whose direction the step can end is proved somewhere.
+    ending = {test for test in TESTS if test is mir.Kind.NE or (test in induction._ASCENDING) == (step > 0)}
+    assert set(counted) == ending
+
+
+@pytest.mark.parametrize(
+    ("start", "step", "bound", "last"),
+    [
+        (7, 3, 37, 34),
+        (37, -3, 7, 10),
+        (0, 1, 32767, 32766),
+        (0, -1, -32768, -32767),
+        (7, 3, 38, None),  # reached only after wrapping
+        (7, -3, 37, None),
+        (7, 3, 7, None),  # no trip
+        (32767, 1, -32768, None),  # its exit value wraps
+    ],
+)
+def test_a_not_equal_loop_knows_its_last_trip_only_without_wrapping(
+    start: int, step: int, bound: int, last: int | None
+) -> None:
+    """IVARM lost its ten-trip proof when IndVarSimplify changed `<= 10` to `!= 37`."""
+    body = _loop(start, bound, mir.Kind.NE, step, "pre", width=2)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    (proof,) = induction.counted(body, loop)
+
+    assert proof.last == last
 
 
 @pytest.mark.parametrize(

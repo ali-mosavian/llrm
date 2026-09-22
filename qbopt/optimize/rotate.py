@@ -241,15 +241,10 @@ def _step_test(body: mir.MirBody, loop: loops.Loop, header: mir.MirBlock) -> mir
         phi = next((one for one in header.phis if one.result.id == counter.value), None)
         if phi is None or latch_at not in phi.incoming:
             continue
-        comparisons = [
-            op
-            for op in header.ops[:-1]
-            if induction._counter_bound(op, branch, counter, counter.start.width, made)
-            == mir.Const(0, counter.start.width)
-        ]
-        if len(comparisons) != 1:
+        proof = induction.controlling(body, loop, counter, facts)
+        if proof is None or proof.posttested or proof.bound != mir.Const(0, counter.start.width):
             continue
-        compare = comparisons[0]
+        compare = proof.compare
         flags = [value for value in compare.defines if value.flags]
         if len(flags) != 1 or readers.get(flags[0]) != [branch]:
             continue
