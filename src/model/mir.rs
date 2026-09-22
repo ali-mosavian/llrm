@@ -488,6 +488,8 @@ pub enum Kind {
     Decrement,
     Mul,
     Smulhi,
+    FixedMul,
+    FixedDiv,
     Div,
     Rem,
     Divmod,
@@ -546,7 +548,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 65] = [
         Self::Add,
         Self::Sub,
         Self::AddCarry,
@@ -555,6 +557,8 @@ impl Kind {
         Self::Decrement,
         Self::Mul,
         Self::Smulhi,
+        Self::FixedMul,
+        Self::FixedDiv,
         Self::Div,
         Self::Rem,
         Self::Divmod,
@@ -622,6 +626,8 @@ impl Kind {
             Self::Decrement => "decrement",
             Self::Mul => "mul",
             Self::Smulhi => "smulhi",
+            Self::FixedMul => "fixed_mul",
+            Self::FixedDiv => "fixed_div",
             Self::Div => "div",
             Self::Rem => "rem",
             Self::Divmod => "divmod",
@@ -678,6 +684,85 @@ impl Kind {
             Self::Opaque => "opaque",
             Self::Nothing => "nothing",
         }
+    }
+}
+
+impl Kind {
+    /// The member name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Add => "ADD",
+            Self::Sub => "SUB",
+            Self::AddCarry => "ADD_CARRY",
+            Self::SubBorrow => "SUB_BORROW",
+            Self::Increment => "INCREMENT",
+            Self::Decrement => "DECREMENT",
+            Self::Mul => "MUL",
+            Self::Smulhi => "SMULHI",
+            Self::FixedMul => "FIXED_MUL",
+            Self::FixedDiv => "FIXED_DIV",
+            Self::Div => "DIV",
+            Self::Rem => "REM",
+            Self::Divmod => "DIVMOD",
+            Self::Udivmod => "UDIVMOD",
+            Self::And => "AND",
+            Self::Or => "OR",
+            Self::Xor => "XOR",
+            Self::Shl => "SHL",
+            Self::Shr => "SHR",
+            Self::Sar => "SAR",
+            Self::Neg => "NEG",
+            Self::Not => "NOT",
+            Self::Lt => "LT",
+            Self::Le => "LE",
+            Self::Gt => "GT",
+            Self::Ge => "GE",
+            Self::Eq => "EQ",
+            Self::Ne => "NE",
+            Self::Below => "BELOW",
+            Self::BelowEq => "BELOW_EQ",
+            Self::Above => "ABOVE",
+            Self::AboveEq => "ABOVE_EQ",
+            Self::Copy => "COPY",
+            Self::Load => "LOAD",
+            Self::Store => "STORE",
+            Self::Convert => "CONVERT",
+            Self::SignExtend => "SIGN_EXTEND",
+            Self::ZeroExtend => "ZERO_EXTEND",
+            Self::Address => "ADDRESS",
+            Self::PtrOffset => "PTR_OFFSET",
+            Self::Fill => "FILL",
+            Self::Call => "CALL",
+            Self::Branch => "BRANCH",
+            Self::Switch => "SWITCH",
+            Self::Jump => "JUMP",
+            Self::Return => "RETURN",
+            Self::Escape => "ESCAPE",
+            Self::Fadd => "FADD",
+            Self::Fsub => "FSUB",
+            Self::Fmul => "FMUL",
+            Self::Fdiv => "FDIV",
+            Self::Fneg => "FNEG",
+            Self::Fabs => "FABS",
+            Self::Fsqrt => "FSQRT",
+            Self::Fload => "FLOAD",
+            Self::Fstore => "FSTORE",
+            Self::Fcompare => "FCOMPARE",
+            Self::Fcheck => "FCHECK",
+            Self::Arg => "ARG",
+            Self::Result => "RESULT",
+            Self::Join => "JOIN",
+            Self::Extract => "EXTRACT",
+            Self::Concat => "CONCAT",
+            Self::Opaque => "OPAQUE",
+            Self::Nothing => "NOTHING",
+        }
+    }
+}
+
+impl Repr for Kind {
+    fn repr(&self) -> String {
+        pyrepr::str_enum("Kind", self.name(), self.as_str())
     }
 }
 
@@ -2389,6 +2474,13 @@ impl Repr for Phi {
 
 #[cfg(test)]
 mod tests {
+    /// The draft lacked FIXED_MUL and FIXED_DIV; `Kind` must be Python's, member for member.
+    #[test]
+    fn kind_members_match_python() {
+        let got: Vec<(&str, &str)> = Kind::ALL.iter().map(|kind| (kind.name(), kind.as_str())).collect();
+        assert_eq!(got, [("ADD", "add"), ("SUB", "sub"), ("ADD_CARRY", "addcarry"), ("SUB_BORROW", "subborrow"), ("INCREMENT", "increment"), ("DECREMENT", "decrement"), ("MUL", "mul"), ("SMULHI", "smulhi"), ("FIXED_MUL", "fixed_mul"), ("FIXED_DIV", "fixed_div"), ("DIV", "div"), ("REM", "rem"), ("DIVMOD", "divmod"), ("UDIVMOD", "udivmod"), ("AND", "and"), ("OR", "or"), ("XOR", "xor"), ("SHL", "shl"), ("SHR", "shr"), ("SAR", "sar"), ("NEG", "neg"), ("NOT", "not"), ("LT", "lt"), ("LE", "le"), ("GT", "gt"), ("GE", "ge"), ("EQ", "eq"), ("NE", "ne"), ("BELOW", "below"), ("BELOW_EQ", "beloweq"), ("ABOVE", "above"), ("ABOVE_EQ", "aboveeq"), ("COPY", "copy"), ("LOAD", "load"), ("STORE", "store"), ("CONVERT", "convert"), ("SIGN_EXTEND", "sign_extend"), ("ZERO_EXTEND", "zero_extend"), ("ADDRESS", "address"), ("PTR_OFFSET", "ptr_offset"), ("FILL", "fill"), ("CALL", "call"), ("BRANCH", "branch"), ("SWITCH", "switch"), ("JUMP", "jump"), ("RETURN", "return"), ("ESCAPE", "escape"), ("FADD", "fadd"), ("FSUB", "fsub"), ("FMUL", "fmul"), ("FDIV", "fdiv"), ("FNEG", "fneg"), ("FABS", "fabs"), ("FSQRT", "fsqrt"), ("FLOAD", "fload"), ("FSTORE", "fstore"), ("FCOMPARE", "fcompare"), ("FCHECK", "fcheck"), ("ARG", "arg"), ("RESULT", "result"), ("JOIN", "join"), ("EXTRACT", "extract"), ("CONCAT", "concat"), ("OPAQUE", "opaque"), ("NOTHING", "nothing")]);
+    }
+
     /// The order CPython 3.13 iterates a set of Values built, thinned and
     /// grown this way; `lower_int64` numbers fresh values in that order.
     #[test]
@@ -2464,74 +2556,6 @@ mod tests {
     #[test]
     fn mir_kind_and_synth_keep_their_python_spellings() {
         assert_eq!(Synth::ALL.map(Synth::as_str), ["half.tolow", "concat.low"]);
-        assert_eq!(
-            Kind::ALL.map(Kind::as_str),
-            [
-                "add",
-                "sub",
-                "addcarry",
-                "subborrow",
-                "increment",
-                "decrement",
-                "mul",
-                "smulhi",
-                "div",
-                "rem",
-                "divmod",
-                "udivmod",
-                "and",
-                "or",
-                "xor",
-                "shl",
-                "shr",
-                "sar",
-                "neg",
-                "not",
-                "lt",
-                "le",
-                "gt",
-                "ge",
-                "eq",
-                "ne",
-                "below",
-                "beloweq",
-                "above",
-                "aboveeq",
-                "copy",
-                "load",
-                "store",
-                "convert",
-                "sign_extend",
-                "zero_extend",
-                "address",
-                "ptr_offset",
-                "fill",
-                "call",
-                "branch",
-                "switch",
-                "jump",
-                "return",
-                "escape",
-                "fadd",
-                "fsub",
-                "fmul",
-                "fdiv",
-                "fneg",
-                "fabs",
-                "fsqrt",
-                "fload",
-                "fstore",
-                "fcompare",
-                "fcheck",
-                "arg",
-                "result",
-                "join",
-                "extract",
-                "concat",
-                "opaque",
-                "nothing",
-            ]
-        );
     }
 
     fn semantics(operation: Operation, name: &str) -> Semantics {
