@@ -417,6 +417,34 @@ pub(crate) fn kind_of(what: &Semantics, args: &[Arg], results: &[Arg]) -> Kind {
 }
 
 /// Direct port of `qbopt.model.mir:WHOLE_FRAME`: every BP-relative frame byte.
+/// A flags value's tracked variable. Direct port of `mir.FLAGS`.
+pub const FLAGS: Register = Register::None;
+
+/// Which root a restore reads and which it writes the high half into, by
+/// `ir.FIXUP`'s pair numbering. Direct port of `mir.RESTORE_PAIR`.
+pub fn restore_pair(pair: i64) -> Option<(Register, Register)> {
+    match pair {
+        0 => Some((Register::EAX, Register::EDX)),
+        1 => Some((Register::ECX, Register::EBX)),
+        _ => None,
+    }
+}
+
+/// Each contract register at its own name. Direct port of `mir.AS_NAMED`.
+pub fn as_named(one: crate::abi::runtime::Reg) -> Option<Register> {
+    use crate::abi::runtime::Reg;
+    match one {
+        Reg::Ax => Some(Register::AX),
+        Reg::Bx => Some(Register::BX),
+        Reg::Cx => Some(Register::CX),
+        Reg::Dx => Some(Register::DX),
+        Reg::Si => Some(Register::SI),
+        Reg::Di => Some(Register::DI),
+        Reg::Flags => Some(FLAGS),
+        _ => None,
+    }
+}
+
 pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
 
 /// Direct port of `qbopt.model.mir:same_bytes`.
