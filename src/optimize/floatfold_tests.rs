@@ -1,11 +1,11 @@
 //! Port of tests/test_floatfold.py.
 //!
-//! Skipped until their modules are ported: `test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance`
-//! (corpus, `mir.bodies`), `test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic`,
+//! Skipped, needing `wholeseg`:
+//! `test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic`,
 //! `test_qb_fpcse_preserves_entry_when_first_load_disappears` and
-//! `test_collapsed_fpcse_has_no_empty_jump_trampoline` (wholeseg).
-//! `test_exact_pair_keeps_checks_and_refuses_observable_results` omits its
-//! `lower.semantics` and `transform.dead` asserts (transform unported).
+//! `test_collapsed_fpcse_has_no_empty_jump_trampoline`.
+//! Skipped, failing in Python at this commit (a completed `Op` has no `node`):
+//! `test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance`.
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
@@ -189,5 +189,10 @@ fn test_exact_pair_keeps_checks_and_refuses_observable_results() {
             changed.blocks[0].ops.iter().map(|op| op.kind).collect::<Vec<_>>(),
             [Kind::Fcheck, Kind::Fcheck]
         );
+        assert!(changed.blocks[0].ops.iter().all(|op| {
+            let lowered = crate::backend::lower::semantics(op, None, crate::backend::lower::Place::Default);
+            lowered.unwrap().unwrap().name.as_deref() == Some("wait")
+        }));
+        assert_eq!(crate::optimize::transform::dead(&changed).unwrap(), changed);
     }
 }
