@@ -2330,6 +2330,21 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     return floatfold.stored(floatfold.discarded(result, conversions), floating_facts)
 
 
+def _constant_fill(op: Op, facts: dict) -> Op:
+    """A fill's value and count, where they are numbers: a held count was priced as unknown."""
+
+    def known(arg: mir.Arg) -> mir.Arg:
+        if isinstance(arg, mir.Held) and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width:
+            return mir.Const(consts.masked(fact.n, arg.width), arg.width)
+        return arg
+
+    args = (*map(known, op.args[:2]), *op.args[2:])
+    if args == op.args:
+        return op
+    kept = {arg.value for arg in args if isinstance(arg, mir.Held)} | set(op.merges)
+    return replace(op, args=args, uses=tuple(value for value in op.uses if value in kept), raised=None)
+
+
 def _constant_based(op: Op, facts: dict) -> Op:
     """A near cell reached through a proven constant, as the fixed cell it is.
 
@@ -2435,6 +2450,8 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None, symbols:
     """Propagate width-proven constants without reversing ordered operands."""
     if op.kind is mir.Kind.ARG:
         return _constant_argument(op, facts, memory or {}, symbols or {})
+    if op.kind is mir.Kind.FILL:
+        return _constant_fill(op, facts)
     if (
         op.kind is mir.Kind.STORE
         and len(op.args) == len(op.stores) == 1

@@ -10,6 +10,7 @@ from qbopt.model import mir
 from qbopt.hir import execute
 from qbopt.backend import masm
 from qbopt.analysis import loops
+from qbopt.optimize import profit
 from qbopt.analysis import induction
 from qbopt.backend import lower_int64
 from qbopt.model.passes import LEVELS
@@ -826,10 +827,10 @@ def test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round(monkeypatch: pytes
     real = unroll._rejection
     rejected: Counter = Counter()
 
-    def recording(before, after, latch, count, where):
-        why = real(before, after, latch, count, where)
+    def recording(before, after, latch, count, where, copied=None):
+        why = real(before, after, latch, count, where, copied)
         if why is not None:
-            rejected[unroll._signature(before, latch, count, where)] += 1
+            rejected[unroll._signature(before if copied is None else copied, latch, count, where)] += 1
         return why
 
     monkeypatch.setattr(unroll, "_rejection", recording)
@@ -991,6 +992,68 @@ def test_a_ranked_repeat_literal_at_os_is_one_string_fill(tmp_path: Path) -> Non
     assert not re.search(r"\bj\w+\s", body)
 
 
+def test_unroll_is_priced_against_the_loop_as_optimized(tmp_path: Path) -> None:
+    """Unroll compared its settled copy with the loop mid-round: `b`'s fill became eight at -Os, not one."""
+    source = tmp_path / "priced_unroll.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\n"
+        "fn value(k: i16) -> fix:\n"
+        "    var a: [fix; 8, 8] = [0; 8, 8]\n"
+        "    var b: [fix; 8, 8] = [0; 8, 8]\n"
+        "    for i in 0..8:\n"
+        "        for j in 0..8:\n"
+        "            a[i, j] = fix(i * 3 + j + 1) / 4\n"
+        "            if i == j:\n"
+        "                b[i, j] = 2\n"
+        "            else:\n"
+        "                b[i, j] = fix((i + j) % 3) / 2\n"
+        "    return a[k, 1] + b[k, 2]\n"
+        "fn main() -> i16:\n"
+        "    value(3)\n"
+        "    return 0\n"
+    )
+    program = driver.parsed(source)
+    assembly = masm.text(modern_compile.assembled(program, entry="main", options=LEVELS["Os"], cpu="486"))
+    body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
+
+    assert body.count("rep stosd") == 2
+    assert body.count("mov cx, 64") == 2
+
+
+def _settled(tmp_path: Path, text: str, options: Options) -> mir.MirBody:
+    source = tmp_path / "settled.mod"
+    source.write_text(text)
+    program = driver.parsed(source)
+    function = next(one for one in program.modules[0].functions if one.name == "value")
+    semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name.endswith(".value"))
+    return modern_compile.optimized(program, function, semantic, targets.profile("486"), options=options).body
+
+
+def test_a_fill_count_that_is_a_number_is_written_as_one(tmp_path: Path) -> None:
+    """A merged fill's count stayed a held 64, which pricing read as an unknown ten cells."""
+    text = "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\n"
+    body = _settled(tmp_path, text, LEVELS["Os"])
+    fills = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.FILL]
+
+    assert [op.args[1] for op in fills] == [mir.Const(64, 2)]
+
+
+def test_an_unnamed_loop_is_priced_at_its_proven_trip_count(tmp_path: Path) -> None:
+    """Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much."""
+    text = (
+        "fn value(v: &[i16]) -> i16:\n"
+        "    var total: i16 = 0\n"
+        "    for i in 0..8:\n"
+        "        total += v[i]\n"
+        "    return total\n"
+    )
+    body = _settled(tmp_path, text, Options(unroll=False, peel=False))
+    (loop,) = loops.loops(body.blocks, body.entry)
+    frequency = profit._frequencies(body)
+
+    assert {frequency[at] for at in loop.body} == {8}
+
+
 def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
     """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
     source = tmp_path / "unrolled_fill.mod"
@@ -1002,7 +1065,8 @@ def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
         "fn main() -> i16:\n"
         "    return i16(value(3))\n"
     )
-    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    # The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n.
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", cpu="486"))
     body = assembly[assembly.index("_value proc") : assembly.index("_value endp")]
     zeroes = re.findall(r"mov dword ptr \[(.*?)\], 0\n", body)
 
