@@ -173,33 +173,7 @@ pub enum Loc {
     Held(Held),
 }
 
-/// x86 flags read or written by one decoded operation.
-///
-/// Direct port of `qbopt.analysis.flags:Flag`, retained here because
-/// `Effects` owns the fact.  The bit values are the x86 RFLAGS positions used
-/// by Python's iced-x86 binding.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Flag(u32);
-
-impl Flag {
-    pub const NONE: Self = Self(0);
-    pub const CF: Self = Self(1 << 0);
-    pub const PF: Self = Self(1 << 2);
-    pub const AF: Self = Self(1 << 4);
-    pub const ZF: Self = Self(1 << 6);
-    pub const SF: Self = Self(1 << 7);
-    pub const OF: Self = Self(1 << 11);
-    pub const ALL: Self =
-        Self(Self::CF.0 | Self::PF.0 | Self::AF.0 | Self::ZF.0 | Self::SF.0 | Self::OF.0);
-
-    pub const fn bits(self) -> u32 {
-        self.0
-    }
-
-    pub const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
+pub use crate::analysis::flags::Flag;
 
 /// Conservative decoded effects of one selected operation.
 ///
@@ -620,3 +594,4 @@ mod tests {
         assert_eq!(Addr::new(Space::Frame, -2).plus(4).disp, 2);
     }
 }
+
