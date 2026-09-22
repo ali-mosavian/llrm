@@ -1449,15 +1449,13 @@ pub fn consumed(op: &Op) -> BTreeSet<Value> {
         .copied()
         .filter(|value| !op.merges.contains_key(value))
         .collect::<BTreeSet<_>>();
+    result.extend(op.args.iter().filter_map(|arg| match arg {
+        Arg::Held(held) => Some(held.value),
+        _ => None,
+    }));
     for arg in op.args.iter().chain(&op.results) {
-        match arg {
-            Arg::Held(held) => {
-                result.insert(held.value);
-            }
-            Arg::Cell(cell) => {
-                result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
-            }
-            Arg::Const(_) | Arg::Symbol(_) | Arg::FrameAddress(_) | Arg::FrameSelector(_) | Arg::Opaque(_) => {}
+        if let Arg::Cell(cell) = arg {
+            result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
         }
     }
     result
@@ -3554,6 +3552,16 @@ mod tests {
             consumed(&op),
             BTreeSet::from([old, result, explicit, base, segment])
         );
+    }
+
+    /// A held result is written, not read; counting it kept dead pure calls
+    /// and refused inlining a call whose result was otherwise unused.
+    #[test]
+    fn consumed_does_not_read_a_held_result() {
+        let written = Value::new(1, 0);
+        let mut op = Op::new(0, OpCode::Operation(Operation::Move), "mov", vec![], vec![]);
+        op.results = vec![Arg::Held(Held { value: written, width: 2 })];
+        assert!(consumed(&op).is_empty());
     }
 
     #[test]
