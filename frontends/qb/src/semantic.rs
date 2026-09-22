@@ -389,7 +389,7 @@ pub fn compile_with_options(
             parameter_bytes += compiler.width(value_type).max(2);
             if is_array {
                 compiler.variables.insert(
-                    compiler.typed_declaration(&parameter.declaration)?.name,
+                    compiler.declaration_key(&parameter.declaration)?,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -424,7 +424,7 @@ pub fn compile_with_options(
                 );
             } else {
                 compiler.variables.insert(
-                    compiler.typed_declaration(&parameter.declaration)?.name,
+                    compiler.declaration_key(&parameter.declaration)?,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -1280,13 +1280,34 @@ impl Compiler {
             .map_or(SINGLE, |(_, table)| table[(first - b'A') as usize]))
     }
 
-    /// The variable an unsuffixed name denotes here: an AS-declared one if
+    /// The scalar an unsuffixed name denotes here: an AS-declared one if
     /// it exists, otherwise the one its DEFtype names, e.g. `c` -> `C%`.
     fn variable_key(&self, name: &str) -> String {
-        if suffix(name).is_some() || self.variables.contains_key(name) {
-            return name.into();
+        self.namespace_key(name, "")
+    }
+
+    /// Arrays are a namespace of their own: deedlines has both `g%` and
+    /// `g%()`. The key is the scalar spelling marked `()`.
+    fn array_key(&self, name: &str) -> String {
+        self.namespace_key(name, "()")
+    }
+
+    fn namespace_key(&self, name: &str, marker: &str) -> String {
+        let declared = format!("{name}{marker}");
+        if suffix(name).is_some() || self.variables.contains_key(&declared) {
+            return declared;
         }
-        self.typed_name(name).unwrap_or_else(|_| name.into())
+        let typed = self.typed_name(name).unwrap_or_else(|_| name.into());
+        format!("{typed}{marker}")
+    }
+
+    fn declaration_key(&self, declaration: &Declaration) -> Result<String, SemanticError> {
+        let name = self.typed_declaration(declaration)?.name;
+        Ok(if declaration.array {
+            format!("{name}()")
+        } else {
+            name
+        })
     }
 
     fn typed_name(&self, name: &str) -> Result<String, SemanticError> {
@@ -1410,7 +1431,7 @@ impl Compiler {
                             // module GOSUB creates INTEGER i, while
                             // DrawGorilla deliberately declares a local
                             // SINGLE i.
-                            self.variables.remove(&self.typed_declaration(item)?.name);
+                            self.variables.remove(&self.declaration_key(item)?);
                         }
                         if storage == "local" && item.array {
                             // Microsoft documents every explicitly DIMmed
@@ -1426,7 +1447,7 @@ impl Compiler {
                 }
                 Statement::Static(items) => {
                     for item in items {
-                        self.variables.remove(&self.typed_declaration(item)?.name);
+                        self.variables.remove(&self.declaration_key(item)?);
                         self.declare_as(item, "static")?;
                     }
                 }
@@ -1435,10 +1456,7 @@ impl Compiler {
                 | Statement::OptionBase(_, _) => {}
                 Statement::Redim(items) => {
                     for item in items {
-                        if self
-                            .variables
-                            .contains_key(&self.typed_declaration(item)?.name)
-                        {
+                        if self.variables.contains_key(&self.declaration_key(item)?) {
                             continue;
                         }
                         // REDIM is itself a declaration in QB, including
@@ -1472,8 +1490,9 @@ impl Compiler {
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
+        let key = self.declaration_key(declaration)?;
         let declaration = &self.typed_declaration(declaration)?;
-        if self.variables.contains_key(&declaration.name)
+        if self.variables.contains_key(&key)
             || self.constants.contains_key(canonical(&declaration.name))
         {
             return self.fail(format!("duplicate declaration {}", declaration.name));
@@ -1602,7 +1621,7 @@ impl Compiler {
             order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
             self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
-                declaration.name.clone(),
+                key.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1669,7 +1688,7 @@ impl Compiler {
                 ));
             }
             self.variables.insert(
-                declaration.name.clone(),
+                key.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1803,7 +1822,7 @@ impl Compiler {
             None
         };
         self.variables.insert(
-            declaration.name.clone(),
+            key,
             Variable {
                 place,
                 type_id,
@@ -2078,10 +2097,7 @@ impl Compiler {
                             } if arguments.is_empty() => name,
                             _ => return self.fail("ERASE requires bare array names"),
                         };
-                        let variable = self.variable(name)?;
-                        if variable.element.is_none() {
-                            return self.fail(format!("ERASE target {name} is not an array"));
-                        }
+                        let variable = self.array(name)?;
                         if variable.descriptor.is_none() && variable.descriptor_place.is_none() {
                             return self.fail(format!(
                                 "static-array ERASE for {name} requires native zero-fill lowering"
@@ -3545,9 +3561,6 @@ impl Compiler {
                     return self.fail(format!("constant {name} is not assignable"));
                 }
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let operand = if let Some(base) = variable.indirect {
                     Operand::Indirect {
                         base,
@@ -3564,10 +3577,8 @@ impl Compiler {
             Expr::Apply {
                 name, arguments, ..
             } => {
-                let variable = self.variable(name)?;
-                let Some(element) = variable.element else {
-                    return self.fail(format!("{name} is not an array"));
-                };
+                let variable = self.array(name)?;
+                let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
                 if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
@@ -3649,9 +3660,6 @@ impl Compiler {
         match expression {
             Expr::Name(name, _) => {
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let base = variable
                     .indirect
                     .map(|base| ProjectionBase::Indirect(base, true, false))
@@ -3661,10 +3669,8 @@ impl Compiler {
             Expr::Apply {
                 name, arguments, ..
             } => {
-                let variable = self.variable(name)?;
-                let Some(element) = variable.element else {
-                    return self.fail(format!("{name} is not an array"));
-                };
+                let variable = self.array(name)?;
+                let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
                 if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
@@ -4776,7 +4782,7 @@ impl Compiler {
             Expr::Apply { name, .. }
                 if intrinsics::find(canonical(name), self.dialect).is_none()
                     && !self.signatures.contains_key(canonical(name))
-                    && self.variables.contains_key(&self.variable_key(name)) =>
+                    && self.variables.contains_key(&self.array_key(name)) =>
             {
                 Some(self.destination(expression)?)
             }
@@ -4800,10 +4806,8 @@ impl Compiler {
         if !declaration.array || declaration.bounds.is_empty() {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
-        let variable = self.variable(&declaration.name)?;
-        let element = variable.element.ok_or_else(|| SemanticError {
-            message: format!("REDIM target {} is not an array", declaration.name),
-        })?;
+        let variable = self.array(&declaration.name)?;
+        let element = variable.element.expect("an array has an element type");
         let inferred = suffix(&declaration.name);
         let selected = declaration.type_name.as_ref().or(inferred.as_ref());
         let same_element = if matches!(selected, Some(TypeName::String)) {
@@ -4887,9 +4891,6 @@ impl Compiler {
                     });
                 }
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let result = self.value(variable.type_id);
                 let source = if let Some(base) = variable.indirect {
                     Operand::Indirect {
@@ -5007,10 +5008,7 @@ impl Compiler {
                 } if arguments.is_empty() => name,
                 _ => return self.fail(format!("{name} requires a bare array name")),
             };
-            let variable = self.variable(array_name)?;
-            if variable.element.is_none() {
-                return self.fail(format!("{array_name} is not an array"));
-            }
+            let variable = self.array(array_name)?;
             let descriptor = self.descriptor_pointer(&variable)?;
             let dimension = if let Some(dimension) = arguments.get(1) {
                 let (dimension, type_id) = self.expression(dimension)?;
@@ -5734,10 +5732,8 @@ impl Compiler {
             } if arguments.is_empty() => name,
             _ => return self.fail("graphics GET/PUT requires a bare array"),
         };
-        let variable = self.variable(name)?;
-        let element = variable.element.ok_or_else(|| SemanticError {
-            message: format!("graphics GET/PUT target {name} is not an array"),
-        })?;
+        let variable = self.array(name)?;
+        let element = variable.element.expect("an array has an element type");
         let descriptor = self.descriptor_pointer(&variable)?;
         let data_type = self.far_pointer_type(element);
         let data = self.descriptor_field(descriptor, 0, data_type);
@@ -5854,7 +5850,7 @@ impl Compiler {
                         "array argument for {name} must use empty parentheses"
                     ));
                 }
-                let variable = self.variable(array_name)?;
+                let variable = self.array(array_name)?;
                 if *parameter_type != ANY && variable.element != Some(*parameter_type) {
                     return self.fail(format!("array argument type does not match {name}"));
                 }
@@ -6241,7 +6237,7 @@ impl Compiler {
                 .map(|one| one.type_id),
             Expr::Apply { name, .. } => self
                 .variables
-                .get(&self.variable_key(name))
+                .get(&self.array_key(name))
                 .and_then(|one| one.element),
             Expr::Index { base, .. } => {
                 let base = self.place_syntax_type(base)?;
@@ -6396,6 +6392,13 @@ impl Compiler {
         let result = self.value(to);
         self.emit("convert", vec![result], vec![operand]);
         Ok(Operand::Value(result))
+    }
+
+    fn array(&self, name: &str) -> Result<Variable, SemanticError> {
+        match self.variables.get(&self.array_key(name)) {
+            Some(variable) => Ok(variable.clone()),
+            None => self.fail(format!("{name} is not an array")),
+        }
     }
 
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {

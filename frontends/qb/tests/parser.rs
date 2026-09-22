@@ -2231,3 +2231,23 @@ fn a_name_and_colon_after_the_start_of_a_line_is_a_call_not_a_label() {
     );
     assert_eq!(hir.matches("\"callee\":\"G\"").count(), 2, "{hir}");
 }
+
+#[test]
+fn a_scalar_and_an_array_may_share_a_name() {
+    // deedlines DIMs g%() and uses scalar g% beside it; one namespace
+    // rejected `g% = 0` with "array G% requires subscripts".
+    let module = parse(
+        "dim g%(5)\r\ng% = 7\r\ng%(1) = g% + 1\r\nprint g%, g%(1), ubound(g%)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "shared_name", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(
+        hir.contains("\"extent\":12,\"id\":1,\"name\":\"G%\""),
+        "{hir}"
+    );
+    assert!(
+        hir.contains("\"extent\":2,\"id\":3,\"name\":\"G%\""),
+        "{hir}"
+    );
+}
