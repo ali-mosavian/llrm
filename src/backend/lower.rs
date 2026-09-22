@@ -2044,29 +2044,88 @@ impl<'a> Lowering<'a> {
     }
 
     /// Unencoded operands of an opaque instruction still have machine locations.
-    fn _implicit_values(&self, op: &Op, _inputs: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
-        if !matches!(self.node(op).map(|node| &**node), Some(Node::Opaque(_))) {
+    fn _implicit_values(&self, op: &Op, inputs: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        let Some(Node::Opaque(node)) = self.node(op).map(|node| &**node) else {
             return Ok(vec![]);
+        };
+        let mut registers: IndexMap<Register, Register> = IndexMap::default();
+        for one in crate::frontend::declen::instruction_info_factory().info(&node.insn.insn).used_registers() {
+            registers.insert(ir::root(one.register()), one.register());
         }
-        Err(Unlowered("not yet ported: qbopt.backend.lower.Lowering._implicit_values".into()))
+        if inputs {
+            // SSA holds the unshifted word; copying its low byte to AH is not an extraction.
+            let registers = registers
+                .into_iter()
+                .map(|(root, register)| {
+                    let high = matches!(register, Register::AH | Register::BH | Register::CH | Register::DH);
+                    (root, if high { target::named(root, 2) } else { register })
+                })
+                .collect();
+            return self._positional(op, &registers);
+        }
+        Ok(op
+            .defines
+            .iter()
+            .filter(|value| !value.flags)
+            .filter_map(|value| {
+                let register = *registers.get(self._origin.get(value)?)?;
+                Some((ir::Held { value: value.id, width: register.size() as u32 }, register))
+            })
+            .collect())
     }
 
     /// An operand the raise left opaque is emitted in BC's registers.
     fn _unencoded(&self, op: &Op) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
-        let mut registers = false;
+        let mut registers: IndexMap<Register, Register> = IndexMap::default();
         for arg in &op.args {
             if let Arg::Opaque(opaque) = arg {
-                registers |= match opaque.machine_payload() {
-                    Some(Loc::Mem(mem)) => mem.through != Register::None || mem.index_through != Register::None,
-                    Some(Loc::Address(address)) => address.through != Register::None || address.index != Register::None,
-                    _ => false,
+                let places = match opaque.machine_payload() {
+                    Some(Loc::Mem(mem)) => vec![mem.through, mem.index_through],
+                    Some(Loc::Address(address)) => vec![address.through, address.index],
+                    _ => vec![],
                 };
+                for place in places.into_iter().filter(|place| *place != Register::None) {
+                    registers.insert(ir::root(place), place);
+                }
             }
         }
-        if registers && self.node(op).is_some() {
-            return Err(Unlowered("not yet ported: qbopt.backend.lower.Lowering._positional".into()));
+        if !registers.is_empty() && self.node(op).is_some() {
+            return self._positional(op, &registers);
         }
         Ok(vec![])
+    }
+
+    /// A use's register is its position, not its value's origin: the raise
+    /// listed them in variable order, and a pass that forwards a copy into
+    /// `out dx,al` hands it a value BC kept somewhere else.
+    fn _positional(
+        &self,
+        op: &Op,
+        registers: &IndexMap<Register, Register>,
+    ) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+        // `touched` orders FLAGS (Register::None) first, as Python's sort key does.
+        let order: Vec<Register> = match self.node(op) {
+            Some(node) => mir::touched(node, None, None).1.into_iter().collect(),
+            None => vec![],
+        };
+        if op.uses.len() < order.len() {
+            return Err(Unlowered(format!(
+                "{:#06x}: {} uses for {} operand registers",
+                op.at,
+                op.uses.len(),
+                order.len()
+            )));
+        }
+        Ok(op
+            .uses
+            .iter()
+            .zip(order)
+            .filter(|(value, _)| !value.flags)
+            .filter_map(|(value, root)| {
+                let register = *registers.get(&root)?;
+                Some((ir::Held { value: value.id, width: register.size() as u32 }, register))
+            })
+            .collect())
     }
 
     /// A value id nothing in this body already uses.
