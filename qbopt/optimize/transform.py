@@ -33,6 +33,7 @@ from qbopt.optimize import peel
 from qbopt.analysis import avail
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
+from qbopt.model.passes import O2
 from qbopt.optimize import profit
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
@@ -42,6 +43,7 @@ from qbopt.optimize import strength
 from qbopt.model.passes import Where
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
+from qbopt.model.passes import Options
 from qbopt.optimize import loopsimplify
 from qbopt.optimize import pointeraccess
 from qbopt.analysis import loops as loopy
@@ -53,8 +55,6 @@ from qbopt.analysis.ssa import provider as _provider
 from qbopt.analysis.ssa import values as _ssa_values
 from qbopt.analysis.ssa import pruned_phis as _pruned_phis
 from qbopt.analysis.ssa import substituted as _substituted
-from qbopt.model.passes import DEFAULT_MAX_UNROLL_ITERATIONS
-from qbopt.model.passes import DEFAULT_MAX_UNROLLED_OPERATIONS
 
 
 def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
@@ -2877,7 +2877,9 @@ class Fold(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return folded(body, self.where.dgroup, self.where.named)
+        from qbopt.optimize import canonical
+
+        return canonical.compares(folded(body, self.where.dgroup, self.where.named))
 
 
 class Decide(MIRTransform):
@@ -3061,29 +3063,13 @@ def applied(
     *,
     blocks: list | None = None,
     found=None,
-    fold: bool = True,
-    lcssa_: bool = True,
-    decide: bool = True,
-    dead: bool = True,
-    hoist: bool = True,
-    forward: bool = True,
-    drop_loads: bool = True,
-    drop_stores: bool = True,
-    promote_: bool = True,
-    strength_: bool = True,
-    floatloop_: bool = True,
-    unroll_: bool = True,
-    peel_: bool = True,
-    fill_: bool = True,
-    unswitch_: bool = False,
+    options: Options = O2,
     only: str | None = None,
     registers: int | None = None,
     call_registers: int = 0,
     index_scales: frozenset[int] | None = None,
     address_forms: tuple[AddressForm, ...] | None = None,
     costs: OperationCosts | None = None,
-    max_unroll_iterations: int = DEFAULT_MAX_UNROLL_ITERATIONS,
-    max_unrolled_operations: int = DEFAULT_MAX_UNROLLED_OPERATIONS,
     coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
 ) -> MirBody:
@@ -3106,22 +3092,22 @@ def applied(
         # Every pass can be turned off, which is how a miscompile is
         # bisected: a variant that skips one and still allocates and emits
         # is the only kind that measures anything.
-        "lcssa": lcssa_,
-        "floatloop": floatloop_,
-        "fold": fold,
-        "decide": decide,
-        "dead": dead,
-        "hoist": hoist,
-        "gvn": forward and drop_loads,
-        "drop_stores": drop_stores,
+        "lcssa": options.lcssa,
+        "floatloop": options.floatloop,
+        "fold": options.fold,
+        "decide": options.decide,
+        "dead": options.dead,
+        "hoist": options.hoist,
+        "gvn": options.forward and options.drop_loads,
+        "drop_stores": options.drop_stores,
         # Recurrences currently replace multiplication chains in innermost
         # loops. Shift-only and outer-loop formulas need pressure costing.
-        "sroa": promote_,
-        "promote": promote_,
-        "strength": strength_,
-        "unroll": unroll_,
-        "peel": peel_,
-        "fill": fill_,
+        "sroa": options.promote,
+        "promote": options.promote,
+        "strength": options.strength,
+        "unroll": options.unroll,
+        "peel": options.peel,
+        "fill": options.fill,
     }
     where = Where(
         dgroup=dgroup,
@@ -3139,8 +3125,7 @@ def applied(
         index_scales=frozenset({1}) if index_scales is None else index_scales,
         address_forms=() if address_forms is None else address_forms,
         costs=costs or OperationCosts(),
-        max_unroll_iterations=max_unroll_iterations,
-        max_unrolled_operations=max_unrolled_operations,
+        options=options,
     )
     # These names were public debugging selectors before value reuse became
     # one pass.  Keep them as aliases rather than accepting a command that
@@ -3186,6 +3171,10 @@ def applied(
             watch("r01-peel", body)
         return _unreachable(body)
 
+    # Candidates rejected anywhere in this call, including inside another
+    # candidate's own fixed point.
+    tried: set[tuple] = set()
+
     def fixed(state: MirBody, *, consider_unroll: bool = False, prefix: str = "") -> MirBody:
         # A monotone chain may expose one simplification per operation.
         # Scale with the body and separately reject a repeated state, so an
@@ -3212,6 +3201,7 @@ def applied(
                         stage=f"{prefix}candidate-unroll",
                         prefix=f"{prefix}candidate-unroll-",
                     ),
+                    tried=tried,
                     watch=(None if watch is None else lambda stage, candidate: watch(f"{prefix}{stage}", candidate)),
                 )
             if only is not None or state == before:
@@ -3276,9 +3266,10 @@ def applied(
                 consider_unroll=bool(unrollers),
                 prefix="candidate-peel-",
             ),
+            tried=tried,
             watch=watch,
         )
-    if unswitch_:
+    if options.unswitch:
         from qbopt.optimize import unswitch
 
         body = unswitch.optimized(
@@ -3290,8 +3281,7 @@ def applied(
             index_scales=where.index_scales,
             address_forms=where.address_forms,
             costs=where.costs,
-            max_unroll_iterations=where.max_unroll_iterations,
-            max_unrolled_operations=where.max_unrolled_operations,
+            options=options,
             watch=watch,
         )
     return _unreachable(body)

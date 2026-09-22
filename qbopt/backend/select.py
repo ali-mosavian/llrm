@@ -1340,11 +1340,7 @@ def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None
 
 
 # Each segment register a far pointer can be loaded into with its offset, and the instruction that does it.
-FAR_LOADS = {
-    Register.ES: ("les", "LES_R16_M1616"),
-    Register.FS: ("lfs", "LFS_R16_M1616"),
-    Register.GS: ("lgs", "LGS_R16_M1616"),
-}
+FAR_LOADS = {segment: (name, f"{name.upper()}_R16_M1616") for segment, name in target.FAR_LOADS.items()}
 
 
 def far_load(name: str, into: Register_, segment: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -1748,8 +1744,8 @@ def emit(
             match (dests[0], sources[0]):
                 case (ir.Reg(register=into), ir.Address() as cell):
                     return address_of(into, cell, at)
-        case ir.Operation.FILL:
-            return fill(what.name or "", at)
+        case ir.Operation.FILL if len(sources) in (3, 4):
+            return fill(what.name or "", at, repeated=len(sources) == 4)
         case ir.Operation.NOTHING if not what.name:
             return Emitted(b"")
         case ir.Operation.EXTEND | ir.Operation.NOTHING | ir.Operation.LEAVE:

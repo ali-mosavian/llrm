@@ -11,13 +11,16 @@ from qbopt.objectfile import omf
 from qbopt.frontend import blocks
 from qbopt.optimize import promote
 from qbopt.objectfile import module
+from qbopt.model.passes import Options
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_guarded_indexed_accumulators_do_not_reload_in_loop(tag):
     """UDTRNG reloaded both LONG record fields on each of seven accumulator updates."""
     from qbopt.analysis import loops
+
     states = []
+
     def watch(stage, name, body):
         if isinstance(body, mir.MirBody):
             states.append(body)
@@ -25,20 +28,31 @@ def test_guarded_indexed_accumulators_do_not_reload_in_loop(tag):
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[-1]
     hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
-    assert not [(op.at, ref) for block in body.blocks if block.at in hot for op in block.ops
-                for ref in op.loads if ref.base is not None and ref.width == 4]
+    assert not [
+        (op.at, ref)
+        for block in body.blocks
+        if block.at in hot
+        for op in block.ops
+        for ref in op.loads
+        if ref.base is not None and ref.width == 4
+    ]
 
 
 def test_procedure_frame_fields_reuse_stored_values():
     """LOCALP reread its frame accumulator on every addition despite known stores."""
     from qbopt.objectfile.module import Space
+
     path = Path("fixtures/regressions/localp-p-g2.obj")
     found = module.of(omf.parse(path.read_bytes()))
-    body = next(body for name, body in mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
-                if body.entry != 0x30)
-    before = next(op for block in body.blocks for op in block.ops
-                  if op.kind is mir.Kind.LOAD and op.loads and op.loads[0].width == 4
-                  and op.loads[0].addr.space is Space.FRAME)
+    body = next(
+        body for name, body in mir.bodies(found, blocks.partition(found, blocks.code_map(found))) if body.entry != 0x30
+    )
+    before = next(
+        op
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.LOAD and op.loads and op.loads[0].width == 4 and op.loads[0].addr.space is Space.FRAME
+    )
     result = promote.promoted(body, found.dgroup, module.landmarks(found), loop_only=True)
     after = next(op for block in result.blocks for op in block.ops if op.id == before.id)
     assert not after.loads
@@ -51,11 +65,21 @@ def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = mir.MemRef(Addr(Space.FRAME, -8), 2)
     changed = mir.MemRef(None, 0) if clobber is None else mir.MemRef(Addr(Space.FRAME, clobber), 2)
     value = mir.Value(1, 4, variable=1, version=1)
-    store = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
-                   args=(mir.Const(7, 2),), results=(mir.Cell(cell),), stores=(cell,))
+    store = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(7, 2),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+    )
     write = mir.Op(
         2,
         ir.Operation.CALL,
@@ -66,8 +90,17 @@ def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused
         stores=(changed,),
         memory_complete=clobber is not None,
     )
-    load = mir.Op(4, ir.Operation.MOVE, "", (value,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(cell),), results=(mir.Held(value, 2),), loads=(cell,))
+    load = mir.Op(
+        4,
+        ir.Operation.MOVE,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(cell),),
+        results=(mir.Held(value, 2),),
+        loads=(cell,),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (store, write, load), ()),))
     result = promote.promoted(body)
     after = next(op for block in result.blocks for op in block.ops if op.at == 4)
@@ -694,17 +727,51 @@ def test_partial_store_does_not_restore_constants_from_before_unknown_effect(eff
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     cell = mir.MemRef(Addr(Space.FRAME, -8), 4)
     word = replace(cell, width=2)
     value = mir.Value(1, 6, variable=1, version=1)
-    initial = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
-        args=(mir.Const(0x11223344, 4),), results=(mir.Cell(cell),), stores=(cell,))
-    clobber = mir.Op(2, ir.Operation.CALL if effect == "call" else ir.Operation.BARRIER, "", (), (),
-        kind=mir.Kind.CALL if effect == "call" else mir.Kind.OPAQUE)
-    partial = mir.Op(4, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
-        args=(mir.Const(7, 2),), results=(mir.Cell(word),), stores=(word,))
-    load = mir.Op(6, ir.Operation.MOVE, "", (value,), (), kind=mir.Kind.LOAD,
-        args=(mir.Cell(cell),), results=(mir.Held(value, 4),), loads=(cell,))
+    initial = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(0x11223344, 4),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+    )
+    clobber = mir.Op(
+        2,
+        ir.Operation.CALL if effect == "call" else ir.Operation.BARRIER,
+        "",
+        (),
+        (),
+        kind=mir.Kind.CALL if effect == "call" else mir.Kind.OPAQUE,
+    )
+    partial = mir.Op(
+        4,
+        ir.Operation.MOVE,
+        "",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(7, 2),),
+        results=(mir.Cell(word),),
+        stores=(word,),
+    )
+    load = mir.Op(
+        6,
+        ir.Operation.MOVE,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(cell),),
+        results=(mir.Held(value, 4),),
+        loads=(cell,),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (initial, clobber, partial, load), ()),))
     result = promote.promoted(body)
     assert next(op for op in result.blocks[0].ops if op.at == 6).loads == (cell,)
@@ -756,7 +823,9 @@ def test_promotion_preserves_existing_cse_value_edges() -> None:
     found = module.of(omf.parse(Path("fixtures/omf/flags-p-g2.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
-    body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found, promote_=False)
+    body = transform.applied(
+        body, found.dgroup, found.calls, blocks=partition, found=found, options=Options(promote=False)
+    )
     stored = next(op for block in body.blocks for op in block.ops if op.at == 0x122)
     result = promote.promoted(body, found.dgroup, module.landmarks(found))
     after = next(op for block in result.blocks for op in block.ops if op.id == stored.id)
@@ -775,8 +844,8 @@ def test_hotlop_keeps_initialization_for_memory_arithmetic() -> None:
     multiply = next(op for block in body.blocks for op in block.ops if op.at == 0x4B)
     cell = multiply.loads[0]
     from qbopt.analysis import consts
-    stores = [op for block in body.blocks for op in block.ops
-              if consts.initialized(op, cell) == consts.Known(7, 2)]
+
+    stores = [op for block in body.blocks for op in block.ops if consts.initialized(op, cell) == consts.Known(7, 2)]
     assert stores
     result = promote.promoted(body, found.dgroup, module.landmarks(found))
     remaining = [op for block in result.blocks for op in block.ops]
@@ -846,6 +915,7 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
         call = replace(call, stores=())
     if effect == "barrier":
         from qbopt.model import ir
+
         call = replace(call, op=ir.Operation.BARRIER, kind=mir.Kind.OPAQUE)
     sequence = [store, load]
     sequence.insert(position, call)
@@ -853,6 +923,7 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
     result = promote.promoted(body, found.dgroup, module.landmarks(found))
     load = next(op for op in result.blocks[0].ops if op.at == load.at)
     assert bool(load.loads) is not reused
+
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_accumulator_is_a_loop_carried_value(tag):
@@ -864,9 +935,12 @@ def test_spill_accumulator_is_a_loop_carried_value(tag):
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
     result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
-    inner = {at for loop in loops.loops(result.blocks, result.entry)
-             if not any(other.body < loop.body for other in loops.loops(result.blocks, result.entry))
-             for at in loop.body}
+    inner = {
+        at
+        for loop in loops.loops(result.blocks, result.entry)
+        if not any(other.body < loop.body for other in loops.loops(result.blocks, result.entry))
+        for at in loop.body
+    }
     assert not any(op.loads or op.stores for block in result.blocks if block.at in inner for op in block.ops)
 
 
@@ -875,20 +949,42 @@ def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_ov
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
     half = mir.MemRef(address.plus(2), 2)
-    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
-                   args=(mir.Const(0x12345678, 4),), stores=(whole,))
+    first = mir.Op(
+        0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(0x12345678, 4),), stores=(whole,)
+    )
+
     def load(at, ref):
         result = mir.Value(at, at, variable=at, version=1)
-        return mir.Op(at, ir.Operation.MOVE, "mov", (result,), (), kind=mir.Kind.LOAD,
-                      args=(mir.Cell(ref),), results=(mir.Held(result, ref.width),), loads=(ref,))
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (result,),
+            (),
+            kind=mir.Kind.LOAD,
+            args=(mir.Cell(ref),),
+            results=(mir.Held(result, ref.width),),
+            loads=(ref,),
+        )
+
     incoming = mir.Value(100, 0, variable=100, version=1)
-    overwrite = mir.Op(14, ir.Operation.MOVE, "mov", (), (incoming,), kind=mir.Kind.STORE,
-                       args=(mir.Held(incoming, 4),), stores=(whole,))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, load(8, whole), load(10, half),
-                      overwrite, load(18, half)), ()),))
+    overwrite = mir.Op(
+        14,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (incoming,),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(incoming, 4),),
+        stores=(whole,),
+    )
+    body = mir.MirBody(
+        0, (mir.MirBlock(0, (), (first, load(8, whole), load(10, half), overwrite, load(18, half)), ()),)
+    )
     result = promote.promoted(body, frozenset({5}))
     ops = result.blocks[0].ops
     assert first in ops and overwrite in ops
@@ -907,10 +1003,15 @@ def test_addrm_long_accumulator_survives_split_initialization(tag):
     found = module.of(omf.parse(Path(f"fixtures/omf/addrm-{tag}.obj".lower()).read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
-    cell = next(ref for block in body.blocks for op in block.ops for ref in op.loads
-                if ref.width == 4 and ref.base is None)
-    output = [op.id for block in body.blocks for op in block.ops
-              if op.kind is mir.Kind.ARG and any(mir.overlapping(ref, cell, found.dgroup) for ref in op.loads)]
+    cell = next(
+        ref for block in body.blocks for op in block.ops for ref in op.loads if ref.width == 4 and ref.base is None
+    )
+    output = [
+        op.id
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.ARG and any(mir.overlapping(ref, cell, found.dgroup) for ref in op.loads)
+    ]
     result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
     inside = {at for loop in loops.loops(result.blocks, result.entry) for at in loop.body}
     assert not any(cell in op.loads for block in result.blocks if block.at in inside for op in block.ops)
@@ -926,14 +1027,34 @@ def test_split_initializer_requires_every_byte(complete):
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
+
     def store(at, offset, number):
-        return mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
-                      args=(mir.Const(number, 2),), stores=(mir.MemRef(address.plus(offset), 2),))
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            (),
+            (),
+            kind=mir.Kind.STORE,
+            args=(mir.Const(number, 2),),
+            stores=(mir.MemRef(address.plus(offset), 2),),
+        )
+
     value = mir.Value(10, 10, variable=10, version=1)
-    load = mir.Op(10, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(whole),), results=(mir.Held(value, 4),), loads=(whole,))
+    load = mir.Op(
+        10,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(whole),),
+        results=(mir.Held(value, 4),),
+        loads=(whole,),
+    )
     stores = (store(0, 0, 0x5678), store(2, 2, 0x1234)) if complete else (store(0, 0, 0x5678),)
     body = mir.MirBody(0, (mir.MirBlock(0, (), (*stores, load), ()),))
     result = promote.promoted(body, frozenset({5}))

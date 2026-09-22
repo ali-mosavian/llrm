@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.model.mir import Op
 from qbopt.analysis import loops
 from qbopt.model.mir import Kind
@@ -315,7 +316,11 @@ def _fixed(ref: MemRef) -> bool:
     pointer, index or selector remains unnamed and reaches a private cell no
     more than an unknown call does.
     """
-    canonical = ref.provenance is not None and bool(ref.provenance.slices)
+    canonical = (
+        ref.provenance is not None
+        and bool(ref.provenance.slices)
+        and all(one.object.kind is not memory.Kind.UNKNOWN for one in ref.provenance.slices)
+    )
     direct = ref.addr is not None and ref.addr.direct and ref.base is None and ref.segment is None
     return canonical or direct
 

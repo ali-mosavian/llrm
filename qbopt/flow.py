@@ -31,6 +31,10 @@ The machine half, against LLVM's own order:
 answer questions and change nothing, which is why nothing here lists them.
 """
 
+import argparse
+from dataclasses import replace
+from collections.abc import Callable
+
 from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.abi import runtime
@@ -42,6 +46,7 @@ from qbopt.backend import farcall
 from qbopt.backend import parcopy
 from qbopt.backend import phielim
 from qbopt.backend import twoaddr
+from qbopt.model.passes import O2
 from qbopt.backend import allocate
 from qbopt.backend import coalesce
 from qbopt.backend import omfwrite
@@ -50,6 +55,8 @@ from qbopt.backend import prologue
 from qbopt.backend import schedule
 from qbopt.objectfile import module
 from qbopt.optimize import transform
+from qbopt.model.passes import LEVELS
+from qbopt.model.passes import Options
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 from qbopt.frontend import blocks as split
@@ -94,6 +101,61 @@ def machine(
     ]
 
 
+def optimized(
+    body: mir.MirBody,
+    dgroup: frozenset[int],
+    calls: dict,
+    cpu: str | targets.Profile = "386",
+    options: Options = O2,
+    *,
+    blocks: list | None = None,
+    found=None,
+    coverage: dict | None = None,
+    only: str | None = None,
+    watch: "Callable[[str, mir.MirBody], None] | None" = None,
+) -> mir.MirBody:
+    """The MIR fixed point every driver runs, configured by target and options alone.
+
+    A switch one frontend sets and another does not makes the same program
+    compile differently by spelling: sum_three took three paths here.
+    Promotion needs dominators, which an irreducible CFG -- QB's RESUME
+    entering a loop -- does not have; that is a fact about the body.
+    """
+    from qbopt.analysis import loops
+
+    target = targets.profile(cpu)
+    if loops.irreducible(body.blocks, body.entry):
+        options = replace(options, promote=False)
+    return transform.applied(
+        body,
+        dgroup,
+        calls,
+        blocks=blocks,
+        found=found,
+        coverage=coverage,
+        only=only,
+        options=options,
+        registers=target.register_capacity,
+        call_registers=target.call_register_capacity,
+        index_scales=target.address_scales,
+        address_forms=target.address_forms,
+        costs=target.operations,
+        watch=watch,
+    )
+
+
+def level_option(parser: argparse.ArgumentParser) -> None:
+    """GCC's spelling, `-Os` or `-O2`, as `args.options`."""
+
+    def named(text: str) -> Options:
+        try:
+            return LEVELS[f"O{text}"]
+        except KeyError:
+            raise argparse.ArgumentTypeError(f"unknown level -O{text}; choose -Os or -O2") from None
+
+    parser.add_argument("-O", dest="options", type=named, default=O2, metavar="{s,2}", help="optimization level")
+
+
 def verified(body: lir.LirBody, stage: str, *, in_ssa: bool) -> lir.LirBody:
     """Return a well-formed body or name the phase boundary that is not.
 
@@ -116,6 +178,7 @@ def run(
     native_fpu: bool = False,
     optimise: bool = True,
     cpu: str | targets.Profile = "386",
+    options: Options = O2,
 ) -> tuple[bytes, str]:
     """The object, rewritten, and what happened. The input back on refusal."""
     target = targets.profile(cpu)
@@ -140,21 +203,14 @@ def run(
     done = []
     for name, body in raised:
         if optimise:
-            body = transform.applied(
+            body = optimized(
                 body,
                 found.dgroup,
                 found.calls,
+                target,
+                replace(options, promote=False, strength=False),
                 blocks=blocks,
                 found=found,
-                promote_=False,
-                strength_=False,
-                registers=target.register_capacity,
-                call_registers=target.call_register_capacity,
-                index_scales=target.address_scales,
-                address_forms=target.address_forms,
-                costs=target.operations,
-                max_unroll_iterations=target.max_unroll_iterations,
-                max_unrolled_operations=target.max_unrolled_operations,
                 coverage=source.coverage,
             )
             body = rotate.entered(body)

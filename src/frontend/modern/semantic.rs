@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::error::Diagnostic;
 use super::hir;
@@ -33,8 +34,9 @@ const U32: u32 = 9;
 const F32: u32 = 10;
 const F64: u32 = 11;
 const STRING: u32 = 12;
-const I64: u32 = 13;
-const FIXED_START: u32 = 14;
+const ADDR: u32 = 13;
+const I64: u32 = 14;
+const FIXED_START: u32 = 15;
 
 #[derive(Default)]
 struct LiteralPool {
@@ -90,6 +92,7 @@ struct TypeRegistry {
     structs: BTreeMap<String, StructLayout>,
     fixed_names: BTreeMap<String, TypeName>,
     pointers: BTreeMap<(u32, u32), u32>,
+    slice_descriptors: BTreeMap<u32, u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -148,11 +151,24 @@ impl TypeRegistry {
                     bounds: Vec::new(),
                     address: "near",
                 },
+                hir::Type {
+                    id: ADDR,
+                    name: "addr".into(),
+                    kind: "pointer",
+                    width: 4,
+                    signed: None,
+                    evaluation: "none",
+                    element: Some(U8),
+                    rank: 0,
+                    bounds: Vec::new(),
+                    address: "far",
+                },
             ],
             arrays: BTreeMap::new(),
             structs: BTreeMap::new(),
             fixed_names: BTreeMap::new(),
             pointers: BTreeMap::new(),
+            slice_descriptors: BTreeMap::new(),
         }
     }
 
@@ -332,6 +348,34 @@ impl TypeRegistry {
         id
     }
 
+    fn slice_descriptor(&mut self, element: ElementType) -> u32 {
+        let element_id = element.id();
+        if let Some(id) = self.slice_descriptors.get(&element_id) {
+            return *id;
+        }
+        let id = self.types.len() as u32 + 1;
+        let element_name = self.types[(element_id - 1) as usize].name.clone();
+        self.types.push(hir::Type {
+            id,
+            name: format!("$slice[{element_name}]"),
+            kind: "opaque",
+            width: 8,
+            signed: None,
+            evaluation: "none",
+            element: Some(element_id),
+            rank: 0,
+            bounds: Vec::new(),
+            address: "none",
+        });
+        self.slice_descriptors.insert(element_id, id);
+        id
+    }
+
+    fn slice_pointer(&mut self, element: ElementType) -> u32 {
+        let descriptor = self.slice_descriptor(element);
+        self.pointer(descriptor, 1)
+    }
+
     fn parameter_target(
         &mut self,
         annotation: &TypeAnnotation,
@@ -428,8 +472,10 @@ impl SignatureParameter {
 enum Storage {
     Parameter(u32),
     Reference(u32),
+    Slice(u32),
     Place(u32),
     ArrayView { place: u32, index: hir::Operand },
+    Dictionary { keys: u32, values: u32, length: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -459,9 +505,19 @@ enum AssignmentPlace {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BindingType {
     Scalar(TypeName),
-    Slice { element: ElementType },
-    Array { element: ElementType, length: u32 },
+    Slice {
+        element: ElementType,
+    },
+    Array {
+        element: ElementType,
+        length: u32,
+    },
     Struct(u32),
+    Dictionary {
+        key: TypeName,
+        value: TypeName,
+        capacity: u32,
+    },
 }
 
 impl BindingType {
@@ -469,7 +525,7 @@ impl BindingType {
         match self {
             Self::Slice { element } => Some((element, None)),
             Self::Array { element, length } => Some((element, Some(length))),
-            Self::Scalar(_) | Self::Struct(_) => None,
+            Self::Scalar(_) | Self::Struct(_) | Self::Dictionary { .. } => None,
         }
     }
 }
@@ -515,8 +571,10 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 ParameterType::Scalar(type_name) => Ok(SignatureParameter::Scalar(*type_name)),
                 ParameterType::Borrowed { mutable, target } => {
                     let (target, target_id) = types.parameter_target(target, parameter.span)?;
-                    let rank = u32::from(matches!(&target, BindingType::Slice { .. }));
-                    let pointer = types.pointer(target_id, rank);
+                    let pointer = match target {
+                        BindingType::Slice { element } => types.slice_pointer(element),
+                        _ => types.pointer(target_id, 0),
+                    };
                     Ok(SignatureParameter::Borrowed {
                         mutable: *mutable,
                         target,
@@ -619,6 +677,7 @@ fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
 fn print_name(type_name: TypeName) -> &'static str {
     match type_name {
         TypeName::String => "_pt",
+        TypeName::Addr => unreachable!("addresses have no default formatter"),
         TypeName::Bool => "_pb",
         TypeName::Char => "_pc",
         TypeName::I8 => "_pi1",
@@ -706,7 +765,15 @@ impl<'a> FunctionCompiler<'a> {
                 ),
                 SignatureParameter::Borrowed {
                     mutable, target, ..
-                } => (*target, *mutable, Storage::Reference(value)),
+                } => (
+                    *target,
+                    *mutable,
+                    if matches!(target, BindingType::Slice { .. }) {
+                        Storage::Slice(value)
+                    } else {
+                        Storage::Reference(value)
+                    },
+                ),
             };
             compiler.scopes[0].insert(
                 parameter.name.clone(),
@@ -739,6 +806,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
         }
+        self.prune_unreachable();
         let blocks = self
             .blocks
             .into_iter()
@@ -761,6 +829,38 @@ impl<'a> FunctionCompiler<'a> {
             parameters: self.parameters,
             calls: self.calls,
         })
+    }
+
+    fn prune_unreachable(&mut self) {
+        let mut reachable = BTreeSet::new();
+        let mut pending = vec![1_u32];
+        while let Some(id) = pending.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            let block = &self.blocks[(id - 1) as usize];
+            if let Some(terminator) = &block.terminator {
+                pending.extend(terminator.targets.iter().copied());
+            }
+        }
+
+        self.blocks.retain(|block| reachable.contains(&block.id));
+        let instructions = self
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.iter().map(|instruction| instruction.id))
+            .collect::<BTreeSet<_>>();
+        self.calls
+            .retain(|call| instructions.contains(&call.instruction));
+
+        let mut defined = self.parameters.iter().copied().collect::<BTreeSet<_>>();
+        defined.extend(
+            self.blocks
+                .iter()
+                .flat_map(|block| block.instructions.iter())
+                .flat_map(|instruction| instruction.results.iter().copied()),
+        );
+        self.values.retain(|value| defined.contains(&value.id));
     }
 
     fn statements(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
@@ -790,6 +890,51 @@ impl<'a> FunctionCompiler<'a> {
                         *span,
                         format!("binding {name:?} is already declared in this scope"),
                     ));
+                }
+                if let Expr::Comprehension {
+                    element,
+                    binding,
+                    mode,
+                    iterable,
+                    span: comprehension_span,
+                } = value
+                {
+                    return self.comprehension_binding(
+                        *mutable,
+                        name,
+                        annotation.as_ref(),
+                        element,
+                        binding,
+                        *mode,
+                        iterable,
+                        *comprehension_span,
+                    );
+                }
+                if let Expr::DictComprehension {
+                    key,
+                    value: entry_value,
+                    binding,
+                    mode,
+                    iterable,
+                    span: comprehension_span,
+                } = value
+                {
+                    if annotation.is_some() {
+                        return Err(Diagnostic::new(
+                            *span,
+                            "dictionary comprehension types are inferred from key and value",
+                        ));
+                    }
+                    return self.dictionary_binding(
+                        *mutable,
+                        name,
+                        key,
+                        entry_value,
+                        binding,
+                        *mode,
+                        iterable,
+                        *comprehension_span,
+                    );
                 }
                 if let Some(TypeAnnotation::Array { element, length }) = annotation {
                     let Expr::Array(items, _) = value else {
@@ -1105,6 +1250,430 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn comprehension_binding(
+        &mut self,
+        mutable: bool,
+        name: &str,
+        annotation: Option<&TypeAnnotation>,
+        expression: &Expr,
+        item_name: &str,
+        mode: IterationMode,
+        iterable: &Expr,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Expr::Name(source_name, _) = iterable else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "a bounded comprehension currently requires a named fixed array",
+            ));
+        };
+        if source_name == name {
+            return Err(Diagnostic::new(
+                span,
+                "a comprehension cannot replace its own source",
+            ));
+        }
+        let source = self.binding(source_name, iterable.span())?.clone();
+        let BindingType::Array {
+            element: source_element,
+            length,
+        } = source.type_
+        else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "a materialized comprehension needs a statically bounded source",
+            ));
+        };
+        let source_scalar = match source_element {
+            ElementType::Scalar(type_name) => type_name,
+            ElementType::Struct(_) => {
+                return Err(Diagnostic::new(
+                    span,
+                    "struct comprehension elements must select a scalar field",
+                ))
+            }
+        };
+
+        self.scopes.push(BTreeMap::from([(
+            item_name.into(),
+            Binding {
+                type_: BindingType::Scalar(source_scalar),
+                mutable: mode == IterationMode::Mutable,
+                storage: Storage::Parameter(0),
+            },
+        )]));
+        let inferred = self
+            .expression_type_hint(expression)
+            .or_else(|| match expression {
+                Expr::Integer(value, _) if i16::try_from(*value).is_ok() => Some(TypeName::I16),
+                Expr::Integer(value, _) if i32::try_from(*value).is_ok() => Some(TypeName::I32),
+                _ => None,
+            });
+        self.scopes.pop();
+
+        let annotated = match annotation {
+            None => None,
+            Some(TypeAnnotation::Array {
+                element,
+                length: annotated_length,
+            }) => {
+                if *annotated_length != length {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!(
+                            "comprehension has {length} elements, annotation expects {annotated_length}"
+                        ),
+                    ));
+                }
+                Some(self.types.resolve_element(element, span)?)
+            }
+            Some(_) => {
+                return Err(Diagnostic::new(
+                    span,
+                    "a comprehension binding needs an array annotation or inference",
+                ))
+            }
+        };
+        let result_type = match (annotated, inferred) {
+            (Some(ElementType::Scalar(expected)), Some(actual)) if expected != actual => {
+                return Err(type_mismatch(span, expected, actual))
+            }
+            (Some(ElementType::Scalar(type_name)), _) | (None, Some(type_name)) => type_name,
+            (Some(ElementType::Struct(_)), _) => {
+                return Err(Diagnostic::new(
+                    span,
+                    "struct-valued comprehensions are not in this slice",
+                ))
+            }
+            (None, None) => {
+                return Err(Diagnostic::new(
+                    expression.span(),
+                    "cannot infer comprehension element type; add an array annotation",
+                ))
+            }
+        };
+        let result_element = ElementType::Scalar(result_type);
+        let type_id = self.types.array(result_element, length);
+        let place = self.array_place(name, type_id, result_element, length, mutable);
+        self.scopes.last_mut().expect("scope").insert(
+            name.into(),
+            Binding {
+                type_: BindingType::Array {
+                    element: result_element,
+                    length,
+                },
+                mutable: true,
+                storage: Storage::Place(place),
+            },
+        );
+        let counter_name = format!("$comprehension_{name}");
+        let counter = self.place(&counter_name, TypeName::U16, true);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(counter), hir::Operand::Constant(U16, 0)],
+            None,
+        );
+        self.scopes.last_mut().expect("scope").insert(
+            counter_name.clone(),
+            Binding {
+                type_: BindingType::Scalar(TypeName::U16),
+                mutable: true,
+                storage: Storage::Place(counter),
+            },
+        );
+        let body = vec![
+            Statement::Assign {
+                target: AssignTarget::Index {
+                    base: name.into(),
+                    index: Expr::Name(counter_name.clone(), span),
+                },
+                operation: None,
+                value: expression.clone(),
+                span,
+            },
+            Statement::Assign {
+                target: AssignTarget::Name(counter_name),
+                operation: Some(BinaryOp::Add),
+                value: Expr::Integer(1, span),
+                span,
+            },
+        ];
+        self.for_statement(mode, item_name, iterable, &body, span)?;
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .get_mut(name)
+            .expect("comprehension result")
+            .mutable = mutable;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dictionary_binding(
+        &mut self,
+        mutable: bool,
+        name: &str,
+        key_expression: &Expr,
+        value_expression: &Expr,
+        item_name: &str,
+        mode: IterationMode,
+        iterable: &Expr,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let Expr::Name(source_name, _) = iterable else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "a bounded dictionary comprehension requires a named fixed array",
+            ));
+        };
+        let source = self.binding(source_name, iterable.span())?.clone();
+        let BindingType::Array {
+            element: ElementType::Scalar(source_type),
+            length: capacity,
+        } = source.type_
+        else {
+            return Err(Diagnostic::new(
+                iterable.span(),
+                "a dictionary comprehension needs a scalar fixed-array source",
+            ));
+        };
+        self.scopes.push(BTreeMap::from([(
+            item_name.into(),
+            Binding {
+                type_: BindingType::Scalar(source_type),
+                mutable: mode == IterationMode::Mutable,
+                storage: Storage::Parameter(0),
+            },
+        )]));
+        let infer = |expression: &Expr, this: &Self| {
+            this.expression_type_hint(expression)
+                .or_else(|| match expression {
+                    Expr::Integer(value, _) if i16::try_from(*value).is_ok() => Some(TypeName::I16),
+                    Expr::Integer(value, _) if i32::try_from(*value).is_ok() => Some(TypeName::I32),
+                    _ => None,
+                })
+        };
+        let key_type = infer(key_expression, self);
+        let value_type = infer(value_expression, self);
+        self.scopes.pop();
+        let key_type = key_type.ok_or_else(|| {
+            Diagnostic::new(key_expression.span(), "cannot infer dictionary key type")
+        })?;
+        let value_type = value_type.ok_or_else(|| {
+            Diagnostic::new(
+                value_expression.span(),
+                "cannot infer dictionary value type",
+            )
+        })?;
+        if !matches!(
+            key_type,
+            TypeName::Char
+                | TypeName::I8
+                | TypeName::U8
+                | TypeName::I16
+                | TypeName::U16
+                | TypeName::I32
+                | TypeName::U32
+                | TypeName::Bool
+        ) {
+            return Err(Diagnostic::new(
+                key_expression.span(),
+                "dictionary keys must have an exact scalar equality type",
+            ));
+        }
+
+        let keys_name = format!("$dict_{name}_keys");
+        let values_name = format!("$dict_{name}_values");
+        let length_name = format!("$dict_{name}_length");
+        let key_element = ElementType::Scalar(key_type);
+        let value_element = ElementType::Scalar(value_type);
+        let keys_type = self.types.array(key_element, capacity);
+        let values_type = self.types.array(value_element, capacity);
+        let keys = self.array_place(&keys_name, keys_type, key_element, capacity, true);
+        let values = self.array_place(&values_name, values_type, value_element, capacity, true);
+        let length = self.place(&length_name, TypeName::U16, true);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(length), hir::Operand::Constant(U16, 0)],
+            None,
+        );
+        let scope = self.scopes.last_mut().expect("scope");
+        scope.insert(
+            keys_name.clone(),
+            Binding {
+                type_: BindingType::Array {
+                    element: key_element,
+                    length: capacity,
+                },
+                mutable: true,
+                storage: Storage::Place(keys),
+            },
+        );
+        scope.insert(
+            values_name.clone(),
+            Binding {
+                type_: BindingType::Array {
+                    element: value_element,
+                    length: capacity,
+                },
+                mutable: true,
+                storage: Storage::Place(values),
+            },
+        );
+        scope.insert(
+            length_name.clone(),
+            Binding {
+                type_: BindingType::Scalar(TypeName::U16),
+                mutable: true,
+                storage: Storage::Place(length),
+            },
+        );
+
+        let key_name = format!("$dict_{name}_key");
+        let value_name = format!("$dict_{name}_value");
+        let scan_name = format!("$dict_{name}_scan");
+        let found_name = format!("$dict_{name}_found");
+        let scan = Expr::Name(scan_name.clone(), span);
+        let length_expr = Expr::Name(length_name.clone(), span);
+        let key = Expr::Name(key_name.clone(), span);
+        let value = Expr::Name(value_name.clone(), span);
+        let body = vec![
+            Statement::Bind {
+                mutable: false,
+                name: key_name.clone(),
+                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(key_type))),
+                value: key_expression.clone(),
+                span,
+            },
+            Statement::Bind {
+                mutable: false,
+                name: value_name.clone(),
+                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(value_type))),
+                value: value_expression.clone(),
+                span,
+            },
+            Statement::Bind {
+                mutable: true,
+                name: scan_name.clone(),
+                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::U16))),
+                value: Expr::Integer(0, span),
+                span,
+            },
+            Statement::Bind {
+                mutable: true,
+                name: found_name.clone(),
+                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Bool))),
+                value: Expr::Boolean(false, span),
+                span,
+            },
+            Statement::While {
+                condition: Expr::Binary {
+                    op: BinaryOp::Less,
+                    left: Box::new(scan.clone()),
+                    right: Box::new(length_expr.clone()),
+                    span,
+                },
+                body: vec![
+                    Statement::If {
+                        condition: Expr::Binary {
+                            op: BinaryOp::Equal,
+                            left: Box::new(Expr::Index {
+                                base: Box::new(Expr::Name(keys_name.clone(), span)),
+                                index: Box::new(scan.clone()),
+                                span,
+                            }),
+                            right: Box::new(key.clone()),
+                            span,
+                        },
+                        then_branch: vec![
+                            Statement::Assign {
+                                target: AssignTarget::Index {
+                                    base: values_name.clone(),
+                                    index: scan.clone(),
+                                },
+                                operation: None,
+                                value: value.clone(),
+                                span,
+                            },
+                            Statement::Assign {
+                                target: AssignTarget::Name(found_name.clone()),
+                                operation: None,
+                                value: Expr::Boolean(true, span),
+                                span,
+                            },
+                            Statement::Break(span),
+                        ],
+                        else_branch: Vec::new(),
+                        span,
+                    },
+                    Statement::Assign {
+                        target: AssignTarget::Name(scan_name.clone()),
+                        operation: Some(BinaryOp::Add),
+                        value: Expr::Integer(1, span),
+                        span,
+                    },
+                ],
+                span,
+            },
+            Statement::If {
+                condition: Expr::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(Expr::Name(found_name, span)),
+                    span,
+                },
+                then_branch: vec![
+                    Statement::Assign {
+                        target: AssignTarget::Index {
+                            base: keys_name.clone(),
+                            index: length_expr.clone(),
+                        },
+                        operation: None,
+                        value: key,
+                        span,
+                    },
+                    Statement::Assign {
+                        target: AssignTarget::Index {
+                            base: values_name.clone(),
+                            index: length_expr.clone(),
+                        },
+                        operation: None,
+                        value,
+                        span,
+                    },
+                    Statement::Assign {
+                        target: AssignTarget::Name(length_name.clone()),
+                        operation: Some(BinaryOp::Add),
+                        value: Expr::Integer(1, span),
+                        span,
+                    },
+                ],
+                else_branch: Vec::new(),
+                span,
+            },
+        ];
+        self.for_statement(mode, item_name, iterable, &body, span)?;
+        self.scopes.last_mut().expect("scope").insert(
+            name.into(),
+            Binding {
+                type_: BindingType::Dictionary {
+                    key: key_type,
+                    value: value_type,
+                    capacity,
+                },
+                mutable,
+                storage: Storage::Dictionary {
+                    keys,
+                    values,
+                    length,
+                },
+            },
+        );
+        Ok(())
+    }
+
     fn for_statement(
         &mut self,
         mode: IterationMode,
@@ -1113,23 +1682,114 @@ impl<'a> FunctionCompiler<'a> {
         body: &[Statement],
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let Expr::Name(array_name, _) = iterable else {
-            return Err(Diagnostic::new(
-                iterable.span(),
-                "for currently iterates a named array",
-            ));
+        if let Expr::Generator {
+            element,
+            binding,
+            mode: generator_mode,
+            iterable,
+            ..
+        } = iterable
+        {
+            if mode != IterationMode::Value {
+                return Err(Diagnostic::new(
+                    span,
+                    "a generator is already a borrowed view",
+                ));
+            }
+            let mut fused = Vec::with_capacity(body.len() + 1);
+            fused.push(Statement::Bind {
+                mutable: false,
+                name: name.into(),
+                annotation: None,
+                value: element.as_ref().clone(),
+                span,
+            });
+            fused.extend_from_slice(body);
+            return self.for_statement(*generator_mode, binding, iterable, &fused, span);
+        }
+        let (array_name, range) = match iterable {
+            Expr::Name(name, _) => (name.as_str(), None),
+            Expr::Slice {
+                base,
+                start,
+                end,
+                span: range_span,
+            } => {
+                let Expr::Name(name, _) = base.as_ref() else {
+                    return Err(Diagnostic::new(
+                        base.span(),
+                        "slice base must be a named array",
+                    ));
+                };
+                (
+                    name.as_str(),
+                    Some((start.as_deref(), end.as_deref(), *range_span)),
+                )
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    iterable.span(),
+                    "for currently iterates a named sequence or scoped range",
+                ))
+            }
         };
         let array = self.binding(array_name, iterable.span())?.clone();
-        let Some((element, length)) = array.type_.array() else {
-            return Err(Diagnostic::new(iterable.span(), "for requires an array"));
+        let string = array.type_ == BindingType::Scalar(TypeName::String);
+        let (element, mut length) = if string {
+            (ElementType::Scalar(TypeName::Char), None)
+        } else {
+            array.type_.array().ok_or_else(|| {
+                Diagnostic::new(iterable.span(), "for requires an array or string")
+            })?
         };
-        if !matches!(array.storage, Storage::Place(_) | Storage::Reference(_)) {
-            return Err(Diagnostic::new(iterable.span(), "array has no storage"));
+        if string && range.is_some() {
+            return Err(Diagnostic::new(span, "string ranges are not in this slice"));
         }
-        if mode == IterationMode::Value {
+        let mut range_data = None;
+        if let Some(range) = range {
+            let Some(owner_length) = length else {
+                return Err(Diagnostic::new(
+                    span,
+                    "nested slice ranges are not in this slice",
+                ));
+            };
+            let (start, end) = self.slice_bounds(Some(range), owner_length, span)?;
+            let Storage::Place(place) = &array.storage else {
+                return Err(Diagnostic::new(
+                    span,
+                    "slice range needs an owned fixed array",
+                ));
+            };
+            let pointer_type = self.types.pointer(element.id(), 0);
+            let pointer = self.value_type(pointer_type);
+            self.emit(
+                "address",
+                vec![pointer],
+                vec![hir::Operand::Place(*place)],
+                None,
+            );
+            range_data = Some(if start == 0 {
+                pointer
+            } else {
+                self.indexed_pointer(
+                    pointer,
+                    hir::Operand::Constant(U16, i64::from(start)),
+                    self.types.width(element.id()),
+                    span,
+                )?
+            });
+            length = Some(end - start);
+        }
+        if string && mode == IterationMode::Mutable {
             return Err(Diagnostic::new(
                 span,
-                "by-value array iteration awaits aggregate move semantics; use '&' or '&mut'",
+                "strings are immutable byte sequences",
+            ));
+        }
+        if mode == IterationMode::Value && matches!(element, ElementType::Struct(_)) {
+            return Err(Diagnostic::new(
+                span,
+                "by-value struct iteration awaits aggregate move semantics; use '&' or '&mut'",
             ));
         }
         if mode == IterationMode::Mutable && !array.mutable {
@@ -1138,6 +1798,11 @@ impl<'a> FunctionCompiler<'a> {
                 format!("cannot take a mutable view of immutable array {array_name:?}"),
             ));
         }
+        let string_pointer = if string {
+            Some(self.string_pointer(&array, iterable.span())?)
+        } else {
+            None
+        };
         let length = match length {
             Some(length) => hir::Operand::Constant(
                 U16,
@@ -1149,15 +1814,19 @@ impl<'a> FunctionCompiler<'a> {
                 })?),
             ),
             None => {
-                let Storage::Reference(pointer) = &array.storage else {
-                    return Err(Diagnostic::new(iterable.span(), "slice has no descriptor"));
+                let pointer = if let Some(pointer) = string_pointer {
+                    pointer
+                } else if let Storage::Slice(pointer) = &array.storage {
+                    *pointer
+                } else {
+                    return Err(Diagnostic::new(iterable.span(), "view has no descriptor"));
                 };
                 let value = self.value(TypeName::U16);
                 self.emit(
                     "load",
                     vec![value],
                     vec![hir::Operand::DescriptorPlace {
-                        base: *pointer,
+                        base: pointer,
                         field: "length",
                         type_id: U16,
                     }],
@@ -1206,18 +1875,33 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = body_block;
         let element_width = self.types.width(element.id());
-        let view_storage = match array.storage {
-            Storage::Place(place) => Storage::ArrayView {
-                place,
-                index: hir::Operand::Value(index),
-            },
-            Storage::Reference(pointer) => Storage::Reference(self.indexed_pointer(
+        let view_storage = if let Some(pointer) = string_pointer.or(range_data) {
+            Storage::Reference(self.indexed_pointer(
                 pointer,
                 hir::Operand::Value(index),
                 element_width,
                 span,
-            )?),
-            Storage::Parameter(_) | Storage::ArrayView { .. } => unreachable!("checked above"),
+            )?)
+        } else {
+            match array.storage {
+                Storage::Place(place) => Storage::ArrayView {
+                    place,
+                    index: hir::Operand::Value(index),
+                },
+                Storage::Slice(descriptor) => {
+                    let pointer = self.slice_data_pointer(descriptor, element);
+                    Storage::Reference(self.indexed_pointer(
+                        pointer,
+                        hir::Operand::Value(index),
+                        element_width,
+                        span,
+                    )?)
+                }
+                Storage::Parameter(_) | Storage::Reference(_) | Storage::ArrayView { .. } => {
+                    unreachable!("checked above")
+                }
+                Storage::Dictionary { .. } => unreachable!("sequence is not a dictionary"),
+            }
         };
         self.scopes.push(BTreeMap::new());
         self.scopes.last_mut().expect("scope").insert(
@@ -1746,6 +2430,10 @@ impl<'a> FunctionCompiler<'a> {
                                 offset: 0,
                                 type_id: type_id(type_name),
                             },
+                            Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
+                            Storage::Dictionary { .. } => {
+                                unreachable!("a scalar binding is not a dictionary")
+                            }
                         };
                         Ok(AssignmentPlace::Scalar(destination, type_name))
                     }
@@ -1757,6 +2445,10 @@ impl<'a> FunctionCompiler<'a> {
                                 return Err(Diagnostic::new(span, "parameters are immutable"));
                             }
                             Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
+                            Storage::Slice(_) => unreachable!("a struct binding is not a slice"),
+                            Storage::Dictionary { .. } => {
+                                unreachable!("a struct binding is not a dictionary")
+                            }
                         };
                         Ok(AssignmentPlace::Struct(StructView {
                             struct_id,
@@ -1771,6 +2463,10 @@ impl<'a> FunctionCompiler<'a> {
                     BindingType::Array { .. } | BindingType::Slice { .. } => Err(Diagnostic::new(
                         span,
                         "whole array assignment is not supported",
+                    )),
+                    BindingType::Dictionary { .. } => Err(Diagnostic::new(
+                        span,
+                        "whole dictionary assignment is not supported",
                     )),
                 }
             }
@@ -1794,7 +2490,7 @@ impl<'a> FunctionCompiler<'a> {
                         self.indexed_place(
                             &binding.storage,
                             index,
-                            type_id(type_name),
+                            ElementType::Scalar(type_name),
                             width(type_name),
                             span,
                         )?,
@@ -1808,9 +2504,17 @@ impl<'a> FunctionCompiler<'a> {
                                 let pointer = self.indexed_pointer(pointer, index, width, span)?;
                                 (0, Some(pointer), Vec::new())
                             }
+                            Storage::Slice(descriptor) => {
+                                let width = self.types.width(struct_id);
+                                let pointer = self
+                                    .slice_data_pointer(descriptor, ElementType::Struct(struct_id));
+                                let pointer = self.indexed_pointer(pointer, index, width, span)?;
+                                (0, Some(pointer), Vec::new())
+                            }
                             Storage::Parameter(_) | Storage::ArrayView { .. } => {
                                 return Err(Diagnostic::new(span, "array has no storage"));
                             }
+                            Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
                         };
                         AssignmentPlace::Struct(StructView {
                             struct_id,
@@ -1872,6 +2576,10 @@ impl<'a> FunctionCompiler<'a> {
                         return Err(Diagnostic::new(span, "struct has no addressable storage"));
                     }
                     Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
+                    Storage::Slice(_) => unreachable!("a struct binding is not a slice"),
+                    Storage::Dictionary { .. } => {
+                        unreachable!("a struct binding is not a dictionary")
+                    }
                 };
                 Ok(StructView {
                     struct_id,
@@ -1905,9 +2613,17 @@ impl<'a> FunctionCompiler<'a> {
                         let pointer = self.indexed_pointer(pointer, index, width, span)?;
                         (0, Some(pointer), Vec::new())
                     }
+                    Storage::Slice(descriptor) => {
+                        let width = self.types.width(struct_id);
+                        let pointer =
+                            self.slice_data_pointer(descriptor, ElementType::Struct(struct_id));
+                        let pointer = self.indexed_pointer(pointer, index, width, span)?;
+                        (0, Some(pointer), Vec::new())
+                    }
                     Storage::Parameter(_) | Storage::ArrayView { .. } => {
                         return Err(Diagnostic::new(span, "array has no storage"));
                     }
+                    Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
                 };
                 Ok(StructView {
                     struct_id,
@@ -1988,6 +2704,18 @@ impl<'a> FunctionCompiler<'a> {
                 *span,
                 "an array literal is valid only as a fixed-array initializer",
             )),
+            Expr::Comprehension { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a comprehension is valid only as an array initializer",
+            )),
+            Expr::Generator { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a generator is non-escaping and must be consumed by a for loop",
+            )),
+            Expr::DictComprehension { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a dictionary comprehension is valid only as a binding initializer",
+            )),
             Expr::StructLiteral { span, .. } => Err(Diagnostic::new(
                 *span,
                 "a struct literal requires an expected struct type",
@@ -2051,6 +2779,10 @@ impl<'a> FunctionCompiler<'a> {
                         );
                         hir::Operand::Value(value)
                     }
+                    Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
+                    Storage::Dictionary { .. } => {
+                        unreachable!("a scalar binding is not a dictionary")
+                    }
                 };
                 Ok(TypedOperand {
                     operand: Some(operand),
@@ -2060,6 +2792,10 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Index { base, index, span } => {
                 self.index_expression(base, index, expected, *span)
             }
+            Expr::Slice { span, .. } => Err(Diagnostic::new(
+                *span,
+                "a slice is a scoped view and cannot be used as a scalar value",
+            )),
             Expr::Member { base, field, span } => {
                 let (place, type_name, _, _) = self.member_place(base, field, *span)?;
                 if expected.is_some_and(|one| one != type_name) {
@@ -2338,7 +3074,7 @@ impl<'a> FunctionCompiler<'a> {
         let place = self.indexed_place(
             &binding.storage,
             index,
-            type_id(element),
+            ElementType::Scalar(element),
             width(element),
             span,
         )?;
@@ -2354,12 +3090,22 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         storage: &Storage,
         index: hir::Operand,
-        element_type: u32,
+        element: ElementType,
         element_width: u32,
         span: Span,
     ) -> Result<hir::Operand, Diagnostic> {
+        let element_type = element.id();
         match storage {
             Storage::Place(place) => Ok(hir::Operand::ArrayElement(*place, vec![index])),
+            Storage::Slice(descriptor) => {
+                let pointer = self.slice_data_pointer(*descriptor, element);
+                let address = self.indexed_pointer(pointer, index, element_width, span)?;
+                Ok(hir::Operand::IndirectPlace {
+                    base: address,
+                    offset: 0,
+                    type_id: element_type,
+                })
+            }
             Storage::Reference(pointer) => {
                 let address = self.indexed_pointer(*pointer, index, element_width, span)?;
                 Ok(hir::Operand::IndirectPlace {
@@ -2371,7 +3117,36 @@ impl<'a> FunctionCompiler<'a> {
             Storage::Parameter(_) | Storage::ArrayView { .. } => {
                 Err(Diagnostic::new(span, "array has no indexable storage"))
             }
+            Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
         }
+    }
+
+    fn string_pointer(&mut self, binding: &Binding, span: Span) -> Result<u32, Diagnostic> {
+        match binding.storage {
+            Storage::Parameter(value) => Ok(value),
+            Storage::Place(place) => {
+                let value = self.value(TypeName::String);
+                self.emit("load", vec![value], vec![hir::Operand::Place(place)], None);
+                Ok(value)
+            }
+            _ => Err(Diagnostic::new(span, "string has no scalar pointer value")),
+        }
+    }
+
+    fn slice_data_pointer(&mut self, descriptor: u32, element: ElementType) -> u32 {
+        let pointer_type = self.types.pointer(element.id(), 0);
+        let pointer = self.value_type(pointer_type);
+        self.emit(
+            "load",
+            vec![pointer],
+            vec![hir::Operand::IndirectPlace {
+                base: descriptor,
+                offset: 4,
+                type_id: pointer_type,
+            }],
+            None,
+        );
+        pointer
     }
 
     fn indexed_pointer(
@@ -2828,7 +3603,8 @@ impl<'a> FunctionCompiler<'a> {
                         BindingType::Scalar(type_name) => Some(type_name),
                         BindingType::Array { .. }
                         | BindingType::Slice { .. }
-                        | BindingType::Struct(_) => None,
+                        | BindingType::Struct(_)
+                        | BindingType::Dictionary { .. } => None,
                     })
             }
             Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
@@ -2856,7 +3632,8 @@ impl<'a> FunctionCompiler<'a> {
                             element: ElementType::Struct(_),
                         }
                         | BindingType::Scalar(_)
-                        | BindingType::Struct(_) => None,
+                        | BindingType::Struct(_)
+                        | BindingType::Dictionary { .. } => None,
                     })
             }
             Expr::Member { base, field, span } => self.member_type_hint(base, field, *span),
@@ -2888,6 +3665,10 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Integer(..)
             | Expr::FString { .. }
             | Expr::Array(..)
+            | Expr::Comprehension { .. }
+            | Expr::Generator { .. }
+            | Expr::DictComprehension { .. }
+            | Expr::Slice { .. }
             | Expr::StructLiteral { .. }
             | Expr::Borrow { .. } => None,
         }
@@ -2908,12 +3689,80 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         let binding = self.binding(array_name, *receiver_span)?.clone();
-        let Some((_element, length)) = binding.type_.array() else {
-            return Err(Diagnostic::new(
-                receiver.span(),
-                format!("{array_name:?} is not an array"),
-            ));
+        if let BindingType::Dictionary {
+            key,
+            value,
+            capacity,
+        } = binding.type_
+        {
+            return self.dictionary_method(
+                &binding, key, value, capacity, name, arguments, expected, span,
+            );
+        }
+        let string = binding.type_ == BindingType::Scalar(TypeName::String);
+        let length = if string {
+            None
+        } else {
+            let Some((_element, length)) = binding.type_.array() else {
+                return Err(Diagnostic::new(
+                    receiver.span(),
+                    format!("{array_name:?} is not an array or string"),
+                ));
+            };
+            length
         };
+        if name == "data" {
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(span, "data() takes no arguments"));
+            }
+            if string {
+                if expected.is_some_and(|one| one != TypeName::String) {
+                    return Err(type_mismatch(
+                        span,
+                        expected.expect("checked"),
+                        TypeName::String,
+                    ));
+                }
+                let pointer = self.string_pointer(&binding, receiver.span())?;
+                return Ok(TypedOperand {
+                    operand: Some(hir::Operand::Value(pointer)),
+                    type_name: TypeName::String,
+                });
+            }
+            if expected.is_some_and(|one| one != TypeName::Addr) {
+                return Err(type_mismatch(
+                    span,
+                    expected.expect("checked"),
+                    TypeName::Addr,
+                ));
+            }
+            let pointer = match binding.storage {
+                Storage::Place(place) => {
+                    let result = self.value(TypeName::Addr);
+                    self.emit(
+                        "address",
+                        vec![result],
+                        vec![hir::Operand::Place(place)],
+                        None,
+                    );
+                    result
+                }
+                Storage::Slice(descriptor) => {
+                    let BindingType::Slice { element } = binding.type_ else {
+                        unreachable!("slice storage has slice type")
+                    };
+                    let typed = self.slice_data_pointer(descriptor, element);
+                    let result = self.value(TypeName::Addr);
+                    self.emit("copy", vec![result], vec![hir::Operand::Value(typed)], None);
+                    result
+                }
+                _ => return Err(Diagnostic::new(span, "sequence has no data pointer")),
+            };
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Value(pointer)),
+                type_name: TypeName::Addr,
+            });
+        }
         if expected.is_some_and(|one| one != TypeName::U16) {
             return Err(type_mismatch(
                 span,
@@ -2921,9 +3770,9 @@ impl<'a> FunctionCompiler<'a> {
                 TypeName::U16,
             ));
         }
-        let field = match name {
-            "len" if arguments.is_empty() => "length",
-            "capacity" if arguments.is_empty() => "capacity",
+        let offset = match name {
+            "len" if arguments.is_empty() => 0,
+            "capacity" if arguments.is_empty() => 2,
             "dim" if arguments.len() == 1 => {
                 let Expr::Integer(axis, axis_span) = arguments[0] else {
                     return Err(Diagnostic::new(
@@ -2937,7 +3786,7 @@ impl<'a> FunctionCompiler<'a> {
                         "one-dimensional array has only dimension 0",
                     ));
                 }
-                "length"
+                0
             }
             "len" | "capacity" => {
                 return Err(Diagnostic::new(
@@ -2956,7 +3805,11 @@ impl<'a> FunctionCompiler<'a> {
         let operand = if let Some(length) = length {
             hir::Operand::Constant(U16, i64::from(length))
         } else {
-            let Storage::Reference(pointer) = binding.storage else {
+            let pointer = if string {
+                self.string_pointer(&binding, receiver.span())?
+            } else if let Storage::Slice(pointer) = binding.storage {
+                pointer
+            } else {
                 return Err(Diagnostic::new(receiver.span(), "slice has no descriptor"));
             };
             let value = self.value(TypeName::U16);
@@ -2965,7 +3818,7 @@ impl<'a> FunctionCompiler<'a> {
                 vec![value],
                 vec![hir::Operand::DescriptorPlace {
                     base: pointer,
-                    field,
+                    field: if offset == 0 { "length" } else { "capacity" },
                     type_id: U16,
                 }],
                 None,
@@ -2975,6 +3828,208 @@ impl<'a> FunctionCompiler<'a> {
         Ok(TypedOperand {
             operand: Some(operand),
             type_name: TypeName::U16,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dictionary_method(
+        &mut self,
+        binding: &Binding,
+        key_type: TypeName,
+        value_type: TypeName,
+        capacity: u32,
+        name: &str,
+        arguments: &[Expr],
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let Storage::Dictionary {
+            keys,
+            values,
+            length,
+        } = binding.storage
+        else {
+            unreachable!("dictionary type has dictionary storage")
+        };
+        if matches!(name, "len" | "capacity") {
+            if !arguments.is_empty() {
+                return Err(Diagnostic::new(
+                    span,
+                    format!("{name}() takes no arguments"),
+                ));
+            }
+            if expected.is_some_and(|one| one != TypeName::U16) {
+                return Err(type_mismatch(
+                    span,
+                    expected.expect("checked"),
+                    TypeName::U16,
+                ));
+            }
+            let operand = if name == "capacity" {
+                hir::Operand::Constant(U16, i64::from(capacity))
+            } else {
+                let result = self.value(TypeName::U16);
+                self.emit(
+                    "load",
+                    vec![result],
+                    vec![hir::Operand::Place(length)],
+                    None,
+                );
+                hir::Operand::Value(result)
+            };
+            return Ok(TypedOperand {
+                operand: Some(operand),
+                type_name: TypeName::U16,
+            });
+        }
+        if name != "get" {
+            return Err(Diagnostic::new(
+                span,
+                format!("dictionary has no method {name:?}"),
+            ));
+        }
+        if arguments.len() != 2 {
+            return Err(Diagnostic::new(span, "get() takes a key and default value"));
+        }
+        if expected.is_some_and(|one| one != value_type) {
+            return Err(type_mismatch(span, expected.expect("checked"), value_type));
+        }
+        let wanted = required(
+            self.expression(&arguments[0], Some(key_type))?,
+            arguments[0].span(),
+        )?;
+        let fallback = required(
+            self.expression(&arguments[1], Some(value_type))?,
+            arguments[1].span(),
+        )?;
+        let result_place = self.place("$dict_get_result", value_type, true);
+        let index_place = self.place("$dict_get_index", TypeName::U16, true);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(result_place), fallback],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(index_place),
+                hir::Operand::Constant(U16, 0),
+            ],
+            None,
+        );
+        let condition = self.block();
+        let body = self.block();
+        let found = self.block();
+        let increment = self.block();
+        let exit = self.block();
+        self.terminate(jump(condition));
+
+        self.current = condition;
+        let index = self.value(TypeName::U16);
+        let length_value = self.value(TypeName::U16);
+        self.emit(
+            "load",
+            vec![index],
+            vec![hir::Operand::Place(index_place)],
+            None,
+        );
+        self.emit(
+            "load",
+            vec![length_value],
+            vec![hir::Operand::Place(length)],
+            None,
+        );
+        let in_range = self.value(TypeName::Bool);
+        self.emit(
+            "below",
+            vec![in_range],
+            vec![
+                hir::Operand::Value(index),
+                hir::Operand::Value(length_value),
+            ],
+            None,
+        );
+        self.terminate(hir::Terminator {
+            kind: "branch",
+            operands: vec![hir::Operand::Value(in_range)],
+            targets: vec![body, exit],
+        });
+
+        self.current = body;
+        let actual = self.value(key_type);
+        self.emit(
+            "load",
+            vec![actual],
+            vec![hir::Operand::ArrayElement(
+                keys,
+                vec![hir::Operand::Value(index)],
+            )],
+            None,
+        );
+        let equal = self.value(TypeName::Bool);
+        self.emit(
+            "eq",
+            vec![equal],
+            vec![hir::Operand::Value(actual), wanted],
+            None,
+        );
+        self.terminate(hir::Terminator {
+            kind: "branch",
+            operands: vec![hir::Operand::Value(equal)],
+            targets: vec![found, increment],
+        });
+
+        self.current = found;
+        let selected = self.value(value_type);
+        self.emit(
+            "load",
+            vec![selected],
+            vec![hir::Operand::ArrayElement(
+                values,
+                vec![hir::Operand::Value(index)],
+            )],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![
+                hir::Operand::Place(result_place),
+                hir::Operand::Value(selected),
+            ],
+            None,
+        );
+        self.terminate(jump(exit));
+
+        self.current = increment;
+        let next = self.value(TypeName::U16);
+        self.emit(
+            "add",
+            vec![next],
+            vec![hir::Operand::Value(index), hir::Operand::Constant(U16, 1)],
+            None,
+        );
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(index_place), hir::Operand::Value(next)],
+            None,
+        );
+        self.terminate(jump(condition));
+
+        self.current = exit;
+        let result = self.value(value_type);
+        self.emit(
+            "load",
+            vec![result],
+            vec![hir::Operand::Place(result_place)],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: value_type,
         })
     }
 
@@ -3080,13 +4135,34 @@ impl<'a> FunctionCompiler<'a> {
         if required_mutable && !mutable {
             return Err(Diagnostic::new(*span, "mutable parameter requires '&mut'"));
         }
-        let Expr::Name(name, name_span) = operand.as_ref() else {
-            return Err(Diagnostic::new(
-                operand.span(),
-                "borrow currently requires a named binding",
-            ));
+        let (name, name_span, range) = match operand.as_ref() {
+            Expr::Name(name, name_span) => (name, *name_span, None),
+            Expr::Slice {
+                base,
+                start,
+                end,
+                span: range_span,
+            } => {
+                let Expr::Name(name, name_span) = base.as_ref() else {
+                    return Err(Diagnostic::new(
+                        base.span(),
+                        "slice base must be a named array",
+                    ));
+                };
+                (
+                    name,
+                    *name_span,
+                    Some((start.as_deref(), end.as_deref(), *range_span)),
+                )
+            }
+            _ => {
+                return Err(Diagnostic::new(
+                    operand.span(),
+                    "borrow currently requires a named binding or array range",
+                ))
+            }
         };
-        let binding = self.binding(name, *name_span)?.clone();
+        let binding = self.binding(name, name_span)?.clone();
         let compatible = binding.type_ == target
             || matches!(
                 (binding.type_, target),
@@ -3107,10 +4183,108 @@ impl<'a> FunctionCompiler<'a> {
                 format!("cannot mutably borrow immutable binding {name:?}"),
             ));
         }
+        if let BindingType::Slice { element } = target {
+            if range.is_none() {
+                if let Storage::Slice(pointer) = binding.storage {
+                    return Ok((hir::Operand::Value(pointer), name.clone()));
+                }
+            }
+            let BindingType::Array {
+                element: actual,
+                length,
+            } = binding.type_
+            else {
+                return Err(Diagnostic::new(
+                    operand.span(),
+                    "a ranged borrow currently requires a fixed array",
+                ));
+            };
+            debug_assert_eq!(actual, element);
+            let (start, end) = self.slice_bounds(range, length, operand.span())?;
+            let Storage::Place(place) = binding.storage else {
+                return Err(Diagnostic::new(
+                    operand.span(),
+                    "array has no owned payload",
+                ));
+            };
+            let data_type = self.types.pointer(element.id(), 0);
+            let data = self.value_type(data_type);
+            self.emit(
+                "address",
+                vec![data],
+                vec![hir::Operand::Place(place)],
+                None,
+            );
+            let data = if start == 0 {
+                data
+            } else {
+                self.indexed_pointer(
+                    data,
+                    hir::Operand::Constant(U16, i64::from(start)),
+                    self.types.width(element.id()),
+                    operand.span(),
+                )?
+            };
+            let descriptor_type = self
+                .types
+                .types
+                .iter()
+                .find(|one| one.id == pointer_type)
+                .and_then(|one| one.element)
+                .expect("slice pointer has a descriptor pointee");
+            let descriptor = self.local_place(&format!("$slice_{name}"), descriptor_type, 8, false);
+            let view_length = end - start;
+            for (offset, value) in [(0, view_length), (2, view_length)] {
+                self.emit(
+                    "store",
+                    Vec::new(),
+                    vec![
+                        hir::Operand::ProjectedPlace {
+                            place: descriptor,
+                            indices: Vec::new(),
+                            offset,
+                            type_id: U16,
+                        },
+                        hir::Operand::Constant(U16, i64::from(value)),
+                    ],
+                    None,
+                );
+            }
+            self.emit(
+                "store",
+                Vec::new(),
+                vec![
+                    hir::Operand::ProjectedPlace {
+                        place: descriptor,
+                        indices: Vec::new(),
+                        offset: 4,
+                        type_id: data_type,
+                    },
+                    hir::Operand::Value(data),
+                ],
+                None,
+            );
+            let result = self.value_type(pointer_type);
+            self.emit(
+                "address",
+                vec![result],
+                vec![hir::Operand::Place(descriptor)],
+                None,
+            );
+            return Ok((hir::Operand::Value(result), name.clone()));
+        }
+        if range.is_some() {
+            return Err(Diagnostic::new(
+                operand.span(),
+                "a range can only be borrowed as a slice",
+            ));
+        }
         let place = match binding.storage {
             Storage::Place(place) => hir::Operand::Place(place),
             Storage::ArrayView { place, index } => hir::Operand::ArrayElement(place, vec![index]),
             Storage::Reference(pointer) => return Ok((hir::Operand::Value(pointer), name.clone())),
+            Storage::Slice(_) => unreachable!("slice target handled above"),
+            Storage::Dictionary { .. } => unreachable!("borrow target is not a dictionary"),
             Storage::Parameter(_) => {
                 return Err(Diagnostic::new(
                     *span,
@@ -3121,6 +4295,39 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.value_type(pointer_type);
         self.emit("address", vec![result], vec![place], None);
         Ok((hir::Operand::Value(result), name.clone()))
+    }
+
+    fn slice_bounds(
+        &self,
+        range: Option<(Option<&Expr>, Option<&Expr>, Span)>,
+        length: u32,
+        _span: Span,
+    ) -> Result<(u32, u32), Diagnostic> {
+        let Some((start, end, range_span)) = range else {
+            return Ok((0, length));
+        };
+        let endpoint = |value: Option<&Expr>, default: u32| -> Result<u32, Diagnostic> {
+            let Some(value) = value else {
+                return Ok(default);
+            };
+            match value {
+                Expr::Integer(value, at) => u32::try_from(*value)
+                    .map_err(|_| Diagnostic::new(*at, "slice bounds must be non-negative")),
+                _ => Err(Diagnostic::new(
+                    value.span(),
+                    "this slice requires compile-time integer bounds",
+                )),
+            }
+        };
+        let start = endpoint(start, 0)?;
+        let end = endpoint(end, length)?;
+        if start > end || end > length {
+            return Err(Diagnostic::new(
+                range_span,
+                format!("slice {start}..{end} is outside 0..{length}"),
+            ));
+        }
+        Ok((start, end))
     }
 
     fn print(
@@ -3541,6 +4748,7 @@ fn type_id(type_name: TypeName) -> u32 {
         TypeName::F32 => F32,
         TypeName::F64 => F64,
         TypeName::String => STRING,
+        TypeName::Addr => ADDR,
         TypeName::I64 => I64,
         TypeName::Fixed { declaration, .. } => FIXED_START + u32::from(declaration),
     }
@@ -3554,6 +4762,7 @@ fn width(type_name: TypeName) -> u32 {
         TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
         TypeName::F64 => 8,
         TypeName::String => 2,
+        TypeName::Addr => 4,
         TypeName::I64 => 8,
         TypeName::Fixed { storage, .. } => match storage {
             FixedStorage::I16 => 2,
@@ -3576,6 +4785,7 @@ fn type_name_text(type_name: TypeName) -> String {
         TypeName::F32 => "f32".into(),
         TypeName::F64 => "f64".into(),
         TypeName::String => "string".into(),
+        TypeName::Addr => "addr".into(),
         TypeName::I64 => "$i64".into(),
         TypeName::Fixed {
             storage, fraction, ..

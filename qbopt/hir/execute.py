@@ -101,6 +101,10 @@ class _Machine:
         self.data = {one.id: bytearray(one.bytes) for one in self.module.data}
         self.output: list[str] = []
         self.remaining = limit
+        # Reference semantics need not invent a segmented numeric address for
+        # host bytearrays.  Pointer-valued memory cells retain their address
+        # object here, keyed by the concrete storage cell that contains them.
+        self.pointer_cells: dict[tuple[int, int, int], _Address] = {}
 
     def invoke(self, name: str, arguments: tuple[_Scalar, ...]) -> int | float | None:
         function = self.functions.get(name)
@@ -139,9 +143,15 @@ class _Machine:
                 address = values.get(operand.base)
                 if not isinstance(address, _Address):
                     raise ExecutionError("descriptor place has no address value")
+                pointer = value_types[operand.base]
+                pointee = self.types[pointer.element] if pointer.element is not None else None
+                if pointee is not None and pointee.kind is model.TypeKind.OPAQUE and pointee.name.startswith("$slice["):
+                    offset = 0 if operand.field is model.DescriptorField.LENGTH else 2
+                    return load(_Location(address.memory, address.offset + offset, self.types[operand.type]))
                 value = address.length if operand.field is model.DescriptorField.LENGTH else address.capacity
                 if value is None:
-                    raise ExecutionError("pointer has no array descriptor")
+                    offset = -4 if operand.field is model.DescriptorField.LENGTH else -2
+                    return load(_Location(address.memory, address.offset + offset, self.types[operand.type]))
                 return _normalized(value, self.types[operand.type])
             return load(location(operand))
 
@@ -204,6 +214,11 @@ class _Machine:
             return _Location(memory, offset + linear * element.width + extra, type_)
 
         def load(where: _Location) -> _Scalar:
+            if where.type.kind is model.TypeKind.POINTER:
+                try:
+                    return self.pointer_cells[(id(where.memory), where.offset, where.type.width)]
+                except KeyError as error:
+                    raise ExecutionError("pointer load reads an uninitialized address cell") from error
             data = bytes(where.memory[where.offset : where.offset + where.type.width])
             if len(data) != where.type.width:
                 raise ExecutionError("load falls outside its storage object")
@@ -215,16 +230,25 @@ class _Machine:
 
         def store(where: _Location, value: _Scalar) -> None:
             value = _normalized(value, where.type)
-            if where.type.kind is model.TypeKind.FLOAT:
+            if where.type.kind is model.TypeKind.POINTER:
+                assert isinstance(value, _Address)
+                data = bytes(where.type.width)
+                self.pointer_cells[(id(where.memory), where.offset, where.type.width)] = value
+            elif where.type.kind is model.TypeKind.FLOAT:
                 data = struct.pack("<f" if where.type.width == 4 else "<d", value)
             elif isinstance(value, int):
                 data = (value & ((1 << (where.type.width * 8)) - 1)).to_bytes(where.type.width, "little")
             else:
-                raise ExecutionError("storing pointers is not implemented by the reference executor")
+                raise ExecutionError("unsupported scalar store")
             after = where.offset + len(data)
             if where.offset < 0 or after > len(where.memory):
                 raise ExecutionError("store falls outside its storage object")
             where.memory[where.offset : after] = data
+            if where.type.kind is not model.TypeKind.POINTER:
+                for key in tuple(self.pointer_cells):
+                    memory, offset, width = key
+                    if memory == id(where.memory) and where.offset < offset + width and offset < after:
+                        del self.pointer_cells[key]
 
         def define(instruction: model.Instruction, results: tuple[_Scalar, ...]) -> None:
             if len(results) != len(instruction.results):

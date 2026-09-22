@@ -332,7 +332,9 @@ class Operation(StrEnum):
     PUSH = "push"  # sources[0] onto the stack; the cell and sp are Effects' business, not this layer's
     POP = "pop"  # dests[0] off the stack, likewise
     LEAVE = "leave"  # dests[0] <- sources[0], then dests[1] off the stack: `leave` is `mov sp,bp` then `pop bp`
-    FILL = "fill"  # sources[1] copies of sources[0] into dests[0], addressed by sources[3]:sources[2], which steps
+    # Repeated: sources=(value,count,address,segment), dests=(cell,stepped,empty-count).
+    # Single: sources=(value,address,segment), dests=(cell,stepped).
+    FILL = "fill"
     JUMP = "jump"  # unconditional, to `target`
     BRANCH = "branch"  # conditional on the flags, to `target`
     # Control leaves the body, to somewhere the instruction does not name -- a direct far `jmp`. All a

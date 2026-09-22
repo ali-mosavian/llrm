@@ -4226,6 +4226,136 @@ impl Compiler {
         data
     }
 
+    /// LBOUND/UBOUND read from the descriptor, as dynamic.asm's ULbound does.
+    /// Where that routine would raise "subscript out of range" -- no data,
+    /// or a dimension outside 1..=AD_cDims -- the call itself runs instead,
+    /// so the error and any RESUME behave exactly as before.
+    fn array_bound(
+        &mut self,
+        descriptor: u32,
+        dimension: Operand,
+        upper: bool,
+    ) -> Result<Operand, SemanticError> {
+        let result = self.compiler_temporary("$bound", INTEGER)?;
+        let read = self.new_block();
+        let checked = self.new_block();
+        let ranked = self.new_block();
+        let call = self.new_block();
+        let done = self.new_block();
+
+        let data = self.descriptor_field(descriptor, 2, INTEGER);
+        let allocated = self.value(BOOLEAN);
+        let zero = Operand::Constant(INTEGER, Number::Integer(0));
+        self.emit(hir::Opcode::NotEqual, vec![allocated], vec![Operand::Value(data), zero]);
+        self.terminate(Terminator::Branch { condition: Operand::Value(allocated), then_block: checked, else_block: call })?;
+
+        self.select_block(checked);
+        let rank = self.descriptor_field(descriptor, 8, BYTE);
+        let rank = self.convert(Operand::Value(rank), BYTE, INTEGER)?;
+        let positive = self.value(BOOLEAN);
+        let one = Operand::Constant(INTEGER, Number::Integer(1));
+        self.emit(hir::Opcode::GreaterEqual, vec![positive], vec![dimension.clone(), one]);
+        self.terminate(Terminator::Branch { condition: Operand::Value(positive), then_block: ranked, else_block: call })?;
+
+        self.select_block(ranked);
+        let within = self.value(BOOLEAN);
+        self.emit(hir::Opcode::LessEqual, vec![within], vec![dimension.clone(), rank.clone()]);
+        self.terminate(Terminator::Branch { condition: Operand::Value(within), then_block: read, else_block: call })?;
+
+        // Dimensions are stored last first: dimension d is entry cDims - d.
+        self.select_block(read);
+        let entry = self.value(INTEGER);
+        self.emit(hir::Opcode::Subtract, vec![entry], vec![rank, dimension.clone()]);
+        let bytes = self.value(INTEGER);
+        self.emit(hir::Opcode::Multiply,
+            vec![bytes],
+            vec![
+                Operand::Value(entry),
+                Operand::Constant(INTEGER, Number::Integer(4)),
+            ],
+        );
+        let (pointer_type, offset_type) = {
+            let pointer_type = self
+                .values
+                .iter()
+                .find_map(|(id, type_id)| (*id == descriptor).then_some(*type_id))
+                .expect("descriptor value");
+            let offset_type = if self.width(pointer_type) == 4 {
+                LONG
+            } else {
+                INTEGER
+            };
+            (pointer_type, offset_type)
+        };
+        let bytes = self.convert(Operand::Value(bytes), INTEGER, offset_type)?;
+        let at = self.value(pointer_type);
+        self.emit(hir::Opcode::OffsetPointer,
+            vec![at],
+            vec![Operand::Value(descriptor), bytes],
+        );
+        let lower = self.value(INTEGER);
+        self.emit(hir::Opcode::Load,
+            vec![lower],
+            vec![Operand::Indirect {
+                base: at,
+                offset: 16,
+                type_id: INTEGER,
+                volatile: false,
+            }],
+        );
+        let value = if upper {
+            let count = self.value(INTEGER);
+            self.emit(hir::Opcode::Load,
+                vec![count],
+                vec![Operand::Indirect {
+                    base: at,
+                    offset: 14,
+                    type_id: INTEGER,
+                    volatile: false,
+                }],
+            );
+            let end = self.value(INTEGER);
+            self.emit(hir::Opcode::Add,
+                vec![end],
+                vec![Operand::Value(lower), Operand::Value(count)],
+            );
+            let last = self.value(INTEGER);
+            self.emit(hir::Opcode::Subtract,
+                vec![last],
+                vec![
+                    Operand::Value(end),
+                    Operand::Constant(INTEGER, Number::Integer(1)),
+                ],
+            );
+            last
+        } else {
+            lower
+        };
+        self.emit(hir::Opcode::Store,
+            Vec::new(),
+            vec![Operand::Place(result), Operand::Value(value)],
+        );
+        self.terminate(Terminator::Jump(done))?;
+
+        self.select_block(call);
+        let called = self.value(INTEGER);
+        self.emit_runtime_call(
+            if upper { "B$UBND" } else { "B$LBND" },
+            vec![called],
+            vec![Operand::Value(descriptor), dimension],
+        );
+        self.emit(hir::Opcode::Store,
+            Vec::new(),
+            vec![Operand::Place(result), Operand::Value(called)],
+        );
+        self.terminate(Terminator::Jump(done))?;
+
+        self.select_block(done);
+        let merged = self.value(INTEGER);
+        self.emit(hir::Opcode::Load, vec![merged], vec![Operand::Place(result)]);
+        Ok(Operand::Value(merged))
+    }
+
     fn descriptor_field(&mut self, descriptor: u32, offset: usize, type_id: u32) -> u32 {
         let key = (descriptor, offset, type_id);
         if let Some(value) = self.descriptor_fields.get(&key) {
@@ -5121,17 +5251,9 @@ impl Compiler {
             } else {
                 Operand::Constant(INTEGER, Number::Integer(1))
             };
-            let result = self.value(INTEGER);
-            self.emit_runtime_call(
-                if intrinsic.lowering == Lowering::LowerBound {
-                    "B$LBND"
-                } else {
-                    "B$UBND"
-                },
-                vec![result],
-                vec![Operand::Value(descriptor), dimension],
-            );
-            return Ok(Some((Operand::Value(result), INTEGER)));
+            let upper = intrinsic.lowering == Lowering::UpperBound;
+            let result = self.array_bound(descriptor, dimension, upper)?;
+            return Ok(Some((result, INTEGER)));
         }
         if intrinsic.lowering == Lowering::FreeFile {
             let result = self.value(INTEGER);

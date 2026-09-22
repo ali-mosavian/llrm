@@ -507,6 +507,10 @@ def test_basic_frontend_returns_the_independent_parity_answer(tmp_path: Path) ->
         ("qmove", "quake_move_demo"),
         ("qbsp", "quake_bsp_demo"),
         ("qlight", "quake_light_demo"),
+        # Three far bases and one shared index: a rejected allocation trial
+        # left the index's frame slot behind and a static use count read the
+        # loop-invariant base as dying, so the object returned 330.
+        ("sum_three", "sum_three_demo"),
     ],
 )
 @pytest.mark.e2e
@@ -541,3 +545,43 @@ def test_c_frontend_returns_the_independent_parity_answer(tmp_path: Path, name: 
     value = next((tmp_path / name for name in ("VALUE.BIN", "value.bin") if (tmp_path / name).is_file()), None)
     assert value is not None
     assert int.from_bytes(value.read_bytes(), "little", signed=True) == _expected_for(name)
+
+
+@pytest.mark.e2e
+@pytest.mark.skipif(not _runtime_available(), reason="DOSBox or the DOS toolchains are unavailable")
+def test_basic_array_bounds_match_the_runtime(tmp_path: Path) -> None:
+    """LBOUND/UBOUND read inline from the descriptor; a bad dimension still raises error 9."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from dosbox import launch
+    from configs import CONFIGS
+    from dosbox import read_dos
+
+    from qbopt.frontend.qb import driver as qb_driver
+    from qbopt.frontend.qb import compile as qb_compile
+
+    source = tmp_path / "BOUNDS.BAS"
+    source.write_text(
+        "DEFINT A-Z\n"
+        "DECLARE FUNCTION Top (a() AS INTEGER, d AS INTEGER)\n"
+        "DIM grid(2 TO 5, -1 TO 3) AS INTEGER\n"
+        "PRINT LBOUND(grid, 1); UBOUND(grid, 1); LBOUND(grid, 2); Top(grid(), 2)\n"
+        "PRINT Top(grid(), 3)\n"
+        "FUNCTION Top (a() AS INTEGER, d AS INTEGER)\n"
+        "  Top = UBOUND(a, d)\n"
+        "END FUNCTION\n"
+    )
+    (tmp_path / "PROG.OBJ").write_bytes(qb_compile.object_bytes(qb_driver.parsed(source), source.name))
+    config = CONFIGS["v-g3"]
+    launch(
+        tmp_path,
+        config.mount,
+        [
+            rf"{config.link} PROG.OBJ,PROGRAM.EXE,PROGRAM.MAP,V:\LIB\VBDCL10E.LIB; > LINK.TXT",
+            "if exist PROGRAM.EXE PROGRAM.EXE > RESULT.TXT",
+        ],
+        timeout=60,
+    )
+    output = read_dos(tmp_path, "RESULT.TXT")
+
+    assert output.split("\n")[0].split() == ["2", "5", "-1", "3"]
+    assert "Subscript out of range" in output

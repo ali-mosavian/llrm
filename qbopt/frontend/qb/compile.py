@@ -26,10 +26,11 @@ from qbopt.backend import lower
 from qbopt.hir import callmemory
 from qbopt.objectfile import omf
 from qbopt.backend import phielim
+from qbopt.model.passes import O2
 from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
-from qbopt.optimize import transform
+from qbopt.model.passes import Options
 from qbopt.backend import addressvalues
 from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
@@ -888,7 +889,7 @@ def _drop_optimizer_resume_edges(body: mir.MirBody, restored: dict[int, mir.Op |
     return replace(body, blocks=tuple(blocks))
 
 
-def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered, options: Options) -> hir.Lowered:
     """Run the shared MIR fixed point at one QB compilation boundary."""
     module = next(
         (one for one in program.modules if function in one.functions),
@@ -926,33 +927,7 @@ def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) 
     # semantics: propagation could make a resumable statement depend on a
     # definition which the external entry bypasses.
     rooted, temporary_root = _machine_side_entry(optimizer_body, entries)
-    transformed = transform.applied(
-        rooted,
-        dgroup,
-        semantic_calls,
-        # QB's source loops commonly have large exact bounds (screen and
-        # array initialization). The shared peeler speculatively clones those
-        # loops, recursively considers unrolling the clone, then rejects the
-        # result on growth. Nibbles' 50x80 loop spent minutes constructing
-        # candidates of 1,500--3,600 MIR operations which selected no code.
-        # Keep unrolling and every scalar pass; skip that unproductive
-        # speculative transaction at this frontend boundary.
-        peel_=False,
-        # Runtime RESUME entries can jump directly into a loop, making the
-        # analysis root irreducible. Scalar promotion requires a dominator
-        # tree and, more importantly, must not replace frame state that such
-        # an entry deliberately reloads with a value from the ordinary path.
-        promote_=temporary_root is None,
-        registers=target.register_capacity,
-        call_registers=target.call_register_capacity,
-        index_scales=target.address_scales,
-        # The common 16-bit address-folder does not yet express the
-        # BP+{SI,DI} pair restriction to allocation. Let explicit QB
-        # base-plus-offset MIR survive instead of recreating an illegal
-        # BP+BX LEA below HIR. Other MIR optimizations remain enabled.
-        address_forms=(),
-        costs=target.operations,
-    )
+    transformed = flow.optimized(rooted, dgroup, semantic_calls, target, options=options)
     transformed = _drop_optimizer_resume_edges(transformed, resume_edges)
     if temporary_root is not None:
         transformed = replace(
@@ -967,12 +942,14 @@ def _optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) 
     return replace(body, body=transformed)
 
 
-def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+def optimized(program: hir.Program, function: hir.Function, body: hir.Lowered, options: Options = O2) -> hir.Lowered:
     """Optimize source MIR while preserving QB ABI side entries and RESUME semantics."""
-    return _optimized(program, function, body)
+    return _optimized(program, function, body, options)
 
 
-def optimized_physical(program: hir.Program, function: hir.Function, body: hir.Lowered) -> hir.Lowered:
+def optimized_physical(
+    program: hir.Program, function: hir.Function, body: hir.Lowered, options: Options = O2
+) -> hir.Lowered:
     """Optimize MIR introduced by ABI physicalization.
 
     Physicalization replaces RESUME's terminal ESCAPE marker with the concrete
@@ -980,7 +957,7 @@ def optimized_physical(program: hir.Program, function: hir.Function, body: hir.L
     for memory optimization, so expose the physical form and then remove only
     the temporary edge rather than restoring a source marker.
     """
-    return _optimized(program, function, body)
+    return _optimized(program, function, body, options)
 
 
 def lowering_target() -> targets.Profile:
@@ -1201,7 +1178,7 @@ def _graphics_dependencies(module: hir.Module) -> frozenset[str]:
     return frozenset(required)
 
 
-def assembled(program: hir.Program, *, observer: StageObserver | None = None) -> masm.Module:
+def assembled(program: hir.Program, *, observer: StageObserver | None = None, options: Options = O2) -> masm.Module:
     """Compile one QB HIR module to the shared assembly model."""
     hir.verify(program)
     _observe(observer, "hir", program)
@@ -1227,7 +1204,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
     for function, body in zip(functions, semantic, strict=True):
         handler_at = _handler_at(function)
         _observe(observer, "source-mir", body, function)
-        body = optimized(program, function, body)
+        body = optimized(program, function, body, options)
         _observe(observer, "optimized-mir", body, function)
         physical = physicalize(program, function, body)
         _observe(observer, "physical-mir", physical.lowered, function)
@@ -1236,7 +1213,7 @@ def assembled(program: hir.Program, *, observer: StageObserver | None = None) ->
         # Feed those operations through the same fixed point as source MIR so
         # code quality cannot depend on whether a frontend expressed work
         # before or during ABI adaptation.
-        physical = replace(physical, lowered=optimized_physical(program, function, physical.lowered))
+        physical = replace(physical, lowered=optimized_physical(program, function, physical.lowered, options))
         _observe(observer, "optimized-physical-mir", physical.lowered, function)
         ordinary_entry = physical.lowered.body.entry
         ordinary_block = physical.lowered.body.block(ordinary_entry)
@@ -1579,9 +1556,11 @@ def _basic_code(
         at = len(segment.image)
 
 
-def object_bytes(program: hir.Program, source: str | Path, *, observer: StageObserver | None = None) -> bytes:
+def object_bytes(
+    program: hir.Program, source: str | Path, *, observer: StageObserver | None = None, options: Options = O2
+) -> bytes:
     """Emit a complete fresh BASIC-envelope OMF object."""
-    module = assembled(program, observer=observer)
+    module = assembled(program, observer=observer, options=options)
     # Build the same semantic segments as backend.omfwrite.written, then add
     # the BASIC-owned MODULE_CODE envelope before asking its canonical record
     # serializer to write OMF. This stays frontend-owned and leaves the shared

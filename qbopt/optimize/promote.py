@@ -799,6 +799,7 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
     """Complete scalar constants established by intact, possibly split stores."""
     calls = {op.at: "" for block in body.blocks for op in block.ops if op.barrier or op.kind is mir.Kind.CALL}
     memory = consts.cells(body, dgroup, calls)
+    asked = consts.memory_queries(body, {}, dgroup)
     initialized = {}
     for block in body.blocks:
         for index, op in enumerate(block.ops):
@@ -813,7 +814,7 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
                 or cell.addr.space not in CELLS
             ):
                 continue
-            after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls)
+            after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls, queries=asked)
             initialized[id(op)] = {
                 addr: fact
                 for addr, width in cells.items()

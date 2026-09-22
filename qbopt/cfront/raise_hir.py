@@ -121,10 +121,6 @@ INVERSE = {
     K.EQ: K.NE, K.NE: K.EQ, K.LT: K.GE, K.GE: K.LT, K.LE: K.GT, K.GT: K.LE,
     K.BELOW: K.ABOVE_EQ, K.ABOVE_EQ: K.BELOW, K.BELOW_EQ: K.ABOVE, K.ABOVE: K.BELOW_EQ,
 }  # fmt: skip
-SWAPPED = {
-    K.EQ: K.EQ, K.NE: K.NE, K.LT: K.GT, K.GT: K.LT, K.LE: K.GE, K.GE: K.LE,
-    K.BELOW: K.ABOVE, K.ABOVE: K.BELOW, K.BELOW_EQ: K.ABOVE_EQ, K.ABOVE_EQ: K.BELOW_EQ,
-}  # fmt: skip
 ARITHMETIC = {
     "O_PLUS": (K.ADD, True),
     "O_MINUS": (K.SUB, False),
@@ -589,10 +585,6 @@ class _Raise:
         a = self.narrowed(self.coerced(self.eval(left), left, type_), width)
         b = self.narrowed(self.coerced(self.eval(right), right, type_), width)
         test = TESTS[cg_op][0 if type_ in SIGNED else 1]
-        if isinstance(a, mir.Const):
-            a, b, test = b, a, SWAPPED[test]
-        if isinstance(a, mir.Const):
-            a = mir.Held(self.copy(a), width)
         flags = self.fresh(flags=True)
         self.op(K.SUB, (), (a, b), defines=(flags,))
         return flags, test

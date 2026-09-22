@@ -11,11 +11,12 @@ from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.hir import callmemory
 from qbopt.backend import phielim
+from qbopt.model.passes import O2
 from qbopt.optimize import rotate
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
-from qbopt.optimize import transform
 from qbopt.backend import lower_int64
+from qbopt.model.passes import Options
 from qbopt.backend import addressvalues
 from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
@@ -38,6 +39,7 @@ def optimized(
     lowered: hir.Lowered,
     target: targets.Profile,
     calls: dict[int, str] | None = None,
+    options: Options = O2,
 ) -> hir.Lowered:
     """Run the common MIR fixed point for one modern-language function."""
     module = next(one for one in program.modules if function in one.functions)
@@ -53,23 +55,7 @@ def optimized(
             for operation in block.ops
             if operation.kind is mir.Kind.CALL
         }
-    body = transform.applied(
-        lowered.body,
-        dgroup,
-        calls,
-        registers=target.register_capacity,
-        call_registers=target.call_register_capacity,
-        index_scales=target.address_scales,
-        address_forms=target.address_forms,
-        costs=target.operations,
-        max_unroll_iterations=target.max_unroll_iterations,
-        max_unrolled_operations=target.max_unrolled_operations,
-        # The real-mode frontend optimizes for a compact loop body. Complete
-        # unrolling and speculative peeling duplicate code; the scalar,
-        # recurrence, and address-strength passes remain enabled.
-        unroll_=False,
-        peel_=False,
-    )
+    body = flow.optimized(lowered.body, dgroup, calls, target, options=options)
     return replace(lowered, body=body)
 
 
@@ -78,6 +64,7 @@ def assembled(
     *,
     entry: str,
     cpu: str | targets.Profile = "386",
+    options: Options = O2,
 ) -> masm.Module:
     """Lower one modern module to allocated machine form.
 
@@ -101,11 +88,11 @@ def assembled(
         return name if name.startswith("__") else f"_{name}"
 
     for function, lowered in zip(module.functions, semantic, strict=True):
-        lowered = optimized(program, function, lowered, target)
+        lowered = optimized(program, function, lowered, target, options=options)
         physical = physicalize(program, function, lowered)
         physical = replace(
             physical,
-            lowered=optimized(program, function, physical.lowered, target, physical.calls),
+            lowered=optimized(program, function, physical.lowered, target, physical.calls, options),
         )
         # Rotation is deliberately after the scalar fixed point: counted-loop
         # analyses need the canonical pre-tested form, while final machine
@@ -195,6 +182,6 @@ def assembled(
     )
 
 
-def written(program: hir.Program, *, entry: str, source: str | Path) -> bytes:
+def written(program: hir.Program, *, entry: str, source: str | Path, options: Options = O2) -> bytes:
     """Compile a modern program directly to an OMF object."""
-    return omfwrite.written(assembled(program, entry=entry), Path(source).name)
+    return omfwrite.written(assembled(program, entry=entry, options=options), Path(source).name)

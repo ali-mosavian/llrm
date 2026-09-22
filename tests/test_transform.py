@@ -20,6 +20,42 @@ from qbopt.backend import lower
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
+
+
+def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul recomputed 595 fixed points for only 170 body objects.
+
+    Analysis of a nested candidate temporarily displaces its parent state.
+    Returning to that exact immutable parent must recover its earlier answer,
+    rather than retaining only the transaction's most recent body.
+    """
+    value = mir.Value(1, 0, variable=1)
+    copy = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (mir.Const(1, 2),),
+        kind=mir.Kind.COPY,
+        results=(mir.Held(value, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (copy,), ()),))
+    leaving = transform._leaving
+    calls = 0
+
+    def counted(state):
+        nonlocal calls
+        calls += 1
+        return leaving(state)
+
+    monkeypatch.setattr(transform, "_leaving", counted)
+    with transform._reusing_halves():
+        other = replace(body, entry=1)
+        assert transform.halves(body) == transform.halves(other)
+        assert transform.halves(body) == transform.halves(other)
+
+    assert calls == 2
 
 
 def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,8 +195,7 @@ def test_structural_candidate_pass_stages_are_named_tentative(monkeypatch) -> No
         body,
         frozenset(),
         {},
-        peel_=False,
-        unswitch_=False,
+        options=Options(peel=False, unswitch=False),
         watch=lambda stage, _state: stages.append(stage),
     )
 

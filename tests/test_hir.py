@@ -1993,20 +1993,33 @@ def test_vbdos_nibbles_screen_calls_have_fixed_stack_contracts() -> None:
         assert contract.inputs == frozenset()
 
 
-def test_qb_frontend_does_not_build_speculative_peel_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nibbles INITCOLORS spent minutes optimizing rejected 50x80 peel candidates."""
-    program = qb_driver.parsed(ROOT / "frontends/qb/fixtures/timer-basic.bas")
+def test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nibbles INITCOLORS spent minutes optimizing rejected 50x80 peel candidates.
+
+    Its size is known before cloning, as GCC estimates it; the peeler must not
+    build a candidate the target budget already refuses.
+    """
+    from qbopt.optimize import loopclone
+
+    source = tmp_path / "ARENA.BAS"
+    source.write_text(
+        "DEFINT A-Z\nDIM arena(1 TO 50, 1 TO 80)\n"
+        "FOR row = 1 TO 50\n  FOR col = 1 TO 80\n    arena(row, col) = row + col\n  NEXT col\nNEXT row\n"
+        "PRINT arena(3, 4)\n"
+    )
+    program = qb_driver.parsed(source)
     function = program.modules[0].functions[0]
     body = hir.lower(program)[0]
-    seen: dict[str, object] = {}
+    peeled = loopclone.peeled
 
-    def applied(candidate: mir.MirBody, *args: object, **kwargs: object) -> mir.MirBody:
-        seen.update(kwargs)
-        return candidate
+    def refusing(candidate: mir.MirBody, loop: object, count: int) -> "mir.MirBody | None":
+        assert count <= 16, f"cloned a {count}-trip peel candidate"
+        return peeled(candidate, loop, count)
 
-    monkeypatch.setattr(qb_compile.transform, "applied", applied)
+    monkeypatch.setattr(loopclone, "peeled", refusing)
     qb_compile.optimized(program, function, body)
-    assert seen.get("peel_", True) is False
 
 
 def test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() -> None:
@@ -2711,3 +2724,45 @@ def test_identity_phi_edge_survives_control_flow_threading() -> None:
         array_order="row-major",
     )
     assert qb_compile.object_bytes(source, "ENTPHI.BAS")
+
+
+def test_a_constant_on_the_left_of_a_comparison_still_encodes(tmp_path: Path) -> None:
+    """`1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on every array."""
+    source = tmp_path / "LEFT.BAS"
+    source.write_text('DEFINT A-Z\nDECLARE SUB Show (n)\nShow 3\nSUB Show (n)\n  IF 1 <= n THEN PRINT "YES"\nEND SUB\n')
+    program = qb_driver.parsed(source)
+
+    assert qb_compile.object_bytes(program, source.name)
+    assert "cmp 1," not in masm.text(qb_compile.assembled(program))
+
+
+def test_array_parameters_do_not_pin_private_statics_inside_their_loop() -> None:
+    """sumThree reloaded three descriptors and stored `total` after every add.
+
+    Neither the parameter pointers nor B$UBND can reach a static whose
+    address the module never hands out.
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+    head = re.search(r"    jle (L\d+_\d+)\n", procedure)
+    assert head
+    loop = procedure[procedure.index(head.group(1) + ":\n") : head.end()]
+
+    assert not re.search(r"word ptr \[(?:bx|si|di)\+(?:2|10)\]", loop)
+    assert len(re.findall(r"mov word ptr SUM_THREE\$D\d+,", loop)) <= 2  # total and index, once each
+    assert "call" not in loop
+
+
+def test_array_bounds_are_read_from_the_descriptor() -> None:
+    """Every UBOUND called B$UBND, whose unknown writes pinned all memory around it.
+
+    The descriptor holds the bounds; the call remains only where the runtime
+    would raise "Subscript out of range".
+    """
+    source = ROOT / "bench" / "parity" / "sum_three.bas"
+    text = masm.text(qb_compile.assembled(qb_driver.parsed(source)))
+    procedure = text[text.index("SUMTHREE proc") : text.index("SUMTHREE endp")]
+
+    assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
+    assert re.search(r"word ptr \[\w+\+\w+\+14\]", procedure)

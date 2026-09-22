@@ -1,15 +1,19 @@
 """Runtime integer inputs need no concrete constant to prove exact conversion."""
 
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
-import corpus
 import pytest
 
-from qbopt.analysis import floatbounds
+import corpus
 from qbopt.model import mir
-from qbopt.model.floating import Format, Precision, Rounding, Semantics
 from qbopt.optimize import transform
+from qbopt.analysis import floatbounds
+from qbopt.model.passes import Options
+from qbopt.model.floating import Format
+from qbopt.model.floating import Rounding
+from qbopt.model.floating import Precision
+from qbopt.model.floating import Semantics
 
 
 def _assert_shared_conversions(found, instructions):
@@ -30,17 +34,26 @@ def test_fpdeep_reuses_proven_finite_array_loads(tag):
     path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
-    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
-                             found.calls, blocks=partition, found=found)
-    loads = [op for block in body.blocks for op in block.ops
-             if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None]
+    body = transform.applied(
+        mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
+    )
+    loads = [
+        op
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None
+    ]
     assert not loads
-    printed = [op.args[0].n for block in body.blocks for op in block.ops
-               if op.kind is mir.Kind.ARG and len(op.args) == 1
-               and isinstance(op.args[0], mir.Const) and op.args[0].width == 4]
+    printed = [
+        op.args[0].n
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.ARG and len(op.args) == 1 and isinstance(op.args[0], mir.Const) and op.args[0].width == 4
+    ]
     expected = [144, 6, 512, 784, 14, 768, 3600, 30, 896]
     assert printed == expected + ([144, 6] if tag == "q-O" else [])
     from qbopt import wholeseg
+
     emitted = wholeseg.emitted(path.read_bytes())
     assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
     instructions = [str(one.insn) for block in corpus.partitioned(emitted.data) for one in block.insns]
@@ -49,7 +62,7 @@ def test_fpdeep_reuses_proven_finite_array_loads(tag):
 
 
 # Not 0.5: every answer from it is exact, and folding an exact value needs no integer bound.
-@pytest.mark.parametrize("bits", [0x7f800000, 0x7fc00000, 1])
+@pytest.mark.parametrize("bits", [0x7F800000, 0x7FC00000, 1])
 def test_array_reuse_requires_every_element_to_have_proven_integer_bounds(bits):
     """An infinite, NaN or denormal p(1) is not a finite-integer proof."""
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
@@ -58,9 +71,15 @@ def test_array_reuse_requires_every_element_to_have_proven_integer_bounds(bits):
     body = mir.bodies(found, partition)[0][1]
     first = body.blocks[0].ops[0]
     assert first.args == (mir.Const(0x41400000, 4),)
-    body = replace(body, blocks=tuple(replace(block, ops=tuple(
-        replace(op, args=(mir.Const(bits, 4),)) if op is first else op for op in block.ops
-    )) for block in body.blocks))
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(
+                block, ops=tuple(replace(op, args=(mir.Const(bits, 4),)) if op is first else op for op in block.ops)
+            )
+            for block in body.blocks
+        ),
+    )
     changed = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
     # A second read of p(i) with nothing written since is the first one's value.
     first = set()
@@ -80,15 +99,26 @@ def test_array_reuse_requires_every_element_to_have_proven_integer_bounds(bits):
 
 @pytest.mark.parametrize("guard", [None, "missing", "alignment", "segment", "wrap"])
 def test_finite_array_proof_requires_known_aligned_nonwrapping_bytes(guard):
-    from qbopt.analysis import floatfacts, ranges
+    from qbopt.analysis import ranges
+    from qbopt.analysis import floatfacts
+
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
-    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
-                             found.calls, blocks=partition, found=found, unroll_=False)  # Unrolled, i is a constant.
-    block, index, op = next((block, index, op) for block in body.blocks
+    body = transform.applied(
+        mir.bodies(found, partition)[0][1],
+        found.dgroup,
+        found.calls,
+        blocks=partition,
+        found=found,
+        options=Options(unroll=False),
+    )  # Unrolled, i is a constant.
+    block, index, op = next(
+        (block, index, op)
+        for block in body.blocks
         for index, op in enumerate(block.ops)
-        if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None)
+        if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None
+    )
     memory = floatfacts.cells(body, found.dgroup, found.calls)[block.at, index]
     scoped = ranges.bounded(body)[block.at]
     definitions = {value: one for block in body.blocks for one in block.ops for value in one.defines}
@@ -102,14 +132,17 @@ def test_finite_array_proof_requires_known_aligned_nonwrapping_bytes(guard):
     elif guard == "wrap":
         scoped = {arg.ref.base: ranges.Interval(0, 65535, 2)}
     assert floatbounds._memory(arg, op.floating.inputs[0], memory, scoped, definitions) == (
-        (12, 60) if guard is None else None)
+        (12, 60) if guard is None else None
+    )
 
 
 def test_integer_helper_with_a_live_clobbered_result_keeps_it_defined(monkeypatch):
     """B$FIL2 sign-extends into DX; replacing it must not discard a live DX result."""
     from iced_x86 import Register
+
     from qbopt.abi import runtime
     from qbopt.frontend import raising_float_calls
+
     path = Path("fixtures/regressions/fpi2cs-p-g2.obj")
     found = corpus.loaded(path)
     contracts = runtime.for_module(found)
@@ -123,7 +156,9 @@ def test_integer_helper_with_a_live_clobbered_result_keeps_it_defined(monkeypatc
     call = block.ops[index]
     result = next(value for value in call.defines if body.origin.get(value) == Register.EDX)
     observer = block.ops[index + 1]
-    changed = replace(block, ops=tuple(replace(op, uses=(*op.uses, result)) if op is observer else op for op in block.ops))
+    changed = replace(
+        block, ops=tuple(replace(op, uses=(*op.uses, result)) if op is observer else op for op in block.ops)
+    )
     body = replace(body, blocks=tuple(changed if one is block else one for one in body.blocks))
     raised = raise_calls(body, found, contracts)
     ops = [op for one in raised.blocks for op in one.ops]
@@ -150,16 +185,27 @@ def test_computed_runtime_integer_uses_one_conversion(tag):
 @pytest.mark.parametrize("change", ["unknown", "writes", "control", "inputs"])
 def test_helper_conversion_respects_its_effect_contract(change):
     from qbopt.abi import runtime
+
     path = Path("fixtures/regressions/fpicse-p-g2.obj")
     found = corpus.loaded(path)
     contracts = runtime.for_module(found)
-    alterations = {"unknown": {"established": False}, "writes": {"writes": runtime.Memory.ANY},
-                   "control": {"enters_user_code": True}, "inputs": {"inputs": None}}
-    contracts = {at: replace(rule, **alterations[change]) if found.calls.get(at) == "B$FILD" else rule
-                 for at, rule in contracts.items()}
+    alterations = {
+        "unknown": {"established": False},
+        "writes": {"writes": runtime.Memory.ANY},
+        "control": {"enters_user_code": True},
+        "inputs": {"inputs": None},
+    }
+    contracts = {
+        at: replace(rule, **alterations[change]) if found.calls.get(at) == "B$FILD" else rule
+        for at, rule in contracts.items()
+    }
     body = mir.bodies(found, corpus.partitioned(path), contracts)[0][1]
-    assert sum(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FILD"
-               for block in body.blocks for op in block.ops) == 2
+    assert (
+        sum(
+            op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FILD" for block in body.blocks for op in block.ops
+        )
+        == 2
+    )
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -178,6 +224,7 @@ def test_runtime_integer_conversion_is_shared_in_emitted_code(tag, program, help
     body = mir.bodies(found, corpus.partitioned(result.data))[0][1]
     converted = next(op for block in body.blocks for op in block.ops if op.name == "fild")
     from qbopt.objectfile.module import Space
+
     assert converted.loads[0].addr.space is Space.SEGMENT
     assert converted.loads[0].addr.disp == 6
 
@@ -197,14 +244,17 @@ def test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not(format, e
     assert sum(op.kind is mir.Kind.FLOAD for one in result.blocks for op in one.ops) == expected
 
 
-@pytest.mark.parametrize("kind,bounds,expected", [
-    (mir.Kind.FADD, ((-32768, 32767), (-32768, 32767)), (-65536, 65534)),
-    (mir.Kind.FMUL, ((-32768, 32767), (-32768, 32767)), None),
-    (mir.Kind.FMUL, ((-100, 100), (-100, 100)), (-10000, 10000)),
-    (mir.Kind.FSUB, ((-10, 10), (-10, 10)), (-20, 20)),
-    (mir.Kind.FDIV, ((1, 3), (1, 3)), None),
-    (mir.Kind.FADD, ((2**24, 2**24), (1, 1)), None),
-])
+@pytest.mark.parametrize(
+    "kind,bounds,expected",
+    [
+        (mir.Kind.FADD, ((-32768, 32767), (-32768, 32767)), (-65536, 65534)),
+        (mir.Kind.FMUL, ((-32768, 32767), (-32768, 32767)), None),
+        (mir.Kind.FMUL, ((-100, 100), (-100, 100)), (-10000, 10000)),
+        (mir.Kind.FSUB, ((-10, 10), (-10, 10)), (-20, 20)),
+        (mir.Kind.FDIV, ((1, 3), (1, 3)), None),
+        (mir.Kind.FADD, ((2**24, 2**24), (1, 1)), None),
+    ],
+)
 def test_dynamic_arithmetic_requires_exactness_at_every_precision(kind, bounds, expected):
     rule = Semantics((Format.EXTENDED80,) * 2, Format.EXTENDED80, Precision.DYNAMIC, Rounding.DYNAMIC)
     assert floatbounds.evaluated(kind, rule, bounds) == expected

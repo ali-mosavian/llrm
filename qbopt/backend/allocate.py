@@ -296,6 +296,9 @@ def classes(body: lir.LirBody, prefer_indexes: frozenset[int] = frozenset()) -> 
                     restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
     for value in selecting - numeric:
         restrict(value, frozenset(target.SELECTORS))
+    for one in body.insns:
+        if one.what is not None and target.far_load(one.what) and isinstance(one.what.dests[1], ir.Held):
+            restrict(one.what.dests[1].value, frozenset(target.SELECTORS))
     _word_address_roles(word_pairs, out, body, prefer_indexes)
     return out
 
@@ -1091,6 +1094,7 @@ class RegAlloc(LIRTransform):
                     opened_body, opened = spiller.unfolded_indexes(scoped, folded)
                     if opened:
                         opened_reloads = reloads
+                        before = self.frame.saved()
                         try:
                             trial = allocate(opened_body, self.pinned, reloads, protected=keep, cpu=self.cpu)
                         except Unplaced:
@@ -1123,14 +1127,18 @@ class RegAlloc(LIRTransform):
                         if (
                             trial is not None
                             and keep.isdisjoint(trial.spilled)
-                            and _traffic(opened_body, trial.spilled) < _traffic(body, got.spilled)
+                            and _traffic(opened_body, trial.spilled) + _added(scoped, opened_body)
+                            < _traffic(body, got.spilled)
                         ):
                             body, retained, got, reloads = opened_body, keep, trial, opened_reloads
+                        else:
+                            self.frame.restore(before)
                     if not retained:
                         # If the unfolded indexes still do not fit, commit
                         # them to slots and consume those slots directly in
                         # the identical dying-base adds. `spilled()` proves
                         # the same lifetime/address condition before writing.
+                        before = self.frame.saved()
                         prepared, made = (
                             spiller.spilled(scoped, folded, self.frame) if folded else (scoped, frozenset())
                         )
@@ -1143,10 +1151,15 @@ class RegAlloc(LIRTransform):
                             and keep.isdisjoint(trial.spilled)
                             # The candidate may spill ordinary cold values
                             # into normal slots. Admit it only when the whole
-                            # pre-folded trial lowers weighted traffic.
-                            and _traffic(prepared, trial.spilled) < _traffic(body, got.spilled)
+                            # pre-folded trial lowers weighted traffic --
+                            # including its own folded slots, whose values
+                            # `prepared` no longer names.
+                            and _traffic(prepared, trial.spilled) + _slot_traffic(prepared, self.frame, folded)
+                            < _traffic(body, got.spilled)
                         ):
                             body, retained, got, reloads = prepared, keep, trial, reloads | made
+                        else:
+                            self.frame.restore(before)
                 # The body-wide version is useful wherever a source cell is
                 # stable and repeatedly forms an encoded address.  Acyclic
                 # branches do not make its second reconstruction free.  Try
@@ -1317,6 +1330,40 @@ def _traffic(body: lir.LirBody, spilled: "frozenset[int]") -> float:
         for one in block.insns
         for value in (*one.defines, *one.uses)
         if value in spilled
+    )
+
+
+def _added(before: lir.LirBody, after: lir.LirBody) -> float:
+    """The instructions a plan inserted, weighted by loop depth.
+
+    Unpriced, sum_three's unfolded `add di,bx` looked free and the loop grew
+    an instruction.
+    """
+    deep = ranges.depths(after)
+    was = {block.at: len(block.insns) for block in before.blocks}
+    return sum(
+        float(ranges.PER_LEVEL ** deep.get(block.at, 0)) * max(len(block.insns) - was.get(block.at, 0), 0)
+        for block in after.blocks
+    )
+
+
+def _slot_traffic(body: lir.LirBody, frame: "Frame", values: "frozenset[int]") -> float:
+    """The memory references to these values' frame slots, weighted by loop depth."""
+    homes = {frame.slots[value] for value in values if value in frame.slots}
+    if not homes:
+        return 0.0
+    deep = ranges.depths(body)
+    return sum(
+        float(ranges.PER_LEVEL ** deep.get(block.at, 0))
+        for block in body.blocks
+        for one in block.insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem)
+        and where.addr is not None
+        and where.addr.space is Space.FRAME
+        and where.base is None
+        and where.addr.disp in homes
     )
 
 
@@ -1593,7 +1640,10 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     # `compare=False`, so a cell that just gained the register its base was
     # given compares equal to the one without it, and the shortcut returned
     # the unresolved instruction it had already replaced.
-    return replace(one, what=replace(what, dests=dests, sources=sources))
+    name = what.name
+    if target.far_load(what) and isinstance(dests[1], ir.Reg):
+        name = target.FAR_LOADS.get(dests[1].register, name)
+    return replace(one, what=replace(what, name=name, dests=dests, sources=sources))
 
 
 def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:

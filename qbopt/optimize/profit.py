@@ -10,7 +10,6 @@ from qbopt.analysis import loops
 from qbopt.analysis import liveness
 from qbopt.model.passes import OperationCosts
 
-
 _ALU = frozenset(
     {
         mir.Kind.ADD,
@@ -60,11 +59,7 @@ def operation(one: mir.Op, costs: OperationCosts) -> int | None:
     if one.kind is mir.Kind.FSTORE:
         return costs.float_store
     folded_update = len(one.loads) == len(one.stores) == 1 and one.loads == one.stores
-    memory = (
-        costs.memory_update
-        if folded_update
-        else len(one.loads) * costs.load + len(one.stores) * costs.store
-    )
+    memory = costs.memory_update if folded_update else len(one.loads) * costs.load + len(one.stores) * costs.store
     if one.kind in (mir.Kind.LOAD, mir.Kind.STORE):
         return memory
     if folded_update:
@@ -77,6 +72,13 @@ def operation(one: mir.Op, costs: OperationCosts) -> int | None:
         work = costs.multiply
     elif one.kind in (mir.Kind.DIV, mir.Kind.REM, mir.Kind.DIVMOD, mir.Kind.UDIVMOD):
         work = costs.divide
+    # A fixed-point product is a widening multiply then a shift back; a
+    # quotient, the shift first. Unpriced, one left nbody's whole body
+    # unpriceable and every loop candidate was built only to be refused.
+    elif one.kind is mir.Kind.FIXED_MUL:
+        work = costs.multiply + costs.shift
+    elif one.kind is mir.Kind.FIXED_DIV:
+        work = costs.divide + costs.shift
     elif one.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR):
         work = costs.shift
     elif one.kind in (mir.Kind.ADDRESS, mir.Kind.PTR_OFFSET):
@@ -186,9 +188,7 @@ def spill_risk(
                 uses[value] = uses.get(value, 0) + each
         for op in block.ops:
             floating.update(
-                arg.value
-                for arg in (*op.args, *op.results)
-                if isinstance(arg, mir.Held) and arg.width == 10
+                arg.value for arg in (*op.args, *op.results) if isinstance(arg, mir.Held) and arg.width == 10
             )
             for value in op.defines:
                 definitions[value] = definitions.get(value, 0) + each
@@ -215,9 +215,7 @@ def spill_risk(
             return None
         if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], mir.Const):
             return costs.move
-        if op.kind is mir.Kind.ADDRESS and len(op.args) == 1 and isinstance(
-            op.args[0], (mir.FrameAddress, mir.Symbol)
-        ):
+        if op.kind is mir.Kind.ADDRESS and len(op.args) == 1 and isinstance(op.args[0], (mir.FrameAddress, mir.Symbol)):
             return costs.address
         return None
 
@@ -233,9 +231,7 @@ def spill_risk(
 
     def account(alive: set[mir.Value]) -> None:
         nonlocal risk
-        values = [
-            value for value in alive if not value.flags and value not in floating and value not in spilled
-        ]
+        values = [value for value in alive if not value.flags and value not in floating and value not in spilled]
         excess = len(values) - capacity
         if excess > 0:
             selected = sorted(values, key=lambda value: (traffic.get(value, 0), value.id))[:excess]

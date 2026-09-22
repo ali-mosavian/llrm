@@ -154,7 +154,7 @@ def checkpoint(op: mir.Op) -> bool:
 
 
 def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
-             dgroup: frozenset[int], known: dict | None = None) -> consts.Cells | None:
+             dgroup: frozenset[int], known: dict | None = None, queries=None) -> consts.Cells | None:
     """Exact memory facts after a caller-proven repetition of a straight-line body.
 
     Each storage conversion is evaluated in order on every iteration. This
@@ -206,7 +206,7 @@ def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
                     return None
                 store = replace(op, kind=mir.Kind.STORE, args=(mir.Const(bits, ref.width),),
                                 stores=(ref,), uses=())
-                memory = consts._kills(memory, store, integers, dgroup, {})
+                memory = consts._kills(memory, store, integers, dgroup, {}, queries=queries)
             else:
                 if op.stores or len(op.results) != 1 or not isinstance(op.results[0], mir.Held):
                     return None
@@ -262,8 +262,10 @@ def loop_exits(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> tuple[
         if len(counts) != 1:
             continue
         count = counts.pop()
-        initial = consts._kills(memory[entry.at, len(entry.ops) - 1], entry.ops[-1], integers, dgroup, calls)
-        final = repeated(latch.ops, count, initial, dgroup, integers)
+        asked = consts.memory_queries(body, integers, dgroup)
+        initial = consts._kills(memory[entry.at, len(entry.ops) - 1], entry.ops[-1], integers, dgroup, calls,
+                                queries=asked)
+        final = repeated(latch.ops, count, initial, dgroup, integers, asked)
         if final is None:
             continue
         facts = tuple((ref, consts._cell(final, ref)) for ref in stored)

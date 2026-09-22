@@ -1,7 +1,10 @@
 """Select complete far-pointer loads before allocation loses their address.
 
-Open Watcom's C front end represents a far-pointer field load as two word
-loads: its offset followed by its selector.  The final physical peephole can
+A far pointer reaches lowering as two word loads -- its offset, then its
+selector -- whether a frontend spelt it so or `narrow` split a dword read only
+through its halves.  They are one far load when the high word is only ever a
+cell's selector; that use, not a source type, is what makes `les` the right
+instruction.  The final physical peephole can
 recognise that shape only when both loads still use the same physical address
 register.  Under pressure the allocator rematerializes a near owner for each
 word, so it is too late there even though the pre-allocation LIR still proves
@@ -10,7 +13,7 @@ the words are adjacent parts of one cell.
 This is lowering, not an LIR optimization pass.  It chooses the one x86 form
 for a machine-neutral pair of loads while the pair's address identity is
 available; allocation remains responsible for giving the offset an address
-register and the selector ES.
+register and the selector ES, FS or GS.
 """
 
 from dataclasses import replace
@@ -19,7 +22,7 @@ from qbopt.model import ir
 from qbopt.model import lir
 
 
-def selected(insns: tuple[lir.Insn, ...]) -> tuple[lir.Insn, ...]:
+def selected(insns: tuple[lir.Insn, ...], selectors: frozenset[int]) -> tuple[lir.Insn, ...]:
     """Select private ``mov offset,[p]; mov selector,[p+2]`` pairs as ``les``.
 
     A combined load reads both words before writing either result, unlike the
@@ -35,7 +38,7 @@ def selected(insns: tuple[lir.Insn, ...]) -> tuple[lir.Insn, ...]:
         if at in erased:
             continue
         second = insns[at + 1]
-        joined = _pair(first, second)
+        joined = _pair(first, second, selectors)
         if joined is None:
             continue
         made[at] = joined
@@ -46,7 +49,7 @@ def selected(insns: tuple[lir.Insn, ...]) -> tuple[lir.Insn, ...]:
     )
 
 
-def _pair(first: lir.Insn, second: lir.Insn) -> lir.Insn | None:
+def _pair(first: lir.Insn, second: lir.Insn, selectors: frozenset[int]) -> lir.Insn | None:
     if (
         not _plain(first)
         or not _plain(second)
@@ -66,7 +69,7 @@ def _pair(first: lir.Insn, second: lir.Insn) -> lir.Insn | None:
             case _:
                 return None
     (first_dest, first_cell), (second_dest, second_cell) = words
-    if not _next_word(first_cell, second_cell) or not _far_pointer_words(first, second):
+    if not _next_word(first_cell, second_cell) or second_dest.value not in selectors or _volatile(first, second):
         return None
     # A fixed address survives allocation unchanged.  Leave its two semantic
     # values independent so spilling may rematerialize either word from the
@@ -81,10 +84,8 @@ def _pair(first: lir.Insn, second: lir.Insn) -> lir.Insn | None:
     defined = {first_dest.value, second_dest.value}
     if any(value.value in defined for cell in (first_cell, second_cell) for value in ir.values(cell)):
         return None
-    # C's far-pointer representation is low offset then high selector.  The
-    # selector is confined by its later far-cell uses to a segment register;
-    # the allocator's existing selector order prefers ES, making LES the
-    # exact one-instruction load without introducing a fixed-register pin.
+    # Spelt `les`; the rewriter respells it for the segment register the
+    # selector is given.
     what = ir.Semantics(ir.Operation.MOVE, "les", (first_dest, second_dest), (replace(first_cell, width=4),))
     return replace(
         first,
@@ -121,21 +122,26 @@ def _next_word(low: ir.Mem, high: ir.Mem) -> bool:
     return moved == 2 and high.offset - low.offset in (0, 2) or moved == 0 and high.offset == low.offset + 2
 
 
-def _far_pointer_words(first: lir.Insn, second: lir.Insn) -> bool:
-    """Whether the two loads are adjacent halves of one typed far pointer.
+def _volatile(first: lir.Insn, second: lir.Insn) -> bool:
+    return any(ref.volatile for one in (first, second) if one.op is not None for ref in one.op.loads)
 
-    Adjacent machine addresses alone prove nothing: two near parameters also
-    occupy consecutive words.  The C raise records both words of a far pointer
-    with the ``pointer4`` access type, so require that semantic fact as well as
-    the exact encoding-level address proof above.  Allocation provenance is an
-    aliasing fact, not part of the value's type: a pointer field reached through
-    a dynamic far owner has no named allocation even though its two adjacent
-    words are still one typed value.
+
+def selectors(made: dict[int, tuple[lir.Insn, ...]], kept: frozenset[int]) -> frozenset[int]:
+    """Values read only as a cell's selector: what makes a far load the right load.
+
+    `kept` holds values a phi reads, which no instruction here shows.
     """
-    for one in (first, second):
-        loaded = () if one.op is None else one.op.loads
-        if len(loaded) != 1 or loaded[0].width != 2 or loaded[0].volatile or not loaded[0].typed:
-            return False
-        if loaded[0].typed[0] != "pointer4":
-            return False
-    return True
+    selecting: set[int] = set()
+    numeric: set[int] = set(kept)
+    for block in made.values():
+        for one in block:
+            numeric.update(held.value for held, _ in (*one.requires, *one.delivers))
+            if one.what is None:
+                continue
+            for where in (*one.what.dests, *one.what.sources):
+                if isinstance(where, ir.Mem):
+                    numeric.update(held.value for held in (where.base, where.index) if held is not None)
+                    if where.selector is not None:
+                        selecting.add(where.selector.value)
+            numeric.update(where.value for where in one.what.sources if isinstance(where, ir.Held))
+    return frozenset(selecting - numeric)

@@ -332,9 +332,11 @@ def calls_annotated(
                 visible.update(_whole(actual, facts.escaped_before.get(op.at, ())))
                 effect = Summary(frozenset(visible), frozenset(visible))
             if effect.unknown_read:
-                effect = replace(effect, reads=effect.reads | UNKNOWN.slices)
+                visible = frozenset(_whole(actual, facts.escaped_before.get(op.at, ())))
+                effect = replace(effect, reads=effect.reads | (visible or UNKNOWN.slices))
             if effect.unknown_write:
-                effect = replace(effect, writes=effect.writes | UNKNOWN.slices)
+                visible = frozenset(_whole(actual, facts.escaped_before.get(op.at, ())))
+                effect = replace(effect, writes=effect.writes | (visible or UNKNOWN.slices))
             loads = tuple(reference(one) for one in sorted(effect.reads, key=repr))
             stores = tuple(reference(one) for one in sorted(effect.writes, key=repr))
             ops.append(
@@ -543,11 +545,42 @@ def points_to(
     escape_in: dict[int, set[memory.Object]] = {block.at: set() for block in body.blocks}
     escape_out: dict[int, set[memory.Object]] = {block.at: set() for block in body.blocks}
     escaped_before: dict[int, frozenset[memory.Object]] = {}
+    pointer_fields: dict[memory.Object, set[memory.Object]] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if not op.stores:
+                continue
+            source = _union(values.get(arg.value) for arg in op.args if isinstance(arg, mir.Held))
+            if source is None:
+                continue
+            targets = {
+                one.object
+                for ref in op.stores
+                if (provenance := _resolved_reference(ref, values)) is not None
+                for one in provenance.slices
+            }
+            for target in targets:
+                pointer_fields.setdefault(target, set()).update(one.object for one in source.slices)
+
+    def pointees(objects: set[memory.Object], cells: dict) -> set[memory.Object]:
+        """Close publication through pointer-valued fields of known objects."""
+        reached = set(objects)
+        while True:
+            before = len(reached)
+            for key, provenance in cells.items():
+                if isinstance(key, tuple) and len(key) == 3 and isinstance(key[0], memory.Object) and key[0] in reached:
+                    reached.update(one.object for one in provenance.slices)
+            for object_ in tuple(reached):
+                reached.update(pointer_fields.get(object_, ()))
+            if len(reached) == before:
+                return reached
+
     while True:
         before = {at: set(one) for at, one in escape_out.items()}
         for block in body.blocks:
             state = set().union(*(escape_out[one] for one in predecessors.get(block.at, ())))
             escape_in[block.at] = set(state)
+            cells = dict(incoming[block.at])
             for op in block.ops:
                 escaped_before[op.at] = frozenset(set(escaped_before.get(op.at, ())) | state)
                 newly = set()
@@ -558,6 +591,10 @@ def points_to(
                     newly.update(
                         one.object for index in selected if 0 <= index < len(actual) for one in actual[index].slices
                     )
+                if op.kind is mir.Kind.CALL:
+                    for arg in op.args:
+                        if isinstance(arg, mir.Held) and arg.value in values:
+                            newly.update(one.object for one in values[arg.value].slices)
                 if op.kind in (mir.Kind.RETURN, mir.Kind.ESCAPE):
                     for value in op.uses:
                         if value in values:
@@ -575,7 +612,15 @@ def points_to(
                         for arg in op.args:
                             if isinstance(arg, mir.Held) and arg.value in values:
                                 newly.update(one.object for one in values[arg.value].slices)
-                state.update(newly)
+                    source = _union(values.get(arg.value) for arg in op.args if isinstance(arg, mir.Held))
+                    for ref in op.stores:
+                        provenance = _resolved_reference(ref, values)
+                        key = _cell_key(replace(ref, provenance=provenance))
+                        cells = {old: fact for old, fact in cells.items() if old == key or not _keys_overlap(old, key)}
+                        if key is not None and source is not None:
+                            cells[key] = source
+                state.update(pointees(newly, cells))
+                escaped_before[op.at] = frozenset(set(escaped_before.get(op.at, ())) | state)
             escape_out[block.at] = state
         if escape_out == before:
             break
@@ -693,6 +738,41 @@ def congruences(body: mir.MirBody) -> dict[mir.Value, tuple[int, int]]:
             return result
 
 
+def named_bytes(body: mir.MirBody) -> dict:
+    """The object and offset each directly addressed byte is, as the body's own references name it.
+
+    Keyed by address, and by (space, index) for a space that is one object
+    at its own displacements. A cell known only by its address takes its
+    object from here, so it carries the same object facts every other
+    reference to it does.
+    """
+    out: dict = {}
+    refs = [ref for ref, _ in body.initial]
+    for block in body.blocks:
+        for op in block.ops:
+            cells = (arg.ref for arg in (*op.args, *op.results) if isinstance(arg, mir.Cell))
+            refs.extend((*op.loads, *op.stores, *cells, *(ref for ref, _ in op.memory_values)))
+    for ref in map(mir._symbolic_ref, refs):
+        if ref.provenance is None or ref.base is not None or ref.segment is not None or ref.addr is None:
+            continue
+        if ref.addr.base or len(ref.provenance.slices) != 1:
+            continue
+        one = next(iter(ref.provenance.slices))
+        if one.stride != 1 or one.high + one.width - 1 - one.low != ref.width:
+            continue
+        for byte in range(ref.width):
+            at, named = ref.addr.plus(byte), (one.object, one.low + byte)
+            out[at] = named if out.get(at, named) == named else None
+    named = {at: one for at, one in out.items() if one is not None}
+    # A space whose every named byte is one object at its own displacement
+    # is that object throughout: BC's segments and frame are.
+    spaces: dict = {}
+    for at, (object_, offset) in named.items():
+        key = (at.space, at.index)
+        spaces[key] = object_ if offset == at.disp and spaces.get(key, object_) == object_ else None
+    return named | {key: object_ for key, object_ in spaces.items() if object_ is not None}
+
+
 def annotated(body: mir.MirBody) -> mir.MirBody:
     """Attach solved provenance to every indirect reference in a body."""
     facts = points_to(body)
@@ -743,6 +823,10 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
             # arbitrary SP-relative references conservative; the operation's
             # semantic role is the proof, not the address spelling.
             excludes = (*excludes, mir.WHOLE_FRAME)
+        if outgoing and ref.space is Space.STACK and got is not None:
+            got = memory.Provenance(
+                frozenset(one for one in got.slices if one.object.kind is not memory.Kind.FRAME), got.restrict
+            )
         return (
             replace(ref, provenance=got, space=space, excludes=excludes)
             if got != ref.provenance or space is not ref.space or excludes != ref.excludes

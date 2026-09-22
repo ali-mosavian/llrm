@@ -1,17 +1,20 @@
 import re
 import json
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
 from qbopt import hir
 from qbopt.model import mir
-from qbopt.analysis import induction
-from qbopt.analysis import loops
+from qbopt.hir import execute
 from qbopt.backend import masm
-from qbopt.backend import cpu as targets
+from qbopt.analysis import loops
+from qbopt.analysis import induction
 from qbopt.backend import lower_int64
+from qbopt.model.passes import LEVELS
+from qbopt.model.passes import Options
+from qbopt.backend import cpu as targets
 from qbopt.frontend.modern import driver
 from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern_compile
@@ -22,6 +25,7 @@ PRIMITIVES = ROOT / "fixtures" / "modern" / "primitives.mod"
 NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
 SUM = ROOT / "fixtures" / "modern" / "sum.mod"
 FIXED = ROOT / "fixtures" / "modern" / "fixed.mod"
+SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.mod"
 STARTUP = ROOT / "runtime" / "modern" / "start.asm"
 RUNTIME = ROOT / "runtime" / "modern" / "rt.c"
 
@@ -90,6 +94,7 @@ def test_all_primitive_types_cross_hir_with_their_exact_representation() -> None
         "f32",
         "f64",
         "string",
+        "addr",
     }
     integral_names = ("char", "i8", "u8", "i16", "u16", "i32", "u32")
     integral = {name: (types[name].width, types[name].signed) for name in integral_names}
@@ -298,7 +303,8 @@ def test_nbody_position_loop_uses_one_end_relative_byte_offset() -> None:
     temporaries, and a separate compare.  One -96,+16 byte recurrence can
     address the fields and terminate on the step's own zero flag.
     """
-    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+    # -O2 unrolls the loop away.
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main", options=LEVELS["Os"]))
     loop = assembly.split("L0_18:\n", 1)[1].split("    jne L0_18\n", 1)[0]
 
     assert "mov si, ax" not in loop
@@ -326,7 +332,8 @@ def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
     address chains because their identity comparison hid that both byte
     offsets are the same injective encoding of those indices.
     """
-    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
+    # -O2 unrolls the loop away.
+    assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main", options=LEVELS["Os"]))
     interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
     force_loops = assembly.split("L0_3:\n", 1)[1].split("L0_9:\n", 1)[0]
 
@@ -340,23 +347,18 @@ def test_nbody_identity_uses_the_paired_byte_recurrences() -> None:
     assert len(re.findall(r"    mov (?:[sd]i|word ptr \[[^]]+\]), 65440\n", force_loops)) == 2
 
 
-def test_nbody_velocity_updates_write_the_array_cells_in_place() -> None:
-    """nbody loaded each velocity field, added its acceleration, then stored it.
+def test_nbody_velocity_fields_are_stored_once_per_update() -> None:
+    """nbody stored vel.x after `+= acc.x`, stored vel.y, then reloaded vel.x for `-= vel.x / 16`.
 
-    The destination is private to the compound update, so x86 can select its
-    memory-destination ADD directly.  Keeping the source load is both smaller
-    and one register cheaper than materializing the old field value as well.
+    Both fields are displacements off one base, so the store at +12 cannot
+    reach +8: the first store is dead and the value stays in a register.
     """
     assembly = masm.text(modern_compile.assembled(driver.parsed(NBODY), entry="main"))
     interaction = assembly.split("L0_7:\n", 1)[1].split("L0_2:\n", 1)[0]
 
-    assert re.search(r"    add dword ptr \[bp\+[sd]i\+8\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
-    assert re.search(r"    add dword ptr \[bp\+[sd]i\+12\], e(?:ax|bx|cx|dx|si|di)\n", interaction)
-    assert not re.search(
-        r"    mov (?P<temporary>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+[sd]i\+(?:8|12)\]\n"
-        r"    add (?P=temporary),",
-        interaction,
-    )
+    for field in (8, 12):
+        assert len(re.findall(rf"dword ptr \[bp\+[sd]i\+{field}\], e(?:ax|bx|cx|dx|si|di)\n", interaction)) == 1
+        assert len(re.findall(rf"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i\+{field}\]\n", interaction)) == 1
 
 
 def test_counted_struct_loop_uses_its_record_width_as_the_byte_stride(tmp_path: Path) -> None:
@@ -387,7 +389,8 @@ fn main() -> i16:
 """
     )
 
-    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main"))
+    # -O2 unrolls the loop away.
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", options=LEVELS["Os"]))
 
     loop = re.search(
         r"    mov (?P<offset>[sd]i), 65486\n"
@@ -403,6 +406,46 @@ fn main() -> i16:
     assert f"dword ptr [bp+{offset}+2]" in loop.group("body")
     assert f"dword ptr [bp+{offset}+6]" in loop.group("body")
     assert f"shl {offset}" not in assembly
+
+
+def test_os_copies_no_loop_into_larger_code(tmp_path: Path) -> None:
+    """-O2 unrolls the five-record update from 54 instructions to 81.
+
+    -Os is GCC's UL_NO_GROWTH: never larger than not copying at all.
+    """
+    source = tmp_path / "stride.mod"
+    source.write_text(
+        """\
+struct sample:
+    tag: i16
+    value: i32
+    delta: i32
+
+fn update() -> i32:
+    var samples: [sample; 5] = [
+        sample { tag: 0, value: 1, delta: 2 },
+        sample { tag: 0, value: 2, delta: 3 },
+        sample { tag: 0, value: 3, delta: 4 },
+        sample { tag: 0, value: 4, delta: 5 },
+        sample { tag: 0, value: 5, delta: 6 },
+    ]
+    for current in &mut samples:
+        current.value += current.delta
+    return samples[0].value + samples[4].value
+
+fn main() -> i16:
+    update()
+    return 0
+"""
+    )
+
+    def size(options: Options) -> int:
+        text = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", options=options))
+        return sum(line.startswith("    ") for line in text.splitlines())
+
+    uncopied = size(Options(unroll=False, peel=False))
+    assert size(LEVELS["O2"]) > uncopied
+    assert size(LEVELS["Os"]) <= uncopied
 
 
 def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
@@ -425,8 +468,8 @@ def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
     assert "mov word ptr [bp-8], 3" in assembly
 
 
-def test_borrowed_array_call_passes_element_zero_not_its_descriptor(tmp_path: Path) -> None:
-    """The systems ABI exposes a direct payload pointer while metadata stays at negative offsets."""
+def test_borrowed_array_call_builds_one_view_from_the_direct_payload(tmp_path: Path) -> None:
+    """A slice view carries one direct payload pointer without a hidden length argument."""
     source = tmp_path / "array_borrow.mod"
     source.write_text(
         "fn bump(values: &mut [u16]) -> void:\n"
@@ -440,11 +483,20 @@ def test_borrowed_array_call_passes_element_zero_not_its_descriptor(tmp_path: Pa
     program = driver.parsed(source)
     caller = next(function for function in program.modules[0].functions if function.name == "main")
     values = next(place for place in caller.places if place.name == "values")
-    address = next(
+    addresses = [
         instruction for block in caller.blocks for instruction in block.instructions if instruction.op is hir.Op.ADDRESS
+    ]
+    payload_address = next(one for one in addresses if one.operands == (hir.PlaceRef(values.id),))
+    view = next(place for place in caller.places if place.name == "$slice_values")
+    view_address = next(one for one in addresses if one.operands == (hir.PlaceRef(view.id),))
+    call = next(
+        instruction
+        for block in caller.blocks
+        for instruction in block.instructions
+        if instruction.op is hir.Op.CALL and instruction.callee == "bump"
     )
-    assert address.operands == (hir.PlaceRef(values.id),)
-    pointer = next(value for value in caller.values if value.id == address.results[0])
+    assert call.operands == (hir.ValueRef(view_address.results[0]),)
+    pointer = next(value for value in caller.values if value.id == payload_address.results[0])
     pointer_type = next(type_ for type_ in program.modules[0].types if type_.id == pointer.type)
     assert pointer_type.width == 4
     assert pointer_type.address is hir.AddressKind.FAR
@@ -486,13 +538,14 @@ def test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() 
     assert all(f", {value}" in main for value in range(1, 7))
 
 
-def test_array_parameter_is_one_unsized_payload_pointer() -> None:
-    """sum used to repeat `[i16; 6]` even though the prefix is the runtime extent."""
+def test_array_parameter_is_one_unsized_view_pointer() -> None:
+    """A slice passes one descriptor pointer, never a pointer-plus-length pair."""
     program = driver.parsed(SUM)
     module = program.modules[0]
     function = next(one for one in module.functions if one.name == "sum")
     pointer = next(one for one in module.types if one.id == function.values[0].type)
-    element = next(one for one in module.types if one.id == pointer.element)
+    descriptor = next(one for one in module.types if one.id == pointer.element)
+    element = next(one for one in module.types if one.id == descriptor.element)
     metadata = next(one for one in module.types if one.name == "u16")
     descriptor_loads = [
         instruction.operands[0]
@@ -504,6 +557,7 @@ def test_array_parameter_is_one_unsized_payload_pointer() -> None:
     assert len(function.parameters) == 1
     assert pointer.kind is hir.TypeKind.POINTER
     assert pointer.rank == 1
+    assert (descriptor.kind, descriptor.width) == (hir.TypeKind.OPAQUE, 8)
     assert element.name == "i16"
     assert descriptor_loads == [hir.DescriptorPlace(function.parameters[0], hir.DescriptorField.LENGTH, metadata.id)]
 
@@ -518,6 +572,18 @@ def test_runtime_bounded_array_loop_advances_its_payload_address() -> None:
     assert "xor ax, ax" in function
     assert "dec " not in function
     assert re.search(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b", hot)
+
+
+def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> None:
+    """sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main"))
+    main = assembly.split("_main proc far", 1)[1].split("call far ptr _sum_three", 1)[0]
+    initializers = [
+        line.strip() for line in main.splitlines() if re.search(r"mov word ptr \[[^]]+-(?:8|20|32)\],", line)
+    ]
+
+    assert len(initializers) == 12
+    assert all("bp" in line for line in initializers)
 
 
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
@@ -573,3 +639,184 @@ def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path
 
     with pytest.raises(driver.FrontendError, match="omit the length"):
         driver.parsed(source)
+
+
+def test_scoped_array_range_is_one_descriptor_pointer_and_executes(tmp_path: Path) -> None:
+    """An interior range cannot borrow the owner's prefix as its own descriptor."""
+    source = tmp_path / "slice.mod"
+    source.write_text(
+        "fn sum(values: &[i16]) -> i16:\n"
+        "    var total: i16 = 0\n"
+        "    for value in &values:\n"
+        "        total += value\n"
+        "    return total\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        "    return sum(&values[1..3])\n"
+    )
+
+    program = driver.parsed(source)
+    function = next(one for one in program.modules[0].functions if one.name == "sum")
+    pointer = next(one for one in program.modules[0].types if one.id == function.values[0].type)
+
+    assert len(function.parameters) == 1
+    assert pointer.kind is hir.TypeKind.POINTER
+    assert pointer.width == 4
+    assert pointer.rank == 1
+    assert execute.run(program, "main").value == 5
+
+
+def test_scoped_range_iteration_uses_only_the_selected_elements(tmp_path: Path) -> None:
+    source = tmp_path / "slice_loop.mod"
+    source.write_text(
+        "fn main() -> i16:\n"
+        "    let values: [i16; 5] = [1, 2, 4, 8, 16]\n"
+        "    var total: i16 = 0\n"
+        "    for value in &values[1..4]:\n"
+        "        total += value\n"
+        "    return total\n"
+    )
+
+    assert execute.run(driver.parsed(source), "main").value == 14
+
+
+def test_data_is_an_explicit_pointer_escape_hatch(tmp_path: Path) -> None:
+    source = tmp_path / "data.mod"
+    source.write_text(
+        "fn data(values: &[i16]) -> addr:\n"
+        "    return values.data()\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 2] = [4, 9]\n"
+        "    data(&values)\n"
+        "    return 0\n"
+    )
+
+    program = driver.parsed(source)
+    types = {one.name: one for one in program.modules[0].types}
+    assert types["addr"].kind is hir.TypeKind.POINTER
+    assert (types["addr"].width, types["addr"].address) == (4, hir.AddressKind.FAR)
+    assert modern_compile.written(program, entry="main", source=source)
+
+
+def test_string_descriptor_methods_and_value_iteration_need_no_runtime(tmp_path: Path) -> None:
+    source = tmp_path / "string_view.mod"
+    source.write_text(
+        "fn first(text: string) -> char:\n"
+        "    for byte in text:\n"
+        "        return byte\n"
+        "    return '\\0'\n"
+        "fn size(text: string) -> u16:\n"
+        "    return text.len() + text.capacity()\n"
+        "fn main() -> u16:\n"
+        '    let text: string = "abc"\n'
+        "    if first(text) == 'a':\n"
+        "        return size(text)\n"
+        "    return 0\n"
+    )
+
+    program = driver.parsed(source)
+    assert execute.run(program, "main").value == 6
+    assert all(callable_.name not in {"len", "capacity", "iter", "next"} for callable_ in program.modules[0].callables)
+
+
+def test_return_inside_sequence_iteration_reaches_object_generation(tmp_path: Path) -> None:
+    """`first` once left a dead increment block with non-dominating SSA values."""
+    source = tmp_path / "first.mod"
+    source.write_text(
+        "fn first(text: string) -> char:\n"
+        "    for byte in text:\n"
+        "        return byte\n"
+        "    return '\\0'\n"
+        "fn main() -> i16:\n"
+        "    if first(\"metal\") == 'm':\n"
+        '        print("ok")\n'
+        "        return 0\n"
+        "    return 1\n"
+    )
+
+    program = driver.parsed(source)
+    assert execute.run(program, "main").output == "ok\n"
+    assert modern_compile.written(program, entry="main", source=source)
+
+
+def test_bounded_comprehension_materializes_and_generator_fuses(tmp_path: Path) -> None:
+    source = tmp_path / "comprehension.mod"
+    source.write_text(
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        "    let doubled = [value * 2 for value in values]\n"
+        "    var total: i16 = 0\n"
+        "    for value in (item + 1 for item in doubled):\n"
+        "        total += value\n"
+        "    return total\n"
+    )
+
+    program = driver.parsed(source)
+    assert execute.run(program, "main").value == 24
+    call_names = {one.name for one in program.modules[0].callables}
+    assert not {"iter", "next", "collect", "append"} & call_names
+    assert modern_compile.written(program, entry="main", source=source)
+
+
+def test_dictionary_comprehension_deduplicates_and_has_explicit_lookup(tmp_path: Path) -> None:
+    source = tmp_path / "dictionary.mod"
+    source.write_text(
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 1, 3]\n"
+        "    let table = {item: item * 10 for item in values}\n"
+        "    return table.get(1, 0) + table.get(3, 0) + table.get(9, 5)\n"
+        "fn count() -> u16:\n"
+        "    let values: [i16; 4] = [1, 2, 1, 3]\n"
+        "    let table = {item: item * 10 for item in values}\n"
+        "    return table.len()\n"
+    )
+
+    program = driver.parsed(source)
+    assert execute.run(program, "main").value == 45
+    assert execute.run(program, "count").value == 3
+    assert modern_compile.written(program, entry="main", source=source)
+
+
+def test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round(monkeypatch: pytest.MonkeyPatch) -> None:
+    """nbody rebuilt and re-priced the same rejected unroll every fixed-point round."""
+    from collections import Counter
+
+    from qbopt.optimize import unroll
+
+    real = unroll._rejection
+    rejected: Counter = Counter()
+
+    def recording(before, after, latch, count, where):
+        why = real(before, after, latch, count, where)
+        if why is not None:
+            rejected[unroll._signature(before, latch, count, where)] += 1
+        return why
+
+    monkeypatch.setattr(unroll, "_rejection", recording)
+    modern_compile.assembled(driver.parsed(NBODY), entry="main")
+
+    assert rejected
+    assert max(rejected.values()) == 1
+
+
+def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
+    """Unpriced FIXED_MUL left nbody unpriceable, so every loop copy was built only to be refused."""
+    from qbopt import hir
+    from qbopt.backend import cpu
+    from qbopt.optimize import profit
+
+    source = tmp_path / "fixed.mod"
+    source.write_text(
+        "type fixed16 = fixed i32, fraction=16\n\n"
+        "fn scaled(left: fixed16, right: fixed16) -> fixed16:\n"
+        "    return left * right / right\n\n"
+        "fn main() -> i16:\n"
+        "    scaled(1.5, 2.25)\n"
+        "    return 0\n"
+    )
+    costs = cpu.profile("386").operations
+    bodies = [one.body for one in hir.lower(driver.parsed(source))]
+    kinds = {op.kind for body in bodies for block in body.blocks for op in block.ops}
+
+    assert {mir.Kind.FIXED_MUL, mir.Kind.FIXED_DIV} <= kinds
+    assert all(profit.static(body, costs) is not None for body in bodies)

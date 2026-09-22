@@ -287,6 +287,15 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
         for op in block.ops:
             if op.kind not in publishing and not op.barrier and not op.exits:
                 continue
+            # Interprocedural summaries spell a callee's reachable memory as
+            # explicit call loads/stores.  Those canonical objects are
+            # observable even when ABI physicalization has split the pointer
+            # value that originally led to them.
+            if op.kind is mir.Kind.CALL:
+                for ref in op.loads:
+                    provenance = pointers.reference(ref)
+                    if provenance is not None:
+                        published.update(one.object for one in provenance.slices)
             values = set(op.uses) | set(op.exits)
             values.update(arg.value for arg in op.args if isinstance(arg, mir.Held))
             for value in values:

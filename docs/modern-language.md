@@ -6,7 +6,7 @@ This root-package frontend implements the first source-language slice:
 
 - indentation-delimited functions and blocks;
 - the complete scalar set: `bool`, `char`, signed and unsigned 8/16/32-bit
-  integers, `f32`, `f64`, and `void`;
+  integers, `f32`, `f64`, `addr`, and `void`;
 - named signed fixed-point types backed by `i16` or `i32` storage;
 - typed parameters and return values;
 - `let` and `var` bindings;
@@ -18,8 +18,10 @@ This root-package frontend implements the first source-language slice:
   literals, indexed loads and stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
-- scoped `&T` and `&mut T` parameters, including direct payload pointers for
-  arrays of primitives or structs written `&[T]` and `&mut [T]`; and
+- scoped `&T` and `&mut T` parameters, including unsized array views written
+  `&[T]` and `&mut [T]`;
+- fixed-range slices, bounded list and dictionary comprehensions, and fused
+  non-escaping generators; and
 - byte strings, allocation-free f-strings, and `print`.
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
@@ -80,18 +82,24 @@ is part of the ABI and is initialized even when the current source never asks
 for it.
 
 An array parameter is an unsized borrowed view, written `values: &[T]` or
-`values: &mut [T]`. A call passes exactly one far payload pointer; it does not
-pass a second length argument and the parameter type does not repeat the
-caller's fixed length. Indexing uses that pointer directly. Iteration and
-metadata methods recover `length` or `capacity` from the descriptor at negative
-offsets, so the same function accepts every fixed `[T; N]` array.
+`values: &mut [T]`. A call passes exactly one far pointer; it never passes a
+separate hidden length. The pointer names an eight-byte scoped view containing
+`length`, `capacity`, and a 16:16 payload pointer. This indirection is necessary
+for `&values[start..end]`: an interior payload cannot claim the owner's prefix
+as its own descriptor. The view is stack-scoped and has no allocator or
+destructor. Owned arrays retain the direct prefix-plus-payload representation
+above. `array.data()` is the explicit systems escape hatch: it returns an
+opaque far `addr` pointing directly at element zero. A string's `data()` keeps
+its native near `string` pointer.
 
-Fixed arrays have a zero lower bound. `array.len()`, `array.capacity()`, and
-`array.dim(0)` are intrinsic operations. For a fixed array the compiler knows
+Fixed arrays have a zero lower bound. `array.len()`, `array.capacity()`,
+`array.data()`, and `array.dim(0)` are intrinsic operations. For a fixed array the compiler knows
 all three values and folds them without emitting a helper or descriptor load;
 the physical descriptor remains available to interop. On a borrowed `[T]`
-view the same operations load the descriptor through the payload pointer. Only
-rank one is implemented, so any other dimension is currently rejected.
+view metadata loads through the scoped descriptor and indexing loads its data
+pointer. Strings provide `len()`, `capacity()`, and byte-value iteration over
+`char`. Only rank one is implemented, so any other dimension is currently
+rejected.
 
 Struct fields stay in source order, with at most two-byte alignment for the
 16-bit target. Indexing and field selection are structural HIR and lower to
@@ -129,11 +137,45 @@ does not introduce a general aggregate runtime operation. Compound assignment
 is defined only for the existing numeric operators; it resolves its destination
 once, applies the corresponding built-in operation, and stores the result.
 There is no operator overloading.
-`for item in &array` gives `item` an immutable scoped view of the element;
+`for item in array` copies a scalar element. `for item in &array` gives `item`
+an immutable scoped view of the element;
 `for item in &mut array` requests a mutable view and is rejected for an
-immutable array. By-value array iteration is reserved until aggregate move
-semantics are implemented. A mutable view's field stores update the original
-element.
+immutable array. By-value struct iteration remains reserved until aggregate
+move semantics are implemented. A mutable view's field stores update the
+original element. `for item in &array[begin..end]` iterates only that checked
+compile-time range.
+
+A list comprehension over a fixed array materializes another fixed,
+descriptor-backed stack array whose capacity is known from the source:
+
+```text
+let doubled = [value * 2 for value in values]
+```
+
+A dictionary comprehension uses the same bounded-storage rule. It maintains a
+runtime unique-key length, updates the existing value for a duplicate key, and
+offers `len()`, `capacity()`, and `get(key, default)`. Lookup is explicit about
+the missing-key case, so it needs neither exceptions nor an option-object
+runtime:
+
+```text
+let table = {item: item * 10 for item in values}
+let answer = table.get(3, 0)
+```
+
+A parenthesized generator is valid only as the iterable of a `for` loop. The
+frontend fuses its mapping expression into that loop; it cannot escape and no
+iterator object, resume table, `next` call, or heap allocation is emitted:
+
+```text
+for value in (item + 1 for item in doubled):
+    total += value
+```
+
+The current minimal grammar permits one `for` clause and no comprehension
+filter. Materialized comprehensions require a fixed-array source so their
+maximum storage is statically known; generators can stay lazy without that
+storage.
 
 The same borrow syntax is used at a function boundary:
 
@@ -146,9 +188,10 @@ fn translate(points: &mut [vec2i], delta: &vec2i) -> void:
 translate(&mut bodies, &offset)
 ```
 
-A borrowed parameter is a 32-bit real-mode far pointer—one 16-bit segment and
-one 16-bit payload offset—so it can refer uniformly to stack, static, or far
-storage. The borrow is explicit at the call, mutable access requires `&mut`,
+A borrowed parameter is one 32-bit real-mode far pointer—one 16-bit segment and
+one 16-bit offset—so it can refer uniformly to stack, static, or far storage.
+For `[T]` it addresses the scoped view described above; for `T` it addresses
+the value directly. The borrow is explicit at the call, mutable access requires `&mut`,
 and an immutable binding cannot be mutably borrowed. A call may not give the
 same named object to two parameters when either access is mutable. References
 are non-owning and confined to the call or loop scope: they cannot be stored,
@@ -171,8 +214,8 @@ strings, f-strings, and printing.
 In the implemented slice, primitive and struct expressions have value
 semantics; `let` creates an immutable place and `var` a mutable place. Struct
 copies are explicit in HIR as leaf loads and stores, while arrays remain
-non-copyable aggregates. Borrows are explicit, non-owning views with no
-runtime representation beyond the far pointer. Escaping references, owning
+non-copyable aggregates. Borrows are explicit, non-owning views represented
+by one far pointer. Escaping references, owning
 moves, and explicit cloning remain future work.
 
 Canonical language code uses lowercase `snake_case` for functions, variables,
@@ -211,8 +254,8 @@ allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 
 Not implemented in this slice are explicit numeric conversions, imports,
-resizable collections, escaping or owning references, patterns,
-comprehensions, lambdas, or generators. General string construction is also
+general resizable collections, escaping or owning references, patterns,
+lambdas, comprehension filters, or multiple comprehension clauses. General string construction is also
 absent: f-strings are currently a print facility, not heap values. Those
 features should extend semantic analysis and elaborate to the same small HIR
 rather than adding surface-language HIR operations.

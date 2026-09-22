@@ -9,6 +9,7 @@ from qbopt.model import memory
 from qbopt.backend import lower
 from qbopt.analysis import alias
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
@@ -882,7 +883,7 @@ def test_pointer_fact_refines_coarse_operand_provenance_before_gvn() -> None:
         pointer_seeds={pointer: memory.Provenance.one(allocation, 0, 1)},
     )
 
-    optimized = transform.applied(body, frozenset({7}), {}, unroll_=False, peel_=False, fill_=False)
+    optimized = transform.applied(body, frozenset({7}), {}, options=Options(unroll=False, peel=False, fill=False))
     descriptor_loads = [
         op for block in optimized.blocks for op in block.ops if op.kind is mir.Kind.LOAD and op.loads == (descriptor,)
     ]
@@ -925,3 +926,91 @@ def test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object() -> N
 
     assert tagged.provenance is not None
     assert {one.object for one in tagged.provenance.slices} == {allocation, attached}
+
+
+def test_offsets_in_different_objects_are_never_compared() -> None:
+    """A bp slot and an sp push were called disjoint by comparing -0x16 with -2.
+
+    Offsets count from their own object; two objects that may alias can meet
+    at any offset, as GCC's ao_ref and LLVM's BasicAA compare offsets only
+    for one base.
+    """
+    static = memory.Provenance.one(memory.Object(memory.Kind.GLOBAL, "table"), 0x16, 0x18)
+    extern = memory.Provenance.one(memory.Object(memory.Kind.EXTERNAL, "shared"), 2, 4)
+
+    assert static.intersects(extern)
+
+
+def test_capture_decides_what_nonlocal_reaches() -> None:
+    """A call's NONLOCAL reach met every global, so no call left a private static in a register.
+
+    LLVM's split: an addressed object meets an unknown pointer; only a
+    captured one meets what the call can find on its own.
+    """
+    private = memory.Object(memory.Kind.GLOBAL, "counter", addressed=True, captured=False)
+    unaddressed = memory.Object(memory.Kind.GLOBAL, "total", addressed=False, captured=False)
+    nonlocal_ = memory.Object(memory.Kind.NONLOCAL)
+    unknown = memory.Object(memory.Kind.UNKNOWN)
+
+    assert not memory.objects_may_alias(nonlocal_, private)
+    assert memory.objects_may_alias(unknown, private)
+    assert not memory.objects_may_alias(unknown, unaddressed)
+    assert memory.objects_may_alias(unaddressed, unaddressed)
+
+
+def test_one_base_value_settles_provenance_references_by_displacement() -> None:
+    """Two fields off one pointer, each whole-object provenance, were called overlapping.
+
+    LLVM's constant-offset compare holds whatever object the base names.
+    """
+    base = mir.Value(1, 2)
+    whole = memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN))
+    first = mir.MemRef(Addr(Space.LITERAL, 0), 2, base, provenance=whole)
+    second = mir.MemRef(Addr(Space.LITERAL, 2), 2, base, provenance=whole)
+
+    assert not mir.overlapping(first, second, frozenset())
+    assert mir.overlapping(first, replace(second, addr=Addr(Space.LITERAL, 1)), frozenset())
+
+
+def test_provenance_translation_is_never_narrower_than_regions() -> None:
+    """Moving the symbolic rewrite into a helper left regions answering for [abs+si+0xa], not seg:5+0x10.
+
+    That made legacy wider than its translation on harr-p-noO's main, which
+    tools/provdiff.py reported as unsound pairs.
+    """
+    from pathlib import Path
+
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    import provdiff
+
+    assert provdiff.main([str(Path(__file__).resolve().parents[1] / "fixtures/omf/harr-p-noO.obj")]) == 0
+
+
+def test_provenance_diff_compares_the_legacy_answer() -> None:
+    """Once the raise attached translated provenance, provdiff compared it with itself and reported all agree.
+
+    procs' REPORT keeps pushes the frame cannot be proven clear of, so some
+    pair must still widen.
+    """
+    from pathlib import Path
+
+    import provdiff
+
+    totals, _, _ = provdiff.compared(Path(__file__).resolve().parents[1] / "fixtures/omf/procs-p-noO.obj", 120)
+
+    assert totals["widened"] > 0
+
+
+def test_a_lane_form_slice_names_every_byte_it_covers() -> None:
+    """A narrowed word slice [6, 7) of width 2 covers bytes 6 and 7; reading its end as 7 named neither."""
+    static = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 5))
+    provenance = memory.Provenance(frozenset({memory.Slice(static, 6, 7, 1, 2)}))
+    ref = mir.MemRef(Addr(Space.SEGMENT, 6, 5), 2, provenance=provenance)
+    store = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(7, 2),), stores=(ref,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store,), ()),))
+
+    named = alias.named_bytes(body)
+
+    assert named[Addr(Space.SEGMENT, 7, 5)] == (static, 7)

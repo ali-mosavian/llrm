@@ -9,6 +9,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.optimize import algebraic
 from qbopt.optimize import transform
+from qbopt.model.passes import Options
 
 
 def test_nbody_reuses_the_whole_signed_initialization_value():
@@ -1087,7 +1088,9 @@ def test_dead_phis_do_not_keep_matrix_product_halves() -> None:
     assert found is not None
     blocks = corpus.partitioned(obj)
     body = mir.bodies(found, blocks)[0][1]
-    after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, strength_=False)
+    after = transform.applied(
+        body, found.dgroup, found.calls, blocks=blocks, found=found, options=Options(strength=False)
+    )
     products = [op for block in after.blocks for op in block.ops if op.kind is mir.Kind.MUL]
     assert products and all(len(op.results) == 1 for op in products)
 

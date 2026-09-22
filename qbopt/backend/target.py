@@ -71,14 +71,6 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
     out: dict[Occurrence, Register_] = {}
     if _on_the_stack(what):
         return out
-    # LES/LFS/LGS name their offset destination normally but encode the
-    # selector destination in the opcode.  The selector is therefore a hard
-    # result requirement even when no later far-memory operand happens to use
-    # it.  Pre-allocation far-load selection relies on this table rather than
-    # prescribing a register itself.
-    far_selector = {"les": Register.ES, "lfs": Register.FS, "lgs": Register.GS}.get(what.name or "")
-    if what.op is ir.Operation.MOVE and far_selector is not None and len(what.dests) == 2:
-        out[Occurrence("dest", 1)] = far_selector
     # The widening forms name neither half: the product and the dividend
     # are both dx:ax, low first.
     if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
@@ -92,17 +84,25 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
             out[Occurrence("source", 1)] = Register.EAX
         else:
             out[Occurrence("source", 0)] = Register.EAX
-    # A string fill reads the value, the count and the address in their own
-    # registers, and leaves di past the last cell and cx empty.
-    if what.op is ir.Operation.FILL and len(what.sources) >= 3:
+    # A repeated string fill reads value, count, address and segment, then
+    # leaves di past the last cell and cx empty.  A single store has no count
+    # source or result: value, address and segment are its three sources.
+    if what.op is ir.Operation.FILL and len(what.sources) == 4:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("source", 1)] = Register.ECX
         out[Occurrence("source", 2)] = Register.EDI
-        if len(what.sources) == 4 and isinstance(what.sources[3], ir.Held):
+        if isinstance(what.sources[3], ir.Held):
             out[Occurrence("source", 3)] = Register.ES
         if len(what.dests) == 3:
             out[Occurrence("dest", 1)] = Register.EDI
             out[Occurrence("dest", 2)] = Register.ECX
+    elif what.op is ir.Operation.FILL and len(what.sources) == 3:
+        out[Occurrence("source", 0)] = Register.EAX
+        out[Occurrence("source", 1)] = Register.EDI
+        if isinstance(what.sources[2], ir.Held):
+            out[Occurrence("source", 2)] = Register.ES
+        if len(what.dests) == 2:
+            out[Occurrence("dest", 1)] = Register.EDI
     if what.op is ir.Operation.EXTEND and what.name in {"cwd", "cdq"}:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("dest", 0)] = Register.EDX
@@ -279,6 +279,13 @@ SEGMENTS: frozenset[Register_] = frozenset(
 # The ones a selector value may be placed in. DS is DGROUP, SS the stack and
 # CS the code; ES is BC's, and FS and GS are the 386's.
 SELECTORS: tuple[Register_, ...] = (Register.ES, Register.FS, Register.GS)
+# One far load per selector: its selector result is in the class, not pinned,
+# and the rewriter spells the instruction for the register it was given.
+FAR_LOADS: dict[Register_, str] = {Register.ES: "les", Register.FS: "lfs", Register.GS: "lgs"}
+
+
+def far_load(what: "ir.Semantics") -> bool:
+    return what.op is ir.Operation.MOVE and what.name in FAR_LOADS.values() and len(what.dests) == 2
 
 
 def known(register: Register_) -> bool:

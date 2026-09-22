@@ -1,13 +1,16 @@
 """Guarded countdown loops and their profile-free measurement."""
 
+import re
+
 import pytest
 
-from qbopt.analysis import loops
-from qbopt.model import ir
-from qbopt.model import lir, mir
-from qbopt.objectfile.module import Space
-from qbopt.optimize import rotate
 from tools import quality
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
+from qbopt.analysis import loops
+from qbopt.optimize import rotate
+from qbopt.objectfile.module import Space
 
 
 def counted_loop(*, observed: bool = False) -> mir.MirBody:
@@ -157,3 +160,21 @@ def test_dynamic_frequencies_do_not_charge_a_rotated_entry_guard_as_fifty_fifty(
     )
 
     assert quality._frequencies(body) == pytest.approx({0: 1, 1: 9, 2: 9, 3: 1})
+
+
+def test_an_element_read_every_iteration_bounds_the_trip_count() -> None:
+    """C's sum_three kept `dec ax` beside its byte offset: `index < first->length` has no range.
+
+    Its word reads through 16-bit offsets stay inside one 64K object, so
+    the loop runs at most 32768 times, and the offset alone can end it.
+    """
+    from pathlib import Path
+
+    from qbopt.cfront import compile as cfront
+
+    source = Path(__file__).resolve().parents[1] / "bench" / "parity" / "sum_three.c"
+    text = cfront.compiled(cfront.recorded(source, []), "sum_three", optimise=True)
+    procedure = text[text.index("_sum_three proc") : text.index("_sum_three endp")]
+
+    assert re.search(r"add \w\w, 2\n", procedure)
+    assert not re.search(r"    (?:dec|inc) \w\w\n", procedure)

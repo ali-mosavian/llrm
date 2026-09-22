@@ -281,7 +281,7 @@ def _instruction(what: ir.Semantics, names: dict, number: int) -> list[str]:
     name = what.name or ""
     if what.op is ir.Operation.FILL:
         # Its operands are the registers the instruction names in its opcode.
-        return [f"rep {name}"]
+        return [f"{'rep ' if len(what.sources) == 4 else ''}{name}"]
     dests = [_operand(x, names) for x in what.dests]
     sources = [_operand(x, names) for x in what.sources]
     match what.op:

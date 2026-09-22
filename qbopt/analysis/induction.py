@@ -254,6 +254,8 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             maximum = (
                 interval.high if interval is not None and interval.width == bound.width and interval.low >= 0 else None
             )
+        if maximum is None:
+            maximum = _inbounds_trips(body, loop, shape.latch)
         proven.append(
             CountedLoop(
                 counter,
@@ -269,6 +271,53 @@ def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> t
             )
         )
     return tuple(proven)
+
+
+def advances(body: mir.MirBody, loop: loopy.Loop) -> dict[mir.Value, int]:
+    """How far each counter and each value affine in one advances per iteration.
+
+    The bytes-per-iteration view of `basics` and `derived`; nothing here
+    re-derives which values are affine.
+    """
+    found = basics(body, loop)
+    header = next(block for block in body.blocks if block.at == loop.header)
+    out = {
+        phi.result: _as_signed(one.step.n, one.step.width)
+        for phi in header.phis
+        if (one := found.get(phi.result.id)) is not None and isinstance(one.step, mir.Const)
+    }
+    for one in derived(body, loop, found):
+        if (
+            isinstance(one.of.step, mir.Const)
+            and isinstance(one.by, mir.Const)
+            and one.pointer is None
+            and len(one.op.results) == 1
+            and isinstance(one.op.results[0], mir.Held)
+        ):
+            out[one.op.results[0].value] = _as_signed(one.of.step.n, one.of.step.width) * _as_signed(
+                one.by.n, one.by.width
+            )
+    return {value: step for value, step in out.items() if step}
+
+
+def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | None:
+    """The most iterations an access made every iteration allows, as LLVM's inbounds does.
+
+    Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
+    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
+    """
+    step = advances(body, loop)
+    every = loopy.dominators(body.blocks, body.entry).get(latch, frozenset())
+    limits = [
+        ((1 << 8 * ref.base_width) - ref.width) // abs(step[ref.base]) + 1
+        for block in body.blocks
+        # The header also runs the final, failing test: n + 1 times.
+        if block.at in loop.body and block.at in every and block.at != loop.header
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+        if ref.base in step
+    ]
+    return min(limits, default=None)
 
 
 def transparent_aliases(

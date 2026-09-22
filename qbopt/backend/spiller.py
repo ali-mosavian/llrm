@@ -83,7 +83,7 @@ def spilled(
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
     identities: set[int] = set()
-    base_uses = _base_uses(body)
+    final = _final_uses(body)
 
     blocks = []
     for block in body.blocks:
@@ -100,7 +100,7 @@ def spilled(
             # is an allocation fold, like `_source`, not a new program-level
             # address formula; it is valid only where the original base dies
             # at this instruction and the 16-bit address form is unscaled.
-            indexed = _indexed_source(one, stored, frame, base_uses)
+            indexed = _indexed_source(one, stored, frame, final)
             if indexed is not None:
                 add, one = indexed
                 insns.append(add)
@@ -1009,20 +1009,34 @@ class _Cells:
         return found if found is not None and found.width == width else None
 
 
-def _base_uses(body: lir.LirBody) -> dict[int, int]:
-    """How many instructions still read each possible address base.
+def _final_uses(body: lir.LirBody) -> frozenset[tuple[int, int]]:
+    """Every `(id(insn), value)` where that instruction is the value's last read.
 
-    A destructive index fold requires the base's final semantic use, not
-    merely its final appearance inside an encoded memory operand. ``uses``
-    already includes memory address dependencies and ordinary register reads
-    once per instruction, including a read-modify-write cell that is spelt in
-    both the source and destination tuples.
+    A destructive index fold needs the base dead after the access. Counting
+    static uses cannot say so: sum_three's loop-invariant base had one use,
+    inside the loop, and `add di,[slot]` moved it on every trip -- 330 for
+    1110.
     """
-    out: dict[int, int] = {}
-    for one in body.insns:
-        for value in set(one.uses):
-            out[value] = out.get(value, 0) + 1
-    return out
+    from qbopt.backend import allocate
+
+    _live_in, live_out = allocate.live(body)
+    out: set[tuple[int, int]] = set()
+    for block in body.blocks:
+        alive = set(live_out[block.at])
+        index = len(block.insns) - 1
+        while index >= 0:
+            one = block.insns[index]
+            first = index
+            if one.group is not None:
+                while first > 0 and block.insns[first - 1].group == one.group:
+                    first -= 1
+            group = block.insns[first : index + 1]
+            alive -= {value for item in group for value in item.defines}
+            for item in group:
+                out.update((id(item), value) for value in item.uses if value not in alive)
+            alive |= {value for item in group for value in item.uses}
+            index = first - 1
+    return frozenset(out)
 
 
 def foldable_indexes(body: lir.LirBody, values: frozenset[int]) -> frozenset[int]:
@@ -1032,9 +1046,9 @@ def foldable_indexes(body: lir.LirBody, values: frozenset[int]) -> frozenset[int
     pressure-plan chooser may ask whether a candidate has a legal recovery
     without reserving a frame slot or mutating the body it is comparing.
     """
-    bases = _base_uses(body)
+    final = _final_uses(body)
     return frozenset(
-        found[1].value for one in body.insns if (found := _indexed_pattern(one, values, bases)) is not None
+        found[1].value for one in body.insns if (found := _indexed_pattern(one, values, final)) is not None
     )
 
 
@@ -1051,7 +1065,7 @@ def unfolded_indexes(body: lir.LirBody, values: frozenset[int]) -> "tuple[lir.Li
     """
     if not values:
         return body, frozenset()
-    base_uses = _base_uses(body)
+    final = _final_uses(body)
     changed: set[int] = set()
     blocks = []
     for block in body.blocks:
@@ -1060,7 +1074,7 @@ def unfolded_indexes(body: lir.LirBody, values: frozenset[int]) -> "tuple[lir.Li
         definitions: dict[int, int] = {}
         for position, one in enumerate(block.insns):
             definitions.update((value, position) for value in one.defines)
-            found = _indexed_pattern(one, values, base_uses)
+            found = _indexed_pattern(one, values, final)
             if found is None:
                 continue
             base, index, _cells = found
@@ -1068,7 +1082,11 @@ def unfolded_indexes(body: lir.LirBody, values: frozenset[int]) -> "tuple[lir.Li
             placement = position - 1
             latest_definition = max(definitions.get(value, position - 1) for value in (base.value, index.value))
             crossed = block.insns[latest_definition + 1 : position]
-            if latest_definition < position and _flags_overwritten(crossed):
+            if (
+                latest_definition < position
+                and _flags_overwritten(crossed)
+                and not any(base.value in item.uses for item in crossed)
+            ):
                 placement = latest_definition
             rewritten[position] = access
             after.setdefault(placement, []).append(add)
@@ -1107,7 +1125,7 @@ def _flags_overwritten(crossed: tuple[lir.Insn, ...]) -> bool:
     return False
 
 
-def _indexed_pattern(one: lir.Insn, values: frozenset[int], base_uses: dict[int, int]):
+def _indexed_pattern(one: lir.Insn, values: frozenset[int], final: frozenset[tuple[int, int]]):
     """The base, index and matching cells of one legal direct-index fold."""
     if one.what is None or one.group is not None or one.requires or one.delivers or one.clobbers:
         return None
@@ -1141,7 +1159,7 @@ def _indexed_pattern(one: lir.Insn, values: frozenset[int], base_uses: dict[int,
                 and where.selector.value in participants
             ):
                 return None
-    if base_uses.get(base.value, 0) != 1:
+    if (id(one), base.value) not in final:
         return None
     return base, index, cells
 
@@ -1171,7 +1189,7 @@ def _unfolded_index(one: lir.Insn, base: ir.Held, index: ir.Held) -> tuple[lir.I
 
 
 def _indexed_source(
-    one: lir.Insn, values: frozenset[int], frame, base_uses: dict[int, int]
+    one: lir.Insn, values: frozenset[int], frame, final: frozenset[tuple[int, int]]
 ) -> "tuple[lir.Insn, lir.Insn] | None":
     """Fold a spilled word index into a base the current access kills.
 
@@ -1183,7 +1201,7 @@ def _indexed_source(
     data operand. A read-modify-write appears twice (destination and source)
     and is one safe final access.
     """
-    found = _indexed_pattern(one, values, base_uses)
+    found = _indexed_pattern(one, values, final)
     if found is None:
         return None
     base, index, _cells = found

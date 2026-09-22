@@ -1,6 +1,7 @@
 from dataclasses import replace
 from collections.abc import Iterable
 from collections.abc import Iterator
+from collections.abc import Collection
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -11,14 +12,14 @@ from qbopt.model.mir import MirBody
 
 def use_index(
     body: MirBody,
-    values: Iterable[mir.Value] | None = None,
+    values: Collection[mir.Value] | None = None,
     *,
     consumed: bool = False,
 ) -> dict[mir.Value, list[Op]]:
     """Each value's operation users, built in one body traversal.
 
     ``Op.uses`` includes carried merge inputs; ``mir.consumed`` is the
-    narrower set an operation actually reads. Callers choose the relation
+    narrower set an operation actually reads.  Callers choose the relation
     they mean, while construction and ordering stay one shared mechanism.
     Each operation occurs at most once in a value's list, matching the old
     per-value membership scans exactly.
