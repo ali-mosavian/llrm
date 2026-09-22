@@ -13,4 +13,6 @@ pub mod model;
 pub mod objectfile;
 pub mod old;
 pub mod optimize;
+pub mod rewrite;
 pub mod support;
+pub mod wholeseg;
