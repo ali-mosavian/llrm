@@ -1492,7 +1492,8 @@ class _Raise:
         """The reference, typed by the object it names where declared, else by the lvalue's type."""
         declared = getattr(address, "declared", None)
         access = self.aliasing(type_)
-        ref = self.placed(address, width)
+        # C: every access stays inside the object it names.
+        ref = replace(self.placed(address, width), inbounds=True)
         if address.volatile:
             ref = replace(ref, volatile=True)
         if declared is not None:

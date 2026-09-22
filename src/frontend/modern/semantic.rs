@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use super::conversions;
+use super::conversions::Rules;
 use super::error::Diagnostic;
 use super::hir;
 use super::syntax::AssignTarget;
@@ -719,6 +721,7 @@ struct FunctionCompiler<'a> {
     literals: &'a mut LiteralPool,
     types: &'a mut TypeRegistry,
     constant_places: BTreeMap<u32, u32>,
+    rules: &'static Rules,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -753,6 +756,7 @@ impl<'a> FunctionCompiler<'a> {
             literals,
             types,
             constant_places: BTreeMap::new(),
+            rules: &conversions::I386_REAL_MODE,
         };
         for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
             let value = compiler.value_type(resolved.hir_type());
@@ -937,26 +941,60 @@ impl<'a> FunctionCompiler<'a> {
                     );
                 }
                 if let Some(TypeAnnotation::Array { element, length }) = annotation {
-                    let Expr::Array(items, _) = value else {
-                        return Err(Diagnostic::new(
-                            *span,
-                            "fixed-array binding requires an array literal",
-                        ));
+                    let count = match value {
+                        Expr::Array(items, _) => items.len(),
+                        Expr::Repeat { counts, .. } => repeat_count(counts)?,
+                        _ => {
+                            return Err(Diagnostic::new(
+                                *span,
+                                "fixed-array binding requires an array literal",
+                            ))
+                        }
                     };
-                    if items.len() != *length as usize {
+                    if count != *length as usize {
                         return Err(Diagnostic::new(
                             *span,
-                            format!("array expects {length} elements, got {}", items.len()),
+                            format!("array expects {length} elements, got {count}"),
                         ));
+                    }
+                    if let Expr::Repeat { value, .. } = value {
+                        // Evaluated before the new name exists, which it may shadow.
+                        self.statement(&Statement::Bind {
+                            mutable: false,
+                            name: format!("${name}_fill"),
+                            annotation: Some(TypeAnnotation::Value(element.clone())),
+                            value: value.as_ref().clone(),
+                            span: *span,
+                        })?;
                     }
                     let element = self.types.resolve_element(element, *span)?;
                     let type_id = self.types.array(element, *length);
                     let place = self.array_place(name, type_id, element, *length, *mutable);
+                    let binding = |mutable| Binding {
+                        type_: BindingType::Array {
+                            element,
+                            length: *length,
+                        },
+                        mutable,
+                        storage: Storage::Place(place),
+                    };
+                    if matches!(value, Expr::Repeat { .. }) {
+                        // Filling stores through the name, which a `let` would refuse.
+                        self.scopes
+                            .last_mut()
+                            .expect("scope")
+                            .insert(name.clone(), binding(true));
+                        self.fill(name, *length, *span)?;
+                    }
+                    let items = match value {
+                        Expr::Array(items, _) => items.as_slice(),
+                        _ => &[],
+                    };
                     for (index, item) in items.iter().enumerate() {
                         let index = hir::Operand::Constant(U16, index as i64);
                         match element {
                             ElementType::Scalar(type_name) => {
-                                let value = self.expression(item, Some(type_name))?;
+                                let value = self.coerced(item, type_name)?;
                                 self.emit(
                                     "store",
                                     Vec::new(),
@@ -972,20 +1010,13 @@ impl<'a> FunctionCompiler<'a> {
                             }
                         }
                     }
-                    self.scopes.last_mut().expect("scope").insert(
-                        name.clone(),
-                        Binding {
-                            type_: BindingType::Array {
-                                element,
-                                length: *length,
-                            },
-                            mutable: *mutable,
-                            storage: Storage::Place(place),
-                        },
-                    );
+                    self.scopes
+                        .last_mut()
+                        .expect("scope")
+                        .insert(name.clone(), binding(*mutable));
                     return Ok(());
                 }
-                if matches!(value, Expr::Array(..)) {
+                if matches!(value, Expr::Array(..) | Expr::Repeat { .. }) {
                     return Err(Diagnostic::new(
                         *span,
                         "array literal requires a fixed-array annotation",
@@ -1042,7 +1073,10 @@ impl<'a> FunctionCompiler<'a> {
                     Some(ElementType::Struct(_)) => unreachable!(),
                     None => None,
                 };
-                let value = self.expression(value, expected)?;
+                let value = match expected {
+                    Some(type_name) => self.coerced(value, type_name)?,
+                    None => self.expression(value, None)?,
+                };
                 if value.type_name == TypeName::Void {
                     return Err(Diagnostic::new(*span, "cannot bind a void expression"));
                 }
@@ -1073,19 +1107,19 @@ impl<'a> FunctionCompiler<'a> {
                     let value = if let Some(operation) = operation {
                         let current = self.value(element);
                         self.emit("load", vec![current], vec![destination.clone()], None);
-                        let right = self.expression(value, Some(element))?;
-                        self.binary_operands(
+                        let right = self.beside(value, element)?;
+                        let result = self.arithmetic(
                             *operation,
                             TypedOperand {
                                 operand: Some(hir::Operand::Value(current)),
                                 type_name: element,
                             },
                             right,
-                            Some(element),
                             *span,
-                        )?
+                        )?;
+                        self.implicit(result, element, *span)?
                     } else {
-                        self.expression(value, Some(element))?
+                        self.coerced(value, element)?
                     };
                     self.emit(
                         "store",
@@ -1120,11 +1154,11 @@ impl<'a> FunctionCompiler<'a> {
                         return Err(Diagnostic::new(
                             *span,
                             "void function cannot return a value",
-                        ));
+                        ))
                     }
                     (_, None) => return Err(Diagnostic::new(*span, "return value is required")),
                     (result, Some(expression)) => {
-                        let value = self.expression(expression, Some(result))?;
+                        let value = self.coerced(expression, result)?;
                         vec![required(value, *span)?]
                     }
                 };
@@ -1176,6 +1210,48 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Stores `$name_fill`, bound beforehand, to each of `name`'s `length` elements.
+    fn fill(&mut self, name: &str, length: u32, span: Span) -> Result<(), Diagnostic> {
+        let fill_name = format!("${name}_fill");
+        let at_name = format!("${name}_at");
+        let at = Expr::Name(at_name.clone(), span);
+        self.scoped(&[
+            Statement::Bind {
+                mutable: true,
+                name: at_name.clone(),
+                annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::U16))),
+                value: Expr::Integer(0, span),
+                span,
+            },
+            Statement::While {
+                condition: Expr::Binary {
+                    op: BinaryOp::Less,
+                    left: Box::new(at.clone()),
+                    right: Box::new(Expr::Integer(i64::from(length), span)),
+                    span,
+                },
+                body: vec![
+                    Statement::Assign {
+                        target: AssignTarget::Index {
+                            base: name.into(),
+                            index: at,
+                        },
+                        operation: None,
+                        value: Expr::Name(fill_name, span),
+                        span,
+                    },
+                    Statement::Assign {
+                        target: AssignTarget::Name(at_name),
+                        operation: Some(BinaryOp::Add),
+                        value: Expr::Integer(1, span),
+                        span,
+                    },
+                ],
+                span,
+            },
+        ])
     }
 
     fn if_statement(
@@ -1964,19 +2040,14 @@ impl<'a> FunctionCompiler<'a> {
         body: &[Statement],
         _span: Span,
     ) -> Result<(), Diagnostic> {
-        let hint = self.expression_type_hint(end);
-        if hint.is_some_and(|one| !is_integer(one)) {
-            return Err(Diagnostic::new(end.span(), "range bounds must be integers"));
-        }
-        let start_value = self.expression(start, hint)?;
-        if !is_integer(start_value.type_name) {
-            return Err(Diagnostic::new(
-                start.span(),
-                "range bounds must be integers",
-            ));
-        }
-        let type_name = start_value.type_name;
-        let end_value = self.expression(end, Some(type_name))?;
+        let (start_value, end_value) = self.operand_pair(start, end)?;
+        let type_name = self
+            .rules
+            .common(start_value.type_name, end_value.type_name)
+            .filter(|one| is_integer(*one))
+            .ok_or_else(|| Diagnostic::new(end.span(), "range bounds must be integers with a common type"))?;
+        let start_value = self.implicit(start_value, type_name, start.span())?;
+        let end_value = self.implicit(end_value, type_name, end.span())?;
         let counter_place = self.place(&format!("$range_{name}"), type_name, true);
         let limit_place = self.place(&format!("$range_limit_{name}"), type_name, false);
         self.emit(
@@ -2200,7 +2271,7 @@ impl<'a> FunctionCompiler<'a> {
             })?;
             match field.type_ {
                 ElementType::Scalar(type_name) => {
-                    let value = self.expression(value, Some(type_name))?;
+                    let value = self.coerced(value, type_name)?;
                     stores.push((
                         self.projected_place(destination, field.offset, type_name),
                         required(value, *field_span)?,
@@ -2302,6 +2373,7 @@ impl<'a> FunctionCompiler<'a> {
                 base: pointer,
                 offset: view.offset + field_offset,
                 type_id: type_id(type_name),
+                inbounds: false,
             }
         } else {
             hir::Operand::ProjectedPlace {
@@ -2423,12 +2495,13 @@ impl<'a> FunctionCompiler<'a> {
                                 hir::Operand::ArrayElement(place, vec![index])
                             }
                             Storage::Parameter(_) => {
-                                return Err(Diagnostic::new(span, "parameters are immutable"));
+                                return Err(Diagnostic::new(span, "parameters are immutable"))
                             }
                             Storage::Reference(pointer) => hir::Operand::IndirectPlace {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
+                                inbounds: false,
                             },
                             Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                             Storage::Dictionary { .. } => {
@@ -2442,7 +2515,7 @@ impl<'a> FunctionCompiler<'a> {
                             Storage::Place(place) => (place, None, Vec::new()),
                             Storage::ArrayView { place, index } => (place, None, vec![index]),
                             Storage::Parameter(_) => {
-                                return Err(Diagnostic::new(span, "parameters are immutable"));
+                                return Err(Diagnostic::new(span, "parameters are immutable"))
                             }
                             Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                             Storage::Slice(_) => unreachable!("a struct binding is not a slice"),
@@ -2512,7 +2585,7 @@ impl<'a> FunctionCompiler<'a> {
                                 (0, Some(pointer), Vec::new())
                             }
                             Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                                return Err(Diagnostic::new(span, "array has no storage"));
+                                return Err(Diagnostic::new(span, "array has no storage"))
                             }
                             Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
                         };
@@ -2573,7 +2646,7 @@ impl<'a> FunctionCompiler<'a> {
                     Storage::Place(place) => (place, None, Vec::new()),
                     Storage::ArrayView { place, index } => (place, None, vec![index]),
                     Storage::Parameter(_) => {
-                        return Err(Diagnostic::new(span, "struct has no addressable storage"));
+                        return Err(Diagnostic::new(span, "struct has no addressable storage"))
                     }
                     Storage::Reference(pointer) => (0, Some(pointer), Vec::new()),
                     Storage::Slice(_) => unreachable!("a struct binding is not a slice"),
@@ -2621,7 +2694,7 @@ impl<'a> FunctionCompiler<'a> {
                         (0, Some(pointer), Vec::new())
                     }
                     Storage::Parameter(_) | Storage::ArrayView { .. } => {
-                        return Err(Diagnostic::new(span, "array has no storage"));
+                        return Err(Diagnostic::new(span, "array has no storage"))
                     }
                     Storage::Dictionary { .. } => unreachable!("array is not a dictionary"),
                 };
@@ -2700,10 +2773,15 @@ impl<'a> FunctionCompiler<'a> {
                 *span,
                 "an f-string is currently valid only as a direct print argument",
             )),
-            Expr::Array(_, span) => Err(Diagnostic::new(
+            Expr::Array(_, span) | Expr::Repeat { span, .. } => Err(Diagnostic::new(
                 *span,
                 "an array literal is valid only as a fixed-array initializer",
             )),
+            Expr::Conversion {
+                target,
+                value,
+                span,
+            } => self.conversion(*target, value, expected, *span),
             Expr::Comprehension { span, .. } => Err(Diagnostic::new(
                 *span,
                 "a comprehension is valid only as an array initializer",
@@ -2774,6 +2852,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
+                                inbounds: false,
                             }],
                             None,
                         );
@@ -2821,36 +2900,46 @@ impl<'a> FunctionCompiler<'a> {
                         return self.integer(-*value, Some(wanted), *span);
                     }
                 }
+                // Only a literal takes its type from context; anything else has its own.
                 let wanted = match op {
-                    UnaryOp::Negative => expected.filter(|one| is_signed(*one) || is_float(*one)),
                     UnaryOp::Not => Some(TypeName::Bool),
+                    _ if is_literal(operand) => expected,
+                    _ => None,
                 };
                 let operand = self.expression(operand, wanted)?;
-                match op {
-                    UnaryOp::Negative
-                        if !is_signed(operand.type_name) && !is_float(operand.type_name) =>
-                    {
-                        return Err(Diagnostic::new(
-                            *span,
-                            "unary '-' requires a signed integer or float",
-                        ));
-                    }
+                let operand = match op {
                     UnaryOp::Not if operand.type_name != TypeName::Bool => {
-                        return Err(Diagnostic::new(*span, "not requires bool"));
+                        return Err(Diagnostic::new(*span, "not requires bool"))
                     }
-                    _ => {}
-                }
+                    UnaryOp::Not => operand,
+                    UnaryOp::Complement if !is_integer(operand.type_name) => {
+                        return Err(Diagnostic::new(*span, "'~' requires an integer"))
+                    }
+                    UnaryOp::Negative
+                        if !is_numeric(operand.type_name)
+                            || (is_fixed(operand.type_name) && !is_signed(operand.type_name)) =>
+                    {
+                        return Err(Diagnostic::new(*span, "unary '-' requires a number"))
+                    }
+                    _ => {
+                        let promoted = self.rules.promoted(operand.type_name);
+                        self.implicit(operand, promoted, *span)?
+                    }
+                };
                 let result = self.value(operand.type_name);
                 self.emit(
                     match op {
                         UnaryOp::Negative if is_float(operand.type_name) => "fneg",
                         UnaryOp::Negative => "neg",
-                        UnaryOp::Not => "not",
+                        UnaryOp::Not | UnaryOp::Complement => "not",
                     },
                     vec![result],
                     vec![required(operand.clone(), *span)?],
                     None,
                 );
+                if expected.is_some_and(|one| one != operand.type_name) {
+                    return Err(type_mismatch(*span, expected.expect("checked"), operand.type_name));
+                }
                 Ok(TypedOperand {
                     operand: Some(hir::Operand::Value(result)),
                     type_name: operand.type_name,
@@ -3104,6 +3193,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: address,
                     offset: 0,
                     type_id: element_type,
+                    inbounds: true,
                 })
             }
             Storage::Reference(pointer) => {
@@ -3112,6 +3202,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: address,
                     offset: 0,
                     type_id: element_type,
+                    inbounds: true,
                 })
             }
             Storage::Parameter(_) | Storage::ArrayView { .. } => {
@@ -3143,6 +3234,7 @@ impl<'a> FunctionCompiler<'a> {
                 base: descriptor,
                 offset: 4,
                 type_id: pointer_type,
+                inbounds: false,
             }],
             None,
         );
@@ -3209,114 +3301,425 @@ impl<'a> FunctionCompiler<'a> {
         if matches!(operation, BinaryOp::Is | BinaryOp::IsNot) {
             return self.identity(operation, left, right, expected, span);
         }
-        let comparison = matches!(
-            operation,
-            BinaryOp::Equal
-                | BinaryOp::NotEqual
-                | BinaryOp::Less
-                | BinaryOp::LessEqual
-                | BinaryOp::Greater
-                | BinaryOp::GreaterEqual
-        );
-        if comparison && expected.is_some_and(|one| one != TypeName::Bool) {
+        if matches!(operation, BinaryOp::And | BinaryOp::Or) {
+            return self.logical(operation, left, right, expected, span);
+        }
+        let (left, right) = if is_shift(operation) {
+            // A shift's operands are typed apart: the result is the left one's.
+            (self.expression(left, None)?, self.expression(right, None)?)
+        } else {
+            self.operand_pair(left, right)?
+        };
+        let result = self.arithmetic(operation, left, right, span)?;
+        if expected.is_some_and(|one| one != result.type_name) {
+            return Err(type_mismatch(span, expected.expect("checked"), result.type_name));
+        }
+        Ok(result)
+    }
+
+    /// Two operands that meet at a common type, in source order.
+    fn operand_pair(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(TypedOperand, TypedOperand), Diagnostic> {
+        // A literal has no effects, so evaluating it second keeps source order.
+        if is_literal(left) && !is_literal(right) {
+            let right = self.expression(right, None)?;
+            return Ok((self.beside(left, right.type_name)?, right));
+        }
+        let left = self.expression(left, None)?;
+        let right = self.beside(right, left.type_name)?;
+        Ok((left, right))
+    }
+
+    /// An operand next to one of type `other`: a literal takes that type when it fits.
+    fn beside(&mut self, expression: &Expr, other: TypeName) -> Result<TypedOperand, Diagnostic> {
+        if !is_literal(expression) {
+            return self.expression(expression, None);
+        }
+        if is_integer_literal(expression) && is_integer(other) {
+            if let Ok(value) = self.expression(expression, Some(self.rules.promoted(other))) {
+                return Ok(value);
+            }
+            return self.expression(expression, None);
+        }
+        if is_float(other) || is_fixed(other) {
+            return self.coerced(expression, other);
+        }
+        self.expression(expression, None)
+    }
+
+    /// A value for a destination of type `target`, converted as an assignment converts it.
+    fn coerced(&mut self, expression: &Expr, target: TypeName) -> Result<TypedOperand, Diagnostic> {
+        if is_float(target) {
+            let spelled = match expression {
+                Expr::Integer(value, span) => Some((value.to_string(), *span)),
+                Expr::Unary {
+                    op: UnaryOp::Negative,
+                    operand,
+                    span,
+                } => match operand.as_ref() {
+                    Expr::Integer(value, _) => Some((format!("-{value}"), *span)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some((spelling, span)) = spelled {
+                return self.float(&spelling, Some(target), span);
+            }
+        }
+        if is_literal(expression) {
+            return self.expression(expression, Some(target));
+        }
+        let value = self.expression(expression, None)?;
+        self.implicit(value, target, expression.span())
+    }
+
+    /// C's implicit conversion, between integers and floats only.
+    fn implicit(
+        &mut self,
+        value: TypedOperand,
+        target: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if value.type_name == target {
+            return Ok(value);
+        }
+        if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
+            return Err(type_mismatch(span, target, value.type_name));
+        }
+        self.converted(value, target, span)
+    }
+
+    /// `and` and `or` evaluate their right operand only when it decides the result.
+    fn logical(
+        &mut self,
+        operation: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != TypeName::Bool) {
             return Err(type_mismatch(
                 span,
                 expected.expect("checked"),
                 TypeName::Bool,
             ));
         }
-        let mut left_expected = (!comparison).then_some(expected).flatten();
-        if left_expected.is_none() {
-            let hint = self.expression_type_hint(right);
-            if (matches!(left, Expr::Integer(..))
-                && hint
-                    .is_some_and(|one| is_integer(one) || one == TypeName::Char || is_fixed(one)))
-                || (matches!(left, Expr::Float(..))
-                    && hint.is_some_and(|one| is_float(one) || is_fixed(one)))
-            {
-                left_expected = hint;
-            }
-        }
-        let left = self.expression(left, left_expected)?;
-        if left.type_name == TypeName::String {
-            return Err(Diagnostic::new(
-                span,
-                "string comparison is not in the minimal runtime slice",
-            ));
-        }
-        if comparison {
-            let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
-            if (!equality && !is_ordered(left.type_name)) || left.type_name == TypeName::Void {
-                return Err(Diagnostic::new(
-                    span,
-                    if equality {
-                        "equality requires scalar operands"
-                    } else {
-                        "ordering requires numeric or char operands"
-                    },
-                ));
-            }
-        } else if !is_numeric(left.type_name) {
-            return Err(Diagnostic::new(
-                span,
-                "arithmetic requires numeric operands",
-            ));
-        }
-        let right = self.expression(right, Some(left.type_name))?;
-        self.binary_operands(operation, left, right, expected, span)
+        let name = format!("$logical{}", self.next_place);
+        let result = self.place(&name, TypeName::Bool, true);
+        let left = self.expression(left, Some(TypeName::Bool))?;
+        let left = required(left, span)?;
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(result), left.clone()],
+            None,
+        );
+        let decide = self.block();
+        let join = self.block();
+        self.terminate(hir::Terminator {
+            kind: "branch",
+            operands: vec![left],
+            targets: if operation == BinaryOp::And {
+                vec![decide, join]
+            } else {
+                vec![join, decide]
+            },
+        });
+        self.current = decide;
+        let right = self.expression(right, Some(TypeName::Bool))?;
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![hir::Operand::Place(result), required(right, span)?],
+            None,
+        );
+        self.terminate(jump(join));
+        self.current = join;
+        let value = self.value(TypeName::Bool);
+        self.emit("load", vec![value], vec![hir::Operand::Place(result)], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(value)),
+            type_name: TypeName::Bool,
+        })
     }
 
-    fn binary_operands(
+    fn conversion(
+        &mut self,
+        target: TypeName,
+        value: &Expr,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != target) {
+            return Err(type_mismatch(span, expected.expect("checked"), target));
+        }
+        // A number literal takes the target type, so `u8(300)` is rejected rather than wrapped.
+        let typed = ((is_integer_literal(value) || is_float_literal(value)) && is_fixed(target))
+            || (is_integer_literal(value) && conversions::implicit(target))
+            || (is_float_literal(value) && is_float(target));
+        let value = if typed {
+            self.coerced(value, target)?
+        } else {
+            self.expression(value, None)?
+        };
+        self.converted(value, target, span)
+    }
+
+    fn converted(
+        &mut self,
+        value: TypedOperand,
+        target: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let source = value.type_name;
+        if source == target {
+            return Ok(value);
+        }
+        if is_fixed(source) || is_fixed(target) {
+            return self.fixed_converted(value, target, span);
+        }
+        let op = match (source, target) {
+            (from, to) if is_float(from) && is_integer(to) => "truncate",
+            (from, to) if conversions::implicit(from) && conversions::implicit(to) => "convert",
+            (TypeName::Bool, to) if is_integer(to) => "convert",
+            (TypeName::Char, TypeName::U8) | (TypeName::U8, TypeName::Char) => "convert",
+            _ => {
+                return Err(Diagnostic::new(
+                    span,
+                    format!(
+                        "no conversion from {} to {}",
+                        type_name_text(source),
+                        type_name_text(target)
+                    ),
+                ))
+            }
+        };
+        if let Some(hir::Operand::Constant(_, constant)) = value.operand {
+            if is_integer(source) && is_integer(target) {
+                return Ok(TypedOperand {
+                    operand: Some(hir::Operand::Constant(type_id(target), wrapped(constant, target))),
+                    type_name: target,
+                });
+            }
+        }
+        let result = self.value(target);
+        self.emit(op, vec![result], vec![required(value, span)?], None);
+        if source != TypeName::Bool {
+            return Ok(TypedOperand {
+                operand: Some(hir::Operand::Value(result)),
+                type_name: target,
+            });
+        }
+        // `true` is all ones.
+        let bit = self.value(target);
+        self.emit(
+            "and",
+            vec![bit],
+            vec![
+                hir::Operand::Value(result),
+                hir::Operand::Constant(type_id(target), 1),
+            ],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(bit)),
+            type_name: target,
+        })
+    }
+
+    /// A conversion to or from a fixed-point type, done on its storage integer.
+    fn fixed_converted(
+        &mut self,
+        value: TypedOperand,
+        target: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        let source = value.type_name;
+        if !(is_integer(source) || is_fixed(source)) || !(is_integer(target) || is_fixed(target)) {
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "no conversion from {} to {}",
+                    type_name_text(source),
+                    type_name_text(target)
+                ),
+            ));
+        }
+        let (stored, from) = self.fixed_storage(value);
+        let (to_storage, to) = match target {
+            TypeName::Fixed { storage, fraction, .. } => (storage_type(storage), fraction),
+            integer => (integer, 0),
+        };
+        // Scale in the wider storage, so rescaling up loses nothing it keeps.
+        let work = if width(to_storage) > width(stored.type_name) {
+            to_storage
+        } else {
+            stored.type_name
+        };
+        let stored = self.converted(stored, work, span)?;
+        let scaled = if to >= from {
+            self.shifted("shl", stored, to - from, span)?
+        } else {
+            self.toward_zero(stored, from - to, span)?
+        };
+        let narrowed = self.converted(scaled, to_storage, span)?;
+        if to_storage == target {
+            return Ok(narrowed);
+        }
+        let result = self.value(target);
+        self.emit("convert", vec![result], vec![required(narrowed, span)?], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: target,
+        })
+    }
+
+    /// A fixed-point value as its storage integer and fraction; an integer as itself.
+    fn fixed_storage(&mut self, value: TypedOperand) -> (TypedOperand, u8) {
+        let TypeName::Fixed { storage, fraction, .. } = value.type_name else {
+            return (value, 0);
+        };
+        let storage = storage_type(storage);
+        let result = self.value(storage);
+        let operand = value.operand.expect("a fixed-point value has an operand");
+        self.emit("convert", vec![result], vec![operand], None);
+        (
+            TypedOperand {
+                operand: Some(hir::Operand::Value(result)),
+                type_name: storage,
+            },
+            fraction,
+        )
+    }
+
+    fn shifted(
+        &mut self,
+        op: &'static str,
+        value: TypedOperand,
+        count: u8,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if count == 0 {
+            return Ok(value);
+        }
+        let result = self.value(value.type_name);
+        self.emit(
+            op,
+            vec![result],
+            vec![
+                required(value.clone(), span)?,
+                hir::Operand::Constant(U8, i64::from(count)),
+            ],
+            None,
+        );
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(result)),
+            type_name: value.type_name,
+        })
+    }
+
+    /// `value >> count`, rounded toward zero: a negative value is first biased by `2^count - 1`.
+    fn toward_zero(
+        &mut self,
+        value: TypedOperand,
+        count: u8,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if !is_signed(value.type_name) {
+            return self.shifted("shr", value, count, span);
+        }
+        let type_name = value.type_name;
+        let bits = u8::try_from(8 * width(type_name) - 1).expect("an integer is under 256 bits");
+        let sign = self.shifted("sar", value.clone(), bits, span)?;
+        let bias = self.value(type_name);
+        self.emit(
+            "and",
+            vec![bias],
+            vec![
+                required(sign, span)?,
+                hir::Operand::Constant(type_id(type_name), (1_i64 << count) - 1),
+            ],
+            None,
+        );
+        let biased = self.value(type_name);
+        self.emit(
+            "add",
+            vec![biased],
+            vec![required(value, span)?, hir::Operand::Value(bias)],
+            None,
+        );
+        self.shifted(
+            "sar",
+            TypedOperand {
+                operand: Some(hir::Operand::Value(biased)),
+                type_name,
+            },
+            count,
+            span,
+        )
+    }
+
+    /// Both operands evaluated: the usual arithmetic conversions, then the operation.
+    fn arithmetic(
         &mut self,
         operation: BinaryOp,
         left: TypedOperand,
         right: TypedOperand,
-        expected: Option<TypeName>,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
-        if matches!(operation, BinaryOp::Is | BinaryOp::IsNot) {
-            return Err(Diagnostic::new(
-                span,
-                "identity is not a numeric assignment operator",
-            ));
-        }
-        let comparison = matches!(
+        if matches!(
             operation,
-            BinaryOp::Equal
-                | BinaryOp::NotEqual
-                | BinaryOp::Less
-                | BinaryOp::LessEqual
-                | BinaryOp::Greater
-                | BinaryOp::GreaterEqual
-        );
-        if comparison && expected.is_some_and(|one| one != TypeName::Bool) {
-            return Err(type_mismatch(
-                span,
-                expected.expect("checked"),
-                TypeName::Bool,
-            ));
+            BinaryOp::Is | BinaryOp::IsNot | BinaryOp::And | BinaryOp::Or
+        ) {
+            return Err(Diagnostic::new(span, "this operator has no compound assignment"));
         }
-        if left.type_name != right.type_name {
-            return Err(type_mismatch(span, left.type_name, right.type_name));
-        }
-        if comparison {
-            let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
-            if (!equality && !is_ordered(left.type_name)) || left.type_name == TypeName::Void {
-                return Err(Diagnostic::new(
-                    span,
-                    if equality {
-                        "equality requires scalar operands"
-                    } else {
-                        "ordering requires numeric or char operands"
-                    },
-                ));
+        let comparison = is_comparison(operation);
+        let (left, right) = if is_shift(operation) {
+            if !is_integer(left.type_name) || !is_integer(right.type_name) {
+                return Err(Diagnostic::new(span, "a shift requires integer operands"));
             }
-        } else if !is_numeric(left.type_name) {
-            return Err(Diagnostic::new(
-                span,
-                "arithmetic requires numeric operands",
-            ));
-        }
+            let bits = 8 * width(self.rules.promoted(left.type_name));
+            if let Some(hir::Operand::Constant(_, count)) = right.operand {
+                if !(0..i64::from(bits)).contains(&count) {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("shift count {count} is outside 0..{bits}"),
+                    ));
+                }
+            }
+            let (left_type, right_type) = (
+                self.rules.promoted(left.type_name),
+                self.rules.promoted(right.type_name),
+            );
+            (
+                self.implicit(left, left_type, span)?,
+                self.implicit(right, right_type, span)?,
+            )
+        } else {
+            let Some(common) = self.rules.common(left.type_name, right.type_name) else {
+                let (left, right) = (left.type_name, right.type_name);
+                if is_integer(left) && is_integer(right) {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!(
+                            "{} and {} have no common type; convert one explicitly",
+                            type_name_text(left),
+                            type_name_text(right)
+                        ),
+                    ));
+                }
+                return Err(type_mismatch(span, left, right));
+            };
+            operand_rule(operation, common, span)?;
+            (
+                self.implicit(left, common, span)?,
+                self.implicit(right, common, span)?,
+            )
+        };
         if is_fixed(left.type_name)
             && matches!(
                 operation,
@@ -3337,7 +3740,7 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::Multiply if is_float(left.type_name) => "fmul",
             BinaryOp::Divide if is_float(left.type_name) => "fdiv",
             BinaryOp::Remainder if is_float(left.type_name) => {
-                return Err(Diagnostic::new(span, "'%' is not defined for floats"));
+                return Err(Diagnostic::new(span, "'%' is not defined for floats"))
             }
             BinaryOp::Add => "add",
             BinaryOp::Subtract => "sub",
@@ -3356,7 +3759,19 @@ impl<'a> FunctionCompiler<'a> {
             BinaryOp::LessEqual => "le",
             BinaryOp::Greater => "gt",
             BinaryOp::GreaterEqual => "ge",
+            BinaryOp::BitAnd => "and",
+            BinaryOp::BitOr => "or",
+            BinaryOp::BitXor => "xor",
+            BinaryOp::ShiftLeft => "shl",
+            BinaryOp::ShiftRight if is_unsigned(left.type_name) => "shr",
+            BinaryOp::ShiftRight => "sar",
             BinaryOp::Is | BinaryOp::IsNot => unreachable!("identity handled above"),
+            BinaryOp::And | BinaryOp::Or => {
+                return Err(Diagnostic::new(
+                    span,
+                    "'and' and 'or' have no compound assignment",
+                ))
+            }
         };
         self.emit(
             op,
@@ -3609,7 +4024,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Call { name, .. } => self.signatures.get(name).map(|one| one.result),
             Expr::MethodCall { .. } => Some(TypeName::U16),
-            Expr::Unary { operand, .. } => self.expression_type_hint(operand),
+            Expr::Unary {
+                op: UnaryOp::Not, ..
+            } => Some(TypeName::Bool),
+            Expr::Unary { operand, .. } => self
+                .expression_type_hint(operand)
+                .map(|one| self.rules.promoted(one)),
+            Expr::Conversion { target, .. } => Some(*target),
             Expr::Index { base, .. } => {
                 let Expr::Name(name, _) = base.as_ref() else {
                     return None;
@@ -3650,21 +4071,29 @@ impl<'a> FunctionCompiler<'a> {
                         | BinaryOp::GreaterEqual
                         | BinaryOp::Is
                         | BinaryOp::IsNot
+                        | BinaryOp::And
+                        | BinaryOp::Or
                 ) {
                     return Some(TypeName::Bool);
+                }
+                if is_shift(*op) {
+                    return self.expression_type_hint(left).map(|one| self.rules.promoted(one));
                 }
                 match (
                     self.expression_type_hint(left),
                     self.expression_type_hint(right),
                 ) {
-                    (Some(left), Some(right)) if left == right => Some(left),
-                    (Some(type_name), None) | (None, Some(type_name)) => Some(type_name),
-                    (Some(_), Some(_)) | (None, None) => None,
+                    (Some(left), Some(right)) => self.rules.common(left, right),
+                    (Some(type_name), None) | (None, Some(type_name)) => {
+                        Some(self.rules.promoted(type_name))
+                    }
+                    (None, None) => None,
                 }
             }
             Expr::Integer(..)
             | Expr::FString { .. }
             | Expr::Array(..)
+            | Expr::Repeat { .. }
             | Expr::Comprehension { .. }
             | Expr::Generator { .. }
             | Expr::DictComprehension { .. }
@@ -3792,14 +4221,14 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(
                     span,
                     format!("{name}() takes no arguments"),
-                ));
+                ))
             }
             "dim" => return Err(Diagnostic::new(span, "dim() takes one dimension index")),
             _ => {
                 return Err(Diagnostic::new(
                     span,
                     format!("array has no method {name:?}"),
-                ));
+                ))
             }
         };
         let operand = if let Some(length) = length {
@@ -3895,11 +4324,11 @@ impl<'a> FunctionCompiler<'a> {
             return Err(type_mismatch(span, expected.expect("checked"), value_type));
         }
         let wanted = required(
-            self.expression(&arguments[0], Some(key_type))?,
+            self.coerced(&arguments[0], key_type)?,
             arguments[0].span(),
         )?;
         let fallback = required(
-            self.expression(&arguments[1], Some(value_type))?,
+            self.coerced(&arguments[1], value_type)?,
             arguments[1].span(),
         )?;
         let result_place = self.place("$dict_get_result", value_type, true);
@@ -4070,7 +4499,7 @@ impl<'a> FunctionCompiler<'a> {
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
             match parameter {
                 SignatureParameter::Scalar(type_name) => {
-                    let value = self.expression(argument, Some(*type_name))?;
+                    let value = self.coerced(argument, *type_name)?;
                     operands.push(required(value, argument.span())?);
                 }
                 SignatureParameter::Borrowed {
@@ -4289,7 +4718,7 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(
                     *span,
                     "a by-value parameter has no borrowable storage",
-                ));
+                ))
             }
         };
         let result = self.value_type(pointer_type);
@@ -4697,14 +5126,14 @@ fn fixed_storage_value(value: i128, type_name: TypeName, span: Span) -> Result<i
     Ok(value)
 }
 
-fn is_integer(type_name: TypeName) -> bool {
+pub(crate) fn is_integer(type_name: TypeName) -> bool {
     matches!(
         type_name,
         TypeName::I8 | TypeName::U8 | TypeName::I16 | TypeName::U16 | TypeName::I32 | TypeName::U32
     )
 }
 
-fn is_signed(type_name: TypeName) -> bool {
+pub(crate) fn is_signed(type_name: TypeName) -> bool {
     matches!(
         type_name,
         TypeName::I8 | TypeName::I16 | TypeName::I32 | TypeName::I64 | TypeName::Fixed { .. }
@@ -4718,7 +5147,7 @@ fn is_unsigned(type_name: TypeName) -> bool {
     )
 }
 
-fn is_float(type_name: TypeName) -> bool {
+pub(crate) fn is_float(type_name: TypeName) -> bool {
     matches!(type_name, TypeName::F32 | TypeName::F64)
 }
 
@@ -4728,6 +5157,125 @@ fn is_numeric(type_name: TypeName) -> bool {
 
 fn is_ordered(type_name: TypeName) -> bool {
     is_numeric(type_name) || type_name == TypeName::Char
+}
+
+/// A repeat literal's element count; only rank one is implemented.
+fn repeat_count(counts: &[Expr]) -> Result<usize, Diagnostic> {
+    match counts {
+        [Expr::Integer(count, at)] => usize::try_from(*count)
+            .map_err(|_| Diagnostic::new(*at, "a repeat count must be non-negative")),
+        [count] => Err(Diagnostic::new(
+            count.span(),
+            "a repeat count must be a compile-time integer",
+        )),
+        [_, second, ..] => Err(Diagnostic::new(
+            second.span(),
+            "only rank-one repeat literals are implemented",
+        )),
+        [] => unreachable!("the parser requires a count"),
+    }
+}
+
+/// An expression whose type comes from its context.
+fn is_literal(expression: &Expr) -> bool {
+    is_integer_literal(expression)
+        || is_float_literal(expression)
+        || matches!(
+            expression,
+            Expr::Character(..) | Expr::Boolean(..) | Expr::String(..)
+        )
+}
+
+fn storage_type(storage: FixedStorage) -> TypeName {
+    match storage {
+        FixedStorage::I16 => TypeName::I16,
+        FixedStorage::I32 => TypeName::I32,
+    }
+}
+
+fn is_integer_literal(expression: &Expr) -> bool {
+    match expression {
+        Expr::Integer(..) => true,
+        Expr::Unary {
+            op: UnaryOp::Negative,
+            operand,
+            ..
+        } => matches!(operand.as_ref(), Expr::Integer(..)),
+        _ => false,
+    }
+}
+
+fn is_float_literal(expression: &Expr) -> bool {
+    match expression {
+        Expr::Float(..) => true,
+        Expr::Unary {
+            op: UnaryOp::Negative,
+            operand,
+            ..
+        } => matches!(operand.as_ref(), Expr::Float(..)),
+        _ => false,
+    }
+}
+
+/// `value`'s low bits as `target` reads them.
+fn wrapped(value: i64, target: TypeName) -> i64 {
+    let bits = 8 * width(target);
+    let low = value & ((1_i64 << bits) - 1);
+    if is_signed(target) && low >> (bits - 1) != 0 {
+        low - (1_i64 << bits)
+    } else {
+        low
+    }
+}
+
+fn is_comparison(operation: BinaryOp) -> bool {
+    matches!(
+        operation,
+        BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual
+    )
+}
+
+fn is_shift(operation: BinaryOp) -> bool {
+    matches!(operation, BinaryOp::ShiftLeft | BinaryOp::ShiftRight)
+}
+
+fn is_bitwise(operation: BinaryOp) -> bool {
+    is_shift(operation) || matches!(operation, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
+}
+
+/// What the left operand of a numeric binary operator may be.
+fn operand_rule(operation: BinaryOp, type_name: TypeName, span: Span) -> Result<(), Diagnostic> {
+    if is_comparison(operation) {
+        let equality = matches!(operation, BinaryOp::Equal | BinaryOp::NotEqual);
+        if (!equality && !is_ordered(type_name)) || type_name == TypeName::Void {
+            return Err(Diagnostic::new(
+                span,
+                if equality {
+                    "equality requires scalar operands"
+                } else {
+                    "ordering requires numeric or char operands"
+                },
+            ));
+        }
+    } else if is_bitwise(operation) {
+        if !is_integer(type_name) {
+            return Err(Diagnostic::new(
+                span,
+                "bitwise operators require integer operands",
+            ));
+        }
+    } else if !is_numeric(type_name) {
+        return Err(Diagnostic::new(
+            span,
+            "arithmetic requires numeric operands",
+        ));
+    }
+    Ok(())
 }
 
 fn is_fixed(type_name: TypeName) -> bool {
@@ -4754,7 +5302,7 @@ fn type_id(type_name: TypeName) -> u32 {
     }
 }
 
-fn width(type_name: TypeName) -> u32 {
+pub(crate) fn width(type_name: TypeName) -> u32 {
     match type_name {
         TypeName::Void => 0,
         TypeName::Bool | TypeName::Char | TypeName::I8 | TypeName::U8 => 1,

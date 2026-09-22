@@ -1182,6 +1182,11 @@ def funnel(name: str, dest: Register_, other: Register_, count: int | None, at: 
     return _assemble(Instruction.create_reg_reg_i32(code, dest, other, count), at)
 
 
+def _cl(count: Register_) -> bool:
+    """A count in cx or ecx is one in cl: every shift and rotate reads only `count & 31`."""
+    return count in (Register.CL, Register.CX, Register.ECX)
+
+
 def shift(name: str, dest: Register_ | ir.Mem, count: int | None, at: int = 0) -> Emitted | None:
     """Shift a register or spill cell. `count` of None means by cl."""
     if name not in SHIFTS:
@@ -1593,17 +1598,17 @@ def emit(
             match (dests[0], sources[1], sources[2]):
                 case (ir.Reg(register=into), ir.Reg(register=other), ir.Imm(value=count)):
                     return funnel(what.name or "", into, other, count, at)
-                case (ir.Reg(register=into), ir.Reg(register=other), ir.Reg(register=Register.CL)):
+                case (ir.Reg(register=into), ir.Reg(register=other), ir.Reg(register=count)) if _cl(count):
                     return funnel(what.name or "", into, other, None, at)
         case ir.Operation.BINARY if (what.name or "") in SHIFTS and len(dests) == 1 and len(sources) == 2:
             match (dests[0], sources[1]):
                 case (ir.Reg(register=into), ir.Imm(value=count)):
                     return shift(what.name or "", into, count, at)
-                case (ir.Reg(register=into), ir.Reg(register=Register.CL)):
+                case (ir.Reg(register=into), ir.Reg(register=count)) if _cl(count):
                     return shift(what.name or "", into, None, at)
                 case (ir.Mem() as cell, ir.Imm(value=count)):
                     return shift(what.name or "", cell, count, at)
-                case (ir.Mem() as cell, ir.Reg(register=Register.CL)):
+                case (ir.Mem() as cell, ir.Reg(register=count)) if _cl(count):
                     return shift(what.name or "", cell, None, at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].

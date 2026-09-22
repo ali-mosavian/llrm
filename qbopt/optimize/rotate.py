@@ -24,8 +24,9 @@ def entered(body: mir.MirBody) -> mir.MirBody:
     unrolling it in a later round found no loop to work on.
     """
     from qbopt.optimize import cfg
+    from qbopt.optimize import canonical
 
-    return cfg.merged(rotated(_counted_down(body)))
+    return cfg.merged(canonical.identities(rotated(_counted_down(body))))
 
 
 def _counted_down(body: mir.MirBody) -> mir.MirBody:
@@ -53,7 +54,7 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
     all_values = tuple(ssa.values(body))
 
     for loop in loops.loops(body.blocks, body.entry):
-        proofs = induction.counted(body, loop, facts)
+        proofs = induction.counted(body, loop, facts, inbounds=True)
         if len(proofs) != 1:
             continue
         proof = proofs[0]
@@ -73,7 +74,6 @@ def _counted_down(body: mir.MirBody) -> mir.MirBody:
             at,
             width,
             [],
-            facts,
         )
         count = induction.trips(proof, seeds.computed)
         # A constant count is handled more profitably by the ordinary
@@ -241,15 +241,10 @@ def _step_test(body: mir.MirBody, loop: loops.Loop, header: mir.MirBlock) -> mir
         phi = next((one for one in header.phis if one.result.id == counter.value), None)
         if phi is None or latch_at not in phi.incoming:
             continue
-        comparisons = [
-            op
-            for op in header.ops[:-1]
-            if induction._counter_bound(op, branch, counter, counter.start.width, made)
-            == mir.Const(0, counter.start.width)
-        ]
-        if len(comparisons) != 1:
+        proof = induction.controlling(body, loop, counter, facts)
+        if proof is None or proof.posttested or proof.bound != mir.Const(0, counter.start.width):
             continue
-        compare = comparisons[0]
+        compare = proof.compare
         flags = [value for value in compare.defines if value.flags]
         if len(flags) != 1 or readers.get(flags[0]) != [branch]:
             continue

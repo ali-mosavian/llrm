@@ -88,36 +88,22 @@ class AffineMap:
 
 
 @dataclass(frozen=True, slots=True)
-class LoopShape:
-    """The canonical pre-tested, single-latch loop CFG.
-
-    This is control-flow structure only.  Keeping it separate from counted
-    loop semantics prevents every consumer from spelling its own subtly
-    different preheader, latch, entry, and exit recognizer.
-    """
-
-    preheader: int
-    latch: int
-    entered: int
-    exit: int
-
-
-@dataclass(frozen=True, slots=True)
 class CountedLoop:
-    """A canonical zero-or-more loop with an exact symbolic trip count.
+    """The one proof of how many trips a loop makes, shared by every pass.
 
-    This is deliberately a proof object rather than another recognizer in a
-    transform.  ``trip_count`` answers the narrower question "is the count a
-    positive host integer?"; this object retains the useful answer when the
-    count is an invariant MIR value:
+        i = start; loop { [i test bound?] body; i += step; [i test bound?] }
 
-        i = start; while i test bound: ...; i += 1
+    ``test`` continues the loop, counter first; ``step`` is a nonzero
+    constant. A pre-tested loop tests the header value before each trip; a
+    post-tested one tests after each trip, the stepped value when
+    ``stepped``. ``width`` is the compare's: a counter read narrower is
+    counted modulo that width.
 
-    ``test`` is ``<`` or ``<=``, signed or unsigned. The loop is entered iff
-    ``start test bound``, and then runs ``bound - start`` trips, one more
-    when inclusive, without assuming a value for either.  Consumers may turn
-    the control recurrence into a guarded countdown, but may not infer that
-    an unrelated scaled recurrence is injective over that unknown domain.
+    ``count`` is the exact trip count when constant. ``trips`` places it
+    when symbolic, which needs a pre-tested unit step: the only proofs with
+    no ``count``. ``first`` and ``last`` are the header's signed values on
+    the first and last trip, given only when nothing up to the exit wraps.
+    ``maximum`` bounds the trips when the count is unknown.
     """
 
     counter: Affine
@@ -126,57 +112,82 @@ class CountedLoop:
     branch: mir.Op
     start: mir.Held | mir.Const
     bound: mir.Held | mir.Const
-    test: mir.Kind  # the comparison that continues the loop
-    preheader: int
+    test: mir.Kind
+    preheader: int | None
     latch: int
     entered: int
     exit: int
     maximum: int | None = None
+    step: int = 1
+    posttested: bool = False
+    stepped: bool = False
+    count: int | None = None
+    first: int | None = None
+    last: int | None = None
 
     @property
     def inclusive(self) -> bool:
-        return self.test in (mir.Kind.LE, mir.Kind.BELOW_EQ)
+        return self.test in _INCLUSIVE
+
+    @property
+    def width(self) -> int:
+        return self.bound.width
+
+    @property
+    def span(self) -> tuple[int, int] | None:
+        """The signed values the header's counter takes on a trip, lowest first."""
+        if self.first is None or self.last is None:
+            return None
+        return min(self.first, self.last), max(self.first, self.last)
 
 
-_SKIPPED = {
-    mir.Kind.BELOW: mir.Kind.BELOW_EQ,
-    mir.Kind.LT: mir.Kind.LE,
-    mir.Kind.BELOW_EQ: mir.Kind.BELOW,
-    mir.Kind.LE: mir.Kind.LT,
-}
+_ASCENDING = frozenset({mir.Kind.LT, mir.Kind.LE, mir.Kind.BELOW, mir.Kind.BELOW_EQ})
+_DESCENDING = frozenset({mir.Kind.GT, mir.Kind.GE, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ})
+_INCLUSIVE = frozenset({mir.Kind.LE, mir.Kind.BELOW_EQ, mir.Kind.GE, mir.Kind.ABOVE_EQ})
+_UNSIGNED = frozenset({mir.Kind.BELOW, mir.Kind.BELOW_EQ, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ})
+# The preheader test `bound SKIPPED start` under which no trip runs.
+_SKIPPED = {test: mir.MIRRORED[mir.NEGATED[test]] for test in (*_ASCENDING, *_DESCENDING, mir.Kind.NE)}
 
 
 Computed = Callable[[mir.Kind, tuple[mir.Arg, ...]], mir.Held | mir.Const]
 
 
-def skipped(proof: CountedLoop) -> tuple[tuple[mir.Held | mir.Const, mir.Held | mir.Const], mir.Kind]:
+def skipped(proof: CountedLoop) -> tuple[tuple[mir.Held | mir.Const, mir.Held | mir.Const], mir.Kind] | None:
     """The preheader comparison, and the test on it, under which the loop runs no trips."""
-    test = _SKIPPED[proof.test]
-    if test is mir.Kind.BELOW_EQ and proof.start == mir.Const(0, proof.start.width):
-        test = mir.Kind.EQ  # nothing is below zero
-    return (proof.bound, proof.start), test
+    if proof.posttested:
+        return None
+    return (proof.bound, proof.start), _SKIPPED[proof.test]
 
 
-def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const:
-    """Trips on the entered path, exact modulo the counter's width.
+def trips(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None:
+    """Trips on the entered path, exact modulo the compare's width, or None where not expressible.
 
     `computed(kind, args)` places one preheader operation and returns its
-    result. `counted` proved the count fits: an exclusive test cannot reach
-    the width's size, and an inclusive one is proved finite first.
+    result. `counted` proved the count finite.
     """
-    width = proof.bound.width
-    if isinstance(proof.bound, mir.Const) and isinstance(proof.start, mir.Const):
-        return mir.Const(consts.masked(proof.bound.n - proof.start.n + proof.inclusive, width), width)
-    count = computed(mir.Kind.SUB, (proof.bound, proof.start))
+    width = proof.width
+    if proof.posttested:
+        return None
+    if proof.count is not None:
+        return mir.Const(proof.count, width) if proof.count < 1 << 8 * width else None
+    ahead, behind = (proof.bound, proof.start) if proof.step > 0 else (proof.start, proof.bound)
+    count = computed(mir.Kind.SUB, (ahead, behind))
     return computed(mir.Kind.ADD, (count, mir.Const(int(proof.inclusive), width)))
 
 
-def exit_value(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const:
-    """The counter as a loop that ran a trip leaves: the first value failing its test."""
-    width = proof.bound.width
+def exit_value(proof: CountedLoop, computed: Computed) -> mir.Held | mir.Const | None:
+    """The header's counter as a pre-tested loop that ran a trip leaves: the first value failing its test."""
+    width = proof.width
+    if proof.posttested:
+        return None
+    if proof.test is mir.Kind.NE:
+        return proof.bound
+    if isinstance(proof.start, mir.Const) and proof.count is not None:
+        return mir.Const(consts.masked(proof.start.n + proof.count * proof.step, width), width)
+    past = mir.Const(consts.masked(proof.step * proof.inclusive, width), width)
     if isinstance(proof.bound, mir.Const):
-        return mir.Const(consts.masked(proof.bound.n + proof.inclusive, width), width)
-    return computed(mir.Kind.ADD, (proof.bound, mir.Const(int(proof.inclusive), width)))
+        return mir.Const(consts.masked(proof.bound.n + past.n, width), width)
+    return computed(mir.Kind.ADD, (proof.bound, past))
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,130 +226,269 @@ class ZeroTerminatingControl:
     period: int
 
 
-def canonical(body: mir.MirBody, loop: loopy.Loop) -> LoopShape | None:
-    """The one normalized loop shape consumed by induction transforms."""
+@dataclass(frozen=True, slots=True)
+class _Control:
+    """Where a single-latch loop with one exit tests whether to go round again."""
+
+    block: int
+    preheader: int | None
+    entered: int
+    exit: int
+    posttested: bool
+
+
+def _control(body: mir.MirBody, loop: loopy.Loop) -> _Control | None:
+    """The block whose final branch is the loop's only exit: its header, or its latch."""
     blocks = {block.at: block for block in body.blocks}
     if len(loop.latches) != 1 or loop.header not in blocks:
         return None
-    latch_at = next(iter(loop.latches))
-    latch = blocks.get(latch_at)
+    latch = blocks.get(next(iter(loop.latches)))
     header = blocks[loop.header]
     inside = set(loop.body)
-    outside = [at for at in loopy.predecessors(body.blocks).get(header.at, ()) if at not in inside]
-    entered = [at for at in header.succ if at in inside and at != header.at]
-    exits = [at for at in header.succ if at not in inside]
+    if latch is None:
+        return None
+    if latch.succ == (header.at,):
+        control, entered = header, [at for at in header.succ if at in inside]
+    elif header.at in latch.succ:
+        control, entered = latch, [header.at]
+    else:
+        return None
+    exits = [at for at in control.succ if at not in inside]
     if (
-        latch is None
-        or len(outside) != 1
-        or blocks[outside[0]].succ != (header.at,)
-        or latch.succ != (header.at,)
+        len(control.succ) != 2
         or len(entered) != 1
         or len(exits) != 1
-        or not header.ops
-        or header.ops[-1].kind is not mir.Kind.BRANCH
-        or any(any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at)
+        or not control.ops
+        or control.ops[-1].kind is not mir.Kind.BRANCH
+        or control.ops[-1].target not in control.succ
+        or any(
+            not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != control.at
+        )
     ):
         return None
-    return LoopShape(outside[0], latch_at, entered[0], exits[0])
+    outside = [at for at in loopy.predecessors(body.blocks).get(header.at, ()) if at not in inside]
+    preheader = outside[0] if len(outside) == 1 and blocks[outside[0]].succ == (header.at,) else None
+    return _Control(control.at, preheader, entered[0], exits[0], control is latch)
 
 
-def counted(body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None) -> tuple[CountedLoop, ...]:
-    """Prove every canonical ``start ..< bound`` or ``start ..= bound`` unit control recurrence.
+def counted(
+    body: mir.MirBody, loop: loopy.Loop, facts: dict | None = None, *, inbounds: bool = False
+) -> tuple[CountedLoop, ...]:
+    """Prove every counter that alone decides when a single-exit loop leaves.
 
-    Loop normalization gives analyses one structural spelling: a dedicated
-    preheader, a pre-tested header, one latch, and no side exit.  This proof
-    adds the semantic facts which shape alone cannot supply.  It is shared by
-    strength reduction and loop rotation so neither pass grows a subtly
-    different interpretation of the same branch.
-
-    An exclusive test stops the counter before it can wrap.  An inclusive
-    one runs forever where ``bound`` is its type's maximum, so it is proved
-    only where that cannot happen: a constant below it, or a finite
-    ``maximum``.
+    Constant start and bound give an exact ``count``, and so does an
+    equality sentinel a constant distance from the start. Otherwise the
+    proof is symbolic, and only for a pre-tested unit step whose loop is
+    proved finite: an exclusive or ``!=`` test always is; an inclusive one
+    runs forever where ``bound`` is the end of its type, so needs a
+    ``maximum``. Only with `inbounds` is one taken from the loop's memory
+    accesses: that reads `derived`, which asks this for counts.
     """
     facts = consts.known(body) if facts is None else facts
     blocks = {block.at: block for block in body.blocks}
-    shape = canonical(body, loop)
+    shape = _control(body, loop)
     if shape is None:
         return ()
-    header = blocks[loop.header]
+    header, control = blocks[loop.header], blocks[shape.block]
     inside = set(loop.body)
-    branch = header.ops[-1]
-    test = _continuing_test(branch, inside)
-    if test not in _SKIPPED:
-        return ()
-    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ)
-    inclusive = test in (mir.Kind.LE, mir.Kind.BELOW_EQ)
+    branch = control.ops[-1]
+    continuing = branch.test if branch.target in inside else mir.NEGATED.get(branch.test)
+    latch = next(iter(loop.latches))
     still = invariant(body, inside)
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     proven = []
     for counter in basics(body, loop).values():
-        width = counter.start.width
-        if _signed(counter.step, facts, width) != 1 or not isinstance(counter.start, (mir.Held, mir.Const)):
-            continue
         phi = next((one for one in header.phis if one.result.id == counter.value), None)
-        if phi is None or set(phi.incoming) != {shape.preheader, shape.latch}:
+        if phi is None or latch not in phi.incoming or not isinstance(counter.start, (mir.Held, mir.Const)):
             continue
-        comparisons = [
-            (op, bound)
-            for op in header.ops[:-1]
-            if (bound := _counter_bound(op, branch, counter, width, made)) is not None
-        ]
-        if len(comparisons) != 1:
+        tested = {phi.result.id: False, phi.incoming[latch].id: True} if shape.posttested else {phi.result.id: False}
+        comparisons = [found for op in control.ops[:-1] if (found := _compared(op, branch, tested, made)) is not None]
+        if len(comparisons) != 1 or continuing is None:
             continue
-        compare, bound = comparisons[0]
-        if not isinstance(bound, (mir.Held, mir.Const)) or bound.width != width:
+        compare, width, bound, mirrored, stepped = comparisons[0]
+        test = mir.MIRRORED[continuing] if mirrored else continuing
+        step = _signed(counter.step, facts, counter.start.width)
+        if (
+            not step
+            or width > counter.start.width
+            or not isinstance(bound, (mir.Held, mir.Const))
+            or bound.width != width
+        ):
             continue
         if isinstance(bound, mir.Held) and bound.value.id not in still:
             continue
-        update = phi.incoming[shape.latch]
-        stepping = made.get(update.id)
-        if (
-            stepping is None
-            or mir.stepping(stepping) != (mir.Held(phi.result, width), mir.Const(1, width))
-            or stepping.results != (mir.Held(update, width),)
-            or stepping.loads
-            or stepping.stores
-            or stepping.barrier
-            or stepping.merges
+        step = _as_signed(consts.masked(step, width), width)
+        if not step or not (
+            test is mir.Kind.NE or (test in _ASCENDING and step > 0) or (test in _DESCENDING and step < 0)
         ):
             continue
-        start = _constant(counter.start, facts, width)
-        limit = _constant(bound, facts, width)
-        if unsigned:
-            first, last, top = start, limit, (1 << 8 * width) - 1
+        start = mir.Held(counter.start.value, width) if isinstance(counter.start, mir.Held) else counter.start
+        start = mir.Const(consts.masked(start.n, width), width) if isinstance(start, mir.Const) else start
+        begin, limit = _constant(start, facts, width), _constant(bound, facts, width)
+        difference = _difference(bound, start, begin, limit, made, facts, width)
+        count = first = last = maximum = None
+        if difference is not None and test is mir.Kind.NE:
+            count = _equal_after(difference, step, width, shape.posttested, stepped)
+        elif begin is not None and limit is not None:
+            count = _ordered_after(begin, limit, step, test, width, shape.posttested, stepped)
+        if count is not None:
+            maximum = count
+            if _signed(counter.step, facts, counter.start.width) == step:
+                first, last = _signed_span(counter.start, facts, width, count, step)
+        elif shape.posttested or abs(step) != 1:
+            continue
         else:
-            first = None if start is None else _as_signed(start, width)
-            last = None if limit is None else _as_signed(limit, width)
-            top = (1 << 8 * width - 1) - 1
-        if inclusive and last == top:
-            continue
-        lowest = first if first is not None else _range(body, counter.start, 0, top)
-        highest = last if last is not None else _range(body, bound, 1, top - inclusive)
-        maximum = None
-        if lowest is not None and highest is not None:
-            maximum = max(0, highest - lowest + inclusive)
-        if maximum is None:
-            maximum = _inbounds_trips(body, loop, shape.latch)
-        if inclusive and last is None and maximum is None:
-            continue
+            maximum = _unit_maximum(body, loop, start, bound, begin, limit, step, test, inbounds)
+            if maximum is None and test in _INCLUSIVE:
+                continue
         proven.append(
             CountedLoop(
                 counter,
                 phi,
                 compare,
                 branch,
-                counter.start if start is None else mir.Const(start, width),
+                start if begin is None else mir.Const(begin, width),
                 bound if limit is None else mir.Const(limit, width),
                 test,
                 shape.preheader,
-                shape.latch,
+                latch,
                 shape.entered,
                 shape.exit,
                 maximum,
+                step,
+                shape.posttested,
+                stepped,
+                count,
+                first,
+                last,
             )
         )
     return tuple(proven)
+
+
+def _compared(
+    op: mir.Op, branch: mir.Op, tested: dict[int, bool], made: dict[int, mir.Op]
+) -> tuple[mir.Op, int, mir.Arg, bool, bool] | None:
+    """(op, width, bound, mirrored, stepped) where `op` sets `branch`'s flags from a tested counter value."""
+    if len(op.args) != 2 or op.loads or op.stores or op.barrier:
+        return None
+    flags = [value for value in op.defines if value.flags]
+    if len(flags) != 1 or flags[0] not in branch.uses:
+        return None
+    for index, arg in enumerate(op.args):
+        if not isinstance(arg, mir.Held) or _copied(arg, made).value.id not in tested:
+            continue
+        stepped = tested[_copied(arg, made).value.id]
+        if op.kind is mir.Kind.SUB and not op.results and len(op.defines) == 1:
+            return op, arg.width, op.args[1 - index], index == 1, stepped
+        if op.kind in (mir.Kind.AND, mir.Kind.OR) and op.args[0] == op.args[1]:
+            return op, arg.width, mir.Const(0, arg.width), False, stepped
+    return None
+
+
+def _difference(
+    bound: mir.Held | mir.Const,
+    start: mir.Held | mir.Const,
+    begin: int | None,
+    limit: int | None,
+    made: dict[int, mir.Op],
+    facts: dict,
+    width: int,
+) -> int | None:
+    """`bound - start` modulo the width, when constant: both constant, or `bound = start + c`."""
+    if begin is not None and limit is not None:
+        return consts.masked(limit - begin, width)
+    definition = made.get(bound.value.id) if isinstance(bound, mir.Held) else None
+    if (
+        definition is None
+        or definition.kind is not mir.Kind.ADD
+        or definition.loads
+        or definition.stores
+        or definition.barrier
+        or definition.merges
+        or len(definition.args) != 2
+        or definition.results != (bound,)
+    ):
+        return None
+    for index, arg in enumerate(definition.args):
+        if isinstance(arg, mir.Held) and isinstance(start, mir.Held) and arg.value == start.value:
+            offset = _constant(definition.args[1 - index], facts, width)
+            if offset is not None:
+                return offset
+    return None
+
+
+def _equal_after(difference: int, step: int, width: int, posttested: bool, stepped: bool) -> int | None:
+    """Trips until `start + k*step`, tested as the loop is shaped, first equals `start + difference`."""
+    modulus = 1 << 8 * width
+    lead = int(posttested and stepped)
+    divisor = gcd(step % modulus, modulus)
+    remaining = (difference - lead * step) % modulus
+    if remaining % divisor:
+        return None  # never equal: the loop does not end
+    period = modulus // divisor
+    return int(posttested) + remaining // divisor * pow(step % modulus // divisor, -1, period) % period
+
+
+def _ordered_after(
+    begin: int, limit: int, step: int, test: mir.Kind, width: int, posttested: bool, stepped: bool
+) -> int | None:
+    """Trips of an ordered test with constant ends, or None where a tested value would wrap first."""
+    unsigned = test in _UNSIGNED
+    low, high = (0, (1 << 8 * width) - 1) if unsigned else (-(1 << 8 * width - 1), (1 << 8 * width - 1) - 1)
+    first = (begin if unsigned else _as_signed(begin, width)) + int(posttested and stepped) * step
+    bound = limit if unsigned else _as_signed(limit, width)
+    if not low <= first <= high:
+        return None
+    if step > 0:
+        edge = bound + (test in _INCLUSIVE)
+        tested = max(0, -((first - edge) // step))
+    else:
+        edge = bound - (test in _INCLUSIVE)
+        tested = max(0, -((edge - first) // -step))
+    return int(posttested) + tested if low <= first + tested * step <= high else None
+
+
+def _signed_span(start: mir.Arg, facts: dict, width: int, count: int, step: int) -> tuple[int | None, int | None]:
+    """The first and last signed header values over `count` trips, where none up to the exit wraps."""
+    begin = _signed(start, facts, start.width) if isinstance(start, (mir.Held, mir.Const)) else None
+    if begin is None or count < 1 or _as_signed(consts.masked(begin, width), width) != begin:
+        return None, None
+    last = begin + (count - 1) * step
+    sign = 1 << 8 * width - 1
+    return (begin, last) if -sign <= last < sign and -sign <= last + step < sign else (None, None)
+
+
+def _unit_maximum(
+    body: mir.MirBody,
+    loop: loopy.Loop,
+    start: mir.Held | mir.Const,
+    bound: mir.Held | mir.Const,
+    begin: int | None,
+    limit: int | None,
+    step: int,
+    test: mir.Kind,
+    inbounds: bool,
+) -> int | None:
+    """Most trips of a symbolic unit-step loop, where proved; None for an inclusive test that may never end."""
+    width = bound.width
+    if test is mir.Kind.NE:
+        return (1 << 8 * width) - 1
+    unsigned, inclusive = test in _UNSIGNED, test in _INCLUSIVE
+    low, high = (0, (1 << 8 * width) - 1) if unsigned else (-(1 << 8 * width - 1), (1 << 8 * width - 1) - 1)
+    # Walked toward `bound`, as integers in the test's own signedness.
+    begin = None if begin is None else begin if unsigned else _as_signed(begin, width)
+    limit = None if limit is None else limit if unsigned else _as_signed(limit, width)
+    if inclusive and limit == (high if step > 0 else low):
+        return None
+    ends = (_range(body, start, 0 if step > 0 else 1, high), _range(body, bound, 1 if step > 0 else 0, high))
+    origin = begin if begin is not None else ends[0]
+    target = limit if limit is not None else ends[1]
+    if target is not None and limit is None and inclusive and target == (high if step > 0 else low):
+        target = None
+    if origin is not None and target is not None and low <= min(origin, target) and max(origin, target) <= high:
+        return max(0, (target - origin) * step + inclusive)
+    return _inbounds_trips(body, loop, next(iter(loop.latches))) if inbounds else None
 
 
 def advances(body: mir.MirBody, loop: loopy.Loop) -> dict[mir.Value, int]:
@@ -380,7 +530,8 @@ def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | No
     """The most iterations an access made every iteration allows, as LLVM's inbounds does.
 
     Iteration i reaches `b + i*s` inside one object, and an offset `w` bytes
-    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w).
+    wide addresses at most 2**(8w) of them, so i*s + width <= 2**(8w). Only
+    an access its frontend marked `inbounds` is promised that.
     """
     step = advances(body, loop)
     every = loopy.dominators(body.blocks, body.entry).get(latch, frozenset())
@@ -391,7 +542,7 @@ def _inbounds_trips(body: mir.MirBody, loop: loopy.Loop, latch: int) -> int | No
         if block.at in loop.body and block.at in every and block.at != loop.header
         for op in block.ops
         for ref in (*op.loads, *op.stores)
-        if ref.base in step
+        if ref.inbounds and ref.base in step
     ]
     return min(limits, default=None)
 
@@ -435,6 +586,8 @@ def control_replacement(
     """Prove that ``covered``, loop control and exit phis are every counter use."""
     blocks = {block.at: block for block in body.blocks}
     predecessors = loopy.predecessors(body.blocks)
+    if proof.posttested or proof.preheader is None or proof.width != proof.counter.start.width:
+        return None
     header, latch = blocks[loop.header], blocks[proof.latch]
     if (
         len(loop.body) != 2
@@ -447,7 +600,16 @@ def control_replacement(
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     update = proof.phi.incoming[proof.latch]
     stepping = made.get(update.id)
-    if stepping is None:
+    width = proof.width
+    if (
+        stepping is None
+        or mir.Held(proof.phi.result, width) not in (mir.stepping(stepping) or ())
+        or stepping.results != (mir.Held(update, width),)
+        or stepping.loads
+        or stepping.stores
+        or stepping.barrier
+        or stepping.merges
+    ):
         return None
     aliases, copies = transparent_aliases(body, loop, proof.phi.result)
     allowed = covered | copies | {id(proof.compare), id(stepping)}
@@ -567,12 +729,16 @@ def derived_map(formula: Derived, facts: dict) -> AffineMap | None:
     return AffineMap(scale, offset, width)
 
 
+def controlling(body: mir.MirBody, loop: loopy.Loop, counter: Affine, facts: dict) -> CountedLoop | None:
+    """The proof in which `counter` decides when `loop` leaves."""
+    proofs = counted(body, loop, facts)
+    return next((proof for proof in proofs if proof.counter.value == counter.value), None)
+
+
 def domain(body: mir.MirBody, loop: loopy.Loop, affine: Affine, facts: dict) -> tuple[int, int] | None:
-    """The finite inclusive integer domain visited by ``affine``."""
-    width = affine.start.width
-    start = _signed(affine.start, facts, width)
-    last = _last_counter(body, loop, affine, facts, width)
-    return None if start is None or last is None else (min(start, last), max(start, last))
+    """The finite inclusive signed domain ``affine`` takes on a trip."""
+    proof = controlling(body, loop, affine, facts)
+    return None if proof is None else proof.span
 
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
@@ -789,333 +955,6 @@ def _signed(arg: mir.Arg, facts: dict, width: int) -> int | None:
     return ((fact.n & (sign * 2 - 1)) ^ sign) - sign
 
 
-def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
-    """Last executed counter of a canonical pretested loop, proving its update cannot wrap."""
-    posttested = _posttested_last(body, loop, counter, facts, width)
-    if posttested is not None:
-        return posttested
-    blocks = {block.at: block for block in body.blocks}
-    if len(loop.latches) != 1:
-        return None
-    header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
-    if latch.succ != (header.at,) or not header.ops or len(header.succ) != 2:
-        return None
-    branch = header.ops[-1]
-    if branch.kind is not mir.Kind.BRANCH or branch.target not in header.succ:
-        return None
-    inside = set(loop.body)
-    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at):
-        return None
-    if sum(to in inside for to in header.succ) != 1:
-        return None
-    test = _continuing_test(branch, inside)
-    if test is None:
-        return None
-    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
-    comparisons = [
-        bound for op in header.ops[:-1] if (bound := _counter_bound(op, branch, counter, width, made)) is not None
-    ]
-    if len(comparisons) != 1:
-        return None
-    raw = tuple(_constant(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0]))
-    if any(value is None for value in raw):
-        return None
-    raw_start, raw_step, raw_bound = raw
-    assert raw_start is not None and raw_step is not None and raw_bound is not None
-    step = _as_signed(raw_step, width)
-    if step == 0:
-        return None
-    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ)
-    start = raw_start if unsigned else _as_signed(raw_start, width)
-    bound = raw_bound if unsigned else _as_signed(raw_bound, width)
-    if step > 0 and test in (mir.Kind.LE, mir.Kind.LT, mir.Kind.BELOW_EQ, mir.Kind.BELOW):
-        limit = bound - (test is mir.Kind.LT)
-        if test is mir.Kind.BELOW:
-            limit = bound - 1
-        distance = limit - start
-    elif step < 0 and test in (mir.Kind.GE, mir.Kind.GT, mir.Kind.ABOVE_EQ, mir.Kind.ABOVE):
-        limit = bound + (test is mir.Kind.GT)
-        if test is mir.Kind.ABOVE:
-            limit = bound + 1
-        distance = start - limit
-    elif test is mir.Kind.NE and (bound - start) * step > 0 and (bound - start) % step == 0:
-        distance = abs(bound - start) - abs(step)
-    else:
-        return None
-    if distance < 0:
-        return None
-    last = start + (distance // abs(step)) * step
-    after = last + step
-    if unsigned:
-        return last if 0 <= after < 1 << (width * 8) else None
-    sign = 1 << (width * 8 - 1)
-    return last if -sign <= after < sign else None
-
-
-def _continuing_test(branch: mir.Op, inside: set[int]) -> mir.Kind | None:
-    """The condition under which this branch keeps executing its loop.
-
-    Conditional branches name the taken edge, while recurrence reasoning
-    names the edge that returns to the header.  Keeping that inversion here
-    lets pre-tested and rotated post-tested loops share the exact same
-    comparison semantics.
-    """
-    if branch.target in inside:
-        return branch.test
-    return {
-        mir.Kind.LE: mir.Kind.GT,
-        mir.Kind.LT: mir.Kind.GE,
-        mir.Kind.GE: mir.Kind.LT,
-        mir.Kind.GT: mir.Kind.LE,
-        mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
-        mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
-        mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
-        mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
-        mir.Kind.EQ: mir.Kind.NE,
-        mir.Kind.NE: mir.Kind.EQ,
-    }.get(branch.test)
-
-
-def _posttested_bound(op, branch, counter, width, made):
-    """Bound and final update for a post-tested affine counter, if exact.
-
-    Rotation puts a counter's update before its exit comparison.  The compare
-    therefore names the next phi value rather than the header value.  This is
-    not a special case for an ``inc`` spelling: ``mir.stepping`` supplies the
-    mathematical update for every MIR operation that can be an affine step.
-    """
-    if (
-        len(op.args) != 2
-        or op.kind is not mir.Kind.SUB
-        or op.loads
-        or op.stores
-        or op.barrier
-        or op.results
-        or len(op.defines) != 1
-        or not isinstance(op.args[0], mir.Held)
-        or op.args[0].width != width
-        or not any(value.flags and value in branch.uses for value in op.defines)
-    ):
-        return None
-    following = op.args[0]
-    definition = made.get(following.value.id)
-    if (
-        definition is None
-        or definition.loads
-        or definition.stores
-        or definition.barrier
-        or definition.merges
-        or following not in definition.results
-    ):
-        return None
-    stepped = mir.stepping(definition)
-    if stepped is None:
-        return None
-    source, delta = stepped
-    if (
-        not isinstance(source, mir.Held)
-        or not isinstance(delta, mir.Const)
-        or source.width != width
-        or delta.width != width
-        or _copied(source, made).value.id != counter.value
-    ):
-        return None
-    return op.args[1], delta
-
-
-def _posttested_last(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
-    """Last header value of a canonical rotated loop, with a non-wrapping exit.
-
-    A post-tested loop executes its body once before the test.  We only prove
-    the compact canonical form: one latch updates the header recurrence,
-    compares that immediate next value, and either returns to the header or
-    leaves the loop.  Any early exit, extra latch edge, unknown bound, or
-    potentially wrapping update remains deliberately unmeasured.
-    """
-    blocks = {block.at: block for block in body.blocks}
-    if len(loop.latches) != 1:
-        return None
-    latch = blocks[next(iter(loop.latches))]
-    inside = set(loop.body)
-    if (
-        len(latch.succ) != 2
-        or loop.header not in latch.succ
-        or sum(to in inside for to in latch.succ) != 1
-        or not latch.ops
-    ):
-        return None
-    branch = latch.ops[-1]
-    if branch.kind is not mir.Kind.BRANCH or branch.target not in latch.succ:
-        return None
-    if any(any(to not in inside for to in blocks[at].succ) for at in inside if at != latch.at):
-        return None
-    test = _continuing_test(branch, inside)
-    if test is None:
-        return None
-    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
-    comparisons = [
-        bound for op in latch.ops[:-1] if (bound := _posttested_bound(op, branch, counter, width, made)) is not None
-    ]
-    if len(comparisons) != 1:
-        return None
-    bound_arg, after_step = comparisons[0]
-    raw = tuple(_constant(arg, facts, width) for arg in (counter.start, counter.step, bound_arg, after_step))
-    if any(value is None for value in raw):
-        return None
-    raw_start, raw_step, raw_bound, raw_after = raw
-    assert raw_start is not None and raw_step is not None and raw_bound is not None and raw_after is not None
-    step = _as_signed(raw_step, width)
-    after = _as_signed(raw_after, width)
-    if step == 0 or after != step:
-        return None
-    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ)
-    start = raw_start if unsigned else _as_signed(raw_start, width)
-    bound = raw_bound if unsigned else _as_signed(raw_bound, width)
-    first = start + step
-    if step > 0 and test in (mir.Kind.LT, mir.Kind.BELOW):
-        count = max(1, (bound - first) // step + 1) if first <= bound else 1
-    elif step > 0 and test in (mir.Kind.LE, mir.Kind.BELOW_EQ):
-        count = max(1, (bound - first) // step + 2) if first <= bound else 1
-    elif step < 0 and test in (mir.Kind.GT, mir.Kind.ABOVE):
-        count = max(1, (first - bound) // -step + 1) if first >= bound else 1
-    elif step < 0 and test in (mir.Kind.GE, mir.Kind.ABOVE_EQ):
-        count = max(1, (first - bound) // -step + 2) if first >= bound else 1
-    elif test is mir.Kind.NE and (bound - start) * step > 0 and (bound - start) % step == 0:
-        count = (bound - start) // step
-    else:
-        return None
-    if count <= 0:
-        return None
-    last = start + (count - 1) * step
-    next_value = last + step
-    if unsigned:
-        return last if 0 <= last < 1 << (width * 8) and 0 <= next_value < 1 << (width * 8) else None
-    sign = 1 << (width * 8 - 1)
-    return last if -sign <= last < sign and -sign <= next_value < sign else None
-
-
-def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
-    """The one proven positive execution count shared by every loop counter.
-
-    A loop may carry an integer counter, a byte address and one or more
-    derived counters at once.  They are evidence for the same trip count,
-    not alternatives from which a transform may pick the convenient one.
-    Refusing disagreement keeps cloning transforms independent of which
-    recurrence happened to be visited first.
-    """
-    counts = set()
-    for counter in basics(body, loop).values():
-        width = counter.start.width
-        start = _signed(counter.start, facts, width)
-        step = _signed(counter.step, facts, width)
-        last = _last_counter(body, loop, counter, facts, width)
-        if start is not None and step and last is not None:
-            distance = last - start
-            if not distance % step:
-                count = distance // step + 1
-                if count > 0:
-                    counts.add(count)
-        symbolic = _sentinel_trip_count(body, loop, counter, facts, width)
-        if symbolic is not None:
-            counts.add(symbolic)
-    if len(counts) != 1:
-        # A semantics-preserving loop transform may consume the syntactic
-        # relationship which established this fact.  Nested-recurrence
-        # rewind, for example, replaces ``start`` with an outer phi after it
-        # has proved the inner loop's exact distance.  Retain that proof at
-        # the same header so rotation and measurement do not fall back to a
-        # guessed trip count.  A newly derived disagreement is still refused.
-        return dict(body.loop_trip_counts).get(loop.header) if not counts else None
-    return next(iter(counts))
-
-
-def _sentinel_trip_count(body: mir.MirBody, loop: loopy.Loop, counter: Affine, facts: dict, width: int) -> int | None:
-    """Trips to an invariant ``start + step * count`` equality sentinel.
-
-    The start itself need not be constant.  The modular period proves both
-    that the sentinel is reached and that it cannot be reached earlier.  This
-    is the form left when indvar simplification reuses a pointer or coordinate
-    recurrence and removes a narrower constant counter.
-    """
-    blocks = {block.at: block for block in body.blocks}
-    if len(loop.latches) != 1:
-        return None
-    header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
-    inside = set(loop.body)
-    if latch.succ == (header.at,) and len(header.succ) == 2:
-        control = header
-        posttested = False
-    elif len(latch.succ) == 2 and header.at in latch.succ:
-        control = latch
-        posttested = True
-    else:
-        return None
-    if not control.ops or sum(to in inside for to in control.succ) != 1:
-        return None
-    branch = control.ops[-1]
-    if branch.kind is not mir.Kind.BRANCH or branch.target not in control.succ:
-        return None
-    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != control.at):
-        return None
-    test = _continuing_test(branch, inside)
-    if test is not mir.Kind.NE:
-        return None
-
-    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
-    owners = {value.id: block.at for block in body.blocks for op in block.ops for value in op.defines}
-    if posttested:
-        compared = [
-            found
-            for op in control.ops[:-1]
-            if (found := _posttested_bound(op, branch, counter, width, made)) is not None
-        ]
-        if len(compared) != 1:
-            return None
-        bound, after_step = compared[0]
-        raw_after = _constant(after_step, facts, width)
-    else:
-        compared = [
-            (found, None)
-            for op in control.ops[:-1]
-            if (found := _counter_bound(op, branch, counter, width, made)) is not None
-        ]
-        if len(compared) != 1:
-            return None
-        bound, _after_step = compared[0]
-        raw_after = None
-    if not isinstance(bound, mir.Held):
-        return None
-    definition = made.get(bound.value.id)
-    if (
-        definition is None
-        or owners.get(bound.value.id) in inside
-        or definition.kind is not mir.Kind.ADD
-        or definition.loads
-        or definition.stores
-        or definition.barrier
-        or definition.merges
-        or len(definition.args) != 2
-        or len(definition.results) != 1
-        or definition.results[0] != bound
-    ):
-        return None
-    starts = [arg for arg in definition.args if arg == counter.start]
-    offsets = [arg for arg in definition.args if arg != counter.start]
-    if len(starts) != 1 or len(offsets) != 1:
-        return None
-    raw_step = _constant(counter.step, facts, width)
-    delta = _constant(offsets[0], facts, width)
-    if raw_step in (None, 0) or delta is None or (posttested and raw_after != raw_step):
-        return None
-    modulus = 1 << (8 * width)
-    divisor = gcd(raw_step, modulus)
-    if delta % divisor:
-        return None
-    period = modulus // divisor
-    count = (delta // divisor) * pow(raw_step // divisor, -1, period) % period
-    return count or None
-
-
 def _constant(arg: mir.Arg, facts: dict, width: int) -> int | None:
     """An exact width-limited bit pattern, without imposing signedness."""
     if not isinstance(arg, (mir.Held, mir.Const)) or arg.width != width:
@@ -1129,34 +968,6 @@ def _constant(arg: mir.Arg, facts: dict, width: int) -> int | None:
 def _as_signed(value: int, width: int) -> int:
     sign = 1 << (width * 8 - 1)
     return (value ^ sign) - sign
-
-
-def _counter_bound(op, branch, counter, width, made=None):
-    if (
-        len(op.args) != 2
-        or op.loads
-        or op.stores
-        or op.barrier
-        or not isinstance(op.args[0], mir.Held)
-        or op.args[0].width != width
-    ):
-        return None
-    # A partial numeric result retains part of its destination, but the flags
-    # this branch consumes are still exactly those of the width named by the
-    # operands.  Rejecting that independent value dependency loses ordinary
-    # word `or i,i` loop tests merely because the register model tracks an
-    # upper-half merge.
-    compared = _copied(op.args[0], made) if made is not None else op.args[0]
-    if compared.value.id != counter.value:
-        return None
-    flags = [value for value in op.defines if value.flags]
-    if len(flags) != 1 or flags[0] not in branch.uses:
-        return None
-    if op.kind is mir.Kind.SUB and not op.results and len(op.defines) == 1:
-        return op.args[1]
-    if op.kind in (mir.Kind.AND, mir.Kind.OR) and op.args[0] == op.args[1]:
-        return mir.Const(0, width)
-    return None
 
 
 def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derived]:
@@ -1185,8 +996,8 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
                 continue
             if start % denominator or step % denominator:
                 continue
-            last = _last_counter(body, loop, counter, facts, 2)
-            if last is None or not all(-32768 <= value // denominator <= 32767 for value in (start, last)):
+            span = domain(body, loop, counter, facts)
+            if span is None or not all(-32768 <= value // denominator <= 32767 for value in span):
                 continue
             quotient = Affine(
                 counter.value,
@@ -1198,10 +1009,36 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
     return out
 
 
+def agreed_count(proofs: tuple[CountedLoop, ...]) -> int | None:
+    """The one positive trip count every counter of a loop proves, if they prove one.
+
+    A loop may carry an integer counter, a byte address and one or more
+    derived counters at once.  They are evidence for the same trip count,
+    not alternatives from which a transform may pick the convenient one.
+    Refusing disagreement keeps cloning transforms independent of which
+    recurrence happened to be visited first.
+    """
+    counts = {proof.count for proof in proofs if proof.count}
+    return next(iter(counts)) if len(counts) == 1 else None
+
+
+def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
+    """`agreed_count`, or the count remembered at this header when nothing proves one now."""
+    proofs = counted(body, loop, facts)
+    if not any(proof.count for proof in proofs):
+        # A semantics-preserving loop transform may consume the syntactic
+        # relationship which established this fact.  Nested-recurrence
+        # rewind, for example, replaces ``start`` with an outer phi after it
+        # has proved the inner loop's exact distance.  Retain that proof at
+        # the same header so rotation and measurement do not fall back to a
+        # guessed trip count.  A newly derived disagreement is still refused.
+        return dict(body.loop_trip_counts).get(loop.header)
+    return agreed_count(proofs)
+
+
 def nonempty(body: mir.MirBody, loop) -> bool:
-    """A canonical counted loop whose first iteration and finite exit are proven."""
-    facts = consts.known(body)
-    return trip_count(body, loop, facts) is not None
+    """A counted loop whose first iteration and finite exit are proven."""
+    return trip_count(body, loop, consts.known(body)) is not None
 
 
 def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled) -> list[Derived]:
@@ -1374,25 +1211,15 @@ def _extended(body, loop, op, forms, facts):
         return None
     raw_start = _constant(counter.start, facts, width)
     raw_step = _constant(counter.step, facts, width)
-    last = _last_counter(body, loop, counter, facts, width)
+    proof = controlling(body, loop, counter, facts)
+    count = proof.count if proof is not None and proof.width == width else None
     constants = tuple((_constant(arg, facts, width), coefficient) for arg, coefficient in offsets)
-    if raw_start is None or raw_step is None or last is None or any(value is None for value, _ in constants):
+    if raw_start is None or raw_step is None or not count or any(value is None for value, _ in constants):
         return None
     step = _as_signed(raw_step, width)
-    if not step:
+    if not step or op.kind not in (mir.Kind.SIGN_EXTEND, mir.Kind.ZERO_EXTEND):
         return None
-    if op.kind is mir.Kind.SIGN_EXTEND:
-        start = _as_signed(raw_start, width)
-    elif op.kind is mir.Kind.ZERO_EXTEND and last >= 0:
-        start = raw_start
-    else:
-        return None
-    distance = last - start
-    if distance * step < 0 or distance % step:
-        return None
-    count = distance // step + 1
-    if count <= 0:
-        return None
+    start = _as_signed(raw_start, width) if op.kind is mir.Kind.SIGN_EXTEND else raw_start
 
     mask = (1 << (width * 8)) - 1
     sign = 1 << (width * 8 - 1)

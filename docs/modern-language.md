@@ -10,12 +10,16 @@ This root-package frontend implements the first source-language slice:
 - named signed fixed-point types backed by `i16` or `i32` storage;
 - typed parameters and return values;
 - `let` and `var` bindings;
-- assignment, built-in numeric `+=`, `-=`, `*=`, `/=`, and `%=` operators,
-  calls, `return`, `if`/`else`, `while`, and typed half-open integer ranges;
+- assignment and every compound assignment, calls, `return`, `if`/`else`,
+  `while`, and typed half-open integer ranges;
 - `break` and `continue`;
-- strictly typed integer and floating arithmetic and comparisons;
+- the language's operators at its precedence: strictly typed arithmetic,
+  bitwise operators and shifts, non-chaining comparisons, and short-circuit
+  `and`/`or`;
+- conversions written `T(x)`;
 - fixed one-dimensional arrays, written `[T; length]`, with prefix descriptors,
-  literals, indexed loads and stores, and intrinsic metadata methods;
+  literals, rank-one repeat literals `[value; length]`, indexed loads and
+  stores, and intrinsic metadata methods;
 - source-ordered, nested `struct` layouts, local struct values, struct literals
   and copies, plus allocation-free array iteration through explicit references;
 - scoped `&T` and `&mut T` parameters, including unsized array views written
@@ -26,9 +30,13 @@ This root-package frontend implements the first source-language slice:
 
 `char` is one target-code-page byte; `\xNN` spells any code unit without
 making the compiler or runtime Unicode-aware. Decimal floating literals are
-stored once in read-only module data. There are no implicit numeric
-conversions: literals may acquire a type from context, while nonliteral
-operands must already have the same type.
+stored once in read-only module data. Integers and floats convert implicitly
+as in C: operands narrower than `int` (`i16` here, set per target in
+`src/conversions.rs`) are promoted, mixed operands meet at their common type,
+and destinations convert what is assigned to them. Where C would convert
+a signed operand to an unsigned type of its width, it is an error instead. Native code for float arithmetic
+and conversions waits on strict `f32`/`f64` evaluation; the HIR executor runs
+them.
 
 Fixed-point types make their representation explicit:
 
@@ -42,7 +50,10 @@ one less than the storage width. Distinct declarations are distinct types,
 even when their storage and fraction match. Integer literals are scaled
 exactly at compile time. Decimal literals are rounded once to the nearest
 representable quantum, with ties away from zero. There are no implicit
-conversions between fixed types, integers, or floats.
+conversions between fixed types, integers, or floats. An explicit one names
+the type, `fixed16(count)`: integers scale in exactly, and fixed values leave
+or rescale truncating toward zero. Floats do not yet convert to or from fixed
+point.
 
 Addition, subtraction, negation, and comparison use the signed stored
 representation directly. Multiplication and division use a double-width
@@ -85,7 +96,7 @@ An array parameter is an unsized borrowed view, written `values: &[T]` or
 `values: &mut [T]`. A call passes exactly one far pointer; it never passes a
 separate hidden length. The pointer names an eight-byte scoped view containing
 `length`, `capacity`, and a 16:16 payload pointer. This indirection is necessary
-for `&values[start..end]`: an interior payload cannot claim the owner's prefix
+for `&values[start:end]`: an interior payload cannot claim the owner's prefix
 as its own descriptor. The view is stack-scoped and has no allocator or
 destructor. Owned arrays retain the direct prefix-plus-payload representation
 above. `array.data()` is the explicit systems escape hatch: it returns an
@@ -134,15 +145,15 @@ Whole-struct assignment is a structural field copy. All source leaves are
 evaluated and loaded before any destination leaf is stored, so overlapping
 copies and literals which read their destination have value semantics. This
 does not introduce a general aggregate runtime operation. Compound assignment
-is defined only for the existing numeric operators; it resolves its destination
-once, applies the corresponding built-in operation, and stores the result.
+resolves its destination once, applies the corresponding built-in operation,
+and stores the result.
 There is no operator overloading.
 `for item in array` copies a scalar element. `for item in &array` gives `item`
 an immutable scoped view of the element;
 `for item in &mut array` requests a mutable view and is rejected for an
 immutable array. By-value struct iteration remains reserved until aggregate
 move semantics are implemented. A mutable view's field stores update the
-original element. `for item in &array[begin..end]` iterates only that checked
+original element. `for item in &array[begin:end]` iterates only that checked
 compile-time range.
 
 A list comprehension over a fixed array materializes another fixed,
@@ -253,7 +264,7 @@ and `qbopt.hir.lower`, then follows qbopt's shared optimization, lowering,
 allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 
-Not implemented in this slice are explicit numeric conversions, imports,
+Not implemented in this slice are panics, `checked_to[T]()`, imports,
 general resizable collections, escaping or owning references, patterns,
 lambdas, comprehension filters, or multiple comprehension clauses. General string construction is also
 absent: f-strings are currently a print facility, not heap values. Those

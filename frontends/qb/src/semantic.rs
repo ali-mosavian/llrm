@@ -73,12 +73,15 @@ enum Operand {
         offset: usize,
         type_id: u32,
         volatile: bool,
+        // An array element: QB promises it stays inside its array.
+        inbounds: bool,
     },
 }
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    Indirect(u32, bool),
+    // Base, volatile, inbounds.
+    Indirect(u32, bool, bool),
 }
 
 #[derive(Clone)]
@@ -1331,9 +1334,10 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
-                        if storage == "local" && !item.shared {
-                            // An explicit procedure DIM shadows an implicit
-                            // module variable of the same name. Gorillas'
+                        if storage != "module" && !item.shared {
+                            // An explicit procedure DIM shadows a module
+                            // variable of the same name, STATIC or not:
+                            // STATIC changes lifetime, not scope. Gorillas'
                             // module GOSUB creates INTEGER i, while
                             // DrawGorilla deliberately declares a local
                             // SINGLE i.
@@ -2758,6 +2762,7 @@ impl Compiler {
                                     offset: 0,
                                     type_id: BYTE,
                                     volatile: false,
+                                    inbounds: false,
                                 },
                                 value,
                             ],
@@ -3414,12 +3419,14 @@ impl Compiler {
                 base,
                 offset: at,
                 volatile,
+                inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
                 volatile: *volatile,
+                inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
                 self.fail("aggregate copy operand is not a place")
@@ -3482,6 +3489,7 @@ impl Compiler {
                         offset: 0,
                         type_id: variable.type_id,
                         volatile: true,
+                        inbounds: false,
                     }
                 } else {
                     Operand::Place(variable.place)
@@ -3512,6 +3520,7 @@ impl Compiler {
                             offset: 0,
                             type_id: element,
                             volatile: false,
+                            inbounds: true,
                         },
                         element,
                     ));
@@ -3540,6 +3549,7 @@ impl Compiler {
                         offset: 0,
                         type_id: element,
                         volatile: false,
+                        inbounds: true,
                     },
                     element,
                 ))
@@ -3553,11 +3563,12 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, volatile) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
                         volatile,
+                        inbounds,
                     },
                 };
                 Ok((operand, type_id))
@@ -3578,7 +3589,7 @@ impl Compiler {
                 }
                 let base = variable
                     .indirect
-                    .map(|base| ProjectionBase::Indirect(base, true))
+                    .map(|base| ProjectionBase::Indirect(base, true, false))
                     .unwrap_or_else(|| ProjectionBase::Place(variable.place, Vec::new()));
                 Ok((base, 0, variable.type_id))
             }
@@ -3600,7 +3611,7 @@ impl Compiler {
                     };
                     let pointer =
                         self.descriptor_element(descriptor, element, arguments, address)?;
-                    return Ok((ProjectionBase::Indirect(pointer, false), 0, element));
+                    return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
                     return self.fail(format!("{name} has the wrong number of subscripts"));
@@ -3620,7 +3631,7 @@ impl Compiler {
             }
             Expr::Index { base, indices, .. } => {
                 let (pointer, element) = self.indexed(base, indices)?;
-                Ok((ProjectionBase::Indirect(pointer, false), 0, element))
+                Ok((ProjectionBase::Indirect(pointer, false, true), 0, element))
             }
             Expr::Field { base, name, .. } => {
                 let (base, offset, base_type) = self.projection(base)?;
@@ -3670,11 +3681,12 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, volatile) => Operand::Indirect {
+            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
                 volatile,
+                inbounds,
             },
         };
         let array_pointer_type = self.pointer_type(array_type);
@@ -4013,6 +4025,7 @@ impl Compiler {
                 offset: 16,
                 type_id: INTEGER,
                 volatile: false,
+                inbounds: false,
             }],
         );
         let value = if upper {
@@ -4025,6 +4038,7 @@ impl Compiler {
                     offset: 14,
                     type_id: INTEGER,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             let end = self.value(INTEGER);
@@ -4089,6 +4103,7 @@ impl Compiler {
                 offset,
                 type_id,
                 volatile: false,
+                inbounds: false,
             }],
         );
         self.descriptor_fields.insert(key, value);
@@ -4817,6 +4832,7 @@ impl Compiler {
                         offset: 0,
                         type_id: variable.type_id,
                         volatile: true,
+                        inbounds: false,
                     }
                 } else {
                     Operand::Place(variable.place)
@@ -4991,6 +5007,7 @@ impl Compiler {
                     offset: 0,
                     type_id: SINGLE,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
@@ -5026,6 +5043,7 @@ impl Compiler {
                     offset: 0,
                     type_id: SINGLE,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
@@ -5401,6 +5419,7 @@ impl Compiler {
                     offset: 0,
                     type_id: BYTE,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
@@ -5527,6 +5546,7 @@ impl Compiler {
                     offset: 0,
                     type_id,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), type_id)));
@@ -5549,6 +5569,7 @@ impl Compiler {
                     offset: 0,
                     type_id: DOUBLE,
                     volatile: false,
+                    inbounds: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), DOUBLE)));
@@ -5822,6 +5843,7 @@ impl Compiler {
                         offset,
                         type_id,
                         volatile,
+                        inbounds,
                     } => {
                         let pointer_type = self
                             .values
@@ -5835,6 +5857,7 @@ impl Compiler {
                             offset,
                             type_id,
                             volatile,
+                            inbounds,
                         };
                         if self.width(pointer_type) == 4 {
                             // Ordinary BASIC BYREF formals carry a near
@@ -7675,9 +7698,10 @@ fn operand_json(out: &mut String, operand: &Operand) {
             offset,
             type_id,
             volatile,
+            inbounds,
         } => write!(
             out,
-            "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}"
+            "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}"
         )
         .unwrap(),
     }

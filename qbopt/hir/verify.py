@@ -300,6 +300,14 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 involved = [*(values[one].type for one in instruction.results), *operand_types]
                 if any(types[one].kind is not model.TypeKind.FLOAT for one in involved):
                     raise InvalidHIR(f"{prefix}: {instruction.op} has a non-floating operand")
+            if instruction.op is model.Op.TRUNCATE:
+                if (
+                    len(operand_types) != 1
+                    or len(result_types) != 1
+                    or types[operand_types[0]].kind is not model.TypeKind.FLOAT
+                    or types[result_types[0]].kind is not model.TypeKind.INTEGER
+                ):
+                    raise InvalidHIR(f"{prefix}: truncate does not take a float to an integer")
             if instruction.op in _INTEGER:
                 involved = [*(values[one].type for one in instruction.results), *operand_types]
                 if any(types[one].kind not in (model.TypeKind.INTEGER, model.TypeKind.BOOLEAN) for one in involved):

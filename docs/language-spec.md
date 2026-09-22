@@ -107,6 +107,90 @@ fn(T) -> U      # noncapturing function value
 
 There is no `null`. Absence is represented by `Option[T]`.
 
+### Conversions
+
+A conversion names its target type as a function:
+
+```text
+let wide = i32(narrow)
+let byte = u8(code)
+let ratio = f32(count)
+```
+
+| From | To | Result |
+|---|---|---|
+| integer | integer | Wider: sign- or zero-extended by the source's signedness. Narrower: the low bits, as arithmetic wraps. |
+| integer | float | The nearest representable value. |
+| float | integer | Truncated toward zero; a value outside the target's range invokes the panic handler. |
+| float | float | The nearest representable value. |
+| `bool` | integer | `0` or `1`. |
+| `char` | `u8`, and back | The code unit unchanged. |
+| integer | fixed-point | Converted to the storage type, then scaled; the scaled value wraps as arithmetic does. |
+| fixed-point | integer | Truncated toward zero, then as integer to integer. |
+| fixed-point | fixed-point | Rescaled; lost fraction bits truncate toward zero. |
+
+There is no conversion to `bool`; compare instead (`count != 0`). A
+conversion that must not lose information is a named library method,
+`checked_to[T]()`, returning `Option[T]`.
+
+Between integer and float types, conversions are also implicit, as in C.
+`bool`, `char`, and fixed-point types convert only explicitly.
+
+- **Assignment.** A value bound, assigned, passed, or returned converts to
+  the destination's type by the table above, narrowing included.
+- **Promotion.** An operand narrower than the target's `int` converts to
+  `int`. On this target `int` is `i16`, so `u16` is not promoted; a 32-bit
+  target would make `int` `i32`.
+- **Usual arithmetic conversions.** The operands of an arithmetic, bitwise, or
+  comparison operator convert to a common type. With a float operand, it is
+  the wider float. Otherwise, after promotion, it is the wider integer type.
+  Where that leaves a signed and an unsigned operand of the same width, C
+  picks the unsigned one; here it is a compile-time error, unless the signed
+  operand was promoted from an unsigned type. So `i8 + u8` is `i16`,
+  `u8 + u16` is `u16`, and `i8 < u16` is rejected.
+- A range's bounds meet at their common type, as operands do.
+
+An integer literal takes the type of the other operand when it fits, and its
+own type otherwise: `int`, or `i32` if it does not fit `int`.
+
+### Operators
+
+From tightest to loosest binding:
+
+| Operators | Meaning |
+|---|---|
+| `f(x)` `a[i]` `a.b` `x?` | call, index or slice, field or method, propagate failure |
+| `-x` `~x` `&x` `&mut x` | negate, bitwise not, borrow |
+| `*` `/` `%` | multiply, divide, remainder |
+| `+` `-` | add, subtract |
+| `<<` `>>` | shift |
+| `&` | bitwise and |
+| `^` | bitwise exclusive or |
+| `\|` | bitwise or |
+| `==` `!=` `<` `<=` `>` `>=` `is` `is not` | compare |
+| `not` | logical not |
+| `and` | logical and |
+| `or` | logical or |
+
+Binary operators group left to right. Comparisons do not chain: `a < b < c`
+is a compile-time error. As in Python, bitwise operators bind tighter than
+comparisons, so `flags & mask == 0` means `(flags & mask) == 0`.
+
+The operands of an arithmetic, bitwise, or comparison operator convert to
+their common type; the result has that type, and a comparison's is `bool`. A
+shift's operands are promoted separately; the result has the left one's type,
+and the count may be any integer type. `and`, `or`, and `not` take and give `bool`;
+`and` and `or` evaluate their right operand only when it decides the result.
+
+Integer `/` truncates toward zero and `%` takes the sign of the dividend.
+`>>` is arithmetic on a signed operand and logical on an unsigned one. A shift
+count that is negative, or not less than the operand's width, is a
+compile-time error when constant and invokes the panic handler otherwise.
+
+Every binary arithmetic and bitwise operator has a compound assignment:
+`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`. There is
+no `++`, `--`, or `**`.
+
 ## 4. Functions, methods, and lambdas
 
 A named function has one declaration form and an explicit return type:
@@ -450,9 +534,19 @@ The ordinary collection literals are:
 {"one": 1, "two": 2}
 ```
 
-An unconstrained bracket literal has type `vec[T]`. An expected fixed-array
-type permits the same elements to initialize fixed storage directly. Empty
-literals require an expected type. Collection spreading and call splatting do
+A repeat literal gives every element one value:
+
+```text
+let zeroes: [i32; 64] = [0; 64]
+let grid: [u8; 80, 25] = [32; 80, 25]
+```
+
+The count is a compile-time constant. The value is evaluated once and copied
+into each element, so its type must be copyable.
+
+An unconstrained bracket literal, repeat or not, has type `vec[T]`. An
+expected fixed-array type permits the same elements to initialize fixed
+storage directly. Empty literals require an expected type. Collection spreading and call splatting do
 not exist.
 
 Dynamic collection construction uses the program allocator and invokes the
@@ -472,6 +566,18 @@ An owned vector allocation places its descriptor immediately before its data:
 Rank is part of the static type, so `vec[T, 2]` need not store a runtime rank.
 A borrowed view carries a data pointer plus the required dimensions and
 strides. Slicing aliases storage and never copies implicitly.
+
+A slice is spelled as in Python and selects a half-open range:
+
+```text
+values[a:b]     # a up to, not including, b
+values[a:]      # a to the end
+values[:b]      # the start up to b
+values[:]       # everything
+```
+
+`&values[a:b]` borrows the selection. There are no negative indices and no
+step.
 
 Nested vectors and ranked vectors are distinct:
 

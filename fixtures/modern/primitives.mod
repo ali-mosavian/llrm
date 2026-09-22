@@ -34,7 +34,7 @@ fn unsigned_divide(left: u32, right: u32) -> u32:
 fn unsigned_remainder(left: u16, right: u16) -> u16:
     return left % right
 
-fn unsigned_less(left: u8, right: u8) -> bool:
+fn unsigned_less(left: u16, right: u16) -> bool:
     return left < right
 
 fn float_product(left: f32, right: f32) -> f32:

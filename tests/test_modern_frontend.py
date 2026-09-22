@@ -652,7 +652,7 @@ def test_scoped_array_range_is_one_descriptor_pointer_and_executes(tmp_path: Pat
         "    return total\n"
         "fn main() -> i16:\n"
         "    let values: [i16; 4] = [1, 2, 3, 4]\n"
-        "    return sum(&values[1..3])\n"
+        "    return sum(&values[1:3])\n"
     )
 
     program = driver.parsed(source)
@@ -672,12 +672,44 @@ def test_scoped_range_iteration_uses_only_the_selected_elements(tmp_path: Path) 
         "fn main() -> i16:\n"
         "    let values: [i16; 5] = [1, 2, 4, 8, 16]\n"
         "    var total: i16 = 0\n"
-        "    for value in &values[1..4]:\n"
+        "    for value in &values[1:4]:\n"
         "        total += value\n"
         "    return total\n"
     )
 
     assert execute.run(driver.parsed(source), "main").value == 14
+
+
+@pytest.mark.parametrize(("chosen", "total"), [("1:3", 5), ("1:", 9), (":3", 6), (":", 10)])
+def test_a_slice_is_spelled_as_in_python(tmp_path: Path, chosen: str, total: int) -> None:
+    """Slices were `a..b`; the language spells them `a:b`, `a:`, `:b` and `:`."""
+    source = tmp_path / "python_slice.mod"
+    source.write_text(
+        "fn sum(values: &[i16]) -> i16:\n"
+        "    var total: i16 = 0\n"
+        "    for value in &values:\n"
+        "        total += value\n"
+        "    return total\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        f"    return sum(&values[{chosen}])\n"
+    )
+
+    assert execute.run(driver.parsed(source), "main").value == total
+
+
+def test_a_range_is_not_a_slice(tmp_path: Path) -> None:
+    source = tmp_path / "range_slice.mod"
+    source.write_text(
+        "fn sum(values: &[i16]) -> i16:\n"
+        "    return values[0]\n"
+        "fn main() -> i16:\n"
+        "    let values: [i16; 4] = [1, 2, 3, 4]\n"
+        "    return sum(&values[1..3])\n"
+    )
+
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
 
 
 def test_data_is_an_explicit_pointer_escape_hatch(tmp_path: Path) -> None:
@@ -820,3 +852,177 @@ def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
 
     assert {mir.Kind.FIXED_MUL, mir.Kind.FIXED_DIV} <= kinds
     assert all(profit.static(body, costs) is not None for body in bodies)
+
+
+def _returned(tmp_path: Path, text: str, entry: str = "value") -> object:
+    source = tmp_path / "program.mod"
+    source.write_text(text)
+    return execute.run(driver.parsed(source), entry).value
+
+
+@pytest.mark.parametrize(
+    ("type_", "expression", "expected"),
+    [
+        ("i16", "6 & 3 | 8 ^ 1", 11),
+        ("i16", "1 + 2 << 3", 24),
+        ("i16", "~5", -6),
+        ("i16", "1 << 15", -32768),
+        ("i16", "-16 >> 2", -4),
+        ("u16", "u16(65520) >> 4", 4095),
+        ("i16", "i16(not 1 == 2)", 1),
+        ("i16", "i16(true or false and false)", 1),
+        ("i32", "i32(i16(-2))", -2),
+        ("u32", "u32(u16(65535))", 65535),
+        ("i8", "i8(i16(300))", 44),
+        ("i16", "i16(-7.9)", -7),
+        ("i16", "i16(true) + i16(false)", 1),
+        ("u8", "u8('A')", 65),
+        ("f32", "f32(3) / f32(2)", 1.5),
+    ],
+)
+def test_operators_bind_and_conversions_convert_as_the_spec_says(
+    tmp_path: Path, type_: str, expression: str, expected: object
+) -> None:
+    assert _returned(tmp_path, f"fn value() -> {type_}:\n    return {expression}\n") == expected
+
+
+def test_and_or_evaluate_their_right_operand_only_when_it_decides(tmp_path: Path) -> None:
+    text = (
+        "fn boom(zero: i16) -> bool:\n"
+        "    return 1 / zero == 0\n"
+        "fn value() -> i16:\n"
+        "    let zero: i16 = 0\n"
+        "    return i16(false and boom(zero)) + i16(true or boom(zero))\n"
+    )
+    assert _returned(tmp_path, text) == 1
+
+
+def test_every_bitwise_operator_has_a_compound_assignment(tmp_path: Path) -> None:
+    text = (
+        "fn value() -> u16:\n"
+        "    var x: u16 = 1\n"
+        "    x <<= 4\n"
+        "    x |= 3\n"
+        "    x ^= 1\n"
+        "    x &= 255\n"
+        "    x >>= 1\n"
+        "    return x\n"
+    )
+    assert _returned(tmp_path, text) == 9
+
+
+def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
+    text = (
+        "fn value() -> i32:\n"
+        "    var a: [i32; 5] = [7; 5]\n"
+        "    a[2] = 1\n"
+        "    var total: i32 = 0\n"
+        "    for item in a:\n"
+        "        total += item\n"
+        "    return total\n"
+    )
+    assert _returned(tmp_path, text) == 29
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    return i16(1 < 2 < 3)\n",
+        "    return 1 << 16\n",
+        "    return 1 << -1\n",
+        "    let a: i16 = 1\n    let b: u16 = 1\n    return i16(a + b)\n",
+        "    let a: i8 = -1\n    let b: u16 = 1\n    return i16(a < b)\n",
+        "    return i16(bool(1))\n",
+        "    return i16(u8(300))\n",
+        "    return i16(f64(1) & f64(2))\n",
+        "    let a: [i16; 4] = [0; 3]\n    return a[0]\n",
+    ],
+)
+def test_ill_formed_operators_conversions_and_repeats_are_rejected(tmp_path: Path, body: str) -> None:
+    source = tmp_path / "rejected.mod"
+    source.write_text("fn value() -> i16:\n" + body)
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
+
+
+def test_a_repeat_value_reads_the_names_outside_the_new_binding(tmp_path: Path) -> None:
+    """The fill bound the new array first, so `[a[0]; 3]` read the uninitialized new `a`."""
+    text = (
+        "fn value() -> i16:\n"
+        "    let a: [i16; 2] = [5, 6]\n"
+        "    if true:\n"
+        "        let a: [i16; 3] = [a[0]; 3]\n"
+        "        return a[0] + a[2]\n"
+        "    return 0\n"
+    )
+    assert _returned(tmp_path, text) == 10
+
+
+def test_not_is_not_an_operand_of_a_tighter_operator(tmp_path: Path) -> None:
+    """`a + not b == c` parsed as `a + (not (b == c))`; Python rejects it, and so does the spec's ladder."""
+    source = tmp_path / "not.mod"
+    source.write_text("fn value() -> bool:\n    return true == not false\n")
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)
+
+
+@pytest.mark.parametrize(
+    ("type_", "body", "expected"),
+    [
+        ("i16", "    let a: u8 = 200\n    let b: u8 = 100\n    return a + b\n", 300),
+        ("u8", "    let a: i16 = 300\n    return a\n", 44),
+        ("i16", "    let a: u8 = 5\n    return -a\n", -5),
+        ("i16", "    let a: i16 = -1\n    let b: u32 = 1\n    return i16(a < b)\n", 0),
+        ("f32", "    let a: i8 = 3\n    let f: f32 = 0.5\n    return a * f\n", 1.5),
+        ("i32", "    let a: i16 = 1\n    return a + 40000\n", 40001),
+        ("u8", "    var x: u8 = 250\n    x += 10\n    return x\n", 4),
+        ("i16", "    return half(7)\n", 3),
+        ("i16", "    let a: i8 = -1\n    let b: u8 = 1\n    return a + b\n", 0),
+        ("u16", "    let a: u8 = 1\n    let b: u16 = 65535\n    return a + b\n", 0),
+        ("i32", "    let n: u32 = 15\n    return 1 << n\n", -32768),
+        ("i16", "    let n: u8 = 3\n    var t: i16 = 0\n    for i in 0..n + n:\n        t += i\n    return t\n", 15),
+        (
+            "i16",
+            "    let k: i16 = 1\n    let n: u8 = 4\n    var t: i16 = 0\n    for i in k..n:\n        t += i\n    return t\n",
+            6,
+        ),
+    ],
+)
+def test_integers_and_floats_convert_implicitly_as_in_c(
+    tmp_path: Path, type_: str, body: str, expected: object
+) -> None:
+    """Every one of these was a type mismatch: operands and destinations had to agree exactly."""
+    text = f"fn half(x: f64) -> f64:\n    return x / 2\nfn value() -> {type_}:\n" + body
+    assert _returned(tmp_path, text) == expected
+
+
+@pytest.mark.parametrize(
+    ("type_", "expression", "expected"),
+    [
+        ("i16", "i16(fix(3)) + i16(fix(2.75))", 5),
+        ("i16", "i16(fix(-2.75))", -2),
+        ("i32", "i32(fix(-0.5))", 0),
+        ("i16", "i16(small(fix(5.5) - fix(2.75)) * 4)", 11),
+        ("i16", "i16(fix(small(7.9375)) * 16)", 127),
+        ("i16", "i16(fix(u8(200)))", 200),
+    ],
+)
+def test_fixed_point_converts_explicitly_toward_zero(
+    tmp_path: Path, type_: str, expression: str, expected: int
+) -> None:
+    """`fix(n)` was a call to an unknown function: fixed types had no conversions."""
+    text = (
+        "type fix = fixed i32, fraction=8\n"
+        "type small = fixed i16, fraction=4\n"
+        f"fn value() -> {type_}:\n    return {expression}\n"
+    )
+    assert _returned(tmp_path, text) == expected
+
+
+def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
+    source = tmp_path / "float_fixed.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\nfn value() -> i16:\n    let x: f64 = 1.5\n    return i16(fix(x))\n"
+    )
+    with pytest.raises(driver.FrontendError):
+        driver.parsed(source)

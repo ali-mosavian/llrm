@@ -56,6 +56,8 @@ pub enum Operand {
         base: u32,
         offset: u32,
         type_id: u32,
+        // An array element: the language promises it stays inside its array.
+        inbounds: bool,
     },
     DescriptorPlace {
         base: u32,
@@ -326,9 +328,10 @@ fn operands(out: &mut String, values: &[Operand]) {
                 base,
                 offset,
                 type_id,
+                inbounds,
             } => write!(
                 out,
-                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+                "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
             )
             .unwrap(),
             Operand::DescriptorPlace {

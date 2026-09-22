@@ -289,6 +289,19 @@ def test_procedure_dim_shadows_implicit_module_variable(tmp_path: Path) -> None:
     assert any(function.name == "PROBE" for function in program.modules[0].functions)
 
 
+STATIC_LOCAL = (
+    "DECLARE FUNCTION F& ()\r\nDIM total AS LONG\r\ntotal = F&\r\nPRINT total\r\n"
+    "FUNCTION F& STATIC\r\nDIM total AS LONG\r\ntotal = 3\r\nF& = total\r\nEND FUNCTION\r\n"
+)
+
+
+def test_static_procedure_dim_shadows_module_variable(tmp_path: Path) -> None:
+    """A STATIC FUNCTION's DIM total was refused as a duplicate of the module's total."""
+    source = tmp_path / "STATLOC.BAS"
+    source.write_bytes(STATIC_LOCAL.encode())
+    assert qb_compile.object_bytes(qb_driver.parsed(source), source.name)
+
+
 def test_integer_floor_division_stays_integer_until_its_qb_single_result(tmp_path: Path) -> None:
     """Nibbles stored x87 status 16384 as arena(3,1).sister, then COLOR failed on 8224."""
     source = tmp_path / "floor.bas"

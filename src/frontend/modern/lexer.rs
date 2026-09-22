@@ -28,6 +28,8 @@ pub enum TokenKind {
     True,
     False,
     Not,
+    And,
+    Or,
     Is,
     Char,
     I8,
@@ -72,6 +74,16 @@ pub enum TokenKind {
     SlashEqual,
     Percent,
     PercentEqual,
+    AmpersandEqual,
+    Pipe,
+    PipeEqual,
+    Caret,
+    CaretEqual,
+    Tilde,
+    ShiftLeft,
+    ShiftLeftEqual,
+    ShiftRight,
+    ShiftRightEqual,
     Newline,
     Indent,
     Dedent,
@@ -89,6 +101,50 @@ fn token(kind: TokenKind, line: usize, start: usize, end: usize) -> Token {
         kind,
         span: Span::new(line, start + 1, end + 1),
     }
+}
+
+/// The operator at the start of `bytes`, longest spelling first.
+fn operator(bytes: &[u8]) -> Option<(usize, TokenKind)> {
+    const OPERATORS: &[(&[u8], fn() -> TokenKind)] = &[
+        (b"<<=", || TokenKind::ShiftLeftEqual),
+        (b">>=", || TokenKind::ShiftRightEqual),
+        (b"..", || TokenKind::Range),
+        (b"->", || TokenKind::Arrow),
+        (b"==", || TokenKind::EqualEqual),
+        (b"!=", || TokenKind::NotEqual),
+        (b"<=", || TokenKind::LessEqual),
+        (b">=", || TokenKind::GreaterEqual),
+        (b"<<", || TokenKind::ShiftLeft),
+        (b">>", || TokenKind::ShiftRight),
+        (b"+=", || TokenKind::PlusEqual),
+        (b"-=", || TokenKind::MinusEqual),
+        (b"*=", || TokenKind::StarEqual),
+        (b"/=", || TokenKind::SlashEqual),
+        (b"%=", || TokenKind::PercentEqual),
+        (b"&=", || TokenKind::AmpersandEqual),
+        (b"|=", || TokenKind::PipeEqual),
+        (b"^=", || TokenKind::CaretEqual),
+        (b",", || TokenKind::Comma),
+        (b";", || TokenKind::Semicolon),
+        (b".", || TokenKind::Dot),
+        (b":", || TokenKind::Colon),
+        (b"=", || TokenKind::Equal),
+        (b"<", || TokenKind::Less),
+        (b">", || TokenKind::Greater),
+        (b"+", || TokenKind::Plus),
+        (b"-", || TokenKind::Minus),
+        (b"*", || TokenKind::Star),
+        (b"/", || TokenKind::Slash),
+        (b"%", || TokenKind::Percent),
+        (b"&", || TokenKind::Ampersand),
+        (b"|", || TokenKind::Pipe),
+        (b"^", || TokenKind::Caret),
+        (b"~", || TokenKind::Tilde),
+    ];
+    OPERATORS
+        .iter()
+        .find(|(spelling, _)| bytes.starts_with(spelling))
+        .map(|(spelling, kind)| (spelling.len(), kind()))
 }
 
 fn keyword(word: &str) -> Option<TokenKind> {
@@ -112,6 +168,8 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "not" => TokenKind::Not,
+        "and" => TokenKind::And,
+        "or" => TokenKind::Or,
         "is" => TokenKind::Is,
         "char" => TokenKind::Char,
         "i8" => TokenKind::I8,
@@ -411,119 +469,6 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     index += 1;
                     tokens.push(token(TokenKind::RightBracket, line_number, start, index));
                 }
-                b',' => {
-                    index += 1;
-                    tokens.push(token(TokenKind::Comma, line_number, start, index));
-                }
-                b';' => {
-                    index += 1;
-                    tokens.push(token(TokenKind::Semicolon, line_number, start, index));
-                }
-                b'.' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'.' {
-                        index += 1;
-                        TokenKind::Range
-                    } else {
-                        TokenKind::Dot
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b':' => {
-                    index += 1;
-                    tokens.push(token(TokenKind::Colon, line_number, start, index));
-                }
-                b'+' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::PlusEqual
-                    } else {
-                        TokenKind::Plus
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'-' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'>' {
-                        index += 1;
-                        TokenKind::Arrow
-                    } else if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::MinusEqual
-                    } else {
-                        TokenKind::Minus
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'*' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::StarEqual
-                    } else {
-                        TokenKind::Star
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'&' => {
-                    index += 1;
-                    tokens.push(token(TokenKind::Ampersand, line_number, start, index));
-                }
-                b'/' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::SlashEqual
-                    } else {
-                        TokenKind::Slash
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'%' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::PercentEqual
-                    } else {
-                        TokenKind::Percent
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'=' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::EqualEqual
-                    } else {
-                        TokenKind::Equal
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'!' if index + 1 < bytes.len() && bytes[index + 1] == b'=' => {
-                    index += 2;
-                    tokens.push(token(TokenKind::NotEqual, line_number, start, index));
-                }
-                b'<' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::LessEqual
-                    } else {
-                        TokenKind::Less
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
-                b'>' => {
-                    index += 1;
-                    let kind = if index < bytes.len() && bytes[index] == b'=' {
-                        index += 1;
-                        TokenKind::GreaterEqual
-                    } else {
-                        TokenKind::Greater
-                    };
-                    tokens.push(token(kind, line_number, start, index));
-                }
                 byte if byte >= 0x80 => {
                     return Err(Diagnostic::new(
                         Span::new(line_number, start + 1, start + 2),
@@ -531,10 +476,14 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     ));
                 }
                 other => {
-                    return Err(Diagnostic::new(
-                        Span::new(line_number, start + 1, start + 2),
-                        format!("unexpected character {:?}", other as char),
-                    ));
+                    let Some((length, kind)) = operator(&bytes[index..]) else {
+                        return Err(Diagnostic::new(
+                            Span::new(line_number, start + 1, start + 2),
+                            format!("unexpected character {:?}", other as char),
+                        ));
+                    };
+                    index += length;
+                    tokens.push(token(kind, line_number, start, index));
                 }
             }
         }

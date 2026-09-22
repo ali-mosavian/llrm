@@ -134,3 +134,66 @@ def test_native_modern_collection_examples_match_hir(
 
     assert made.output == expected
     assert made.size < 3 * 1024
+
+
+def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -> None:
+    """The runtime had no integer formatter: printing an i32 failed to link on `_pi4`."""
+    source = tmp_path / "integers.mod"
+    source.write_text(
+        "fn main() -> i16:\n"
+        "    let a: i8 = -128\n"
+        "    let b: u8 = 255\n"
+        "    let c: i16 = -32768\n"
+        "    let d: u16 = 65535\n"
+        "    let e: i32 = -2147483648\n"
+        "    let f: u32 = 4294967295\n"
+        "    let g: i32 = 0\n"
+        '    print(f"{a} {b} {c} {d} {e} {f} {g}")\n'
+        "    return 0\n"
+    )
+
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "-128 255 -32768 65535 -2147483648 4294967295 0\n"
+    assert build(source, tmp_path / "INTS.EXE", run=True).output == expected
+
+
+def test_native_matmul_matches_hir(tmp_path: Path) -> None:
+    source = ROOT / "fixtures" / "modern" / "matmul.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "matmul: 372432\n"
+    assert build(source, tmp_path / "MATMUL.EXE", run=True).output == expected
+
+
+def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> None:
+    """A shift by a u16 count selected `sar eax,cx`, which has no encoding: x86 counts from cl."""
+    source = ROOT / "fixtures" / "modern" / "operators.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "49149 -812500 3203125\n1 0 1 0\n447 254 224 121\n"
+    assert build(source, tmp_path / "OPS.EXE", run=True).output == expected
+
+
+def test_native_fixed_matmul_matches_hir_and_exact_arithmetic(tmp_path: Path) -> None:
+    """Quarter-step inputs keep 24.8 exact; 56974 is the rational checksum."""
+    source = ROOT / "fixtures" / "modern" / "matmul_fixed.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "matmul: 56974.0\n"
+    assert build(source, tmp_path / "MMFIX.EXE", run=True).output == expected
+
+
+def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
+    """Printing an i16-backed fixed value failed to link on `_pf2`."""
+    source = tmp_path / "fixed_conversions.mod"
+    source.write_text(
+        "type fix = fixed i32, fraction=8\n"
+        "type small = fixed i16, fraction=4\n"
+        "fn main() -> i16:\n"
+        "    let n: i16 = 3\n"
+        "    let b: fix = -2.75\n"
+        "    let c: small = small(fix(5.5) + b)\n"
+        "    let d: u8 = 200\n"
+        '    print(f"{fix(n)} {i16(b)} {i32(fix(-0.5))} {c} {fix(d)} {i16(small(7.9375))}")\n'
+        "    return 0\n"
+    )
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "3.0 -2 0 2.75 200.0 7\n"
+    assert build(source, tmp_path / "FIXCONV.EXE", run=True).output == expected

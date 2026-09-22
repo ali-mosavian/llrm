@@ -32,17 +32,11 @@ def evaluated(body: mir.MirBody) -> mir.MirBody:
         counters = induction.basics(body, loop)
         if not counters:
             continue
-        counts = set()
-        for counter in counters.values():
-            width = counter.start.width
-            last = induction._last_counter(body, loop, counter, facts, width)
-            start = induction._signed(counter.start, facts, width)
-            step = induction._signed(counter.step, facts, width)
-            if last is not None and start is not None and step:
-                counts.add((last - start) // step + 1)
-        if len(counts) != 1:
+        proofs = induction.counted(body, loop, facts)
+        count = induction.agreed_count(proofs)
+        # The exit terms below are the header's values as it leaves.
+        if count is None or any(proof.posttested for proof in proofs):
             continue
-        count = counts.pop()
         exits = _exit_terms(body, loop, counters, count, facts)
         if not exits:
             continue

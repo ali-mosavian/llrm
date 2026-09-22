@@ -285,6 +285,8 @@ class MemRef:
     # barrier, but the property belongs on the memory occurrence so cloning,
     # splitting and aggregate expansion cannot silently shed it.
     volatile: bool = False
+    # The source language promises this access stays inside one object.
+    inbounds: bool = field(default=False, compare=False)
 
     @property
     def where(self) -> "Space | None":
@@ -488,6 +490,11 @@ class Kind(StrEnum):
 MIRRORED = {
     Kind.EQ: Kind.EQ, Kind.NE: Kind.NE, Kind.LT: Kind.GT, Kind.GT: Kind.LT, Kind.LE: Kind.GE, Kind.GE: Kind.LE,
     Kind.BELOW: Kind.ABOVE, Kind.ABOVE: Kind.BELOW, Kind.BELOW_EQ: Kind.ABOVE_EQ, Kind.ABOVE_EQ: Kind.BELOW_EQ,
+}  # fmt: skip
+# `not (a test b)` is `a NEGATED[test] b`.
+NEGATED = {
+    Kind.EQ: Kind.NE, Kind.NE: Kind.EQ, Kind.LT: Kind.GE, Kind.GE: Kind.LT, Kind.LE: Kind.GT, Kind.GT: Kind.LE,
+    Kind.BELOW: Kind.ABOVE_EQ, Kind.ABOVE_EQ: Kind.BELOW, Kind.BELOW_EQ: Kind.ABOVE, Kind.ABOVE: Kind.BELOW_EQ,
 }  # fmt: skip
 
 

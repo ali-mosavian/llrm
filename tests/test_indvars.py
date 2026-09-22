@@ -298,7 +298,7 @@ def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monk
     counter = next(
         counter
         for counter in induction.basics(body, loop).values()
-        if induction._last_counter(body, loop, counter, facts, counter.start.width) is not None
+        if (proof := induction.controlling(body, loop, counter, facts)) is not None and proof.last is not None
     )
     header = next(block for block in body.blocks if block.at == loop.header)
     value = next(phi.result for phi in header.phis if phi.result.id == counter.value)

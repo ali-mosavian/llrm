@@ -1,7 +1,8 @@
-"""`induction.counted` over any unit loop: runtime start, `<` or `<=`, signed or not."""
+"""`induction.counted`, the one trip-count proof, against what the loops it names actually do."""
 
 import re
 import functools
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from qbopt.model import execute
 from qbopt.optimize import rotate
 from qbopt.frontend.qb import driver
 from qbopt.frontend.qb import compile as qb_compile
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,6 +153,225 @@ def _unit_loop(start: int, bound: int, exit_test: mir.Kind) -> mir.MirBody:
     )
 
 
+GIVEN = mir.Value(99, 0, variable=99, version=1)
+
+
+def _loop(
+    start: int | None,
+    bound: int,
+    test: mir.Kind,
+    step: int,
+    shape: str,
+    mirrored: bool = False,
+    width: int = 1,
+    *,
+    zero_test: bool = False,
+    observed: bool = True,
+    split: bool = False,
+) -> mir.MirBody:
+    """`i = start` stepping by `step` while `i test bound`, returning trips and the last trip's `i`.
+
+    `shape` is "pre" (tested before each trip), or "post" or "post-stepped"
+    (after each, reading `i` or `i + step`). `mirrored` compares `bound` to `i`;
+    `zero_test` tests `i or i` against a zero bound. A `start` of None is
+    `GIVEN`, live in. An unobserved `i` is read only by its test and step.
+    `split` puts a post-tested loop's test in a latch block of its own.
+    """
+    serial = iter(range(1, 100))
+
+    def value(at: int, **flags: bool) -> mir.Value:
+        n = next(serial)
+        return mir.Value(n, at, variable=n, version=1, **flags)
+
+    posttested = shape != "pre"
+    body_at, exit_at = (1, 2) if posttested else (2, 3)
+    control = 4 if split else 1
+    latch = control if posttested else body_at
+    seed, zero, counter, trips, seen = value(0), value(0), value(1), value(1), value(1)
+    following, counted_up, saw, flags = value(body_at), value(body_at), value(body_at), value(1, flags=True)
+    tested = mir.Held(following if shape == "post-stepped" else counter, width)
+    args = (mir.Const(bound, width), tested) if mirrored else (tested, mir.Const(bound, width))
+    if zero_test:
+        args = (tested, tested)
+    compare = mir.Op(
+        control, ir.Operation.COMPARE, "cmp", (flags,), (tested.value,),
+        kind=mir.Kind.OR if zero_test else mir.Kind.SUB, args=args,
+    )  # fmt: skip
+    continuing = mir.MIRRORED[test] if mirrored else test
+    branch = mir.Op(
+        control, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
+        test=continuing if posttested else mir.NEGATED[continuing], target=1 if posttested else exit_at,
+    )  # fmt: skip
+    trip = (
+        mir.computed(body_at, mir.Kind.ADD, counted_up, (mir.Held(trips, 2), mir.Const(1, 2)), 2),
+        mir.computed(body_at, mir.Kind.COPY, saw, (mir.Held(counter, width),), width),
+        mir.computed(body_at, mir.Kind.ADD, following, (mir.Held(counter, width), mir.Const(step, width)), width),
+    )[:: 1 if observed else 2]
+    phis = (
+        mir.Phi(counter, {0: seed, latch: following}),
+        mir.Phi(trips, {0: zero, latch: counted_up}),
+        mir.Phi(seen, {0: seed, latch: saw}),
+    )[: 3 if observed else 2]
+    left = (
+        (mir.Held(trips, 2), mir.Held(seen, width))
+        if not posttested
+        else (mir.Held(counted_up, 2), mir.Held(saw, width))
+    )[: 2 if observed else 1]
+    # Closed over the loop, as every pass after LCSSA sees it.
+    closed = tuple(mir.Phi(value(exit_at), {control: held.value}) for held in left)
+    returned = mir.Op(
+        exit_at, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN,
+        args=tuple(mir.Held(phi.result, held.width) for phi, held in zip(closed, left, strict=True)),
+    )  # fmt: skip
+    entry = mir.MirBlock(
+        0,
+        (),
+        (
+            mir.computed(
+                0, mir.Kind.COPY, seed, (mir.Held(GIVEN, width) if start is None else mir.Const(start, width),), width
+            ),
+            mir.computed(0, mir.Kind.COPY, zero, (mir.Const(0, 2),), 2),
+        ),
+        (1,),
+    )
+    if posttested and split:
+        jump = mir.Op(1, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=4)
+        blocks = (
+            entry,
+            mir.MirBlock(1, phis, (*trip, jump), (4,)),
+            mir.MirBlock(2, closed, (returned,), ()),
+            mir.MirBlock(4, (), (compare, branch), (1, 2)),
+        )
+    elif posttested:
+        blocks = (
+            entry,
+            mir.MirBlock(1, phis, (*trip, compare, branch), (1, 2)),
+            mir.MirBlock(2, closed, (returned,), ()),
+        )
+    else:
+        jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+        blocks = (
+            entry,
+            mir.MirBlock(1, phis, (compare, branch), (2, 3)),
+            mir.MirBlock(2, (), (*trip, jump), (1,)),
+            mir.MirBlock(3, closed, (returned,), ()),
+        )
+    return mir.MirBody(0, blocks, sealed=True)
+
+
+def _signed(n: int, width: int) -> int:
+    return n - (1 << 8 * width) if n >> 8 * width - 1 else n
+
+
+TESTS = (*induction._ASCENDING, *induction._DESCENDING, mir.Kind.NE)
+ENDS = (0, 1, 0x7F, 0x80, 0xFE, 0xFF)
+
+
+@pytest.mark.parametrize("shape", ["pre", "post", "post-stepped"])
+@pytest.mark.parametrize("step", [1, -1, 3, -3])
+def test_every_counted_loop_runs_its_proved_trips(shape: str, step: int) -> None:
+    """The proof, over every byte loop of these ends and tests, against running it.
+
+    A loop the executor sees end has its exact count, or no proof; one that
+    never ends has no proof. The last trip's counter is `last` wherever given.
+    """
+    counted = []
+    for test in TESTS:
+        for start in ENDS:
+            for bound in ENDS:
+                for mirrored in (False, True):
+                    body = _loop(start, bound, test, step, shape, mirrored)
+                    (loop,) = loops.loops(body.blocks, body.entry)
+                    proofs = induction.counted(body, loop)
+                    try:
+                        trips, seen = execute.run(body, limit=1_700).returned
+                    except execute.ExecutionError:
+                        assert not proofs, (test, start, bound, mirrored)
+                        continue
+                    if not proofs:
+                        continue
+                    (proof,) = proofs
+                    where = (test, start, bound, mirrored, trips)
+                    assert proof.count == trips and proof.test is test, where
+                    if proof.last is not None:
+                        assert (proof.first, proof.last) == (_signed(start, 1), _signed(seen, 1)), where
+                    counted.append(test)
+    # Every test whose direction the step can end is proved somewhere.
+    ending = {test for test in TESTS if test is mir.Kind.NE or (test in induction._ASCENDING) == (step > 0)}
+    assert set(counted) == ending
+
+
+@pytest.mark.parametrize("split", [False, True])
+@pytest.mark.parametrize("shape", ["pre", "post", "post-stepped"])
+def test_exit_values_hold_for_every_counted_shape(shape: str, split: bool) -> None:
+    """loopexit assumed a header exit, and a post-tested loop leaves from its latch."""
+    from qbopt.optimize import loopexit
+
+    body = _loop(3, 10, mir.Kind.LT, 2, shape, width=2, split=split and shape != "pre")
+    assert execute.run(loopexit.evaluated(body)).returned == execute.run(body).returned
+
+
+def test_a_loop_dividing_its_counter_is_counted_without_asking_itself() -> None:
+    """`counted` reached `derived` for a memory bound, whose quotient rule asked `counted`: unbounded recursion."""
+    body = _loop(None, 5, mir.Kind.LT, 1, "pre", width=2, observed=False)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    _counter, trips = (phi.result for phi in body.block(loop.header).phis)
+    quotient, remainder = mir.Value(90, 2, variable=90), mir.Value(91, 2, variable=91)
+    divide = mir.Op(
+        2, ir.Operation.BINARY, "", (quotient, remainder), (trips,), kind=mir.Kind.DIVMOD,
+        args=(mir.Held(trips, 2), mir.Const(1, 2)), results=(mir.Held(quotient, 2), mir.Held(remainder, 2)),
+    )  # fmt: skip
+    body = replace(
+        body,
+        blocks=tuple(replace(b, ops=(divide, *b.ops)) if b.at == 2 else b for b in body.blocks),
+    )
+
+    (proof,) = induction.counted(body, loop, inbounds=True)
+    assert proof.count is None
+
+
+@pytest.mark.parametrize(("test", "step"), [(mir.Kind.GT, -1), (mir.Kind.NE, 1), (mir.Kind.NE, -1)])
+def test_a_zero_tested_counter_from_a_runtime_start_is_skipped_exactly(test: mir.Kind, step: int) -> None:
+    """The skip guard kept an `or i,i` test's kind for `0 or start`: a countdown from 5 ran no trips."""
+    body = _loop(None, 0, test, step, "pre", width=2, zero_test=True, observed=False)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    (proof,) = induction.counted(body, loop, inbounds=True)
+    assert proof.count is None  # symbolic, so rotation places a guard
+    rotated = rotate.entered(body)
+    assert rotated != body
+    for start in (0, 1, 5, 0x7FFF, 0xFFFB):
+        given = {GIVEN: start}
+        try:
+            expected = execute.run(body, given, limit=500_000).returned
+        except execute.ExecutionError:
+            continue  # counts down past the sign: GT never ends it within the limit
+        assert execute.run(rotated, given, limit=500_000).returned == expected, start
+
+
+@pytest.mark.parametrize(
+    ("start", "step", "bound", "last"),
+    [
+        (7, 3, 37, 34),
+        (37, -3, 7, 10),
+        (0, 1, 32767, 32766),
+        (0, -1, -32768, -32767),
+        (7, 3, 38, None),  # reached only after wrapping
+        (7, -3, 37, None),
+        (7, 3, 7, None),  # no trip
+        (32767, 1, -32768, None),  # its exit value wraps
+    ],
+)
+def test_a_not_equal_loop_knows_its_last_trip_only_without_wrapping(
+    start: int, step: int, bound: int, last: int | None
+) -> None:
+    """IVARM lost its ten-trip proof when IndVarSimplify changed `<= 10` to `!= 37`."""
+    body = _loop(start, bound, mir.Kind.NE, step, "pre", width=2)
+    (loop,) = loops.loops(body.blocks, body.entry)
+    (proof,) = induction.counted(body, loop)
+
+    assert proof.last == last
+
+
 @pytest.mark.parametrize(
     ("start", "bound", "exit_test", "trips"),
     [
@@ -170,6 +391,51 @@ def test_an_inclusive_test_at_its_types_maximum_is_not_counted(
     proofs = induction.counted(body, loop)
 
     assert [proof.maximum for proof in proofs] == ([] if trips is None else [trips])
+
+
+def _indexing_loop(inbounds: bool) -> mir.MirBody:
+    """`for i = 0 to n: load a[i]` over an unknown `n`: only the access can bound its trips."""
+    seed, limit, counter, following, loaded = (
+        mir.Value(n, at, variable=n, version=1) for n, at in enumerate((0, 0, 1, 2, 2), 1)
+    )
+    flags = mir.Value(6, 1, flags=True, variable=6, version=1)
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 1), 1, base=counter, space=Space.SEGMENT, base_width=2, inbounds=inbounds)
+    compare = mir.Op(
+        1, ir.Operation.COMPARE, "cmp", (flags,), (counter, limit),
+        kind=mir.Kind.SUB, args=(mir.Held(counter, 2), mir.Held(limit, 2)),
+    )  # fmt: skip
+    branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.ABOVE, target=3)
+    jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+    returned = mir.Op(3, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN)
+    entry = (
+        mir.computed(0, mir.Kind.COPY, seed, (mir.Const(0, 2),), 2),
+        mir.computed(0, mir.Kind.LOAD, limit, (mir.Cell(mir.MemRef(Addr(Space.SEGMENT, 2, 1), 2)),), 2),
+    )
+    step = (
+        mir.computed(2, mir.Kind.LOAD, loaded, (mir.Cell(cell),), 1),
+        mir.computed(2, mir.Kind.INCREMENT, following, (mir.Held(counter, 2),), 2),
+    )
+    return mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), entry, (1,)),
+            mir.MirBlock(1, (mir.Phi(counter, {0: seed, 2: following}),), (compare, branch), (2, 3)),
+            mir.MirBlock(2, (), (*step, jump), (1,)),
+            mir.MirBlock(3, (), (returned,), ()),
+        ),
+        sealed=True,
+    )
+
+
+@pytest.mark.parametrize(("inbounds", "maximum"), [(True, 0x10000), (False, None)])
+def test_only_a_promised_access_bounds_an_inclusive_loop(inbounds: bool, maximum: int | None) -> None:
+    """Raised BC's `a[i]` may wrap its 16-bit offset, yet it bounded `i <= n` as if it could not."""
+    body = _indexing_loop(inbounds)
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    assert [proof.maximum for proof in induction.counted(body, loop, inbounds=True)] == (
+        [] if maximum is None else [maximum]
+    )
 
 
 PAIRS = """\
@@ -225,3 +491,13 @@ def test_a_c_loop_from_a_runtime_start_runs_its_source_trips(
 
     got = [execute.run(body, {}, argument).returned for body in (before, after, rotate.entered(after))]
     assert got[1:] == got[:1] * 2
+
+
+def test_a_c_array_access_carries_its_languages_inbounds_promise(pairs: tuple[mir.MirBody, mir.MirBody]) -> None:
+    """C's `x[j]` must say it stays in `x`, or no inclusive C loop is bounded by its accesses."""
+    raised, _ = pairs
+    indexed = [
+        ref for block in raised.blocks for op in block.ops for ref in (*op.loads, *op.stores) if ref.base is not None
+    ]
+
+    assert indexed and all(ref.inbounds for ref in indexed)

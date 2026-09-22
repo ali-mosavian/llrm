@@ -585,3 +585,42 @@ def test_basic_array_bounds_match_the_runtime(tmp_path: Path) -> None:
 
     assert output.split("\n")[0].split() == ["2", "5", "-1", "3"]
     assert "Subscript out of range" in output
+
+
+@pytest.mark.e2e
+@pytest.mark.skipif(not _runtime_available(), reason="DOSBox or the DOS toolchains are unavailable")
+def test_static_procedure_local_is_its_own_cell(tmp_path: Path) -> None:
+    """A STATIC FUNCTION's DIM total collided with the module's total; it must print 3."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from dosbox import launch
+    from configs import CONFIGS
+    from dosbox import read_dos
+
+    from qbopt.frontend.qb import driver as qb_driver
+    from qbopt.frontend.qb import compile as qb_compile
+
+    source = tmp_path / "STATLOC.BAS"
+    source.write_text(
+        "DECLARE FUNCTION F& ()\n"
+        "DIM total AS LONG\n"
+        "total = 7\n"
+        "PRINT F&; total\n"
+        "FUNCTION F& STATIC\n"
+        "  DIM total AS LONG\n"
+        "  total = total + 3\n"
+        "  F& = total\n"
+        "END FUNCTION\n"
+    )
+    (tmp_path / "PROG.OBJ").write_bytes(qb_compile.object_bytes(qb_driver.parsed(source), source.name))
+    config = CONFIGS["v-g3"]
+    launch(
+        tmp_path,
+        config.mount,
+        [
+            rf"{config.link} PROG.OBJ,PROGRAM.EXE,PROGRAM.MAP,V:\LIB\VBDCL10E.LIB; > LINK.TXT",
+            "if exist PROGRAM.EXE PROGRAM.EXE > RESULT.TXT",
+        ],
+        timeout=60,
+    )
+
+    assert read_dos(tmp_path, "RESULT.TXT").split() == ["3", "7"]

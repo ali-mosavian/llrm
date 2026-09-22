@@ -165,6 +165,7 @@ class IndirectPlace:
     offset: int
     type: int
     volatile: bool = False
+    inbounds: bool = False  # the language promises the access stays inside one object
 
 
 class DescriptorField(StrEnum):
@@ -192,6 +193,8 @@ class Op(StrEnum):
     POINTER_OFFSET = "pointer_offset"
     CONCAT = "concat"
     CONVERT = "convert"
+    # A float to an integer, rounded toward zero; CONVERT rounds as the environment does.
+    TRUNCATE = "truncate"
     SIGN_EXTEND = "sign_extend"
     ZERO_EXTEND = "zero_extend"
     ADD = "add"

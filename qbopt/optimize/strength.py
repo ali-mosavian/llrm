@@ -472,7 +472,7 @@ def _control_credits(
     selected: dict[int, tuple[tuple[int, int, int], induction.Derived]] = {}
 
     for loop, _basics, _derived in found:
-        proofs = induction.counted(body, loop, facts)
+        proofs = induction.counted(body, loop, facts, inbounds=True)
         if len(proofs) != 1:
             continue
         proof = proofs[0]
@@ -530,16 +530,20 @@ def _replacement_credits(
         candidates = groups[loop.header]
         for affine in {one.of for one in candidates}:
             phi = next((one for one in header.phis if one.result.id == affine.value), None)
-            domain = induction.domain(body, loop, affine, facts)
-            if phi is None or latch not in phi.incoming or domain is None:
+            proof = induction.controlling(body, loop, affine, facts)
+            if (
+                phi is None
+                or latch not in phi.incoming
+                or proof is None
+                or proof.span is None
+                or proof.posttested
+                or proof.width != affine.start.width
+            ):
                 continue
-            controls = {
-                id(op)
-                for op in header.ops[:-1]
-                if induction._counter_bound(op, branch, affine, affine.start.width, made) is not None
-            }
+            domain = proof.span
+            controls = {id(proof.compare)}
             update = made.get(phi.incoming[latch].id)
-            if len(controls) != 1 or update is None:
+            if update is None:
                 continue
 
             aliases, copies = induction.transparent_aliases(body, loop, phi.result)
@@ -1255,7 +1259,7 @@ def _widened(body: MirBody, loop, facts: dict, value: int | None = None) -> "lis
             continue
         if induction._signed(affine.start, facts, 2) != 0 or induction._signed(affine.step, facts, 2) != 1:
             continue
-        if induction._last_counter(body, loop, affine, facts, 2) is None:
+        if induction.domain(body, loop, affine, facts) is None:
             continue
         phi = next((phi for phi in header.phis if phi.result.id == affine.value), None)
         if phi is None or len(phi.incoming) != 2:
