@@ -3,6 +3,8 @@
 //! test_dead_address_arithmetic, test_parcopy, test_postallocation and
 //! test_prologue.  Checks Python made through `masm` compare the `repr` of
 //! the semantics Python printed instead: `masm` is not ported.
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -2654,6 +2656,19 @@ fn procedure() -> LirBody {
     body("procedure", 0, vec![block(0, insns, vec![])])
 }
 
+/// Python's phases share one frame; a copy taken before allocation saw no
+/// spill slots and kept a dead `sub sp` reservation.
+#[test]
+fn test_peephole_sees_slots_added_after_it_was_built() {
+    let shared = Rc::new(RefCell::new(Frame::new(-16)));
+    let phase = Peephole::new(Some(Rc::clone(&shared)), "386").unwrap();
+    shared.borrow_mut().cell(1i64, 2).unwrap();
+    let calls = IndexMap::from([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
+    let reserved = prologue::reserved(&procedure(), &shared.borrow(), Some(&calls)).unwrap();
+    let result = phase._frame(reserved);
+    assert_eq!(result.insns().iter().filter(|one| one.frame_adjust).count(), 0);
+}
+
 #[test]
 fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
     // QB FPCSE retained SUB SP,2 after its final dead spill reload vanished.
@@ -2679,7 +2694,7 @@ fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
         }
         let calls = IndexMap::from([(1, "B$ENRA".to_owned()), (2, "B$EXSA".to_owned())]);
         let reserved = prologue::reserved(&input, &slots, Some(&calls)).unwrap();
-        let result = Peephole::new(Some(slots), "386").unwrap()._frame(reserved);
+        let result = Peephole::new(Some(Rc::new(RefCell::new(slots))), "386").unwrap()._frame(reserved);
         assert_eq!(
             result.insns().iter().filter(|one| one.frame_adjust).count(),
             if used == "none" { 0 } else { 2 },

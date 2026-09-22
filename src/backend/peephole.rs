@@ -1,7 +1,9 @@
 //! Port of `qbopt/backend/peephole.py`: simplifications that depend on the
 //! final physical register assignment.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
 use iced_x86::{Decoder, DecoderOptions, FlowControl, OpAccess, Register, RflagsBits};
@@ -66,12 +68,13 @@ fn full32(register: Register) -> Register {
 }
 
 pub struct Peephole {
-    pub frame: Option<Frame>,
+    /// One frame, shared with the phases before this one, as Python shares it.
+    pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
 }
 
 impl Peephole {
-    pub fn new<'a>(frame: Option<Frame>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
+    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
         Ok(Self { frame, cpu: targets::profile(cpu)?.clone() })
     }
 
@@ -80,6 +83,7 @@ impl Peephole {
         let Some(frame) = &self.frame else {
             return body;
         };
+        let frame = frame.borrow();
         if frame.size() == 0 {
             return body;
         }
