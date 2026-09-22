@@ -1,6 +1,8 @@
 //! Target-independent support code.
 
 pub mod bits;
+#[cfg(test)]
+pub mod testing;
 pub mod diagnostic;
 pub mod hash;
 pub mod pyjson;

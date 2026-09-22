@@ -1,0 +1,85 @@
+//! Test support: `tests/corpus.py`'s loaders, without its caches, and the
+//! Python test idioms the Rust API spells differently.
+
+use std::path::{Path, PathBuf};
+
+use crate::analysis::regions::{self, RegionLayout};
+use crate::frontend::blocks::{self, Block, CodeMap};
+use crate::model::ir::decode::{self, BodyIR};
+use crate::model::mir::{self, Arg, MemRef, MirBody, Op, RaisedBodies};
+use crate::objectfile::module::{self, Group, Module};
+use crate::objectfile::omf;
+
+/// A path from the repo root, where Python's tests run.
+pub fn path(relative: impl AsRef<Path>) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+}
+
+pub fn data(relative: impl AsRef<Path>) -> Vec<u8> {
+    std::fs::read(path(relative)).unwrap()
+}
+
+/// `corpus.loaded`.
+pub fn loaded(relative: impl AsRef<Path>) -> Option<Module> {
+    module::of(&omf::parse(&data(relative)).unwrap())
+}
+
+fn _module(relative: impl AsRef<Path>) -> Module {
+    loaded(relative).expect("not a BASIC object this pass can read")
+}
+
+/// `corpus.mapped`.
+pub fn mapped(relative: impl AsRef<Path>) -> Result<CodeMap, String> {
+    blocks::code_map(&_module(relative))
+}
+
+/// `corpus.partitioned`.
+pub fn partitioned(relative: impl AsRef<Path>) -> Vec<Block> {
+    let found = _module(relative);
+    let found_map = blocks::code_map(&found).unwrap();
+    blocks::partition(&found, &found_map)
+}
+
+/// `corpus.bodies`: the decoded IR.
+pub fn bodies(relative: impl AsRef<Path>) -> Result<Vec<BodyIR>, String> {
+    decode::decode_module(&_module(relative))
+}
+
+/// `mir.bodies(corpus.loaded(path), corpus.partitioned(path))`.
+pub fn raised(relative: impl AsRef<Path>) -> RaisedBodies {
+    let found = _module(&relative);
+    mir::bodies(&found, &partitioned(&relative), None, false, false).unwrap()
+}
+
+/// `[op for block in body.blocks for op in block.ops]`.
+pub fn ops(body: &MirBody) -> Vec<Op> {
+    body.blocks.iter().flat_map(|block| block.ops.iter().cloned()).collect()
+}
+
+/// `[op for _, body in bodies for block in body.blocks for op in block.ops]`.
+pub fn all_ops(raised: &RaisedBodies) -> Vec<Op> {
+    raised.values.iter().flat_map(|(_, body)| ops(body)).collect()
+}
+
+/// The raised body Python finds as `bodies[index][1]`.
+pub fn nth(raised: &RaisedBodies, index: usize) -> MirBody {
+    MirBody::clone(&raised.values[index].1)
+}
+
+/// Python's `arg.width`, which a `Cell` or an `Opaque` does not have.
+pub fn width(arg: &Arg) -> u32 {
+    match arg {
+        Arg::Held(one) => one.width,
+        Arg::Const(one) => one.width,
+        Arg::Symbol(one) => one.width,
+        Arg::FrameAddress(one) => one.width,
+        Arg::FrameSelector(one) => one.width,
+        Arg::Cell(_) | Arg::Opaque(_) => panic!("{arg:?} has no width"),
+    }
+}
+
+/// `mir.overlapping(one, other, dgroup)`; `None` is Python's `frozenset()`.
+pub fn overlapping(one: &MemRef, other: &MemRef, dgroup: Option<&Group>) -> bool {
+    let layout = dgroup.map(|group| RegionLayout { shared_segments: Some(group.shared.clone()), landmarks: Default::default() });
+    regions::overlapping(one, other, None, None, layout.as_ref()).unwrap()
+}
