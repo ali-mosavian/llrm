@@ -1,7 +1,6 @@
 //! Port of `tests/test_scalar_division.py`.
 //!
-//! Skipped, monkeypatching `raising_division.scalar` out of `mir.bodies`, and
-//! needing `wholeseg`:
+//! Skipped, monkeypatching `raising_division.scalar` out of `mir.bodies`:
 //! `test_stride_division_requires_the_dividends_sign_extension`.
 
 use crate::model::mir::{Arg, Const, Kind, Op};
