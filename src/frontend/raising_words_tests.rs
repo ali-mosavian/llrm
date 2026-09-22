@@ -1,6 +1,6 @@
 //! Port of `tests/test_raising_words.py` and `tests/test_word_arithmetic_carry.py`.
 //!
-//! Skipped, needing `mir.bodies` and `corpus.loaded`:
+//! Skipped, monkeypatching `raising_words.carried` out of `mir.bodies`:
 //! `test_culling_pointer_arithmetic_preserves_the_returned_upper_word`,
 //! `test_culling_restore_carries_the_original_upper_word`.
 
