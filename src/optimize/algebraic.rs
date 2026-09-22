@@ -2,6 +2,7 @@
 //!
 //! Direct port of `qbopt/optimize/algebraic.py`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use crate::support::hash::HashMap;
 
@@ -128,7 +129,7 @@ pub(crate) fn simplified(
         let op = _scaled_chain(&op, &definitions, &seen, &uses);
         let op = _offset_chain(&op, &definitions, &seen, &uses);
         let op = _bitwise_chain(&op, &definitions, &seen, &uses);
-        _simplified(&op, &seen, wide)
+        _simplified(&op, &seen, wide).into_owned()
     };
 
     let changed = MirBody {
@@ -490,12 +491,12 @@ pub(crate) fn _reassociated_recurrences(body: &MirBody) -> MirBody {
 }
 
 /// Negating a single-use modular difference reverses its operands.
-pub(crate) fn _negated_difference(
-    op: &Op,
+pub(crate) fn _negated_difference<'a>(
+    op: &'a Op,
     definitions: &Definitions<'_>,
     wanted: &BTreeSet<Value>,
     uses: &Counter,
-) -> Op {
+) -> Cow<'a, Op> {
     if op.kind != Kind::Neg
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -509,17 +510,17 @@ pub(crate) fn _negated_difference(
             .chain(&op.results)
             .all(|arg| matches!(arg, Arg::Held(_)))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (source, result) = (
         held_of(&op.args[0]).expect("held"),
         held_of(&op.results[0]).expect("held"),
     );
     if source.width != result.width || times(uses, &source.value) != 1 {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some(difference) = definitions.get(&source.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if difference.kind != Kind::Sub
         || !difference.loads.is_empty()
@@ -538,10 +539,10 @@ pub(crate) fn _negated_difference(
                 .any(|value| Some(*value) != first && wanted.contains(value))
         })
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let args = difference.args.iter().rev().cloned().collect::<Vec<_>>();
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Sub,
         name: "sub".to_owned(),
         op: Some(OpCode::Operation(Operation::Binary)),
@@ -555,7 +556,7 @@ pub(crate) fn _negated_difference(
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Reuse a smaller available scale instead of shifting the original again.
@@ -673,26 +674,26 @@ pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(H
 }
 
 /// Combine single-use integer scales at an unchanged modular width.
-pub(crate) fn _scaled_chain(
-    op: &Op,
+pub(crate) fn _scaled_chain<'a>(
+    op: &'a Op,
     definitions: &Definitions<'_>,
     wanted: &BTreeSet<Value>,
     uses: &Counter,
-) -> Op {
+) -> Cow<'a, Op> {
     let Some((middle, factor)) = _scale(op, wanted, false) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let Some(previous) = definitions.get(&middle.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if times(uses, &middle.value) != 1 || previous.results != [Arg::Held(middle)] {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some((source, initial)) = _scale(previous, wanted, false) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let factor = consts::masked(&(initial * factor), source.width);
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Mul,
         args: vec![
             Arg::Held(source),
@@ -703,7 +704,7 @@ pub(crate) fn _scaled_chain(
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 pub(crate) fn _offset(op: &Op, wanted: &BTreeSet<Value>) -> Option<(Held, BigInt)> {
@@ -748,26 +749,26 @@ pub(crate) fn _offset(op: &Op, wanted: &BTreeSet<Value>) -> Option<(Held, BigInt
 }
 
 /// Compose single-use modular offsets without preserving intermediate flags.
-pub(crate) fn _offset_chain(
-    op: &Op,
+pub(crate) fn _offset_chain<'a>(
+    op: &'a Op,
     definitions: &Definitions<'_>,
     wanted: &BTreeSet<Value>,
     uses: &Counter,
-) -> Op {
+) -> Cow<'a, Op> {
     let Some((middle, amount)) = _offset(op, wanted) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let Some(previous) = definitions.get(&middle.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if times(uses, &middle.value) != 1 || previous.results != [Arg::Held(middle)] {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some((source, initial)) = _offset(previous, wanted) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let amount = consts::masked(&(initial + amount), source.width);
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Add,
         name: "add".to_owned(),
         op: Some(OpCode::Operation(Operation::Binary)),
@@ -780,7 +781,7 @@ pub(crate) fn _offset_chain(
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 const _ASSOCIATIVE_BITS: [Kind; 3] = [Kind::And, Kind::Or, Kind::Xor];
@@ -828,33 +829,33 @@ pub(crate) fn _bitwise(
 }
 
 /// Compose single-use associative bitwise constants at one modular width.
-pub(crate) fn _bitwise_chain(
-    op: &Op,
+pub(crate) fn _bitwise_chain<'a>(
+    op: &'a Op,
     definitions: &Definitions<'_>,
     wanted: &BTreeSet<Value>,
     uses: &Counter,
-) -> Op {
+) -> Cow<'a, Op> {
     // The final bitwise operation still computes identical flags from its
     // identical result.  An intermediate's flags would disappear and are only
     // admissible when unobserved.
     let Some((middle, constant)) = _bitwise(op, wanted, true) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let Some(previous) = definitions.get(&middle.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if previous.kind != op.kind
         || times(uses, &middle.value) != 1
         || previous.results != [Arg::Held(middle)]
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some((source, initial)) = _bitwise(previous, wanted, false) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let arith = consts::ARITH.iter().find(|(kind, _)| *kind == op.kind).map(|(_, arith)| *arith).expect("bitwise");
     let combined = consts::masked(&arith(&initial, &constant), source.width);
-    Op {
+    Cow::Owned(Op {
         args: vec![
             Arg::Held(source),
             Arg::Const(Const::new(combined, source.width)),
@@ -863,11 +864,11 @@ pub(crate) fn _bitwise_chain(
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Joining both extracted halves of one value is that value, without a round trip.
-pub(crate) fn _recombined(op: &Op, definitions: &Definitions<'_>) -> Op {
+pub(crate) fn _recombined<'a>(op: &'a Op, definitions: &Definitions<'_>) -> Cow<'a, Op> {
     if op.kind != Kind::Concat
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -876,12 +877,12 @@ pub(crate) fn _recombined(op: &Op, definitions: &Definitions<'_>) -> Op {
         || op.results.len() != 1
         || !matches!(op.results[0], Arg::Held(result) if result.width == 4 && op.defines == [result.value])
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some(original) = mir::extracted_whole(&op.args[0], &op.args[1], definitions) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Copy,
         args: vec![Arg::Held(original)],
         uses: vec![original.value],
@@ -889,11 +890,11 @@ pub(crate) fn _recombined(op: &Op, definitions: &Definitions<'_>) -> Op {
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Extracting a word just concatenated from two words recovers that word.
-pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
+pub(crate) fn _extracted<'a>(op: &'a Op, definitions: &Definitions<'_>) -> Cow<'a, Op> {
     if op.kind != Kind::Extract
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -901,19 +902,19 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
         || op.args.len() != 2
         || op.results.len() != 1
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (Arg::Held(whole), Arg::Const(offset)) = (&op.args[0], &op.args[1]) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if whole.width != 4
         || !(offset.n == BigInt::zero() || offset.n == BigInt::from(16))
         || !matches!(op.results[0], Arg::Held(result) if result.width == 2)
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some(joined) = definitions.get(&whole.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if joined.kind != Kind::Concat
         || !joined.loads.is_empty()
@@ -927,11 +928,11 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
             .iter()
             .any(|arg| !matches!(arg, Arg::Held(_) | Arg::Const(_)) || arg_width(arg) != Some(2))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (high, low) = (&joined.args[0], &joined.args[1]);
     let source = if offset.n.is_zero() { low } else { high };
-    Op {
+    Cow::Owned(Op {
         op: Some(OpCode::Operation(Operation::Move)),
         name: "mov".to_owned(),
         kind: Kind::Copy,
@@ -941,7 +942,7 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Reuse bits an earlier same-kind extension has already established.
@@ -949,7 +950,7 @@ pub(crate) fn _extracted(op: &Op, definitions: &Definitions<'_>) -> Op {
 /// A value zero-extended from 8 to 16 bits remains zero-extended when viewed
 /// through any 8..16-bit slice; likewise for sign extension.  Mixed
 /// signedness is deliberately excluded.
-pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op {
+pub(crate) fn _redundant_extension<'a>(op: &'a Op, definitions: &Definitions<'_>) -> Cow<'a, Op> {
     if !matches!(op.kind, Kind::ZeroExtend | Kind::SignExtend)
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -958,17 +959,17 @@ pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op
         || op.args.len() != 1
         || op.results.len() != 1
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (Arg::Held(viewed), Arg::Held(result)) = (&op.args[0], &op.results[0]) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let (viewed, result) = (*viewed, *result);
     if op.defines != [result.value] {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Some(previous) = definitions.get(&viewed.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if previous.kind != op.kind
         || !previous.loads.is_empty()
@@ -980,22 +981,22 @@ pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op
         || !matches!(previous.results[0], Arg::Held(held) if held.value == viewed.value)
         || previous.defines != [viewed.value]
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let source_width = arg_width(&previous.args[0]);
     let established = held_of(&previous.results[0]).expect("held").width;
     let Some(source_width) = source_width else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if !(source_width <= viewed.width && viewed.width < result.width && result.width <= established)
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let known = Held {
         value: viewed.value,
         width: result.width,
     };
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Copy,
         args: vec![Arg::Held(known)],
         uses: vec![viewed.value],
@@ -1003,11 +1004,11 @@ pub(crate) fn _redundant_extension(op: &Op, definitions: &Definitions<'_>) -> Op
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// `0 - x` is the unary modular negation of x, with identical flags.
-pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
+pub(crate) fn _zero_difference<'a>(op: &'a Op, definitions: &Definitions<'_>) -> Cow<'a, Op> {
     if op.kind != Kind::Sub
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -1016,10 +1017,10 @@ pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
         || op.args.len() != 2
         || op.results.len() != 1
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (Arg::Held(source), Arg::Held(result)) = (&op.args[1], &op.results[0]) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let (source, result) = (*source, *result);
     if op
@@ -1027,7 +1028,7 @@ pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
         .iter()
         .any(|value| *value != result.value && !value.flags)
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let zero = &op.args[0];
     if arg_width(zero) != Some(source.width)
@@ -1041,9 +1042,9 @@ pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
                 .collect::<BTreeSet<_>>()
         || !_copied_zero(zero, definitions)
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Neg,
         name: "neg".to_owned(),
         op: Some(OpCode::Operation(Operation::Unary)),
@@ -1052,7 +1053,7 @@ pub(crate) fn _zero_difference(op: &Op, definitions: &Definitions<'_>) -> Op {
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Whether an operand is zero through width-preserving, effect-free copies.
@@ -1328,12 +1329,12 @@ pub(crate) fn _halved(body: &MirBody) -> MirBody {
     }
 }
 
-pub(crate) fn _shift_chain(
-    op: &Op,
+pub(crate) fn _shift_chain<'a>(
+    op: &'a Op,
     definitions: &Definitions<'_>,
     wanted: &BTreeSet<Value>,
     uses: &Counter,
-) -> Op {
+) -> Cow<'a, Op> {
     if op.kind != Kind::Shl
         || !op.loads.is_empty()
         || !op.stores.is_empty()
@@ -1341,24 +1342,24 @@ pub(crate) fn _shift_chain(
         || op.args.len() != 2
         || op.results.len() != 1
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (Arg::Held(source), Arg::Const(count)) = (&op.args[0], &op.args[1]) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let Some(previous) = definitions.get(&source.value) else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if times(uses, &source.value) != 1
         || previous.kind != Kind::Shl
         || previous.args.len() != 2
         || previous.results.len() != 1
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (Arg::Held(original), Arg::Const(first_count)) = (&previous.args[0], &previous.args[1])
     else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let first_result = held_of(&op.results[0]).map(|held| held.value);
     if previous.results[0] != Arg::Held(*source)
@@ -1369,15 +1370,15 @@ pub(crate) fn _shift_chain(
             .iter()
             .any(|value| Some(*value) != first_result && wanted.contains(value))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let total = &first_count.n + &count.n;
     if first_count.n.clone().min(count.n.clone()) <= BigInt::zero()
         || total >= BigInt::from(source.width * 8)
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
-    Op {
+    Cow::Owned(Op {
         args: vec![
             Arg::Held(*original),
             Arg::Const(Const::new(total, count.width)),
@@ -1392,7 +1393,7 @@ pub(crate) fn _shift_chain(
         source_backed: false,
         raised: None,
         ..op.clone()
-    }
+    })
 }
 
 /// Divide by positive powers of two, biasing negatives to truncate toward zero.
@@ -1567,28 +1568,28 @@ pub(crate) fn _divisions(body: &MirBody) -> MirBody {
     }
 }
 
-pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Op {
+pub(crate) fn _product<'a>(op: &'a Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Cow<'a, Op> {
     if op.kind != Kind::Mul
         || op.barrier()
         || !op.stores.is_empty()
         || op.results.len() != 2
         || op.args.len() != 2
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if !op
         .results
         .iter()
         .all(|result| matches!(result, Arg::Held(held) if held.width == 2))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if !op.args.iter().all(|arg| match arg {
         Arg::Held(_) | Arg::Const(_) => arg_width(arg) == Some(2),
         Arg::Cell(cell) => cell.r#ref.width == 2,
         _ => false,
     }) {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let result = held_of(&op.results[0]).expect("held");
     if wide.contains(&result.value)
@@ -1597,10 +1598,10 @@ pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>
             .iter()
             .any(|value| *value != result.value && wanted.contains(value))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let read = _operands_read(op);
-    Op {
+    Cow::Owned(Op {
         results: vec![Arg::Held(result)],
         defines: vec![result.value],
         uses: op
@@ -1611,7 +1612,7 @@ pub(crate) fn _product(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>
             .collect(),
         merges: OrderedMap::new(),
         ..op.clone()
-    }
+    })
 }
 
 pub(crate) fn _operands_read(op: &Op) -> BTreeSet<Value> {
@@ -1628,20 +1629,20 @@ pub(crate) fn _operands_read(op: &Op) -> BTreeSet<Value> {
         .collect()
 }
 
-pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Op {
+pub(crate) fn _simplified<'a>(op: &'a Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Value>) -> Cow<'a, Op> {
     if !op.loads.is_empty()
         || !op.stores.is_empty()
         || op.barrier()
         || op.results.len() != 1
         || op.args.len() != 2
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let Arg::Held(result) = op.results[0] else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     if !matches!(result.width, 2 | 4) {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if op.kind == Kind::Concat {
         if let (Arg::Const(high), Arg::Const(low)) = (&op.args[0], &op.args[1]) {
@@ -1649,38 +1650,38 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
                 let mask = |width: u32| (BigInt::one() << (width * 8)) - 1u8;
                 let number =
                     ((&high.n & mask(high.width)) << (low.width * 8)) | (&low.n & mask(low.width));
-                return Op {
+                return Cow::Owned(Op {
                     kind: Kind::Copy,
                     args: vec![Arg::Const(Const::new(number, result.width))],
                     uses: vec![],
                     ..op.clone()
-                };
+                });
             }
         }
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if result.width == 2 && wide.contains(&result.value) {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if op
         .defines
         .iter()
         .any(|value| *value != result.value && wanted.contains(value))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let (mut left, mut right) = (&op.args[0], &op.args[1]);
     if ![left, right]
         .iter()
         .all(|arg| matches!(arg, Arg::Held(_) | Arg::Const(_) | Arg::Symbol(_)))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     let shift = matches!(op.kind, Kind::Shl | Kind::Shr | Kind::Sar);
     if arg_width(left) != Some(result.width)
         || (arg_width(right) != Some(result.width) && !(shift && matches!(right, Arg::Const(_))))
     {
-        return op.clone();
+        return Cow::Borrowed(op);
     }
     if matches!(
         op.kind,
@@ -1690,7 +1691,7 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
         (left, right) = (right, left);
     }
     let Arg::Const(right) = right else {
-        return op.clone();
+        return Cow::Borrowed(op);
     };
     let mask = (BigInt::one() << (result.width * 8)) - 1u8;
     let number = &right.n & ((BigInt::one() << (right.width * 8)) - 1u8);
@@ -1711,9 +1712,9 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
         Kind::And if number == mask => left.clone(),
         Kind::Mul | Kind::And if number.is_zero() => Arg::Const(Const::new(0, result.width)),
         Kind::Or if number == mask => Arg::Const(Const::new(mask, result.width)),
-        _ => return op.clone(),
+        _ => return Cow::Borrowed(op),
     };
-    Op {
+    Cow::Owned(Op {
         kind: Kind::Copy,
         uses: held_of(&answer)
             .map(|held| held.value)
@@ -1723,7 +1724,7 @@ pub(crate) fn _simplified(op: &Op, wanted: &BTreeSet<Value>, wide: &BTreeSet<Val
         defines: vec![result.value],
         merges: OrderedMap::new(),
         ..op.clone()
-    }
+    })
 }
 
 #[cfg(test)]

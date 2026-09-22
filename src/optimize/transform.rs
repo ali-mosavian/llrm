@@ -725,30 +725,22 @@ pub(crate) fn _undisturbed(one: &Op, _earlier: &Op, between: &[Op], _dgroup: &BT
 
 /// Anything standing inside a call's argument run, moved ahead of it.
 pub(crate) fn placed(body: &MirBody, dgroup: &BTreeSet<i64>, calls: &IndexMap<i64, String>) -> Result<MirBody, String> {
-    let mut out = Vec::new();
-    let mut changed = false;
-    for block in &body.blocks {
-        let mut ops = block.ops.clone();
-        for index in (0..ops.len()).rev() {
-            if ops[index].kind != Kind::Call {
+    let mut out = body.clone();
+    for block in &mut out.blocks {
+        for index in (0..block.ops.len()).rev() {
+            if block.ops[index].kind != Kind::Call {
                 continue;
             }
-            let Some((first, standing)) = _argument_run(&ops, index, dgroup, calls) else {
+            let Some((first, standing)) = _argument_run(&block.ops, index, dgroup, calls) else {
                 continue;
             };
-            let kept = ops
-                .iter()
-                .enumerate()
-                .filter(|(at, _)| !standing.contains(at))
-                .map(|(_, one)| one.clone())
-                .collect::<Vec<_>>();
-            let ahead = standing.iter().map(|at| ops[*at].clone()).collect::<Vec<_>>();
-            ops = kept[..first].iter().cloned().chain(ahead).chain(kept[first..].iter().cloned()).collect();
-            changed = true;
+            let kept = (0..block.ops.len()).filter(|at| !standing.contains(at)).collect::<Vec<_>>();
+            let order = kept[..first].iter().chain(&standing).chain(&kept[first..]).copied().collect::<Vec<_>>();
+            let mut ops = std::mem::take(&mut block.ops).into_iter().map(Some).collect::<Vec<_>>();
+            block.ops = order.into_iter().map(|at| ops[at].take().expect("each once")).collect();
         }
-        out.push(MirBlock { ops, ..block.clone() });
     }
-    Ok(if changed { MirBody { blocks: out, ..body.clone() } } else { body.clone() })
+    Ok(out)
 }
 
 /// (where the run starts, which of its operations do not belong to it).
