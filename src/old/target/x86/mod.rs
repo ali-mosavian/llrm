@@ -26,7 +26,8 @@ mod timing;
 mod verify;
 mod word_merge;
 
-pub use crate::model::ir::root;
+mod semantic_registers;
+pub use semantic_registers::root;
 pub use allocation::{
     X86AllocationError, X86AllocationResult, allocate_registers, allocate_registers_with_spills,
     split_fixed_register_occurrences,

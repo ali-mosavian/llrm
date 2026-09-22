@@ -12,7 +12,8 @@ mod model;
 mod text;
 mod verify;
 
-pub use crate::model::ir::*;
+mod semantics;
+pub use semantics::*;
 pub use allocation::{AllocationError, RegisterAssignment, allocate};
 pub use allocation_constraints::{ConstraintError, ConstraintTarget, split_fixed_occurrences};
 pub use allocation_greedy::{GreedyAllocation, GreedyAllocationError, allocate_greedy};
