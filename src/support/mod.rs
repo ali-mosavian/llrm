@@ -4,6 +4,7 @@ pub mod bits;
 pub mod diagnostic;
 pub mod hash;
 pub mod pyjson;
+pub mod pypath;
 pub mod pyrepr;
 pub mod pyset;
 mod register;

@@ -63,14 +63,22 @@ fn whitespace_end(s: &[char], mut end: usize) -> usize {
     end
 }
 
+/// `object_pairs_hook`: builds the value for one decoded object.
+pub type PairsHook<'a> = Option<&'a dyn Fn(Vec<(String, Json)>) -> Result<Json, String>>;
+
 /// `json.loads(text)`.
 pub fn loads(text: &str) -> Result<Json, String> {
+    loads_with(text, None)
+}
+
+/// `json.loads(text, object_pairs_hook=hook)`; the hook's error propagates as it is.
+pub fn loads_with(text: &str, hook: PairsHook) -> Result<Json, String> {
     let s: Vec<char> = text.chars().collect();
     if s.first() == Some(&'\u{feff}') {
         return Err(error("Unexpected UTF-8 BOM (decode using utf-8-sig)", &s, 0));
     }
     let start = whitespace_end(&s, 0);
-    let (obj, end) = match scan_once(&s, start)? {
+    let (obj, end) = match scan_once(&s, start, hook)? {
         Scanned::Value(obj, end) => (obj, end),
         Scanned::Stop(at) => return Err(error("Expecting value", &s, at)),
     };
@@ -92,7 +100,7 @@ fn starts(s: &[char], idx: usize, word: &str) -> bool {
     s.len() >= idx + word.len() && s[idx..idx + word.len()] == word[..]
 }
 
-fn scan_once(s: &[char], idx: usize) -> Result<Scanned, String> {
+fn scan_once(s: &[char], idx: usize, hook: PairsHook) -> Result<Scanned, String> {
     let Some(&nextchar) = s.get(idx) else {
         return Ok(Scanned::Stop(idx));
     };
@@ -100,10 +108,10 @@ fn scan_once(s: &[char], idx: usize) -> Result<Scanned, String> {
         let (string, end) = scanstring(s, idx + 1)?;
         return Ok(Scanned::Value(Json::Str(string), end));
     } else if nextchar == '{' {
-        let (object, end) = parse_object(s, idx + 1)?;
+        let (object, end) = parse_object(s, idx + 1, hook)?;
         return Ok(Scanned::Value(object, end));
     } else if nextchar == '[' {
-        let (array, end) = parse_array(s, idx + 1)?;
+        let (array, end) = parse_array(s, idx + 1, hook)?;
         return Ok(Scanned::Value(array, end));
     } else if nextchar == 'n' && starts(s, idx, "null") {
         return Ok(Scanned::Value(Json::None, idx + 4));
@@ -245,8 +253,12 @@ fn scanstring(s: &[char], mut end: usize) -> Result<(String, usize), String> {
 }
 
 /// `JSONObject((s, end), strict=True, ...)`.
-fn parse_object(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
-    let mut pairs: IndexMap<String, Json> = IndexMap::default();
+fn parse_object(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, usize), String> {
+    let mut pairs: Vec<(String, Json)> = Vec::new();
+    let made = |pairs: Vec<(String, Json)>| match hook {
+        Some(hook) => hook(pairs),
+        None => Ok(Json::Dict(pairs.into_iter().collect())),
+    };
     let mut nextchar = s.get(end).copied();
     if nextchar != Some('"') {
         if nextchar.is_some_and(|one| WHITESPACE.contains(&one)) {
@@ -254,7 +266,7 @@ fn parse_object(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
             nextchar = s.get(end).copied();
         }
         if nextchar == Some('}') {
-            return Ok((Json::Dict(pairs), end + 1));
+            return Ok((made(pairs)?, end + 1));
         } else if nextchar != Some('"') {
             return Err(error("Expecting property name enclosed in double quotes", s, end));
         }
@@ -277,11 +289,11 @@ fn parse_object(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
             }
         }
         let value;
-        (value, end) = match scan_once(s, end)? {
+        (value, end) = match scan_once(s, end, hook)? {
             Scanned::Value(value, end) => (value, end),
             Scanned::Stop(at) => return Err(error("Expecting value", s, at)),
         };
-        pairs.insert(key, value);
+        pairs.push((key, value));
         let mut nextchar = s.get(end).copied();
         if nextchar.is_some_and(|one| WHITESPACE.contains(&one)) {
             end = whitespace_end(s, end + 1);
@@ -304,11 +316,11 @@ fn parse_object(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
             return Err(error("Expecting property name enclosed in double quotes", s, end - 1));
         }
     }
-    Ok((Json::Dict(pairs), end))
+    Ok((made(pairs)?, end))
 }
 
 /// `JSONArray((s, end), scan_once)`.
-fn parse_array(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
+fn parse_array(s: &[char], mut end: usize, hook: PairsHook) -> Result<(Json, usize), String> {
     let mut values = Vec::new();
     let mut nextchar = s.get(end).copied();
     if nextchar.is_some_and(|one| WHITESPACE.contains(&one)) {
@@ -320,7 +332,7 @@ fn parse_array(s: &[char], mut end: usize) -> Result<(Json, usize), String> {
     }
     loop {
         let value;
-        (value, end) = match scan_once(s, end)? {
+        (value, end) = match scan_once(s, end, hook)? {
             Scanned::Value(value, end) => (value, end),
             Scanned::Stop(at) => return Err(error("Expecting value", s, at)),
         };

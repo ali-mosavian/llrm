@@ -157,10 +157,10 @@ only for a module still `todo`, and never after cutover.
 | 5 | `qbopt/abi/events.py` | 52 | `src/abi/events.rs` | ported (tests, BC harness) | test_runtime |
 | 5 | `qbopt/abi/handlers.py` | 47 | `src/abi/handlers.rs` | ported (tests, BC harness) | test_extent |
 | 5 | `qbopt/abi/inputscan.py` | 864 | `src/abi/inputscan.rs` | ported (tests, BC harness) | - |
-| 5 | `qbopt/abi/linkunit.py` | 179 | `src/abi/linkunit.rs` | todo | test_array_access, test_basic_semantics, test_contract_profile, test_cpu_driver |
+| 5 | `qbopt/abi/linkunit.py` | 179 | `src/abi/linkunit.rs` | ported (tests, BC harness) | test_array_access, test_basic_semantics, test_contract_profile, test_cpu_driver |
 | 5 | `qbopt/abi/nativecalls.py` | 122 | `src/abi/nativecalls.rs` | ported (tests, BC harness) | test_native_frame |
 | 5 | `qbopt/abi/ports.py` | 15 | `src/abi/ports.rs` | ported (tests, BC harness) | - |
-| 5 | `qbopt/abi/profile.py` | 113 | `src/abi/profile.rs` | todo | - |
+| 5 | `qbopt/abi/profile.py` | 113 | `src/abi/profile.rs` | ported (tests, BC harness) | - |
 | 5 | `qbopt/abi/runtime.py` | 1436 | `src/abi/runtime.rs` | ported (tests, BC harness) | test_allocation, test_callsite_abi, test_cfg_merge, test_coalesce, test_constant_call_memory, test_environ_contract, test_float_values, test_floatbounds, test_flow, test_huge_array_access, test_invariant_shift, test_ivshare, test_lir, test_literal_initializers, test_loopmotion, test_mir, test_noreturn, test_numeric_argument_escape, test_parcopy, test_raising_calls, test_redim_contract, test_regions, test_rounding_contracts, test_rule5, test_runtime, test_runtime_cells, test_transform |
 | 5 | `qbopt/frontend/addressfacts.py` | 36 | `src/frontend/addressfacts.rs` | todo | test_array_facts |
 | 5 | `qbopt/frontend/arrayfacts.py` | 403 | `src/frontend/arrayfacts.rs` | todo | test_array_facts, test_cfg_merge |
