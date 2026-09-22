@@ -2039,7 +2039,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         .filter(|block| reachable.contains(&block.at))
         .cloned()
         .collect::<Vec<_>>();
-    if !loops::irreducible(&blocks, start).is_empty() {
+    if !loops::irreducible(&blocks, Some(start)).is_empty() {
         return Err(
             "the body's control flow is irreducible, so it has no dominator tree".to_owned(),
         );
@@ -2049,7 +2049,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         .iter()
         .map(|block| (block.at, block))
         .collect::<BTreeMap<_, _>>();
-    let immediate = loops::immediate_dominators(&blocks, start);
+    let immediate = loops::immediate_dominators(&blocks, Some(start));
     let mut children = blocks
         .iter()
         .map(|block| (block.at, Vec::new()))
@@ -2062,7 +2062,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
                 .push(block.at);
         }
     }
-    let frontier = loops::frontiers(&blocks, start);
+    let frontier = loops::frontiers(&blocks, Some(start));
     let mut where_defined = BTreeMap::<u32, BTreeSet<i64>>::new();
     for block in &blocks {
         for operation in &block.ops {
@@ -2219,7 +2219,7 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
 /// incoming value per predecessor.  This is intentionally not a structural
 /// or type verifier.
 pub fn verify(body: &MirBody) -> Vec<String> {
-    let dominators = loops::dominators(&body.blocks, body.entry);
+    let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let mut problems = Vec::new();
 
     let mut defined_at = BTreeMap::<Value, i64>::new();

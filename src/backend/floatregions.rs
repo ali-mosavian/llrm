@@ -180,7 +180,7 @@ pub fn bridged(
     let Some(frame) = frame.as_deref_mut() else {
         return Err(unlowered("floating region crossing requires an owned frame"));
     };
-    let doms = loops::dominators(&_graph(body), body.entry);
+    let doms = loops::dominators(&_graph(body), Some(body.entry));
     for value in crossing.iter() {
         let value = *value as u32;
         let defined = definitions.entry(value).or_default();
