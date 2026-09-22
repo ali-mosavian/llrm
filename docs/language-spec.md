@@ -567,6 +567,20 @@ Rank is part of the static type, so `vec[T, 2]` need not store a runtime rank.
 A borrowed view carries a data pointer plus the required dimensions and
 strides. Slicing aliases storage and never copies implicitly.
 
+Ranks are one to four. Arrays are row-major: the last index is contiguous, so
+`a[i, j]` and `a[i, j + 1]` are neighbours. Strides count elements; every
+one is stored, the last included, so a view need not be contiguous. A fixed
+array's descriptor has the same words as a vector's,
+`[dimensions][capacity][strides]`, and a borrowed `&[T, N]` view holds them
+followed by the data pointer. At rank one these are
+`[length][capacity][stride]`.
+
+A ranked literal nests one bracket per dimension:
+
+```text
+let identity: [f32; 2, 2] = [[1, 0], [0, 1]]
+```
+
 A slice is spelled as in Python and selects a half-open range:
 
 ```text
@@ -753,7 +767,8 @@ Version 0.1 has no:
 - runtime reflection or RTTI;
 - dynamic protocol dispatch;
 - function or operator overloading;
-- implicit conversions or implicit cloning;
+- implicit conversions beyond C's between integers and floats, or implicit
+  cloning;
 - `null`;
 - `defer`;
 - UFCS or extension methods;

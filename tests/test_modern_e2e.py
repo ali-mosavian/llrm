@@ -197,3 +197,18 @@ def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "3.0 -2 0 2.75 200.0 7\n"
     assert build(source, tmp_path / "FIXCONV.EXE", run=True).output == expected
+
+
+def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
+    source = ROOT / "fixtures" / "modern" / "ranked.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "15 106 162 42 9 3 4\n"
+    assert build(source, tmp_path / "RANKED.EXE", run=True).output == expected
+
+
+def test_native_8x8_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
+    """The flat 24.8 matmul's inputs as 8x8 matrices: the same exact checksum."""
+    source = ROOT / "fixtures" / "modern" / "matmul8.mod"
+    expected = execute.run(driver.parsed(source), "main").output
+    assert expected == "matmul: 56974.0\n"
+    assert build(source, tmp_path / "MM8.EXE", run=True).output == expected
