@@ -70,7 +70,7 @@ impl LIRTransform for ParallelCopy {
                 Refused::Tangled(_) => "Tangled",
                 Refused::Malformed(_) => "Malformed",
             };
-            Exception::new(kind, refused.to_string())
+            Exception::defined_in("qbopt.backend.parcopy", kind, refused.to_string())
         })
     }
 }

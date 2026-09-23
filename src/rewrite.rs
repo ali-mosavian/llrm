@@ -142,7 +142,8 @@ pub fn rewrite(data: &[u8], asked: &Rewrite<'_>) -> Result<(Vec<u8>, Vec<Region>
         // Already emitted by this pass. What came out is a program, and
         // raising it again reads all of that as code BC wrote.
         if was != made_by {
-            return Err(Exception::new(
+            return Err(Exception::defined_in(
+                "qbopt.rewrite",
                 "Finalised",
                 format!(
                     "this object was written by {}, and this run is {}",
@@ -178,7 +179,7 @@ pub fn rewrite(data: &[u8], asked: &Rewrite<'_>) -> Result<(Vec<u8>, Vec<Region>
         // Explicit compatibility mode only.
         return Ok((data.to_vec(), regions));
     }
-    Err(Exception::new("Unsupported", reason))
+    Err(Exception::defined_in("qbopt.rewrite", "Unsupported", reason))
 }
 
 /// Every option that can change what the emitter writes, as one string.
@@ -529,7 +530,7 @@ pub fn main(argv: &[String]) -> Result<i32, Exception> {
             };
             let (out, regions) = rewrite(&source.data, &asked).map_err(|raised| {
                 if raised.kind == "Unsupported" {
-                    Exception::new("Unsupported", format!("{}: {}", source.path.display(), raised.message))
+                    Exception::defined_in("qbopt.rewrite", "Unsupported", format!("{}: {}", source.path.display(), raised.message))
                 } else {
                     raised
                 }
@@ -751,6 +752,16 @@ mod tests {
         let data = once(&std::fs::read(FIXTURE).unwrap(), true).unwrap();
         assert_eq!(with_cpu(&data, "386").unwrap(), data);
         assert_eq!(with_cpu(&data, "P5").unwrap_err().kind, "Finalised");
+    }
+
+    /// llrm-omf's traceback said `Exception:` where Python's names
+    /// `qbopt.backend.masm.Unprintable:`, so the matrix's REWRITEFAIL
+    /// details differed between the two rewriters on jumps-*-evt.
+    #[test]
+    fn test_an_escaping_exception_is_named_as_python_names_it() {
+        let raised = once(&std::fs::read("fixtures/omf/jumps-p-evt.obj").unwrap(), true).unwrap_err();
+        let line = raised.traceback();
+        assert!(line.starts_with("qbopt.backend.masm.Unprintable: main (main): block 102 leaves for"), "{line}");
     }
 
     /// A stale contract dependency exits 2 before touching the output.

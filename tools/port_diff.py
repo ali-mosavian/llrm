@@ -196,7 +196,7 @@ def _message(stderr: str, prefix: str) -> str:
     return last.partition(prefix)[2] if prefix in last else last
 
 
-def _rust_binary(name: str = "llrm-c") -> Path:
+def rust_binary(name: str = "llrm-c") -> Path:
     subprocess.run(["cargo", "build", "--quiet", "--bin", name], cwd=ROOT, check=True)
     return ROOT / "target" / "debug" / name
 
@@ -407,8 +407,8 @@ def main(argv: list[str] | None = None) -> int:
         sources = modern_corpus()
     if not sources:
         parser.error("no sources")
-    rust = _rust_binary("llrm-qb" if args.qb else "llrm-omf" if args.bc else "llrm-modern" if args.modern else "llrm-c")
-    frontend = _rust_binary("modernfront") if args.modern else None
+    rust = rust_binary("llrm-qb" if args.qb else "llrm-omf" if args.bc else "llrm-modern" if args.modern else "llrm-c")
+    frontend = rust_binary("modernfront") if args.modern else None
 
     def one(source: Path) -> Result:
         work = _workdir(args.work, source)

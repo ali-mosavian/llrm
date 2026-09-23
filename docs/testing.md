@@ -99,6 +99,7 @@ for the one question a model cannot answer.
 
     uv run python tools/matrix.py                  all twelve, in parallel
     uv run python tools/matrix.py --dry-run        the harness proving itself
+    uv run python tools/matrix.py --rewriter rust  the same, through llrm-omf
     uv run python tools/e2e.py v-g3 --prog arith   one configuration
     uv run python -m qbopt.rewrite F.OBJ --report  the region census for one object
     uv run python -m qbopt.price F.OBJ             what it costs, per architecture

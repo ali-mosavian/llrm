@@ -440,9 +440,9 @@ pub fn _through_lir<'w>(
         );
         let low = match low {
             Ok(low) => low,
-            Err(short) => return refusal(name, Exception::new("Unlowered", short.0)),
+            Err(short) => return refusal(name, Exception::defined_in("qbopt.backend.lower", "Unlowered", short.0)),
         };
-        let mut low = flow::verified(low, "lower", true).map_err(|error| Exception::new("Malformed", error.0))?;
+        let mut low = flow::verified(low, "lower", true).map_err(|error| Exception::defined_in("qbopt.backend.verify", "Malformed", error.0))?;
         let native = native_frames.get(&body.entry);
         if let Some(native) = native {
             low = nativeframe::bound(&low, native);
@@ -452,7 +452,7 @@ pub fn _through_lir<'w>(
         }
         let frame = match frames::of(&low, Some(&found.calls), family.value(), native.cloned()) {
             Ok(frame) => frame,
-            Err(short) => return refusal(name, Exception::new("Refused", short.0)),
+            Err(short) => return refusal(name, Exception::defined_in("qbopt.backend.frame", "Refused", short.0)),
         };
         let mut in_ssa = true;
         let mut phases =
@@ -465,7 +465,7 @@ pub fn _through_lir<'w>(
             low = match flow::checked(low, phase.as_mut(), in_ssa) {
                 Ok(low) => low,
                 Err(flow::Checked::Refused(raised)) => return refusal(name, raised),
-                Err(flow::Checked::Malformed(malformed)) => return Err(Exception::new("Malformed", malformed.0)),
+                Err(flow::Checked::Malformed(malformed)) => return Err(Exception::defined_in("qbopt.backend.verify", "Malformed", malformed.0)),
             };
             if let Some(watch) = watch.as_mut() {
                 watch(phase.name(), Some(name), Watched::Lir(&low));
@@ -487,9 +487,10 @@ pub fn _through_lir<'w>(
         Some(source),
     )
     .map_err(|error| match error {
-        omfwrite::Error::Survived(one) => Exception::new("Survived", one.0),
+        omfwrite::Error::Survived(one) => Exception::defined_in("qbopt.backend.omfwrite", "Survived", one.0),
+        omfwrite::Error::Unencodable(one) => Exception::defined_in("qbopt.backend.omfwrite", "Unencodable", one.0),
+        omfwrite::Error::Unprintable(one) => one.into(),
         omfwrite::Error::Value(one) => value_error(one.0),
-        other => Exception::new("Exception", other.to_string()),
     })
 }
 

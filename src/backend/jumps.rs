@@ -20,7 +20,7 @@ use crate::backend::layout::_OPPOSITE;
 use crate::backend::{machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::passes::{Exception, LIRTransform};
 
 /// Python's AttributeError on `None.op`: `_real` keeps semantics-less markers.
 const NO_OP: &str = "'NoneType' object has no attribute 'op'";
@@ -38,12 +38,16 @@ impl LIRTransform for ControlFlow {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        optimized(&body)
+        optimized(&body).map_err(|error| error.0)
+    }
+
+    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
+        Ok(optimized(&body)?)
     }
 }
 
 /// Choose the cheapest common-tail fixed point without adding hot work.
-pub fn optimized(body: &LirBody) -> Result<LirBody, String> {
+pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     let mut candidate = placed(body)?;
     let baseline = threaded(&candidate);
     // Merging one physical tail may make the condition selecting between its
@@ -69,11 +73,11 @@ pub fn optimized(body: &LirBody) -> Result<LirBody, String> {
 /// is written as a jump first, which makes any order correct; `threaded` then
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
-pub fn placed(body: &LirBody) -> Result<LirBody, String> {
+pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     let mut explicit = Vec::new();
     for block in &body.blocks {
         let mut block = block.clone();
-        let fall = masm::_falls_to(&block, &body.name).map_err(|error| error.0)?;
+        let fall = masm::_falls_to(&block, &body.name)?;
         if let Some(fall) = fall {
             let at = block.insns.last().map_or(block.at, |last| last.at);
             let jump = Insn::new(
@@ -236,12 +240,12 @@ pub type TailKey = (
 );
 
 /// Merge physically identical allocated tails after fallthroughs are explicit.
-pub fn merged(body: &LirBody) -> Result<LirBody, String> {
+pub fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     // Removing a duplicate block is sound only when every incoming edge is an
     // instruction that can be retargeted. `placed` establishes exactly that
     // form. Decline a body presented at an earlier pipeline boundary.
     for block in &body.blocks {
-        if masm::_falls_to(block, &body.name).map_err(|error| error.0)?.is_some() {
+        if masm::_falls_to(block, &body.name)?.is_some() {
             return Ok(body.clone());
         }
     }
