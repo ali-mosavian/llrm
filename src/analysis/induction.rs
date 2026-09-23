@@ -1331,28 +1331,62 @@ fn _difference(
     if let (Some(begin), Some(limit)) = (begin, limit) {
         return Some(masked(&(limit - begin), width));
     }
-    let AffineOperand::Held(held) = bound else { return None };
-    let definition = made.get(&held.value.id).copied()?;
-    if definition.kind != Kind::Add
-        || !definition.loads.is_empty()
-        || !definition.stores.is_empty()
-        || definition.barrier()
-        || !definition.merges.is_empty()
-        || definition.args.len() != 2
-        || definition.results != vec![bound.as_arg()]
-    {
-        return None;
-    }
-    for (index, arg) in definition.args.iter().enumerate() {
-        if let (Arg::Held(arg), AffineOperand::Held(start)) = (arg, start) {
-            if arg.value == start.value {
-                if let Some(offset) = _constant(&definition.args[1 - index], facts, width) {
-                    return Some(offset);
-                }
-            }
+    let (root, ahead) = anchored(&bound.as_arg(), made, width, Some(facts));
+    let (other, behind) = anchored(&start.as_arg(), made, width, Some(facts));
+    (root == other).then(|| masked(&(ahead - behind), width))
+}
+
+/// `arg` as a root value plus a constant, through copies and constant adds; a number has no root.
+///
+/// Two values with one root are a constant apart, which is how a loop from
+/// `x - 32` to `x` is counted and how two counters starting 4 apart share one.
+pub(crate) fn anchored(
+    arg: &Arg,
+    made: &BTreeMap<u32, &Op>,
+    width: u32,
+    facts: Option<&IndexMap<Value, Known>>,
+) -> (Option<Value>, BigInt) {
+    let empty = IndexMap::default();
+    let facts = facts.unwrap_or(&empty);
+    let mut arg = arg.clone();
+    let mut offset = BigInt::from(0_u8);
+    while let Arg::Held(held) = &arg {
+        if held.width != width {
+            break;
+        }
+        if let Some(known) = _constant(&arg, facts, width) {
+            arg = Arg::Const(Const::new(known, width));
+            break;
+        }
+        let Some(op) = made.get(&held.value.id).copied() else {
+            break;
+        };
+        if !op.loads.is_empty()
+            || !op.stores.is_empty()
+            || op.barrier()
+            || !op.merges.is_empty()
+            || op.results != [arg.clone()]
+        {
+            break;
+        }
+        let constants = op.args.iter().filter(|one| matches!(one, Arg::Const(_))).count();
+        if op.kind == Kind::Copy && op.args.len() == 1 && matches!(op.args[0], Arg::Held(_) | Arg::Const(_)) {
+            arg = op.args[0].clone();
+        } else if op.kind == Kind::Add && op.args.len() == 2 && constants == 1 {
+            let (constant, other) =
+                if matches!(op.args[0], Arg::Const(_)) { (&op.args[0], &op.args[1]) } else { (&op.args[1], &op.args[0]) };
+            let Arg::Const(constant) = constant else { unreachable!("one constant") };
+            offset += &constant.n;
+            arg = other.clone();
+        } else {
+            break;
         }
     }
-    None
+    match arg {
+        Arg::Const(constant) => (None, masked(&(&constant.n + offset), width)),
+        Arg::Held(held) => (Some(held.value), masked(&offset, width)),
+        other => panic!("AttributeError: {other:?} has no attribute 'value'"),
+    }
 }
 
 /// Trips until `start + k*step`, tested as the loop is shaped, first equals `start + difference`.

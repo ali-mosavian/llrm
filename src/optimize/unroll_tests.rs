@@ -23,6 +23,8 @@
 use std::collections::BTreeSet;
 
 use super::*;
+use std::rc::Rc;
+
 use crate::analysis::loops;
 use crate::backend::{cpu, lower_floats};
 use crate::model::ir::Operation;
@@ -57,6 +59,7 @@ fn test_unroll_profitability_uses_the_selected_cpu() {
         vec![MirBlock::new(0, vec![], moves, vec![2]), MirBlock::new(2, vec![], vec![], vec![])],
     );
     result.repetitions = vec![(1, 2)];
+    let (original, result) = (Rc::new(original), Rc::new(result));
     let with = |name: &str| Where {
         costs: cpu::profile(name).expect("a known cpu").operations.clone(),
         ..Where::default()

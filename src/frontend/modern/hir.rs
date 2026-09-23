@@ -132,7 +132,7 @@ impl Program {
     /// dependency so the standalone frontend remains one small binary.
     pub fn json(&self) -> String {
         let mut out = String::new();
-        out.push_str("{\"array_order\":\"column-major\",\"dialect\":\"modern\",\"float_mode\":\"inline\",\"modules\":[{");
+        out.push_str("{\"array_order\":\"row-major\",\"dialect\":\"modern\",\"float_mode\":\"inline\",\"modules\":[{");
         out.push_str("\"callables\":[");
         for (index, callable) in self.callables.iter().enumerate() {
             comma(&mut out, index);

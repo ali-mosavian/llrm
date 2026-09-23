@@ -157,6 +157,15 @@ static _MODULE: LazyLock<(
     cost.insert("lea", [2, 1, 1, 1, 1, 1, 1]);
     latency.insert("lea", [2, 1, 1, 1, 1, 1, 1]);
 
+    // REP STOS: a setup, then a clock count per cell. The 386 and 486 figures
+    // are Intel's (5+5n, 7+4n); the rest are Agner Fog's small-count rankings,
+    // where fast strings have not yet paid for their startup.
+    //                              486  P5  P6  K5  K6  K7 Core
+    cost.insert("rep_stos", [7, 9, 30, 10, 10, 15, 30]);
+    cost.insert("rep_stos_cell", [4, 1, 1, 1, 1, 1, 1]);
+    latency.insert("rep_stos", cost["rep_stos"]);
+    latency.insert("rep_stos_cell", cost["rep_stos_cell"]);
+
     // 32-bit multiply, for telling it from the 16-bit one
     cost.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
     latency.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
@@ -249,6 +258,8 @@ mod tests {
                 "lahf",
                 "sahf",
                 "lea",
+                "rep_stos",
+                "rep_stos_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",
@@ -302,6 +313,8 @@ mod tests {
                 "sahf",
                 "unknown",
                 "lea",
+                "rep_stos",
+                "rep_stos_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",

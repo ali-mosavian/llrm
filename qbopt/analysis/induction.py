@@ -395,27 +395,41 @@ def _difference(
     facts: dict,
     width: int,
 ) -> int | None:
-    """`bound - start` modulo the width, when constant: both constant, or `bound = start + c`."""
+    """`bound - start` modulo the width, when constant: both one root plus a constant."""
     if begin is not None and limit is not None:
         return consts.masked(limit - begin, width)
-    definition = made.get(bound.value.id) if isinstance(bound, mir.Held) else None
-    if (
-        definition is None
-        or definition.kind is not mir.Kind.ADD
-        or definition.loads
-        or definition.stores
-        or definition.barrier
-        or definition.merges
-        or len(definition.args) != 2
-        or definition.results != (bound,)
-    ):
-        return None
-    for index, arg in enumerate(definition.args):
-        if isinstance(arg, mir.Held) and isinstance(start, mir.Held) and arg.value == start.value:
-            offset = _constant(definition.args[1 - index], facts, width)
-            if offset is not None:
-                return offset
-    return None
+    root, ahead = anchored(bound, made, width, facts)
+    other, behind = anchored(start, made, width, facts)
+    return consts.masked(ahead - behind, width) if root == other else None
+
+
+def anchored(
+    arg: mir.Held | mir.Const, made: dict[int, mir.Op], width: int, facts: dict | None = None
+) -> tuple[mir.Value | None, int]:
+    """`arg` as a root value plus a constant, through copies and constant adds; a number has no root.
+
+    Two values with one root are a constant apart, which is how a loop from
+    `x - 32` to `x` is counted and how two counters starting 4 apart share one.
+    """
+    offset = 0
+    while isinstance(arg, mir.Held) and arg.width == width:
+        known = _constant(arg, facts or {}, width)
+        if known is not None:
+            arg = mir.Const(known, width)
+            break
+        op = made.get(arg.value.id)
+        if op is None or op.loads or op.stores or op.barrier or op.merges or op.results != (arg,):
+            break
+        if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], (mir.Held, mir.Const)):
+            arg = op.args[0]
+        elif op.kind is mir.Kind.ADD and len(op.args) == 2 and sum(isinstance(one, mir.Const) for one in op.args) == 1:
+            constant, arg = sorted(op.args, key=lambda one: not isinstance(one, mir.Const))
+            offset += constant.n
+        else:
+            break
+    if isinstance(arg, mir.Const):
+        return None, consts.masked(arg.n + offset, width)
+    return arg.value, consts.masked(offset, width)
 
 
 def _equal_after(difference: int, step: int, width: int, posttested: bool, stepped: bool) -> int | None:

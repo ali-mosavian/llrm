@@ -9,9 +9,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::{HashMap, HashSet, IndexMap};
 
-use crate::analysis::{liveness, loops};
+use crate::analysis::{consts, induction, liveness, loops};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, Value};
 use crate::model::passes::OperationCosts;
+use std::rc::Rc;
+use num_traits::ToPrimitive;
+
+// Trips assumed of a loop, and cells of a fill, whose count is not a number.
+pub(crate) const UNKNOWN_TRIPS: i64 = 10;
 
 pub(crate) const _ALU: [Kind; 21] = [
     Kind::Add,
@@ -96,6 +101,12 @@ pub(crate) fn operation(one: &Op, costs: &OperationCosts) -> Option<i64> {
         costs.float_multiply
     } else if matches!(one.kind, Kind::Fdiv | Kind::Fsqrt) {
         costs.float_divide
+    } else if one.kind == Kind::Fill {
+        let cells = match &one.args[1] {
+            Arg::Const(count) => count.n.to_i64().expect("a cell count"),
+            _ => UNKNOWN_TRIPS,
+        };
+        return Some(costs.fill + cells * costs.fill_cell);
     } else if one.kind == Kind::Fcheck {
         costs.float_store
     } else if one.kind == Kind::Call {
@@ -125,16 +136,25 @@ pub(crate) fn r#static(body: &MirBody, costs: &OperationCosts) -> Option<i64> {
 }
 
 /// Profile-free block frequencies, or `None` for conflicting proofs.
-pub(crate) fn _frequencies(body: &MirBody, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+pub(crate) fn _frequencies(body: &Rc<MirBody>, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let mut frequency = body.blocks.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
+    let mut facts = None;
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
+        let mut exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
         if exact.len() > 1 {
             return None;
         }
-        let factor = exact.iter().next().copied().unwrap_or(10);
+        if exact.is_empty() {
+            // A loop nobody named still has its proven count: guessing ten for
+            // an 8-trip loop priced unrolling its inner loop above a 64-cell fill.
+            let facts = facts.get_or_insert_with(|| consts::known(body, None, None, None, None));
+            exact.extend(
+                induction::trip_count(body, &loop_, facts).map(|count| count.to_i64().expect("a trip count fits")),
+            );
+        }
+        let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);
         for at in &loop_.body {
             if let Some(count) = frequency.get_mut(at) {
                 *count *= factor;
@@ -148,7 +168,7 @@ pub(crate) fn _frequencies(body: &MirBody, trips: Option<&IndexMap<i64, i64>>) -
 ///
 /// `trips` keys a proven count by latch address; every other loop retains
 /// the conventional factor of ten.
-pub(crate) fn weighted(body: &MirBody, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
+pub(crate) fn weighted(body: &Rc<MirBody>, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
     let frequency = _frequencies(body, trips)?;
     let mut total = 0;
     for block in &body.blocks {
@@ -165,7 +185,7 @@ pub(crate) fn weighted(body: &MirBody, costs: &OperationCosts, trips: Option<&In
 /// the body.  x87 values do not consume the integer capacity.  Literal and
 /// fixed-address values use their cheaper reconstruction price.
 pub(crate) fn spill_risk(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     costs: &OperationCosts,
     capacity: i64,
     trips: Option<&IndexMap<i64, i64>>,
@@ -286,7 +306,7 @@ pub(crate) fn spill_risk(
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
 pub(crate) fn pressure_adjusted(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     costs: &OperationCosts,
     capacity: i64,
     trips: Option<&IndexMap<i64, i64>>,
