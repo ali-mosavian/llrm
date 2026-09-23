@@ -759,12 +759,17 @@ fn _cells_solved(
         ))
     };
 
+    // A worklist in reverse postorder, as LLVM's dataflow solvers drain theirs:
+    // a block runs again only when what enters it changed, not every round.
+    let order = super::loops::reverse_postorder(&body.blocks, body.entry);
+    let rank = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect::<HashMap<_, _>>();
+    let by_at = body.blocks.iter().map(|block| (block.at, block)).collect::<HashMap<_, _>>();
+    let mut waiting = (0..order.len()).collect::<BTreeSet<_>>();
     let mut rounds = 0;
-    let mut changing = true;
-    while changing {
-        changing = false;
+    while let Some(next) = waiting.pop_first() {
         rounds += 1;
-        for block in &body.blocks {
+        {
+            let block = by_at[&order[next]];
             let Some(mut here) = entering(&outof, block.at) else {
                 continue;
             };
@@ -783,12 +788,12 @@ fn _cells_solved(
             }
             if outof[&block.at].as_deref() != Some(here.cells()) {
                 outof.insert(block.at, Some(queries.owned(here)));
-                changing = true;
+                waiting.extend(block.succ.iter().filter_map(|at| rank.get(at).copied()));
             }
         }
     }
 
-    crate::debug!("consts", "cells solved in {rounds} rounds");
+    crate::debug!("consts", "cells solved in {rounds} block visits");
     let mut found = IndexMap::default();
     for block in &body.blocks {
         let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
