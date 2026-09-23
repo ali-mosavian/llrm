@@ -1,8 +1,10 @@
 import random
 from pathlib import Path
 
+from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.analysis import alias
+from qbopt.analysis import avail
 from qbopt.analysis import consts
 from qbopt.analysis import cellmap
 from qbopt.frontend.qb import driver as qb_driver
@@ -18,6 +20,18 @@ def _cells_program(tmp_path: Path, scalars: int) -> Path:
     return basic
 
 
+def _loop_program(tmp_path: Path, scalars: int) -> Path:
+    basic = tmp_path / "LOOP.BAS"
+    lines = ["DEFINT A-Z", "DIM a(10)", "FOR j = 1 TO 3", *(f"x{k} = x{k} + j: a(j) = x{k}" for k in range(scalars))]
+    lines += ["NEXT", "PRINT " + " + ".join(f"x{k}" for k in range(scalars))]
+    basic.write_bytes("\r\n".join(lines).encode() + b"\r\n")
+    return basic
+
+
+def _compiled(basic: Path) -> bytes:
+    return qb_compile.object_bytes(qb_driver.parsed(basic, dialect="qb45", runtime="qb45"), basic.name)
+
+
 def test_a_store_is_not_tested_against_every_known_cell(tmp_path, monkeypatch) -> None:
     """deedlines compiled for 45 minutes: each store asked may_overlap of
     every constant cell, 285K questions here for 24 scalars."""
@@ -30,14 +44,55 @@ def test_a_store_is_not_tested_against_every_known_cell(tmp_path, monkeypatch) -
         return original(self, where, ref)
 
     monkeypatch.setattr(consts._MemoryQueries, "may_overlap", counted)
-    basic = _cells_program(tmp_path, 24)
-    qb_compile.object_bytes(qb_driver.parsed(basic, dialect="qb45", runtime="qb45"), basic.name)
+    _compiled(_cells_program(tmp_path, 24))
+    assert asked < 50_000, asked
+
+
+def test_dead_stores_do_not_test_every_overwritten_cell(tmp_path, monkeypatch) -> None:
+    """dead_stores was 44% of deedlines' compile: each access tested every
+    cell overwritten below it, 17K overlap tests here for 24 scalars."""
+    inside, asked = False, 0
+    overlapping, dead_stores = mir.overlapping, avail.dead_stores
+
+    def counted(*args, **named):
+        nonlocal asked
+        asked += inside
+        return overlapping(*args, **named)
+
+    def scoped(*args, **named):
+        nonlocal inside
+        inside = True
+        try:
+            return dead_stores(*args, **named)
+        finally:
+            inside = False
+
+    monkeypatch.setattr(mir, "overlapping", counted)
+    monkeypatch.setattr(avail, "dead_stores", scoped)
+    _compiled(_loop_program(tmp_path, 24))
+    assert asked < 5_000, asked
+
+
+def test_a_write_asks_each_object_pair_once(tmp_path, monkeypatch) -> None:
+    """Picking the buckets a write reaches asked objects_may_alias of every
+    bucket for every store: 145K questions here, 27M in 5 min of deedlines."""
+    asked = 0
+    original = memory.objects_may_alias
+
+    def counted(one, other):
+        nonlocal asked
+        asked += 1
+        return original(one, other)
+
+    mir.overlap_reaches.cache_clear()
+    monkeypatch.setattr(memory, "objects_may_alias", counted)
+    _compiled(_cells_program(tmp_path, 24))
     assert asked < 50_000, asked
 
 
 def test_skipped_buckets_hold_no_cell_the_store_reaches(tmp_path, monkeypatch) -> None:
-    """The index only skips work: every cell it leaves untested is one
-    mir.overlapping says the store cannot reach."""
+    """The index only skips work: every cell it leaves untested, in consts
+    and dead stores alike, is one the exact test says the write cannot reach."""
     original = cellmap.CellMap.kill
     checked = 0
 
@@ -50,8 +105,8 @@ def test_skipped_buckets_hold_no_cell_the_store_reaches(tmp_path, monkeypatch) -
         original(self, reached, overlaps)
 
     monkeypatch.setattr(cellmap.CellMap, "kill", verified)
-    basic = _cells_program(tmp_path, 8)
-    qb_compile.object_bytes(qb_driver.parsed(basic, dialect="qb45", runtime="qb45"), basic.name)
+    _compiled(_cells_program(tmp_path, 8))
+    _compiled(_loop_program(tmp_path, 8))
     assert checked
 
 

@@ -2,10 +2,6 @@
 
 from collections.abc import Callable, Hashable, Iterable
 
-# The bucket of a cell whose object is not known. Every write tests it.
-OPEN = object()
-
-
 class CellMap(dict):
     """A cell-to-fact dict that also buckets its cells by object.
 

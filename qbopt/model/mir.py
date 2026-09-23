@@ -59,6 +59,7 @@ no transform can still carry their bytes verbatim without exposing a node to
 an optimization pass.
 """
 
+import functools
 import itertools
 from enum import StrEnum
 from typing import overload
@@ -2802,6 +2803,52 @@ def overlapping(
         if apart is not None:
             return not apart
     return regions.may_alias(one, other, bounds, known, other_known, dgroup)
+
+
+def overlap_bucket(ref: MemRef) -> tuple:
+    """What `overlapping` needs of a cell to rule a write out unseen: its one
+    object (None if it has no single one) and the frame `_displaced` compares
+    displacements in (None for a pointer)."""
+    slices = ref.provenance.slices if ref.provenance is not None else ()
+    return (next(iter(slices)).object if len(slices) == 1 else None, _frame(ref))
+
+
+def overlap_shape(ref: MemRef) -> tuple | None:
+    """A write's side of `overlap_reaches`; None where it may reach every bucket."""
+    if ref.provenance is None:
+        return None
+    return (frozenset(one.object for one in ref.provenance.slices), _frame(ref))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def overlap_reaches(shape: tuple, bucket: tuple) -> bool:
+    """Whether a write of `shape` may overlap a cell in `bucket`.
+
+    False only where `overlapping` would say so for every such pair: both
+    carry provenance, no `_displaced` frame is shared, and no two objects
+    may alias.
+    """
+    objects, frame = shape
+    one, cell_frame = bucket
+    if one is None or (frame is not None and frame == cell_frame):
+        return True
+    return any(memory.objects_may_alias(other, one) for other in objects)
+
+
+def overlap_buckets(ref: MemRef, buckets) -> list | None:
+    """The `buckets` a write through `ref` may reach; None for all of them."""
+    shape = overlap_shape(ref)
+    return None if shape is None else [bucket for bucket in buckets if overlap_reaches(shape, bucket)]
+
+
+def _frame(ref: MemRef) -> tuple | None:
+    if ref.pointer:
+        return None
+    if ref.symbolic is not None:
+        return (None, None, ref.symbolic.space, ref.symbolic.index)
+    if ref.addr is None:
+        return None
+    return (ref.base, ref.segment, ref.addr.space, ref.addr.index)
 
 
 def _displaced(one: MemRef, other: MemRef) -> bool | None:

@@ -111,34 +111,9 @@ class _MemoryQueries:
         return self.exact[where]
 
     def bucket(self, where: tuple) -> tuple:
-        """The object cell `where` lies in (OPEN where its bytes name none), and its symbol."""
+        """Cell `where`'s ``mir.overlap_bucket``: the object its bytes name, if any."""
         named = self._named(where)
-        return (cellmap.OPEN if named is None else named[0], where[0].space, where[0].index)
-
-    def reached(self, ref: mir.MemRef, buckets) -> "list | None":
-        """The buckets a write through `ref` may touch; None for all of them.
-
-        A cell with an object is apart from a provenance-carrying write
-        unless their objects may alias (``regions.may_alias``) or both are
-        static addresses in one symbol (``mir._displaced``). Anything else
-        is tested.
-        """
-        if ref.provenance is None:
-            return None
-        symbolic = mir._symbolic_ref(ref)
-        static = (
-            None
-            if ref.pointer or symbolic.addr is None or symbolic.base is not None or symbolic.segment is not None
-            else (symbolic.addr.space, symbolic.addr.index)
-        )
-        objects = {one.object for one in ref.provenance.slices}
-        return [
-            bucket
-            for bucket in buckets
-            if bucket[0] is cellmap.OPEN
-            or bucket[1:] == static
-            or any(memory.objects_may_alias(one, bucket[0]) for one in objects)
-        ]
+        return (None if named is None else named[0], (None, None, where[0].space, where[0].index))
 
     def owned(self, here: Cells) -> cellmap.CellMap:
         """A copy of `here` indexed by this epoch's buckets, for one operation to change."""
@@ -397,7 +372,7 @@ def _kills(
             continue
         if not owned:
             here, owned = queries.owned(here), True
-        here.kill(queries.reached(ref, here.buckets), lambda where: queries.may_overlap(where, ref))
+        here.kill(mir.overlap_buckets(ref, here.buckets), lambda where: queries.may_overlap(where, ref))
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             queries.learn(ref)
             here.update(_fragments(ref, put))
