@@ -1,10 +1,6 @@
 //! Specialize exact finite recurrences to one checked final iteration.
 //!
 //! Direct port of `qbopt/optimize/floatloop.py`.
-//!
-//! Tests: every `floatloop` test in `tests/test_float_loop_exit.py` is
-//! skipped; each builds its input from an object fixture or `wholeseg`,
-//! neither of which is ported.
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -309,3 +305,7 @@ fn _rewritten(
     rewritten.blocks = out;
     transform::_trivial_phis(&rewritten)
 }
+
+#[cfg(test)]
+#[path = "floatloop_tests.rs"]
+mod tests;
