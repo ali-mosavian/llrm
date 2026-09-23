@@ -11,7 +11,7 @@ class CellMap(dict):
     1218 of them between different objects.
 
     `bucket_of` names a cell's bucket, a tuple; it must not change while
-    the cell is held. `part(i)` finds buckets by their i-th component, so a
+    the cell is held. `parts[i]` finds buckets by their i-th component, so a
     write can look its buckets up rather than test each one.
     """
 
@@ -49,10 +49,6 @@ class CellMap(dict):
                 held.discard(bucket)
                 if not held:
                     del self.parts[i][part]
-
-    def part(self, i: int) -> dict[Hashable, set]:
-        """The buckets held, by their i-th component."""
-        return self.parts[i] if i < len(self.parts) else {}
 
     def update(self, items=(), **named) -> None:
         pairs = items.items() if isinstance(items, dict) else items

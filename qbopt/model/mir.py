@@ -2828,22 +2828,32 @@ def overlap_buckets(ref: MemRef, cells) -> set | None:
     """
     if ref.provenance is None:
         return None
-    objects, frames, classes = cells.part(0), cells.part(1), cells.part(2)
+    if not cells:
+        return set()
+    objects, frames, classes = cells.parts
     reached = set(objects.get(None, ()))
-    if (frame := _frame(ref)) is not None:
-        reached |= frames.get(frame, set())
-    for one in _objects(ref.provenance):
-        reached |= objects.get(one, set())
-        kind = memory.alias_class(one)
-        for other, buckets in classes.items():
-            if other is not None and memory.classes_may_alias(kind, other):
-                reached |= buckets
+    if (frame := _frame(ref)) is not None and frame in frames:
+        reached |= frames[frame]
+    written, kinds = _write_reach(ref.provenance)
+    for one in written:
+        if one in objects:
+            reached |= objects[one]
+    for kind, buckets in classes.items():
+        if kind is not None and _classes_reach(kinds, kind):
+            reached |= buckets
     return reached
 
 
 @functools.lru_cache(maxsize=1 << 12)
-def _objects(provenance: memory.Provenance) -> frozenset:
-    return frozenset(one.object for one in provenance.slices)
+def _write_reach(provenance: memory.Provenance) -> tuple[frozenset, frozenset]:
+    """A write's objects and their alias classes."""
+    written = frozenset(one.object for one in provenance.slices)
+    return written, frozenset(memory.alias_class(one) for one in written)
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _classes_reach(kinds: frozenset, kind: memory.AliasClass) -> bool:
+    return any(memory.classes_may_alias(one, kind) for one in kinds)
 
 
 def _frame(ref: MemRef) -> tuple | None:

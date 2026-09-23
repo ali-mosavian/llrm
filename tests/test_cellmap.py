@@ -114,6 +114,22 @@ def test_picking_buckets_does_not_grow_with_the_cells_held(tmp_path, monkeypatch
     assert calls / writes < 100, calls / writes
 
 
+def test_alias_classes_are_not_rebuilt_per_question(tmp_path, monkeypatch) -> None:
+    """Indexing buckets by alias class made deedlines slower: every bucket
+    lookup and every alias check built the classes afresh, 525K here."""
+    built = 0
+    original = memory.alias_class
+
+    def counted(one):
+        nonlocal built
+        built += 1
+        return original(one)
+
+    monkeypatch.setattr(memory, "alias_class", counted)
+    _compiled(_cells_program(tmp_path, 96))
+    assert built < 400_000, built
+
+
 def test_skipped_buckets_hold_no_cell_the_store_reaches(tmp_path, monkeypatch) -> None:
     """The index only skips work: every cell it leaves untested, in consts
     and dead stores alike, is one the exact test says the write cannot reach."""

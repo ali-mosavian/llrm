@@ -148,7 +148,10 @@ def alias_class(one: Object) -> AliasClass:
 
 
 def objects_may_alias(one: Object, other: Object) -> bool:
-    return one == other or classes_may_alias(alias_class(one), alias_class(other))
+    if one == other:
+        return True
+    # classes_may_alias's first rule, asked before building either class.
+    return one.addressed and other.addressed and classes_may_alias(alias_class(one), alias_class(other))
 
 
 @cache
