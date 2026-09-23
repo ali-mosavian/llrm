@@ -39,6 +39,7 @@ pub mod pointers;
 pub mod prologue;
 pub mod regthrash;
 pub mod rmw;
+pub mod executed;
 pub mod schedule;
 pub mod select;
 pub mod spiller;

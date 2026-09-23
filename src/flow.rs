@@ -126,9 +126,17 @@ pub enum Checked {
 
 /// Run one machine phase and verify what it returned.
 pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
-    let transformed = phase.transform_raising(body).map_err(Checked::Refused)?;
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
-    verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)
+    let transformed =
+        crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
+    let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+    if stage == "jumps" && crate::support::debug::enabled("cost") {
+        match crate::backend::executed::executed(&body) {
+            Some(done) => crate::debug!("cost", "{} executes {:.0} instructions, {:.0} memory operands", body.name, done.instructions, done.memory),
+            None => crate::debug!("cost", "{} executes an unbounded amount", body.name),
+        }
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
