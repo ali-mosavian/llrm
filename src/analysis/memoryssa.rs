@@ -77,6 +77,11 @@ impl MemorySSA<'_> {
         &self.sites[&site]
     }
 
+    /// The access numbered `id`: `accesses` is sorted by id.
+    fn access(&self, id: usize) -> &Access {
+        &self.accesses[self.accesses.binary_search_by_key(&id, |access| access.id).expect("a numbered access")]
+    }
+
     /// Possible nearest writes before a site, including live-on-entry.
     ///
     /// Walk every phi input. A visited set closes cycles without treating
@@ -109,7 +114,6 @@ impl MemorySSA<'_> {
         edge: Option<i64>,
         edge_memory: Option<&MemRef>,
     ) -> BTreeSet<usize> {
-        let accesses: BTreeMap<usize, &Access> = self.accesses.iter().map(|access| (access.id, access)).collect();
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
@@ -125,7 +129,7 @@ impl MemorySSA<'_> {
                 found.insert(current);
                 continue;
             }
-            let access = accesses[&current];
+            let access = self.access(current);
             match access.kind {
                 Kind::Live => {
                     found.insert(current);
