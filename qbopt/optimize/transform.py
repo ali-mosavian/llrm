@@ -562,13 +562,16 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
         return body
     alive = live(body)
     into: dict[int, Op] = {}
+    # A divide made a copy computes neither answer any more; one after it
+    # reads them from the divide that copy was served by.
+    answers: dict[mir.Value, mir.Held] = {}
     for _at, earlier, one in pairs_found:
         if len(one.results) != 2 or len(earlier.results) != 2:
             continue
         served, wanted = None, None
         for mine, theirs in zip(one.results, earlier.results):
             if mine.value in alive:
-                served, wanted = theirs, mine
+                served, wanted = answers.get(theirs.value, theirs), mine
         if served is None or wanted is None:
             continue
         # One register is what a copy writes, so one value is all it may
@@ -602,6 +605,9 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
             args=(served,),
             results=(wanted,),
             source_backed=False,
+        )
+        answers.update(
+            (mine.value, answers.get(theirs.value, theirs)) for mine, theirs in zip(one.results, earlier.results)
         )
     if not into:
         return body
