@@ -49,6 +49,13 @@ fn overlapping(
 /// Each op's value intervals, shared by the ops of one block.
 type Intervals = HashMap<usize, Rc<BTreeMap<Value, Interval>>>;
 
+#[cfg(test)]
+thread_local! {
+    /// Interval maps built, one per block, and the blocks `sunk_stores` was handed.
+    pub(crate) static MAPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn sunk_stores(
     body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
@@ -56,23 +63,11 @@ pub fn sunk_stores(
     handles_errors: bool,
 ) -> Result<Rc<MirBody>, String> {
     let mut body = body.clone();
+    #[cfg(test)]
+    SEEN.with(|seen| seen.set(seen.get() + body.blocks.len()));
     let predecessors = loops::predecessors(&body.blocks);
+    let mut facts = None;
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let scoped = ranges::bounded(&body)?;
-        // With constants, as hoist asks: a store through the literal selector
-        // 0A000h otherwise observes every frame and descriptor cell.
-        let constant: BTreeMap<Value, Interval> = ranges::constants(&body, Some(dgroup), None).into_iter().collect();
-        let mut intervals = Intervals::default();
-        for block in &body.blocks {
-            let mut here = constant.clone();
-            if let Some(found) = scoped.get(&block.at) {
-                here.extend(found.iter().map(|(value, interval)| (*value, interval.clone())));
-            }
-            let here = Rc::new(here);
-            for op in &block.ops {
-                intervals.insert(id(op), Rc::clone(&here));
-            }
-        }
         let blocks = body
             .blocks
             .iter()
@@ -122,6 +117,30 @@ pub fn sunk_stores(
         let exit_block = blocks[&destination];
         if exit_block.ops.is_empty() {
             continue;
+        }
+        if facts.is_none() {
+            // With constants, as hoist asks: a store through the literal
+            // selector 0A000h otherwise observes every frame and descriptor cell.
+            let scoped = ranges::bounded(&body)?;
+            let constant: BTreeMap<Value, Interval> =
+                ranges::constants(&body, Some(dgroup), None).into_iter().collect();
+            facts = Some((scoped, constant));
+        }
+        let (scoped, constant) = facts.as_ref().expect("computed above");
+        // One map per block, shared by its ops: a copy per op of every body
+        // op, per loop, took deedlines past 7 GB.
+        let mut intervals = Intervals::default();
+        for block in &inside {
+            let mut merged = constant.clone();
+            if let Some(found) = scoped.get(&block.at) {
+                merged.extend(found.iter().map(|(value, interval)| (*value, interval.clone())));
+            }
+            let merged = Rc::new(merged);
+            for op in &block.ops {
+                intervals.insert(id(op), Rc::clone(&merged));
+            }
+            #[cfg(test)]
+            MAPPED.with(|mapped| mapped.set(mapped.get() + 1));
         }
         let dominators = loops::dominators(&body.blocks, Some(body.entry));
         let empty = BTreeSet::new();
@@ -234,6 +253,7 @@ pub fn sunk_stores(
             .map(|block| updates.get(&block.at).cloned().unwrap_or_else(|| block.clone()))
             .collect();
         body = Rc::new(MirBody { blocks, ..MirBody::clone(&body) });
+        facts = None;
     }
     Ok(body)
 }

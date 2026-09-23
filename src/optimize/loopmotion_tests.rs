@@ -195,3 +195,30 @@ fn test_a_float_loop_sinks_its_counter_store_without_an_error_handler() {
     let innermost = floating.min_by_key(|one| one.body.len()).unwrap();
     assert!(!innermost.body.iter().flat_map(ops).any(|op| op.kind == Kind::Store));
 }
+
+#[test]
+fn test_intervals_are_not_built_per_block_per_loop() {
+    // sunk_stores built an interval map for every block, per loop: ten
+    // loops here. Python's per-op copies took deedlines past 7 GB.
+    use std::path::Path;
+
+    use super::{MAPPED, SEEN};
+    use crate::frontends::qb::{compile as qb_compile, driver as qb_driver};
+    use crate::model::passes::O2;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("LOOPS.BAS");
+    let mut lines = vec!["DEFINT A-Z".to_owned()];
+    for k in 0..10 {
+        lines.extend([format!("x{k} = {k}"), format!("FOR i = 1 TO 10: s{k} = s{k} + i: NEXT")]);
+    }
+    lines.push(format!("PRINT {}", (0..10).map(|k| format!("s{k} + x{k}")).collect::<Vec<_>>().join(" + ")));
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let program =
+        qb_driver::parsed(&basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false).unwrap();
+    MAPPED.with(|mapped| mapped.set(0));
+    SEEN.with(|seen| seen.set(0));
+    qb_compile::object_bytes(&program, Path::new("LOOPS.BAS"), None, &O2()).unwrap();
+    let (mapped, seen) = (MAPPED.with(std::cell::Cell::get), SEEN.with(std::cell::Cell::get));
+    assert!(seen > 0 && mapped <= seen, "{mapped} maps for {seen} blocks");
+}
