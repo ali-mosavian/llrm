@@ -1063,6 +1063,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 if let Some(TypeAnnotation::Array { element, dims }) = annotation {
                     let shape = Shape::new(dims);
+                    let repeated = repeated_literal(value, shape.dims());
+                    let value = repeated.as_ref().unwrap_or(value);
                     let items = match value {
                         Expr::Array(..) => literal_elements(value, shape.dims(), *span)?,
                         Expr::Repeat { counts, .. } => {
@@ -5418,6 +5420,36 @@ fn literal_elements<'e>(
     Ok(out)
 }
 
+/// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills rather than storing each element.
+fn repeated_literal(literal: &Expr, dims: &[u32]) -> Option<Expr> {
+    let items = literal_elements(literal, dims, literal.span()).ok()?;
+    let (_, first) = items.first()?;
+    let key = scalar_literal(first)?;
+    if items.len() < 2 || items.iter().any(|(_, item)| scalar_literal(item) != Some(key.clone())) {
+        return None;
+    }
+    let span = literal.span();
+    Some(Expr::Repeat {
+        value: Box::new((*first).clone()),
+        counts: dims.iter().map(|count| Expr::Integer(i64::from(*count), span)).collect(),
+        span,
+    })
+}
+
+/// A number, character or boolean literal's value, whatever its spelling's position.
+fn scalar_literal(expression: &Expr) -> Option<String> {
+    match expression {
+        Expr::Integer(value, _) => Some(format!("i{value}")),
+        Expr::Float(text, _) => Some(format!("f{text}")),
+        Expr::Character(value, _) => Some(format!("c{value}")),
+        Expr::Boolean(value, _) => Some(format!("b{value}")),
+        Expr::Unary { op: UnaryOp::Negative, operand, .. } => {
+            scalar_literal(operand).filter(|inner| !inner.starts_with(['c', 'b'])).map(|inner| format!("-{inner}"))
+        }
+        _ => None,
+    }
+}
+
 /// An expression whose type comes from its context.
 fn is_literal(expression: &Expr) -> bool {
     is_integer_literal(expression)
@@ -5743,6 +5775,35 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("outside 0..2"));
+    }
+
+    /// matmul.mod spelled `[0, 0, ...]` three times: 192 stores that every unroll candidate carried.
+    #[test]
+    fn an_array_literal_of_one_repeated_value_fills_like_a_repeat_literal() {
+        let spelled = compile_source(
+            "fn zeros() -> i32:\n\
+             \x20\x20\x20\x20var values: [i32; 8] = [0, 0, 0, 0, 0, 0, 0, 0]\n\
+             \x20\x20\x20\x20return values[3]\n",
+        )
+        .unwrap();
+        let repeated = compile_source(
+            "fn zeros() -> i32:\n\
+             \x20\x20\x20\x20var values: [i32; 8] = [0; 8]\n\
+             \x20\x20\x20\x20return values[3]\n",
+        )
+        .unwrap();
+        assert_eq!(spelled, repeated);
+    }
+
+    #[test]
+    fn an_array_literal_of_different_values_stores_each_element() {
+        let json = compile_source(
+            "fn pair() -> i32:\n\
+             \x20\x20\x20\x20var values: [i32; 2] = [0, 1]\n\
+             \x20\x20\x20\x20return values[1]\n",
+        )
+        .unwrap();
+        assert!(!json.contains("$values_fill"));
     }
 
     #[test]
