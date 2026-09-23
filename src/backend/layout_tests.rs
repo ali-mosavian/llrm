@@ -1,9 +1,7 @@
 //! Port of `tests/test_layout.py`: a whole body emitted, and everything that
 //! moves with it. `test_a_tangled_class_is_split_on_the_phi_edge` checks
 //! `legacy/regalloc`, which is not ported; the Emitted-places test lives in
-//! `select_tests`; `test_peeled_ivarm_*` monkeypatches `transform.applied`
-//! and `test_a_moved_operation_keeps_its_fixup` calls `mir.bodies`, so both
-//! wait for the BC raise.
+//! `select_tests`; `test_peeled_ivarm_*` monkeypatches `transform.applied`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -584,8 +582,48 @@ fn test_split_exit_executes_its_reload_before_the_increment() {
     assert_eq!(instructions[1].near_branch_target() as i64, laid.moved[&bridge]);
 }
 
-// tests/test_symbolic_relocation.py. `test_load_hoisted_to_call_does_not_acquire_call_fixup`
-// calls `mir.bodies` and waits for the BC raise.
+/// Why the side table is keyed by the operation and not by its address:
+/// keyed by `at`, the relocation stays behind and the address comes out a bare zero.
+#[test]
+fn test_a_moved_operation_keeps_its_fixup() {
+    let found = crate::support::testing::loaded("fixtures/omf/hotlop-p-g2.obj").unwrap();
+    let raised = crate::support::testing::raised("fixtures/omf/hotlop-p-g2.obj");
+    let found = raised.source.applied(&found);
+    assert!(!found.refs.is_empty(), "the raise recorded no relocations at all");
+    let selected: Vec<Insn> = raised
+        .values
+        .iter()
+        .flat_map(|(_, body)| body.blocks.iter().flat_map(|block| &block.ops))
+        .filter(|op| op.id.is_some_and(|id| found.refs.contains_key(&id)))
+        .map(|op| selected(op.clone(), Some(&raised.source)))
+        .collect();
+    let none = BTreeSet::new();
+    let carried: Vec<&Insn> = selected.iter().filter(|op| asm::_field_in(&found, op, &none, None).is_some()).collect();
+    assert!(!carried.is_empty(), "no operation carries a fixup; the test measures nothing");
+    let one = carried[0];
+    let was = asm::_field_in(&found, one, &none, None);
+    let moved = Insn { at: one.at + 0x100, ..one.clone() };
+    assert_eq!(asm::_field_in(&found, &moved, &none, None), was, "the relocation stayed behind");
+}
+
+// tests/test_symbolic_relocation.py.
+
+/// Qrender mov at 0941 inherited B$PER4's target and refused with no relocation field.
+#[test]
+fn test_load_hoisted_to_call_does_not_acquire_call_fixup() {
+    let path = "fixtures/regressions/qrender-view-v-g3.obj";
+    let found = crate::support::testing::loaded(path).unwrap();
+    let raised = crate::support::testing::raised(path);
+    let ops = crate::support::testing::all_ops(&raised);
+    let call = ops.iter().find(|op| op.at == 0x941).unwrap();
+    let load = ops.iter().find(|op| op.at == 0x946).unwrap();
+    let fields = BTreeSet::from([0x942]);
+    let source = Some(&raised.source);
+    assert_eq!(asm::_field_in(&found, &selected(call.clone(), source), &fields, source), Some(0x942));
+    assert_eq!(asm::_field_in(&found, &selected(load.clone(), source), &fields, source), None);
+    let moved = Insn { at: call.at, ..selected(load.clone(), source) };
+    assert_eq!(asm::_field_in(&found, &moved, &fields, source), None);
+}
 
 fn selected(op: mir::Op, source: Option<&SourceMap>) -> Insn {
     let id = op.id.unwrap_or_default();
