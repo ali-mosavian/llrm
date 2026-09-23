@@ -633,6 +633,19 @@ fn _analyzed(
     let integers = consts::known(body, Some(dgroup), Some(calls), None, seed.as_ref());
     let mut facts = IndexMap::<Value, Finite>::default();
     let mut memory = IndexMap::default();
+    // The shadow differs from the last only where an Fstore's source was just
+    // learned; otherwise its cells are the ones already solved.
+    let sources = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| op.kind == Kind::Fstore && op.floating.is_some())
+        .filter_map(|op| match op.args.as_slice() {
+            [Arg::Held(source)] => Some(source.value),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let mut reshadow = true;
     let mut changed = true;
     while changed {
         changed = false;
@@ -657,11 +670,14 @@ fn _analyzed(
             store.uses = Vec::new();
             store
         };
-        let mut shadow = MirBody::clone(body);
-        for block in &mut shadow.blocks {
-            block.ops = block.ops.iter().map(stored).collect();
+        if reshadow {
+            let mut shadow = MirBody::clone(body);
+            for block in &mut shadow.blocks {
+                block.ops = block.ops.iter().map(stored).collect();
+            }
+            memory = consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None);
+            reshadow = false;
         }
-        memory = consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None);
         let empty = Cells::default();
         for block in &body.blocks {
             for (index, op) in block.ops.iter().enumerate() {
@@ -678,6 +694,7 @@ fn _analyzed(
                         if target.width == 10 && !facts.contains_key(&target.value) {
                             facts.insert(target.value, result.clone());
                             changed = true;
+                            reshadow |= sources.contains(&target.value);
                         }
                     }
                 }
