@@ -1830,7 +1830,7 @@ impl<'a> Lowering<'a> {
     }
 
     /// Where an operation that names no operand leaves what it writes.
-    fn _idiom(&self, op: &Op, speaks: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
+    pub(crate) fn _idiom(&self, op: &Op, speaks: bool) -> Result<Vec<(ir::Held, Register)>, Unlowered> {
         let mut out: crate::support::hash::IndexSet<(ir::Held, Register)> = self._selectors(op, speaks).into_iter().collect();
         out.extend(self._delivered(op)?);
         Ok(out.into_iter().collect())

@@ -1,17 +1,6 @@
 //! Port of `tests/test_algebraic.py`.
 //!
-//! Skipped:
-//! - needing `wholeseg`:
-//!   test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic,
-//!   test_hotlpx_scales_by_twenty_without_a_second_multiply,
-//!   test_spill_folds_closed_loops_to_their_exact_final_constants,
-//!   test_addrm_reuses_word_scale_for_long_address,
-//!   test_nested_combines_row_scale_in_emitted_code,
-//!   test_nbody_damping_keeps_negation_whole,
-//!   test_nbody_damping_reverses_subtraction_without_negation.
-//! - monkeypatching `mir.consumed`: test_zero_test_forwarding_indexes_each_operation_once.
-//! - failing in Python at this commit (two stores, not one):
-//!   test_nbody_counter_is_stored_as_one_whole_value.
+//! Skipped, monkeypatching `mir.consumed`: test_zero_test_forwarding_indexes_each_operation_once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -1391,4 +1380,151 @@ fn test_dead_phis_do_not_keep_matrix_product_halves() {
     let after = transformed("fixtures/omf/matrix-p-g2.obj", Options { strength: false, ..Default::default() });
     let products: Vec<&Op> = all_ops(&after).filter(|op| op.kind == Kind::Mul).collect();
     assert!(!products.is_empty() && products.iter().all(|op| op.results.len() == 1));
+}
+
+/// NBODY split its whole counter into two stores and reloaded it on every backedge.
+#[test]
+#[ignore = "fails in Python too: assert 2 == 1 (two stores, not one)"]
+fn test_nbody_counter_is_stored_as_one_whole_value() {
+    let (found, blocks, body) = raised_main("fixtures/bench/nbody-v-g3.obj");
+    let done = simplified(&body, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+    let stores: Vec<&Op> = all_ops(&done).filter(|op| [0x2F0, 0x2F3].contains(&op.at) && !op.stores.is_empty()).collect();
+    assert_eq!(stores.len(), 1);
+    assert!(stores[0].stores[0].width == 4 && testing::width(&stores[0].args[0]) == 4);
+    let final_ = testing::applied(&found, Some(&blocks), &body, crate::model::passes::O2());
+    let counter = stores[0].stores[0].addr;
+    let found_loop = crate::analysis::loops::loops(&final_.blocks, Some(final_.entry))
+        .into_iter()
+        .find(|one| one.header == 0x2F0)
+        .unwrap();
+    assert!(!final_
+        .blocks
+        .iter()
+        .filter(|block| found_loop.body.contains(&block.at))
+        .flat_map(|block| &block.ops)
+        .any(|op| op.loads.iter().chain(&op.stores).any(|one| one.addr == counter)));
+}
+
+/// The fixture's emitted instructions, asserting the LIR emitter wrote them.
+fn emitted(path: &str) -> Vec<iced_x86::Instruction> {
+    testing::instructions(&testing::emitted_lir(path).data)
+}
+
+/// NDMAX printed 11,22 correctly but normalized a pointer advanced by zero bytes.
+#[test]
+fn test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let data = testing::data(format!("fixtures/regressions/ndmax-{tag}.obj").to_lowercase());
+        let (result, states) = testing::emitted_mir(&data, "mir-widen", "");
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}: {}", result.reason);
+        let facts = crate::analysis::consts::known(&Rc::new(states[0].clone()), None, None, None, None);
+        let offsets: Vec<&Arg> = all_ops(&states[0]).filter(|op| op.kind == Kind::PtrOffset).map(|op| &op.args[1]).collect();
+        assert!(!offsets.is_empty(), "{tag}");
+        for arg in offsets {
+            let value = match arg {
+                Arg::Const(one) => Some(one.n.clone()),
+                Arg::Held(one) => facts.get(&one.value).map(|fact| fact.n.clone()),
+                other => panic!("{other:?}"),
+            };
+            assert!(value.is_none_or(|n| n != BigInt::from(0)), "{tag}");
+        }
+    }
+}
+
+/// HOTLPX's closed-form sum still used IMUL for the constant factor twenty.
+#[test]
+fn test_hotlpx_scales_by_twenty_without_a_second_multiply() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let insns = emitted(&format!("fixtures/omf/hotlpx-{tag}.obj").to_lowercase());
+        assert_eq!(insns.iter().filter(|one| one.mnemonic() == iced_x86::Mnemonic::Imul).count(), 1, "{tag}");
+    }
+}
+
+/// SPILL once added 150 then 70 per iteration; it now needs no loop or ADD:
+/// the independent answers 2200 and 220 are passed to PRINT directly.
+#[test]
+fn test_spill_folds_closed_loops_to_their_exact_final_constants() {
+    use iced_x86::{Mnemonic, OpKind};
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let instructions = emitted(&format!("fixtures/omf/spill-{tag}.obj").to_lowercase());
+        assert!(!instructions.iter().any(|one| one.mnemonic() == Mnemonic::Add), "{tag}");
+        let printed: Vec<u64> = instructions
+            .iter()
+            .filter(|one| {
+                one.mnemonic() == Mnemonic::Push && matches!(one.op0_kind(), OpKind::Immediate8to16 | OpKind::Immediate16)
+            })
+            .map(|one| one.immediate(0))
+            .filter(|immediate| *immediate != 0)
+            .collect();
+        assert_eq!(printed, [2200, 220], "{tag}");
+    }
+}
+
+/// ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration.
+#[test]
+fn test_addrm_reuses_word_scale_for_long_address() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let result = testing::emitted_lir(format!("fixtures/omf/addrm-{tag}.obj").to_lowercase());
+        let found = testing::loaded_bytes(&result.data).unwrap();
+        let shifts: Vec<iced_x86::Instruction> = crate::frontend::blocks::instructions(&found)
+            .unwrap()
+            .into_iter()
+            .map(|one| one.insn)
+            .filter(|one| one.mnemonic() == iced_x86::Mnemonic::Shl)
+            .collect();
+        assert_eq!(shifts.len(), 1, "{tag}");
+        assert!(shifts.iter().all(|one| one.immediate(1) == 1), "{tag}");
+    }
+}
+
+/// NESTED multiplied the row by six, then shifted it again to address word elements.
+#[test]
+#[ignore = "fails in Python too: assert (12 in [] or 12 in [])"]
+fn test_nested_combines_row_scale_in_emitted_code() {
+    use iced_x86::Code;
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let result = testing::emitted_lir(format!("fixtures/omf/nested-{tag}.obj").to_lowercase());
+        let found = testing::loaded_bytes(&result.data).unwrap();
+        let insns: Vec<iced_x86::Instruction> =
+            crate::frontend::blocks::instructions(&found).unwrap().into_iter().map(|one| one.insn).collect();
+        let factors: Vec<i16> =
+            insns.iter().filter(|one| one.code() == Code::Imul_r16_rm16_imm8).map(|one| one.immediate8to16()).collect();
+        let strides: Vec<i16> =
+            insns.iter().filter(|one| one.code() == Code::Add_rm16_imm8).map(|one| one.immediate8to16()).collect();
+        assert!(factors.contains(&12) || strides.contains(&12), "{tag}");
+        assert!(!factors.contains(&6), "{tag}");
+    }
+}
+
+const NBODY_STACK: &str = "fixtures/regressions/nbody-stack-p-g2.obj";
+
+/// NBODY split both velocity negations into words, emitting push/pop traffic and paired stores.
+#[test]
+#[ignore = "fails in Python too: 0x0114: 3 bytes between the ops are not instructions"]
+fn test_nbody_damping_keeps_negation_whole() {
+    use iced_x86::Register;
+    let (_, _, body) = raised_main(NBODY_STACK);
+    let negated: Vec<&Op> = all_ops(&body).filter(|op| op.kind == Kind::Neg).collect();
+    assert!(negated.len() >= 2);
+    assert!(negated.iter().all(|op| testing::width(&op.results[0]) == 4));
+    let result = testing::emitted_lir(NBODY_STACK);
+    let found = testing::loaded_bytes(&result.data).unwrap();
+    let whole = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+    assert!(crate::frontend::blocks::instructions(&found)
+        .unwrap()
+        .iter()
+        .filter(|one| one.insn.mnemonic() == iced_x86::Mnemonic::Neg)
+        .all(|one| whole.contains(&one.insn.op0_register())));
+}
+
+/// NBODY paid for -(quotient-velocity) instead of one velocity-quotient subtraction.
+#[test]
+#[ignore = "fails in Python too: 0x0114: 3 bytes between the ops are not instructions"]
+fn test_nbody_damping_reverses_subtraction_without_negation() {
+    let result = testing::emitted_lir(NBODY_STACK);
+    let found = testing::loaded_bytes(&result.data).unwrap();
+    assert!(!crate::frontend::blocks::instructions(&found)
+        .unwrap()
+        .iter()
+        .any(|one| one.insn.mnemonic() == iced_x86::Mnemonic::Neg));
 }

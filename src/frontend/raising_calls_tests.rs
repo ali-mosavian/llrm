@@ -1,23 +1,22 @@
 //! Port of `tests/test_raising_calls.py`.
 //!
-//! Skipped, needing `transform.applied` or `wholeseg`:
-//! `test_nbody_timer_does_not_keep_arithmetic_scratch_values_live`,
-//! `test_long_division_setup_is_not_counted_as_stack_arguments`,
+//! Skipped, monkeypatching `observers.private` or `mir._flags_after`:
 //! `test_optimization_does_not_move_nbody_store_before_its_definition`,
 //! `test_recovered_memory_arguments_keep_their_relocations`,
-//! `test_nbody_computed_loop_limit_is_a_native_comparison`.
-//! Skipped, needing `asm._divide_fields`:
-//! `test_divide_relocation_survives_index_value_replacement`.
-//! Skipped, monkeypatching `mir._flags_after`:
 //! `test_captured_comparison_retains_runtime_synthesized_flags`.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use super::*;
 use crate::abi::runtime::{self, Contract, Reg};
+use crate::backend::{asm, lower};
 use crate::legacy::calls;
+use crate::model::lir::Insn;
 use crate::model::mir::{Arg, MirBody};
+use crate::model::passes::O2;
 use crate::objectfile::module::{Addr, Space};
+use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 use crate::support::testing::{self, nth, ops, width};
 
@@ -144,4 +143,121 @@ fn test_memory_argument_capture_requires_adjacent_pushes() {
         let answer = _whole_memory(&[&first, &second]);
         assert_eq!(answer, if separated { None } else { Some(MemRef { width: 4, ..low.clone() }) });
     }
+}
+
+const NBODY: &str = "fixtures/bench/nbody-v-g3.obj";
+
+/// NBODY kept Y damping's DVI4 because PITSNAP invented register arguments.
+#[test]
+#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
+fn test_nbody_timer_does_not_keep_arithmetic_scratch_values_live() {
+    let found = testing::loaded(NBODY).unwrap();
+    let raised = testing::raised(NBODY);
+    let body = nth(&raised, 0);
+    let hints = &raised.hints[&body.entry];
+    let ops = ops(&body);
+    let timers: Vec<_> = ops
+        .iter()
+        .filter(|op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("PITSNAP"))
+        .collect();
+    assert_eq!(timers.len(), 2);
+    // Only the SI and DI its caller reads afterwards, which the callee keeps.
+    assert!(timers.iter().all(|op| {
+        !op.defines.is_empty()
+            && op.uses.iter().all(|value| matches!(hints.origin_of(*value), Some(Register::ESI | Register::EDI)))
+    }));
+    assert!(ops.iter().any(|op| op.at == 0x26e && op.kind == Kind::Divmod));
+    let emitted = testing::emitted_lir(NBODY);
+    let rewritten = testing::loaded_bytes(&emitted.data).unwrap();
+    assert!(!rewritten.calls.values().any(|name| name == calls::DIVIDE));
+    // Timer conversion only.
+    assert_eq!(rewritten.calls.values().filter(|name| *name == calls::MULTIPLY).count(), 1);
+}
+
+/// QB LNGMIX kept two runtime divisions per iteration because MOV/CWD setup polluted push grouping.
+#[test]
+fn test_long_division_setup_is_not_counted_as_stack_arguments() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        for name in ["lngmix", "lngmxx"] {
+            let path = format!("fixtures/omf/{name}-{tag}.obj").to_lowercase();
+            let found = testing::module(&path);
+            let blocks = testing::blocks_of(&found);
+            let body = testing::main_body(&found, &blocks);
+            assert!(
+                !ops(&body).iter().any(|op| op.kind == Kind::Call
+                    && found.calls.get(&op.at).is_some_and(|called| calls::DIVIDES.contains(&called.as_str()))),
+                "{path}"
+            );
+            let result = testing::applied(&found, Some(&blocks), &body, O2());
+            let divisions = ops(&result).iter().filter(|op| op.kind == Kind::Divmod).count();
+            assert_eq!(divisions, if name == "lngmix" { 0 } else { 1 }, "{path}");
+            let emitted = testing::emitted_lir(&path);
+            let rewritten = testing::loaded_bytes(&emitted.data).unwrap();
+            assert!(!rewritten.calls.values().any(|called| calls::DIVIDES.contains(&called.as_str())), "{path}");
+        }
+    }
+}
+
+/// Nbody refused its velocity divide after LICM renamed an index without changing its relocation.
+#[test]
+fn test_divide_relocation_survives_index_value_replacement() {
+    let found = testing::loaded(NBODY_STACK).unwrap();
+    let raised = testing::raised(NBODY_STACK);
+    let body = nth(&raised, 0);
+    // The scalar divide now owns no address; its argument capture owns it.
+    // Keep exercising the legacy operand-binding guard on that real operand.
+    let mut op = ops(&body).into_iter().find(|op| op.at == 0x267 && op.kind == Kind::Load).unwrap();
+    op.raised = Some((op.args.clone(), op.results.clone()));
+    let id = op.id.unwrap();
+    let node = raised.source.nodes[&id].clone();
+    let owned: Vec<(i64, i64)> =
+        op.absorbed.iter().flat_map(|identity| raised.source.occurrences[identity].iter().copied()).collect();
+    let insn = |op: mir::Op| {
+        let mut made = Insn::new(
+            op.at,
+            Some(owned[0]),
+            lower::current(&op, lower::Place::Default, Some(&node)).unwrap(),
+            op.defines.iter().map(|value| value.id).collect(),
+            op.uses.iter().map(|value| value.id).collect(),
+        );
+        made.node = Some(node.clone());
+        made.symbol = op.symbol;
+        made.spread = owned.clone();
+        made.op = Some(Arc::new(op));
+        made
+    };
+    let fields: BTreeSet<i64> =
+        omf::fixups(&found.records).iter().filter(|one| one.seg == Some(found.seg)).map(|one| one.offset).collect();
+    let expected = asm::_divide_fields(&insn(op.clone()), &found, &fields, Some(&raised.source));
+    assert!(expected.as_ref().is_some_and(|fields| !fields.is_empty()));
+    let Arg::Cell(cell) = &op.args[0] else { panic!("{:?}", op.args[0]) };
+    let moved = Cell { r#ref: MemRef { base: Some(mir::Value::new(99999, 0)), ..cell.r#ref.clone() } };
+    let with = |first: Cell| {
+        let mut changed = op.clone();
+        changed.args[0] = Arg::Cell(first);
+        insn(changed)
+    };
+    assert_eq!(asm::_divide_fields(&with(moved.clone()), &found, &fields, Some(&raised.source)), expected);
+    let different = Cell { r#ref: MemRef { addr: moved.r#ref.addr.map(|addr| addr.plus(4)), ..moved.r#ref.clone() } };
+    assert_eq!(asm::_divide_fields(&with(different), &found, &fields, Some(&raised.source)), None);
+}
+
+/// NBODY pushed its updated step counter into CPI4 instead of comparing its whole value.
+#[test]
+#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
+fn test_nbody_computed_loop_limit_is_a_native_comparison() {
+    let body = nth(&testing::raised(NBODY), 0);
+    let ops = ops(&body);
+    let comparison = ops
+        .iter()
+        .find(|op| op.at == 0x2fe && op.op == Some(OpCode::Operation(Operation::Compare)))
+        .unwrap();
+    assert!(comparison.args.len() == 2 && comparison.args.iter().all(|arg| width(arg) == 4));
+    assert!(!comparison.defines.is_empty() && comparison.defines.iter().all(|value| value.flags));
+    let definitions: IndexMap<mir::Value, &mir::Op> =
+        ops.iter().flat_map(|op| op.defines.iter().map(move |value| (*value, op))).collect();
+    assert_eq!(definitions[&held(&comparison.args[0])].kind, Kind::Concat);
+    assert_eq!(definitions[&held(&comparison.args[1])].at, 0x2f9);
+    let emitted = testing::emitted_lir(NBODY);
+    assert!(!testing::loaded_bytes(&emitted.data).unwrap().calls.values().any(|name| name == calls::COMPARE));
 }

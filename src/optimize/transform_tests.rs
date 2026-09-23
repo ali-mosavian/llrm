@@ -60,11 +60,6 @@ mod preheader_tests {
         assert_eq!(preheader(&body, &loop_(20, &[20])), None);
     }
 }
-/// Skipped, needing .obj fixtures or wholeseg:
-/// test_place_takes_a_store_out_of_a_push_run,
-/// test_place_keeps_the_frame_pointer_behind_the_push_that_saves_it,
-/// test_both_lngmix_divides_absorb,
-/// test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image.
 mod subexpressions_tests {
     use std::collections::BTreeSet;
 
@@ -158,7 +153,6 @@ mod subexpressions_tests {
         assert!(_computation(&fake, &IndexMap::default(), &whole(2)).is_some());
     }
 }
-// Skipped: test_a_served_read_names_the_value_and_not_a_register (corpus fixture).
 mod b_tests {
     use std::collections::BTreeSet;
 
@@ -628,6 +622,91 @@ mod pipeline_tests {
         assert_eq!(root(Register::AX), Register::EAX);
         assert_eq!(root(Register::DX), Register::EDX);
         assert_ne!(root(Register::AX), root(Register::DX));
+    }
+}
+
+/// tests/test_transform.py's fixture tests.
+///
+/// Skipped, monkeypatching a pass:
+/// test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image.
+mod corpus_tests {
+    use crate::model::mir::{Arg, Kind};
+    use crate::optimize::transform::{forwarded, placed};
+    use crate::support::testing;
+
+    /// `add ax,[y]` served from a register used to say which register.
+    #[test]
+    fn test_a_served_read_names_the_value_and_not_a_register() {
+        let mut objects: Vec<_> = std::fs::read_dir(testing::path("fixtures/omf"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.file_name().unwrap().to_str().unwrap().ends_with("-p-g2.obj"))
+            .collect();
+        objects.sort();
+        let mut seen = 0;
+        for obj in objects {
+            let found = testing::loaded(&obj).unwrap();
+            let Ok(mapped) = crate::frontend::blocks::code_map(&found) else { continue };
+            let blocks = crate::frontend::blocks::partition(&found, &mapped);
+            for (_, body) in testing::raised_from(&found, &blocks, None).values {
+                let after = forwarded(&body, &found.dgroup.members, &found.calls, false).unwrap();
+                if std::rc::Rc::ptr_eq(&after, &body) {
+                    continue;
+                }
+                for op in testing::ops(&after) {
+                    let Some(raised) = &op.raised else { continue };
+                    if (&op.args, &op.results) == (&raised.0, &raised.1) || !op.loads.is_empty() {
+                        continue;
+                    }
+                    if !raised.0.iter().any(|one| matches!(one, Arg::Cell(_))) {
+                        continue;
+                    }
+                    let held = op.args.iter().any(|one| matches!(one, Arg::Held(_)));
+                    assert!(held, "{obj:?} {:#06x}: served read names a register", op.at);
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 0, "nothing was served, so this proves nothing");
+    }
+
+    /// lngmix's second divide never folded: two stores stood in its run.
+    #[test]
+    fn test_place_takes_a_store_out_of_a_push_run() {
+        let found = testing::module("fixtures/omf/lngmix-p-g2.obj");
+        let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
+        let [(_, body)] = <[_; 1]>::try_from(raised.values).unwrap();
+        let done = placed(&body, &found.dgroup.members, &found.calls).unwrap();
+        let run = done.blocks.iter().find(|block| block.ops.iter().any(|op| op.kind == Kind::Call)).unwrap();
+        let kinds: Vec<Kind> = run.ops.iter().map(|op| op.kind).collect();
+        let call = kinds.iter().position(|&kind| kind == Kind::Call).unwrap();
+        let first = kinds.iter().position(|&kind| kind == Kind::Arg).unwrap();
+        let stray: Vec<&Kind> = kinds[first..call].iter().filter(|&&kind| kind != Kind::Arg).collect();
+        assert!(stray.is_empty(), "a call's run still holds {stray:?}");
+    }
+
+    /// procs p-ot's REPORT moved `mov bp,sp` ahead of `push bp`, so every
+    /// argument it read through bp was one word off.
+    #[test]
+    fn test_place_keeps_the_frame_pointer_behind_the_push_that_saves_it() {
+        let found = testing::module("fixtures/omf/procs-p-ot.obj");
+        let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
+        let body = raised.values.iter().find(|(name, _)| name.contains("REPORT")).unwrap().1.clone();
+        let done = placed(&body, &found.dgroup.members, &found.calls).unwrap();
+        assert_eq!(done.blocks[0].ops[..2].iter().map(|op| op.at).collect::<Vec<_>>(), [0x142, 0x143]);
+    }
+
+    /// 952 -> 930 bytes, no runtime divide: the second call folds around the store.
+    #[test]
+    fn test_both_lngmix_divides_absorb() {
+        let mut data = testing::data("fixtures/omf/lngmix-p-g2.obj");
+        for _ in 0..3 {
+            data = crate::wholeseg::rebuilt(&data, true, true, None, false, false).unwrap().0;
+        }
+        let found = testing::loaded_bytes(&data).unwrap();
+        let blocks = testing::partitioned_bytes(&data);
+        let reached: Vec<_> = blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect();
+        assert_eq!(crate::legacy::calls::sites(&found, &reached, &blocks), vec![]);
     }
 }
 

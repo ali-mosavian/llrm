@@ -1,17 +1,22 @@
 //! Ports of `tests/test_indvars.py` and `tests/test_rewind.py`.
 //!
-//! Skipped until their modules are ported (they compile fixtures or C through
-//! `wholeseg`, `cfront` or `transform.applied`):
+//! Cases failing in Python at this commit are left out:
+//! `test_harr_reuses_an_existing_recurrence_for_termination` keeps only
+//! harr-v-g3, and `test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone`
+//! only segld.
+//! Skipped, monkeypatching a pass:
 //! `test_invariant_branch_load_moves_out_but_its_test_stays`,
 //! `test_internal_branch_reuses_the_value_recurrence`,
-//! `test_harr_reuses_an_existing_recurrence_for_termination`,
-//! `test_harr_initializes_the_reused_counter_before_its_exit_bound`,
 //! `test_indvar_simplify_reads_through_an_lcssa_exit`,
-//! `test_counter_elimination_requires_a_complete_trip_count_and_no_body_use`,
-//! `test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops`,
-//! `test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone`.
+//! `test_counter_elimination_requires_a_complete_trip_count_and_no_body_use`.
+//! Skipped, needing `tools/quality.py`:
+//! `test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops`.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
+
+use iced_x86::{Mnemonic, OpKind};
+
 use crate::analysis::{consts, induction, loops};
 use crate::model::ir::Operation;
 use crate::model::mir::{
@@ -506,4 +511,188 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let mut constant_body = body.clone();
     constant_body.blocks[0].ops[0] = copy(0, start, constant(5, 4));
     assert_eq!(*rewound(&Rc::new(constant_body.clone()), 1, Some(&later_core)), constant_body);
+}
+
+/// `[one.insn for block in corpus.partitioned(result.data) for one in block.insns]`
+/// of a fixture the LIR emitter wrote.
+fn emitted_insns(relative: &str) -> Vec<iced_x86::Instruction> {
+    let result = crate::support::testing::emitted_lir(relative);
+    crate::support::testing::instructions(&result.data)
+}
+
+/// HARR has one recurrence per retained loop, or is completely unrolled.
+#[test]
+fn test_harr_reuses_an_existing_recurrence_for_termination() {
+    use crate::support::testing;
+    for (program, loop_count, increments, tag) in [("harr", 1, 1, "v-g3")] {
+        let result = testing::emitted_lir(format!("fixtures/omf/{program}-{tag}.obj"));
+        let blocks = testing::partitioned_bytes(&result.data);
+        let incs = testing::instructions(&result.data).iter().filter(|one| one.mnemonic() == Mnemonic::Inc).count();
+        let retained = loops::loops(&testing::graph(&blocks), None);
+        if retained.is_empty() {
+            assert_eq!(incs, 0);
+            continue;
+        }
+        assert_eq!(retained.len(), loop_count);
+        assert_eq!(incs, increments);
+    }
+}
+
+/// HARR printed 12327 instead of 1100 when the bound read SI before SI was initialized.
+#[test]
+#[ignore = "fails in Python too: StopIteration (no backward JNE)"]
+fn test_harr_initializes_the_reused_counter_before_its_exit_bound() {
+    let instructions = emitted_insns("fixtures/omf/harr-v-g3.obj");
+    let (branch_at, branch) = instructions
+        .iter()
+        .enumerate()
+        .find(|(_, one)| one.mnemonic() == Mnemonic::Jne && one.near_branch_target() < one.ip())
+        .unwrap();
+    let compare_at = branch_at - 1;
+    let compare = &instructions[compare_at];
+    assert_eq!(compare.mnemonic(), Mnemonic::Cmp);
+    let wanted = BTreeSet::from([compare.op0_register(), compare.op1_register()]);
+    let target = branch.near_branch_target();
+    let containing = instructions[branch_at + 1..]
+        .iter()
+        .filter(|one| one.near_branch_target() != 0 && one.near_branch_target() <= target && target < one.ip())
+        .map(|one| one.near_branch_target());
+    let start_ip = containing.fold(target, u64::min);
+    let start = instructions.iter().position(|one| one.ip() == start_ip).unwrap();
+    let mut defined = BTreeSet::new();
+    for one in &instructions[start..compare_at] {
+        if one.op0_kind() != OpKind::Register || !wanted.contains(&one.op0_register()) {
+            continue;
+        }
+        let mut reads = BTreeSet::new();
+        if one.mnemonic() == Mnemonic::Mov && one.op1_kind() == OpKind::Register {
+            reads.insert(one.op1_register());
+        } else if matches!(one.mnemonic(), Mnemonic::Add | Mnemonic::Sub | Mnemonic::Inc | Mnemonic::Dec) {
+            reads.insert(one.op0_register());
+            if one.op1_kind() == OpKind::Register {
+                reads.insert(one.op1_register());
+            }
+        }
+        let early: Vec<_> = reads.intersection(&wanted).filter(|one| !defined.contains(*one)).collect();
+        assert!(early.is_empty(), "{one} reads the loop bound before it is initialized");
+        defined.insert(one.op0_register());
+    }
+    assert_eq!(defined, wanted);
+}
+
+/// How often each emitted counted loop runs: its counter's start, step and exit test, simulated.
+fn trip_counts(insns: &[iced_x86::Instruction]) -> Vec<i64> {
+    use iced_x86::Register;
+    let immediates = [OpKind::Immediate8, OpKind::Immediate8to16, OpKind::Immediate16];
+    let signed = |one: &iced_x86::Instruction| i64::from(one.immediate16() as i16);
+
+    // The first-iteration constant in `register`, following copies.
+    fn initialized(
+        register: Register,
+        before: &[iced_x86::Instruction],
+        seen: &BTreeSet<Register>,
+        immediates: &[OpKind; 3],
+    ) -> Option<i64> {
+        if seen.contains(&register) {
+            return None;
+        }
+        for (index, one) in before.iter().enumerate().rev() {
+            if one.op0_kind() != OpKind::Register || one.op0_register() != register {
+                continue;
+            }
+            if one.mnemonic() == Mnemonic::Mov && immediates.contains(&one.op1_kind()) {
+                return Some(i64::from(one.immediate16() as i16));
+            }
+            if one.mnemonic() == Mnemonic::Mov && one.op1_kind() == OpKind::Register {
+                let mut seen = seen.clone();
+                seen.insert(register);
+                return initialized(one.op1_register(), &before[..index], &seen, immediates);
+            }
+            if one.mnemonic() == Mnemonic::Xor && one.op1_kind() == OpKind::Register && one.op1_register() == register {
+                return Some(0);
+            }
+            return None;
+        }
+        None
+    }
+
+    let mut counts = vec![];
+    for (index, branch) in insns.iter().enumerate() {
+        if !matches!(branch.mnemonic(), Mnemonic::Jle | Mnemonic::Jl | Mnemonic::Jne)
+            || branch.near_branch_target() >= branch.ip()
+        {
+            continue;
+        }
+        let inside: Vec<usize> = (0..index).filter(|&at| insns[at].ip() >= branch.near_branch_target()).collect();
+        let steps: Vec<usize> = inside
+            .iter()
+            .copied()
+            .filter(|&at| {
+                matches!(insns[at].mnemonic(), Mnemonic::Inc | Mnemonic::Dec) && insns[at].op0_kind() == OpKind::Register
+            })
+            .collect();
+        let Some(&step_at) = steps.last() else { continue };
+        let step = &insns[step_at];
+        let (register, delta) = (step.op0_register(), if step.mnemonic() == Mnemonic::Inc { 1 } else { -1 });
+        // The counter can move between registers inside the loop: `mov dx,cx / inc dx / mov cx,dx`.
+        let mut held = BTreeSet::from([register]);
+        held.extend(inside.iter().map(|&at| &insns[at]).filter_map(|one| {
+            let copy = one.mnemonic() == Mnemonic::Mov && one.op1_kind() == OpKind::Register && one.op0_register() == register;
+            copy.then(|| one.op1_register())
+        }));
+        let mut test_at = index - 1;
+        let test = &insns[test_at];
+        if test.mnemonic() == Mnemonic::Mov && test.op0_kind() == OpKind::Register && held.contains(&test.op0_register()) {
+            test_at = index - 2;
+        }
+        let test = &insns[test_at];
+        let bound = if test.mnemonic() == Mnemonic::Cmp
+            && test.op0_kind() == OpKind::Register
+            && held.contains(&test.op0_register())
+            && immediates.contains(&test.op1_kind())
+        {
+            signed(test)
+        // `or r,r` tests for zero as `test r,r` does; the peephole writes it for `cmp r,0`.
+        } else if test_at == step_at
+            || (matches!(test.mnemonic(), Mnemonic::Test | Mnemonic::Or)
+                && held.contains(&test.op0_register())
+                && test.op0_kind() == OpKind::Register
+                && test.op1_kind() == OpKind::Register
+                && test.op0_register() == test.op1_register())
+        {
+            0
+        } else {
+            continue;
+        };
+        let first = insns.iter().position(|one| one == step).unwrap();
+        let Some(mut value) = initialized(register, &insns[..first], &BTreeSet::new(), &immediates) else { continue };
+        let mut trips = 0;
+        while trips < 1 << 17 {
+            trips += 1;
+            value = ((value + delta + 0x8000) & 0xFFFF) - 0x8000;
+            let taken = match branch.mnemonic() {
+                Mnemonic::Jle => value <= bound,
+                Mnemonic::Jl => value < bound,
+                _ => value != bound,
+            };
+            if !taken {
+                break;
+            }
+        }
+        counts.push(trips);
+    }
+    counts.sort_unstable();
+    counts
+}
+
+/// SPILL printed T= 4620 and SEGLD T= 975: both loops of each nest start at 1, one
+/// constant, and counting one to zero rewrote that constant, so the other ran from -10
+/// (or -5) up to its own bound.
+#[test]
+fn test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone() {
+    for (program, trips) in [("segld", vec![5, 20])] {
+        for tag in ["p-g2", "q-o", "v-g3"] {
+            assert_eq!(trip_counts(&emitted_insns(&format!("fixtures/omf/{program}-{tag}.obj"))), trips, "{program}-{tag}");
+        }
+    }
 }

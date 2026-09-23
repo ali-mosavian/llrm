@@ -1,7 +1,4 @@
 //! Port of `tests/test_loopsimplify.py`. `is` assertions compare by `==`.
-//! Skipped, needing the corpus and `transform.applied`:
-//! test_adjacent_angle_loops_reach_a_fixed_point,
-//! test_real_timer_loop_has_one_backedge.
 
 use std::rc::Rc;
 use crate::model::mir::MirBody;
@@ -99,6 +96,45 @@ fn test_conditional_entry_and_shared_exit_become_dedicated() {
             .collect::<BTreeSet<_>>();
         assert_ne!(exits, BTreeSet::from([exit_at]));
         assert!(exits.iter().all(|at| predecessors[at].is_subset(&loop_.body)));
+        assert_eq!(simplified(&result), result);
+    }
+}
+
+/// The body named `...suffix` in a fixture's raised bodies.
+fn named(path: &str, suffix: &str) -> (Rc<crate::objectfile::module::Module>, Rc<MirBody>) {
+    use crate::support::testing;
+    let found = testing::module(path);
+    let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
+    let body = raised.values.iter().find(|(name, _)| name.ends_with(suffix)).unwrap().1.clone();
+    (found, body)
+}
+
+#[test]
+fn test_adjacent_angle_loops_reach_a_fixed_point() {
+    // PL_MOVE aborted after 16 rounds: Decide erased the preheader each round.
+    let (found, body) = named("fixtures/regressions/qrender-pl-move-v-g3.obj", " MDL_ANGLEMOD");
+    let how = crate::optimize::transform::Applied { found: Some(found), ..Default::default() };
+    let result = crate::optimize::transform::applied(&body, &BTreeSet::new(), &Default::default(), how).unwrap();
+    assert_eq!(loops::loops(&result.blocks, Some(result.entry)).len(), 2);
+}
+
+#[test]
+fn test_real_timer_loop_has_one_backedge() {
+    for program in ["nbody", "fpbench"] {
+        let (_, body) = named(&format!("fixtures/bench/{program}-v-g3.obj"), "PITSNAP");
+        let [original] = <[loops::Loop; 1]>::try_from(loops::loops(&body.blocks, Some(body.entry))).unwrap();
+        assert_eq!(original.latches.len(), 2);
+        let result = simplified(&body);
+        let [loop_] = <[loops::Loop; 1]>::try_from(loops::loops(&result.blocks, Some(result.entry))).unwrap();
+        assert_eq!(loop_.latches.len(), 1);
+        let latch = result.block(*loop_.latches.iter().next().unwrap()).unwrap();
+        let predecessors = loops::predecessors(&result.blocks);
+        assert_eq!(predecessors[&latch.at], original.latches);
+        for block in &result.blocks {
+            for phi in &block.phis {
+                assert_eq!(phi.incoming.keys().copied().collect::<BTreeSet<_>>(), predecessors[&block.at]);
+            }
+        }
         assert_eq!(simplified(&result), result);
     }
 }

@@ -1,10 +1,9 @@
 //! Port of `tests/test_array_facts.py`: unknown branches must not erase
 //! independently proven constant array extents.
 //!
-//! Skipped, needing `wholeseg`:
-//! `test_hugerg_has_an_inductive_extent_proof_with_a_small_budget`.
 //! Skipped, monkeypatching `arrayfacts.proven` or `raising_array_bounds.proven`
 //! out of `mir.bodies`:
+//! `test_hugerg_has_an_inductive_extent_proof_with_a_small_budget`,
 //! `test_guarded_record_stores_only_exclude_proven_disjoint_statics`,
 //! `test_inductive_proof_must_preserve_its_own_preconditions`.
 

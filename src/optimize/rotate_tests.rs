@@ -1,7 +1,7 @@
-//! Port of the direct `rotate` tests: tests/test_countdown.py.
+//! Port of the direct `rotate` tests: tests/test_countdown.py and
+//! tests/test_rotate.py.
 //!
-//! Skipped until their modules are ported:
-//! - tests/test_rotate.py (both tests): need `wholeseg.emitted`.
+//! Skipped:
 //! - tests/test_countdown.py::test_dynamic_frequencies_do_not_charge_a_rotated_entry_guard_as_fifty_fifty:
 //!   `tools.quality`, not rotate.
 //! - `rotate.rotated` asserts inside tests/test_rewind.py and tests/test_indvars.py
@@ -216,4 +216,38 @@ fn test_countdown_refuses_an_observed_source_counter() {
     let body = counted_loop(true);
 
     assert_eq!(entered(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
+}
+
+/// Re-deriving the moved phis by variable renamed main's exit copy of a
+/// call's answer to the loop counter; decide folded the exit away and the
+/// segment was refused.
+#[test]
+#[ignore = "fails in Python too: main (main): Unlowered: 0x0079: no instruction for opaque"]
+fn test_entering_mains_first_loop_at_its_body_keeps_the_code_after_it() {
+    crate::support::testing::emitted_lir("fixtures/regressions/qbdemo-fil2.obj");
+}
+
+/// Entered at its body, harr's inner loop branched to a copy block placed
+/// after the procedure and jumped back: two jumps a pass.
+#[test]
+fn test_a_back_edge_keeps_its_copies_in_the_latch() {
+    use crate::wholeseg::{Emission, Watched};
+    let mut body: crate::support::hash::IndexMap<String, crate::model::lir::LirBody> = Default::default();
+    let mut watch = |stage: &str, name: Option<&str>, state: Watched<'_>| {
+        if let (true, Some(name), Watched::Lir(state)) = (stage == "peephole", name, state) {
+            body.insert(name.to_owned(), state.clone());
+        }
+    };
+    let data = crate::support::testing::data("fixtures/omf/harr-v-g3.obj");
+    let result = crate::support::testing::emitted_watching(&data, Some(&mut watch));
+    assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
+    assert!(!body.is_empty());
+    let split: Vec<String> = body
+        .iter()
+        .flat_map(|(name, state)| {
+            let end = (state.entry + 1) << 32;
+            state.blocks.iter().filter(move |block| block.at >= end).map(move |block| format!("{name} {:#x}", block.at))
+        })
+        .collect();
+    assert!(split.is_empty(), "{split:?}");
 }

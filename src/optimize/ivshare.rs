@@ -1,7 +1,7 @@
 //! Direct port of `qbopt/optimize/ivshare.py`.
 //!
-//! Tests: every test in `tests/test_ivshare.py` is skipped; each builds its
-//! input through `wholeseg.emitted`, which is not ported.
+//! Tests: every test in `tests/test_ivshare.py` is skipped; its `culling`
+//! fixture spies on `strength.reduced`, and errors in Python at this commit.
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};

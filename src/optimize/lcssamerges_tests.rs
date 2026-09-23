@@ -1,6 +1,4 @@
 //! Port of `tests/test_lcssa_merges.py`. `is` assertions compare by `==`.
-//! Skipped, needing the corpus and `transform.applied`:
-//! test_compiled_early_exit_accumulator_is_closed.
 
 use std::rc::Rc;
 use std::collections::BTreeSet;
@@ -77,5 +75,39 @@ fn test_following_cycle_keeps_complete_phi_edges() {
             assert_eq!(phi.incoming.keys().copied().collect::<BTreeSet<_>>(), predecessors[&block.at]);
         }
     }
+    assert_eq!(closed(&result).unwrap(), result);
+}
+
+#[test]
+#[ignore = "fails in Python too: assert result != body (closing changes nothing)"]
+fn test_compiled_early_exit_accumulator_is_closed() {
+    use crate::model::passes::Options;
+    use crate::support::testing;
+    let found = testing::module("fixtures/regressions/lcmerge-p-g2.obj");
+    let partition = testing::blocks_of(&found);
+    let raised = testing::main_body(&found, &partition);
+    let body = testing::applied(&found, Some(&partition), &raised, Options { lcssa: false, ..Options::default() });
+    let [loop_] = <[loops::Loop; 1]>::try_from(loops::loops(&body.blocks, Some(body.entry))).unwrap();
+    let result = closed(&body).unwrap();
+    assert_ne!(result, body);
+    let inside = |block: &MirBlock| loop_.body.contains(&block.at);
+    let defined: BTreeSet<Value> = result
+        .blocks
+        .iter()
+        .filter(|block| inside(block))
+        .flat_map(|block| {
+            let phis = block.phis.iter().map(|phi| phi.result);
+            phis.chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()))
+        })
+        .filter(|value| !value.flags)
+        .collect();
+    let outside: Vec<&MirBlock> = result.blocks.iter().filter(|block| !inside(block)).collect();
+    assert!(!outside.iter().flat_map(|block| &block.ops).flat_map(|op| &op.uses).any(|value| defined.contains(value)));
+    assert!(outside
+        .iter()
+        .flat_map(|block| &block.phis)
+        .flat_map(|phi| phi.incoming.iter())
+        .filter(|(_, value)| defined.contains(*value))
+        .all(|(parent, _)| loop_.body.contains(parent)));
     assert_eq!(closed(&result).unwrap(), result);
 }

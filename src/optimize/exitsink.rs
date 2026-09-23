@@ -1,8 +1,8 @@
 //! Direct port of `qbopt/optimize/exitsink.py`.
 //!
 //! Tests: `tests/test_ivshare.py:test_final_pointer_update_moves_to_the_exit`
-//! is skipped; it builds its input through `wholeseg.emitted`, which is not
-//! ported.
+//! is skipped; its `culling` fixture spies on `strength.reduced`, and errors
+//! in Python at this commit.
 
 use std::rc::Rc;
 use std::collections::BTreeMap;

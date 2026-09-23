@@ -1,13 +1,15 @@
 //! Port of `tests/test_floatfacts.py`.
-//!
-//! Skipped, needing the corpus raise: `test_fpcse_known_inputs_reach_float_computations`,
-//! `test_entry_bytes_are_killed_by_a_store`.
 
 use num_bigint::BigInt;
 
-use super::{Finite, Fraction, decoded, encoded, evaluated};
+use super::{Finite, Fraction, decoded, encoded, evaluated, known};
+use crate::analysis::consts;
 use crate::model::floating::{Format, Precision, Rounding, Semantics};
-use crate::model::mir::Kind;
+use crate::model::mir::{Arg, Kind, MirBlock, MirBody};
+use crate::objectfile::module::{Addr, Space};
+use crate::objectfile::omf;
+use crate::support::hash::IndexMap;
+use crate::support::testing;
 
 fn finite(value: Fraction) -> Finite {
     Finite::new(value, false)
@@ -115,4 +117,55 @@ fn test_a_loop_exit_repeats_its_stores_every_iteration() {
     assert_eq!(exits[0].count, BigInt::from(10));
     let stored: Vec<BigInt> = exits[0].stores.iter().map(|(_, fact)| fact.n.clone()).collect();
     assert_eq!(stored, [0x4240_0000, 0x3f40_0000, 0x43f3_c000].map(BigInt::from));
+}
+
+/// FPCSE's 2+4, product 48 and quotient 0.75 should not remain opaque facts.
+#[test]
+fn test_fpcse_known_inputs_reach_float_computations() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let path = format!("fixtures/omf/fpcse-{tag}.obj").to_lowercase();
+        let found = testing::module(&path);
+        let body = testing::main_body(&found, &testing::blocks_of(&found));
+        // Explicit initial contents of this fixture's constant pool, not a
+        // default assumption about arbitrary procedure-entry memory.
+        let segments = omf::segments(&found.records);
+        let mut initial: IndexMap<Addr, BigInt> = IndexMap::default();
+        for (_, segment, offset, data) in omf::ledata(&found.records) {
+            if segments[segment as usize].as_ref().is_some_and(|one| one.0 == "BC_CN") {
+                for (index, byte) in data.iter().enumerate() {
+                    initial.insert(Addr { index: segment, ..Addr::new(Space::Segment, offset + index as i64) }, BigInt::from(*byte));
+                }
+            }
+        }
+        let facts = known(&body, &found.dgroup.members, &found.calls, Some(&initial));
+        let mut computed: IndexMap<Kind, Fraction> = IndexMap::default();
+        for op in testing::ops(&body) {
+            for result in &op.results {
+                if let Arg::Held(one) = result {
+                    if let Some(fact) = facts.get(&one.value) {
+                        computed.insert(op.kind, fact.value.clone());
+                    }
+                }
+            }
+        }
+        assert_eq!(computed[&Kind::Fadd], Fraction::from_integer(6), "{tag}");
+        assert_eq!(computed[&Kind::Fmul], Fraction::from_integer(48), "{tag}");
+        assert_eq!(computed[&Kind::Fdiv], Fraction::new(3, 4), "{tag}");
+    }
+}
+
+/// A constant-pool seed is an entry fact, not immutable memory after a write.
+#[test]
+fn test_entry_bytes_are_killed_by_a_store() {
+    let found = testing::module("fixtures/omf/fpcse-p-g2.obj");
+    let body = testing::main_body(&found, &testing::blocks_of(&found));
+    let store = testing::ops(&body).into_iter().find(|op| op.kind == Kind::Store).unwrap();
+    let reference = store.stores[0].clone();
+    let mut alone = MirBody::clone(&body);
+    alone.blocks = vec![MirBlock::new(body.entry, vec![], vec![store.clone()], vec![])];
+    let seed: consts::Cells = [((reference.addr.unwrap(), 1), consts::Known::new(255, 1))].into_iter().collect();
+    let before = consts::cells(&alone, &found.dgroup.members, &found.calls, None, Some(&seed), None, None, None);
+    assert_eq!(before[&(body.entry, 0)], seed);
+    let after = consts::_kills(seed, &store, &IndexMap::default(), &found.dgroup.members, &found.calls, None, None, false, None);
+    assert_eq!(after[&(reference.addr.unwrap(), 1)].n, BigInt::from(0));
 }

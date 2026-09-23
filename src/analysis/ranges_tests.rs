@@ -1,17 +1,18 @@
 //! Ports of `tests/test_ranges.py`, `tests/test_edge_ranges.py` and
 //! `tests/test_unsigned_edge_ranges.py`.
 //!
-//! Skipped, needing the corpus raise and `transform.applied`:
-//! `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
-//! `test_addrm_long_array_value_keeps_counter_bounds`,
-//! `test_nbody_scaled_index_is_bounded_only_inside_its_loop`,
-//! `test_rngarm_writes_its_counter_only_after_the_loop`.
+//! Skipped, monkeypatching `strength._multiplies` and `observers.private`:
+//! `test_nbody_scaled_index_is_bounded_only_inside_its_loop`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_computed, _recurrence_span, Interval, bounded, on_edge};
+use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge};
+use crate::model::passes::{O2, Options};
+use crate::support::testing;
+use crate::wholeseg::Emission;
 use crate::analysis::regions::overlapping;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value};
@@ -264,5 +265,88 @@ fn test_unsigned_edge_never_removes_a_possible_selector() {
                 }
             }
         }
+    }
+}
+
+fn applied(path: &str, options: Options) -> Rc<MirBody> {
+    let found = testing::module(path);
+    let blocks = testing::blocks_of(&found);
+    testing::applied(&found, Some(&blocks), &testing::main_body(&found, &blocks), options)
+}
+
+/// FPDEEP lost its 1..3 bound at i-1, leaving p(i)'s byte extent unknown.
+#[test]
+#[ignore = "fails in Python too: assert [] (no indexed FLOAD once transformed)"]
+fn test_fpdeep_one_based_index_has_a_bounded_byte_offset() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        // Unrolled, i is a constant.
+        let body = applied(&format!("fixtures/omf/fpdeep-{tag}.obj").to_lowercase(), Options { unroll: false, ..Default::default() });
+        let known = bounded(&body).unwrap();
+        let accesses: Vec<(i64, MemRef)> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter().map(move |op| (block.at, op)))
+            .filter(|(_, op)| op.kind == Kind::Fload)
+            .flat_map(|(at, op)| op.loads.iter().filter(|one| one.base.is_some()).map(move |one| (at, one.clone())))
+            .collect();
+        assert!(!accesses.is_empty(), "{tag}");
+        for (at, reference) in &accesses {
+            let scoped: BTreeMap<Value, Interval> = known[at].iter().map(|(value, one)| (*value, one.clone())).collect();
+            let covered = covering(reference, &scoped);
+            assert!(covered.base.is_none(), "{tag}");
+            assert_eq!(covered.addr.unwrap().disp, 6, "{tag}");
+            assert_eq!(covered.width, 12, "{tag}");
+        }
+    }
+}
+
+/// ADDRM lost the 1..20 bound at the integer-to-long conversion feeding b(i).
+#[test]
+fn test_addrm_long_array_value_keeps_counter_bounds() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let body = applied(&format!("fixtures/omf/addrm-{tag}.obj").to_lowercase(), O2());
+        let known = bounded(&body).unwrap();
+        let converted: Vec<(i64, Value)> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter().map(move |op| (block.at, op)))
+            .filter(|(_, op)| op.kind == Kind::SignExtend)
+            .map(|(at, op)| match &op.results[0] {
+                Arg::Held(one) => (at, one.value),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert!(!converted.is_empty(), "{tag}");
+        for (at, value) in &converted {
+            assert_eq!(known[at][value], Interval { low: 1.into(), high: 20.into(), width: 4 }, "{tag}");
+        }
+    }
+}
+
+/// RNGARM printed 28,7,10 but stored INDEX eleven times; its guarded array cannot alias INDEX.
+#[test]
+#[ignore = "fails in Python too: assert (set()) (no loop left at mir-widen)"]
+fn test_rngarm_writes_its_counter_only_after_the_loop() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let data = testing::data(format!("fixtures/regressions/rngarm-{tag}.obj").to_lowercase());
+        let found = testing::loaded_bytes(&data).unwrap();
+        let (result, states) = testing::emitted_mir(&data, "mir-widen", "");
+        assert_eq!(result.outcome, Emission::Lir, "{tag}: {}", result.reason);
+        let [body] = &states[..] else { panic!("{tag}: {} states", states.len()) };
+        let inside: BTreeSet<i64> =
+            crate::analysis::loops::loops(&body.blocks, Some(body.entry)).into_iter().flat_map(|one| one.body).collect();
+        let writes: Vec<i64> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter().flat_map(move |op| op.stores.iter().map(move |one| (block.at, one))))
+            .filter(|(_, one)| {
+                one.addr.is_some_and(|addr| {
+                    addr.space == Space::Segment && Some(addr.index) == found.program_data && addr.disp == 14
+                })
+            })
+            .map(|(at, _)| at)
+            .collect();
+        assert!(!inside.is_empty() && writes.len() <= 1, "{tag}");
+        assert!(!writes.iter().any(|at| inside.contains(at)), "{tag}");
     }
 }

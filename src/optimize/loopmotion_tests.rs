@@ -1,10 +1,10 @@
 //! Port of tests/test_loopmotion.py.
 //!
-//! Skipped, needing `wholeseg`:
-//! `test_indexed_record_accumulators_store_only_after_loop`,
-//! `test_indexed_exit_store_requires_a_dominating_invariant_address`,
-//! `test_a_float_loop_sinks_its_counter_store_without_an_error_handler`.
+//! `test_indexed_record_accumulators_store_only_after_loop` leaves out q-O,
+//! which fails in Python at this commit (0x005b: 6 bytes between the ops are
+//! not instructions).
 //! Skipped, monkeypatching a pass:
+//! `test_indexed_exit_store_requires_a_dominating_invariant_address`,
 //! `test_harr_constant_column_exit_is_stored_once_only_after_a_nonempty_loop`,
 //! `test_nbody_conditional_accumulator_stores_sink`,
 //! `test_lngmxx_invariant_temporaries_sink_only_when_loop_executes`,
@@ -130,4 +130,45 @@ fn test_an_accumulator_without_zero_trip_initialization_stays_in_the_loop() {
     }
     let result = sunk_stores(&Rc::new(altered), &dgroup, Some(&bounds), true).unwrap();
     assert_eq!(*result.block(block.at).unwrap(), block);
+}
+
+/// UDTRNG wrote both promoted record accumulators on every iteration instead of once at exit.
+#[test]
+fn test_indexed_record_accumulators_store_only_after_loop() {
+    for tag in ["p-g2", "v-g3"] {
+        let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/regressions/udtrng-{tag}.obj")));
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
+        let body = &states.last().unwrap().2;
+        let hot: BTreeSet<i64> =
+            loops::loops(&body.blocks, Some(body.entry)).into_iter().flat_map(|one| one.body).collect();
+        let wide: Vec<(i64, MemRef)> = body
+            .blocks
+            .iter()
+            .filter(|block| hot.contains(&block.at))
+            .flat_map(|block| &block.ops)
+            .flat_map(|op| op.stores.iter().map(move |one| (op.at, one.clone())))
+            .filter(|(_, one)| one.base.is_some() && one.width == 4)
+            .collect();
+        assert!(wide.is_empty(), "{tag}: {wide:?}");
+    }
+}
+
+/// NBODYS stored `other` every inner iteration: a float op kept the loop's stores for a handler it has not got.
+#[test]
+fn test_a_float_loop_sinks_its_counter_store_without_an_error_handler() {
+    let (_, states) = testing::emitted_states(&testing::data("fixtures/bench/nbodys-v-g3.obj"));
+    let mut last: IndexMap<Option<String>, MirBody> = IndexMap::default();
+    for (_, name, body) in states.into_iter().filter(|(stage, _, _)| stage.starts_with("mir-")) {
+        last.insert(name, body);
+    }
+    let body = last
+        .values()
+        .find(|one| one.blocks.iter().flat_map(|block| &block.ops).any(|op| op.kind == Kind::Fmul))
+        .unwrap();
+    let ops = |at: &i64| &body.block(*at).unwrap().ops;
+    let floating = loops::loops(&body.blocks, Some(body.entry))
+        .into_iter()
+        .filter(|one| one.body.iter().flat_map(ops).any(|op| op.floating.is_some()));
+    let innermost = floating.min_by_key(|one| one.body.len()).unwrap();
+    assert!(!innermost.body.iter().flat_map(ops).any(|op| op.kind == Kind::Store));
 }

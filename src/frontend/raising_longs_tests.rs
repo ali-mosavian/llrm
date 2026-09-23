@@ -1,14 +1,5 @@
 //! Port of `tests/test_raising_longs.py` and `tests/test_raising_unary.py`.
 //!
-//! Skipped, needing `wholeseg`:
-//! `test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit`,
-//! `test_removed_half_flags_do_not_become_machine_exit_inputs`,
-//! `test_production_does_not_recognize_long_pairs_after_optimization`,
-//! `test_nots_stores_whole_unary_results_without_stack_splitting`,
-//! `test_arith_passes_whole_results_without_splitting_them`.
-//! Skipped, needing `transform.applied`:
-//! `test_addrm_stores_and_reuses_the_signed_whole_value`,
-//! `test_nbody_whole_position_loads_leave_the_inner_loop`.
 //! Skipped, monkeypatching a `raising_longs` stage out of `mir.bodies`
 //! (`scalar`, directly or through the `nbody` fixture; `_negated_whole`,
 //! `sign_fills`, `arguments` or `unary`):
@@ -36,6 +27,7 @@ use crate::model::ir::nodes::{Data, Node, TableKind};
 use crate::model::ir::{Effects, Imm, Loc, Reg, Semantics};
 use crate::model::mir::MirBlock;
 use crate::model::mir::MirBody;
+use crate::model::passes::O2;
 use crate::objectfile::module::Addr;
 use crate::support::pyrepr::Repr;
 use crate::support::testing::{self, all_ops, nth, ops, width};
@@ -341,5 +333,81 @@ fn test_negnot_raises_printed_long_negations() {
         let ops = ops(&body);
         assert!(!ops.iter().any(|op| op.kind == Kind::AddCarry), "{tag}");
         assert_eq!(ops.iter().filter(|op| op.kind == Kind::Neg && width(&op.results[0]) == 4).count(), 3, "{tag}");
+    }
+}
+
+/// ARITH /V fused ADD/ADC despite its final-word flags being visible at the machine exit, so fresh OMF emission refused it.
+#[test]
+fn test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit() {
+    testing::emitted_lir("fixtures/omf/arith-p-evt.obj");
+}
+
+/// ADDRM stored b(i) in two words and immediately reloaded the same long on every iteration.
+#[test]
+fn test_addrm_stores_and_reuses_the_signed_whole_value() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let found = testing::module(&format!("fixtures/omf/addrm-{tag}.obj").to_lowercase());
+        let blocks = testing::blocks_of(&found);
+        let body = testing::main_body(&found, &blocks);
+        assert!(ops(&body).iter().any(|op| op.stores.iter().any(|one| one.base.is_some() && one.width == 4)), "{tag}");
+        let result = testing::applied(&found, Some(&blocks), &body, O2());
+        assert!(!ops(&result).iter().any(|op| op.loads.iter().any(|one| one.base.is_some() && one.width == 4)), "{tag}");
+    }
+}
+
+/// Nbody recomputed invariant position reads; hoisting four halves had increased spill cost.
+#[test]
+fn test_nbody_whole_position_loads_leave_the_inner_loop() {
+    let found = testing::module("fixtures/regressions/nbody-stack-p-g2.obj");
+    let blocks = testing::blocks_of(&found);
+    let body = testing::main_body(&found, &blocks);
+    let sites: Vec<Op> = ops(&body).into_iter().filter(|op| [0x12D, 0x144].contains(&op.at) && !op.loads.is_empty()).collect();
+    assert_eq!(sites.len(), 2);
+    let done = testing::applied(&found, Some(&blocks), &body, O2());
+    for site in &sites {
+        let (block, load) = done
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter().map(move |op| (block, op)))
+            .find(|(_, op)| op.id == site.id)
+            .unwrap();
+        assert_eq!(block.at, 0xF0);
+        assert!(load.kind == Kind::Load && width(&load.results[0]) == 4);
+        assert_eq!(load.loads[0].addr, site.loads[0].addr);
+    }
+}
+
+/// PARITYCONTROL fresh emission refused its scalar add as crossing live flags:
+/// a removed ADC's flag, left only on dead phis, became a caller input.
+#[test]
+fn test_removed_half_flags_do_not_become_machine_exit_inputs() {
+    testing::emitted_lir("fixtures/parity/control-v-g3.obj");
+}
+
+/// Long-pair recognition belongs to raising; the late machine-shaped pass must not exist.
+#[test]
+fn test_production_does_not_recognize_long_pairs_after_optimization() {
+    testing::emitted_lir("fixtures/omf/arith-p-g2.obj");
+}
+
+/// Whether the emitted object pops anything: splitting a whole value through the stack.
+fn pops(path: &str) -> bool {
+    let result = testing::emitted_lir(path);
+    testing::instructions(&result.data).iter().any(|one| one.mnemonic() == iced_x86::Mnemonic::Pop)
+}
+
+/// NOTS split whole EQV/NAND results with PUSH/POP merely to store their halves.
+#[test]
+fn test_nots_stores_whole_unary_results_without_stack_splitting() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        assert!(!pops(&format!("fixtures/omf/nots-{tag}.obj").to_lowercase()), "{tag}");
+    }
+}
+
+/// ARITH split eight long results through PUSH/POP just to push the same bytes again.
+#[test]
+fn test_arith_passes_whole_results_without_splitting_them() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        assert!(!pops(&format!("fixtures/omf/arith-{tag}.obj").to_lowercase()), "{tag}");
     }
 }

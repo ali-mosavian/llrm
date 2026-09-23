@@ -14,14 +14,15 @@
 //!   test_reduced_product_keeps_the_current_iteration_on_exit
 //!   test_inserted_counter_operations_own_their_insertion_location
 //!
-//! Skipped, they need modules with no Rust port (the pipeline in
-//! `transform.applied`, the frontends, `wholeseg`, `Strength`):
-//!   test_flow.py: test_strength_reduction_replaces_a_loop_multiply_with_an_add
-//!   test_ranges.py, test_ivshare.py: monkeypatch `strength` inside the pipeline
+//! tests/test_flow.py:
+//!   test_strength_reduction_replaces_a_loop_multiply_with_an_add
+//!
+//! Skipped, monkeypatching a pass:
+//!   test_ranges.py, test_ivshare.py: `strength` inside the pipeline
 //!   test_cpu_profile.py: the two `transform.applied(..., only="strength")` tests
 //!   test_induction_identity.py: the tests patching `strength.reduced` in the
-//!     pipeline, test_strength_does_not_spill_cheap_loop_work, and the
-//!     matrix/harr `wholeseg` fixtures
+//!     pipeline, and test_strength_does_not_spill_cheap_loop_work
+//!     (`transform.applied`, and `opportunity`, which is not ported)
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -893,4 +894,38 @@ fn test_inserted_counter_operations_own_their_insertion_location() {
     let update = result.blocks[1].ops.last().unwrap();
     assert!(setup.at == 0 && setup.inserted());
     assert!(update.at == 4 && update.inserted());
+}
+
+/// tests/test_flow.py. matrix recomputes a row address from the counter every
+/// iteration with `imul word [w]`; reduced, the multiply moves to the
+/// preheader and an add of the same width advances it.
+#[test]
+fn test_strength_reduction_replaces_a_loop_multiply_with_an_add() {
+    use crate::support::testing;
+    let found = testing::module("fixtures/omf/matrix-p-g2.obj");
+    let blocks = testing::blocks_of(&found);
+    let landmarks = crate::objectfile::module::landmarks(&found);
+    let layout = crate::analysis::regions::RegionLayout {
+        shared_segments: None,
+        landmarks: landmarks.iter().map(|(key, marks)| (*key, marks.clone())).collect(),
+    };
+    let dgroup = &found.dgroup.members;
+    let mut fired = false;
+    for (_, body) in testing::raised_from(&found, &blocks, None).values {
+        // The counter is a cell until forwarding makes it a value.
+        let body = crate::optimize::transform::forwarded(&body, dgroup, &found.calls, false).unwrap();
+        let out = reduced(&body, dgroup, Some(&layout), 0, &BTreeSet::new(), 0, &_DEFAULT_COSTS, &[], true).unwrap();
+        if Rc::ptr_eq(&out, &body) {
+            continue;
+        }
+        fired = true;
+        let multiplies = |one: &MirBody| testing::ops(one).into_iter().filter(|op| op.kind == Kind::Mul).collect::<Vec<_>>();
+        let (was, now) = (multiplies(&body), multiplies(&out));
+        assert_eq!(now.len(), was.len(), "a multiply should move, not multiply");
+        assert!(now.iter().any(|op| op.inserted()), "the preheader multiply was not inserted");
+        let adds: Vec<Op> = testing::ops(&out).into_iter().filter(|op| op.kind == Kind::Add && op.inserted()).collect();
+        assert!(!adds.is_empty(), "no add advances the new counter");
+        assert!(adds.iter().all(|op| op.absorbed.is_empty()), "an invented recurrence claimed a source occurrence");
+    }
+    assert!(fired, "matrix multiplies its counter by a width it never changes");
 }

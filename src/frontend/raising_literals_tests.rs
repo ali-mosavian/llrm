@@ -7,7 +7,9 @@
 //!
 //! Skipped, monkeypatching `module.escaped`, `omf.fixups` and `omf.ledata`:
 //! `test_unknown_literal_pool_layout_does_not_exclude_call_writes`.
-//! Skipped, needing `wholeseg`: `test_fpdeep_mix_outputs_fold_across_string_prints`.
+//!
+//! `test_fpdeep_mix_outputs_fold_across_string_prints` keeps only its q-O
+//! case: p-g2 and v-g3 fail in Python at this commit (Unlowered opaque).
 
 use std::rc::Rc;
 
@@ -211,5 +213,45 @@ fn test_literal_entry_requires_unmodified_complete_loader_bytes() {
         }
         let result = initialized(raised(body), &Module { records, ..found.clone() }, None).unwrap();
         assert!(!result.initial.iter().any(|(one, _)| *one == reference), "{change}");
+    }
+}
+
+/// FPDEEP kept CLNG(q*1024) because PRINT invalidated the unrelated numeric literal.
+#[test]
+fn test_fpdeep_mix_outputs_fold_across_string_prints() {
+    for tag in ["q-O"] {
+        let data = testing::data(format!("fixtures/omf/fpdeep-{tag}.obj").to_lowercase());
+        let (result, states) = testing::emitted_mir(&data, "mir-widen", "");
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}: {}", result.reason);
+        let printed: std::collections::BTreeSet<_> = states
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.ops)
+            .filter(|op| op.kind == Kind::Arg)
+            .flat_map(|op| &op.args)
+            .filter_map(|arg| match arg {
+                Arg::Const(one) if one.width == 4 => Some(one.n.clone()),
+                _ => None,
+            })
+            .collect();
+        for n in [512, 768, 896] {
+            assert!(printed.contains(&BigInt::from(n)), "{tag}: {n}");
+        }
+        for body in &states {
+            let literal = body
+                .initial
+                .iter()
+                .find(|(_, value)| value.n == BigInt::from(0x4480_0000) && value.width == 4)
+                .map(|(one, _)| one.clone())
+                .unwrap();
+            assert!(
+                !body
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.ops)
+                    .any(|op| op.kind == Kind::Fmul && op.loads.iter().any(|one| one.addr == literal.addr)),
+                "{tag}"
+            );
+        }
     }
 }

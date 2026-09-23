@@ -276,9 +276,6 @@ pub fn framed(body: &MirBody) -> IndexMap<Value, BTreeSet<(i64, i64)>> {
 #[cfg(test)]
 mod tests {
     //! Port of tests/test_frame_escape.py.
-    //!
-    //! `test_renderer_exposes_temporary_string_not_counter_address` waits for
-    //! `mir.bodies` and the corpus loader.
 
     use super::*;
     use crate::model::ir::Operation;
@@ -322,5 +319,14 @@ mod tests {
         address.args = vec![Arg::Opaque(Opaque::new(None))];
         let result = analysed(&MirBody::new(8, vec![MirBlock::new(8, vec![], vec![address], vec![])]));
         assert_eq!(result.opaque_addresses, BTreeSet::from([8]));
+    }
+
+    #[test]
+    fn test_renderer_exposes_temporary_string_not_counter_address() {
+        let raised = crate::support::testing::raised("fixtures/regressions/qrender-d-surf-v-g3.obj");
+        let (_, body) = raised.values.iter().find(|(name, _)| name.ends_with(" LS_ANIMATE")).unwrap();
+        let result = analysed(body);
+        assert_eq!(result.exposed, BTreeSet::from([-32]));
+        assert!(result.opaque_addresses.is_empty());
     }
 }
