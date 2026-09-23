@@ -205,11 +205,7 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
 
 #[cfg(test)]
 mod tests {
-    //! Ports of `tests/test_cfg_merge.py`. Skipped (need frontend/wholeseg ports):
-    //! test_end_guards_have_no_return_edge_in_raised_control_flow,
-    //! test_udtrng_bounds_compare_explicit_values, test_udtrng_guards_constrain_subsequent_reads_of_slot,
-    //! test_only_established_terminal_contracts_remove_return_edges,
-    //! test_bools_constant_program_is_one_live_block, test_localp_keeps_termination_after_interleaved_procedure.
+    //! Ports of `tests/test_cfg_merge.py`.
     use std::rc::Rc;
     use super::merged;
     use crate::model::ir::Operation;
@@ -446,5 +442,109 @@ mod tests {
         op.kind = Kind::Nothing;
         op.stack = Some(0);
         assert!(super::_empty(&op));
+    }
+
+    fn udtrng() -> (Rc<crate::objectfile::module::Module>, Rc<MirBody>) {
+        use crate::support::testing;
+        let found = testing::module("fixtures/regressions/udtrng-p-g2.obj");
+        let body = testing::main_body(&found, &testing::blocks_of(&found));
+        (found, body)
+    }
+
+    /// UDTRNG's END arms falsely rejoined the guarded array accesses in MIR.
+    #[test]
+    fn test_end_guards_have_no_return_edge_in_raised_control_flow() {
+        let (found, body) = udtrng();
+        let ends = |block: &&MirBlock| {
+            block.ops.last().is_some_and(|last| found.calls.get(&last.at).map(String::as_str) == Some("B$CEND"))
+        };
+        let exits: Vec<&MirBlock> = body.blocks.iter().filter(ends).collect();
+        assert_eq!(exits.len(), 2);
+        assert!(exits.iter().all(|block| block.succ.is_empty()));
+        let parents = |at: i64| {
+            body.blocks.iter().filter(|block| block.succ.contains(&at)).map(|block| block.at).collect::<Vec<_>>()
+        };
+        assert_eq!((parents(0x60), parents(0x6c)), (vec![0x30], vec![0x60]));
+    }
+
+    /// UDTRNG's bounds guards hid their read inside CMP, leaving range analysis no SSA value to constrain.
+    #[test]
+    fn test_udtrng_bounds_compare_explicit_values() {
+        let (_, body) = udtrng();
+        let guards: Vec<Op> = crate::support::testing::ops(&body)
+            .into_iter()
+            .filter(|op| [0x54, 0x60].contains(&op.at) && op.op == Some(OpCode::Operation(Operation::Compare)))
+            .collect();
+        assert_eq!(guards.len(), 2);
+        assert!(guards.iter().all(|op| op.loads.is_empty() && matches!(op.args[0], Arg::Held(_))));
+    }
+
+    /// UDTRNG lost both slot bounds when the next statement reloaded the same cell.
+    #[test]
+    fn test_udtrng_guards_constrain_subsequent_reads_of_slot() {
+        use crate::analysis::ranges::Interval;
+        use crate::frontend::arrayfacts::{_edge, _read, _transfer, Fact, State};
+        let (_, body) = udtrng();
+        let block = |at: i64| body.block(at).unwrap();
+        let (state, _) = _transfer(block(0x30), &State::default(), false);
+        let state = _edge(&state, block(0x30), 0x60).unwrap();
+        let (state, _) = _transfer(block(0x60), &state, false);
+        let state = _edge(&state, block(0x60), 0x6c).unwrap();
+        let cell = &block(0x6c).ops[0].args[0];
+        let expected = Interval { low: 0.into(), high: 2.into(), width: 2 };
+        assert_eq!(_read(cell, &state), Some(Fact::Interval(expected)));
+    }
+
+    /// An unknown or returning END-shaped call must not erase a reachable path.
+    #[test]
+    fn test_only_established_terminal_contracts_remove_return_edges() {
+        use crate::abi::runtime::{self, Control};
+        use crate::support::testing;
+        let found = testing::module("fixtures/regressions/udtrng-p-g2.obj");
+        let mapped = crate::frontend::blocks::code_map(&found).unwrap();
+        let contracts = runtime::for_module(&found, None).unwrap();
+        let original: Vec<_> = crate::frontend::blocks::partition(&found, &mapped)
+            .into_iter()
+            .filter(|block| {
+                let last = block.insns.last().map(|insn| insn.at as i64);
+                last.and_then(|at| found.calls.get(&at)).map(String::as_str) == Some("B$CEND")
+            })
+            .collect();
+        assert!(!original.is_empty());
+        for (known, terminal) in [(false, true), (true, false)] {
+            let mut changed = contracts.clone();
+            for contract in changed.values_mut() {
+                contract.established = known;
+                contract.control = if terminal { Control::Never } else { Control::Returns };
+            }
+            let kept = crate::frontend::raising_control::terminal_edges(original.clone(), &changed);
+            assert_eq!(kept, original, "known={known} terminal={terminal}");
+        }
+    }
+
+    /// BOOLS still split four constant stores and PRINT across four live blocks.
+    #[test]
+    fn test_bools_constant_program_is_one_live_block() {
+        use crate::support::testing;
+        for tag in ["q-o", "p-g2", "v-g3"] {
+            let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/omf/bools-{tag}.obj")));
+            assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
+            assert_eq!(states.last().unwrap().2.blocks.len(), 1, "{tag}");
+        }
+    }
+
+    /// LOCALP printed 28/DONE in BC but nothing after optimization lost main's exit.
+    #[test]
+    fn test_localp_keeps_termination_after_interleaved_procedure() {
+        use crate::support::testing;
+        for tag in ["q-o", "p-g2", "v-g3"] {
+            let result = testing::emitted_lir(format!("fixtures/regressions/localp-{tag}.obj"));
+            let found = testing::loaded_bytes(&result.data).unwrap();
+            let mapped = crate::frontend::blocks::code_map(&found).unwrap();
+            let terminals: Vec<i64> =
+                found.calls.iter().filter(|(_, name)| name.as_str() == "B$CENP").map(|(at, _)| *at).collect();
+            let [terminal] = <[i64; 1]>::try_from(terminals).unwrap();
+            assert!(mapped.starts.contains(&(terminal as usize)), "{tag}");
+        }
     }
 }
