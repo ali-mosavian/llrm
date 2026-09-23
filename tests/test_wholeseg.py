@@ -45,7 +45,7 @@ def test_split_edges_do_not_create_phantom_padding(tag) -> None:
     """
     from qbopt.frontend.blocks import code_map
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
@@ -263,7 +263,7 @@ def test_a_rewritten_operation_still_has_machine_operands(stem: str) -> None:
     the missing _located step in itself. The whole-segment path calls
     current directly and got MIR operands.
     """
-    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    raw = (Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()
     assert wholeseg.rebuilt(raw)[1] == wholeseg.REBUILT
 
 
@@ -303,7 +303,7 @@ def test_an_operation_a_pass_rewrote_keeps_its_relocation(stem: str) -> None:
     lower.semantics, which answers in MIR's own operands. A mir.MemRef is
     not an ir.Mem, so the answer was no, and the fixup naming `t` went.
     """
-    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    raw = (Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()
     out, why = wholeseg.rebuilt(raw, only="drop_loads")
     assert why == wholeseg.REBUILT
     assert not _unrelocated(raw), "the fixture itself has one"
@@ -411,7 +411,7 @@ def test_a_refusal_says_so_rather_than_looking_like_a_rebuild() -> None:
 def test_rebuilt_still_answers_exactly_what_it_used_to(stem: str) -> None:
     """Every caller reads (bytes, why); the outcome is beside that, not
     instead of it."""
-    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    raw = (Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()
     out, why = wholeseg.rebuilt(raw)
     got = wholeseg.emitted(raw)
     assert (out, why) == (got.data, got.reason)
@@ -526,7 +526,7 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
     from qbopt.frontend.blocks import code_map
 
     got = wholeseg.emitted(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.fallback_reason}"
+    assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.reason}"
     after = module.of(omf.parse(got.data))
     entry = min(one.at for block in split.partition(after, code_map(after)) for one in block.insns)
     written = {

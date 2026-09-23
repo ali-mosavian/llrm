@@ -197,7 +197,7 @@ def test_direct_mir_default_has_a_bounded_complete_peel_budget(monkeypatch: pyte
     """
     observed = []
 
-    def recording(body, where, *, optimize, tried, watch=None):
+    def recording(body, where, *, watch=None):
         observed.append((where.options.max_unroll_iterations, where.options.max_unrolled_operations))
         return body
 
@@ -480,7 +480,7 @@ def test_every_frontend_optimizes_with_the_options_it_was_given(
     basic.write_text("DEFINT A-Z\nFOR i = 1 TO 5\n  t = t + i\nNEXT i\nPRINT t\n")
     qb_compile.object_bytes(qb_driver.parsed(basic), basic.name, options=size)
     frontend = "modern"
-    modern = modern_driver.parsed(root / "frontends/modern/fixtures/sum_three.mod")
+    modern = modern_driver.parsed(root / "fixtures/modern/sum_three.mod")
     masm.text(modern_compile.assembled(modern, entry="main", options=size))
 
     assert seen == {"c": {"Os"}, "qb": {"Os"}, "modern": {"Os"}}

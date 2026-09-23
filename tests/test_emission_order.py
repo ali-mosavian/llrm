@@ -43,7 +43,7 @@ def test_removed_floating_loop_is_emitted_in_execution_order():
     from qbopt import wholeseg
 
     for tag in ("p-g2", "q-O", "v-g3"):
-        result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+        result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj".lower()).read_bytes())
         assert result.outcome is wholeseg.Emission.LIR, result.reason
         assert not any(
             one.insn.mnemonic == Mnemonic.JMP for block in corpus.partitioned(result.data) for one in block.insns

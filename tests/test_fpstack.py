@@ -18,7 +18,7 @@ def inspect_before_float_ssa(monkeypatch):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_store_reads_product_not_original_load(tag):
     """FPCSE's (a+b)*c was reported as the original a because arithmetic minted no value."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     chain = next(block.ops for block in body.blocks if any(op.kind is mir.Kind.FMUL for op in block.ops))
     chain = [op for op in chain if op.stack is not None][:4]

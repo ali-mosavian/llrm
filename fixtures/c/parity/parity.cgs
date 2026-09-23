@@ -1,0 +1,136 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=4 align=1
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/parity.c"
+- DBSrcCue f1 6 1
+SYM y1 name="parity_kernel" base="parity_kernel" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_4
+l2 CGLastParm
+t3 CGTemp TY_INT_4
+TYPE T26 size=32 align=1
+SYM y2 name="points" base="points" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y2 T26
+SYM y3 name="total" base="total" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 TY_INT_4
+SYM y4 name="index" base="index" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INT_2
+l4 BENewLabel
+l5 BENewLabel
+l6 BENewLabel
+l7 BENewLabel
+- DBSrcCue f1 12 1
+n8 CGFEName y3 TY_INT_4
+n9 CGInteger 17 TY_INTEGER
+n10 CGAssign n8 n9 TY_INT_4
+- CGDone n10
+- DBSrcCue f1 13 1
+n11 CGFEName y4 TY_INT_2
+n12 CGInteger 0 TY_INTEGER
+n13 CGAssign n11 n12 TY_INT_2
+- CGDone n13
+- CGControl O_LABEL n0 l4
+n14 CGFEName y4 TY_INT_2
+n15 CGUnary O_POINTS n14 TY_INT_2
+n16 CGInteger 8 TY_INTEGER
+n17 CGCompare O_LT n15 n16 TY_INTEGER
+- CGControl O_IF_FALSE n17 l5
+- DBSrcCue f1 14 1
+n18 CGFEName y2 T26
+n19 CGFEName y4 TY_INT_2
+n20 CGUnary O_POINTS n19 TY_INT_2
+n21 CGInteger 4 TY_INTEGER
+n22 CGBinary O_TIMES n20 n21 TY_INTEGER
+n23 CGBinary O_PLUS n18 n22 TY_POINTER
+n24 CGInteger 0 TY_UNSIGNED
+n25 CGBinary O_PLUS n23 n24 TY_POINTER
+n26 CGFEName y4 TY_INT_2
+n27 CGUnary O_POINTS n26 TY_INT_2
+n28 CGInteger 3 TY_INTEGER
+n29 CGBinary O_TIMES n27 n28 TY_INTEGER
+n30 CGInteger 1 TY_INTEGER
+n31 CGBinary O_PLUS n29 n30 TY_INTEGER
+n32 CGAssign n25 n31 TY_INT_2
+- CGDone n32
+- DBSrcCue f1 15 1
+n33 CGFEName y2 T26
+n34 CGFEName y4 TY_INT_2
+n35 CGUnary O_POINTS n34 TY_INT_2
+n36 CGInteger 4 TY_INTEGER
+n37 CGBinary O_TIMES n35 n36 TY_INTEGER
+n38 CGBinary O_PLUS n33 n37 TY_POINTER
+n39 CGInteger 2 TY_UNSIGNED
+n40 CGBinary O_PLUS n38 n39 TY_POINTER
+n41 CGInteger 29 TY_INTEGER
+n42 CGFEName y4 TY_INT_2
+n43 CGUnary O_POINTS n42 TY_INT_2
+n44 CGInteger 2 TY_INTEGER
+n45 CGBinary O_TIMES n43 n44 TY_INTEGER
+n46 CGBinary O_MINUS n41 n45 TY_INTEGER
+n47 CGAssign n40 n46 TY_INT_2
+- CGDone n47
+- DBSrcCue f1 16 1
+n48 CGFEName y4 TY_INT_2
+n49 CGInteger 1 TY_INTEGER
+n50 CGPreGets O_PLUS n48 n49 TY_INT_2
+- CGDone n50
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 17 1
+n51 CGFEName y4 TY_INT_2
+n52 CGInteger 0 TY_INTEGER
+n53 CGAssign n51 n52 TY_INT_2
+- CGDone n53
+- CGControl O_LABEL n0 l6
+n54 CGFEName y4 TY_INT_2
+n55 CGUnary O_POINTS n54 TY_INT_2
+n56 CGInteger 8 TY_INTEGER
+n57 CGCompare O_LT n55 n56 TY_INTEGER
+- CGControl O_IF_FALSE n57 l7
+- DBSrcCue f1 18 1
+n58 CGFEName y3 TY_INT_4
+n59 CGFEName y2 T26
+n60 CGFEName y4 TY_INT_2
+n61 CGUnary O_POINTS n60 TY_INT_2
+n62 CGInteger 4 TY_INTEGER
+n63 CGBinary O_TIMES n61 n62 TY_INTEGER
+n64 CGBinary O_PLUS n59 n63 TY_POINTER
+n65 CGInteger 0 TY_UNSIGNED
+n66 CGBinary O_PLUS n64 n65 TY_POINTER
+n67 CGUnary O_POINTS n66 TY_INT_2
+n68 CGUnary O_CONVERT n67 TY_INT_4
+n69 CGFEName y2 T26
+n70 CGFEName y4 TY_INT_2
+n71 CGUnary O_POINTS n70 TY_INT_2
+n72 CGInteger 4 TY_INTEGER
+n73 CGBinary O_TIMES n71 n72 TY_INTEGER
+n74 CGBinary O_PLUS n69 n73 TY_POINTER
+n75 CGInteger 2 TY_UNSIGNED
+n76 CGBinary O_PLUS n74 n75 TY_POINTER
+n77 CGUnary O_POINTS n76 TY_INT_2
+n78 CGBinary O_TIMES n68 n77 TY_INT_4
+n79 CGPreGets O_PLUS n58 n78 TY_INT_4
+- CGDone n79
+n80 CGFEName y4 TY_INT_2
+n81 CGInteger 1 TY_INTEGER
+n82 CGPreGets O_PLUS n80 n81 TY_INT_2
+- CGDone n82
+- CGControl O_GOTO n0 l6
+- CGControl O_LABEL n0 l7
+- DBSrcCue f1 19 1
+n83 CGFEName y3 TY_INT_4
+n84 CGUnary O_POINTS n83 TY_INT_4
+n85 CGUnary O_CONVERT n84 TY_INT_4
+n86 CGTempName t3 TY_INT_4
+n87 CGAssign n86 n85 TY_INT_4
+- CGDone n87
+- DBSrcCue f1 20 1
+n88 CGTempName t3 TY_INT_4
+n89 CGUnary O_POINTS n88 TY_INT_4
+- CGReturn n89 TY_INT_4
+STOP
+FINI

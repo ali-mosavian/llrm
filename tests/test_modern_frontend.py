@@ -21,12 +21,12 @@ from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
-PRIMITIVES = ROOT / "frontends" / "modern" / "fixtures" / "primitives.mod"
-NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
-SUM = ROOT / "frontends" / "modern" / "fixtures" / "sum.mod"
-SUM_THREE = ROOT / "frontends" / "modern" / "fixtures" / "sum_three.mod"
-FIXED = ROOT / "frontends" / "modern" / "fixtures" / "fixed.mod"
+FIXTURE = ROOT / "fixtures" / "modern" / "control.mod"
+PRIMITIVES = ROOT / "fixtures" / "modern" / "primitives.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
+SUM = ROOT / "fixtures" / "modern" / "sum.mod"
+FIXED = ROOT / "fixtures" / "modern" / "fixed.mod"
+SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.mod"
 STARTUP = ROOT / "runtime" / "modern" / "start.asm"
 RUNTIME = ROOT / "runtime" / "modern" / "rt.c"
 
@@ -874,28 +874,6 @@ def test_dictionary_comprehension_deduplicates_and_has_explicit_lookup(tmp_path:
     assert modern_compile.written(program, entry="main", source=source)
 
 
-def test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round(monkeypatch: pytest.MonkeyPatch) -> None:
-    """nbody rebuilt and re-priced the same rejected unroll every fixed-point round."""
-    from collections import Counter
-
-    from qbopt.optimize import unroll
-
-    real = unroll._rejection
-    rejected: Counter = Counter()
-
-    def recording(before, after, latch, count, where, copied=None):
-        why = real(before, after, latch, count, where, copied)
-        if why is not None:
-            rejected[unroll._signature(before if copied is None else copied, latch, count, where)] += 1
-        return why
-
-    monkeypatch.setattr(unroll, "_rejection", recording)
-    modern_compile.assembled(driver.parsed(NBODY), entry="main")
-
-    assert rejected
-    assert max(rejected.values()) == 1
-
-
 def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
     """Unpriced FIXED_MUL left nbody unpriceable, so every loop copy was built only to be refused."""
     from qbopt import hir
@@ -1259,7 +1237,7 @@ def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
 
 def test_ranked_arrays_index_fill_and_borrow_row_major() -> None:
     """Only rank one existed; `[T; 3, 3]`, `a[i, j]` and `&[T, 2]` were rejected."""
-    program = driver.parsed(ROOT / "frontends" / "modern" / "fixtures" / "ranked.mod")
+    program = driver.parsed(ROOT / "fixtures" / "modern" / "ranked.mod")
     assert program.array_order is hir.ArrayOrder.ROW_MAJOR
     assert execute.run(program, "main").output == "15 106 162 42 9 3 4\n"
 

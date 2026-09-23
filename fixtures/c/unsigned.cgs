@@ -1,0 +1,70 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/fixtures/c/unsigned.c"
+- DBSrcCue f1 3 1
+SYM y1 name="unsigned_divide" base="unsigned_divide" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_UINT_4
+SYM y2 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_UINT_2
+SYM y3 name="divisor" base="divisor" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_UINT_4
+l2 CGLastParm
+t3 CGTemp TY_UINT_4
+- DBSrcCue f1 5 1
+n4 CGFEName y2 TY_UINT_2
+n5 CGUnary O_POINTS n4 TY_UINT_2
+n6 CGUnary O_CONVERT n5 TY_UINT_4
+n7 CGFEName y3 TY_UINT_4
+n8 CGUnary O_POINTS n7 TY_UINT_4
+n9 CGBinary O_DIV n6 n8 TY_UINT_4
+n10 CGUnary O_CONVERT n9 TY_UINT_4
+n11 CGTempName t3 TY_UINT_4
+n12 CGAssign n11 n10 TY_UINT_4
+- CGDone n12
+- DBSrcCue f1 6 1
+n13 CGTempName t3 TY_UINT_4
+n14 CGUnary O_POINTS n13 TY_UINT_4
+- CGReturn n14 TY_UINT_4
+- DBSrcCue f1 8 1
+SYM y4 name="unsigned_less" base="unsigned_less" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y4 TY_UINT_2
+SYM y5 name="left" base="left" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_UINT_2
+SYM y6 name="right" base="right" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_UINT_2
+l15 CGLastParm
+t16 CGTemp TY_UINT_2
+l17 BENewLabel
+l18 BENewLabel
+- DBSrcCue f1 10 1
+n19 CGFEName y5 TY_UINT_2
+n20 CGUnary O_POINTS n19 TY_UINT_2
+n21 CGFEName y6 TY_UINT_2
+n22 CGUnary O_POINTS n21 TY_UINT_2
+n23 CGCompare O_LT n20 n22 TY_UNSIGNED
+- CGControl O_IF_FALSE n23 l17
+- DBSrcCue f1 11 1
+n24 CGInteger 1 TY_UINT_2
+n25 CGTempName t16 TY_UINT_2
+n26 CGAssign n25 n24 TY_UINT_2
+- CGDone n26
+- CGControl O_GOTO n0 l18
+- CGControl O_LABEL n0 l17
+- DBSrcCue f1 12 1
+n27 CGInteger 0 TY_UINT_2
+n28 CGTempName t16 TY_UINT_2
+n29 CGAssign n28 n27 TY_UINT_2
+- CGDone n29
+- DBSrcCue f1 13 1
+- CGControl O_LABEL n0 l18
+n30 CGTempName t16 TY_UINT_2
+n31 CGUnary O_POINTS n30 TY_UINT_2
+- CGReturn n31 TY_UINT_2
+STOP
+FINI

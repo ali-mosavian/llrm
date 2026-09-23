@@ -796,7 +796,7 @@ def _frame_loads(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Mem]
     use.  That is enough for CSE'd selector reloads while making no claim about
     arbitrary load rematerialization.
     """
-    pinned = {getattr(value, "id", value): register for value, register in body.pins.items()}
+    pinned = body.pins
     candidates = {value for value in values if pinned.get(value) in target.SEGMENTS}
     if not candidates:
         return {}

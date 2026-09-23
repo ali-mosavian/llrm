@@ -105,7 +105,7 @@ Module {
                     Literal(
                         Integer(
                             100000,
-                            Integer,
+                            Long,
                         ),
                         Span {
                             line: 10,
@@ -180,7 +180,7 @@ Module {
                     right: Literal(
                         Integer(
                             100023,
-                            Integer,
+                            Long,
                         ),
                         Span {
                             line: 12,
@@ -301,6 +301,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 2,
                 start: 8,
@@ -361,6 +362,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 3,
                 start: 8,
@@ -442,6 +444,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 19,
                 start: 0,
@@ -542,6 +545,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 23,
                 start: 0,

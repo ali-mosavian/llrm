@@ -604,10 +604,11 @@ def assembled(
         )
         if watch is not None:
             watch("lir-lower", raised.name, low)
+        _write(dump, f"passes/{raised.name}.lir-lower", _lir_text(raised.name, low))
         lirs.append(_lir_text(raised.name, low))
         frame = frames.of(low, legalized.calls)
         in_ssa = True
-        for number, phase in enumerate(flow.machine(flow._pinned(low), frame, legalized.calls, cpu=target)):
+        for number, phase in enumerate(flow.machine(low.pins, frame, legalized.calls, cpu=target)):
             if not isinstance(phase, prologue.Prologue):
                 if isinstance(phase, phielim.PhiElimination):
                     in_ssa = False

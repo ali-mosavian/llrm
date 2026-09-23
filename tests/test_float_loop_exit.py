@@ -33,7 +33,7 @@ def test_emitted_final_answer_has_the_correct_symbol(tag):
     """FPCSE seeds 438.75 and retains the strict final iteration to reach 487.5."""
     from qbopt import wholeseg
 
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     accumulator = next(
@@ -63,7 +63,7 @@ def test_exact_loop_retains_checkpoint_and_final_iteration(tag):
     """FPCSE computes 487.5, but previously repeated its exact FP body ten times."""
     from qbopt.optimize import floatloop
 
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     latch = body.block(next(iter(loops.loops(body.blocks, body.entry)[0].latches)))

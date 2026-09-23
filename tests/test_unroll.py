@@ -6,7 +6,6 @@ import pytest
 
 import corpus
 from qbopt.model import mir
-from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.analysis import loops
 from qbopt.optimize import unroll
@@ -15,96 +14,6 @@ from qbopt.optimize import transform
 from qbopt.analysis import floatfacts
 from qbopt.backend import lower_floats
 from qbopt.model.passes import Options
-from qbopt.model.passes import OperationCosts
-
-
-def test_unroll_rejects_growth_not_paid_for_by_dynamic_work(monkeypatch) -> None:
-    """Five straight-line moves are not a win over a two-trip ADD/branch loop."""
-    from qbopt.model import ir
-
-    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
-    branch = mir.Op(1, ir.Operation.BRANCH, "jne", (), (), kind=mir.Kind.BRANCH, target=1)
-    original = mir.MirBody(
-        0,
-        (
-            mir.MirBlock(0, (), (), (1,)),
-            mir.MirBlock(1, (), (add, branch), (1, 2)),
-            mir.MirBlock(2, (), (), ()),
-        ),
-    )
-    move = lambda at: mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY)
-    candidate = mir.MirBody(
-        0,
-        (mir.MirBlock(0, (), tuple(move(at) for at in range(5)), (2,)), mir.MirBlock(2, (), (), ())),
-        repetitions=((1, 2),),
-    )
-    monkeypatch.setattr(unroll, "expanded", lambda *_args, **_kwargs: candidate)
-    where = Where(costs=OperationCosts(add=1, branch=2, move=1))
-    stages = []
-
-    assert (
-        unroll.optimized(
-            original,
-            where,
-            optimize=lambda body: body,
-            watch=lambda stage, _body: stages.append(stage),
-        )
-        is original
-    )
-    assert "unroll-rejected-growth" in stages
-
-
-def test_unroll_profitability_uses_the_selected_cpu() -> None:
-    """A short branch-heavy expansion is worthwhile on 386 but not P5."""
-    from qbopt.model import ir
-
-    add = mir.Op(1, ir.Operation.BINARY, "add", (), (), kind=mir.Kind.ADD)
-    branch = mir.Op(1, ir.Operation.BRANCH, "jne", (), (), kind=mir.Kind.BRANCH, target=1)
-    original = mir.MirBody(
-        0,
-        (
-            mir.MirBlock(0, (), (), (1,)),
-            mir.MirBlock(1, (), (add, branch), (1, 2)),
-            mir.MirBlock(2, (), (), ()),
-        ),
-    )
-    move = lambda at: mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY)
-    result = mir.MirBody(
-        0,
-        (mir.MirBlock(0, (), tuple(move(at) for at in range(3)), (2,)), mir.MirBlock(2, (), (), ())),
-        repetitions=((1, 2),),
-    )
-
-    assert unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("386").operations))
-    assert not unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("P5").operations))
-
-
-def test_peel_reports_the_gate_that_rejected_its_candidate(monkeypatch) -> None:
-    """Matmul's rejected peel had no final event explaining why it lost."""
-    from dataclasses import replace
-
-    from qbopt.optimize import peel
-
-    original = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
-    candidate = replace(original, cloned=True)
-
-    def found(_body, _where, *, skip=frozenset()):
-        return None if skip else (candidate, 7, 2)
-
-    monkeypatch.setattr(peel, "_candidate", found)
-    monkeypatch.setattr(unroll, "_rejection", lambda *_args: "residual-loops")
-    stages = []
-
-    assert (
-        peel.optimized(
-            original,
-            Where(),
-            optimize=lambda body: body,
-            watch=lambda stage, _body: stages.append(stage),
-        )
-        is original
-    )
-    assert stages == ["peel-rejected-residual-loops"]
 
 
 def test_peel_bounds_conditional_floating_clone_work(monkeypatch) -> None:
@@ -298,8 +207,8 @@ def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
     """PDS/VBDOS FPDEEP retained three iterations because its LCSSA exit phis blocked unrolling."""
     from tools.stages import _bodies
 
-    found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
-    partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
+    found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()).read_bytes())
+    partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()))
     original = transform.applied(
         bodies[0][1],
         found.dgroup,

@@ -216,7 +216,7 @@ an `Op.ALUI` case in `_pair_step()`/`instruction()`. The reconstruction is
 post-sign-extension value for the imm8 form, so the mask alone is correct
 across all three encodings -- verified against 3500 synthetic half-pairs, not
 just the two worked examples above) combined as `to_signed((high<<16)|(low &
-0xFFFF), 4)`. Opus's design review (before implementation, per AGENTS.md's
+0xFFFF), 4)`. Opus's design review (before implementation, per agents.md's
 Method section) caught three real defects in the first draft, all fixed
 before any code was written: (1) `classify()`'s own gate only checked
 `code in IMM_FAMILY`, which is the LOW-half table alone -- the high half
@@ -229,7 +229,7 @@ encoding it directly. (3) `Op.ALUI` was missing from `computes()`'s own
 DIVERGENT-flags check -- an immediate ALU op sets flags exactly the way a
 memory-operand one does, and without this a widened `add eax,imm32` followed
 by a live `jz` would have silently taken the wrong branch, the exact class of
-bug AGENTS.md's own "What widening changes, exactly" section warns has been
+bug agents.md's own "What widening changes, exactly" section warns has been
 lost once already. The imm8-sign-extension-vs-imm16 reconstruction itself
 (the risk flagged before implementation) was independently re-derived by
 Opus against real iced_x86 output, not just re-read from this prose, and

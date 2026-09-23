@@ -208,7 +208,7 @@ def test_peeled_ivarm_emission_keeps_every_iteration_reachable(monkeypatch, tag)
         return changed
 
     monkeypatch.setattr(transform, "applied", candidate)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
@@ -493,7 +493,7 @@ def test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() -> None:
     from qbopt import wholeseg
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path("fixtures/omf/wendgo-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/wendgo-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
@@ -520,7 +520,7 @@ def test_a_jump_over_a_block_holding_a_phi_copy_is_kept() -> None:
     from qbopt import wholeseg
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path("fixtures/omf/rcflip-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/rcflip-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     insns = sorted(

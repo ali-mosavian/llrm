@@ -1,0 +1,33 @@
+//! Ports of `qbopt/optimize`.
+
+pub(crate) mod algebraic;
+pub(crate) mod canonical;
+pub(crate) mod counting;
+pub(crate) mod cfg;
+pub(crate) mod edges;
+pub(crate) mod exitsink;
+pub(crate) mod fill;
+pub(crate) mod floatloop;
+pub(crate) mod gvn;
+pub(crate) mod floatfold;
+pub(crate) mod indvars;
+pub(crate) mod inline;
+pub(crate) mod ivshare;
+pub(crate) mod lcssa;
+pub(crate) mod lcssamerges;
+pub(crate) mod loadjoins;
+pub(crate) mod loopclone;
+pub(crate) mod loopexit;
+pub(crate) mod loopmotion;
+pub(crate) mod loopsimplify;
+pub(crate) mod peel;
+pub(crate) mod pointeraccess;
+pub(crate) mod profit;
+pub(crate) mod promote;
+pub(crate) mod rotate;
+pub(crate) mod strength;
+pub(crate) mod transform;
+pub(crate) mod unroll;
+pub(crate) mod unswitch;
+pub(crate) mod wholephis;
+pub(crate) mod wholestores;

@@ -148,7 +148,7 @@ def test_real_diamond_emits_one_fewer_multiply(tag, program, monkeypatch):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module, omf
 
-    data = Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes()
+    data = Path(f"fixtures/regressions/{program}-{tag}.obj".lower()).read_bytes()
     with monkeypatch.context() as before:
         before.setattr(gvn, "joined", lambda body, **options: body)
         old = wholeseg.emitted(data)
@@ -175,7 +175,7 @@ def test_partial_redundancy_path_skips_the_other_paths_multiply(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module, omf
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/gvnpre-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/gvnpre-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)

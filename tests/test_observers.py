@@ -195,7 +195,7 @@ def test_a_long_handed_to_a_sub_keeps_both_halves_stored(tag) -> None:
     from iced_x86 import Mnemonic
     from iced_x86 import OpKind
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/procs-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/procs-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     stores = [
         one.insn for block in corpus.partitioned(result.data) for one in block.insns

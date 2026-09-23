@@ -118,7 +118,7 @@ def test_qb_driver_never_replays_a_stale_in_tree_release_binary(monkeypatch: pyt
 @pytest.mark.full
 def test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() -> None:
     """Q45N01 stopped at READ, then a native-only spill frame made READ report syntax error."""
-    source = ROOT / "frontends/qb/compat/qb45/Q45N01.BAS"
+    source = ROOT / "frontends/qb/compat/qb45/q45n01.bas"
     program = qb_driver.parsed(source, dialect="qb45", runtime="qb45")
     main = program.modules[0].functions[0]
     calls = [
@@ -453,6 +453,45 @@ def test_hir_lowers_typed_array_index_to_whole_offset_arithmetic() -> None:
     lir = lower_mir.lowered(lowered.name, lowered.body, {}, set(), {}, occurrences={})
     assert lir.name == "array.lookup"
     assert any(insn.what is not None for insn in lir.insns)
+
+
+def _region(written: int) -> hir.Program:
+    """`$zero` holds `low` and `high`; `pieces(at)` stores `written` to `$zero[at]` and returns `high`."""
+    void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
+    word = hir.Type(1, "word", hir.TypeKind.INTEGER, 2, signed=False)
+    words = hir.Type(2, "words", hir.TypeKind.ARRAY, 8, element=1, rank=1, bounds=((0, 3),))
+    region = hir.Place(1, "$zero", 2, hir.Storage.LOCAL, -8, extent=8)
+    low = hir.Place(2, "low", 1, hir.Storage.LOCAL, -8, extent=2)
+    high = hir.Place(3, "high", 1, hir.Storage.LOCAL, -4, extent=2)
+    block = hir.Block(
+        1,
+        (
+            hir.Instruction(1, hir.Op.STORE, (), (hir.ArrayElement(1, (hir.ValueRef(1),)), hir.Constant(1, written))),
+            hir.Instruction(2, hir.Op.STORE, (), (hir.PlaceRef(2), hir.Constant(1, 5))),
+            hir.Instruction(3, hir.Op.LOAD, (2,), (hir.PlaceRef(3),)),
+        ),
+        hir.Terminator(hir.TerminatorKind.RETURN, (hir.ValueRef(2),)),
+    )
+    values = (hir.Value(1, 1), hir.Value(2, 1))
+    function = hir.Function(1, "pieces", 1, values, (region, low, high), (block,), 1, parameters=(1,))
+    module = hir.Module(1, "frame", (void, word, words), (function,))
+    return hir.Program(hir.Dialect.VBDOS, hir.RuntimeProfile.VBDOS, (module,))
+
+
+def test_a_frame_region_aliases_the_places_it_holds_which_stay_apart() -> None:
+    """A region lowered as its own object, so the fill zeroing it reached none of the arrays in it."""
+    (lowered,) = hir.lower(_region(0))
+    region, low, high = (
+        reference for op in lowered.body.blocks[0].ops for reference in (*op.stores, *op.loads) if reference.provenance
+    )
+    assert region.provenance.intersects(low.provenance)
+    assert region.provenance.intersects(high.provenance)
+    assert not low.provenance.intersects(high.provenance)
+
+
+def test_execution_shares_the_bytes_of_overlapping_frame_places() -> None:
+    """Each place had its own bytes, so a store through a region never reached its members."""
+    assert hir.execute.run(_region(9), "pieces", (2,)).value == 9
 
 
 def test_hir_lowering_honors_qb_multidimensional_array_order(tmp_path: Path) -> None:
@@ -796,7 +835,7 @@ def test_source_procedure_names_match_all_three_microsoft_omf_dialects() -> None
         "procs-p-ot.obj",
         "procs-v-g3-zi.obj",
     ):
-        records = omf.read(ROOT / "fixtures/omf" / fixture)
+        records = omf.read(ROOT / "fixtures/omf" / fixture.lower())
         assert set(omf.public_definitions(records)) == expected
         assert expected <= set(omf.externals(records))
 
@@ -978,7 +1017,7 @@ def test_fresh_basic_object_does_not_predeclare_the_c_data_class() -> None:
 def test_pds_alternate_math_module_header_records_the_measured_switch() -> None:
     """PDFPA reached LINK, then BCL71ANR rejected the module during initialization."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDFPA.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdfpa.bas",
         dialect="pds71",
         runtime="pds71",
         alternate_math=True,
@@ -1154,7 +1193,7 @@ def test_runtime_frame_counts_owned_string_descriptors_not_runtime_temporaries()
 
 def test_source_call_releases_its_materialized_string_argument() -> None:
     """Nibbles left three Center arguments live until loop i became 0x2020."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/STRTEMP.BAS", runtime="qb45")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/strtemp.bas", runtime="qb45")
     main = source.modules[0].functions[0]
     calls = [
         instruction.callee
@@ -1169,7 +1208,7 @@ def test_source_call_releases_its_materialized_string_argument() -> None:
 
 def test_far_array_field_byref_uses_a_near_copy_in_copy_out_slot() -> None:
     """Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP corrupted."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FARBYREF.BAS", runtime="qb45")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/farbyref.bas", runtime="qb45")
     module = source.modules[0]
     function = next(one for one in module.functions if one.name == "WORK")
     types = {one.id: one for one in module.types}
@@ -1296,7 +1335,7 @@ end function
 def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() -> None:
     """Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was source-ordered."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45A05.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45a05.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1314,7 +1353,7 @@ def test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() ->
 
 def test_static_array_formal_uses_a_lower_bound_adjusted_descriptor() -> None:
     """DYNARR wrote a(2).row, leaving a(1).row at zero after Touch a()."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/ADJUDT.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/adjudt.bas")
     module = source.modules[0]
     main = module.functions[0]
     values = next(one for one in main.places if one.name == "A")
@@ -1610,7 +1649,7 @@ def test_on_error_registrations_follow_source_order(tmp_path: Path) -> None:
 def test_resume_next_retains_runtime_statement_entries() -> None:
     """Q45R35's post-ERROR statement vanished, leaving RESUME NEXT with no target."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45R35.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45r35.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1638,7 +1677,7 @@ def test_resume_statement_entries_are_optimizer_roots() -> None:
     and 0x36 instead of emitting an object for the bounds-error test.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45ER52.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45er52.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1740,6 +1779,17 @@ def test_constant_screen_mode_pulls_its_graphics_driver(tmp_path: Path) -> None:
     assert "B$EGAUSED" in omf.externals(records)
 
 
+def test_a_qb45_screen_mode_keeps_its_driver_request(tmp_path: Path) -> None:
+    """qbdemo's SCREEN 13 raised "Illegal function call" under QB45: nothing
+    references B$VGAUSED, so the OBJ writer pruned the EXTDEF that links it."""
+    basic = tmp_path / "SCN13.BAS"
+    basic.write_bytes(b"screen 13\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+
+    records = omf.parse(qb_compile.object_bytes(source, "SCN13.BAS"))
+    assert "B$VGAUSED" in omf.externals(records)
+
+
 def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None:
     """Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame."""
     basic = tmp_path / "SCNVAR.BAS"
@@ -1751,11 +1801,12 @@ def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None
 
 
 def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
-    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot."""
+    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
+    Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`."""
     basic = tmp_path / "NESTDIV.BAS"
     basic.write_bytes(
-        b"declare function scale (maxCol)\r\n"
         b"defint a-z\r\n"
+        b"declare function scale (maxCol)\r\n"
         b"print scale(80)\r\n"
         b"end\r\n"
         b"function scale (maxCol)\r\n"
@@ -1770,6 +1821,41 @@ def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
     assert "mov eax, 30\n" in scale
     assert scale.count("idiv e") == 2
     assert "idiv ax" not in scale
+
+
+def test_a_float_compare_status_word_does_not_overwrite_a_live_ax(tmp_path: Path) -> None:
+    """-2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`."""
+    basic = tmp_path / "POWSIGN.BAS"
+    basic.write_bytes(b"b! = -2\r\ne! = 3\r\nr! = b! ^ e!\r\nprint r!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    ax = re.compile(r"\b(e?ax|al|ah)\b")
+    for index, line in enumerate(lines):
+        if line != "fnstsw ax":
+            continue
+        for later in lines[index + 1 :]:
+            if later == "sahf" or later.startswith(("j", "L0_")):
+                continue
+            mnemonic, _, operands = later.partition(" ")
+            destination, _, sources = operands.partition(",")
+            assert not ax.search(sources) and not (ax.search(destination) and mnemonic not in ("mov", "fnstsw")), (
+                f"AX read after fnstsw: {later}"
+            )
+            if ax.search(destination):
+                break
+
+
+def test_a_statement_under_an_error_handler_keeps_its_code_contiguous(tmp_path: Path) -> None:
+    """RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
+    layout put the raise after B$CEND, outside its statement's code."""
+    basic = tmp_path / "POWRES.BAS"
+    basic.write_bytes(
+        b"on error goto h\r\nb! = -8: e! = .5\r\nfor i% = 1 to 2\r\nr! = b! ^ e!\r\nprint r!\r\nnext\r\nsystem\r\n"
+        b"h:\r\nresume next\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    calls = [line.split()[-1] for line in masm.text(qb_compile.assembled(source)).splitlines() if "call" in line]
+    assert calls.index("B$SERR") < calls.index("B$PER4"), calls
 
 
 def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
@@ -1808,7 +1894,7 @@ def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) 
 def test_runtime_frame_owns_spill_reservation_without_a_native_prefix() -> None:
     """Q45N01's native SUB SP shifted B$ENRA's documented frame fields by four bytes."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45N01.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45n01.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1849,7 +1935,7 @@ def test_local_error_and_resume_label_use_their_measured_procedure_abi() -> None
 def test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() -> None:
     """PDLOCAL reported ERL 0 and resumed at L1_9 instead of recovered L1_4."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDLOCAL.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdlocal.bas",
         dialect="pds71",
         runtime="pds71",
     )
@@ -1868,7 +1954,7 @@ def test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() -
 def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
     """PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and B$HARY was guessed inline."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/pds71/PDHUGE.BAS",
+        ROOT / "frontends/qb/compat/pds71/pdhuge.bas",
         dialect="pds71",
         runtime="pds71",
         array_order="row-major",
@@ -1895,7 +1981,7 @@ def test_pds_huge_array_uses_measured_ddim_and_hary_abi() -> None:
 def test_byref_call_keeps_the_temporary_values_it_publishes() -> None:
     """Q45P04 passed uninitialized slots after optimization deleted 100000 and 23."""
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45P04.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45p04.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -1916,7 +2002,7 @@ def test_unpublished_float_conversion_temporary_does_not_hold_the_x87_stack_acro
     retain neither that publication nor an x87 value after its exact store
     folds to bits.
     """
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/FSTKBR.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/fstkbr.bas")
     function = next(one for one in source.modules[0].functions if one.name == "PICK")
     semantic = hir.lower(source)[list(source.modules[0].functions).index(function)]
     physical = physicalize(source, function, semantic)
@@ -2038,7 +2124,7 @@ def test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate(
 def test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() -> None:
     """Q45FP61 reached OBJ emission with one unencodable eight-byte PUSH."""
     program = qb_driver.parsed(
-        ROOT / "frontends/qb/compat/qb45/Q45FP61.BAS",
+        ROOT / "frontends/qb/compat/qb45/q45fp61.bas",
         dialect="qb45",
         runtime="qb45",
     )
@@ -2469,7 +2555,7 @@ def test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() -> None:
 
 def test_qb_string_comparison_abi_site_survives_alias_annotation() -> None:
     """SCMPABI's B$SCMP ABI site was dropped because STRING_EQ is not Op.CALL."""
-    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/SCMPABI.BAS")
+    source = qb_driver.parsed(ROOT / "frontends/qb/fixtures/scmpabi.bas")
     function = next(one for one in source.modules[0].functions if one.name == "MATCHES")
     instruction = next(
         one for block in function.blocks for one in block.instructions if one.id == function.calls[0].instruction
@@ -2700,7 +2786,7 @@ def test_byref_loop_condition_reloads_the_published_pointee() -> None:
     and the back-edge condition must therefore remain observable loads.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/fixtures/BYREFLP.BAS",
+        ROOT / "frontends/qb/fixtures/byreflp.bas",
         dialect="vbdos",
         runtime="vbdos",
     )
@@ -2731,7 +2817,7 @@ def test_identity_phi_edge_survives_control_flow_threading() -> None:
     control-flow threading is complete.
     """
     source = qb_driver.parsed(
-        ROOT / "frontends/qb/fixtures/ENTPHI.BAS",
+        ROOT / "frontends/qb/fixtures/entphi.bas",
         dialect="vbdos",
         runtime="vbdos",
         array_order="row-major",
@@ -2859,3 +2945,119 @@ def test_unchecked_bounds_read_the_descriptor_without_runtime_calls() -> None:
 
     assert "B$LBND" not in procedure and "B$UBND" not in procedure
     assert re.search(r"word ptr \[\w+\+\w+\+16\]", procedure)
+
+
+def _function(source: Path, text: str, name: str, *, dialect: str = "vbdos") -> tuple[hir.Program, hir.Function]:
+    source.write_text(text)
+    program = qb_driver.parsed(source, dialect=dialect, runtime=dialect)
+    return program, next(one for one in program.modules[0].functions if one.name == name)
+
+
+def _value_exit(function: hir.Function) -> hir.Block:
+    return next(
+        block
+        for block in function.blocks
+        if block.terminator.kind is hir.TerminatorKind.RETURN and block.terminator.operands
+    )
+
+
+def test_an_unsuffixed_decimal_above_32767_is_a_long_literal(tmp_path: Path) -> None:
+    """Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended."""
+    program, function = _function(
+        tmp_path / "scale.bas",
+        "function qlightScale (word as integer) as long\nqlightScale = clng(word) * 1000000\nend function\n",
+        "QLIGHTSCALE",
+        dialect="qb45",
+    )
+    widths = {one.id: one.width for module in program.modules for one in module.types}
+    constants = [
+        operand
+        for block in function.blocks
+        for instruction in block.instructions
+        for operand in instruction.operands
+        if isinstance(operand, hir.Constant) and operand.value == 1000000
+    ]
+
+    assert constants and all(widths[one.type] == 4 for one in constants)
+
+
+def test_a_long_function_reloads_its_result_after_erasing_local_arrays(tmp_path: Path) -> None:
+    """Loading TOTAL before B$ERAS let the cleanup call clobber the returned value."""
+    _, function = _function(
+        tmp_path / "total.bas",
+        "function total as long\ndim cells(0 to 0) as integer\ntotal = 42\nend function\n",
+        "TOTAL",
+    )
+    result = next(one.id for one in function.places if one.name == "TOTAL")
+    exit_ = _value_exit(function)
+    calls = [one.callee for one in exit_.instructions]
+    loads = [
+        at
+        for at, one in enumerate(exit_.instructions)
+        if one.op is hir.Op.LOAD and one.operands == (hir.PlaceRef(result),)
+    ]
+
+    assert loads and calls.index("B$ERAS") < loads[-1]
+
+
+def test_a_string_function_copies_its_result_before_freeing_other_locals(tmp_path: Path) -> None:
+    """The scalar reload must not reorder STRING results: B$SCPF runs before B$STDL frees OTHER."""
+    _, function = _function(
+        tmp_path / "pick.bas",
+        'function pick as string\ndim other as string\nother = "kept"\npick = other\nend function\n',
+        "PICK",
+    )
+    exit_ = _value_exit(function)
+    calls = [one.callee for one in exit_.instructions]
+    copied = exit_.instructions[calls.index("B$SCPF")]
+
+    assert calls.index("B$SCPF") < calls.index("B$STDL")
+    assert exit_.terminator.operands == (hir.ValueRef(copied.results[0]),)
+
+
+def test_port_io_narrows_a_float_through_integer_and_prints_both_operands(tmp_path: Path) -> None:
+    """OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
+    listing printed `out dx` / `in al` without their second operand."""
+    basic = tmp_path / "PORTS.BAS"
+    basic.write_bytes(b"defint a-z\r\np = &H3C8: f! = 41.6\r\nout p, f!\r\npoke 0, f!\r\na = inp(p + 1)\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = {" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()}
+    assert {"out dx, al", "in al, dx"} <= lines, sorted(lines)
+    assert any(line.startswith("fistp word ptr") for line in lines), sorted(lines)
+
+
+def test_open_compiles_with_its_callee_cleaned_arguments(tmp_path: Path) -> None:
+    """oimad's OPEN was refused: B$OPEN had no audited stack effect (RETF 8)."""
+    basic = tmp_path / "OPENS.BAS"
+    basic.write_bytes(b'open "DATA.DAT" for binary as #1\r\nclose #1\r\n')
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$OPEN" in masm.text(qb_compile.assembled(source))
+
+
+def test_rnd_without_an_argument_compiles(tmp_path: Path) -> None:
+    """oimad's bare RND was refused: B$RND0 had no audited stack effect."""
+    basic = tmp_path / "RND0.BAS"
+    basic.write_bytes(b"x! = rnd\r\nprint x!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$RND0" in masm.text(qb_compile.assembled(source))
+
+
+def test_circle_pushes_one_radius(tmp_path: Path) -> None:
+    """oimad froze after a few hundred frames: CIRCLE pushed its radius twice,
+    four stack bytes B$CIRC never pops. QB45 circle.asm and the VBDOS /A
+    listing both take one parmD radius and one color word."""
+    basic = tmp_path / "CIRC.BAS"
+    basic.write_bytes(b"screen 13\r\nr! = 16\r\ncircle (10, 100), r!, 5\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    start = lines.index("call far ptr B$N1I2")
+    end = lines.index("call far ptr B$CIRC")
+    widths = {"pushd": 4, "pushw": 2}
+    pushed = 0
+    for line in lines[start + 1 : end]:
+        mnemonic, _, operand = line.partition(" ")
+        if mnemonic in widths:
+            pushed += widths[mnemonic]
+        elif mnemonic == "push":
+            pushed += 4 if operand.startswith(("dword", "e")) else 2
+    assert pushed == 6, lines[start:end + 1]

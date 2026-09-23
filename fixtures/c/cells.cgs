@@ -1,0 +1,64 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/fixtures/c/cells.c"
+- DBSrcCue f1 2 1
+SYM y1 name="fill_cells" base="fill_cells" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+TYPE T25 size=8 align=2
+SYM y3 name="cells" base="cells" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 T25
+SYM y4 name="index" base="index" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 7 1
+n6 CGFEName y4 TY_INTEGER
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_INTEGER
+- CGDone n8
+- CGControl O_LABEL n0 l4
+n9 CGFEName y4 TY_INTEGER
+n10 CGUnary O_POINTS n9 TY_INTEGER
+n11 CGInteger 4 TY_INTEGER
+n12 CGCompare O_LT n10 n11 TY_INTEGER
+- CGControl O_IF_FALSE n12 l5
+n13 CGFEName y3 T25
+n14 CGFEName y4 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+n16 CGInteger 2 TY_INTEGER
+n17 CGBinary O_TIMES n15 n16 TY_INTEGER
+n18 CGBinary O_PLUS n13 n17 TY_POINTER
+n19 CGFEName y2 TY_INTEGER
+n20 CGUnary O_POINTS n19 TY_INTEGER
+n21 CGAssign n18 n20 TY_INT_2
+- CGDone n21
+n22 CGFEName y4 TY_INTEGER
+n23 CGInteger 1 TY_INTEGER
+n24 CGPreGets O_PLUS n22 n23 TY_INTEGER
+- CGDone n24
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 8 1
+n25 CGFEName y3 T25
+n26 CGInteger 6 TY_INTEGER
+n27 CGBinary O_PLUS n25 n26 TY_POINTER
+n28 CGUnary O_POINTS n27 TY_INT_2
+n29 CGUnary O_CONVERT n28 TY_INTEGER
+n30 CGTempName t3 TY_INTEGER
+n31 CGAssign n30 n29 TY_INTEGER
+- CGDone n31
+- DBSrcCue f1 9 1
+n32 CGTempName t3 TY_INTEGER
+n33 CGUnary O_POINTS n32 TY_INTEGER
+- CGReturn n33 TY_INTEGER
+STOP
+FINI

@@ -92,7 +92,7 @@ def test_spill_keeps_the_invariant_cell_out_of_repeated_work(tag):
     """
     from qbopt.objectfile import module, omf
     from qbopt import wholeseg
-    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     body = mir.bodies(found, corpus.partitioned(result.data))[0][1]

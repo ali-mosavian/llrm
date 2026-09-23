@@ -1,0 +1,34 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=12 align=1
+f1 DBSrcFile "/private/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/tmp86lzmnsl/unit.c"
+- DBSrcCue f1 2 1
+SYM y1 name="copy" base="copy" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+SYM y4 name="src" base="src" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+n4 CGFEName y2 TY_POINTER
+n5 CGUnary O_POINTS n4 TY_POINTER
+n6 CGFEName y3 TY_POINTER
+n7 CGUnary O_POINTS n6 TY_POINTER
+n8 CGFEName y4 TY_POINTER
+n9 CGUnary O_POINTS n8 TY_POINTER
+n10 CGUnary O_POINTS n9 T25
+n11 CGLVAssign n7 n10 T25
+n12 CGUnary O_POINTS n11 T25
+n13 CGLVAssign n5 n12 T25
+- CGDone n13
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

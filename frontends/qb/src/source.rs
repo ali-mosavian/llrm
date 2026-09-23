@@ -17,7 +17,9 @@ pub struct LoadedSource {
 
 impl LoadedSource {
     pub fn location(&self, expanded_line: usize) -> Option<&SourceLocation> {
-        expanded_line.checked_sub(1).and_then(|index| self.locations.get(index))
+        expanded_line
+            .checked_sub(1)
+            .and_then(|index| self.locations.get(index))
     }
 }
 
@@ -26,7 +28,10 @@ pub fn load(path: &Path, include_dirs: &[PathBuf]) -> Result<String, String> {
 }
 
 pub fn load_with_map(path: &Path, include_dirs: &[PathBuf]) -> Result<LoadedSource, String> {
-    let mut loaded = LoadedSource { text: String::new(), locations: Vec::new() };
+    let mut loaded = LoadedSource {
+        text: String::new(),
+        locations: Vec::new(),
+    };
     expand(path, include_dirs, &mut Vec::new(), &mut loaded)?;
     Ok(loaded)
 }
@@ -58,7 +63,10 @@ fn expand(
         } else {
             loaded.text.push_str(line);
             loaded.text.push('\n');
-            loaded.locations.push(SourceLocation { path: path.to_path_buf(), line: index + 1 });
+            loaded.locations.push(SourceLocation {
+                path: path.to_path_buf(),
+                line: index + 1,
+            });
         }
     }
     active.pop();
@@ -78,7 +86,13 @@ fn read_source(path: &Path) -> Result<String, String> {
         Ok(source) => Ok(source),
         Err(_) => Ok(bytes
             .iter()
-            .map(|byte| if byte.is_ascii() { char::from(*byte) } else { CP437[usize::from(*byte - 0x80)] })
+            .map(|byte| {
+                if byte.is_ascii() {
+                    char::from(*byte)
+                } else {
+                    CP437[usize::from(*byte - 0x80)]
+                }
+            })
             .collect()),
     }
 }
@@ -147,13 +161,44 @@ mod tests {
         let include = root.join("nested.bi");
         fs::create_dir_all(&root).unwrap();
         fs::write(&include, "first include line\nsecond include line\n").unwrap();
-        fs::write(&main, "first main line\n'$include: 'nested.bi'\nlast main line\n").unwrap();
+        fs::write(
+            &main,
+            "first main line\n'$include: 'nested.bi'\nlast main line\n",
+        )
+        .unwrap();
         let loaded = load_with_map(&main, &[]).unwrap();
-        assert_eq!(loaded.text, "first main line\nfirst include line\nsecond include line\nlast main line\n");
-        assert_eq!((loaded.location(1).unwrap().path.as_path(), loaded.location(1).unwrap().line), (main.as_path(), 1));
-        assert_eq!((loaded.location(2).unwrap().path.as_path(), loaded.location(2).unwrap().line), (include.as_path(), 1));
-        assert_eq!((loaded.location(3).unwrap().path.as_path(), loaded.location(3).unwrap().line), (include.as_path(), 2));
-        assert_eq!((loaded.location(4).unwrap().path.as_path(), loaded.location(4).unwrap().line), (main.as_path(), 3));
+        assert_eq!(
+            loaded.text,
+            "first main line\nfirst include line\nsecond include line\nlast main line\n"
+        );
+        assert_eq!(
+            (
+                loaded.location(1).unwrap().path.as_path(),
+                loaded.location(1).unwrap().line
+            ),
+            (main.as_path(), 1)
+        );
+        assert_eq!(
+            (
+                loaded.location(2).unwrap().path.as_path(),
+                loaded.location(2).unwrap().line
+            ),
+            (include.as_path(), 1)
+        );
+        assert_eq!(
+            (
+                loaded.location(3).unwrap().path.as_path(),
+                loaded.location(3).unwrap().line
+            ),
+            (include.as_path(), 2)
+        );
+        assert_eq!(
+            (
+                loaded.location(4).unwrap().path.as_path(),
+                loaded.location(4).unwrap().line
+            ),
+            (main.as_path(), 3)
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -162,7 +207,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("qbfront-cp437-{}", std::process::id()));
         let main = root.join("nibble.bas");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&main, b"' \xdb comment\r\nmono: data 15, 7\r\n\x1aignored = 1\r\n").unwrap();
+        fs::write(
+            &main,
+            b"' \xdb comment\r\nmono: data 15, 7\r\n\x1aignored = 1\r\n",
+        )
+        .unwrap();
 
         let loaded = load_with_map(&main, &[]).unwrap();
 

@@ -75,7 +75,7 @@ def test_arrphi_keeps_the_stored_element_value_across_each_join(tag):
     def watch(stage, name, state):
         if stage == "mir-widen":
             states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/arrphi-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/arrphi-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert states
     assert sum(ref.pointer for body in states for block in body.blocks for op in block.ops for ref in op.stores) == 4
@@ -145,7 +145,7 @@ def test_emitted_memphi_reloads_read_destination_but_not_array_values(tag):
     from qbopt.frontend import blocks, declen
     from qbopt.objectfile import module, omf
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/memphi-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/memphi-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)

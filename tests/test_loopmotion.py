@@ -29,7 +29,7 @@ def test_indexed_record_accumulators_store_only_after_loop(tag):
         if isinstance(body, mir.MirBody):
             states.append(body)
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[-1]
     hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
@@ -101,7 +101,7 @@ def test_harr_constant_column_exit_is_stored_once_only_after_a_nonempty_loop(tag
     """HARR wrote c=11 once per row after its inner counter became a constant."""
     from qbopt.optimize import transform
 
-    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    path = Path(f"fixtures/omf/harr-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
@@ -283,7 +283,7 @@ def test_addrm_exit_store_requires_complete_initial_memory(tag, initialization, 
     """ADDRM wrote u 20 times; moving it must preserve memory even when the loop takes zero trips."""
     from qbopt.optimize import transform
 
-    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    path = Path(f"fixtures/omf/addrm-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition)[0][1]
@@ -442,3 +442,34 @@ def test_a_float_loop_sinks_its_counter_store_without_an_error_handler():
     ]
     innermost = min(floating, key=lambda loop: len(loop.body))
     assert not any(op.kind is mir.Kind.STORE for at in innermost.body for op in blocks[at].ops)
+
+
+def test_intervals_are_not_copied_per_op_per_loop(tmp_path, monkeypatch) -> None:
+    """sunk_stores copied every known constant into a map per body op, per
+    loop: 2 MB here for ten loops, and deedlines past 7 GB until killed."""
+    import tracemalloc
+
+    from qbopt.frontend.qb import driver
+    from qbopt.frontend.qb import compile as qb_compile
+
+    peak = 0
+    original = loopmotion.sunk_stores
+
+    def traced(*args, **named):
+        nonlocal peak
+        tracemalloc.start()
+        try:
+            return original(*args, **named)
+        finally:
+            peak = max(peak, tracemalloc.get_traced_memory()[1])
+            tracemalloc.stop()
+
+    monkeypatch.setattr(loopmotion, "sunk_stores", traced)
+    basic = tmp_path / "LOOPS.BAS"
+    lines = ["DEFINT A-Z"]
+    for k in range(10):
+        lines += [f"x{k} = {k}", f"FOR i = 1 TO 10: s{k} = s{k} + i: NEXT"]
+    lines += ["PRINT " + " + ".join(f"s{k} + x{k}" for k in range(10))]
+    basic.write_bytes("\r\n".join(lines).encode() + b"\r\n")
+    qb_compile.object_bytes(driver.parsed(basic, dialect="qb45", runtime="qb45"), basic.name)
+    assert peak < 1 << 20, peak

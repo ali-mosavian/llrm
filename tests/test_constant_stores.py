@@ -48,7 +48,7 @@ def test_constant_memory_update_does_not_freeze_a_loop_counter():
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_bools_known_accumulator_does_not_need_memory_arithmetic(tag):
     """BOOLS recomputed t=-1+1+2 through memory instead of storing its known answer."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith(("add ", "inc ")) for one in instructions)

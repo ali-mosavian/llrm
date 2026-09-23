@@ -36,7 +36,7 @@ def test_chain_constant_divisors_survive_argument_setup(tag):
     def watch(stage, name, body):
         if stage == "mir-widen":
             bodies.append(body)
-    result = wholeseg.emitted(Path(f"fixtures/omf/chain-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/omf/chain-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert bodies
     assert not any(op.kind is mir.Kind.DIVMOD for body in bodies for block in body.blocks for op in block.ops)
@@ -56,7 +56,7 @@ def _block(raw, at=0x30, successors=()):
 
 @pytest.mark.parametrize("tag,floor", [("q-O", -34), ("p-g2", -42), ("v-g3", -44)])
 def test_main_layout_uses_runtime_specific_fixed_prefix(tag, floor):
-    assert raising_frame._layout(module.load(Path(f"fixtures/omf/chain-{tag}.obj"))) == (floor, 24)
+    assert raising_frame._layout(module.load(Path(f"fixtures/omf/chain-{tag}.obj".lower()))) == (floor, 24)
 
 
 @pytest.mark.parametrize("raw", ["55", "8bc5", "8bc4", "8d46e6", "8bec"])

@@ -134,7 +134,7 @@ fstp qword [secondValue]
 ```
 
 The final LONG fixture passes three runtime cases on each compiler. Its
-committed objects in `fixtures/regressions/fpicse-{p-g2,q-O,v-g3}.obj`
+committed objects in `fixtures/regressions/fpicse-{p-g2,q-o,v-g3}.obj`
 come from `tools/e2e.py` using the matching `tools/configs.py` configurations,
 with zero severe compile errors, in temporary run
 `qbopt-fpicse-implicit-stxjen_l`. Source is DOS CRLF, as required by BC.

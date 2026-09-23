@@ -245,10 +245,11 @@ class LirBody:
     name: str
     entry: int
     blocks: tuple[LirBlock, ...]
-    # What the raise saw each value in. The allocator's input, not its
-    # answer, and the fallback for an operand it could not place.
-    origin: dict
-    pins: dict
+    # What the raise saw each value in, by value id. The allocator's input,
+    # not its answer, and the fallback for an operand it could not place.
+    origin: "dict[int, Register_]"
+    # Where the raise fixed a value, by value id.
+    pins: "dict[int, Register_]"
     # Values supplied by the caller in registers rather than defined by an
     # instruction in this body.  Keeping this explicit is what lets the
     # verifier distinguish a real ABI input from a transform that lost a
@@ -262,6 +263,10 @@ class LirBody:
     loop_trip_counts: tuple[tuple[int, int], ...] = ()
     ordered: bool = False
     noreturn: bool = False
+    # Blocks keep the order they arrive in. A BASIC body with an error
+    # handler says so: RESUME NEXT finds the statement after the faulting
+    # address, which holds only while each statement's code is contiguous.
+    source_order: bool = False
 
     @property
     def insns(self) -> "tuple[Insn, ...]":

@@ -62,6 +62,7 @@ pub(crate) enum DeclarationForm {
     Dim,
     Redim,
     Static,
+    Shared,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -347,8 +348,8 @@ mod tests {
             external: &[],
             encode1byte: ENCODE1BYTE,
         };
-        let tokens = crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45)
-            .unwrap();
+        let tokens =
+            crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
         let mut state = ParseState::new(tokens);
         state.expressions.push(Expr::Name(
             "SENTINEL".into(),
@@ -378,12 +379,18 @@ mod tests {
             external: &[],
             encode1byte: ENCODE1BYTE,
         };
-        let tokens = crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45)
-            .unwrap();
+        let tokens =
+            crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
         let mut state = ParseState::new(tokens);
 
         assert_eq!(engine.parse(&mut state, 0), ParseResult::GoodSyntax);
-        assert_eq!(state.sink.actions, vec![tables::AstAction::Mark { slot: u8::MAX, token: 0 }]);
+        assert_eq!(
+            state.sink.actions,
+            vec![tables::AstAction::Mark {
+                slot: u8::MAX,
+                token: 0
+            }]
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ def test_negation_and_absolute_value_have_distinct_mir_meanings():
 @pytest.mark.parametrize("basic_semantics,exceptions", [(False, "deferred"), (True, "strict")])
 def test_single_store_is_a_rounding_boundary(tag: str, basic_semantics: bool, exceptions: str) -> None:
     """FPCSE stores p and q as SINGLE; replacing their reloads by extended intermediates changes semantics."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path), basic_semantics=basic_semantics)[0][1]
     ops = [op for block in body.blocks for op in block.ops]
     load = next(op for op in ops if op.kind is mir.Kind.FLOAD)

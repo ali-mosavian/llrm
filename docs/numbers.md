@@ -270,7 +270,7 @@ self-contained call. See `qbopt/frontend/stack.py`'s `frames()` and `calls.py`'s
 Every module maps. It did not before: the entry point was searched for, and the
 search picked one byte late on 22 objects and could not explain the `/V /W`
 event stub at all. Both are settled by the module header the QuickBASIC 4.5
-runtime defines -- see `docs/testing.md` and `AGENTS.md`.
+runtime defines -- see `docs/testing.md` and `agents.md`.
 
 No region is refused for crossing a LEDATA boundary any more -- it was the
 largest refusal category, 73 of 1337. `relocate()` moves the shared boundary
@@ -278,7 +278,7 @@ to the edit's own edge instead of merging the two records: neither is removed,
 so no FIXUPP is re-parented to whatever LEDATA happens to precede it after the
 edit, which is the failure mode an earlier, merging design hit on 72 of 73
 corpus cases. See `qbopt/objectfile/relocate.py`'s `crossed_pair` and
-`_boundary_overrides`, and AGENTS.md's "Moving code across a LEDATA boundary".
+`_boundary_overrides`, and agents.md's "Moving code across a LEDATA boundary".
 
 ## The real program
 

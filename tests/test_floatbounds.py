@@ -31,7 +31,7 @@ def _assert_shared_conversions(found, instructions):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpdeep_reuses_proven_finite_array_loads(tag):
     """FPDEEP loaded p(i) five times despite its three initialized finite elements."""
-    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(
@@ -172,10 +172,8 @@ def test_integer_helper_with_a_live_clobbered_result_keeps_it_defined(monkeypatc
 def test_computed_runtime_integer_uses_one_conversion(tag):
     """FPCALC recomputed input+1 and called B$FIL2 twice instead of sharing its converted value."""
     from qbopt import wholeseg
-    from qbopt.objectfile import omf
-    from qbopt.objectfile import module
-
-    path = Path(f"fixtures/regressions/fpcalc-{tag}.obj")
+    from qbopt.objectfile import module, omf
+    path = Path(f"fixtures/regressions/fpcalc-{tag}.obj".lower())
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
@@ -215,10 +213,8 @@ def test_helper_conversion_respects_its_effect_contract(change):
 def test_runtime_integer_conversion_is_shared_in_emitted_code(tag, program, helper):
     """FPICSE/FPI2CS paid two conversion calls for the same READ value across assignments."""
     from qbopt import wholeseg
-    from qbopt.objectfile import omf
-    from qbopt.objectfile import module
-
-    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    from qbopt.objectfile import module, omf
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj".lower())
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

@@ -11,7 +11,7 @@ from qbopt import wholeseg
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcsex_reuses_sum_only_under_native_policy(basic_semantics: bool, adds: int, tag: str) -> None:
     result = wholeseg.emitted(
-        Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes(),
+        Path(f"fixtures/omf/fpcsex-{tag}.obj".lower()).read_bytes(),
         basic_semantics=basic_semantics,
     )
     assert result.outcome is wholeseg.Emission.LIR, result.reason

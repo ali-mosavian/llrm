@@ -96,7 +96,7 @@ def test_every_machine_phase_takes_lir_and_gives_lir_back() -> None:
     _found, _blocks, bodies, contracts = _raised("nested-p-g2")
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body)):
+        for phase in flow.machine(low.pins):
             assert isinstance(phase, LIRTransform), f"{phase} is not a LIR phase"
             try:
                 low = phase.transform(low)
@@ -164,7 +164,8 @@ def test_the_allocation_is_searched_and_says_whether_it_is_optimal(name: str) ->
     budget says so rather than claiming an optimum it did not prove."""
     _found, _blocks, bodies, contracts = _raised(name)
     for who, body in bodies:
-        got = allocate.allocate(_lowered(_found, bodies, contracts, who, body), flow._pinned(body))
+        low = _lowered(_found, bodies, contracts, who, body)
+        got = allocate.allocate(low, low.pins)
         assert got.optimal or got.why, "an unproven assignment has to say why"
         if got.optimal:
             assert got.why == ""
@@ -177,7 +178,7 @@ def test_lowering_gives_back_lir_and_allocation_gives_back_lir() -> None:
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
         assert isinstance(low, lir.LirBody)
-        after = allocate.applied(low, allocate.allocate(low, flow._pinned(body)))
+        after = allocate.applied(low, allocate.allocate(low, low.pins))
         assert isinstance(after, lir.LirBody)
         assert [one.at for one in after.insns] == [one.at for one in low.insns]
 
@@ -284,7 +285,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     low = _lowered(_found, bodies, contracts, name, body)
     # Everything up to the allocator, which now owns the spill loop -- so
     # asking it after that phase would see the spilling already done.
-    for phase in flow.machine(flow._pinned(body)):
+    for phase in flow.machine(low.pins):
         if phase.name == "regalloc":
             break
         low = phase.transform(low)
@@ -338,7 +339,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     _found, _blocks, bodies, contracts = _raised("divmod-p-g2-zd")
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body), None, _found.calls):
+        for phase in flow.machine(low.pins, None, _found.calls):
             low = phase.transform(low)
         for block in low.blocks:
             for op in block.insns:
@@ -366,7 +367,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     ran = False
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body)):
+        for phase in flow.machine(low.pins):
             if phase.name == "regalloc":
                 break
             low = phase.transform(low)
@@ -401,7 +402,7 @@ def test_the_allocator_settles_on_every_program() -> None:
         raised = mir.bodies(found, blocks, contracts)
         for name, body in raised:
             low = _lowered(found, raised, contracts, name, body)
-            for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+            for phase in flow.machine(low.pins, frames.of(low), found.calls):
                 low = phase.transform(low)
 
 
@@ -465,7 +466,7 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     # destroys.
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body), None, _found.calls):
+        for phase in flow.machine(low.pins, None, _found.calls):
             if phase.name == "regalloc":
                 break
             low = phase.transform(low)
@@ -616,24 +617,17 @@ def test_the_coalescer_joins_the_intervals_it_merges() -> None:
 
 
 def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
-    """bools-q-O had three, and every one was silently discarded. harr-q-O has three now."""
-    from pathlib import Path
+    """bools-q-O had three, and every one was silently discarded.
 
-    from qbopt.objectfile import omf
+    Taken from the raise, not the optimizer: which phis sit on a critical
+    edge after it is the optimizer's choice, and peeling (8745040f) left
+    harr-q-O none, so the test checked nothing.
+    """
     from qbopt.backend import phielim
-    from qbopt.objectfile import module
-    from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/harr-q-O.obj").read_bytes()))
-    blocks = split.partition(found, code_map(found))
-    result = mir.bodies(found, blocks)
-    found = result.source.applied(found)
+    found, _blocks, result, contracts = _raised("bools-q-o")
     critical = 0
-    contracts = runtime.for_module(found)
     for name, body in result:
-        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         low = _lowered(found, result, contracts, name, body)
         at_of = {block.at: block for block in low.blocks}
         for block in low.blocks:
@@ -643,7 +637,7 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
         out = phielim.eliminated(low)
         left = [f"{block.at:#06x}" for block in out.blocks if block.phis]
         assert not left, f"{name}: a phi survives at {', '.join(left)}"
-    assert critical >= 3, f"harr-q-O has three phis on critical edges; found {critical}"
+    assert critical >= 3, f"bools-q-O has three phis on critical edges; found {critical}"
 
 
 def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
@@ -731,16 +725,15 @@ def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> N
     assert what.sources[1] == machine.Reg(Register.EAX, 4)
 
 
-def test_far_load_pins_its_selector_result() -> None:
+def test_far_load_confines_its_selector_result_to_a_segment_register() -> None:
     """QCport's pl_game_reset selected LES before allocation, but the selector
     result was assigned BX; fresh OMF emission then refused the impossible
     ``les ax:bx,[di+table]`` form.
 
-    A far-load instruction defines its selector in the segment register named
-    by the opcode, even when no later far-memory use happens to constrain it.
+    The selector result is in the segment-register class rather than pinned
+    to ES: allocation picks one and the rewriter spells les, lfs or lgs.
     """
-    from iced_x86 import Register
-
+    from qbopt.model import lir
     from qbopt.backend import target
     from qbopt.model import ir as machine
 
@@ -750,8 +743,11 @@ def test_far_load_pins_its_selector_result() -> None:
         (machine.Held(1, 2), machine.Held(2, 2)),
         (machine.Mem(None, 4, base=machine.Held(3, 2)),),
     )
+    load = lir.Insn(0x10, (0x10, 0x13), what, (1, 2), (3,))
+    body = lir.LirBody("far", 0x10, (lir.LirBlock(0x10, (load,)),), {}, {})
 
-    assert target.requirements(what) == {target.Occurrence("dest", 1): Register.ES}
+    assert target.Occurrence("dest", 1) not in target.requirements(what)
+    assert allocate.classes(body)[2] == frozenset(target.SELECTORS)
 
 
 def _lngmix_through_the_lir_route():
@@ -790,7 +786,7 @@ def test_invariant_divides_execute_before_the_loop(stem: str) -> None:
     from qbopt.analysis import loops
 
     result = wholeseg.emitted(Path(f"fixtures/omf/{stem}.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped

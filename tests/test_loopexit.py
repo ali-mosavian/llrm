@@ -15,7 +15,7 @@ from qbopt.objectfile import module
 @pytest.mark.parametrize("program", ["lngmxx", "hotlpx", "hotlop"])
 def test_accumulation_has_no_backedge(tag, program):
     """LNGMXX repeated a fixed sum; HOTLPX/HOTLOP repeated product + index twenty times."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     from qbopt.analysis import loops
@@ -38,7 +38,7 @@ def _body(monkeypatch, program="lngmxx"):
     with monkeypatch.context() as context:
         # Counting to zero rewrites the very compare each hazard edits.
         context.setattr(loopexit, "evaluated", lambda body: body)
-        context.setattr(indvars, "zeroed", lambda body: body)
+        context.setattr(indvars, "zeroed", lambda body, *args, **kwargs: body)
         return transform.applied(
             mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
         )
@@ -179,7 +179,7 @@ def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
     from qbopt.analysis import loops
     from qbopt.optimize import transform
 
-    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    path = Path(f"fixtures/omf/addrm-{tag}.obj".lower())
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(

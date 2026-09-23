@@ -462,6 +462,46 @@ def test_conversion_result_is_kept_for_non_operand_readers(reader):
     assert any(one.what and one.what.name == "mov" and one.what.dests == (result,) for one in allocated.insns)
 
 
+def test_a_pinned_conversion_result_survives_lowering_into_floatalloc():
+    """Lower keyed `pins` by `mir.Value` and floatalloc read ids, so a result
+    pinned to EAX with no other reader was left in the frame, never loaded."""
+    from qbopt.backend import frame
+    from qbopt.backend import lower
+    from qbopt.model import mir
+    from qbopt.model.floating import Format, Precision, Rounding, Semantics
+
+    cell = mir.MemRef(Addr(Space.FRAME, -10), 10, space=Space.FRAME)
+    real, integer = mir.Value(1, 0x10), mir.Value(2, 0x20)
+    load = mir.Op(
+        0x10,
+        ir.Operation.FLOAT_LOAD,
+        "fld",
+        (real,),
+        (),
+        kind=mir.Kind.FLOAD,
+        args=(mir.Cell(cell),),
+        results=(mir.Held(real, 10),),
+        loads=(cell,),
+        floating=Semantics((Format.EXTENDED80,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE),
+    )
+    store = mir.Op(
+        0x20,
+        ir.Operation.FLOAT_STORE,
+        "fistp",
+        (integer,),
+        (real,),
+        kind=mir.Kind.FSTORE,
+        args=(mir.Held(real, 10),),
+        results=(mir.Held(integer, 4),),
+        floating=Semantics((Format.EXTENDED80,), Format.SIGNED32, Precision.DESTINATION, Rounding.DYNAMIC),
+        id=200,
+    )
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (load, store), ()),))
+    low = lower.lowered("pinned", body, {}, set(), {}, hints=mir.AllocationHints(pins={(200, 0): Register.EAX}))
+    allocated = floatalloc.allocated(low, frame.Frame(-10))
+    assert any(one.what.name == "mov" and one.what.dests == (ir.Held(integer.id, 4),) for one in allocated.insns)
+
+
 def test_ninth_float_uses_an_owned_extended_precision_spill():
     """Nine live FP values previously refused allocation instead of preserving 80 bits."""
     from qbopt.backend import frame
@@ -545,7 +585,7 @@ def test_float_survives_fork_join_and_loop_without_rereading_source(path):
     assert slots.size == 10
 
 
-@pytest.mark.parametrize("defect", ["entry", "bypass", "pinned", "typed-pinned", "duplicate"])
+@pytest.mark.parametrize("defect", ["entry", "bypass", "pinned", "duplicate"])
 def test_floating_bridge_never_reads_an_unestablished_slot(defect):
     """Cross-block allocation must not turn a missing definition into a frame read."""
     from qbopt.backend import frame
@@ -569,10 +609,6 @@ def test_floating_bridge_never_reads_an_unestablished_slot(defect):
             blocks += (lir.LirBlock(48, (), (0, 16)),)
         case "pinned":
             body = replace(body, pins={1: 0})
-        case "typed-pinned":
-            from qbopt.model import mir
-
-            body = replace(body, pins={mir.Value(1, 0): 0})
         case "duplicate":
             blocks = (replace(blocks[0], insns=(load, load)), *blocks[1:])
     with pytest.raises(Unlowered):

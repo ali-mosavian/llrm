@@ -517,22 +517,16 @@ def symbolically_zeroed(body: mir.MirBody) -> mir.MirBody:
         if len(proofs) != 1:
             continue
         proof = proofs[0]
-        control = induction.control_replacement(body, loop, proof)
-        if control is None or proof.maximum is None:
-            continue
         header = blocks[loop.header]
         inside = set(loop.body)
         candidates = induction.basics(body, loop).values()
         for candidate in candidates:
-            if candidate == proof.counter or candidate.start.width != proof.counter.start.width:
+            symbolic = induction.zero_terminating_control(body, loop, proof, candidate, facts)
+            if symbolic is None:
                 continue
-            width = candidate.start.width
-            step = induction._signed(candidate.step, facts, width)
-            if step in (None, 0):
-                continue
-            relation = induction.AffineMap(step, 0, width)
-            if proof.maximum > relation.period:
-                continue
+            control = symbolic.replacement
+            width = symbolic.candidate.start.width
+            step = symbolic.step
             phi = next((one for one in header.phis if one.result.id == candidate.value), None)
             if phi is None or set(phi.incoming) != {proof.preheader, proof.latch}:
                 continue

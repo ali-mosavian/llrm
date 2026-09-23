@@ -158,7 +158,7 @@ clobbers = ["ax", "bx", "cx", "dx", "flags"]
 established = true
 inputs = []
 evidence = '''
-rt/helpi4.asm: `jmp __aFldiv`, `Uses: ax,cx,dx,bx`, `Exceptions: hardware divide overflow`. __aFldiv is not in the local tree. AGENTS.md measured what the header calls a hardware trap: `x \ 0` raises BASIC error 11, and -2147483648 \ -1 raises nothing at all and returns. calls.py absorbs this call as a bare idiv and drops error 11 deliberately, which is the one place a rewritten program behaves worse than BC's.
+rt/helpi4.asm: `jmp __aFldiv`, `Uses: ax,cx,dx,bx`, `Exceptions: hardware divide overflow`. __aFldiv is not in the local tree. agents.md measured what the header calls a hardware trap: `x \ 0` raises BASIC error 11, and -2147483648 \ -1 raises nothing at all and returns. calls.py absorbs this call as a bare idiv and drops error 11 deliberately, which is the one place a rewritten program behaves worse than BC's.
 '''
 
 ["B$ENRA"]
@@ -172,7 +172,7 @@ reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
 established = true
 evidence = '''
-inc/stack.inc: `The basic frame is set up on entry to the main program, by B$ENSA/B$ENRA SUB and FUNCTION entry routines`, and it names what lands there -- the previous BASIC frame at FR_BFRAME, si and di at FR_SI/FR_DI `Preserved for C compatability`, the local byte count at FR_CLOCALS and a zeroed GOSUB count at FR_GOSUB. inc/rtmint.inc and inc/ulib.inc list it as an entry family with B$ENSA/B$ENRD/B$ENSD/B$ENFA; the code is in none of them. AGENTS.md measured the call site: the frame size arrives in cx, so nothing is on the stack to clean up. It moves both sp and bp, which is why it is in clobbers and why nothing may track stack depth across it.
+inc/stack.inc: `The basic frame is set up on entry to the main program, by B$ENSA/B$ENRA SUB and FUNCTION entry routines`, and it names what lands there -- the previous BASIC frame at FR_BFRAME, si and di at FR_SI/FR_DI `Preserved for C compatability`, the local byte count at FR_CLOCALS and a zeroed GOSUB count at FR_GOSUB. inc/rtmint.inc and inc/ulib.inc list it as an entry family with B$ENSA/B$ENRD/B$ENSD/B$ENFA; the code is in none of them. agents.md measured the call site: the frame size arrives in cx, so nothing is on the stack to clean up. It moves both sp and bp, which is why it is in clobbers and why nothing may track stack depth across it.
 '''
 
 ["B$ERAS"]
@@ -217,7 +217,7 @@ reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
 established = true
 evidence = '''
-inc/stack.inc: si and di are `restored by B$EXSA`, and [b$curframe] is saved at FR_BFRAME `such that B$EXSA can restore it on exit`. inc/ulib.inc pairs it with B$EXFA as the exit family and rt/error.asm calls it to `clear frame state info`. The code is not in the tree. AGENTS.md measured the call site: a far call with no arguments, immediately before the procedure's own `retf n`. Like B$ENRA it moves sp and bp.
+inc/stack.inc: si and di are `restored by B$EXSA`, and [b$curframe] is saved at FR_BFRAME `such that B$EXSA can restore it on exit`. inc/ulib.inc pairs it with B$EXFA as the exit family and rt/error.asm calls it to `clear frame state info`. The code is not in the tree. agents.md measured the call site: a far call with no arguments, immediately before the procedure's own `retf n`. Like B$ENRA it moves sp and bp.
 '''
 
 ["B$FCMD"]
@@ -471,7 +471,7 @@ clobbers = ["ax", "bx", "cx", "dx", "flags"]
 established = true
 inputs = []
 evidence = '''
-rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`, and a body that is `jmp __aFlmul` with no frame. __aFlmul is the C library's own long multiply and is NOT in the local tree, so the register set is the header's word rather than read code; the cleanup is the C helper's, and BC's measured call sites (calls.py, stack.py) say it happens. AGENTS.md measured the overflow: 305419896 * 252645135 wraps and raises nothing.
+rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`, and a body that is `jmp __aFlmul` with no frame. __aFlmul is the C library's own long multiply and is NOT in the local tree, so the register set is the header's word rather than read code; the cleanup is the C helper's, and BC's measured call sites (calls.py, stack.py) say it happens. agents.md measured the overflow: 305419896 * 252645135 wraps and raises nothing.
 '''
 
 ["B$OEGA"]

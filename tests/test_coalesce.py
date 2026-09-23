@@ -24,7 +24,7 @@ def test_matrix_diagonal_stride_needs_no_register_copies(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -328,7 +328,7 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
         runtime.for_module(found),
         nodes=raised.source.nodes,
     )
-    pinned = flow._pinned(body)
+    pinned = low.pins
     for phase in flow.machine(pinned, None, found.calls):
         low = phase.transform(low)
     assert low, "the allocator refused the body"

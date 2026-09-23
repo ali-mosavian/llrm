@@ -1,4 +1,5 @@
 from dataclasses import replace
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Collection
 

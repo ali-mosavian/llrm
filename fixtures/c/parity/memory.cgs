@@ -1,0 +1,129 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+SETSEG 11
+SYM y1 name="demo_delta" base="demo_delta" pattern="_*" attr=0x42 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+SETSEG 11
+SYM y2 name="demo_value" base="demo_value" pattern="_*" attr=0x42 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 2
+f3 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/memory.c"
+- DBSrcCue f3 1 1
+SYM y3 name="parity_memory" base="parity_memory" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INT_4
+SYM y4 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_POINTER
+SYM y5 name="delta" base="delta" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_POINTER
+l4 CGLastParm
+t5 CGTemp TY_INT_4
+- DBSrcCue f3 3 1
+n6 CGFEName y4 TY_POINTER
+n7 CGUnary O_POINTS n6 TY_POINTER
+n8 CGFEName y4 TY_POINTER
+n9 CGUnary O_POINTS n8 TY_POINTER
+n10 CGUnary O_POINTS n9 TY_INT_2
+n11 CGInteger 3 TY_INTEGER
+n12 CGBinary O_TIMES n10 n11 TY_INTEGER
+n13 CGFEName y5 TY_POINTER
+n14 CGUnary O_POINTS n13 TY_POINTER
+n15 CGUnary O_POINTS n14 TY_INT_2
+n16 CGBinary O_PLUS n12 n15 TY_INTEGER
+n17 CGUnary O_CONVERT n16 TY_INT_2
+n18 CGAssign n7 n17 TY_INT_2
+- CGDone n18
+- DBSrcCue f3 4 1
+n19 CGFEName y4 TY_POINTER
+n20 CGUnary O_POINTS n19 TY_POINTER
+n21 CGUnary O_POINTS n20 TY_INT_2
+n22 CGUnary O_CONVERT n21 TY_INT_4
+n23 CGFEName y4 TY_POINTER
+n24 CGUnary O_POINTS n23 TY_POINTER
+n25 CGUnary O_POINTS n24 TY_INT_2
+n26 CGUnary O_CONVERT n25 TY_INT_4
+n27 CGBinary O_TIMES n22 n26 TY_INT_4
+n28 CGUnary O_CONVERT n27 TY_INT_4
+n29 CGTempName t5 TY_INT_4
+n30 CGAssign n29 n28 TY_INT_4
+- CGDone n30
+- DBSrcCue f3 5 1
+n31 CGTempName t5 TY_INT_4
+n32 CGUnary O_POINTS n31 TY_INT_4
+- CGReturn n32 TY_INT_4
+- DBSrcCue f3 10 1
+SYM y6 name="parity_memory_demo" base="parity_memory_demo" pattern="_*" attr=0x7 seg=1
+CALLCONV y6 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y6 TY_INT_4
+l33 CGLastParm
+t34 CGTemp TY_INT_4
+SYM y7 name="first" base="first" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y7 TY_INT_4
+- DBSrcCue f3 14 1
+n35 CGFEName y2 TY_INT_2
+n36 CGInteger 7 TY_INTEGER
+n37 CGAssign n35 n36 TY_INT_2
+- CGDone n37
+- DBSrcCue f3 15 1
+n38 CGFEName y1 TY_INT_2
+n39 CGInteger -2 TY_INTEGER
+n40 CGAssign n38 n39 TY_INT_2
+- CGDone n40
+- DBSrcCue f3 16 1
+n41 CGFEName y7 TY_INT_4
+n42 CGFEName y3 TY_CODE_PTR
+c43 CGInitCall n42 TY_INT_4 y3
+n44 CGFEName y1 TY_INT_2
+n45 CGUnary O_CONVERT n44 TY_POINTER
+- CGAddParm c43 n45 TY_POINTER
+n46 CGFEName y2 TY_INT_2
+n47 CGUnary O_CONVERT n46 TY_POINTER
+- CGAddParm c43 n47 TY_POINTER
+n48 CGCall c43
+n49 CGUnary O_POINTS n48 TY_INT_4
+n50 CGAssign n41 n49 TY_INT_4
+- CGDone n50
+- DBSrcCue f3 17 1
+n51 CGFEName y2 TY_INT_2
+n52 CGInteger -4 TY_INTEGER
+n53 CGAssign n51 n52 TY_INT_2
+- CGDone n53
+- DBSrcCue f3 18 1
+n54 CGFEName y1 TY_INT_2
+n55 CGInteger 11 TY_INTEGER
+n56 CGAssign n54 n55 TY_INT_2
+- CGDone n56
+- DBSrcCue f3 19 1
+n57 CGFEName y7 TY_INT_4
+n58 CGUnary O_POINTS n57 TY_INT_4
+n59 CGInteger 1000 TY_INT_4
+n60 CGBinary O_TIMES n58 n59 TY_INT_4
+n61 CGFEName y3 TY_CODE_PTR
+c62 CGInitCall n61 TY_INT_4 y3
+n63 CGFEName y1 TY_INT_2
+n64 CGUnary O_CONVERT n63 TY_POINTER
+- CGAddParm c62 n64 TY_POINTER
+n65 CGFEName y2 TY_INT_2
+n66 CGUnary O_CONVERT n65 TY_POINTER
+- CGAddParm c62 n66 TY_POINTER
+n67 CGCall c62
+n68 CGUnary O_POINTS n67 TY_INT_4
+n69 CGBinary O_PLUS n60 n68 TY_INT_4
+n70 CGUnary O_CONVERT n69 TY_INT_4
+n71 CGTempName t34 TY_INT_4
+n72 CGAssign n71 n70 TY_INT_4
+- CGDone n72
+- DBSrcCue f3 20 1
+n73 CGTempName t34 TY_INT_4
+n74 CGUnary O_POINTS n73 TY_INT_4
+- CGReturn n74 TY_INT_4
+STOP
+FINI

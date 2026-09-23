@@ -7,6 +7,8 @@ describes byte lanes selected by an indexed access, not merely its hull.
 """
 
 from math import gcd
+from typing import NamedTuple
+from functools import cache
 from enum import StrEnum
 from dataclasses import field
 from dataclasses import dataclass
@@ -133,9 +135,28 @@ class Provenance:
         return any(one.intersects(two) for one in self.slices for two in other.slices)
 
 
+class AliasClass(NamedTuple):
+    """All `objects_may_alias` asks of an object besides its identity."""
+
+    addressed: bool
+    kind: Kind
+    captured: bool
+
+
+def alias_class(one: Object) -> AliasClass:
+    return AliasClass(one.addressed, one.kind, one.captured)
+
+
 def objects_may_alias(one: Object, other: Object) -> bool:
     if one == other:
         return True
+    # classes_may_alias's first rule, asked before building either class.
+    return one.addressed and other.addressed and classes_may_alias(alias_class(one), alias_class(other))
+
+
+@cache
+def classes_may_alias(one: AliasClass, other: AliasClass) -> bool:
+    """Whether two distinct objects of these classes may alias."""
     # Only a reference naming an unaddressed object reaches it.
     if not (one.addressed and other.addressed):
         return False

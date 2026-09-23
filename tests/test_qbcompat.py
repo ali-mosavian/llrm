@@ -128,7 +128,7 @@ def test_artifact_older_than_prepared_run_is_rejected(tmp_path: Path) -> None:
 def test_help_extraction_hash_detects_same_line_count_corruption(tmp_path: Path) -> None:
     """Line counts alone let a truncated or edited FULL extraction pass validation."""
     namespace = __import__("runpy").run_path(ROOT / "tools/qbcompat.py")
-    source = ROOT / "frontends/qb/compat/qb45/QB45QCK.TXT"
+    source = ROOT / "frontends/qb/compat/qb45/qb45qck.txt"
     damaged = tmp_path / "QB45QCK.TXT"
     data = source.read_bytes()
     damaged.write_bytes(bytes([data[0] ^ 1]) + data[1:])
@@ -237,7 +237,7 @@ def test_runtime_gate_reemits_before_accepting_a_bc_produced_object(tmp_path: Pa
     manifest = _write_frontend_manifest(namespace, tmp_path, "numeric")
     data = __import__("json").loads(manifest.read_text())
     obj = tmp_path / "Q45N01.OBJ"
-    obj.write_bytes((ROOT / "fixtures/omf/arith-q-O.obj").read_bytes())
+    obj.write_bytes((ROOT / "fixtures/omf/arith-q-O.obj".lower()).read_bytes())
     data["cases"][0]["objects"][0]["sha256"] = __import__("hashlib").sha256(obj.read_bytes()).hexdigest()
     manifest.write_text(__import__("json").dumps(data))
 
@@ -371,7 +371,7 @@ def test_emission_manifest_pins_linker_and_dos_process_inputs() -> None:
 
 def test_error_resume_cases_require_exact_error_line_and_post_resume_witness() -> None:
     """ERL was once impossible in QB and VBDOS RESUME once jumped into FAIL."""
-    qb = (ROOT / "frontends/qb/compat/qb45/Q45R35.BAS").read_text(encoding="latin1")
+    qb = (ROOT / "frontends/qb/compat/qb45/q45r35.bas").read_text(encoding="latin1")
     vb = (ROOT / "frontends/qb/compat/vbdos/locerr.bas").read_text(encoding="latin1")
 
     assert "100 error 11" in qb

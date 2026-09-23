@@ -703,6 +703,9 @@ class _Stack:
                 what=status,
                 defines=self.one.defines,
                 uses=(),
+                # AX is written whether or not a value is delivered in it:
+                # nothing else may live there across the compare.
+                clobbers=frozenset({Register.AX}),
                 delivers=self.one.delivers,
                 widths=tuple(pair for pair in self.one.widths if pair[0] in produced),
             )

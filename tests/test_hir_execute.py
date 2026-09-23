@@ -9,8 +9,8 @@ from qbopt.frontend.modern import driver
 from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
-CONTROL = ROOT / "frontends" / "modern" / "fixtures" / "control.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
+CONTROL = ROOT / "fixtures" / "modern" / "control.mod"
 
 
 def test_nbody_runs_from_source_through_hir_and_prints_fixed_values() -> None:

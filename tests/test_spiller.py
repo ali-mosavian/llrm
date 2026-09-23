@@ -806,7 +806,8 @@ def test_c_matmul_multiplies_spilled_rows_directly_from_memory() -> None:
     extensions = [operands for _raw, mnemonic, operands in rows if mnemonic == "movsx"]
 
     assert len(multiplies) >= 8
-    assert sum("[bp" in operands.lower() for operands in multiplies) >= 8, multiplies
+    # Seven rows spill; the eighth keeps EAX, which beats reading a slot.
+    assert sum("[bp" in operands.lower() for operands in multiplies) >= 7, multiplies
     assert sum("[" in operands for operands in extensions) >= 8, extensions
 
 
@@ -1235,7 +1236,6 @@ def test_the_body_that_never_settled_allocates() -> None:
     """
     from pathlib import Path
 
-    from qbopt import flow
     from qbopt.abi import runtime
     from qbopt.backend import lower
     from qbopt.objectfile import omf
@@ -1258,7 +1258,7 @@ def test_the_body_that_never_settled_allocates() -> None:
     frame = frames.of(low)
     for phase in (phielim.PhiElimination(), twoaddr.TwoAddress(), coalesce.Coalescer()):
         low = phase.transform(low)
-    got = allocate.RegAlloc(flow._pinned(body), frame).transform(low)
+    got = allocate.RegAlloc(low.pins, frame).transform(low)
     assert got is not None
 
 

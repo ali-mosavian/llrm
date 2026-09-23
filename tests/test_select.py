@@ -889,7 +889,7 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
 
     seen = both = 0
     for name in ("chain-p-g2", "lngmix-p-g2", "matrix-p-g2", "press-p-g2"):
-        found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
+        found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj".lower()).read_bytes()))
         assert found is not None
         mapped = code_map(found)
         if isinstance(mapped, str):

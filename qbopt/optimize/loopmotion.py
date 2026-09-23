@@ -14,12 +14,8 @@ def sunk_stores(
     body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None = None, handles_errors: bool = True
 ) -> mir.MirBody:
     predecessors = loops.predecessors(body.blocks)
+    facts = None
     for loop in loops.loops(body.blocks, body.entry):
-        scoped = ranges.bounded(body)
-        # With constants, as hoist asks: a store through the literal selector
-        # 0A000h otherwise observes every frame and descriptor cell.
-        constant = ranges.constants(body, dgroup)
-        intervals = {id(op): {**constant, **scoped.get(block.at, {})} for block in body.blocks for op in block.ops}
         blocks = {block.at: block for block in body.blocks}
         inside = [blocks[at] for at in loop.body]
         exits = {(block.at, to) for block in inside for to in block.succ if to not in loop.body}
@@ -41,6 +37,17 @@ def sunk_stores(
         exit_block = blocks[destination]
         if not exit_block.ops:
             continue
+        if facts is None:
+            # With constants, as hoist asks: a store through the literal
+            # selector 0A000h otherwise observes every frame and descriptor cell.
+            facts = ranges.bounded(body), ranges.constants(body, dgroup)
+        scoped, constant = facts
+        # One map per block, shared by its ops: a copy per op of every body
+        # op, per loop, took deedlines past 7 GB.
+        intervals = {}
+        for block in inside:
+            merged = {**constant, **scoped.get(block.at, {})}
+            intervals.update((id(op), merged) for op in block.ops)
         dominators = loops.dominators(body.blocks, body.entry)
         address_values = {
             value
@@ -101,6 +108,7 @@ def sunk_stores(
             ),
         }
         body = replace(body, blocks=tuple(updates.get(block.at, block) for block in body.blocks))
+        facts = None
     return body
 
 

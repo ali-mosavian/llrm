@@ -1,4 +1,4 @@
-"""Invoke the isolated Rust frontend and decode its common-HIR document."""
+"""Invoke the root Rust frontend binary and decode its common-HIR document."""
 
 import os
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 from qbopt import hir
 
 ROOT = Path(__file__).resolve().parents[3]
-MANIFEST = ROOT / "frontends" / "modern" / "Cargo.toml"
+MANIFEST = ROOT / "Cargo.toml"
 
 
 class FrontendError(ValueError):
@@ -18,7 +18,17 @@ def command() -> tuple[str, ...]:
     configured = os.environ.get("QBOPT_MODERNFRONT")
     if configured:
         return (configured,)
-    return ("cargo", "run", "--quiet", "--release", "--manifest-path", str(MANIFEST), "--")
+    return (
+        "cargo",
+        "run",
+        "--quiet",
+        "--release",
+        "--manifest-path",
+        str(MANIFEST),
+        "--bin",
+        "modernfront",
+        "--",
+    )
 
 
 def parsed(source: Path, *, dump: Path | None = None) -> hir.Program:

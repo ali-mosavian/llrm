@@ -335,7 +335,7 @@ def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
         runtime.for_module(found),
         nodes=raised.source.nodes,
     )
-    for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+    for phase in flow.machine(low.pins, frames.of(low), found.calls):
         low = phase.transform(low)
     left = [one.at for block in low.blocks for one in block.insns if one.group is not None]
     assert not left, f"copies still marked simultaneous at {[hex(x) for x in left]}"

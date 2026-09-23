@@ -1,0 +1,72 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/bench/parity/scalar.c"
+- DBSrcCue f1 1 1
+SYM y1 name="parity_scalar" base="parity_scalar" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_4
+l2 CGLastParm
+t3 CGTemp TY_INT_4
+SYM y2 name="total" base="total" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y2 TY_INT_4
+SYM y3 name="index" base="index" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 TY_INT_2
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 6 1
+n6 CGFEName y2 TY_INT_4
+n7 CGInteger 17 TY_INTEGER
+n8 CGAssign n6 n7 TY_INT_4
+- CGDone n8
+- DBSrcCue f1 7 1
+n9 CGFEName y3 TY_INT_2
+n10 CGInteger 0 TY_INTEGER
+n11 CGAssign n9 n10 TY_INT_2
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y3 TY_INT_2
+n13 CGUnary O_POINTS n12 TY_INT_2
+n14 CGInteger 8 TY_INTEGER
+n15 CGCompare O_LT n13 n14 TY_INTEGER
+- CGControl O_IF_FALSE n15 l5
+- DBSrcCue f1 8 1
+n16 CGFEName y2 TY_INT_4
+n17 CGFEName y3 TY_INT_2
+n18 CGUnary O_POINTS n17 TY_INT_2
+n19 CGInteger 3 TY_INTEGER
+n20 CGBinary O_TIMES n18 n19 TY_INTEGER
+n21 CGInteger 1 TY_INTEGER
+n22 CGBinary O_PLUS n20 n21 TY_INTEGER
+n23 CGUnary O_CONVERT n22 TY_INT_4
+n24 CGInteger 29 TY_INTEGER
+n25 CGFEName y3 TY_INT_2
+n26 CGUnary O_POINTS n25 TY_INT_2
+n27 CGInteger 2 TY_INTEGER
+n28 CGBinary O_TIMES n26 n27 TY_INTEGER
+n29 CGBinary O_MINUS n24 n28 TY_INTEGER
+n30 CGBinary O_TIMES n23 n29 TY_INT_4
+n31 CGPreGets O_PLUS n16 n30 TY_INT_4
+- CGDone n31
+n32 CGFEName y3 TY_INT_2
+n33 CGInteger 1 TY_INTEGER
+n34 CGPreGets O_PLUS n32 n33 TY_INT_2
+- CGDone n34
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 9 1
+n35 CGFEName y2 TY_INT_4
+n36 CGUnary O_POINTS n35 TY_INT_4
+n37 CGUnary O_CONVERT n36 TY_INT_4
+n38 CGTempName t3 TY_INT_4
+n39 CGAssign n38 n37 TY_INT_4
+- CGDone n39
+- DBSrcCue f1 10 1
+n40 CGTempName t3 TY_INT_4
+n41 CGUnary O_POINTS n40 TY_INT_4
+- CGReturn n41 TY_INT_4
+STOP
+FINI

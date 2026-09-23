@@ -479,7 +479,7 @@ the memory deficit. The larger allocation/copy overhead remains the priority.
 
 All 21 BASIC modules now build through the ordinary CLI with checked-in
 profiles in `docs/contracts/`; no temporary monkeypatch scripts are needed.
-The recipe is in `docs/contracts/README.md`. It preserves the audited input
+The recipe is in `docs/contracts/readme.md`. It preserves the audited input
 bounds and per-caller cleanup facts, checks defining symbols and dependency
 hashes, and leaves unknown effects conservative.
 

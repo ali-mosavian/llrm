@@ -13,11 +13,11 @@ from qbopt.hir import execute
 from qbopt.frontend.modern import driver
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
-SUM = ROOT / "frontends" / "modern" / "fixtures" / "sum.mod"
-DESCRIPTORS = ROOT / "frontends" / "modern" / "fixtures" / "descriptors.mod"
-COLLECTIONS = ROOT / "frontends" / "modern" / "fixtures" / "collections.mod"
-SUM_THREE = ROOT / "frontends" / "modern" / "fixtures" / "sum_three.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
+SUM = ROOT / "fixtures" / "modern" / "sum.mod"
+DESCRIPTORS = ROOT / "fixtures" / "modern" / "descriptors.mod"
+COLLECTIONS = ROOT / "fixtures" / "modern" / "collections.mod"
+SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.mod"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -158,7 +158,7 @@ def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -
 
 
 def test_native_matmul_matches_hir(tmp_path: Path) -> None:
-    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul.mod"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 372432\n"
     assert build(source, tmp_path / "MATMUL.EXE", run=True).output == expected
@@ -166,7 +166,7 @@ def test_native_matmul_matches_hir(tmp_path: Path) -> None:
 
 def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> None:
     """A shift by a u16 count selected `sar eax,cx`, which has no encoding: x86 counts from cl."""
-    source = ROOT / "frontends" / "modern" / "fixtures" / "operators.mod"
+    source = ROOT / "fixtures" / "modern" / "operators.mod"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "49149 -812500 3203125\n1 0 1 0\n447 254 224 121\n"
     assert build(source, tmp_path / "OPS.EXE", run=True).output == expected
@@ -174,7 +174,7 @@ def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> N
 
 def test_native_fixed_matmul_matches_hir_and_exact_arithmetic(tmp_path: Path) -> None:
     """Quarter-step inputs keep 24.8 exact; 56974 is the rational checksum."""
-    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul_fixed.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul_fixed.mod"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 56974.0\n"
     assert build(source, tmp_path / "MMFIX.EXE", run=True).output == expected
@@ -200,7 +200,7 @@ def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
 
 
 def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
-    source = ROOT / "frontends" / "modern" / "fixtures" / "ranked.mod"
+    source = ROOT / "fixtures" / "modern" / "ranked.mod"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "15 106 162 42 9 3 4\n"
     assert build(source, tmp_path / "RANKED.EXE", run=True).output == expected
@@ -208,7 +208,7 @@ def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
 
 def test_native_8x8_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
     """The flat 24.8 matmul's inputs as 8x8 matrices: the same exact checksum."""
-    source = ROOT / "frontends" / "modern" / "fixtures" / "matmul8.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul8.mod"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 56974.0\n"
     assert build(source, tmp_path / "MM8.EXE", run=True).output == expected

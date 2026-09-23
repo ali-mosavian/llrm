@@ -210,6 +210,23 @@ class ControlReplacement:
 
 
 @dataclass(frozen=True, slots=True)
+class ZeroTerminatingControl:
+    """Proof that an affine recurrence's update flags end counted control.
+
+    The replacement recurrence starts at ``-trips * step`` and is tested for
+    zero after each update.  Its original value must therefore be zero, and
+    the complete dynamic trip domain must not reach that recurrence's modular
+    period before the intended final update.
+    """
+
+    replacement: ControlReplacement
+    candidate: Affine
+    step: int
+    maximum: int
+    period: int
+
+
+@dataclass(frozen=True, slots=True)
 class _Control:
     """Where a single-latch loop with one exit tests whether to go round again."""
 
@@ -632,6 +649,39 @@ def control_replacement(
     ):
         return None
     return ControlReplacement(proof, stepping, update, aliases, copies, exits)
+
+
+def zero_terminating_control(
+    body: mir.MirBody,
+    loop: loopy.Loop,
+    proof: CountedLoop,
+    candidate: Affine,
+    facts: dict | None = None,
+) -> ZeroTerminatingControl | None:
+    """Prove that ``candidate`` can supply a counted loop's terminating flags.
+
+    Replacing counted control with an existing affine recurrence seeds it at
+    ``-trips * step`` and rebases its users by its final value, so its final
+    update is zero whatever it started from.  Bounded period safety excludes
+    an earlier modular zero.  This proof belongs here because it is
+    independent of the transform's choice of which address expressions to
+    rebase.
+    """
+    replacement = control_replacement(body, loop, proof)
+    if replacement is None or proof.maximum is None or candidate == proof.counter:
+        return None
+    width = proof.counter.start.width
+    if candidate.start.width != width or candidate.step.width != width or proof.maximum < 0:
+        return None
+    facts = consts.known(body) if facts is None else facts
+    step = _signed(candidate.step, facts, width)
+    if step in (None, 0):
+        return None
+    assert step is not None
+    period = AffineMap(step, 0, width).period
+    if proof.maximum > period:
+        return None
+    return ZeroTerminatingControl(replacement, candidate, step, proof.maximum, period)
 
 
 def test_only(op: mir.Op) -> bool:

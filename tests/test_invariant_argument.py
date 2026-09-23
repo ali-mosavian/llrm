@@ -20,7 +20,7 @@ def test_argument_slot_is_loaded_once_before_the_emitted_loop(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarg-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarg-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     decoded = corpus.partitioned(result.data)
     hot = {at for loop in loops.loops(decoded) for at in loop.body}

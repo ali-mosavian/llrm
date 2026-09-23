@@ -254,7 +254,7 @@ modules already beat BC materially (`D_MDL`, `D_SURF`, and `SND`). `ENT`,
 `IN_KEYSTROKE` and the camera wait loop receive keyboard state through a
 default-`BYREF` formal. VBDOS reloads that pointee on every loop back-edge;
 the frontend formerly let GVN retain the entry value and could wait forever
-after the interrupt handler released a key. `BYREFLP.BAS` is the isolated
+after the interrupt handler released a key. `byreflp.bas` is the isolated
 fail-first regression. The HIR now marks published indirect places volatile,
 and optimized MIR retains the memory read in the natural loop.
 
@@ -280,9 +280,9 @@ not change.
 
 This round includes canonical far-pointer field access plus three independently
 reduced frontend failures found while rebuilding QGL: typed string-comparison
-ABI sites (`SCMPABI.BAS`), virtual definitions on threaded phi edges
-(`ENTPHI.BAS`), and false volatility on compiler conversion temporaries
-(`FSTKBR.BAS`). Each fixture failed before its general fix and passes through
+ABI sites (`scmpabi.bas`), virtual definitions on threaded phi edges
+(`entphi.bas`), and false volatility on compiler conversion temporaries
+(`fstkbr.bas`). Each fixture failed before its general fix and passes through
 its full stage sequence afterwards. No MIR model or backend change was needed.
 
 All production BASIC objects except `H_BENCH` were freshly rebuilt. Its full

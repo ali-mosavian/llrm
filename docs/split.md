@@ -27,7 +27,7 @@ names nothing about the machine.** No register, no mnemonic, no encoding,
 no byte offset into BC's object. Only `lower`, `regalloc` and `peephole`
 see machine form.
 
-That is AGENTS.md's fifth rule and this file is why it is not negotiable.
+That is agents.md's fifth rule and this file is why it is not negotiable.
 
 ## Why
 

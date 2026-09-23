@@ -1,7 +1,7 @@
 """
 Small, disposable BASIC programs over INTEGER/LONG arithmetic, and the one
 reference evaluator that says what each must print -- independent of BC and
-of qbopt, built from AGENTS.md's own measured semantics ("What the runtime
+of qbopt, built from agents.md's own measured semantics ("What the runtime
 does that an instruction does not", "What widening changes, exactly") rather
 than from either compiler's source.
 
@@ -53,7 +53,7 @@ NOT v` computes the correct two's-complement value every time. Harmless for
 NOT used as pure logical negation on a canonical -1/0 value (both readings
 agree there, which is presumably why ordinary code never surfaces it) --
 `_gen_condition` keeps NOT out of every `IfPrint` condition rather than
-chase the exact rule further; written up in AGENTS.md alongside the divide
+chase the exact rule further; written up in agents.md alongside the divide
 one, as a BC behavior to know about rather than a qbopt bug.
 
 ## Why the loop bounds are literals and the counter is frozen

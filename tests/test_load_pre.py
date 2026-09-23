@@ -17,7 +17,7 @@ def test_ldpre_true_arm_skips_the_remaining_memory_read(tag):
     from qbopt import wholeseg
     from qbopt.frontend import blocks, declen
     from qbopt.objectfile import module, omf
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ldpre-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ldpre-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)
@@ -124,7 +124,7 @@ def test_ldcrit_load_runs_only_on_the_missing_conditional_edge(tag):
     from qbopt import wholeseg
     from qbopt.frontend import blocks, declen
     from qbopt.objectfile import module, omf
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ldcrit-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ldcrit-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = blocks.code_map(found)

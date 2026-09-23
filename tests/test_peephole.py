@@ -334,7 +334,7 @@ def test_fpcse_pushes_constant_single_as_one_dword():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert "pushd 43F3C000h" in instructions
@@ -347,7 +347,7 @@ def test_fpcse_passes_literal_addresses_without_register_shuffles(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert "push ax" not in instructions
@@ -400,7 +400,7 @@ def test_fpcse_drops_unused_allocator_reload():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert "mov ax,[bp-2]" not in instructions
@@ -478,7 +478,7 @@ def test_fpdeep_discards_overwritten_copy_shuffles(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert instructions.count("mov ax,si") + instructions.count("mov bx,di") <= 1
@@ -505,7 +505,7 @@ def test_addrm_index_scale_does_not_copy_and_shift_a_register():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/addrm-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     import re
 
@@ -565,7 +565,7 @@ def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert any(one.mnemonic == Mnemonic.LEA and one.memory_index_scale == 4 for one in insns)
@@ -1352,7 +1352,7 @@ def test_fpcsex_keeps_only_waits_before_integer_work(tag, waits):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes(), basic_semantics=True)
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpcsex-{tag}.obj".lower()).read_bytes(), basic_semantics=True)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(str(one) == "wait" for one in instructions) == waits
@@ -1410,7 +1410,7 @@ def test_lngmxx_does_not_reload_dividend_after_sign_extension(tag):
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     divides = [index for index, one in enumerate(insns) if one.mnemonic == Mnemonic.IDIV]

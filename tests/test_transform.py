@@ -58,6 +58,41 @@ def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypat
     assert calls == 2
 
 
+def test_half_liveness_reuses_each_immutable_body_across_a_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matmul recomputed 595 fixed points for only 170 body objects.
+
+    Analysis of a nested candidate temporarily displaces its parent state.
+    Returning to that exact immutable parent must recover its earlier answer,
+    rather than retaining only the transaction's most recent body.
+    """
+    value = mir.Value(1, 0, variable=1)
+    copy = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (value,),
+        (mir.Const(1, 2),),
+        kind=mir.Kind.COPY,
+        results=(mir.Held(value, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (copy,), ()),))
+    leaving = transform._leaving
+    calls = 0
+
+    def counted(state):
+        nonlocal calls
+        calls += 1
+        return leaving(state)
+
+    monkeypatch.setattr(transform, "_leaving", counted)
+    with transform._reusing_halves():
+        other = replace(body, entry=1)
+        assert transform.halves(body) == transform.halves(other)
+        assert transform.halves(body) == transform.halves(other)
+
+    assert calls == 2
+
+
 def test_final_pipeline_inerts_unreachable_executable_blocks() -> None:
     """NBODYS could not be emitted after peeling left clone 0x310000002b unreachable.
 
@@ -198,7 +233,7 @@ def test_gvn_load_chains_keep_a_defined_return_value() -> None:
     from qbopt.abi import runtime
     from qbopt.frontend import blocks
 
-    found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj"))
+    found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj".lower()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = next(
         body for name, body in mir.bodies(found, partition, runtime.for_module(found)) if name == "procedure TWICE"
@@ -366,6 +401,49 @@ def test_divisor_constants_propagate_without_reordering(number, safe):
     assert done.uses == (dividend,)
     assert transform._cannot_fault(done) is safe
     assert transform._constant_operands(op, {divisor: consts.Known(number, 2)}) == op
+
+
+def test_a_third_equal_divide_reads_the_answer_the_first_computed() -> None:
+    """lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no operand".
+
+    The second divide became a copy of the first's remainder, and the third
+    was served the second's quotient, which that copy no longer computes.
+    """
+    dividend, divisor = mir.Value(1, 0), mir.Value(2, 0)
+
+    def divide(at: int) -> mir.Op:
+        quotient, remainder = mir.Value(at + 3, at), mir.Value(at + 4, at)
+        return mir.Op(
+            at,
+            ir.Operation.DIVIDE,
+            "idiv",
+            (quotient, remainder),
+            (dividend, divisor),
+            kind=mir.Kind.DIVMOD,
+            args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
+            results=(mir.Held(quotient, 4), mir.Held(remainder, 4)),
+        )
+
+    first, second, third = divide(0), divide(8), divide(16)
+    remainder, quotient, total = second.results[1].value, third.results[0].value, mir.Value(40, 24)
+    add = mir.Op(
+        24,
+        ir.Operation.BINARY,
+        "add",
+        (total,),
+        (remainder, quotient),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(remainder, 4), mir.Held(quotient, 4)),
+        results=(mir.Held(total, 4),),
+    )
+    returned = mir.Op(28, ir.Operation.RETURN, "ret", (), (total,), kind=mir.Kind.RETURN, args=(mir.Held(total, 4),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, second, third, add, returned), ()),))
+
+    ops = transform.reused_divides(body, frozenset()).blocks[0].ops
+    assert [op.kind for op in ops[:3]] == [mir.Kind.DIVMOD, mir.Kind.COPY, mir.Kind.COPY]
+
+    computed = {one.value for op in ops for one in op.results}
+    assert {value for op in ops for value in op.uses} <= computed | {dividend, divisor}
 
 
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
@@ -1260,7 +1338,7 @@ def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
     from qbopt import wholeseg
 
     for name in ("bools-q-O.obj", "bools-q-noO.obj", "bools-q-O-zd.obj"):
-        path = Path("fixtures/omf") / name
+        path = Path("fixtures/omf") / name.lower()
         if not path.exists():
             continue
         _out, why = wholeseg.rebuilt(path.read_bytes())
@@ -1654,7 +1732,7 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     for name, body in mir.bodies(found, blocks):
         after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
@@ -1693,7 +1771,7 @@ def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result
     found = module.of(omf.parse(result.data))
     assert not isinstance(blocks.code_map(found), str)

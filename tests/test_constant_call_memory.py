@@ -55,7 +55,7 @@ def test_only_a_contracted_call_is_bounded_by_its_escapes(name):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_negnot_does_not_reload_constant_inputs_after_print(tag):
     """NEGNOT recomputed constant expressions after PRINT despite no data-segment escapes."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/negnot-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/negnot-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     from qbopt.objectfile import module, omf
     found = module.of(omf.parse(result.data))

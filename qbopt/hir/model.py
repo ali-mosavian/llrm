@@ -6,6 +6,7 @@ it directly into the existing MIR.
 """
 
 from enum import StrEnum
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 SCHEMA_VERSION = 1
@@ -121,6 +122,44 @@ class Place:
     extent: int | None = None
     address: AddressKind = AddressKind.NEAR
     volatile: bool = False
+
+
+def frame_pieces(places: Iterable[Place]) -> dict[int, tuple[tuple[int, int, tuple[object, ...]], ...]]:
+    """Each frame place's bytes as the objects holding them: `(low, high, identity)` frame spans.
+
+    A place overlapping no other is one object. Where places overlap, the frame splits at
+    every place's edge and each piece is one object: a region filled at once is the union of
+    the places it holds, which stay apart.
+    """
+    frame = sorted(
+        (one for one in places if one.storage in (Storage.LOCAL, Storage.PARAMETER)),
+        key=lambda one: (one.offset, one.id),
+    )
+    pieces: dict[int, tuple[tuple[int, int, tuple[object, ...]], ...]] = {}
+    at = 0
+    while at < len(frame):
+        end = frame[at].offset + (frame[at].extent or 0)
+        group = at + 1
+        while group < len(frame) and frame[group].offset < end:
+            end = max(end, frame[group].offset + (frame[group].extent or 0))
+            group += 1
+        members = frame[at:group]
+        edges = sorted({edge for one in members for edge in (one.offset, one.offset + (one.extent or 0))})
+        spans = []
+        for low, high in zip(edges, edges[1:]):
+            owner = min(
+                (one for one in members if one.offset <= low and high <= one.offset + (one.extent or 0)),
+                key=lambda one: (one.extent or 0, one.id),
+            )
+            exact = owner.offset == low and owner.offset + (owner.extent or 0) == high
+            identity = (owner.storage, owner.id) if exact else (owner.storage, owner.id, low - owner.offset)
+            spans.append((low, high, identity))
+        for one in members:
+            pieces[one.id] = tuple(
+                span for span in spans if one.offset <= span[0] and span[1] <= one.offset + (one.extent or 0)
+            )
+        at = group
+    return pieces
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +286,10 @@ class Op(StrEnum):
     FATAN = "fatan"
     FLOG2 = "flog2"
     FEXP2 = "fexp2"
+    # An I/O port: port_in reads a byte from operands[0]; port_out writes
+    # operands[1], a byte, to operands[0]. Both are observable and ordered.
+    PORT_IN = "port_in"
+    PORT_OUT = "port_out"
     CALL = "call"
 
 

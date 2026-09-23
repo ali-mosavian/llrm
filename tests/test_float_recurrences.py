@@ -110,7 +110,7 @@ def test_stage_dump_exposes_proved_loop_exit(capsys):
 @pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_fpcse_memory_recurrence_has_exact_single_exit(tag):
     """FPCSE retained ten iterations although its rounded accumulator exits at 487.5."""
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     entry = next(block for block in body.blocks if block.at == body.entry)

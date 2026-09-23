@@ -12,7 +12,7 @@ from qbopt import wholeseg
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_descriptor_address_survives_hoisting_out_of_nested_loops(program: str, tag: str) -> None:
     """HARR reloaded its descriptor 100 times; hoisting lost the jump at 0x55 and refused emission."""
-    path = Path(f"fixtures/omf/{program}-{tag}.obj")
+    path = Path(f"fixtures/omf/{program}-{tag}.obj".lower())
     module = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(module, partition)[0][1]

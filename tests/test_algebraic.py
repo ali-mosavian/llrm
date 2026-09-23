@@ -190,7 +190,7 @@ def test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic(tag):
         if stage == "mir-widen":
             states.append(state)
 
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ndmax-{tag}.obj").read_bytes(), watch=watch)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ndmax-{tag}.obj".lower()).read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     facts = consts.known(states[0])
     offsets = [op.args[1] for block in states[0].blocks for op in block.ops if op.kind is mir.Kind.PTR_OFFSET]
@@ -207,7 +207,7 @@ def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
 
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(one.mnemonic == Mnemonic.IMUL for one in insns) == 1
@@ -227,7 +227,7 @@ def test_spill_folds_closed_loops_to_their_exact_final_constants(tag):
 
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.mnemonic == Mnemonic.ADD for one in instructions)
@@ -369,7 +369,7 @@ def test_addrm_reuses_word_scale_for_long_address(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     shifts = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.SHL]
@@ -538,7 +538,7 @@ def test_nested_combines_row_scale_in_emitted_code(tag):
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
 
-    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     factors = [
@@ -1048,7 +1048,7 @@ def test_algebraic_pass_runs_without_constant_propagation_facts() -> None:
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_harr_only_needs_the_low_product(tag: str) -> None:
     """HARR paid for a widening product although its high answer and flags were unused."""
-    obj = Path("fixtures/omf") / f"harr-{tag}.obj"
+    obj = Path("fixtures/omf") / f"harr-{tag}.obj".lower()
     found = corpus.loaded(obj)
     assert found is not None
     before = mir.bodies(found, corpus.partitioned(obj))[0][1]

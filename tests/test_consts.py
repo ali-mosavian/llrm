@@ -234,7 +234,7 @@ def test_relocated_descriptor_address_is_not_integer_zero() -> None:
 
 def test_folded_extraction_has_no_implicit_machine_result() -> None:
     """CHAIN printed MODMOD=92344 instead of 13106 after stale DX replaced a folded high word."""
-    path = Path("fixtures/regressions/chain-stack-q-O.obj")
+    path = Path("fixtures/regressions/chain-stack-q-O.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     folded = transform.folded(body, found.dgroup, found.calls)

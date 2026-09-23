@@ -5,7 +5,10 @@ import subprocess
 from pathlib import Path
 
 from qbopt import hir
+from qbopt import flow
+from qbopt.model.passes import O2
 from qbopt.backend import cpu as targets
+from qbopt.model.passes import Options
 from qbopt.frontend.modern import driver
 from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern
@@ -29,7 +32,7 @@ def _frontend_text(source: Path, option: str) -> str:
     return result.stdout
 
 
-def dumped(source: Path, output: Path) -> Path:
+def dumped(source: Path, output: Path, options: Options = O2) -> Path:
     """Write source, lexical, syntax, HIR, and semantic-MIR snapshots."""
     output.mkdir(parents=True, exist_ok=True)
     program = driver.parsed(source)
@@ -44,7 +47,7 @@ def dumped(source: Path, output: Path) -> Path:
     number = 4
     for function, semantic in zip(program.modules[0].functions, lowered, strict=True):
         name = semantic.name.replace(".", "-")
-        optimized = modern.optimized(program, function, semantic, target)
+        optimized = modern.optimized(program, function, semantic, target, options=options)
         physical = physicalize(program, function, optimized)
         optimized_physical = modern.optimized(
             program,
@@ -52,6 +55,7 @@ def dumped(source: Path, output: Path) -> Path:
             physical.lowered,
             target,
             physical.calls,
+            options,
         )
         stages = (
             ("source", semantic),
@@ -85,9 +89,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path)
+    flow.level_option(parser)
     options = parser.parse_args(argv)
     output = options.output or Path("build/modernstages") / options.source.stem
-    print(dumped(options.source, output))
+    print(dumped(options.source, output, options.options))
     return 0
 
 

@@ -26,7 +26,7 @@ B$ENRD/B$ENSD/B$ENFA as one entry family and B$EXSA/B$EXFA as the matching
 exit family), and runtime/rt/error.asm (calls B$EXSA, "clear frame state
 info"). Neither name is used as the detection mechanism below, precisely
 because /Ot doesn't emit them; they are cited here as the measured grounding
-for what the idiom AGENTS.md describes actually is.
+for what the idiom agents.md describes actually is.
 
 A module's own entry point (blocks.ENTRY) seeds the main body the same way.
 A module built under /V or /W carries a third, disconnected body -- the

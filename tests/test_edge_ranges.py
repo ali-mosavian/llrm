@@ -72,7 +72,7 @@ def test_rngarm_writes_its_counter_only_after_the_loop(tag):
     from qbopt.analysis import loops
     from qbopt.objectfile import module, omf
     from qbopt.objectfile.module import Space
-    data = Path(f"fixtures/regressions/rngarm-{tag}.obj").read_bytes()
+    data = Path(f"fixtures/regressions/rngarm-{tag}.obj".lower()).read_bytes()
     found = module.of(omf.parse(data))
     states = []
     def watch(stage, name, state):

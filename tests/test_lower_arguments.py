@@ -27,7 +27,7 @@ def test_fpdeep_literal_addresses_do_not_spill():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpdeep-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpdeep-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     spill = re.compile(r"^(?:mov (?:word ptr )?\[bp-|push (?:word ptr )?\[bp-)")

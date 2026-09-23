@@ -103,7 +103,7 @@ def test_copy_of_a_pointer_retains_the_relative_offset():
 def test_ndmax_print_uses_the_stored_constant(tag):
     from pathlib import Path
     import corpus
-    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj".lower())
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
     body = mir.bodies(found, blocks, bounds_checks=True)[0][1]

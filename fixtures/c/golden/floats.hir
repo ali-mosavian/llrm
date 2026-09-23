@@ -1,0 +1,45 @@
+target 0xec
+segment 1 _TEXT attr=0x7 items=[]
+segment 2 CONST attr=0x1c items=[]
+segment 3 CONST2 attr=0xc items=[]
+segment 4 _DATA attr=0x6 items=[]
+symbol Symbol(id=1, name='half', base='half', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=2, name='d', base='d', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=3, name='pick', base='pick', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=4, name='a', base='a', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=5, name='b', base='b', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=6, name='sign', base='sign', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=7, name='d', base='d', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=8, name='scaled', base='scaled', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=9, name='x', base='x', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=10, name='ext_scale', base='ext_scale', pattern='_*', attr=15, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=11, name='mag', base='mag', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=12, name='x', base='x', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=13, name='y', base='y', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=14, name='negated', base='negated', pattern='_*', attr=7, call_class=128, call_target=1814, register_parms=False, code=None, segment=1)
+symbol Symbol(id=15, name='x', base='x', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+symbol Symbol(id=16, name='y', base='y', pattern='_*', attr=0, call_class=0, call_target=0, register_parms=False, code=None, segment=2)
+proc _half TY_DOUBLE parms=[(2, 'TY_DOUBLE')] autos=[('t3', 'TY_DOUBLE')]
+  8: CGDone n10
+  9: CGReturn n12 TY_DOUBLE
+proc _pick TY_SINGLE parms=[(4, 'TY_SINGLE'), (5, 'TY_SINGLE')] autos=[('t14', 'TY_SINGLE')]
+  13: CGControl O_IF_FALSE n21 l15
+  13: CGDone n26
+  13: CGControl O_GOTO n0 l16
+  13: CGControl O_LABEL n0 l15
+  14: CGDone n31
+  15: CGControl O_LABEL n0 l16
+  15: CGReturn n33 TY_SINGLE
+proc _sign TY_INT_2 parms=[(7, 'TY_DOUBLE')] autos=[('t35', 'TY_INT_2')]
+  19: CGDone n47
+  20: CGReturn n49 TY_INT_2
+proc _scaled TY_SINGLE parms=[(9, 'TY_SINGLE')] autos=[('t51', 'TY_SINGLE')]
+  24: CGDone n69
+  25: CGReturn n71 TY_SINGLE
+proc _mag TY_DOUBLE parms=[(12, 'TY_DOUBLE'), (13, 'TY_DOUBLE')] autos=[('t73', 'TY_DOUBLE')]
+  29: CGDone n92
+  30: CGReturn n94 TY_DOUBLE
+proc _negated TY_SINGLE parms=[(15, 'TY_SINGLE')] autos=[('t96', 'TY_SINGLE'), ('y16', 'TY_SINGLE')]
+  34: CGDone n101
+  35: CGDone n106
+  36: CGReturn n108 TY_SINGLE

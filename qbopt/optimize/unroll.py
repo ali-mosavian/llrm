@@ -37,7 +37,6 @@ def expanded(
     calls: dict,
     *,
     skip: frozenset[int] = frozenset(),
-    tried: "set[tuple] | None" = None,
 ) -> mir.MirBody:
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
@@ -147,8 +146,6 @@ def expanded(
             continue
         if count < 2 or not peelsize.admitted(body, loop, count, facts, where):
             continue
-        if tried is not None and peelsize.signature(body, loop, count, facts) in tried:
-            continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue
         candidate = _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count)
@@ -167,175 +164,23 @@ def expanded(
     return body
 
 
-def _size(body: mir.MirBody) -> int:
-    return sum(len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops) for block in body.blocks)
-
-
-def _expanded_operations(before: mir.MirBody, after: mir.MirBody, latch: int, count: int) -> int:
-    """Conservative semantic operations attributable to one expanded sequence.
-
-    The complete-peel budget applies to the loop sequence, not the containing
-    procedure. Subtract the original operations outside the loop from the
-    settled candidate, but never let folding hide the source loop copied by
-    the transformation itself. A missing or ambiguous latch is conservatively
-    treated as making the whole result the sequence.
-    """
-    found = [one for one in loops.loops(before.blocks, before.entry) if latch in one.latches]
-    if len(found) != 1:
-        return _size(after)
-    inside = found[0].body
-    loop_size = sum(
-        len(block.phis) + sum(op.kind is not mir.Kind.NOTHING for op in block.ops)
-        for block in before.blocks
-        if block.at in inside
-    )
-    outside = max(0, _size(before) - loop_size)
-    settled = max(0, _size(after) - outside)
-    return max(settled, loop_size * count)
-
-
-def _profitable(
-    before: mir.MirBody,
-    after: mir.MirBody,
-    latch: int,
-    count: int,
-    where: Where,
-) -> bool:
-    """Whether exact dynamic savings pay for the optimized straight-line body."""
-    return _rejection(before, after, latch, count, where) is None
-
-
-def _rejection(
-    before: mir.MirBody,
-    after: mir.MirBody,
-    latch: int,
-    count: int,
-    where: Where,
-    copied: mir.MirBody | None = None,
-) -> str | None:
-    """Why a structural candidate loses, or ``None`` when it wins.
-
-    Keep the decision inspectable rather than returning an unexplained false:
-    matmul's locally cheaper rejected peel was first mistaken for a later
-    production pass because nothing recorded which gate had refused it.
-
-    `before` is what the candidate is priced against; `copied`, the body the
-    loop was copied from, is what must have lost that loop. A settled
-    `before` may already have turned it into a fill.
-    """
-    copied = before if copied is None else copied
-    if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(copied.blocks, copied.entry)):
-        return "residual-loops"
-    if not where.options.grows and _size(after) > _size(before):
-        return "size-growth"
-    if (
-        where.options.max_unroll_iterations
-        and count > where.options.max_unroll_iterations
-        and _size(after) > _size(before)
-    ):
-        # A large exact loop may still be an excellent constant-folding
-        # vehicle: allow it when scalar optimization erases all expansion
-        # growth. Otherwise obey the target's complete-peel budget before an
-        # expensive branch makes arbitrary duplication look free.
-        return "iteration-growth"
-    dynamic_before = profit.weighted(before, where.costs, {latch: count})
-    dynamic_after = profit.weighted(after, where.costs)
-    if dynamic_before is None or dynamic_after is None:
-        return "unpriced"
-    if dynamic_after >= dynamic_before:
-        return "no-saving"
-    pressure_before = profit.spill_risk(before, where.costs, where.registers, {latch: count})
-    pressure_after = profit.spill_risk(after, where.costs, where.registers)
-    if pressure_before is None or pressure_after is None:
-        return "unpriced"
-    total_before = dynamic_before + pressure_before
-    total_after = dynamic_after + pressure_after
-    sequence = _expanded_operations(copied, after, latch, count)
-    if (
-        pressure_after > 0
-        and where.options.max_unrolled_operations
-        and sequence > where.options.max_unrolled_operations
-        and (pressure_after >= pressure_before or total_before - total_after <= sequence * where.costs.move)
-    ):
-        # GCC's target-independent ``max-completely-peeled-insns`` is 200.
-        # Keep the corresponding machine-neutral budget in the target profile.
-        # Register pressure makes MIR's traffic estimate a lower bound rather
-        # than an allocation certificate. P5 matmul first crossed this boundary
-        # while its spill lower bound rose, then escaped through a second shape
-        # where it fell by one (2,341 to 2,340); that candidate selected 958
-        # instructions instead of 421. An oversized spill-prone candidate must
-        # both lower pressure and save enough dynamic work to pay for its whole
-        # expanded sequence. Nbody does: it lowers the bound from 8,010 to
-        # 3,984 and saves 187,314 cost units across its six fixed interactions.
-        return "operation-growth"
-    if total_after >= total_before:
-        return "pressure"
-    # MIR cannot know final encoding bytes. Charge one register move per added
-    # semantic operation.  A register-fitting scalar chain can amortize that
-    # static growth over the exact executions whose dynamic work it removes:
-    # charging every CRC clone once per invocation rejected its useful
-    # constant specialization.  A candidate already predicted to spill must
-    # pay the full growth instead.  MIR's spill cost is only a lower bound on
-    # constrained allocation, so amortizing both the bound's error and the
-    # expansion made matmul twice as large *and* slower.  The profile's peel
-    # count and the builder's operation ceiling remain independent bounds.
-    growth = max(0, _size(after) - _size(before)) * where.costs.move
-    if pressure_after == 0:
-        growth = (growth + count - 1) // count
-    return "growth" if total_before - total_after <= growth else None
-
-
-def optimized(body: mir.MirBody, where: Where, *, optimize, tried: set[tuple], watch=None) -> mir.MirBody:
-    """Repeatedly expand one profitable exact loop and re-run scalar MIR.
-
-    `tried` outlives this call: the fixed point asks every round, and a loop
-    it already rejected, unchanged, is not asked about again.
-    """
+def optimized(body: mir.MirBody, where: Where, *, watch=None) -> mir.MirBody:
+    """Expand every exact loop `peelsize.admitted` prices as worth it, once each; the
+    caller's fixed point settles the copies."""
     if not priced(body, where):
         return body
-    rejected: set[int] = set()
-    # Once settled for pricing, the loop left alone is where the fixed point is
-    # going anyway; handing it back saves redoing that work round by round.
-    baseline = None
     while True:
-        candidate = expanded(body, where, where.named, skip=frozenset(rejected), tried=tried)
+        candidate = expanded(body, where, where.named)
         if candidate is body:
-            return baseline or body
-        additions = candidate.repetitions[len(body.repetitions) :]
-        if len(additions) != 1:
-            return baseline or body
-        latch, count = additions[0]
-        if latch in rejected:
-            return baseline or body
+            return body
         if watch is not None:
-            watch("unroll-candidate", candidate)
-        result = optimize(candidate)
-        # Both sides settled: the loop left as it is gets the same passes the
-        # copy does. Pricing the copy against the loop mid-round let `[0; 8, 8]`
-        # unroll into eight fills that, left alone, merge into one.
-        baseline = baseline or optimize(body)
-        rejection = _rejection(baseline, result, latch, count, where, body)
-        if rejection is not None:
-            if watch is not None:
-                watch(f"unroll-rejected-{rejection}", result)
-            rejected.add(latch)
-            tried.add(_signature(body, latch, count, where))
-            continue
-        body = result
-        baseline = None
-        if watch is not None:
-            watch("unroll-accepted", body)
-        rejected.clear()
+            watch("unroll-accepted", candidate)
+        body = candidate
 
 
 def priced(body: mir.MirBody, where: Where) -> bool:
-    """Whether a candidate here could be accepted at all: `_rejection` prices both sides."""
+    """Whether the target prices every operation here, which a copy's cost needs."""
     return profit.static(body, where.costs) is not None
-
-
-def _signature(body: mir.MirBody, latch: int, count: int, where: Where) -> tuple:
-    (loop,) = (one for one in loops.loops(body.blocks, body.entry) if latch in one.latches)
-    return peelsize.signature(body, loop, count, consts.known(body, where.dgroup, where.named))
 
 
 def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count):

@@ -232,7 +232,7 @@ def run(
         )
         frame = frames.of(low, found.calls)
         in_ssa = True
-        for phase in machine(_pinned(low), frame, found.calls, cpu=target):
+        for phase in machine(low.pins, frame, found.calls, cpu=target):
             if isinstance(phase, phielim.PhiElimination):
                 in_ssa = False
             low = checked(low, phase, in_ssa=in_ssa)
@@ -242,13 +242,3 @@ def run(
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
     out = omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu, source=source)
     return (data, out) if isinstance(out, str) else (out, "written")
-
-
-def _pinned(body) -> dict:
-    """A body's pins, by value id, which is what the allocator is keyed on.
-
-    MIR pins a value; LIR names an id. The translation is here rather than
-    in the allocator because a pin is the raise's statement about the
-    machine, and this is the last place that holds both forms.
-    """
-    return {value.id: register for value, register in (getattr(body, "pins", None) or {}).items()}

@@ -6,7 +6,7 @@ is read as if it did not.
 
 ## The architecture this closes on
 
-`AGENTS.md` has the drawing and the ten passes. The part that changes what
+`agents.md` has the drawing and the ten passes. The part that changes what
 is on this roadmap: **the machine-specific passes are not relocated, they
 are dissolved.**
 
@@ -44,7 +44,7 @@ See [current target coverage](target-coverage-current.md) for measured ratios,
 missing/provisional references and remaining gaps. The historical baseline
 spread is not the current optimizer's result.
 
-Making a `LONG` cost what an `INTEGER` costs -- the README's number, and
+Making a `LONG` cost what an `INTEGER` costs -- the readme's number, and
 where this began -- is one case of that goal rather than the goal itself.
 It is also the part that is nearly done, which is why the two must not be
 confused: the ratio is *long against integer within BC's own output*, and

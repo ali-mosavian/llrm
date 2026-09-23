@@ -13,7 +13,7 @@ from qbopt.optimize import transform
 @pytest.mark.parametrize("disturbed", [False, True])
 def test_harr_reuses_descriptor_address_only_when_unchanged(tag, disturbed):
     """HARR rebuilt a dead high half and missed its identical descriptor address."""
-    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    path = Path(f"fixtures/omf/harr-{tag}.obj".lower())
     module = corpus.loaded(path)
     body = mir.bodies(module, corpus.partitioned(path))[0][1]
 

@@ -41,7 +41,7 @@ def slices(body: mir.MirBody, elements: int | tuple[int, ...]) -> tuple[dict, di
 
 @pytest.fixture(scope="module")
 def sum_three() -> tuple[mir.MirBody, mir.MirBody]:
-    program = driver.parsed(ROOT / "frontends" / "modern" / "fixtures" / "sum_three.mod")
+    program = driver.parsed(ROOT / "fixtures" / "modern" / "sum_three.mod")
     function = next(one for module in program.modules for one in module.functions if one.name == "sum_three")
     semantic = next(one for one in modern_compile.semantic_lowered(program) if one.name.endswith("sum_three"))
     optimized = modern_compile.optimized(program, function, semantic, targets.profile("386"))

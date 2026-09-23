@@ -64,6 +64,8 @@ def placed(body: lir.LirBody) -> lir.LirBody:
             )
             block = replace(block, insns=(*block.insns, jump))
         explicit.append(block)
+    if body.source_order:
+        return replace(body, blocks=tuple(explicit))
     by_at = {block.at: block for block in explicit}
     natural = loops.loops(explicit, body.entry)
     tests = _tests(natural, body.entry, by_at)

@@ -11,6 +11,44 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 from qbopt.analysis import constant_cycles
 from qbopt.analysis import interprocedural
+from qbopt.analysis import ssa
+
+
+def test_ssa_use_index_preserves_modes_filtering_and_operation_order() -> None:
+    """A carried high half is a raw use but not an operation the instruction consumes."""
+    source = mir.Value(1, 0, variable=1)
+    carried = mir.Value(2, 0, variable=2)
+    first_result = mir.Value(3, 0, variable=3)
+    second_result = mir.Value(4, 1, variable=4)
+    ignored = mir.Value(5, 1, variable=5)
+    first = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (first_result,),
+        (source, carried),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(first_result, 2),),
+        merges={carried: first_result},
+    )
+    second = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (second_result,),
+        (source, ignored),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(source, 2), mir.Held(ignored, 2)),
+        results=(mir.Held(second_result, 2),),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, second), ()),))
+
+    raw = ssa.use_index(body, {source, carried})
+    consumed = ssa.use_index(body, {source, carried}, consumed=True)
+
+    assert raw == {source: [first, second], carried: [first]}
+    assert consumed == {source: [first, second]}
 
 
 def test_unreachable_floating_work_becomes_a_complete_inert_marker() -> None:

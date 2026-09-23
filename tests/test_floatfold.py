@@ -42,7 +42,7 @@ def test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpdeep-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpdeep-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(
@@ -74,7 +74,7 @@ def test_qb_fpcse_preserves_entry_when_first_load_disappears():
 
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
 
 
@@ -87,7 +87,7 @@ def test_collapsed_fpcse_has_no_empty_jump_trampoline():
     import corpus
     from qbopt import wholeseg
 
-    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert not any(
         one.insn.mnemonic == Mnemonic.JMP for block in corpus.partitioned(result.data) for one in block.insns

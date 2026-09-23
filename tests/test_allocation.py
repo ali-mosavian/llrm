@@ -48,7 +48,7 @@ def test_harr_keeps_its_inner_loop_value_out_of_a_spill_slot() -> None:
     from qbopt import wholeseg
 
     result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped
@@ -92,6 +92,30 @@ def test_moving_a_preserved_value_does_not_rewrite_the_destination() -> None:
     made = select.emit(what, at=0, where=where)
     assert made is not None
     assert _shown(made.code) == "mov ax,1", f"the destination moved with a value that is not it: {_shown(made.code)}"
+
+
+def test_a_lowered_origin_lets_the_assembler_remap_a_moved_value() -> None:
+    """Lower keyed `origin` by `mir.Value` and the assembler looked up the
+    instruction's value ids, so a value allocated away from where BC had it
+    found no origin and was emitted in BC's register."""
+    from qbopt.backend import lower
+
+    made = mir.Value(1, 0x10, variable=7)
+    copy = mir.Op(
+        0x10,
+        ir.Operation.MOVE,
+        "mov",
+        (made,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(1, 2),),
+        results=(mir.Held(made, 2),),
+    )
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (copy,), ()),))
+    low = lower.lowered("origin", body, {}, set(), {}, hints=mir.AllocationHints(origins={7: Register.EAX}))
+    (one,) = low.insns
+    where = asm._where(one, {made.id: Register.EBX}, low.origin)
+    assert where is not None and where[0][Register.AX] == Register.BX, where
 
 
 def test_lir_says_a_two_address_operand_is_one_register() -> None:
@@ -586,7 +610,7 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
         at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)
     }
     was = owned(low)
-    for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+    for phase in flow.machine(low.pins, frames.of(low), found.calls):
         low = phase.transform(low)
     lost = sorted(was - owned(low))
     assert not lost, f"bytes owned by nothing: {[hex(x) for x in lost[:4]]}"
@@ -616,12 +640,38 @@ def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
     from qbopt.backend import allocate
 
     for register in (Register.EBX, Register.ESI):
-        got = allocate._settled(_based_cell().what.sources[0], {21: register}, {})
+        got = allocate._settled(_based_cell().what.sources[0], {21: register})
         assert isinstance(got, ir.Mem)
         assert got.through == target.named(register, 2), f"{register}: {got.through}"
         assert got.base == ir.Held(21, 2), "the cell stopped naming its value"
         for field in ("addr", "width", "offset", "disp_width"):
             assert getattr(got, field) == getattr(_based_cell().what.sources[0], field), field
+
+
+def test_a_call_result_used_as_a_base_leaves_the_register_it_was_delivered_in() -> None:
+    """nbodys placed `fld [si]`'s base in AX, where the call left it.
+
+    The allocator released the whole-range AX pin, but constrain still found
+    it in `body.pins` and judged the result already where the call delivers
+    it, so nothing split it and `[ax]`, which has no 16-bit encoding, was
+    emitted.
+    """
+    from dataclasses import replace
+
+    result = ir.Held(21, 2)
+    call = lir.Insn(
+        at=0xF0,
+        covers=(0xF0, 0xF3),
+        what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        defines=(21,),
+        uses=(),
+        op=None,
+        delivers=((result, Register.AX),),
+    )
+    body = replace(_one_block(call, _based_cell()), pins={21: Register.EAX})
+    placed = _through_regalloc(body, {21: Register.EAX})
+    load = next(one for one in placed.insns if one.at == 0x100 and isinstance(one.what.sources[0], ir.Mem))
+    assert load.what.sources[0].through in target.ADDRESSING, load.what.sources[0].through
 
 
 def test_a_cell_whose_address_nothing_placed_is_refused() -> None:

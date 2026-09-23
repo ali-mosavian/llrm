@@ -70,7 +70,7 @@ def test_floating_motion_requires_execution_and_unchanged_environment(obstacle: 
 @pytest.mark.parametrize("basic", [False, True])
 def test_fpcsex_invariant_multiply_and_divide_leave_loop(tag: str, basic: bool) -> None:
     result = wholeseg.emitted(
-        Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes(), basic_semantics=basic
+        Path(f"fixtures/omf/fpcsex-{tag}.obj".lower()).read_bytes(), basic_semantics=basic
     )
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     blocks = corpus.partitioned(result.data)

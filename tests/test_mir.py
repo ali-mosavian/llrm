@@ -167,7 +167,7 @@ def test_resolving_renames_pointer_metadata_with_its_values() -> None:
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_arithmetic_has_only_operand_dependencies(tag: str) -> None:
     """nbody refused emission: an absorbed multiply read an undefined condition."""
-    path = Path(f"fixtures/omf/divmod-{tag}.obj")
+    path = Path(f"fixtures/omf/divmod-{tag}.obj".lower())
     found = corpus.loaded(path)
     seen = 0
     for _, body in mir.bodies(found, corpus.partitioned(path)):
@@ -410,7 +410,7 @@ def test_a_routine_that_reads_no_register_leaves_no_phantom_live_across_it() -> 
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj".lower()).read_bytes()))
     bodies = mir.bodies(found, split.partition(found, code_map(found)))
     ((op, body),) = [
         (op, body)
@@ -808,7 +808,7 @@ def _op_at(stem: str, at: int):
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj".lower()).read_bytes()))
     blocks = split.partition(found, code_map(found))
     for _name, body in raised.bodies(found, blocks):
         for block in body.blocks:
@@ -885,7 +885,7 @@ def _raised_calls(name: str):
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    at = Path("fixtures/omf") / name
+    at = Path("fixtures/omf") / name.lower()
     assert at.exists(), f"{name} is checked in and this test needs it"
     from qbopt.abi import runtime
 

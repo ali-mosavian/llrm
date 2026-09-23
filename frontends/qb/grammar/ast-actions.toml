@@ -308,6 +308,12 @@ operand = "ERROR"
 shape = "Runtime"
 
 [[emit]]
+identity = "opStOut"
+action = "Runtime"
+operand = "OUT"
+shape = "Runtime"
+
+[[emit]]
 identity = "opStPoke"
 action = "Runtime"
 operand = "POKE"
@@ -404,6 +410,12 @@ shape = "Runtime"
 identity = "tkCOLOR"
 action = "Runtime"
 operand = "COLOR"
+shape = "Runtime"
+
+[[dispatch]]
+identity = "tkWAIT"
+action = "Runtime"
+operand = "WAIT"
 shape = "Runtime"
 
 [[dispatch]]
@@ -568,6 +580,11 @@ retains = "storage"
 identity = "NtIdAryI"
 action = "StaticVariableDeclaration"
 retains = "name,type_name,array,fixed_length,span"
+
+[[external]]
+identity = "NtIdAry"
+action = "SharedVariableDeclaration"
+retains = "name,type_name,array,span"
 
 [[external]]
 identity = "NtIdAryDim"

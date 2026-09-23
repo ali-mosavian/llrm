@@ -20,6 +20,8 @@ pub enum ResultClass {
 pub enum Effect {
     Pure,
     ReadsMemory,
+    /// Reads a device port: observable, never repeated or dropped.
+    Device,
     Runtime,
 }
 
@@ -51,6 +53,7 @@ pub enum Lowering {
     Floor,
     Truncate,
     Peek,
+    PortIn,
     Point,
     Length,
     LowerBound,
@@ -190,6 +193,7 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("MKD", 1..=1, String, Runtime, Lowering::PackDouble),
     intrinsic!("OCT", 1..=1, String, Runtime, Lowering::RadixText("B$FOCT")),
     intrinsic!("PEEK", 1..=1, Integer, ReadsMemory, Lowering::Peek),
+    intrinsic!("INP", 1..=1, Integer, Device, Lowering::PortIn),
     intrinsic!("POINT", 2..=2, Integer, Runtime, Lowering::Point),
     intrinsic!(
         "RTRIM",

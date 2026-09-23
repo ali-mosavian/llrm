@@ -12,7 +12,7 @@ from qbopt import wholeseg
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_negnot_raises_printed_long_negations(tag):
     """NEGNOT passed split NEG/ADC/NEG chains to PRINT, blocking whole-value folding."""
-    path = Path(f"fixtures/omf/negnot-{tag}.obj")
+    path = Path(f"fixtures/omf/negnot-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     ops = [op for block in body.blocks for op in block.ops]
@@ -23,7 +23,7 @@ def test_negnot_raises_printed_long_negations(tag):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nots_stores_whole_unary_results_without_stack_splitting(tag):
     """NOTS split whole EQV/NAND results with PUSH/POP merely to store their halves."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/nots-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/nots-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(instruction.startswith("pop ") for instruction in instructions)
@@ -32,7 +32,7 @@ def test_nots_stores_whole_unary_results_without_stack_splitting(tag):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_arith_passes_whole_results_without_splitting_them(tag):
     """ARITH split eight long results through PUSH/POP just to push the same bytes again."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/arith-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/omf/arith-{tag}.obj".lower()).read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(instruction.startswith("pop ") for instruction in instructions)

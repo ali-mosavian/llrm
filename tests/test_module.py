@@ -303,7 +303,7 @@ def test_the_compiler_that_made_an_object_is_read_off_it() -> None:
         ("fpemu-p-evt.obj", module.Family.PDS),
         ("cmpord-v-g3.obj", module.Family.VBDOS),
     ):
-        at = Path("fixtures/omf") / name
+        at = Path("fixtures/omf") / name.lower()
         assert at.exists(), f"{name} is checked in and this test needs it"
         got = module.family(omf.parse(at.read_bytes()))
         assert got is want, f"{name} reads as {got}"

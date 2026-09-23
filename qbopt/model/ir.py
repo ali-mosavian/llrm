@@ -389,7 +389,7 @@ class Semantics:
 
     `dests` is a tuple rather than one location because the absorbed divide
     has two -- `idiv` leaves the quotient in eax and the remainder in edx,
-    and AGENTS.md's own "divide and remainder are C's" is exactly that one
+    and agents.md's own "divide and remainder are C's" is exactly that one
     instruction. Naming only the quotient would tell a value-numbering pass
     that edx still held what it held before.
     """
@@ -735,7 +735,7 @@ def _multiply(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semant
     The one-operand form writes the dx:ax (or edx:eax) pair the way `idiv`
     does -- two implicit destinations, the shape Semantics.dests already
     exists for. It is not what calls.py absorbs a B$MUI4 into: that is a
-    plain `imul r32,rm32`, because AGENTS.md's own measurement is that
+    plain `imul r32,rm32`, because agents.md's own measurement is that
     B$MUI4 wraps exactly as `imul` does. Not in the 110-fixture corpus at
     all -- reported twice in bench/nbody.bas's own main body, for which
     there is no object here -- so what pins this shape is the unit case,
@@ -897,7 +897,7 @@ def _jump(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics 
     to the runtime.
 
     The indirect far forms stay barriers: they read their target out of
-    memory, and AGENTS.md's own census finds not one `FF /4` or `/5` in any
+    memory, and agents.md's own census finds not one `FF /4` or `/5` in any
     module, so there is nothing to measure a model against.
     """
     near = _transfer(insn, resolve, op, name)
@@ -1043,7 +1043,7 @@ BUILD: dict[Operation, Builder] = {
 #   a byte-wide `imul` or `idiv`, whose product or quotient lands in ax alone
 #     rather than in a pair. A different shape, and absent from this corpus.
 #   the indirect far transfers, `FF /4` and `/5`. Not one appears in any
-#     module (AGENTS.md's own census), so there is nothing to model against.
+#     module (agents.md's own census), so there is nothing to model against.
 #
 # RETF is its own mnemonic rather than a form of RET, which is why it was
 # absent: _return already handled both its shapes. Measured, that one line

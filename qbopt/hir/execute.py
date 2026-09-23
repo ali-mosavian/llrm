@@ -116,10 +116,14 @@ class _Machine:
         value_types = {one.id: self.types[one.type] for one in function.values}
         for value, argument in zip(function.parameters, arguments, strict=True):
             values[value] = _normalized(argument, value_types[value])
+        framed = [one for one in function.places if one.storage in (model.Storage.LOCAL, model.Storage.PARAMETER)]
+        # One frame, so places that overlap share their bytes.
+        base = min((one.offset for one in framed), default=0)
+        frame = bytearray(max((one.offset + (one.extent or 0) - base for one in framed), default=0))
         locals_ = {
             place.id: bytearray(place.extent if place.extent is not None else self.types[place.type].width)
             for place in function.places
-            if place.storage is not model.Storage.MODULE
+            if place.storage not in (model.Storage.MODULE, model.Storage.LOCAL, model.Storage.PARAMETER)
         }
         places = {one.id: one for one in function.places}
         blocks = {one.id: one for one in function.blocks}
@@ -176,6 +180,9 @@ class _Machine:
                 except KeyError as error:
                     raise ExecutionError(f"{place.name}: unknown module object {place.symbol}") from error
                 offset = place.offset
+            elif place.storage in (model.Storage.LOCAL, model.Storage.PARAMETER):
+                memory = frame
+                offset = place.offset - base
             else:
                 memory = locals_[place.id]
                 offset = 0

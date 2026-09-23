@@ -128,7 +128,7 @@ def assembled(
         )
         owned_frame = frames.of(body, legalized.calls)
         in_ssa = True
-        for phase in flow.machine(flow._pinned(body), owned_frame, legalized.calls, cpu=target):
+        for phase in flow.machine(body.pins, owned_frame, legalized.calls, cpu=target):
             if isinstance(phase, prologue.Prologue):
                 continue
             if isinstance(phase, phielim.PhiElimination):

@@ -22,7 +22,7 @@ def test_checked_constant_indices_can_use_native_addressing(tag, zero_only, monk
         monkeypatch.setattr(raising_array_access, "_checked",
                             lambda shape, symbol, indices, memory:
                             checked(shape, symbol, indices, memory) and all(index.n == 0 for index in indices))
-    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj".lower())
     found = corpus.loaded(path)
     first = min(at for at, name in found.calls.items() if name == "B$HARY")
     body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
@@ -63,7 +63,7 @@ def test_checked_proof_requires_each_live_dimension(hazard):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_checked_access_proofs_reach_fixed_point(tag):
     """NDMAX retained three HARY checks after its first proven store; two also have constant valid indices."""
-    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj".lower())
     found = corpus.loaded(path)
     sites = sorted(at for at, name in found.calls.items() if name == "B$HARY")
     body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
@@ -79,7 +79,7 @@ def test_checked_access_proofs_reach_fixed_point(tag):
 @pytest.mark.parametrize("program", ["ndarr", "ndmax"])
 def test_hary_supports_nine_and_sixty_dimensions(tag, program):
     """NDARR (1,12,2) and NDMAX (11,22) were refused by an invented eight-dimension cap."""
-    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj".lower())
     found = corpus.loaded(path)
     assert "B$HARY" in found.calls.values()
     raised = mir.bodies(found, corpus.partitioned(path))
@@ -95,7 +95,7 @@ def test_hary_supports_nine_and_sixty_dimensions(tag, program):
 def test_native_array_arithmetic_keeps_allocation_dimension_constants(tag):
     """NDMAX grew to 9.7 KB because each native op was mistaken for the removed HARY call."""
     from qbopt.analysis import consts
-    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj".lower())
     found = corpus.loaded(path)
     raised = mir.bodies(found, corpus.partitioned(path))
     body = raised[0][1]
@@ -132,7 +132,7 @@ def test_overflow_observation_has_no_normal_path_register_results():
 @pytest.mark.parametrize("bounds_checks", [False, True])
 def test_array_checks_are_independent_of_numeric_semantics(tag, basic_semantics, bounds_checks):
     """ARRIDX's three HARY calls must become address arithmetic, not deleted pointer definitions."""
-    path = Path(f"fixtures/regressions/arridx-bounds-{tag}.obj")
+    path = Path(f"fixtures/regressions/arridx-bounds-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path), basic_semantics=basic_semantics,
                       bounds_checks=bounds_checks)[0][1]
@@ -182,7 +182,7 @@ def test_unsupported_checked_helper_is_not_unchecked_success():
 @pytest.mark.parametrize("program", ["harr-bounds", "dynsz"])
 def test_dynamic_far_address_arithmetic_is_native(tag, program):
     """HARR computes both addresses via HARY each iteration; they must be MIR, not retained calls."""
-    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj".lower())
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     assert not any(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"

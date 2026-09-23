@@ -1,0 +1,18 @@
+# Real-mode DOS on a PC with VGA.
+
+# A far address is selector * 16 + offset.
+addressing = "real"
+
+# Linear [low, high) ranges no program's own data occupies. A write there
+# reaches no variable, array or runtime cell.
+[[foreign]]
+name = "VGA memory: graphics, monochrome and colour text"
+low = 0xA0000
+high = 0xC0000
+
+# I/O ports a write to changes no memory. The VGA DAC: PEL mask, read
+# index, write index, data; the palette is mapped at no address.
+[[silent_ports]]
+name = "VGA DAC"
+low = 0x3C6
+high = 0x3CA

@@ -46,7 +46,10 @@ fn view_print_preserves_the_reset_and_bounded_runtime_forms() {
     let hir = compile(&module, "view_print", Dialect::VbDos, "vbdos").unwrap();
     assert_eq!(hir.matches("B$VWPT").count(), 2);
     assert!(hir.contains("\"value\":-1"), "reset sentinels: {hir}");
-    assert!(hir.contains("\"value\":3") && hir.contains("\"value\":22"), "bounds: {hir}");
+    assert!(
+        hir.contains("\"value\":3") && hir.contains("\"value\":22"),
+        "bounds: {hir}"
+    );
 }
 
 #[test]
@@ -69,11 +72,7 @@ fn console_input_retains_its_prompt_and_destination() {
         } if prompt == "How many" && destinations.len() == 1
     ));
 
-    let unprompted = parse(
-        "dim answer as string\r\ninput answer\r\n",
-        Dialect::VbDos,
-    )
-    .unwrap();
+    let unprompted = parse("dim answer as string\r\ninput answer\r\n", Dialect::VbDos).unwrap();
     assert!(matches!(
         &unprompted.statements[1],
         Statement::Input { prompt: None, destinations, .. } if destinations.len() == 1
@@ -166,7 +165,11 @@ fn circle_retains_coordinates_radius_and_color() {
 
 #[test]
 fn circle_retains_omitted_angles_before_aspect() {
-    let module = parse("circle (x, y), radius, color, , , aspect\r\n", Dialect::VbDos).unwrap();
+    let module = parse(
+        "circle (x, y), radius, color, , , aspect\r\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
     assert!(matches!(
         &module.statements[..],
         [Statement::Runtime { name, arguments, .. }]
@@ -180,11 +183,7 @@ fn circle_retains_omitted_angles_before_aspect() {
 fn line_input_with_prompt_is_not_a_graphics_line() {
     // Gorillas uses the console form; dispatching only on the shared LINE
     // keyword silently turned it into a two-operand graphics statement.
-    let module = parse(
-        "line input \"Name: \"; player$\r\n",
-        Dialect::QuickBasic45,
-    )
-    .unwrap();
+    let module = parse("line input \"Name: \"; player$\r\n", Dialect::QuickBasic45).unwrap();
     assert!(matches!(
         &module.statements[..],
         [Statement::LineInput { file: None, prompt: Some(_), destination: Expr::Name(name, _), .. }]
@@ -247,7 +246,9 @@ fn print_tab_retains_position_without_printing_it_as_a_number() {
     let Statement::Print { items, .. } = &module.statements[0] else {
         panic!("expected PRINT")
     };
-    assert!(matches!(&items[1].value, Expr::Apply { name, arguments, .. } if name == "TAB" && arguments.len() == 1));
+    assert!(
+        matches!(&items[1].value, Expr::Apply { name, arguments, .. } if name == "TAB" && arguments.len() == 1)
+    );
 }
 
 #[test]
@@ -271,7 +272,11 @@ fn rnd_loads_the_single_returned_by_the_vbdos_runtime() {
     assert!(hir.contains("\"callee\":\"B$RND1\""), "{hir}");
     assert!(hir.contains("\"op\":\"load\""), "{hir}");
     let call = hir.find("\"callee\":\"B$RND1\"").unwrap();
-    assert!(hir[call..].starts_with("\"callee\":\"B$RND1\"") && hir[call..call + 180].contains("\"tag\":\"place\""), "{hir}");
+    assert!(
+        hir[call..].starts_with("\"callee\":\"B$RND1\"")
+            && hir[call..call + 180].contains("\"tag\":\"place\""),
+        "{hir}"
+    );
 }
 
 #[test]
@@ -338,7 +343,10 @@ fn print_using_retains_format_separately_from_values() {
     ));
     let hir = compile(&module, "print_using", Dialect::VbDos, "vbdos").unwrap();
     for callee in ["B$USNG", "B$PSI2", "B$PEI2"] {
-        assert!(hir.contains(&format!("\"callee\":\"{callee}\"")), "{callee}: {hir}");
+        assert!(
+            hir.contains(&format!("\"callee\":\"{callee}\"")),
+            "{callee}: {hir}"
+        );
     }
 }
 
@@ -376,18 +384,20 @@ fn parses_default_type_ranges_as_declarations_not_calls() {
 }
 
 #[test]
-fn default_typing_is_module_wide_and_yields_to_suffix_and_as() {
-    // VBDOS, PDS 7.1, and QB 4.5 all print 2,2 for declarations on either
-    // side of DEFINT. Explicit suffixes and AS clauses remain authoritative.
+fn default_typing_applies_from_its_line_and_yields_to_suffix_and_as() {
+    // BC 4.5's listing of `banana = 1: DEFINT B: banana = 2` stores BANANA!
+    // then BANANA%: each name is typed where it appears, so `apple` either
+    // side of DEFINT is two variables. PRINT LEN(apple) after it prints 2.
     let module = parse(
-        "dim apple\ndefint a-a\ndim another, aLong&, appleDouble as double\n",
+        "dim apple\ndefint a-a\ndim another, aLong&, appleDouble as double\nprint len(apple)\n",
         Dialect::QuickBasic45,
     )
     .unwrap();
     let hir = compile(&module, "default_types", Dialect::QuickBasic45, "qb45").unwrap();
     for (name, extent, type_id) in [
-        ("APPLE", 2, 1),
-        ("ANOTHER", 2, 1),
+        ("APPLE!", 4, 3),
+        ("APPLE%", 2, 1),
+        ("ANOTHER%", 2, 1),
         ("ALONG&", 4, 2),
         ("APPLEDOUBLE", 8, 4),
     ] {
@@ -446,19 +456,34 @@ fn control_not_inverts_the_operand_truth_without_materializing_bitwise_not() {
 }
 
 #[test]
-fn procedure_default_types_are_scoped_to_local_declarations() {
-    // A VBDOS executable with this shape reports a two-byte inherited A local
-    // and an eight-byte procedure-local B local. The following procedure must
-    // start again from the module defaults rather than inheriting DEFDBL.
+fn a_procedure_def_type_carries_into_the_procedures_after_it() {
+    // QB 4.5, PDS 7.1 and VBDOS listings of this shape all store `beta = 3`
+    // in `later` as an eight-byte DOUBLE: DEFtype is textual, not scoped to
+    // the procedure it appears in.
     let module = parse(
-        "defint a-a\nsub first\ndefdbl b-b\ndim apple, beta\nend sub\nsub second\ndim beta\nend sub\n",
+        "defint a-a\nsub first\ndefdbl b-b\ndim apple, beta\nend sub\nsub later\ndim beta\nend sub\n",
         Dialect::VbDos,
     )
     .unwrap();
     let hir = compile(&module, "local_defaults", Dialect::VbDos, "vbdos").unwrap();
-    assert_eq!(hir.matches("\"name\":\"APPLE\",\"offset\":-2").count(), 1);
-    assert_eq!(hir.matches("\"name\":\"BETA\",\"offset\":-10").count(), 1);
-    assert_eq!(hir.matches("\"name\":\"BETA\",\"offset\":-4").count(), 1);
+    assert_eq!(
+        hir.matches("\"extent\":2,\"id\":1,\"name\":\"APPLE%\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"extent\":8,\"id\":2,\"name\":\"BETA#\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"extent\":8,\"id\":1,\"name\":\"BETA#\"")
+            .count(),
+        1,
+        "{hir}"
+    );
 }
 
 #[test]
@@ -553,7 +578,10 @@ fn colon_statements_stay_inside_a_single_line_if_arm() {
         panic!("expected single-line IF")
     };
     assert!(matches!(then_branch[0], Statement::Assign { .. }));
-    assert!(matches!(then_branch[1], Statement::Exit(ExitTarget::Function, _)));
+    assert!(matches!(
+        then_branch[1],
+        Statement::Exit(ExitTarget::Function, _)
+    ));
     assert!(matches!(body[1], Statement::Assign { .. }));
 
     let hir = compile(&module, "colon_if", Dialect::VbDos, "vbdos").unwrap();
@@ -790,7 +818,7 @@ fn cls_is_runtime_and_poke_is_an_inline_segmented_store() {
     assert!(hir.contains("\"op\":\"concat\""));
     assert!(hir.contains("\"op\":\"store\""));
     assert!(hir.contains("\"name\":\"b$seg\""));
-    assert!(hir.contains("\"type\":1,\"value\":42"));
+    assert!(hir.contains("\"type\":8,\"value\":42"));
 }
 
 #[test]
@@ -1221,7 +1249,9 @@ fn nonstatic_procedure_arrays_are_dynamic_despite_module_static_default() {
     let hir = compile(&module, "dynamic_local", Dialect::QuickBasic45, "qb45").unwrap();
     assert!(hir.contains("\"callee\":\"B$DDIM\""));
     assert!(hir.contains("\"callee\":\"B$ERAS\""));
-    assert!(hir.contains("\"name\":\"COUNTS$descriptor\"") && hir.contains("\"storage\":\"local\""));
+    assert!(
+        hir.contains("\"name\":\"COUNTS$descriptor\"") && hir.contains("\"storage\":\"local\"")
+    );
 }
 
 #[test]
@@ -2141,4 +2171,238 @@ fn space_string_keeps_the_measured_vbdos_runtime_boundary() {
     let hir = compile(&module, "space", Dialect::VbDos, "vbdos").unwrap();
     assert!(hir.contains("\"callee\":\"B$SPAC\""));
     assert!(hir.contains("\"callee\":\"B$SASS\""));
+}
+
+#[test]
+fn def_type_governs_the_procedures_that_follow_it() {
+    // qbdemo puts DEFDBL before SUB fracline and DEFINT after it; applying
+    // every module DEFtype at once typed fracline's parameters INTEGER and
+    // rejected its DECLARE with "declaration and definition do not agree".
+    let module = parse(
+        "declare sub fracline (y%, y1#)\r\n\
+         defint a-z\r\nfracline 1, 2\r\n\
+         defdbl a-z\r\nsub fracline (y%, y1)\r\nprint y1\r\nend sub\r\n\
+         defint a-z\r\nsub other (i)\r\nprint i\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    // BC 4.5's listing prints fracline's y1 with B$PER8.
+    let hir = compile(&module, "deftype_position", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("B$PER8"), "{hir}");
+}
+
+#[test]
+fn a_declared_function_suffix_matches_its_default_typed_definition() {
+    // oimad declares `FUNCTION DMADone% (lengy%)` and defines it under
+    // DEFINT as `FUNCTION DMADone (lengy)`; the callee kept the suffix and
+    // the two were rejected as disagreeing.
+    let module = parse(
+        "declare function dmadone% (lengy%)\r\ndefint a-z\r\nprint dmadone(1)\r\n\
+         function dmadone (lengy)\r\ndmadone = lengy\r\nend function\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    compile(&module, "function_suffix", Dialect::QuickBasic45, "qb45").unwrap();
+}
+
+#[test]
+fn a_name_and_colon_after_the_start_of_a_line_is_a_call_not_a_label() {
+    // deedlines repeats `IF xit% = 1 THEN xit% = 2: getpal: ...`; taking
+    // `getpal:` for a label failed with "duplicate label GETPAL". BC 4.5's
+    // listing calls G at both sites.
+    let module = parse(
+        "declare sub g ()\r\nx% = 1\r\n\
+         if x% = 1 then x% = 2: g: print 1\r\n\
+         x% = 3: g: print 2\r\n\
+         g: print 3\r\n\
+         sub g\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "mid_line_call", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(
+        module
+            .statements
+            .iter()
+            .filter(|one| matches!(one, Statement::Label(..)))
+            .count(),
+        1,
+        "only the line-initial g: is a label"
+    );
+    assert_eq!(hir.matches("\"callee\":\"G\"").count(), 2, "{hir}");
+}
+
+#[test]
+fn a_scalar_and_an_array_may_share_a_name() {
+    // deedlines DIMs g%() and uses scalar g% beside it; one namespace
+    // rejected `g% = 0` with "array G% requires subscripts".
+    let module = parse(
+        "dim g%(5)\r\ng% = 7\r\ng%(1) = g% + 1\r\nprint g%, g%(1), ubound(g%)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "shared_name", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(
+        hir.contains("\"extent\":12,\"id\":1,\"name\":\"G%\""),
+        "{hir}"
+    );
+    assert!(
+        hir.contains("\"extent\":2,\"id\":3,\"name\":\"G%\""),
+        "{hir}"
+    );
+}
+
+#[test]
+fn a_procedure_sees_only_shared_module_variables() {
+    // deedlines' SUBs begin `SHARED kb%, px%, ...`, which did not parse.
+    // Every procedure also saw every module variable: gorillas' DoSun
+    // wrote the module's x, which QB keeps local without SHARED.
+    let module = parse(
+        "x% = 5\r\nnamed\r\nunnamed\r\n\
+         sub named\r\nshared x%, onlyhere%\r\nx% = onlyhere%\r\nend sub\r\n\
+         sub unnamed\r\nx% = 6\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "shared_statement", Dialect::QuickBasic45, "qb45").unwrap();
+    // NAMED stores to the module's X% (place 1); UNNAMED to its own.
+    assert_eq!(
+        hir.matches("\"op\":\"store\",\"operands\":[{\"place\":1,")
+            .count(),
+        2,
+        "{hir}"
+    );
+    assert_eq!(
+        hir.matches("\"name\":\"X%\",\"offset\":-2,\"storage\":\"local\"")
+            .count(),
+        1,
+        "{hir}"
+    );
+}
+
+#[test]
+fn graphics_put_and_get_take_an_array_element() {
+    // oimad draws with `PUT (x, y), mask(1500), AND`; BC 4.5 passes the
+    // element's far address where the bare form passes the data start.
+    let module = parse(
+        "defint a-z\r\ndim m(2000)\r\nscreen 13\r\n\
+         put (1, 2), m(1500), and\r\nget (0, 0)-(9, 9), m(i)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "graphics_element", Dialect::QuickBasic45, "qb45").unwrap();
+    assert!(hir.contains("B$GPUT") && hir.contains("B$GGET"), "{hir}");
+}
+
+#[test]
+fn a_power_of_a_variable_base_covers_the_whole_domain() {
+    // deedlines' `SQR(...) ^ 1.5` and `^ meg` were refused: only a positive
+    // constant base had a lowering. B$POW4 raises error 5 for 0 ^ -1 and a
+    // negative base under a fractional exponent.
+    let module = parse(
+        "b! = -2: e! = 3\r\nr! = b! ^ e!\r\ns# = sqr(2#) ^ 1.5\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "general_power", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"op\":\"fexp2\"").count(), 4, "{hir}");
+    assert_eq!(hir.matches("\"callee\":\"B$SERR\"").count(), 2, "{hir}");
+}
+
+#[test]
+fn port_io_statements_reach_the_ports_and_bound_their_byte() {
+    // OUT/INP/WAIT had no lowering. BC folds a constant byte and refuses
+    // one out of range with "Math overflow"; the frontend emitted 298 as-is.
+    let module = parse(
+        "p = &H3C8: OUT p, 40: a = INP(p + 1): WAIT &H3DA, 8, 8\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "ports", Dialect::QuickBasic45, "qb45").unwrap();
+    assert_eq!(hir.matches("\"op\":\"port_out\"").count(), 1, "{hir}");
+    assert_eq!(hir.matches("\"op\":\"port_in\"").count(), 2, "{hir}");
+    let module = parse("OUT 5, 298\r\n", Dialect::QuickBasic45).unwrap();
+    let error =
+        compile(&module, "overflow", Dialect::QuickBasic45, "qb45").expect_err("298 is no byte");
+    assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
+}
+
+#[test]
+fn a_dynamic_dim_allocates_where_it_runs() {
+    // qbdemo's `$DYNAMIC` DIMs ran at entry, ahead of SCREEN 13, which
+    // then had no memory: "Illegal function call". Bounds read at entry
+    // also saw n before its assignment.
+    let module = parse(
+        "'$DYNAMIC\r\nscreen 13\r\nn% = 5\r\ndim a%(n%)\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "dynamic_dim", Dialect::QuickBasic45, "qb45").unwrap();
+    let screen = hir.find("\"callee\":\"B$CSCN\"").expect("SCREEN");
+    let store = hir.find("\"value\":5}").expect("n% = 5");
+    let dim = hir.find("\"callee\":\"B$DDIM\"").expect("DIM");
+    assert!(screen < dim && store < dim, "{hir}");
+}
+
+#[test]
+fn a_parenthesized_argument_passes_a_copy() {
+    // qbdemo's `drawbob (bob(bobptr))` advanced the array element itself,
+    // so `undrawbob` erased the wrong trail: parentheses make a value.
+    let module = parse(
+        "declare sub inc (v%)\r\na% = 1: b% = 1\r\ninc (a%)\r\ninc b%\r\nprint a%; b%\r\n\
+         sub inc (v%)\r\nv% = v% + 1\r\nend sub\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "grouped", Dialect::QuickBasic45, "qb45").unwrap();
+    let address = |place: u32| {
+        hir.matches(&format!(
+            "\"op\":\"address\",\"operands\":[{{\"place\":{place},\"tag\":\"place\"}}]"
+        ))
+        .count()
+    };
+    assert_eq!((address(1), address(2)), (0, 1), "{hir}");
+}
+
+#[test]
+fn graphics_put_passes_the_runtime_action_codes() {
+    // oimad's `PUT ..., text(1500), OR` drew XOR: OR was passed as 4 and XOR
+    // as 5, from getput.asm's header comment. Its PutGetInit table and the
+    // QB45 /A listing agree: OR 0, AND 1, PRESET 2, PSET 3, XOR 4 (default).
+    let module = parse(
+        "defint a-z\r\ndim a(100)\r\nscreen 13\r\nput (1, 1), a, pset\r\nput (1, 1), a, preset\r\n\
+         put (1, 1), a, and\r\nput (1, 1), a, or\r\nput (1, 1), a, xor\r\nput (1, 1), a\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "put_actions", Dialect::QuickBasic45, "qb45").unwrap();
+    let actions: Vec<&str> = hir
+        .split("\"callee\":\"B$GPUT\"")
+        .skip(1)
+        .map(|call| {
+            let operands = &call[..call.find("}]").expect("operands end")];
+            &operands[operands.rfind("\"value\":").expect("action") + 8..]
+        })
+        .collect();
+    assert_eq!(actions, ["3", "2", "1", "0", "4", "4"], "{hir}");
+}
+
+#[test]
+fn an_address_takes_a_long_as_an_unsigned_word() {
+    // deedlines' `BSAVE f$, 0, 64000` was refused as "Math overflow": the
+    // LONG length went through INTEGER's range. QB's I4toU2 (exio.asm) keeps
+    // the low word of -65536..65535 for every address and port.
+    let module = parse(
+        "DEF SEG = 40960&\r\nBSAVE \"V.BIN\", 0, 64000&\r\nPOKE 65535&, PEEK(-1&)\r\nOUT 65535&, 1\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "words", Dialect::QuickBasic45, "qb45").unwrap();
+    for word in [-24576, -1536] {
+        assert!(hir.contains(&format!("\"constant\",\"type\":1,\"value\":{word}}}")), "{word}: {hir}");
+    }
+    assert!(hir.contains("\"op\":\"port_out\",\"operands\":[{\"tag\":\"constant\",\"type\":1,\"value\":-1}"), "{hir}");
+    let module = parse("BSAVE \"V.BIN\", 0, 65536&\r\n", Dialect::QuickBasic45).unwrap();
+    let error = compile(&module, "wide", Dialect::QuickBasic45, "qb45").expect_err("65536 is no word");
+    assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
 }

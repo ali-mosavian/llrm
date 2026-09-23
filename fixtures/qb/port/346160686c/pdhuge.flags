@@ -1,0 +1,7 @@
+--dialect
+pds71
+--runtime
+pds71
+--array-order
+row-major
+--huge-arrays

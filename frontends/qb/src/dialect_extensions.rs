@@ -25,18 +25,41 @@ pub struct ExtensionMatch {
 /// Typed source actions introduced after QBasic 1.1.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
-    OptionExplicit { span: Span },
-    OnLocalError { label: String, span: Span },
+    OptionExplicit {
+        span: Span,
+    },
+    OnLocalError {
+        label: String,
+        span: Span,
+    },
     CdeclAliasFunction {
         name: String,
         alias: String,
         span: Span,
     },
-    AliasFunction { name: String, alias: String, span: Span },
-    CdeclFunction { name: String, span: Span },
-    CdeclAliasSub { name: String, alias: String, span: Span },
-    AliasSub { name: String, alias: String, span: Span },
-    CdeclSub { name: String, span: Span },
+    AliasFunction {
+        name: String,
+        alias: String,
+        span: Span,
+    },
+    CdeclFunction {
+        name: String,
+        span: Span,
+    },
+    CdeclAliasSub {
+        name: String,
+        alias: String,
+        span: Span,
+    },
+    AliasSub {
+        name: String,
+        alias: String,
+        span: Span,
+    },
+    CdeclSub {
+        name: String,
+        span: Span,
+    },
 }
 
 /// Recognize one exact extension prefix at the current statement boundary.
@@ -49,9 +72,7 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
         if !pattern_matches(spec.pattern, tokens) {
             continue;
         }
-        if spec.tail == ExtensionTail::None
-            && !ends_statement(tokens.get(spec.pattern.len()))
-        {
+        if spec.tail == ExtensionTail::None && !ends_statement(tokens.get(spec.pattern.len())) {
             continue;
         }
         let span = statement_span(&tokens[..spec.pattern.len()]);
@@ -62,15 +83,13 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
                     .expect("validated label capture matched a source label"),
                 span,
             },
-            GeneratedExtensionAction::CdeclAliasFunction => {
-                ExtensionAction::CdeclAliasFunction {
-                    name: captured_identifier(spec.pattern, &tokens[..spec.pattern.len()])
-                        .expect("validated identifier capture matched an identifier"),
-                    alias: captured_string(spec.pattern, &tokens[..spec.pattern.len()])
-                        .expect("validated string capture matched a string literal"),
-                    span,
-                }
-            }
+            GeneratedExtensionAction::CdeclAliasFunction => ExtensionAction::CdeclAliasFunction {
+                name: captured_identifier(spec.pattern, &tokens[..spec.pattern.len()])
+                    .expect("validated identifier capture matched an identifier"),
+                alias: captured_string(spec.pattern, &tokens[..spec.pattern.len()])
+                    .expect("validated string capture matched a string literal"),
+                span,
+            },
             GeneratedExtensionAction::AliasFunction => ExtensionAction::AliasFunction {
                 name: captured_identifier(spec.pattern, &tokens[..spec.pattern.len()])
                     .expect("validated identifier capture matched an identifier"),
@@ -124,21 +143,23 @@ fn ends_statement(token: Option<&Token>) -> bool {
 
 fn pattern_matches(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> bool {
     pattern.len() <= tokens.len()
-        && pattern.iter().zip(tokens).all(|(expected, token)| match expected {
-            ExtensionPatternToken::Grammar(id) => {
-                matches!(token.kind, TokenKind::Reserved(actual) if actual == *id)
-            }
-            ExtensionPatternToken::Keyword(word) => {
-                matches!(token.kind, TokenKind::ExtensionKeyword(actual) if actual == *word)
-            }
-            ExtensionPatternToken::Label => matches!(
-                token.kind,
-                TokenKind::Identifier(_)
-                    | TokenKind::Integer(0..=65_529, None)
-            ),
-            ExtensionPatternToken::Identifier => matches!(token.kind, TokenKind::Identifier(_)),
-            ExtensionPatternToken::StringLiteral => matches!(token.kind, TokenKind::String(_)),
-        })
+        && pattern
+            .iter()
+            .zip(tokens)
+            .all(|(expected, token)| match expected {
+                ExtensionPatternToken::Grammar(id) => {
+                    matches!(token.kind, TokenKind::Reserved(actual) if actual == *id)
+                }
+                ExtensionPatternToken::Keyword(word) => {
+                    matches!(token.kind, TokenKind::ExtensionKeyword(actual) if actual == *word)
+                }
+                ExtensionPatternToken::Label => matches!(
+                    token.kind,
+                    TokenKind::Identifier(_) | TokenKind::Integer(0..=65_529, None)
+                ),
+                ExtensionPatternToken::Identifier => matches!(token.kind, TokenKind::Identifier(_)),
+                ExtensionPatternToken::StringLiteral => matches!(token.kind, TokenKind::String(_)),
+            })
 }
 
 fn captured_identifier(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option<String> {
@@ -154,18 +175,15 @@ fn captured_text(
     tokens: &[Token],
     wanted: ExtensionPatternToken,
 ) -> Option<String> {
-    pattern
-        .iter()
-        .zip(tokens)
-        .find_map(|(expected, token)| {
-            if *expected != wanted {
-                return None;
-            }
-            match &token.kind {
-                TokenKind::Identifier(value) | TokenKind::String(value) => Some(value.clone()),
-                _ => None,
-            }
-        })
+    pattern.iter().zip(tokens).find_map(|(expected, token)| {
+        if *expected != wanted {
+            return None;
+        }
+        match &token.kind {
+            TokenKind::Identifier(value) | TokenKind::String(value) => Some(value.clone()),
+            _ => None,
+        }
+    })
 }
 
 fn captured_label(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option<String> {
@@ -184,7 +202,10 @@ fn captured_label(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option
 }
 
 fn statement_span(tokens: &[Token]) -> Span {
-    let first = tokens.first().expect("matching extension is non-empty").span;
+    let first = tokens
+        .first()
+        .expect("matching extension is non-empty")
+        .span;
     let last = tokens.last().expect("matching extension is non-empty").span;
     Span {
         line: first.line,
@@ -196,8 +217,8 @@ fn statement_span(tokens: &[Token]) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Dialect;
     use crate::generated_parser::lex;
+    use crate::Dialect;
 
     #[test]
     fn vbdos_option_explicit_is_table_matched_with_its_full_span() {

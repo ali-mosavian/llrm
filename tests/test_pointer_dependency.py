@@ -9,7 +9,7 @@ from qbopt.objectfile import omf
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_adding_pointer_dependency_keeps_existing_fixups(tag):
-    records = omf.read(Path(f"fixtures/regressions/huge2-{tag}.obj"))
+    records = omf.read(Path(f"fixtures/regressions/huge2-{tag}.obj".lower()))
     before = omf.externals(records)
     added, index = omf.with_external(records, "b$HugeShift")
     assert index == len(before)

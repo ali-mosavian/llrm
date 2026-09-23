@@ -66,7 +66,10 @@ fn generated_lexer_preserves_token_order_and_spans_over_qbasic_port_corpus() {
             let tokens = generated_parser::lex(source, dialect)
                 .unwrap_or_else(|error| panic!("{name} rejected for {dialect:?}: {error:?}"));
             accepted += 1;
-            assert!(!tokens.is_empty(), "{name} produced no tokens for {dialect:?}");
+            assert!(
+                !tokens.is_empty(),
+                "{name} produced no tokens for {dialect:?}"
+            );
             let mut previous = (1, 0, 0);
             for token in tokens {
                 let current = (token.span.line, token.span.start, token.span.end);
@@ -95,4 +98,55 @@ fn recovered_qbasic_forms_remain_explicit_generated_lexer_extensions() {
     assert_eq!(tokens[1].kind, TokenKind::Integer(255, None));
     assert_eq!(tokens[0].span.start, 0);
     assert_eq!(tokens[1].span.start, 2);
+}
+
+#[test]
+fn decimal_integer_literals_select_the_qbasic_width_without_changing_based_bits() {
+    // Qlight's unsuffixed 1000000 must arrive as a LONG. Decimal magnitude
+    // selects INTEGER through 32767 and LONG above it; `%` and `&` override
+    // that choice. Hex/octal values instead retain their width-sized bit
+    // pattern, so &HFFFF is INTEGER -1 but &HFFFF& is LONG 65535.
+    let decimal = generated_parser::lex(
+        "a = 0\nb = 32767\nc = 32768\nd = 1000000\ne = 1%\nf = 1&\ng = 2147483647\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let decimals = decimal
+        .into_iter()
+        .filter_map(|token| match token.kind {
+            TokenKind::Integer(value, suffix) => Some((value, suffix)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        decimals,
+        vec![
+            (0, None),
+            (32767, None),
+            (32768, Some('&')),
+            (1000000, Some('&')),
+            (1, Some('%')),
+            (1, Some('&')),
+            (2147483647, Some('&')),
+        ]
+    );
+    assert!(generated_parser::lex("a = 32768%", Dialect::QuickBasic45).is_err());
+    assert!(generated_parser::lex("a = 2147483648", Dialect::QuickBasic45).is_err());
+
+    let based = generated_parser::lex(
+        "a = &H8000\nb = &HFFFF\nc = &HFFFF&\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let based = based
+        .into_iter()
+        .filter_map(|token| match token.kind {
+            TokenKind::Integer(value, suffix) => Some((value, suffix)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        based,
+        vec![(-32768, None), (-1, None), (65535, Some('&'))]
+    );
 }

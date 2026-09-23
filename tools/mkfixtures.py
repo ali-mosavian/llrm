@@ -32,7 +32,7 @@ from configs import switches_for
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "suite"
 FIXTURES = ROOT / "fixtures" / "omf"
-MANIFEST = FIXTURES / "MANIFEST.tsv"
+MANIFEST = FIXTURES / "manifest.tsv"
 
 # /Zd and /Zi add records rather than changing code, so each is a variant of
 # a few configurations rather than a column of its own. /Zi is what makes BC
@@ -52,6 +52,11 @@ INHERITED = {
 }
 
 COLUMNS = ("file", "sha256", "source", "config", "command", "bc_sha256", "dosbox", "made_by")
+
+
+def artifact_name(stem: str) -> str:
+    """Committed object-file name; configuration tags remain case-sensitive metadata."""
+    return f"{stem.lower()}.obj"
 
 
 def digest(path: Path) -> str:
@@ -130,12 +135,13 @@ def collect(
         made = into / config.tag / f"{names[stem]}.OBJ"
         if not made.is_file():
             raise SystemExit(f"{stem}: no object -- {commands[stem]}")
-        shutil.copy(made, out / f"{stem}.obj")
+        artifact = artifact_name(stem)
+        shutil.copy(made, out / artifact)
         rows.append(
             "\t".join(
                 (
-                    f"{stem}.obj",
-                    digest(out / f"{stem}.obj"),
+                    artifact,
+                    digest(out / artifact),
                     f"suite/{program}.bas",
                     config.tag,
                     commands[stem],
@@ -207,11 +213,12 @@ def main(argv: list[str] | None = None) -> int:
         differ = [
             stem
             for stem, *_ in jobs
-            if not (FIXTURES / f"{stem}.obj").is_file()
-            or (FIXTURES / f"{stem}.obj").read_bytes() != (target / f"{stem}.obj").read_bytes()
+            if not (FIXTURES / artifact_name(stem)).is_file()
+            or (FIXTURES / artifact_name(stem)).read_bytes()
+            != (target / artifact_name(stem)).read_bytes()
         ]
         for stem in differ:
-            print(f"differs: {stem}.obj")
+            print(f"differs: {artifact_name(stem)}")
         print(f"{len(jobs) - len(differ)} of {len(jobs)} match what is committed")
         return 1 if differ else 0
 

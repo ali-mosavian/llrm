@@ -5,7 +5,7 @@ import runpy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "frontends" / "modern" / "fixtures" / "nbody.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
 
 
 def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> None:

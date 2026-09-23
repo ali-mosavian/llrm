@@ -14,7 +14,7 @@ from qbopt import wholeseg
 @pytest.mark.parametrize("matching", [False, True])
 def test_stride_division_requires_the_dividends_sign_extension(tag: str, matching: bool, monkeypatch) -> None:
     """STRIDE's i / 5 carried machine halves, hiding the quotient recurrence from MIR."""
-    path = Path(f"fixtures/omf/stride-{tag}.obj")
+    path = Path(f"fixtures/omf/stride-{tag}.obj".lower())
     with monkeypatch.context() as context:
         context.setattr(raising_division, "scalar", lambda body: body)
         raw = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]

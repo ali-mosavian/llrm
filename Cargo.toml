@@ -1,0 +1,41 @@
+[package]
+name = "llrm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+description = "LLVM-style optimizing compiler and object rewriter for 16-bit x86"
+default-run = "llrm-qb"
+
+[dependencies]
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "instr_info", "nasm"] }
+indexmap = "2"
+num-bigint = "0.4"
+num-traits = "0.2"
+rustc-hash = "2"
+sha2 = "0.10"
+tempfile = "3.27.0"
+toml = { version = "0.9", features = ["preserve_order"] }
+
+[dev-dependencies]
+regex = "1"
+
+[[bin]]
+name = "llrm-qb"
+path = "src/bin/llrm-qb.rs"
+
+[[bin]]
+name = "llrm-c"
+path = "src/bin/llrm-c.rs"
+
+[[bin]]
+name = "llrm-omf"
+path = "src/bin/llrm-omf.rs"
+
+[[bin]]
+name = "llrm-modern"
+path = "src/bin/llrm-modern.rs"
+
+[[bin]]
+name = "modernfront"
+path = "src/bin/modernfront.rs"
+
