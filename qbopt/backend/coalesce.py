@@ -47,7 +47,7 @@ class Coalescer(LIRTransform):
 def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     """`body` with every copy this can prove unnecessary removed."""
     pinned = {
-        getattr(value, "id", value): ir.ROOT.get(register, register)
+        value: ir.ROOT.get(register, register)
         for value, register in {**body.pins, **(pinned or {})}.items()
     }
     from qbopt.backend import allocate

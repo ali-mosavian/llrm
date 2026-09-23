@@ -80,7 +80,7 @@ def constrained(
     the register an instruction wants is the same one the allocation will
     honour. A pin the caller released is not merged back from `body.pins`.
     """
-    ids = {getattr(value, "id", value) for value in (*body.pins, *(pinned or {}))}
+    ids = {*body.pins, *(pinned or {})}
     pinned = dict(body.pins if pinned is None else pinned)
     from qbopt.backend import spiller
 

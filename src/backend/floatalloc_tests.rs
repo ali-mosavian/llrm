@@ -555,6 +555,42 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
 }
 
 #[test]
+fn test_a_pinned_conversion_result_survives_lowering_into_floatalloc() {
+    // Lower keyed `pins` by `mir.Value` and floatalloc read ids, so a result
+    // pinned to EAX with no other reader was left in the frame, never loaded.
+    use crate::backend::lower;
+    use crate::model::floating::{Format, Precision, Rounding, Semantics as Floating};
+    use crate::model::mir::{AllocationHints, Arg, Cell, Held as Named, Kind, MemRef, MirBlock, MirBody, OpCode, Value};
+
+    let cell = MemRef { space: Some(Space::Frame), ..MemRef::new(Some(Addr::new(Space::Frame, -10)), 10) };
+    let (real, integer) = (Value::new(1, 0x10), Value::new(2, 0x20));
+    let mut load = Op::new(0x10, OpCode::Operation(Operation::FloatLoad), "fld", vec![real], vec![]);
+    load.kind = Kind::Fload;
+    load.args = vec![Arg::Cell(Cell { r#ref: cell.clone() })];
+    load.results = vec![Arg::Held(Named { value: real, width: 10 })];
+    load.loads = vec![cell];
+    load.floating = Some(Floating::new([Format::Extended80], Format::Extended80, Precision::Exact, Rounding::None));
+    let mut store = Op::new(0x20, OpCode::Operation(Operation::FloatStore), "fistp", vec![integer], vec![real]);
+    store.kind = Kind::Fstore;
+    store.args = vec![Arg::Held(Named { value: real, width: 10 })];
+    store.results = vec![Arg::Held(Named { value: integer, width: 4 })];
+    store.floating = Some(Floating::new([Format::Extended80], Format::Signed32, Precision::Destination, Rounding::Dynamic));
+    store.id = Some(200);
+    let body = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![load, store], vec![])]);
+    let mut hints = AllocationHints::new();
+    hints.pins.insert((200, 0), Register::EAX);
+    let options = lower::Lowered { hints: Some(&hints), ..Default::default() };
+    let low = lower::lowered("pinned", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", options)
+        .unwrap();
+    let allocated = allocated(&low, Some(&mut Frame::new(-10)), false, "386").unwrap();
+    let result = Loc::Held(Held { value: integer.id, width: 4 });
+    assert!(allocated.insns().iter().any(|one| one
+        .what
+        .as_ref()
+        .is_some_and(|what| what.name.as_deref() == Some("mov") && what.dests == vec![result.clone()])));
+}
+
+#[test]
 fn test_ninth_float_uses_an_owned_extended_precision_spill() {
     // Nine live FP values previously refused allocation instead of preserving 80 bits.
     let sources = _cells((-40..-4).step_by(4), 4);
@@ -649,7 +685,6 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
 #[test]
 fn test_floating_bridge_never_reads_an_unestablished_slot() {
     // Cross-block allocation must not turn a missing definition into a frame read.
-    // Python's "typed-pinned" keys the pin by a mir.Value; Rust pins are ids, so it is "pinned".
     for defect in ["entry", "bypass", "pinned", "duplicate"] {
         let cell = frame_cell(-10, 10);
         let mut body = _body(vec![_load(1, &cell), _store(&cell, 1)]);

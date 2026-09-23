@@ -395,7 +395,7 @@ def _through_lir(
                 low, found.calls, family=module.family(found.records), native=(native_frames or {}).get(body.entry)
             )
             in_ssa = True
-            for phase in flow.machine(flow._pinned(low), frame, found.calls, basic_semantics=basic_semantics, cpu=cpu):
+            for phase in flow.machine(low.pins, frame, found.calls, basic_semantics=basic_semantics, cpu=cpu):
                 if isinstance(phase, phielim.PhiElimination):
                     in_ssa = False
                 low = flow.checked(low, phase, in_ssa=in_ssa)

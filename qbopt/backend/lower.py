@@ -615,7 +615,7 @@ def lowered(
     values = set(ssa.values(body))
     origin = {value: where for value in values if (where := hints.origin_of(value)) is not None}
     pins = {
-        value: where
+        value.id: where
         for block in body.blocks
         for op in block.ops
         for index, value in enumerate(op.defines)
@@ -742,7 +742,7 @@ def lowered(
         inputs=frozenset(value.id for value in liveness.entry_values(body) if not value.flags and value.id is not None),
         loop_trip_counts=trip_counts,
         ordered=True,
-        pins={**pins, **{value: Register.ES for value in values if origin.get(value) == Register.ES}},
+        pins={**pins, **{value.id: Register.ES for value in values if origin.get(value) == Register.ES}},
     )
 
 

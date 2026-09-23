@@ -199,7 +199,7 @@ def test_native_register_saves_survive_allocation() -> None:
     assert plan is not None
     low = lower.lowered(name, raised, module.calls, module.absorbed, contracts, nodes=bodies.source.nodes)
     slots = frame.of(low, native=plan)
-    for phase in flow.machine(flow._pinned(low), slots, module.calls):
+    for phase in flow.machine(low.pins, slots, module.calls):
         low = phase.transform(low)
     from iced_x86 import Register
 

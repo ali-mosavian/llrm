@@ -155,7 +155,7 @@ def test_allocated_constant_fill_loads_its_accumulator_once() -> None:
     body = flow.verified(lower.lowered("fill", source, {}, set(), {}), "lower", in_ssa=True)
     owned = frame.of(body, {})
     in_ssa = True
-    for phase in flow.machine(flow._pinned(body), owned, {}, cpu="386"):
+    for phase in flow.machine(body.pins, owned, {}, cpu="386"):
         if isinstance(phase, prologue.Prologue):
             continue
         if isinstance(phase, phielim.PhiElimination):

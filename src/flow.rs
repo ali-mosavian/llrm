@@ -131,17 +131,6 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)
 }
 
-/// A body's pins, by value id, which is what the allocator is keyed on.
-///
-/// Python reads `getattr(body, "pins", None)`: only a raised body has pins,
-/// so the caller passes them, or `None` for a plain `MirBody`.
-pub fn _pinned(
-    pins: Option<&crate::model::mir::OrderedMap<crate::model::mir::Value, iced_x86::Register>>,
-) -> crate::support::hash::IndexMap<u32, iced_x86::Register> {
-    pins.map(|pins| pins.iter().map(|(value, register)| (value.id, *register)).collect())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -188,17 +177,5 @@ mod tests {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");
-    }
-
-    #[test]
-    fn pinned_keys_a_raised_body_by_value_id() {
-        use crate::model::mir::{OrderedMap, Value};
-        use iced_x86::Register;
-
-        let mut pins = OrderedMap::new();
-        pins.insert(Value::new(7, 0x10), Register::SI);
-        pins.insert(Value::new(3, 0x12), Register::DI);
-        assert_eq!(_pinned(Some(&pins)), IndexMap::from_iter([(7, Register::SI), (3, Register::DI)]));
-        assert!(_pinned(None).is_empty());
     }
 }

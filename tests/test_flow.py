@@ -96,7 +96,7 @@ def test_every_machine_phase_takes_lir_and_gives_lir_back() -> None:
     _found, _blocks, bodies, contracts = _raised("nested-p-g2")
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body)):
+        for phase in flow.machine(low.pins):
             assert isinstance(phase, LIRTransform), f"{phase} is not a LIR phase"
             try:
                 low = phase.transform(low)
@@ -164,7 +164,8 @@ def test_the_allocation_is_searched_and_says_whether_it_is_optimal(name: str) ->
     budget says so rather than claiming an optimum it did not prove."""
     _found, _blocks, bodies, contracts = _raised(name)
     for who, body in bodies:
-        got = allocate.allocate(_lowered(_found, bodies, contracts, who, body), flow._pinned(body))
+        low = _lowered(_found, bodies, contracts, who, body)
+        got = allocate.allocate(low, low.pins)
         assert got.optimal or got.why, "an unproven assignment has to say why"
         if got.optimal:
             assert got.why == ""
@@ -177,7 +178,7 @@ def test_lowering_gives_back_lir_and_allocation_gives_back_lir() -> None:
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
         assert isinstance(low, lir.LirBody)
-        after = allocate.applied(low, allocate.allocate(low, flow._pinned(body)))
+        after = allocate.applied(low, allocate.allocate(low, low.pins))
         assert isinstance(after, lir.LirBody)
         assert [one.at for one in after.insns] == [one.at for one in low.insns]
 
@@ -284,7 +285,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     low = _lowered(_found, bodies, contracts, name, body)
     # Everything up to the allocator, which now owns the spill loop -- so
     # asking it after that phase would see the spilling already done.
-    for phase in flow.machine(flow._pinned(body)):
+    for phase in flow.machine(low.pins):
         if phase.name == "regalloc":
             break
         low = phase.transform(low)
@@ -338,7 +339,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     _found, _blocks, bodies, contracts = _raised("divmod-p-g2-zd")
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body), None, _found.calls):
+        for phase in flow.machine(low.pins, None, _found.calls):
             low = phase.transform(low)
         for block in low.blocks:
             for op in block.insns:
@@ -366,7 +367,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     ran = False
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body)):
+        for phase in flow.machine(low.pins):
             if phase.name == "regalloc":
                 break
             low = phase.transform(low)
@@ -401,7 +402,7 @@ def test_the_allocator_settles_on_every_program() -> None:
         raised = mir.bodies(found, blocks, contracts)
         for name, body in raised:
             low = _lowered(found, raised, contracts, name, body)
-            for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+            for phase in flow.machine(low.pins, frames.of(low), found.calls):
                 low = phase.transform(low)
 
 
@@ -465,7 +466,7 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     # destroys.
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)
-        for phase in flow.machine(flow._pinned(body), None, _found.calls):
+        for phase in flow.machine(low.pins, None, _found.calls):
             if phase.name == "regalloc":
                 break
             low = phase.transform(low)

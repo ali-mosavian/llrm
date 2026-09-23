@@ -28,7 +28,7 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
 
     definitions, readers = defaultdict(list), defaultdict(list)
     widths = defaultdict(set)
-    pinned = {_identifier(value) for value in body.pins}
+    pinned = set(body.pins)
     identifiers = {_identifier(value) for value in body.origin} | pinned
     for block in body.blocks:
         for phi in block.phis:

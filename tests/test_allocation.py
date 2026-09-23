@@ -586,7 +586,7 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
         at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)
     }
     was = owned(low)
-    for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+    for phase in flow.machine(low.pins, frames.of(low), found.calls):
         low = phase.transform(low)
     lost = sorted(was - owned(low))
     assert not lost, f"bytes owned by nothing: {[hex(x) for x in lost[:4]]}"
