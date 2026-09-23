@@ -88,8 +88,8 @@ pub fn assembled(
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
 
     let unit = hir::unit(&stream::parse(text))?;
-    write(dump, "stream", text)?;
-    write(dump, "hir", &hir::text(&unit))?;
+    write(dump, "stream", || text.to_owned())?;
+    write(dump, "hir", || hir::text(&unit))?;
     let mut shared = raise_hir::Shared::default();
     let mut raised_procedures: Vec<raise_hir::Raised> = Vec::new();
     for proc in &unit.procs {
@@ -146,7 +146,7 @@ pub fn assembled(
         let mut observe = |stage: &str, after: &MirBody| {
             if failed.is_none() {
                 if let Err(error) =
-                    write(dump, &format!("passes/{}.{prefix}{stage}", raised.name), &_mir_text(&raised.name, after))
+                    write(dump, &format!("passes/{}.{prefix}{stage}", raised.name), || _mir_text(&raised.name, after))
                 {
                     failed = Some(error);
                 }
@@ -232,7 +232,7 @@ pub fn assembled(
                     continue;
                 }
                 let stage = format!("inline{inline_round}");
-                write(dump, &format!("passes/{}.{stage}", raised.name), &_mir_text(&raised.name, &after))?;
+                write(dump, &format!("passes/{}.{stage}", raised.name), || _mir_text(&raised.name, &after))?;
                 let optimised = run_optimiser(raised, &after, &format!("{stage}."))?;
                 bodies.insert(raised.name.clone(), optimised);
                 changed = true;
@@ -396,15 +396,17 @@ pub fn assembled(
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     for raised in &raised_procedures {
         let body = &bodies[&raised.name];
-        mirs.push(_mir_text(&raised.name, body));
-        if _optimise {
-            mirs.push(_mir_text(&format!("{} (opt)", raised.name), body));
+        if dump.is_some() {
+            mirs.push(_mir_text(&raised.name, body));
+            if _optimise {
+                mirs.push(_mir_text(&format!("{} (opt)", raised.name), body));
+            }
         }
         let legalized =
             lower_int64::expanded(body, Some(&raised.calls), Some(&raised.contracts), Some(&raised.hints))
                 .map_err(|error| hir::Unsupported(error.0))?;
         // Python compares `body is not raised.body`, which is never the same object.
-        write(dump, &format!("passes/{}.int64-lower", raised.name), &_mir_text(&raised.name, &legalized.body))?;
+        write(dump, &format!("passes/{}.int64-lower", raised.name), || _mir_text(&raised.name, &legalized.body))?;
         let low = lower::lowered(
             &raised.name,
             &legalized.body,
@@ -424,13 +426,15 @@ pub fn assembled(
         let low = match low {
             Ok(low) => low,
             Err(error) => {
-                write(dump, "mir", &mirs.join("\n"))?;
+                write(dump, "mir", || mirs.join("\n"))?;
                 return Err(error.into());
             }
         };
         let low = flow::verified(low, "lower", true).map_err(|error| hir::Unsupported(error.0))?;
-        write(dump, &format!("passes/{}.lir-lower", raised.name), &_lir_text(&raised.name, &low))?;
-        lirs.push(_lir_text(&raised.name, &low));
+        write(dump, &format!("passes/{}.lir-lower", raised.name), || _lir_text(&raised.name, &low))?;
+        if dump.is_some() {
+            lirs.push(_lir_text(&raised.name, &low));
+        }
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
         let mut phases = flow::machine(&low.pins, Some(Rc::clone(&frame)), Some(&legalized.calls), false, target)
@@ -453,7 +457,7 @@ pub fn assembled(
             write(
                 dump,
                 &format!("phases/{}.{number:02}-{}", raised.name, phase.class_name()),
-                &_lir_text(&raised.name, &low),
+                || _lir_text(&raised.name, &low),
             )?;
         }
         let reserve = {
@@ -483,11 +487,13 @@ pub fn assembled(
         let overhead = masm::return_overhead_bytes(&procedure)? as i64;
         let masm::Procedure { name, public, far, body, reserve, callees } = procedure;
         let low = jumps::duplicated_returns(body, overhead);
-        lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
+        if dump.is_some() {
+            lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
+        }
         procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees });
     }
-    write(dump, "mir", &mirs.join("\n"))?;
-    write(dump, "lir", &lirs.join("\n"))?;
+    write(dump, "mir", || mirs.join("\n"))?;
+    write(dump, "lir", || lirs.join("\n"))?;
     let mut externs = _externs(&unit);
     externs.extend(shared.runtime.values().map(|one| (one.object_name(), "far".to_owned())));
     let mut data = if _optimise {
@@ -515,7 +521,10 @@ pub fn assembled(
             .collect(),
         requests: BTreeSet::new(),
     };
-    write(dump, "asm", &masm::text(&built)?)?;
+    if dump.is_some() {
+        let text = masm::text(&built)?;
+        write(dump, "asm", || text)?;
+    }
     Ok(built)
 }
 
@@ -976,13 +985,14 @@ pub fn _mir_text(name: &str, body: &MirBody) -> String {
     out.join("\n") + "\n"
 }
 
-fn write(dump: Option<&Path>, stage: &str, text: &str) -> std::io::Result<()> {
+/// Rendering a stage costs more than most passes, so only a dump does it.
+fn write(dump: Option<&Path>, stage: &str, text: impl FnOnce() -> String) -> std::io::Result<()> {
     if let Some(dump) = dump {
         let path = dump.join(stage);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, text)?;
+        fs::write(path, text())?;
     }
     Ok(())
 }
