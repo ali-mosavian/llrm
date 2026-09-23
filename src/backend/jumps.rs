@@ -229,11 +229,106 @@ pub(crate) fn _tests(
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {
-    let (mut body, mut changed) = (_reachable(body, body.blocks.clone()), true);
+    let body = _hoisted(body);
+    let (mut body, mut changed) = (_reachable(&body, body.blocks.clone()), true);
     while changed {
         (body, changed) = _step(&body);
     }
     body
+}
+
+/// An edge block's anchors moved up before the branch into it, where the other way reads nothing they define.
+///
+/// A phi copy the allocation made an identity emits nothing, but its anchor
+/// keeps a virtual definition on the edge, and `_passage` will not thread
+/// around it: sum_three's loop ended `je exit; jmp top` for one. Before the
+/// branch it defines the same value on both edges, harmless on the one that
+/// never reads it; the edge block is then only a jump.
+pub fn _hoisted(body: &LirBody) -> LirBody {
+    let mut blocks = body.blocks.clone();
+    let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect();
+    let predecessors = _predecessors(&blocks);
+    let mut live: Option<IndexMap<i64, BTreeSet<u32>>> = None;
+    for position in 0..blocks.len() {
+        let block = &blocks[position];
+        let (anchors, rest): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = block.insns.iter().cloned().partition(|one| _inert(one));
+        let parents = predecessors.get(&block.at);
+        if anchors.is_empty()
+            || !block.phis.is_empty()
+            || block.succ.len() != 1
+            || rest.iter().any(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Jump))
+            || parents.map_or(0, BTreeSet::len) != 1
+        {
+            continue;
+        }
+        let parent = *parents.and_then(|parents| parents.first()).expect("one predecessor");
+        let before = &blocks[index[&parent]];
+        if before.succ.len() != 2 || !before.succ.contains(&block.at) {
+            continue;
+        }
+        let Some(&other) = before.succ.iter().find(|at| **at != block.at) else {
+            continue;
+        };
+        let reads = live.get_or_insert_with(|| _live_values(&blocks));
+        if anchors.iter().flat_map(|one| &one.defines).any(|value| reads.get(&other).is_some_and(|live| live.contains(value))) {
+            continue;
+        }
+        let mut cut = before.insns.len();
+        while cut > 0 && before.insns[cut - 1].what.as_ref().is_some_and(|what| matches!(what.op, Operation::Branch | Operation::Jump)) {
+            cut -= 1;
+        }
+        let insns = before.insns[..cut].iter().chain(&anchors).chain(&before.insns[cut..]).cloned().collect();
+        let (at, before) = (index[&parent], before.with_insns(insns));
+        blocks[at] = before;
+        blocks[position] = blocks[position].with_insns(rest);
+        live = None;
+    }
+    body.with_blocks(blocks)
+}
+
+/// An inserted anchor: no bytes, no machine effect, only a virtual definition.
+fn _inert(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) && one.inserted() && one.spread.is_empty()
+}
+
+/// Per block, the virtual values live on entry.
+fn _live_values(blocks: &[LirBlock]) -> IndexMap<i64, BTreeSet<u32>> {
+    let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
+    let mut carried: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    for block in blocks {
+        for phi in &block.phis {
+            for (at, value) in &phi.incoming {
+                carried.entry(*at).or_default().insert(*value);
+            }
+        }
+    }
+    let mut into: IndexMap<i64, BTreeSet<u32>> = by_at.keys().map(|at| (*at, BTreeSet::new())).collect();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for (at, block) in &by_at {
+            let mut live = carried.get(at).cloned().unwrap_or_default();
+            for to in &block.succ {
+                if let Some(after) = into.get(to) {
+                    live.extend(after.iter().copied());
+                }
+            }
+            for one in block.insns.iter().rev() {
+                for value in one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)) {
+                    live.remove(&value);
+                }
+                live.extend(one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)));
+            }
+            for phi in &block.phis {
+                live.remove(&phi.result);
+            }
+            if into[at] != live {
+                into.insert(*at, live);
+                changing = true;
+            }
+        }
+    }
+    into
 }
 
 /// Python's `_tail_key` tuple.

@@ -1126,3 +1126,34 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     assert!(!rolled(16), "within the cap the loop is copied out");
     assert!(rolled(17));
 }
+
+/// `_sum_three proc far` .. `endp` for the 486.
+fn sum_three_on_486() -> String {
+    let assembly = listing_on(&parsed(&fixture("sum_three.mod")), "main", &O2(), "486");
+    between(&assembly, "_sum_three proc far", "_sum_three endp").to_owned()
+}
+
+/// Python's `re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)`: from the first
+/// label a later `jne` returns to, through the nearest such `jne`.
+fn closed_on_jne(function: &str) -> Option<String> {
+    let lines: Vec<&str> = function.split_inclusive('\n').collect();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(label) = line.strip_suffix(":\n").filter(|label| label.starts_with('L')) else { continue };
+        let back = format!("jne {label}");
+        if let Some(end) = lines[at + 1..].iter().position(|one| {
+            one.ends_with('\n') && one.split_whitespace().collect::<Vec<_>>().join(" ") == back
+        }) {
+            return Some(lines[at..=at + 1 + end].concat());
+        }
+    }
+    None
+}
+
+#[test]
+fn test_a_loop_whose_latch_copies_ends_on_its_branch() {
+    // sum_three left the latch's copies in the exit edge, so the loop ran je out plus jmp back.
+    let function = sum_three_on_486();
+    let top = closed_on_jne(&function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
+    assert!(!top.contains("jmp"), "{top}");
+}
+
