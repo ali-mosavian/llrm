@@ -1458,6 +1458,7 @@ pub fn assembled(
         )
         .map_err(|error| CompileError::Value(error.0))?;
         let mut low = flow::verified(low, "lower", true).map_err(|error| CompileError::Value(error.0))?;
+        low.source_order = function.error_handler.is_some();
         _observe(&mut observer, "initial-lir", StageValue::Lir(&low), Some(function), None)?;
         let temporary_blocks: BTreeSet<i64> = if temporary_root.is_some() {
             let physical_blocks: BTreeSet<i64> = physical.lowered.body.blocks.iter().map(|block| block.at).collect();

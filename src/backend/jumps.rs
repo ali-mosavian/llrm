@@ -91,6 +91,9 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         }
         explicit.push(block);
     }
+    if body.source_order {
+        return Ok(body.with_blocks(explicit));
+    }
     let by_at: IndexMap<i64, LirBlock> = explicit.iter().map(|block| (block.at, block.clone())).collect();
     let natural = loopy::loops(&intervals::_graph(&explicit), Some(body.entry));
     let tests = _tests(&natural, body.entry, &by_at);

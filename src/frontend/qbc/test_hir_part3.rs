@@ -407,6 +407,24 @@ fn test_nested_integer_division_keeps_each_dividend() {
     assert!(!scale.contains("idiv ax"));
 }
 
+/// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
+/// layout put the raise after B$CEND, outside its statement's code.
+#[test]
+fn test_a_statement_under_an_error_handler_keeps_its_code_contiguous() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "POWRES.BAS",
+        b"on error goto h\r\nb! = -8: e! = .5\r\nfor i% = 1 to 2\r\nr! = b! ^ e!\r\nprint r!\r\nnext\r\nsystem\r\nh:\r\nresume next\r\n",
+    );
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let assembly = listing(&source);
+    let calls: Vec<&str> =
+        assembly.lines().filter(|line| line.contains("call")).map(|line| line.split_whitespace().last().unwrap()).collect();
+    let at = |name: &str| calls.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name}: {calls:?}"));
+    assert!(at("B$SERR") < at("B$PER4"), "{calls:?}");
+}
+
 /// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal.
 #[test]
 fn test_byref_dynamic_array_field_copies_through_a_near_formal() {
