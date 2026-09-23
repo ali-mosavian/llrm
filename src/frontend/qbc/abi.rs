@@ -602,6 +602,15 @@ pub(crate) fn _contract(
             ),
         ));
     }
+    if name == "B$RND0" && pushed == 0 {
+        return Ok(returns(
+            0,
+            format!(
+                "{evidence} QB45 random.asm declares B$RND0 with no \
+                 parameters and returns its result address in AX with a bare RETF."
+            ),
+        ));
+    }
     if name == "B$RND1" && pushed == 4 {
         return Ok(returns(
             4,

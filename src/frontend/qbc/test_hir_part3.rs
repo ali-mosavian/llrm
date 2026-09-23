@@ -1163,6 +1163,15 @@ fn test_open_compiles_with_its_callee_cleaned_arguments() {
     assert!(listing(&source).contains("B$OPEN"));
 }
 
+/// oimad's bare RND was refused: B$RND0 had no audited stack effect.
+#[test]
+fn test_rnd_without_an_argument_compiles() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "RND0.BAS", b"x! = rnd\r\nprint x!\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(listing(&source).contains("B$RND0"));
+}
+
 /// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.
 #[test]
 fn test_an_unsuffixed_decimal_above_32767_is_a_long_literal() {
