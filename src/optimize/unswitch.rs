@@ -2,9 +2,6 @@
 //! invariant condition, entirely in MIR.
 //!
 //! Python's `ValueError`s are the `Err` text.
-//!
-//! Every test in `tests/test_unswitch.py` is skipped: each needs the corpus
-//! or a monkeypatched pipeline.
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -290,3 +287,7 @@ pub(crate) fn _specialized(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "unswitch_tests.rs"]
+mod tests;
