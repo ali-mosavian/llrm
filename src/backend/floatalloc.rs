@@ -999,6 +999,9 @@ impl<'f, 'c> _Stack<'f, 'c> {
         let at = one.at;
         let status = semantics(Operation::Barrier, "fnstsw", vec![Loc::Reg(Reg { register: Register::AX, width: 2 })], Vec::new());
         let mut word = Insn::new(at, Some((at, at)), Some(status), one.defines.clone(), Vec::new());
+        // AX is written whether or not a value is delivered in it:
+        // nothing else may live there across the compare.
+        word.clobbers = std::collections::BTreeSet::from([Register::AX]);
         word.delivers = one.delivers.clone();
         word.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
         self.out.push(Arc::new(word));

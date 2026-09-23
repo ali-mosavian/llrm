@@ -407,6 +407,35 @@ fn test_nested_integer_division_keeps_each_dividend() {
     assert!(!scale.contains("idiv ax"));
 }
 
+/// -2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`.
+#[test]
+fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "POWSIGN.BAS", b"b! = -2\r\ne! = 3\r\nr! = b! ^ e!\r\nprint r!\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines = stripped_lines(&listing(&source));
+    let ax = regex::Regex::new(r"\b(e?ax|al|ah)\b").unwrap();
+    for (index, line) in lines.iter().enumerate() {
+        if line != "fnstsw ax" {
+            continue;
+        }
+        for later in &lines[index + 1..] {
+            if later == "sahf" || later.starts_with('j') || later.starts_with("L0_") {
+                continue;
+            }
+            let (mnemonic, operands) = later.split_once(' ').unwrap_or((later, ""));
+            let (destination, sources) = operands.split_once(',').unwrap_or((operands, ""));
+            assert!(
+                !ax.is_match(sources) && !(ax.is_match(destination) && !matches!(mnemonic, "mov" | "fnstsw")),
+                "AX read after fnstsw: {later}"
+            );
+            if ax.is_match(destination) {
+                break;
+            }
+        }
+    }
+}
+
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
 /// layout put the raise after B$CEND, outside its statement's code.
 #[test]
