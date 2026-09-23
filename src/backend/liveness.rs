@@ -44,14 +44,22 @@ pub fn _universe() -> Lanes {
 
 /// The lanes live before `block`, given those live after it.
 pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    let mut live = live;
+    let (read, written) = _transfer(block, universe);
+    live.minus(&written).or(&read)
+}
+
+/// What `block` reads before writing, and what it writes: the lanes live
+/// before it are the first and those live after it less the second.
+/// Decoding an instruction is the cost, so a fixed point asks this once.
+fn _transfer(block: &LirBlock, universe: &Lanes) -> (Lanes, Lanes) {
+    let (mut read, mut written) = (Lanes::new(), Lanes::new());
     for one in block.insns.iter().rev() {
         if _terminator(one.what.as_ref()) {
             // Its flag read is not in `_register_effects`, which answers only
             // for instructions that fall through. It writes nothing.
             let what = one.what.as_ref().expect("a terminator has semantics");
             if what.op == Operation::Branch {
-                live = live.or(&_branch_reads(what));
+                read = read.or(&_branch_reads(what));
             }
             continue;
         }
@@ -61,12 +69,14 @@ pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
         }
         let Some((reads, writes)) = effects else {
             // It may read anything, but what the block writes before it is still written first.
-            live = universe.clone();
+            read = universe.clone();
+            written = universe.clone();
             continue;
         };
-        live = live.minus(&writes).or(&reads);
+        read = read.minus(&writes).or(&reads);
+        written = written.or(&writes);
     }
-    live
+    (read, written)
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -134,16 +144,18 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
+    let transfer: IndexMap<i64, (Lanes, Lanes)> = blocks.iter().map(|(at, block)| (*at, _transfer(block, &universe))).collect();
     let mut changing = true;
     while changing {
         changing = false;
-        for (at, block) in &blocks {
+        for at in blocks.keys() {
             let after = if successors[at].is_empty() {
                 universe.clone()
             } else {
                 successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
             };
-            let before = _backwards(block, after, &universe);
+            let (read, written) = &transfer[at];
+            let before = after.minus(written).or(read);
             if before != into[at] {
                 into.insert(*at, before);
                 changing = true;
