@@ -10,7 +10,9 @@ else names its EXTDEF.
 
 import struct
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
+from collections.abc import Callable
 from collections.abc import Sequence
 
 from iced_x86 import Register
@@ -395,7 +397,53 @@ def _resolved_fixup(one: omf.Fixup, offset: int, disp: int) -> bytes:
     return bytes(body)
 
 
+def live(module: masm.Module, refers: Callable[[object], str | None] | None = None) -> masm.Module:
+    """`module` without the data objects nothing reaches.
+
+    A `masm.Object` starts a unit that stays only if code, a public, or a
+    kept unit names one of its labels. `refers` names what a datum points
+    at, for datum types this writer does not know.
+    """
+    if not any(isinstance(item, masm.Object) for _segment, items in module.data for item in items):
+        return module
+    reached = set(module.publics)
+    for number, procedure in enumerate(module.procedures):
+        reached.add(procedure.name)
+        for item in masm.listing(procedure, number):
+            for one in _items(item, module.names, number):
+                match one:
+                    case Piece(fixups=fixups):
+                        reached.update(_target(fixup.name) for fixup in fixups)
+                    case Near(name=name):
+                        reached.add(name)
+    units: list[tuple[int, bool, list[masm.Datum]]] = []
+    for entry, (_segment, items) in enumerate(module.data):
+        units.append((entry, False, []))
+        for item in items:
+            if isinstance(item, masm.Object):
+                units.append((entry, True, []))
+            units[-1][2].append(item)
+    kept = [not droppable for _entry, droppable, _run in units]
+    pending = [index for index, keep in enumerate(kept) if keep]
+    labels = [{item.name for item in run if isinstance(item, masm.Label)} for _entry, _droppable, run in units]
+    while pending:
+        for item in units[pending.pop()][2]:
+            name = item.name if isinstance(item, masm.Pointer) else refers(item) if refers is not None else None
+            if name is not None:
+                reached.add(_target(name))
+        for index, keep in enumerate(kept):
+            if not keep and labels[index] & reached:
+                kept[index] = True
+                pending.append(index)
+    data = [(segment, []) for segment, _items in module.data]
+    for (entry, _droppable, run), keep in zip(units, kept):
+        if keep:
+            data[entry][1].extend(run)
+    return replace(module, data=tuple((segment, tuple(items)) for segment, items in data))
+
+
 def written(module: masm.Module, source: str) -> bytes:
+    module = live(module)
     segments = [Segment(module.code, "CODE", False)]
     named = {"_DATA": Segment("_DATA", "DATA", True)}
     for name, _items in module.data:

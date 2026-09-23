@@ -3061,3 +3061,20 @@ def test_circle_pushes_one_radius(tmp_path: Path) -> None:
         elif mnemonic == "push":
             pushed += 4 if operand.startswith(("dword", "e")) else 2
     assert pushed == 6, lines[start:end + 1]
+
+
+def _constant_bytes(tmp_path: Path, text: str) -> int:
+    source = tmp_path / "T.BAS"
+    source.write_bytes(text.encode())
+    records = omf.parse(qb_compile.object_bytes(qb_driver.parsed(source, dialect="qb45", runtime="qb45"), source.name))
+    return next(size for one in omf.segments(records) if one for name, size in (one,) if name == "BC_CN")
+
+
+def test_a_descriptor_nothing_reads_takes_no_dgroup(tmp_path: Path) -> None:
+    """Every static array carried a descriptor in BC_CN whether code read it
+    or not: deedlines' 29 unread ones cost 522 bytes of DGROUP and its string
+    space ran out ("Out of string space") where BC's build ran."""
+    indexed = "DEFINT A-Z\r\nDIM a(10)\r\na(3) = 5\r\nPRINT a(3)\r\n"
+    whole = "DEFINT A-Z\r\nDECLARE SUB s (b())\r\nDIM a(10)\r\na(3) = 5\r\nCALL s(a())\r\nSUB s (b())\r\nPRINT b(3)\r\nEND SUB\r\n"
+    assert _constant_bytes(tmp_path, indexed) == 0
+    assert _constant_bytes(tmp_path, whole) == 18

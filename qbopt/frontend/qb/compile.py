@@ -133,7 +133,7 @@ def _data(module: hir.Module) -> tuple[dict[tuple[Space, int], str], dict[str, t
         )
         items = grouped[segment]
         label = names[(Space.SEGMENT, object_.id)]
-        items.append(masm.Label(label))
+        items.append(masm.Object(label))
         cursor = 0
         for relocation in sorted(object_.relocations, key=lambda one: one.at):
             far = relocation.address in (hir.AddressKind.FAR, hir.AddressKind.HUGE)
@@ -1562,7 +1562,10 @@ def object_bytes(
     program: hir.Program, source: str | Path, *, observer: StageObserver | None = None, options: Options = O2
 ) -> bytes:
     """Emit a complete fresh BASIC-envelope OMF object."""
-    module = assembled(program, observer=observer, options=options)
+    module = omfwrite.live(
+        assembled(program, observer=observer, options=options),
+        lambda item: item.name if isinstance(item, _SegmentWord) else None,
+    )
     # Build the same semantic segments as backend.omfwrite.written, then add
     # the BASIC-owned MODULE_CODE envelope before asking its canonical record
     # serializer to write OMF. This stays frontend-owned and leaves the shared
