@@ -697,6 +697,28 @@ impl Ord for Queued {
 
 const INF: f64 = f64::INFINITY;
 
+/// The fixed register each value reaches through the fewest copies.
+///
+/// A loop's sum placed before the return's copy to AX is otherwise seated
+/// where nothing asked, and whatever took AX leaves a move on the exit.
+fn _wanted(hints: &IndexMap<u32, Vec<u32>>, fixed: &IndexMap<u32, Register>) -> IndexMap<u32, Register> {
+    let mut wanted: IndexMap<u32, Register> = fixed.iter().map(|(value, register)| (*value, _whole(*register))).collect();
+    let mut frontier: Vec<u32> = wanted.keys().copied().collect();
+    while !frontier.is_empty() {
+        let mut reached = Vec::new();
+        for value in frontier {
+            for other in hints.get(&value).into_iter().flatten() {
+                if !wanted.contains_key(other) {
+                    wanted.insert(*other, wanted[&value]);
+                    reached.push(*other);
+                }
+            }
+        }
+        frontier = reached;
+    }
+    wanted.into_iter().filter(|(value, _)| !fixed.contains_key(value)).collect()
+}
+
 /// A register for every value, by LLVM's `RegAllocGreedy`.
 #[allow(clippy::too_many_arguments)]
 pub fn allocate(
@@ -729,6 +751,11 @@ pub fn allocate(
     let confined = classes(body, protected);
     let fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     let hints = _copy_hints(body);
+    let wanted = _wanted(&hints, &fixed);
+    let mut claims: IndexMap<Register, Vec<u32>> = IndexMap::default();
+    for (one, register) in &wanted {
+        claims.entry(*register).or_default().push(*one);
+    }
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -781,7 +808,25 @@ pub fn allocate(
                     *votes.entry(_whole(*register)).or_insert(0) += 1;
                 }
             }
-            order.sort_by_key(|register| -votes.get(&_whole(*register)).copied().unwrap_or(0));
+            if votes.is_empty() {
+                if let Some(register) = wanted.get(&value) {
+                    *votes.entry(*register).or_insert(0) += 1;
+                }
+            }
+            let claimed: BTreeSet<Register> = claims
+                .iter()
+                .filter(|(_, others)| {
+                    others.iter().any(|other| {
+                        *other != value
+                            && !r#where.contains_key(other)
+                            && live.get(other).is_some_and(|theirs| theirs.overlaps(&mine))
+                    })
+                })
+                .map(|(register, _)| *register)
+                .collect();
+            order.sort_by_key(|register| {
+                (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
+            });
             if let Some(choice) = preferred.get(&value) {
                 let wanted = _whole(*choice);
                 order = order
@@ -2417,6 +2462,33 @@ mod tests {
             assert_ne!(got.r#where[&1], Register::EDI, "{barrier}");
             assert_eq!(got.r#where[&2], Register::EDI, "{barrier}");
         }
+    }
+
+    #[test]
+    fn test_a_value_copied_on_to_a_fixed_register_is_seated_there_first() {
+        // A loop sum two copies from the return's AX lost AX to a counter placed first; the exit then moved it.
+        let mov = |at: i64, dest: u32, source: Loc| {
+            let uses = if let Loc::Held(one) = &source { vec![one.value] } else { vec![] };
+            Insn::new(at, Some((at, at + 1)), Some(semantics(Operation::Move, "mov", vec![held(dest, 2)], vec![source])), vec![dest], uses)
+        };
+        let push = |at: i64, value: u32| {
+            Insn::new(at, Some((at, at + 1)), Some(semantics(Operation::Push, "push", vec![], vec![held(value, 2)])), vec![], vec![value])
+        };
+        let (counter, total, copied, returned) = (1, 2, 3, 4);
+        let insns = vec![
+            mov(0, counter, imm(9, 2)),
+            mov(1, total, imm(0, 2)),
+            push(2, total),
+            push(3, counter),
+            mov(4, copied, held(total, 2)),
+            mov(5, returned, held(copied, 2)),
+            push(6, returned),
+        ];
+        let pins = IndexMap::from_iter([(returned, Register::EAX)]);
+        let body = LirBody::new("chain", 0, vec![block(0, insns)], IndexMap::default(), pins);
+        let got = allocated(&body, Some(&body.pins)).expect("allocates");
+        assert_eq!(got.r#where[&total], Register::EAX);
+        assert_eq!(got.r#where[&copied], Register::EAX);
     }
 
     // ------------------------------------ tests/test_interval_redefinitions.py
