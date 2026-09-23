@@ -274,7 +274,8 @@ fn _reuse_key(
         items.sort();
         items
     });
-    Some((Rc::as_ptr(body) as usize, dgroup.cloned(), named))
+    // Without calls no memory is solved, and dgroup is read by nothing else.
+    Some((Rc::as_ptr(body) as usize, dgroup.filter(|_| calls.is_some()).cloned(), named))
 }
 
 /// The low `width` bytes of a value are `n`. Nothing is said above them.
@@ -1103,12 +1104,24 @@ pub(crate) fn known(
                     .map(|(_, facts)| facts.clone())
             })
         });
+        if crate::support::debug::enabled("consts") {
+            let why = if saved.is_some() {
+                "hit"
+            } else if _reuse.with(|reuse| reuse.borrow().as_ref().is_some_and(|cache| cache.keys().any(|(at, ..)| *at == key.0))) {
+                "miss: this body, another context"
+            } else {
+                "miss: a new body"
+            };
+            crate::debug!("consts", "known dgroup={} calls={}: {why}", dgroup.is_some(), calls.is_some());
+        }
         if let Some(saved) = saved {
             if !crate::support::checking_caches() {
                 return saved;
             }
             checked = Some(saved);
         }
+    } else {
+        crate::debug!("consts", "known: uncached (edges or initial)");
     }
     let mut allowed: Option<BTreeSet<Value>> = None;
     loop {
