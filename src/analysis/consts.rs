@@ -662,6 +662,37 @@ pub(crate) fn cells(
     crate::support::debug::timed("analysis consts.cells", || _cells_solved(body, dgroup, calls, known, initial, edges, assume, allowed))
 }
 
+/// `cells` of a body that stays alive, shared by every caller whose facts agree
+/// where the solve reads them: the values memory writes name. Selectors the
+/// solve took on faith are handed to each caller as if it had solved.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shared_cells(
+    body: &Rc<MirBody>,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    known: Option<&IndexMap<Value, Known>>,
+    initial: Option<&Cells>,
+    edges: Option<&IndexMap<(i64, i64), Cells>>,
+    assume: Option<&mut BTreeSet<Value>>,
+    allowed: Option<&BTreeSet<Value>>,
+) -> HeldCells {
+    let read = super::manager::cached(body, (), || _memory_reads(body));
+    let relevant = known
+        .map(|known| read.iter().filter_map(|value| known.get(value).map(|fact| (*value, fact.clone()))).collect::<BTreeMap<_, _>>())
+        .unwrap_or_default();
+    let key = (dgroup.clone(), calls.clone(), initial.cloned(), edges.cloned(), assume.is_some(), allowed.cloned(), relevant);
+    let assuming = assume.is_some();
+    let solved = super::manager::cached(body, key, || {
+        let mut taken = BTreeSet::new();
+        let held = cells(body, dgroup, calls, known, initial, edges, assuming.then_some(&mut taken), allowed);
+        (held, taken)
+    });
+    if let Some(assume) = assume {
+        assume.extend(solved.1.iter().copied());
+    }
+    solved.0.clone()
+}
+
 fn _cells_solved(
     body: &MirBody,
     dgroup: &BTreeSet<i64>,
@@ -794,6 +825,14 @@ fn _cells_solved(
     }
 
     crate::debug!("consts", "cells solved in {rounds} block visits");
+    if crate::support::debug::enabled("cellsize") {
+        let ops = body.blocks.iter().map(|block| block.ops.len()).sum::<usize>();
+        let writes = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| !op.stores.is_empty()).count();
+        let reads = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| !op.loads.is_empty() || op.args.iter().any(|arg| matches!(arg, Arg::Cell(_)))).count();
+        let largest = outof.values().flatten().map(|one| one.len()).max().unwrap_or(0);
+        let total = outof.values().flatten().map(|one| one.len()).sum::<usize>();
+        crate::debug!("cellsize", "{ops} ops, {} blocks, {writes} writes, {reads} reads, cells per block: max {largest}, total {total}", body.blocks.len());
+    }
     let mut found = IndexMap::default();
     for block in &body.blocks {
         let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
@@ -1217,7 +1256,7 @@ thread_local! {
 }
 
 fn _solved(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
     calls: Option<&IndexMap<i64, String>>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
@@ -1238,8 +1277,8 @@ fn _solved(
     // The cells read only what ops that write memory name; until a round
     // learns one of those, solving them again gives the same answer.
     let read = match (dgroup, calls) {
-        (Some(_), Some(_)) => _memory_reads(body),
-        _ => HashSet::default(),
+        (Some(_), Some(_)) => super::manager::cached(body, (), || _memory_reads(body)),
+        _ => Rc::new(HashSet::default()),
     };
     let mut learned = true;
     let mut rounds = 0;
@@ -1251,7 +1290,7 @@ fn _solved(
         // feed each other and run to one fixed point together.
         if let (Some(dgroup), Some(calls)) = (dgroup, calls) {
             if learned {
-                held = cells(body, dgroup, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+                held = shared_cells(body, dgroup, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
             }
             learned = false;
         }

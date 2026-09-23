@@ -684,11 +684,16 @@ fn _solved(
             store
         };
         if reshadow {
-            let mut shadow = MirBody::clone(body);
-            for block in &mut shadow.blocks {
-                block.ops = block.ops.iter().map(stored).collect();
-            }
-            memory = consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None);
+            // Until an Fstore's source is known the shadow is the body, whose cells are shared.
+            memory = if sources.iter().any(|source| facts.contains_key(source)) {
+                let mut shadow = MirBody::clone(body);
+                for block in &mut shadow.blocks {
+                    block.ops = block.ops.iter().map(stored).collect();
+                }
+                consts::cells(&shadow, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None)
+            } else {
+                consts::shared_cells(body, dgroup, calls, Some(&integers), seed.as_ref(), None, None, None)
+            };
             reshadow = false;
         }
         let empty = Cells::default();

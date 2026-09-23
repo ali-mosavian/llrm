@@ -2075,7 +2075,7 @@ pub(crate) fn decided(
 
     let body = _threaded(body)?;
     let facts = consts::known(&body, Some(dgroup), Some(calls), None, None);
-    let held = consts::cells(&body, dgroup, calls, Some(&facts), None, None, None, None);
+    let held = consts::shared_cells(&body, dgroup, calls, Some(&facts), None, None, None, None);
     let pointers = alias::pointers(&body)?;
     let successors = |block: &MirBlock,
                       values: &IndexMap<Value, consts::Known>,
@@ -2674,7 +2674,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
         .iter()
         .any(|block| block.ops.iter().any(|op| !op.loads.is_empty() || op.kind == Kind::Divmod))
     {
-        consts::cells(body, dgroup, calls, Some(&facts), None, Some(&edges), None, None)
+        consts::shared_cells(body, dgroup, calls, Some(&facts), None, Some(&edges), None, None)
     } else {
         IndexMap::default()
     };
