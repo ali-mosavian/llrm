@@ -7,7 +7,7 @@ use crate::support::hash::IndexMap;
 
 use num_traits::ToPrimitive;
 
-use crate::abi::ports;
+use crate::abi::machine;
 use crate::hir::escape;
 use crate::hir::model;
 use crate::hir::verify::{InvalidHIR, verify};
@@ -1511,7 +1511,7 @@ impl<'a> _Scope<'a> {
         let port = matches!(instruction.op, model::Op::PortIn | model::Op::PortOut);
         // A device with no path to memory leaves every cell alone; any other
         // port may start a transfer, so its memory effect stays unknown.
-        let silent_port = port && matches!(args.first(), Some(Arg::Const(one)) if one.n.to_i64().is_some_and(ports::silent));
+        let silent_port = port && matches!(args.first(), Some(Arg::Const(one)) if one.n.to_i64().is_some_and(|port| machine::current().silent_port(port)));
         let volatile = port || loads.iter().chain(&stores).any(|reference| reference.volatile);
         let final_ = mir::Op {
             floating: semantics,

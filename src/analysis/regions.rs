@@ -18,6 +18,8 @@ use crate::analysis::cellmap::Bucket;
 use crate::model::memory::{
     AliasClass, Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError, alias_class, classes_may_alias,
 };
+use num_traits::ToPrimitive;
+
 use crate::support::hash::{HashMap, HashSet};
 use crate::model::mir::{MemRef, Reach, Symbol, Value, symbolic_ref};
 use crate::objectfile::module::{Addr, Space};
@@ -308,7 +310,18 @@ fn absolute(
     let selector = reference.segment?;
     let interval = known?.get(&selector)?;
     if interval.low != interval.high {
-        return None;
+        // Selectors spanning memory the machine keeps no program data in
+        // reach only other absolute memory.
+        // A selector is an unsigned word; ranges may carry it signed.
+        let (low, high) = (interval.low.to_i64()?, interval.high.to_i64()?);
+        if (low < 0) != (high < 0) {
+            return None;
+        }
+        let word = |one: i64| if one < 0 { one + 0x1_0000 } else { one };
+        if !crate::abi::machine::current().foreign_selectors(word(low), word(high)) {
+            return None;
+        }
+        return Some((Region(vec![RegionPart::Absolute]), Origin::Here));
     }
     Some((
         Region(vec![
@@ -916,6 +929,7 @@ fn _object(region: &Region, origin: &Origin, private: &BTreeSet<i64>) -> MemoryO
                 ..MemoryObject::new(MemoryKind::Allocation)
             };
         }
+        [RegionPart::Absolute] => return MemoryObject::new(MemoryKind::Absolute),
         [RegionPart::Absolute, RegionPart::Selector(selector), ..] => {
             let selector = i64::try_from(selector).expect("a selector is a 16-bit value");
             return MemoryObject {

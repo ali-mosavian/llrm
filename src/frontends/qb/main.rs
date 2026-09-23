@@ -5,6 +5,7 @@
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math]
 //!         [--mbf] [--include DIR]... [--mir] [-o OUTPUT] [-O {s,2}] [--dump DIR]
+//!         [--machine TOML]
 //! ```
 
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ use crate::model::passes::{Options, O2};
 const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
 [--array-order {column-major,row-major}] [--dump-hir DUMP_HIR] [--huge-arrays] [--checked-arrays] \
 [--unchecked-bounds] [--alternate-math] [--mbf] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
-[--dump DUMP] source";
+[--dump DUMP] [--machine MACHINE] source";
 
 pub(super) struct Arguments {
     pub(super) source: PathBuf,
@@ -76,6 +77,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--mir" => mir = true,
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
+            "--machine" => {
+                let machine = crate::abi::machine::Machine::load(std::path::Path::new(&value("--machine")?))?;
+                crate::abi::machine::configure(machine)?;
+            }
             "-O" => options = flow::level_option(&value("-O")?)?,
             _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),

@@ -1476,3 +1476,14 @@ SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nb\r\nPOKE 3, 4\r\nEND SUB\r\n\
 SUB b\r\nDEF SEG\r\nEND SUB\r\n";
     assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, true]);
 }
+
+/// A POKE into VGA memory counted as reaching every global, so the row loop
+/// reloaded yy() and xp() per pixel. A segment the machine keeps no program
+/// data in reaches none.
+#[test]
+fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
+    let text = optimized_blit(ROW_LOOP);
+    let row = text.split("\n  jump").find(|block| block.contains("cell(far+")).expect("the POKE's block");
+    let invariant = row.lines().filter(|line| line.contains("<- load") && !line.contains("]+v")).collect::<Vec<_>>();
+    assert!(invariant.is_empty(), "{text}");
+}

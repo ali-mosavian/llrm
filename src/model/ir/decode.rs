@@ -8,7 +8,7 @@ use iced_x86::{Mnemonic, OpKind, Register};
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use crate::abi::ports;
+use crate::abi::machine;
 use crate::frontends::bc::blocks::{Block, CodeMap, INLINE_TABLE, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
@@ -121,7 +121,7 @@ pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>) -> Vec<Arc<Nod
         } else {
             continue;
         };
-        if port.is_some_and(ports::silent) {
+        if port.is_some_and(|port| machine::current().silent_port(port)) {
             let mut replaced = opaque.clone();
             replaced.effects.loads = Vec::new();
             replaced.effects.stores = Vec::new();
