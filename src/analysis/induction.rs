@@ -1112,12 +1112,13 @@ fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
     {
         return None;
     }
-    let outside = predecessors(&body.blocks)
-        .get(&header.at)
+    let outside = body
+        .blocks
+        .iter()
+        .filter(|block| block.succ.contains(&header.at) && !inside.contains(&block.at))
+        .map(|block| block.at)
+        .collect::<BTreeSet<_>>()
         .into_iter()
-        .flatten()
-        .copied()
-        .filter(|at| !inside.contains(at))
         .collect::<Vec<_>>();
     let preheader =
         (outside.len() == 1 && blocks[&outside[0]].succ.as_slice() == [header.at]).then(|| outside[0]);

@@ -25,6 +25,17 @@ fn test_a_straight_line_has_no_loops() {
 }
 
 #[test]
+fn test_loops_are_remembered_by_shape_not_by_addresses() {
+    // Loops are kept per CFG shape across passes; keyed too loosely, a pass
+    // that cut a back edge would still be handed the loop it removed.
+    let looped = [block(0, &[1]), block(1, &[1, 2]), block(2, &[])];
+    let cut = [block(0, &[1]), block(1, &[2]), block(2, &[])];
+    assert_eq!(loops(&looped, None).len(), 1);
+    assert_eq!(loops(&cut, None), vec![]);
+    assert_eq!(loops(&looped, Some(2)), vec![], "from another entry the loop is unreachable");
+}
+
+#[test]
 fn test_a_self_loop_is_its_own_body() {
     let chain = [block(0, &[1]), block(1, &[1, 2]), block(2, &[])];
     let found = loops(&chain, None);

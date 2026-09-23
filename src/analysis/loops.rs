@@ -5,7 +5,9 @@
 //! every caller only looks them up.  `irreducible` keeps block order where
 //! its DFS start order depends on it.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
@@ -85,6 +87,65 @@ pub(crate) fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<
     dominance(blocks, entry).named()
 }
 
+/// What dominance and loops of one CFG shape came to: LLVM's `CFGAnalyses`,
+/// which every pass that leaves the CFG alone preserves. Keyed by the shape
+/// itself -- entry, and each block's address and successors in order -- so a
+/// pass that changes only operations finds them, and no pass has to say so.
+struct Shaped {
+    entry: Option<i64>,
+    shape: Vec<(i64, Vec<i64>)>,
+    dominance: Option<Rc<Dominance>>,
+    loops: Option<Rc<Vec<Loop>>>,
+}
+
+/// Shapes remembered: a transaction alternates between few of them.
+const REMEMBERED: usize = 8;
+
+thread_local! {
+    static SHAPES: RefCell<Vec<Shaped>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `read` of `blocks`' shape, from `compute` on first asking.
+fn shaped<N: Node, T: Clone>(
+    blocks: &[N],
+    entry: Option<i64>,
+    read: impl Fn(&Shaped) -> Option<T>,
+    write: impl FnOnce(&mut Shaped, T),
+    compute: impl FnOnce() -> T,
+) -> T {
+    let same = |one: &Shaped| {
+        one.entry == entry
+            && one.shape.len() == blocks.len()
+            && one.shape.iter().zip(blocks).all(|((at, succ), block)| *at == block.at() && succ.as_slice() == block.succ())
+    };
+    let found = SHAPES.with(|shapes| {
+        let mut shapes = shapes.borrow_mut();
+        let index = shapes.iter().position(same)?;
+        let one = shapes.remove(index);
+        let answer = read(&one);
+        shapes.insert(0, one);
+        answer
+    });
+    if let Some(found) = found {
+        return found;
+    }
+    let computed = compute();
+    SHAPES.with(|shapes| {
+        let mut shapes = shapes.borrow_mut();
+        if !shapes.first().is_some_and(same) {
+            shapes.insert(0, Shaped {
+                entry,
+                shape: blocks.iter().map(|block| (block.at(), block.succ().to_vec())).collect(),
+                dominance: None,
+                loops: None,
+            });
+            shapes.truncate(REMEMBERED);
+        }
+        write(&mut shapes[0], computed.clone());
+    });
+    computed
+}
+
 /// Each block's dominators as bits over the sorted block addresses; naming
 /// them as sets costs more than finding them.
 pub(crate) struct Dominance {
@@ -109,13 +170,23 @@ impl Dominance {
         }
     }
 
-    fn named(self) -> BTreeMap<i64, BTreeSet<i64>> {
+    fn named(&self) -> BTreeMap<i64, BTreeSet<i64>> {
         let ats = &self.ats;
         ats.iter().zip(&self.doms).map(|(at, set)| (*at, set.iter().map(|one| ats[one]).collect())).collect()
     }
 }
 
-pub(crate) fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
+pub(crate) fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
+    shaped(
+        blocks,
+        entry,
+        |one| one.dominance.clone(),
+        |one, found| one.dominance = Some(found),
+        || Rc::new(_dominance(blocks, entry)),
+    )
+}
+
+fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
     if blocks.is_empty() {
         return Dominance { ats: Vec::new(), doms: Vec::new() };
     }
@@ -235,6 +306,17 @@ pub(crate) fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>
 /// Back edges sharing a header are one loop whose body is the union of
 /// theirs.
 pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
+    let found = shaped(
+        blocks,
+        entry,
+        |one| one.loops.clone(),
+        |one, found| one.loops = Some(found),
+        || Rc::new(_loops(blocks, entry)),
+    );
+    Vec::clone(&found)
+}
+
+fn _loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
     let doms = dominance(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
