@@ -549,6 +549,10 @@ fn _killed(
             }
         }
     }
+    // Only a write changes a cell; the queries it needs cost a copy of `known`.
+    if op.stores.is_empty() && !(op.kind == Kind::Call && !op.memory_values.is_empty()) {
+        return here;
+    }
     let put = if op.kind == Kind::Store {
         _put(op, known)
     } else {
