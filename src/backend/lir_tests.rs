@@ -57,7 +57,6 @@ fn lowered(
 }
 
 #[test]
-#[ignore = "fails in Python too: 0x009c: no instruction for extract"]
 fn test_string_copy_keeps_its_implicit_address_registers() {
     // fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy.
     let data = std::fs::read("fixtures/omf/fpdeep-p-g2.obj").unwrap();

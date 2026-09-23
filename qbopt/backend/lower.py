@@ -187,6 +187,10 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
         if op.name or op.kind is mir.Kind.NOTHING:
             return op
         found = _instruction(op)
+        if found is None and op.op is not ir.Operation.NOTHING:
+            # The raise stated the machine operation: an opaque instruction
+            # emitted from its node, an extract that is a move of a half.
+            return op
         if found is None:
             raise Unlowered(f"{op.at:#06x}: no instruction for {op.kind}")
         return replace(op, op=found[0], name=found[1])

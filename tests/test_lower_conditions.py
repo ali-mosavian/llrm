@@ -73,6 +73,25 @@ def test_semantic_compare_gets_its_machine_name_at_lowering() -> None:
     assert (named.op, named.name) == (ir.Operation.COMPARE, "cmp")
 
 
+@pytest.mark.parametrize(
+    "operation,kind",
+    [(ir.Operation.BARRIER, mir.Kind.OPAQUE), (ir.Operation.MOVE, mir.Kind.EXTRACT)],
+)
+def test_a_raised_machine_operation_with_no_kind_instruction_is_kept(operation, kind) -> None:
+    """nbody's `in al,dx` and fpdeep's long halves: "no instruction for opaque/extract".
+
+    The raise states their machine operation and leaves the mnemonic to the
+    node; naming refused them because their kind has no instruction.
+    """
+    value = mir.Value(1, 0)
+    op = mir.Op(0, operation, "", (value,), (value,), kind=kind)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+
+    (named,) = lower.named(body).blocks[0].ops
+
+    assert named == op
+
+
 @pytest.mark.parametrize("width", [2, 4])
 def test_dead_and_result_uses_test_without_a_destination(width):
     """IVWORD emitted mov cx,bx / and cx,bx although only the condition was consumed."""

@@ -245,7 +245,13 @@ pub(crate) fn named(body: &MirBody) -> Result<MirBody, Unlowered> {
         if !op.name.is_empty() || op.kind == Kind::Nothing {
             return Ok(op);
         }
-        let Some((operation, name)) = _instruction(&op)? else {
+        let found = _instruction(&op)?;
+        if found.is_none() && op.op != Some(OpCode::Operation(Operation::Nothing)) {
+            // The raise stated the machine operation: an opaque instruction
+            // emitted from its node, an extract that is a move of a half.
+            return Ok(op);
+        }
+        let Some((operation, name)) = found else {
             return Err(Unlowered(format!("{:#06x}: no instruction for {}", op.at, op.kind.as_str())));
         };
         op.op = Some(OpCode::Operation(operation));
@@ -2606,6 +2612,21 @@ mod tests {
         let named = named(&body).unwrap();
         let op = &named.blocks[0].ops[0];
         assert_eq!((op.op, op.name.as_str()), (Some(OpCode::Operation(Operation::Move)), "mov"));
+    }
+    /// nbody's `in al,dx` and fpdeep's long halves: "no instruction for opaque/extract".
+    ///
+    /// The raise states their machine operation and leaves the mnemonic to the
+    /// node; naming refused them because their kind has no instruction.
+    #[test]
+    fn test_a_raised_machine_operation_with_no_kind_instruction_is_kept() {
+        for (operation, kind) in [(Operation::Barrier, Kind::Opaque), (Operation::Move, Kind::Extract)] {
+            let value = Value::new(1, 0);
+            let mut op = Op::new(0, OpCode::Operation(operation), "", vec![value], vec![value]);
+            op.kind = kind;
+            let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
+            let named = named(&body).unwrap();
+            assert_eq!(named.blocks[0].ops[0], op, "{kind:?}");
+        }
     }
     /// Lower keyed `origin` by `mir.Value` in Python and the assembler looked up
     /// the instruction's value ids, so a moved value was emitted in BC's register.

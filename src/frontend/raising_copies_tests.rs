@@ -163,7 +163,6 @@ fn kinds(block: &MirBlock, kind: Kind) -> Vec<Op> {
 
 /// FPDEEP's d=12 needs memory effects, not eight unused pointer definitions.
 #[test]
-#[ignore = "fails in Python too: lowered refuses the cld, 'no instruction for opaque'"]
 fn test_copy_has_explicit_memory_and_pointer_results() {
     for (byte, step) in [(0xfc, 2), (0xfd, -2)] {
         let (found, body) = _copy(Some(byte));
@@ -313,7 +312,6 @@ fn lowered(body: &MirBody) -> crate::model::lir::LirBody {
 
 /// MOVSW preserves arithmetic flags even though its pointer offsets change.
 #[test]
-#[ignore = "fails in Python too: 0x014b: no instruction for opaque"]
 fn test_copy_selects_without_clobbering_arithmetic_flags() {
     let (found, body) = _copy(Some(0xfc));
     let mut low = lowered(&scalar(body, &found));
@@ -332,7 +330,7 @@ fn test_copy_selects_without_clobbering_arithmetic_flags() {
 
 /// FPDEEP's repeated DOUBLE load becomes one value once d=12 is represented.
 #[test]
-#[ignore = "fails in Python too: 0x014b: no instruction for opaque"]
+#[ignore = "fails in Python too: assert [] == ['fdivr', 'fmul']"]
 fn test_proven_copy_unlocks_strict_floating_cse() {
     let (found, body) = _copy(Some(0xfc));
     let original = testing::nth(&testing::raised("fixtures/omf/fpdeep-p-g2.obj"), 0);
