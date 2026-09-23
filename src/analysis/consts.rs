@@ -651,11 +651,12 @@ fn _cells_solved(
             initial
         }
     };
+    // Kept indexed: an edge from a lone predecessor hands its map on as it is.
     let mut outof = body
         .blocks
         .iter()
         .map(|block| (block.at, None))
-        .collect::<IndexMap<i64, Option<Cells>>>();
+        .collect::<IndexMap<i64, Option<IndexedCells>>>();
     let preds = body
         .blocks
         .iter()
@@ -674,11 +675,12 @@ fn _cells_solved(
     let edge_map = edges.unwrap_or(&no_edges);
     let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
 
-    let entering = |outof: &IndexMap<i64, Option<Cells>>, at: i64| -> Option<Cells> {
+    let entering = |outof: &IndexMap<i64, Option<IndexedCells>>, at: i64| -> Option<Here> {
         if preds[&at].is_empty() {
-            return Some(if at == body.entry { initial.clone() } else { Cells::default() });
+            return Some(Here::Plain(if at == body.entry { initial.clone() } else { Cells::default() }));
         }
-        let mut seen = Vec::new();
+        let mut seen: Vec<std::borrow::Cow<Cells>> = Vec::new();
+        let mut sole = None;
         for one in &preds[&at] {
             let Some(here) = &outof[one] else {
                 continue;
@@ -686,7 +688,8 @@ fn _cells_solved(
             let none = Cells::default();
             let extra = edge_map.get(&(*one, at)).unwrap_or(&none);
             if extra.is_empty() {
-                seen.push(here.clone());
+                sole = Some(here);
+                seen.push(std::borrow::Cow::Borrowed(&**here));
                 continue;
             }
             let mut here = here
@@ -699,29 +702,35 @@ fn _cells_solved(
             for (where_, fact) in extra {
                 here.insert(*where_, fact.clone());
             }
-            seen.push(here);
+            seen.push(std::borrow::Cow::Owned(here));
         }
         if at == body.entry {
-            seen.push(initial.clone());
+            seen.push(std::borrow::Cow::Borrowed(&initial));
+        }
+        if let ([std::borrow::Cow::Borrowed(_)], Some(sole)) = (seen.as_slice(), sole) {
+            if at != body.entry {
+                return Some(Here::Indexed(sole.clone()));
+            }
         }
         let first = seen.first()?;
-        Some(
+        Some(Here::Plain(
             first
                 .iter()
                 .filter(|(where_, fact)| seen[1..].iter().all(|one| one.get(*where_) == Some(*fact)))
                 .map(|(where_, fact)| (*where_, fact.clone()))
                 .collect(),
-        )
+        ))
     };
 
+    let mut rounds = 0;
     let mut changing = true;
     while changing {
         changing = false;
+        rounds += 1;
         for block in &body.blocks {
-            let Some(entered) = entering(&outof, block.at) else {
+            let Some(mut here) = entering(&outof, block.at) else {
                 continue;
             };
-            let mut here = Here::Plain(entered);
             for op in &block.ops {
                 here = _killed(
                     here,
@@ -735,16 +744,17 @@ fn _cells_solved(
                     Some(&mut queries),
                 );
             }
-            if outof[&block.at].as_ref() != Some(here.cells()) {
-                outof.insert(block.at, Some(here.into_cells()));
+            if outof[&block.at].as_deref() != Some(here.cells()) {
+                outof.insert(block.at, Some(queries.owned(here)));
                 changing = true;
             }
         }
     }
 
+    crate::debug!("consts", "cells solved in {rounds} rounds");
     let mut found = IndexMap::default();
     for block in &body.blocks {
-        let mut here = Here::Plain(entering(&outof, block.at).unwrap_or_default());
+        let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
         for (index, op) in block.ops.iter().enumerate() {
             found.insert((block.at, index), here.cells().clone());
             here = _killed(
@@ -1178,9 +1188,11 @@ fn _solved(
         _ => IndexMap::default(),
     };
     let empty = Cells::default();
+    let mut rounds = 0;
     let mut changing = true;
     while changing {
         changing = false;
+        rounds += 1;
         // What memory holds, recomputed from what is known so far: the two
         // feed each other and run to one fixed point together.
         if let (Some(dgroup), Some(calls)) = (dgroup, calls) {
@@ -1229,6 +1241,7 @@ fn _solved(
             }
         }
     }
+    crate::debug!("consts", "known solved in {rounds} rounds, {} ops", body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     (constant_cycles::propagated(body, &facts, None), assume.unwrap_or_default())
 }
 
