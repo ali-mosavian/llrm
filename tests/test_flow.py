@@ -786,7 +786,7 @@ def test_invariant_divides_execute_before_the_loop(stem: str) -> None:
     from qbopt.analysis import loops
 
     result = wholeseg.emitted(Path(f"fixtures/omf/{stem}.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped
