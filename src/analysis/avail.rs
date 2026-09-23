@@ -25,7 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, IndexMap};
 
 use super::memoryssa;
 use super::ranges::{self, Interval};
@@ -597,6 +597,8 @@ fn _dead_stores_solved<'a>(
     let mut sorted: Vec<&MirBlock> = body.blocks.iter().collect();
     sorted.sort_by(|one, other| other.at.cmp(&one.at));
     let mut found: BTreeSet<usize> = BTreeSet::new();
+    // A block's answer depends only on what is overwritten after it.
+    let mut last: HashMap<i64, (Bits, Vec<usize>, Bits)> = HashMap::default();
     let mut changing = true;
     while changing {
         changing = false;
@@ -624,7 +626,14 @@ fn _dead_stores_solved<'a>(
             }
             // no successor at all: only the caller may read it
             let out = out.unwrap_or_else(|| unread.clone());
-            let (mine, start) = _dead_in(block, &out, &stored, dgroup, private, layout, body.sealed, handles_errors);
+            let (mine, start) = match last.get(&block.at) {
+                Some((seen, mine, start)) if *seen == out => (mine.clone(), start.clone()),
+                _ => {
+                    let (mine, start) = _dead_in(block, &out, &stored, dgroup, private, layout, body.sealed, handles_errors);
+                    last.insert(block.at, (out, mine.clone(), start.clone()));
+                    (mine, start)
+                }
+            };
             found.extend(mine);
             if start.len() != entry[&block.at].len() {
                 changing = true;
