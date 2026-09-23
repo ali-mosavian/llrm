@@ -1442,3 +1442,12 @@ fn test_a_poke_does_not_reach_a_local_whose_address_is_never_taken() {
     assert!(!text.contains("load cell(frame"), "{text}");
 }
 
+/// Rotation panicked ("stepping is not in list") on a loop whose counter
+/// update is not in the latch block.
+#[test]
+fn test_rotation_skips_a_loop_whose_update_is_outside_the_latch() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let text = ROW_LOOP.replace("POKE x, cd(dn)", "sp(x - 200) = cd(dn)");
+    records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"), "T.BAS");
+}
+

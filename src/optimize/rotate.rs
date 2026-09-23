@@ -445,13 +445,11 @@ pub(crate) fn _step_test(body: &Rc<MirBody>, loop_: &Loop, header: &MirBlock) ->
         {
             continue;
         }
-        // Python's `latch.ops.index(stepping)`: first structurally equal op,
-        // and a ValueError when there is none.
-        let step_index = latch
-            .ops
-            .iter()
-            .position(|op| op == stepping)
-            .expect("ValueError: stepping is not in list");
+        // The update must be in the latch; one elsewhere in the loop is not
+        // this shape.
+        let Some(step_index) = latch.ops.iter().position(|op| op == stepping) else {
+            continue;
+        };
         if latch.ops[step_index + 1..]
             .iter()
             .any(|op| !matches!(op.kind, Kind::Nothing | Kind::Jump))
