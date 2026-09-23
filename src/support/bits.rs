@@ -17,6 +17,22 @@ impl Bits {
         self.words[index / 64] |= 1 << (index % 64);
     }
 
+    pub fn remove(&mut self, index: usize) {
+        self.words[index / 64] &= !(1 << (index % 64));
+    }
+
+    pub fn len(&self) -> usize {
+        self.words.iter().map(|word| word.count_ones() as usize).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.iter().all(|word| *word == 0)
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.words.iter().zip(&other.words).any(|(one, more)| one & more != 0)
+    }
+
     pub fn contains(&self, index: usize) -> bool {
         self.words[index / 64] & (1 << (index % 64)) != 0
     }

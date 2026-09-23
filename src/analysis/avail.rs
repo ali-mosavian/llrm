@@ -21,6 +21,7 @@
 
 #![allow(private_interfaces)] // `RegionLayout` and `Interval` are crate-private types.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,10 +30,11 @@ use crate::support::hash::IndexMap;
 use super::memoryssa;
 use super::ranges::{self, Interval};
 use super::cellmap::CellMap;
-use super::regions::{ByteRange, OverlapBucket, RegionLayout, overlap_bucket, overlap_buckets, overlapping};
+use super::regions::{OverlapBucket, RegionLayout, overlap_bucket, overlap_buckets, overlapping};
 use super::{effects, loops};
 use crate::model::mir::{self, Arg, Const, Kind, MemRef, MirBlock, MirBody, Op, Symbol, Value};
 use crate::objectfile::module::Space;
+use crate::support::bits::Bits;
 
 /// What a cell maps to: the value, or the constant a store wrote outright.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -372,6 +374,62 @@ fn _fixed(r#ref: &MemRef) -> bool {
     canonical || direct
 }
 
+/// Every cell a body stores to, numbered once for its dead-store solve.
+///
+/// A block's state is a set of these, not a map rebuilt per block: what is
+/// overwritten only ever names a cell some op here stores, as LLVM's DSE
+/// numbers its MemoryLocations. `buckets` indexes them all as `overlapping`
+/// rules writes out; a write asks only the live cells of the buckets it reaches.
+struct _Stored<'a> {
+    cells: Vec<&'a MemRef>,
+    number: IndexMap<&'a MemRef, usize>,
+    index: CellMap<usize, (), OverlapBucket>,
+    private: Bits,
+    /// Per cell, lazily: the cells whose store writes all its bytes, and the cells naming its bytes.
+    covering: RefCell<Vec<Option<Bits>>>,
+    alike: RefCell<Vec<Option<Bits>>>,
+}
+
+impl<'a> _Stored<'a> {
+    fn new(body: &'a MirBody, private: Option<&dyn Fn(&MemRef) -> bool>) -> Self {
+        let mut number: IndexMap<&'a MemRef, usize> = IndexMap::default();
+        for r#ref in body.blocks.iter().flat_map(|block| &block.ops).filter_map(stored_cell) {
+            let next = number.len();
+            number.entry(r#ref).or_insert(next);
+        }
+        let cells: Vec<&MemRef> = number.keys().copied().collect();
+        let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| (overlap_bucket(cells[*at]), None));
+        let mut marked = Bits::new(cells.len());
+        if let Some(private) = private {
+            cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
+        }
+        let size = cells.len();
+        Self { cells, number, index, private: marked, covering: RefCell::new(vec![None; size]), alike: RefCell::new(vec![None; size]) }
+    }
+
+    fn none(&self) -> Bits {
+        Bits::new(self.cells.len())
+    }
+
+    fn _related(&self, memo: &RefCell<Vec<Option<Bits>>>, at: usize, related: impl Fn(&MemRef, &MemRef) -> bool) -> Bits {
+        if let Some(known) = &memo.borrow()[at] {
+            return known.clone();
+        }
+        let mut found = self.none();
+        self.cells.iter().enumerate().filter(|(_, other)| related(self.cells[at], other)).for_each(|(one, _)| found.insert(one));
+        memo.borrow_mut()[at] = Some(found.clone());
+        found
+    }
+
+    fn covering(&self, at: usize, dgroup: Option<&RegionLayout>) -> Bits {
+        self._related(&self.covering, at, |one, other| _covered_by(one, other, dgroup))
+    }
+
+    fn alike(&self, at: usize) -> Bits {
+        self._related(&self.alike, at, mir::same_bytes)
+    }
+}
+
 /// One block, backward, from what its successors have already overwritten.
 ///
 /// Returns the stores it found dead and what is overwritten on entry, so
@@ -379,23 +437,16 @@ fn _fixed(r#ref: &MemRef) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn _dead_in(
     block: &MirBlock,
-    overwritten: &IndexMap<MemRef, i64>,
+    overwritten: &Bits,
+    stored: &_Stored,
     dgroup: Option<&RegionLayout>,
-    _calls: &IndexMap<i64, String>,
     private: Option<&dyn Fn(&MemRef) -> bool>,
-    bounds: Option<&IndexMap<(Space, i64), Vec<i64>>>,
+    layout: Option<&RegionLayout>,
     sealed: bool,
     handles_errors: bool,
-) -> (Vec<usize>, IndexMap<MemRef, i64>) {
-    // Python passes `dgroup` and `bounds` to regions as separate inputs;
-    // Rust's `RegionLayout` carries both.
-    let mut layout = dgroup.cloned().unwrap_or_default();
-    if let Some(bounds) = bounds {
-        layout.landmarks = bounds.iter().map(|(key, marks)| (*key, marks.clone())).collect();
-    }
-    let layout = Some(&layout);
+) -> (Vec<usize>, Bits) {
     let mut found: Vec<usize> = Vec::new();
-    let mut overwritten = _cells(overwritten.clone());
+    let mut overwritten = overwritten.clone();
     for op in block.ops.iter().rev() {
         // Nothing can read a private cell but by its name: not a call, and
         // not an address this cannot resolve.
@@ -416,12 +467,11 @@ fn _dead_in(
             let caught =
                 exception && sealed && private.is_some() && !op.barrier() && !effects::unmodeled_write(op);
             let kept = (shielded && op.kind == Kind::Call) || caught;
-            overwritten = _cells(if kept {
-                let private = private.expect("kept needs private");
-                overwritten.into_items().into_iter().filter(|(one, _)| private(one)).collect()
+            if kept {
+                overwritten.intersect_with(&stored.private);
             } else {
-                IndexMap::default()
-            });
+                overwritten = stored.none();
+            }
             if !caught {
                 continue;
             }
@@ -430,10 +480,11 @@ fn _dead_in(
         let wrote = stored_cell(op);
         if let Some(r#ref) = wrote {
             if r#ref.addr.is_some_and(|addr| addr.space != Space::Stack) {
-                if overwritten.keys().any(|one| _covered_by(r#ref, one, dgroup)) {
+                let at = stored.number[r#ref];
+                if stored.covering(at, dgroup).intersects(&overwritten) {
                     found.push(op as *const Op as usize);
                 }
-                overwritten.insert(r#ref.clone(), op.at, _place);
+                overwritten.insert(at);
                 continue;
             }
         }
@@ -444,7 +495,7 @@ fn _dead_in(
             if r#ref.addr.is_some_and(|addr| addr.space == Space::Stack) {
                 continue; // a pop, for the same reason a push is skipped below
             }
-            _clobber(&mut overwritten, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), private, layout);
+            _clobber(&mut overwritten, stored, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), layout);
         }
         if wrote.is_none() {
             for r#ref in &op.stores {
@@ -455,11 +506,11 @@ fn _dead_in(
                     // whose stack has already grown down into its own data.
                     continue;
                 }
-                _clobber(&mut overwritten, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), private, layout);
+                _clobber(&mut overwritten, stored, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), layout);
             }
         }
     }
-    (found, overwritten.into_items())
+    (found, overwritten)
 }
 
 #[cfg(test)]
@@ -468,36 +519,26 @@ thread_local! {
     pub(crate) static DEAD_OVERLAPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// A copy of `overwritten` to change, bucketed as `overlapping` rules writes out.
-fn _cells(overwritten: IndexMap<MemRef, i64>) -> CellMap<MemRef, i64, OverlapBucket> {
-    CellMap::new(overwritten, _place)
-}
-
-/// A cell's bucket, and no span: indexing MemRefs by displacement cost
-/// dead stores more than it saved.
-fn _place(reference: &MemRef) -> (OverlapBucket, Option<ByteRange>) {
-    (overlap_bucket(reference), None)
-}
-
 /// Forget the cells an access through `reference` may touch; an `unnamed` one cannot reach a private cell.
-fn _clobber(
-    overwritten: &mut CellMap<MemRef, i64, OverlapBucket>,
-    reference: &MemRef,
-    unnamed: bool,
-    private: Option<&dyn Fn(&MemRef) -> bool>,
-    layout: Option<&RegionLayout>,
-) {
-    let reached = overlap_buckets(reference, &overwritten.parts);
-    overwritten.kill(
-        reached,
-        |one| {
-            #[cfg(test)]
-            DEAD_OVERLAPS.with(|asked| asked.set(asked.get() + 1));
-            !(unnamed && private.is_some_and(|private| private(one)))
-                && overlapping(one, reference, None, None, layout).unwrap_or(true)
-        },
-        None,
-    );
+fn _clobber(overwritten: &mut Bits, stored: &_Stored, reference: &MemRef, unnamed: bool, layout: Option<&RegionLayout>) {
+    let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at));
+    let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
+        None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
+        Some(buckets) => buckets
+            .iter()
+            .filter_map(|bucket| stored.index.buckets.get(bucket))
+            .flat_map(IndexMap::keys)
+            .filter(|at| live(at))
+            .copied()
+            .collect(),
+    };
+    for at in reached {
+        #[cfg(test)]
+        DEAD_OVERLAPS.with(|asked| asked.set(asked.get() + 1));
+        if overlapping(stored.cells[at], reference, None, None, layout).unwrap_or(true) {
+            overwritten.remove(at);
+        }
+    }
 }
 
 /// Stores whose bytes are overwritten before anything reads them.
@@ -531,32 +572,27 @@ pub fn dead_stores<'a>(
 fn _dead_stores_solved<'a>(
     body: &'a MirBody,
     dgroup: Option<&RegionLayout>,
-    calls: &IndexMap<i64, String>,
+    _calls: &IndexMap<i64, String>,
     private: Option<&dyn Fn(&MemRef) -> bool>,
     bounds: Option<&IndexMap<(Space, i64), Vec<i64>>>,
     handles_errors: bool,
 ) -> Vec<&'a Op> {
-    let known: IndexMap<i64, &MirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let stored: IndexMap<MemRef, i64> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .filter_map(stored_cell)
-        .filter(|r#ref| r#ref.addr.is_some_and(|addr| addr.space != Space::Stack))
-        .map(|r#ref| (r#ref.clone(), -1))
-        .collect();
-    let mut entry: IndexMap<i64, IndexMap<MemRef, i64>> = known.keys().map(|at| (*at, stored.clone())).collect();
-    let unread: IndexMap<MemRef, i64> = match private {
-        Some(private) => body
-            .blocks
-            .iter()
-            .flat_map(|block| &block.ops)
-            .filter_map(stored_cell)
-            .filter(|r#ref| private(r#ref))
-            .map(|r#ref| (r#ref.clone(), -1))
-            .collect(),
-        None => IndexMap::default(),
-    };
+    // Python passes `dgroup` and `bounds` to regions as separate inputs;
+    // Rust's `RegionLayout` carries both.
+    let mut layout = dgroup.cloned().unwrap_or_default();
+    if let Some(bounds) = bounds {
+        layout.landmarks = bounds.iter().map(|(key, marks)| (*key, marks.clone())).collect();
+    }
+    let layout = Some(&layout);
+    let stored = _Stored::new(body, private);
+    let mut every = stored.none();
+    for (at, one) in stored.cells.iter().enumerate() {
+        if one.addr.is_some_and(|addr| addr.space != Space::Stack) {
+            every.insert(at);
+        }
+    }
+    let mut entry: IndexMap<i64, Bits> = body.blocks.iter().map(|block| (block.at, every.clone())).collect();
+    let unread = if private.is_some() { stored.private.clone() } else { stored.none() };
 
     let mut sorted: Vec<&MirBlock> = body.blocks.iter().collect();
     sorted.sort_by(|one, other| other.at.cmp(&one.at));
@@ -566,7 +602,7 @@ fn _dead_stores_solved<'a>(
         changing = false;
         found = BTreeSet::new();
         for block in &sorted {
-            let mut out: Option<IndexMap<MemRef, i64>> = None;
+            let mut out: Option<Bits> = None;
             for successor in &block.succ {
                 let Some(have) = entry.get(successor) else {
                     // an edge out of this body
@@ -575,16 +611,20 @@ fn _dead_stores_solved<'a>(
                 };
                 out = Some(match out {
                     None => have.clone(),
-                    Some(out) => out
-                        .into_iter()
-                        .filter(|(one, _)| have.keys().any(|other| mir::same_bytes(one, other)))
-                        .collect(),
+                    Some(mut out) => {
+                        let held: Vec<usize> = out.iter().collect();
+                        for one in held {
+                            if !stored.alike(one).intersects(have) {
+                                out.remove(one);
+                            }
+                        }
+                        out
+                    }
                 });
             }
             // no successor at all: only the caller may read it
             let out = out.unwrap_or_else(|| unread.clone());
-            let (mine, start) =
-                _dead_in(block, &out, dgroup, calls, private, bounds, body.sealed, handles_errors);
+            let (mine, start) = _dead_in(block, &out, &stored, dgroup, private, layout, body.sealed, handles_errors);
             found.extend(mine);
             if start.len() != entry[&block.at].len() {
                 changing = true;
