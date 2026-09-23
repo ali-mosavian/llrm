@@ -30,9 +30,11 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 
 /// Whether copying `loop` out `count` times pays: GCC's `try_unroll_loop_completely`.
 ///
-/// A copy no larger than the loop always pays. Otherwise GCC refuses growth under
-/// -Os, past `max-completely-peel-times` iterations, with a call on the path (little
-/// is left to fold), past `max-peel-branches` undecided branches, and past
+/// Past `max-completely-peel-times` iterations nothing is copied, however small the
+/// copy would settle: building it is the cost (deedlines' empty 16384-trip loops became
+/// 360K operations before they folded). A copy no larger than the loop always pays.
+/// Otherwise GCC refuses growth under -Os, with a call on the path (little is left
+/// to fold), past `max-peel-branches` undecided branches, and past
 /// `max-completely-peeled-insns` operations -- a budget raised, as LLVM's
 /// `shouldFullUnroll` raises it, by the share of the rolled work the copy no longer
 /// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
@@ -45,6 +47,10 @@ pub(crate) fn admitted(
     r#where: &Where,
 ) -> bool {
     let limits = &r#where.options;
+    if limits.max_unroll_iterations != 0 && *count > BigInt::from(limits.max_unroll_iterations) {
+        crate::debug!("unroll", "loop b{} x{count}: refused: max-completely-peel-times", loop_.header);
+        return false;
+    }
     let (size, folded) = _sizes(body, loop_, facts);
     let blocks = body
         .blocks
@@ -69,8 +75,6 @@ pub(crate) fn admitted(
         None
     } else if !limits.grows {
         Some("size would grow")
-    } else if limits.max_unroll_iterations != 0 && count > limits.max_unroll_iterations {
-        Some("max-completely-peel-times")
     } else if unrolled.calls {
         Some("contains call and code would grow")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {

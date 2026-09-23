@@ -26,15 +26,19 @@ MAX_PERCENT_THRESHOLD_BOOST = 400
 def admitted(body: mir.MirBody, loop, count: int, facts: dict, where: Where) -> bool:
     """Whether copying `loop` out `count` times pays: GCC's `try_unroll_loop_completely`.
 
-    A copy no larger than the loop always pays. Otherwise GCC refuses growth under
-    -Os, past `max-completely-peel-times` iterations, with a call on the path (little
-    is left to fold), past `max-peel-branches` undecided branches, and past
+    Past `max-completely-peel-times` iterations nothing is copied, however small the
+    copy would settle: building it is the cost (deedlines' empty 16384-trip loops
+    became 360K operations before they folded). A copy no larger than the loop always
+    pays. Otherwise GCC refuses growth under -Os, with a call on the path (little is
+    left to fold), past `max-peel-branches` undecided branches, and past
     `max-completely-peeled-insns` operations -- a budget raised, as LLVM's
     `shouldFullUnroll` raises it, by the share of the rolled work the copy no longer
     does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
     that shrinks it, as GCC does for outer loops.
     """
     limits = where.options
+    if limits.max_unroll_iterations and count > limits.max_unroll_iterations:
+        return False
     size, folded = _sizes(body, loop, facts)
     blocks = {block.at: block for block in body.blocks if block.at in loop.body}
     order = _ordered(blocks, loop.header)
@@ -49,7 +53,6 @@ def admitted(body: mir.MirBody, loop, count: int, facts: dict, where: Where) -> 
         return True
     return not (
         not limits.grows
-        or (limits.max_unroll_iterations and count > limits.max_unroll_iterations)
         or copy.calls
         or copy.branches > MAX_PEEL_BRANCHES
         or copy.size > budget * _boost(copy) // 100
