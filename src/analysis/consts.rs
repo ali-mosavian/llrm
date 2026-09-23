@@ -14,10 +14,12 @@ use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::alias::NamedBytes;
+use super::cellmap::CellMap;
+use super::regions::{OverlapBucket, object_bucket, overlap_buckets};
 use super::ranges::Interval;
 use super::{constant_cycles, effects, loops, memoryssa, ranges};
 use crate::abi::runtime;
-use crate::model::memory::Provenance;
+use crate::model::memory::{MemoryObject, Provenance};
 use crate::model::mir::{self, Arg, Cell, Held, Kind, MemRef, MirBody, Op, Value};
 use crate::objectfile::module::{Addr, Space};
 
@@ -56,6 +58,35 @@ pub(crate) struct _MemoryQueries {
     pub facts: BTreeMap<Value, Interval>,
     pub addressed: HashMap<usize, Vec<(MemRef, Rc<MemRef>)>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
+    // `named`'s per-byte entries never change; `learn` adds whole symbols only.
+    pub exact: HashMap<(Addr, u32), Option<(MemoryObject, i64)>>,
+    pub buckets: HashMap<(Addr, u32), OverlapBucket>,
+}
+
+/// Cells indexed by this epoch's buckets; see `_MemoryQueries::owned`.
+pub(crate) type IndexedCells = CellMap<(Addr, u32), Known, OverlapBucket>;
+
+/// What `_kills` is handed: Python's `here` is a dict, or a `CellMap` an
+/// earlier operation of the same walk already indexed.
+pub(crate) enum Here {
+    Plain(Cells),
+    Indexed(IndexedCells),
+}
+
+impl Here {
+    pub(crate) fn cells(&self) -> &Cells {
+        match self {
+            Here::Plain(cells) => cells,
+            Here::Indexed(cells) => cells,
+        }
+    }
+
+    pub(crate) fn into_cells(self) -> Cells {
+        match self {
+            Here::Plain(cells) => cells,
+            Here::Indexed(cells) => cells.into_items(),
+        }
+    }
 }
 
 impl _MemoryQueries {
@@ -71,6 +102,8 @@ impl _MemoryQueries {
             facts: _intervals(known),
             addressed: HashMap::default(),
             overlaps: HashMap::default(),
+            exact: HashMap::default(),
+            buckets: HashMap::default(),
         }
     }
 
@@ -109,35 +142,75 @@ impl _MemoryQueries {
         }
     }
 
+    /// The object and offset every byte of cell `where_` names, where they agree.
+    fn _named(&mut self, where_: (Addr, u32)) -> Option<(MemoryObject, i64)> {
+        if let Some(exact) = self.exact.get(&where_) {
+            return exact.clone();
+        }
+        let named = (0..i64::from(where_.1))
+            .map(|byte| self.named.at.get(&where_.0.plus(byte)))
+            .collect::<Vec<_>>();
+        let agree = named.first().copied().flatten().filter(|(object, offset)| {
+            named
+                .iter()
+                .enumerate()
+                .all(|(i, one)| one.is_some_and(|(other, at)| other == object && *at == offset + i as i64))
+        });
+        let exact = agree.cloned();
+        self.exact.insert(where_, exact.clone());
+        exact
+    }
+
+    /// Cell `where_`'s `overlap_bucket`, from the object its bytes name, if any.
+    ///
+    /// Remembered, as `exact` is: interning a bucket hashes its object.
+    pub(crate) fn bucket(&mut self, where_: (Addr, u32)) -> OverlapBucket {
+        if let Some(bucket) = self.buckets.get(&where_) {
+            return *bucket;
+        }
+        let named = self._named(where_);
+        let bucket =
+            object_bucket(named.map(|(object, _)| object), Some((None, None, where_.0.space, where_.0.index)));
+        self.buckets.insert(where_, bucket);
+        bucket
+    }
+
+    /// `here` indexed by this epoch's buckets, for one operation to change.
+    ///
+    /// Python copies a `CellMap` it is handed; `_kills` owns its `here`.
+    pub(crate) fn owned(&mut self, here: Here) -> IndexedCells {
+        match here {
+            Here::Indexed(cells) => cells,
+            Here::Plain(cells) => CellMap::new(cells, |where_| self.bucket(*where_)),
+        }
+    }
+
     pub(crate) fn may_overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+        #[cfg(test)]
+        MAY_OVERLAP.with(|asked| asked.set(asked.get() + 1));
         let key = (where_, Rc::as_ptr(reference) as usize);
-        if let Some(answer) = self.overlaps.get(&key) {
+        if let Some(&answer) = self.overlaps.get(&key) {
             if crate::support::checking_caches() {
-                assert_eq!(*answer, self._overlap(where_, reference), "_MemoryQueries.may_overlap: a cache hit disagrees with its recomputation");
+                assert_eq!(answer, self._overlap(where_, reference), "_MemoryQueries.may_overlap: a cache hit disagrees with its recomputation");
             }
-            return *answer;
+            return answer;
         }
         let answer = self._overlap(where_, reference);
         self.overlaps.insert(key, answer);
         answer
     }
 
-    fn _overlap(&self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+    fn _overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
         let mut cell = MemRef::new(Some(where_.0), where_.1);
+        let exact = self._named(where_);
         let named = (0..i64::from(where_.1))
             .map(|byte| self.named.at.get(&where_.0.plus(byte)))
             .collect::<Vec<_>>();
         let whole = self.named.spaces.get(&(where_.0.space, where_.0.index));
         let width = i64::from(where_.1);
-        let first = named.first().copied().flatten().filter(|(object, offset)| {
-            named
-                .iter()
-                .enumerate()
-                .all(|(i, one)| one.is_some_and(|(other, at)| other == object && *at == offset + i as i64))
-        });
-        if let Some((object, offset)) = first {
+        if let Some((object, offset)) = exact {
             cell.provenance = Some(
-                Provenance::one_with_slice(object.clone(), *offset, offset + width, 1, 1, BTreeSet::new())
+                Provenance::one_with_slice(object, offset, offset + width, 1, 1, BTreeSet::new())
                     .expect("a cell is at least one byte"),
             );
         } else if let Some(whole) = whole.filter(|whole| {
@@ -430,7 +503,24 @@ pub(crate) fn memory_queries(
 /// checks afterwards that every one of them did resolve.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _kills(
-    mut here: Cells,
+    here: Cells,
+    op: &Op,
+    known: &IndexMap<Value, Known>,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    assume: Option<&mut BTreeSet<Value>>,
+    allowed: Option<&BTreeSet<Value>>,
+    edge_facts: bool,
+    queries: Option<&mut _MemoryQueries>,
+) -> Cells {
+    _killed(Here::Plain(here), op, known, dgroup, calls, assume, allowed, edge_facts, queries).into_cells()
+}
+
+/// `_kills` over what the walk holds: Python's `here` is a dict or a
+/// `CellMap`, and a `CellMap` goes back out.
+#[allow(clippy::too_many_arguments)]
+fn _killed(
+    mut here: Here,
     op: &Op,
     known: &IndexMap<Value, Known>,
     dgroup: &BTreeSet<i64>,
@@ -439,28 +529,28 @@ pub(crate) fn _kills(
     allowed: Option<&BTreeSet<Value>>,
     edge_facts: bool,
     queries: Option<&mut _MemoryQueries>,
-) -> Cells {
+) -> Here {
     // A fact supplied for one CFG edge is a proof about reaching that edge,
     // not a durable summary of a callee.
     if edge_facts && op.kind == Kind::Call {
-        here = Cells::default();
+        here = Here::Plain(Cells::default());
     }
     if effects::unmodeled_write(op) && (op.barrier() || !calls.contains_key(&op.at)) {
-        here = Cells::default();
+        here = Here::Plain(Cells::default());
     }
     if op.kind == Kind::Call && op.stores.is_empty() {
         if let Some(name) = calls.get(&op.at) {
             // Only a call with no stores has to be taken at its word.
             let contract = runtime::contract(Some(name));
             if runtime::barrier(&contract) || runtime::writes_caller_memory(&contract) {
-                here = Cells::default();
+                here = Here::Plain(Cells::default());
             }
         }
     }
     let put = if op.kind == Kind::Store {
         _put(op, known)
     } else {
-        updated(op, known, &here)
+        updated(op, known, here.cells())
     };
     let mut local;
     let queries = match queries {
@@ -480,26 +570,30 @@ pub(crate) fn _kills(
                 continue;
             }
         }
-        here.retain(|where_, _| !queries.may_overlap(*where_, &reference));
+        let mut owned = queries.owned(here);
+        owned.kill(overlap_buckets(&reference, &owned.parts), |where_| queries.may_overlap(*where_, &reference));
         if let Some(put) = &put {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
                 queries.learn(&reference);
                 for (where_, fact) in _fragments(&reference, put) {
-                    here.insert(where_, fact);
+                    owned.insert(where_, fact, |where_| queries.bucket(*where_));
                 }
             }
         }
+        here = Here::Indexed(owned);
     }
     if op.kind == Kind::Call && !op.memory_values.is_empty() {
+        let mut owned = queries.owned(here);
         for (reference, value) in &op.memory_values {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
                 queries.learn(reference);
                 let fact = Known::new(masked(&value.n, value.width), value.width);
                 for (where_, fact) in _fragments(reference, &fact) {
-                    here.insert(where_, fact);
+                    owned.insert(where_, fact, |where_| queries.bucket(*where_));
                 }
             }
         }
+        here = Here::Indexed(owned);
     }
     here
 }
@@ -602,11 +696,12 @@ pub(crate) fn cells(
     while changing {
         changing = false;
         for block in &body.blocks {
-            let Some(mut here) = entering(&outof, block.at) else {
+            let Some(entered) = entering(&outof, block.at) else {
                 continue;
             };
+            let mut here = Here::Plain(entered);
             for op in &block.ops {
-                here = _kills(
+                here = _killed(
                     here,
                     op,
                     known,
@@ -618,8 +713,8 @@ pub(crate) fn cells(
                     Some(&mut queries),
                 );
             }
-            if outof[&block.at].as_ref() != Some(&here) {
-                outof.insert(block.at, Some(here));
+            if outof[&block.at].as_ref() != Some(here.cells()) {
+                outof.insert(block.at, Some(here.into_cells()));
                 changing = true;
             }
         }
@@ -627,10 +722,10 @@ pub(crate) fn cells(
 
     let mut found = IndexMap::default();
     for block in &body.blocks {
-        let mut here = entering(&outof, block.at).unwrap_or_default();
+        let mut here = Here::Plain(entering(&outof, block.at).unwrap_or_default());
         for (index, op) in block.ops.iter().enumerate() {
-            found.insert((block.at, index), here.clone());
-            here = _kills(
+            found.insert((block.at, index), here.cells().clone());
+            here = _killed(
                 here,
                 op,
                 known,
@@ -1024,6 +1119,8 @@ pub(crate) fn known(
 thread_local! {
     /// Fixed points solved, for the tests that pin cache reuse to Python's.
     pub(crate) static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `may_overlap` questions, for the test that pins the cell index.
+    pub(crate) static MAY_OVERLAP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn _solved(

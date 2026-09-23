@@ -14,7 +14,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use num_bigint::BigInt;
 
 use crate::analysis::ranges::{Interval, covering};
-use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError};
+use crate::analysis::cellmap::Bucket;
+use crate::model::memory::{
+    AliasClass, Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError, alias_class, classes_may_alias,
+};
+use crate::support::hash::{HashMap, HashSet};
 use crate::model::mir::{MemRef, Reach, Symbol, Value, symbolic_ref};
 use crate::objectfile::module::{Addr, Space};
 
@@ -551,6 +555,152 @@ fn _through_pointer(reference: &MemRef) -> bool {
         && reference
             .addr
             .is_none_or(|addr| matches!(addr.space, Space::Literal | Space::Far))
+}
+
+/// Python `mir.overlap_bucket`'s tuple: what `overlapping` needs of a cell
+/// to rule a write out unseen -- its one object (None if it has no single
+/// one), the frame `_displaced` compares displacements in (None for a
+/// pointer), and the object's alias class.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct OverlapShape {
+    pub object: Option<MemoryObject>,
+    pub frame: Option<Frame>,
+    pub class: Option<AliasClass>,
+}
+
+/// An interned `OverlapShape`: equal shapes share one, so a cell map hashes
+/// and copies a word rather than an object's identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct OverlapBucket(u32);
+
+thread_local! {
+    static SHAPES: std::cell::RefCell<(HashMap<OverlapShape, OverlapBucket>, Vec<OverlapShape>)> =
+        std::cell::RefCell::new((HashMap::default(), Vec::new()));
+}
+
+impl OverlapBucket {
+    fn interned(shape: OverlapShape) -> Self {
+        SHAPES.with(|shapes| {
+            let (named, all) = &mut *shapes.borrow_mut();
+            *named.entry(shape).or_insert_with_key(|shape| {
+                all.push(shape.clone());
+                OverlapBucket(u32::try_from(all.len() - 1).expect("fewer than 2^32 buckets"))
+            })
+        })
+    }
+
+    fn shape<T>(self, read: impl FnOnce(&OverlapShape) -> T) -> T {
+        SHAPES.with(|shapes| read(&shapes.borrow().1[self.0 as usize]))
+    }
+}
+
+/// Python `mir._frame`'s tuple: base, segment, space and index.
+pub(crate) type Frame = (Option<Value>, Option<Value>, Space, i64);
+
+/// The buckets held, by object, frame and alias class: Python's `parts`.
+#[derive(Clone, Default)]
+pub(crate) struct OverlapParts {
+    pub objects: HashMap<Option<MemoryObject>, HashSet<OverlapBucket>>,
+    pub frames: HashMap<Option<Frame>, HashSet<OverlapBucket>>,
+    pub classes: HashMap<Option<AliasClass>, HashSet<OverlapBucket>>,
+}
+
+impl Bucket for OverlapBucket {
+    type Parts = OverlapParts;
+
+    fn held(&self, parts: &mut OverlapParts) {
+        self.shape(|shape| {
+            parts.objects.entry(shape.object.clone()).or_default().insert(*self);
+            parts.frames.entry(shape.frame).or_default().insert(*self);
+            parts.classes.entry(shape.class).or_default().insert(*self);
+        });
+    }
+
+    fn released(&self, parts: &mut OverlapParts) {
+        fn drop_from<P: Eq + std::hash::Hash>(
+            part: &mut HashMap<P, HashSet<OverlapBucket>>,
+            key: &P,
+            bucket: &OverlapBucket,
+        ) {
+            let held = part.get_mut(key).expect("a held bucket is indexed");
+            held.remove(bucket);
+            if held.is_empty() {
+                part.remove(key);
+            }
+        }
+        self.shape(|shape| {
+            drop_from(&mut parts.objects, &shape.object, self);
+            drop_from(&mut parts.frames, &shape.frame, self);
+            drop_from(&mut parts.classes, &shape.class, self);
+        });
+    }
+}
+
+/// Python `mir.overlap_bucket`.
+pub(crate) fn overlap_bucket(reference: &MemRef) -> OverlapBucket {
+    let one = reference
+        .provenance
+        .as_ref()
+        .filter(|provenance| provenance.slices.len() == 1)
+        .map(|provenance| provenance.slices.first().expect("one slice").object.clone());
+    object_bucket(one, _frame(reference))
+}
+
+/// Python `mir.object_bucket`.
+pub(crate) fn object_bucket(one: Option<MemoryObject>, frame: Option<Frame>) -> OverlapBucket {
+    let class = one.as_ref().map(alias_class);
+    OverlapBucket::interned(OverlapShape { object: one, frame, class })
+}
+
+/// Python `mir.overlap_buckets`: the buckets held (`parts`, of a map keyed
+/// by `object_bucket`) a write through `reference` may reach; None for all
+/// of them.
+///
+/// Only these can hold a cell `overlapping` does not rule out: one whose
+/// object is unknown, one in the write's `_displaced` frame, one in the
+/// write's own object, and one whose alias class may alias the write's.
+pub(crate) fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<HashSet<OverlapBucket>> {
+    let provenance = reference.provenance.as_ref()?;
+    #[cfg(test)]
+    PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
+    let mut reached = parts.objects.get(&None).cloned().unwrap_or_default();
+    if let Some(frame) = _frame(reference) {
+        if let Some(buckets) = parts.frames.get(&Some(frame)) {
+            reached.extend(buckets.iter().copied());
+        }
+    }
+    let written = provenance.slices.iter().map(|one| &one.object).collect::<HashSet<_>>();
+    let kinds = written.iter().map(|one| alias_class(one)).collect::<HashSet<_>>();
+    for one in written {
+        if let Some(buckets) = parts.objects.get(&Some(one.clone())) {
+            reached.extend(buckets.iter().copied());
+        }
+    }
+    for (kind, buckets) in &parts.classes {
+        if kind.is_some_and(|kind| kinds.iter().any(|one| classes_may_alias(*one, kind))) {
+            reached.extend(buckets.iter().copied());
+        }
+    }
+    Some(reached)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Writes whose buckets were picked, and the alias classes scanned doing
+    /// it: Python's test counts the calls a pick makes.
+    pub(crate) static PICKED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Python `mir._frame`.
+fn _frame(reference: &MemRef) -> Option<Frame> {
+    if reference.pointer {
+        return None;
+    }
+    if let Some(symbol) = reference.symbolic {
+        return Some((None, None, symbol.space, symbol.index));
+    }
+    let addr = reference.addr?;
+    Some((reference.base, reference.segment, addr.space, addr.index))
 }
 
 /// Python `mir._displaced`: whether two references off one base value are

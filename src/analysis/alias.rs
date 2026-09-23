@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 use crate::support::hash::{IndexMap, IndexSet};
 use num_bigint::BigInt;
 
+use super::cellmap::{Bucket, CellMap};
 use super::consts::{self, Known};
 use super::{induction, loops, ranges};
 use crate::model::memory::{self, Identity, MemoryKind, MemoryObject, Provenance, Slice};
@@ -41,7 +42,7 @@ pub enum Actual {
 /// Python's `_cell_key` tuples: `(object, low, high)` or
 /// `(space, index, disp, width)`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-enum CellKey {
+pub(crate) enum CellKey {
     Object(MemoryObject, i64, i64),
     Address(Space, i64, i64, i64),
 }
@@ -809,6 +810,7 @@ pub fn points_to(
                 }
             }
             incoming.insert(block.at, state.clone());
+            let mut state = CellMap::new(state, _key_bucket);
             for phi in &block.phis {
                 let parts = phi
                     .incoming
@@ -870,17 +872,14 @@ pub fn points_to(
                         let key = _cell_key(&keyed);
                         // Any possibly overlapping write invalidates prior cell
                         // contents; an exact pointer store then defines it.
-                        state = state
-                            .into_iter()
-                            .filter(|(old, _)| Some(old) == key.as_ref() || !_keys_overlap(Some(old), key.as_ref()))
-                            .collect();
+                        _kill(&mut state, key.as_ref());
                         if let (Some(key), Some(source)) = (key, &source) {
-                            state.insert(key, source.clone());
+                            state.insert(key, source.clone(), _key_bucket);
                         }
                     }
                 }
             }
-            outgoing.insert(block.at, state);
+            outgoing.insert(block.at, state.into_items());
         }
         if values == before_values && outgoing == before_outgoing {
             break;
@@ -956,7 +955,7 @@ pub fn points_to(
                 .flat_map(|one| escape_out[one].iter().cloned())
                 .collect::<BTreeSet<_>>();
             escape_in.insert(block.at, state.clone());
-            let mut cells = incoming[&block.at].clone();
+            let mut cells = CellMap::new(incoming[&block.at].clone(), _key_bucket);
             for op in &block.ops {
                 let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
                 visible.extend(state.iter().cloned());
@@ -1042,12 +1041,9 @@ pub fn points_to(
                         let mut keyed = reference.clone();
                         keyed.provenance = _resolved_reference(reference, &values);
                         let key = _cell_key(&keyed);
-                        cells = cells
-                            .into_iter()
-                            .filter(|(old, _)| Some(old) == key.as_ref() || !_keys_overlap(Some(old), key.as_ref()))
-                            .collect();
+                        _kill(&mut cells, key.as_ref());
                         if let (Some(key), Some(source)) = (key, &source) {
-                            cells.insert(key, source.clone());
+                            cells.insert(key, source.clone(), _key_bucket);
                         }
                     }
                 }
@@ -1081,7 +1077,46 @@ fn _resolved_actuals(actuals: &[Actual], values: &IndexMap<Value, Provenance>) -
         .collect()
 }
 
-fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
+/// The object a cell key lies in: only keys sharing it can overlap.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum KeyBucket {
+    Object(MemoryObject),
+    Address(Space, i64),
+}
+
+impl Bucket for KeyBucket {
+    // Nothing looks a key bucket up by a component.
+    type Parts = ();
+
+    fn held(&self, _: &mut ()) {}
+
+    fn released(&self, _: &mut ()) {}
+}
+
+pub(crate) fn _key_bucket(key: &CellKey) -> KeyBucket {
+    match key {
+        CellKey::Object(object, _, _) => KeyBucket::Object(object.clone()),
+        CellKey::Address(space, index, _, _) => KeyBucket::Address(*space, *index),
+    }
+}
+
+/// Drop the cells a store to `key` may overwrite, keeping `key` itself.
+pub(crate) fn _kill<V>(cells: &mut CellMap<CellKey, V, KeyBucket>, key: Option<&CellKey>) {
+    let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
+    cells.kill(reached, |old| {
+        #[cfg(test)]
+        ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
+        Some(old) != key && _keys_overlap(Some(old), key)
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The cells `_kill` asked the exact test of.
+    pub(crate) static ASKED: std::cell::RefCell<Vec<CellKey>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn _keys_overlap(one: Option<&CellKey>, other: Option<&CellKey>) -> bool {
     let (Some(one), Some(other)) = (one, other) else {
         return true;
     };

@@ -28,7 +28,8 @@ use crate::support::hash::IndexMap;
 
 use super::memoryssa;
 use super::ranges::{self, Interval};
-use super::regions::{RegionLayout, overlapping};
+use super::cellmap::CellMap;
+use super::regions::{OverlapBucket, RegionLayout, overlap_bucket, overlap_buckets, overlapping};
 use super::{effects, loops};
 use crate::model::mir::{self, Arg, Const, Kind, MemRef, MirBlock, MirBody, Op, Symbol, Value};
 use crate::objectfile::module::Space;
@@ -394,7 +395,7 @@ fn _dead_in(
     }
     let layout = Some(&layout);
     let mut found: Vec<usize> = Vec::new();
-    let mut overwritten = overwritten.clone();
+    let mut overwritten = _cells(overwritten.clone());
     for op in block.ops.iter().rev() {
         // Nothing can read a private cell but by its name: not a call, and
         // not an address this cannot resolve.
@@ -415,12 +416,12 @@ fn _dead_in(
             let caught =
                 exception && sealed && private.is_some() && !op.barrier() && !effects::unmodeled_write(op);
             let kept = (shielded && op.kind == Kind::Call) || caught;
-            overwritten = if kept {
+            overwritten = _cells(if kept {
                 let private = private.expect("kept needs private");
-                overwritten.into_iter().filter(|(one, _)| private(one)).collect()
+                overwritten.into_items().into_iter().filter(|(one, _)| private(one)).collect()
             } else {
                 IndexMap::default()
-            };
+            });
             if !caught {
                 continue;
             }
@@ -432,7 +433,7 @@ fn _dead_in(
                 if overwritten.keys().any(|one| _covered_by(r#ref, one, dgroup)) {
                     found.push(op as *const Op as usize);
                 }
-                overwritten.insert(r#ref.clone(), op.at);
+                overwritten.insert(r#ref.clone(), op.at, overlap_bucket);
                 continue;
             }
         }
@@ -443,11 +444,7 @@ fn _dead_in(
             if r#ref.addr.is_some_and(|addr| addr.space == Space::Stack) {
                 continue; // a pop, for the same reason a push is skipped below
             }
-            let unnamed = shielded && (op.kind == Kind::Call || !_fixed(r#ref));
-            overwritten.retain(|one, _| {
-                (unnamed && private.is_some_and(|private| private(one)))
-                    || !overlapping(one, r#ref, None, None, layout).unwrap_or(true)
-            });
+            _clobber(&mut overwritten, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), private, layout);
         }
         if wrote.is_none() {
             for r#ref in &op.stores {
@@ -458,15 +455,39 @@ fn _dead_in(
                     // whose stack has already grown down into its own data.
                     continue;
                 }
-                let unnamed = shielded && (op.kind == Kind::Call || !_fixed(r#ref));
-                overwritten.retain(|one, _| {
-                    (unnamed && private.is_some_and(|private| private(one)))
-                        || !overlapping(one, r#ref, None, None, layout).unwrap_or(true)
-                });
+                _clobber(&mut overwritten, r#ref, shielded && (op.kind == Kind::Call || !_fixed(r#ref)), private, layout);
             }
         }
     }
-    (found, overwritten)
+    (found, overwritten.into_items())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Overlap tests dead stores asked, for the test that pins its index.
+    pub(crate) static DEAD_OVERLAPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A copy of `overwritten` to change, bucketed as `overlapping` rules writes out.
+fn _cells(overwritten: IndexMap<MemRef, i64>) -> CellMap<MemRef, i64, OverlapBucket> {
+    CellMap::new(overwritten, overlap_bucket)
+}
+
+/// Forget the cells an access through `reference` may touch; an `unnamed` one cannot reach a private cell.
+fn _clobber(
+    overwritten: &mut CellMap<MemRef, i64, OverlapBucket>,
+    reference: &MemRef,
+    unnamed: bool,
+    private: Option<&dyn Fn(&MemRef) -> bool>,
+    layout: Option<&RegionLayout>,
+) {
+    let reached = overlap_buckets(reference, &overwritten.parts);
+    overwritten.kill(reached, |one| {
+        #[cfg(test)]
+        DEAD_OVERLAPS.with(|asked| asked.set(asked.get() + 1));
+        !(unnamed && private.is_some_and(|private| private(one)))
+            && overlapping(one, reference, None, None, layout).unwrap_or(true)
+    });
 }
 
 /// Stores whose bytes are overwritten before anything reads them.

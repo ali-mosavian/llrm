@@ -394,11 +394,39 @@ impl Repr for Provenance {
     }
 }
 
+/// Python `qbopt.model.memory:AliasClass`: all `objects_may_alias` asks of
+/// an object besides its identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AliasClass {
+    pub addressed: bool,
+    pub kind: MemoryKind,
+    pub captured: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `objects_may_alias` questions, for the test that pins how often
+    /// picking a write's buckets asks them.
+    pub(crate) static OBJECT_ALIASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub fn alias_class(one: &MemoryObject) -> AliasClass {
+    AliasClass { addressed: one.addressed, kind: one.kind, captured: one.captured }
+}
+
 /// Direct port of `qbopt.model.memory:objects_may_alias`.
 pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
+    #[cfg(test)]
+    OBJECT_ALIASES.with(|asked| asked.set(asked.get() + 1));
     if one == other {
         return true;
     }
+    // classes_may_alias's first rule, asked before building either class.
+    one.addressed && other.addressed && classes_may_alias(alias_class(one), alias_class(other))
+}
+
+/// Whether two distinct objects of these classes may alias.
+pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
     // Only a reference naming an unaddressed object reaches it.
     if !(one.addressed && other.addressed) {
         return false;
