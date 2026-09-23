@@ -1309,26 +1309,16 @@ impl RegAlloc {
                 reloads.extend(made);
                 continue;
             }
+            // Every failing value split at once and allocated once, as LLVM's greedy
+            // allocator commits a split and requeues its pieces; allocating after each
+            // split priced 68 splits of matmul.mod one full allocation apiece.
             let mut improved = false;
-            let sizes = ranges::intervals(&body, None);
-            let mut failing: Vec<u32> = got.spilled.iter().copied().collect();
-            failing.sort_by_key(|one| (-sizes.get(one).map_or(0, Interval::size), *one));
-            for value in failing {
-                if already.contains(&value) {
-                    continue;
-                }
-                let Some(cut) = splitkit::split(
-                    &body,
-                    Some(&BTreeSet::from([value])),
-                    Some(&mut already),
-                    Some(&got.r#where),
-                ) else {
-                    continue;
-                };
+            let failing: BTreeSet<u32> = got.spilled.difference(&already).copied().collect();
+            if let Some(cut) = splitkit::split(&body, Some(&failing), Some(&mut already), Some(&got.r#where)) {
                 let mut wanted = prefer.clone();
                 wanted.extend(constrain::required(&cut)?);
                 let after = allocate(&cut, Some(&wanted), Some(&reloads), None, None, (&cpu).into())?;
-                crate::debug!("regalloc", "  split v{value}, reallocated: {} spilled", after.spilled.len());
+                crate::debug!("regalloc", "  split {} values, reallocated: {} spilled", failing.len(), after.spilled.len());
                 if after.spilled.is_empty() {
                     return applied(&cut, &after);
                 }

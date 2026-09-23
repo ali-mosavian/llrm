@@ -1218,14 +1218,12 @@ class RegAlloc(LIRTransform):
             # and traffic -- references weighted by loop depth, not
             # divided by length -- does not fall for a cut that placed
             # nothing, which only adds its copies.
+            # Every failing value split at once and allocated once, as LLVM's greedy
+            # allocator commits a split and requeues its pieces; allocating after
+            # each split priced 68 splits of matmul.mod one full allocation apiece.
             improved = False
-            sizes = ranges.intervals(body)
-            for value in sorted(got.spilled, key=lambda one: (-(sizes[one].size if one in sizes else 0), one)):
-                if value in already:
-                    continue
-                cut = splitkit.split(body, frozenset({value}), already, got.where)
-                if cut is body:
-                    continue
+            cut = splitkit.split(body, frozenset(got.spilled - already), already, got.where)
+            if cut is not body:
                 after = allocate(cut, {**prefer, **constrain.required(cut)}, reloads, cpu=self.cpu)
                 if not after.spilled:
                     return applied(cut, after)
