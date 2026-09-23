@@ -1283,17 +1283,22 @@ fn _solved(
         (Some(_), Some(_)) => super::manager::cached(body, (), || _memory_reads(body)),
         _ => Rc::new(HashSet::default()),
     };
-    let mut learned = true;
+    // Registers go first, as SCCP learns them before memory: cells solved
+    // with what registers alone prove need solving again only when a value
+    // learned from memory is one a write names.
+    let mut learned = false;
+    let mut remembered = dgroup.is_none() || calls.is_none();
     let mut rounds = 0;
     let mut changing = true;
-    while changing {
+    while changing || !remembered {
         changing = false;
         rounds += 1;
         // What memory holds, recomputed from what is known so far: the two
         // feed each other and run to one fixed point together.
         if let (Some(dgroup), Some(calls)) = (dgroup, calls) {
-            if learned {
+            if rounds > 1 && (learned || !remembered) {
                 held = shared_cells(body, dgroup, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+                remembered = true;
             }
             learned = false;
         }
