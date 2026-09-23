@@ -617,24 +617,17 @@ def test_the_coalescer_joins_the_intervals_it_merges() -> None:
 
 
 def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
-    """bools-q-O had three, and every one was silently discarded. harr-q-O has three now."""
-    from pathlib import Path
+    """bools-q-O had three, and every one was silently discarded.
 
-    from qbopt.objectfile import omf
+    Taken from the raise, not the optimizer: which phis sit on a critical
+    edge after it is the optimizer's choice, and peeling (8745040f) left
+    harr-q-O none, so the test checked nothing.
+    """
     from qbopt.backend import phielim
-    from qbopt.objectfile import module
-    from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/harr-q-O.obj".lower()).read_bytes()))
-    blocks = split.partition(found, code_map(found))
-    result = mir.bodies(found, blocks)
-    found = result.source.applied(found)
+    found, _blocks, result, contracts = _raised("bools-q-o")
     critical = 0
-    contracts = runtime.for_module(found)
     for name, body in result:
-        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         low = _lowered(found, result, contracts, name, body)
         at_of = {block.at: block for block in low.blocks}
         for block in low.blocks:
@@ -644,7 +637,7 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
         out = phielim.eliminated(low)
         left = [f"{block.at:#06x}" for block in out.blocks if block.phis]
         assert not left, f"{name}: a phi survives at {', '.join(left)}"
-    assert critical >= 3, f"harr-q-O has three phis on critical edges; found {critical}"
+    assert critical >= 3, f"bools-q-O has three phis on critical edges; found {critical}"
 
 
 def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
