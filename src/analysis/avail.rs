@@ -29,7 +29,7 @@ use crate::support::hash::IndexMap;
 use super::memoryssa;
 use super::ranges::{self, Interval};
 use super::cellmap::CellMap;
-use super::regions::{OverlapBucket, RegionLayout, overlap_bucket, overlap_buckets, overlapping};
+use super::regions::{ByteRange, OverlapBucket, RegionLayout, overlap_bucket, overlap_buckets, overlapping};
 use super::{effects, loops};
 use crate::model::mir::{self, Arg, Const, Kind, MemRef, MirBlock, MirBody, Op, Symbol, Value};
 use crate::objectfile::module::Space;
@@ -433,7 +433,7 @@ fn _dead_in(
                 if overwritten.keys().any(|one| _covered_by(r#ref, one, dgroup)) {
                     found.push(op as *const Op as usize);
                 }
-                overwritten.insert(r#ref.clone(), op.at, overlap_bucket);
+                overwritten.insert(r#ref.clone(), op.at, _place);
                 continue;
             }
         }
@@ -470,7 +470,13 @@ thread_local! {
 
 /// A copy of `overwritten` to change, bucketed as `overlapping` rules writes out.
 fn _cells(overwritten: IndexMap<MemRef, i64>) -> CellMap<MemRef, i64, OverlapBucket> {
-    CellMap::new(overwritten, overlap_bucket)
+    CellMap::new(overwritten, _place)
+}
+
+/// A cell's bucket, and no span: indexing MemRefs by displacement cost
+/// dead stores more than it saved.
+fn _place(reference: &MemRef) -> (OverlapBucket, Option<ByteRange>) {
+    (overlap_bucket(reference), None)
 }
 
 /// Forget the cells an access through `reference` may touch; an `unnamed` one cannot reach a private cell.
@@ -482,12 +488,16 @@ fn _clobber(
     layout: Option<&RegionLayout>,
 ) {
     let reached = overlap_buckets(reference, &overwritten.parts);
-    overwritten.kill(reached, |one| {
-        #[cfg(test)]
-        DEAD_OVERLAPS.with(|asked| asked.set(asked.get() + 1));
-        !(unnamed && private.is_some_and(|private| private(one)))
-            && overlapping(one, reference, None, None, layout).unwrap_or(true)
-    });
+    overwritten.kill(
+        reached,
+        |one| {
+            #[cfg(test)]
+            DEAD_OVERLAPS.with(|asked| asked.set(asked.get() + 1));
+            !(unnamed && private.is_some_and(|private| private(one)))
+                && overlapping(one, reference, None, None, layout).unwrap_or(true)
+        },
+        None,
+    );
 }
 
 /// Stores whose bytes are overwritten before anything reads them.

@@ -709,22 +709,55 @@ fn _frame(reference: &MemRef) -> Option<Frame> {
 /// LLVM's constant-offset GEP compare: a fact about values, so it holds
 /// whatever object either reference names.
 fn _displaced(one: &MemRef, other: &MemRef) -> Option<bool> {
-    let (Some(one_address), Some(other_address)) = (one.addr, other.addr) else {
+    let (one, other) = (_span(one)?, _span(other)?);
+    if one.0 != other.0 {
         return None;
-    };
-    if one.base == other.base
-        && one_address.space == other_address.space
-        && one_address.index == other_address.index
-        && one.segment == other.segment
-        && (one_address.space != Space::Far || one.segment.is_some())
-    {
-        let one_low = i128::from(one_address.disp);
-        let other_low = i128::from(other_address.disp);
-        return Some(
-            !(one_low < other_low + i128::from(other.width) && other_low < one_low + i128::from(one.width)),
-        );
     }
-    None
+    Some(!(one.1 < other.2 && other.1 < one.2))
+}
+
+/// A reference's bytes [low, high) in its frame.
+pub(crate) type ByteRange = (i128, i128);
+
+/// Python `mir._span`: the frame `_displaced` measures `reference` in and
+/// the bytes it covers there; `reference` has no symbol.
+fn _span(reference: &MemRef) -> Option<(Frame, i128, i128)> {
+    let addr = reference.addr?;
+    if addr.space == Space::Far && reference.segment.is_none() {
+        return None;
+    }
+    let low = i128::from(addr.disp);
+    Some(((reference.base, reference.segment, addr.space, addr.index), low, low + i128::from(reference.width)))
+}
+
+/// Python `mir.displaced_span`: the frame and bytes where `overlapping`
+/// settles `reference` against every reference of that frame by
+/// displacement alone: one whose bytes miss these cannot overlap it.
+///
+/// None for a pointer, and for an address off a base value, which
+/// `covering` may widen before the displacements are compared.
+pub(crate) fn displaced_span(reference: &MemRef) -> Option<(Frame, i128, i128)> {
+    if reference.pointer {
+        return None;
+    }
+    _span(&symbolic_ref(reference)).filter(|(frame, _, _)| frame.0.is_none())
+}
+
+/// Python `mir.overlap_span`: `reference`'s bytes as `displaced_span`
+/// names them, for a `CellMap`'s spans.
+pub(crate) fn overlap_span(reference: &MemRef) -> Option<ByteRange> {
+    displaced_span(reference).map(|(_, low, high)| (low, high))
+}
+
+/// Python `mir.displaced_buckets`: the buckets held (`parts`) in the frame
+/// of `reference`'s `displaced_span`, and its bytes: a cell there that the
+/// bytes miss is one a write through `reference` cannot reach.
+pub(crate) fn displaced_buckets(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Option<(HashSet<OverlapBucket>, ByteRange)> {
+    let (frame, low, high) = displaced_span(reference)?;
+    Some((parts.frames.get(&Some(frame))?.clone(), (low, high)))
 }
 
 /// Python `addresses`: byte-region intersection for two naked addresses.

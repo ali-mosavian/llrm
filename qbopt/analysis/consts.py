@@ -81,12 +81,14 @@ class _MemoryQueries:
     overlaps: dict[tuple[tuple, int], bool] = field(init=False, default_factory=dict)
     # `named`'s per-byte entries never change; `learn` adds whole symbols only.
     exact: dict[tuple, "tuple[memory.Object, int] | None"] = field(init=False, default_factory=dict)
+    spans: dict[tuple, "tuple[int, int] | None"] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self.facts = _intervals(self.known)
         self.addressed = {}
         self.overlaps = {}
         self.exact = {}
+        self.spans = {}
 
     def resolve(self, ref: mir.MemRef) -> mir.MemRef:
         key = id(ref)
@@ -115,11 +117,17 @@ class _MemoryQueries:
         named = self._named(where)
         return mir.object_bucket(None if named is None else named[0], (None, None, where[0].space, where[0].index))
 
+    def span(self, where: tuple) -> tuple[int, int] | None:
+        """Cell `where`'s ``mir.overlap_span``."""
+        if where not in self.spans:
+            self.spans[where] = mir.overlap_span(mir.MemRef(where[0], where[1], None, None))
+        return self.spans[where]
+
     def owned(self, here: Cells) -> cellmap.CellMap:
         """A copy of `here` indexed by this epoch's buckets, for one operation to change."""
         if isinstance(here, cellmap.CellMap) and here.bucket_of == self.bucket:
             return here.copy()
-        return cellmap.CellMap(self.bucket, here)
+        return cellmap.CellMap(self.bucket, here, self.span)
 
     def may_overlap(self, where: tuple, ref: mir.MemRef) -> bool:
         key = (where, id(ref))
@@ -372,7 +380,8 @@ def _kills(
             continue
         if not owned:
             here, owned = queries.owned(here), True
-        here.kill(mir.overlap_buckets(ref, here), lambda where: queries.may_overlap(where, ref))
+        reached, displaced = mir.overlap_buckets(ref, here), mir.displaced_buckets(ref, here)
+        here.kill(reached, lambda where: queries.may_overlap(where, ref), displaced)
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             queries.learn(ref)
             here.update(_fragments(ref, put))

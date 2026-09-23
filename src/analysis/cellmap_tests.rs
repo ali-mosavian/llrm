@@ -9,15 +9,16 @@ use std::path::{Path, PathBuf};
 use std::thread::LocalKey;
 
 use super::{VERIFIED, VERIFYING};
-use crate::analysis::alias::{_key_bucket, _keys_overlap, _kill, ASKED, CellKey};
+use crate::analysis::alias::{_key_bucket, _key_place, _keys_overlap, _kill, ASKED, CellKey};
 use crate::analysis::avail::DEAD_OVERLAPS;
 use crate::analysis::cellmap::CellMap;
 use crate::analysis::consts::MAY_OVERLAP;
-use crate::analysis::regions::PICKED;
+use crate::analysis::regions::{PICKED, displaced_buckets, overlap_bucket, overlap_span, overlapping};
 use crate::frontends::qb::{compile as qb_compile, driver as qb_driver};
 use crate::model::memory::{Identity, MemoryKind, MemoryObject, OBJECT_ALIASES};
 use crate::model::passes::O2;
-use crate::objectfile::module::Space;
+use crate::model::mir::{MemRef, Value};
+use crate::objectfile::module::{Addr, Space};
 use crate::support::hash::IndexMap;
 
 fn written(directory: &tempfile::TempDir, name: &str, lines: &[String]) -> PathBuf {
@@ -42,6 +43,13 @@ fn loop_program(directory: &tempfile::TempDir, scalars: usize) -> PathBuf {
         format!("PRINT {}", (0..scalars).map(|k| format!("x{k}")).collect::<Vec<_>>().join(" + ")),
     ]);
     written(directory, "LOOP.BAS", &lines)
+}
+
+fn elements_program(directory: &tempfile::TempDir, elements: usize) -> PathBuf {
+    let mut lines = vec!["DEFINT A-Z".to_owned(), format!("DIM a({elements})")];
+    lines.extend((0..elements).map(|k| format!("a({k}) = {k}")));
+    lines.push(format!("PRINT {}", (0..elements).map(|k| format!("a({k})")).collect::<Vec<_>>().join(" + ")));
+    written(directory, "ELEMENTS.BAS", &lines)
 }
 
 fn compiled(basic: &Path) -> Vec<u8> {
@@ -73,6 +81,16 @@ fn dead_stores_do_not_test_every_overwritten_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let asked = counted(&DEAD_OVERLAPS, &loop_program(&directory, 24));
     assert!(asked < 5_000, "{asked}");
+}
+
+#[test]
+fn a_direct_store_asks_only_the_cells_it_meets() {
+    // matmul.mod's array cells name no object, so the object index skipped
+    // none of them: every store into the frame asked may_overlap of every
+    // cell there, 60K questions here for 24 elements.
+    let directory = tempfile::TempDir::new().unwrap();
+    let asked = counted(&MAY_OVERLAP, &elements_program(&directory, 24));
+    assert!(asked < 10_000, "{asked}");
 }
 
 #[test]
@@ -139,7 +157,7 @@ fn an_alias_store_kills_what_the_pairwise_scan_killed() {
             .filter(|(old, _)| Some(*old) == stored.as_ref() || !_keys_overlap(Some(old), stored.as_ref()))
             .map(|(old, fact)| (old.clone(), *fact))
             .collect::<IndexMap<_, _>>();
-        let mut indexed = CellMap::new(cells, _key_bucket);
+        let mut indexed = CellMap::new(cells, _key_place);
         ASKED.with(|asked| asked.borrow_mut().clear());
         _kill(&mut indexed, stored.as_ref());
         assert!(indexed.iter().eq(scanned.iter()));
@@ -149,4 +167,40 @@ fn an_alias_store_kills_what_the_pairwise_scan_killed() {
             });
         }
     }
+}
+
+#[test]
+fn a_displaced_store_kills_what_the_full_scan_killed() {
+    // Looking a direct write's frame up by displacement must drop exactly
+    // the cells, in the same order, that asking every cell drops.
+    let mut state = 11_u64;
+    let mut random = move |below: u64| {
+        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) % below
+    };
+    let values = [Value::new(0, 0), Value::new(1, 0)];
+    let mut reference = |random: &mut dyn FnMut(u64) -> u64| {
+        let space = [Space::Frame, Space::Segment, Space::Far][random(3) as usize];
+        let mut addr = Addr::new(space, random(32) as i64 - 8);
+        addr.index = random(2) as i64;
+        let mut one = MemRef::new(Some(addr), 1 + random(8) as u32);
+        one.segment = (space == Space::Far && random(2) == 0).then_some(values[0]);
+        one.base = (random(3) == 0).then_some(values[1]);
+        one
+    };
+    let mut displaced = 0;
+    for _ in 0..300 {
+        let size = 1 + random(39);
+        let cells = (0..size).map(|n| (reference(&mut random), n as i64)).collect::<IndexMap<_, _>>();
+        let write = reference(&mut random);
+        let overlaps = |one: &MemRef| overlapping(one, &write, None, None, None).unwrap_or(true);
+        let scanned =
+            cells.iter().filter(|(one, _)| !overlaps(one)).map(|(one, at)| (one.clone(), *at)).collect::<Vec<_>>();
+        let mut indexed = CellMap::new(cells, |one| (overlap_bucket(one), overlap_span(one)));
+        let near = displaced_buckets(&write, &indexed.parts);
+        displaced += usize::from(near.is_some());
+        indexed.kill(None, overlaps, near);
+        assert!(indexed.iter().map(|(one, at)| (one.clone(), *at)).eq(scanned));
+    }
+    assert!(displaced > 100, "{displaced}");
 }

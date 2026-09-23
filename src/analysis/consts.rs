@@ -15,7 +15,7 @@ use num_bigint::BigInt;
 
 use super::alias::NamedBytes;
 use super::cellmap::CellMap;
-use super::regions::{OverlapBucket, object_bucket, overlap_buckets};
+use super::regions::{OverlapBucket, ByteRange, displaced_buckets, object_bucket, overlap_buckets, overlap_span};
 use super::ranges::Interval;
 use super::{constant_cycles, effects, loops, memoryssa, ranges};
 use crate::abi::runtime;
@@ -60,7 +60,7 @@ pub(crate) struct _MemoryQueries {
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
     // `named`'s per-byte entries never change; `learn` adds whole symbols only.
     pub exact: HashMap<(Addr, u32), Option<(MemoryObject, i64)>>,
-    pub buckets: HashMap<(Addr, u32), OverlapBucket>,
+    pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
 }
 
 /// Cells indexed by this epoch's buckets; see `_MemoryQueries::owned`.
@@ -103,7 +103,7 @@ impl _MemoryQueries {
             addressed: HashMap::default(),
             overlaps: HashMap::default(),
             exact: HashMap::default(),
-            buckets: HashMap::default(),
+            places: HashMap::default(),
         }
     }
 
@@ -161,18 +161,20 @@ impl _MemoryQueries {
         exact
     }
 
-    /// Cell `where_`'s `overlap_bucket`, from the object its bytes name, if any.
+    /// Python `bucket` and `span`: cell `where_`'s `overlap_bucket`, from
+    /// the object its bytes name, if any, and its `overlap_span`.
     ///
     /// Remembered, as `exact` is: interning a bucket hashes its object.
-    pub(crate) fn bucket(&mut self, where_: (Addr, u32)) -> OverlapBucket {
-        if let Some(bucket) = self.buckets.get(&where_) {
-            return *bucket;
+    pub(crate) fn place(&mut self, where_: (Addr, u32)) -> (OverlapBucket, Option<ByteRange>) {
+        if let Some(place) = self.places.get(&where_) {
+            return *place;
         }
         let named = self._named(where_);
         let bucket =
             object_bucket(named.map(|(object, _)| object), Some((None, None, where_.0.space, where_.0.index)));
-        self.buckets.insert(where_, bucket);
-        bucket
+        let place = (bucket, overlap_span(&MemRef::new(Some(where_.0), where_.1)));
+        self.places.insert(where_, place);
+        place
     }
 
     /// `here` indexed by this epoch's buckets, for one operation to change.
@@ -181,7 +183,7 @@ impl _MemoryQueries {
     pub(crate) fn owned(&mut self, here: Here) -> IndexedCells {
         match here {
             Here::Indexed(cells) => cells,
-            Here::Plain(cells) => CellMap::new(cells, |where_| self.bucket(*where_)),
+            Here::Plain(cells) => CellMap::new(cells, |where_| self.place(*where_)),
         }
     }
 
@@ -571,12 +573,14 @@ fn _killed(
             }
         }
         let mut owned = queries.owned(here);
-        owned.kill(overlap_buckets(&reference, &owned.parts), |where_| queries.may_overlap(*where_, &reference));
+        let reached = overlap_buckets(&reference, &owned.parts);
+        let displaced = displaced_buckets(&reference, &owned.parts);
+        owned.kill(reached, |where_| queries.may_overlap(*where_, &reference), displaced);
         if let Some(put) = &put {
             if reference.addr.is_some() && reference.base.is_none() && reference.segment.is_none() {
                 queries.learn(&reference);
                 for (where_, fact) in _fragments(&reference, put) {
-                    owned.insert(where_, fact, |where_| queries.bucket(*where_));
+                    owned.insert(where_, fact, |where_| queries.place(*where_));
                 }
             }
         }
@@ -589,7 +593,7 @@ fn _killed(
                 queries.learn(reference);
                 let fact = Known::new(masked(&value.n, value.width), value.width);
                 for (where_, fact) in _fragments(reference, &fact) {
-                    owned.insert(where_, fact, |where_| queries.bucket(*where_));
+                    owned.insert(where_, fact, |where_| queries.place(*where_));
                 }
             }
         }

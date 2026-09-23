@@ -8,6 +8,7 @@ from qbopt.analysis import alias
 from qbopt.analysis import avail
 from qbopt.analysis import consts
 from qbopt.analysis import cellmap
+from qbopt.objectfile.module import Addr, Space
 from qbopt.frontend.qb import driver as qb_driver
 from qbopt.frontend.qb import compile as qb_compile
 
@@ -25,6 +26,14 @@ def _loop_program(tmp_path: Path, scalars: int) -> Path:
     basic = tmp_path / "LOOP.BAS"
     lines = ["DEFINT A-Z", "DIM a(10)", "FOR j = 1 TO 3", *(f"x{k} = x{k} + j: a(j) = x{k}" for k in range(scalars))]
     lines += ["NEXT", "PRINT " + " + ".join(f"x{k}" for k in range(scalars))]
+    basic.write_bytes("\r\n".join(lines).encode() + b"\r\n")
+    return basic
+
+
+def _elements_program(tmp_path: Path, elements: int) -> Path:
+    basic = tmp_path / "ELEMENTS.BAS"
+    lines = ["DEFINT A-Z", f"DIM a({elements})", *(f"a({k}) = {k}" for k in range(elements))]
+    lines += ["PRINT " + " + ".join(f"a({k})" for k in range(elements))]
     basic.write_bytes("\r\n".join(lines).encode() + b"\r\n")
     return basic
 
@@ -72,6 +81,23 @@ def test_dead_stores_do_not_test_every_overwritten_cell(tmp_path, monkeypatch) -
     monkeypatch.setattr(avail, "dead_stores", scoped)
     _compiled(_loop_program(tmp_path, 24))
     assert asked < 5_000, asked
+
+
+def test_a_direct_store_asks_only_the_cells_it_meets(tmp_path, monkeypatch) -> None:
+    """matmul.mod's array cells name no object, so the object index skipped
+    none of them: every store into the frame asked may_overlap of every
+    cell there, 60K questions here for 24 elements."""
+    asked = 0
+    original = consts._MemoryQueries.may_overlap
+
+    def counted(self, where, ref):
+        nonlocal asked
+        asked += 1
+        return original(self, where, ref)
+
+    monkeypatch.setattr(consts._MemoryQueries, "may_overlap", counted)
+    _compiled(_elements_program(tmp_path, 24))
+    assert asked < 10_000, asked
 
 
 def test_a_write_does_not_ask_alias_of_every_bucket(tmp_path, monkeypatch) -> None:
@@ -136,13 +162,14 @@ def test_skipped_buckets_hold_no_cell_the_store_reaches(tmp_path, monkeypatch) -
     original = cellmap.CellMap.kill
     checked = 0
 
-    def verified(self, reached, overlaps):
+    def verified(self, reached, overlaps, displaced=None):
         nonlocal checked
-        if reached is not None:
-            skipped = [key for bucket, keys in self.buckets.items() if bucket not in reached for key in keys]
-            checked += len(skipped)
-            assert not any(overlaps(key) for key in skipped)
-        original(self, reached, overlaps)
+        buckets = self.buckets.keys() if reached is None else reached
+        asked = {key for bucket in buckets for key in self._asked(bucket, displaced)}
+        skipped = [key for key in self if key not in asked]
+        checked += len(skipped)
+        assert not any(overlaps(key) for key in skipped)
+        original(self, reached, overlaps, displaced)
 
     monkeypatch.setattr(cellmap.CellMap, "kill", verified)
     _compiled(_cells_program(tmp_path, 8))
@@ -177,3 +204,29 @@ def test_an_alias_store_kills_what_the_pairwise_scan_killed() -> None:
         assert dict(indexed) == scanned
         if stored is not None:
             assert all(alias._key_bucket(one) == alias._key_bucket(stored) for one in asked)
+
+
+def test_a_displaced_store_kills_what_the_full_scan_killed() -> None:
+    """Looking a direct write's frame up by displacement must drop exactly
+    the cells, in the same order, that asking every cell drops."""
+    rng = random.Random(11)
+    values = [mir.Value(n, 0) for n in range(2)]
+
+    def ref() -> mir.MemRef:
+        space = rng.choice((Space.FRAME, Space.SEGMENT, Space.FAR))
+        segment = rng.choice((None, values[0])) if space is Space.FAR else None
+        base = rng.choice((None, None, values[1]))
+        return mir.MemRef(Addr(space, rng.randrange(-8, 24), rng.randrange(2)), rng.randrange(1, 9), base, segment)
+
+    displaced = 0
+    for _ in range(300):
+        cells = {ref(): n for n in range(rng.randrange(1, 40))}
+        write = ref()
+        overlaps = lambda one: mir.overlapping(one, write, frozenset())  # noqa: E731
+        scanned = [(one, at) for one, at in cells.items() if not overlaps(one)]
+        indexed = cellmap.CellMap(mir.overlap_bucket, cells, mir.overlap_span)
+        near = mir.displaced_buckets(write, indexed)
+        displaced += near is not None
+        indexed.kill(None, overlaps, near)
+        assert list(indexed.items()) == scanned
+    assert displaced > 100, displaced

@@ -1,13 +1,17 @@
 //! Facts keyed by memory cell, indexed by the object each cell lies in.
 //!
-//! Port of `qbopt/analysis/cellmap.py`. Python passes `bucket_of` to the
-//! map; here the caller hands each new cell's bucket to `insert`, since a
-//! bucket may come from a cache the caller also mutates.
+//! Port of `qbopt/analysis/cellmap.py`. Python passes `bucket_of` and
+//! `span_of` to the map; here the caller hands each new cell's bucket and
+//! span to `insert`, since a bucket may come from a cache the caller also
+//! mutates, and a bucket remembers each cell's start where Python asks
+//! `span_of` again.
 
+use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::ops::Deref;
 
-use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
+use crate::analysis::regions::ByteRange;
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 /// A cell's bucket, and how it indexes itself: Python's `parts[i]`, the
 /// buckets held by their i-th component, so a write can look its buckets
@@ -20,36 +24,85 @@ pub(crate) trait Bucket: Clone + Eq + Hash {
     fn released(&self, parts: &mut Self::Parts);
 }
 
+/// One bucket's cells by the displacement they start at: Python `_Spans`.
+///
+/// Python keeps a list it sorts before a query; this is kept sorted, by
+/// (low, the order cells came in). `widest` is the widest cell ever held, a
+/// bound on how far below a write a cell meeting it can start; it does not
+/// shrink when that cell goes.
+#[derive(Clone)]
+struct Spans<K> {
+    cells: BTreeMap<(i128, u64), (i128, K)>,
+    added: u64,
+    widest: i128,
+}
+
+impl<K: Clone + Eq + Hash> Spans<K> {
+    fn new() -> Self {
+        Self { cells: BTreeMap::new(), added: 0, widest: 0 }
+    }
+
+    /// Index `key`, returning where it is held.
+    fn add(&mut self, key: K, (low, high): ByteRange) -> (i128, u64) {
+        self.added += 1;
+        self.cells.insert((low, self.added), (high, key));
+        self.widest = self.widest.max(high - low);
+        (low, self.added)
+    }
+
+    fn remove(&mut self, at: (i128, u64)) {
+        self.cells.remove(&at).expect("a held cell's start is indexed");
+    }
+
+    /// The cells whose bytes meet [low, high).
+    fn meeting(&self, (low, high): ByteRange) -> impl Iterator<Item = &K> {
+        self.cells
+            .range((low - self.widest + 1, 0)..(high, 0))
+            .filter(move |(_, (end, _))| low < *end)
+            .map(|(_, (_, key))| key)
+    }
+}
+
 /// A cell-to-fact map that also buckets its cells by object.
 ///
 /// A write can only reach cells in objects it may alias, so `kill` tests
 /// those buckets and never the rest. A cell's bucket must not change while
-/// the cell is held.
+/// the cell is held. A bucket's cells with a span are also indexed by it,
+/// for `kill`'s `displaced`.
 #[derive(Clone)]
 pub(crate) struct CellMap<K, V, B: Bucket> {
     items: IndexMap<K, V>,
-    pub buckets: HashMap<B, IndexSet<K>>,
+    /// Each bucket's cells, with where its spans hold each spanned one.
+    pub buckets: HashMap<B, IndexMap<K, Option<(i128, u64)>>>,
     pub parts: B::Parts,
+    spans: HashMap<B, Spans<K>>,
 }
 
 impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
-    pub(crate) fn new(items: IndexMap<K, V>, mut bucket_of: impl FnMut(&K) -> B) -> Self {
-        let mut map = Self { items: IndexMap::default(), buckets: HashMap::default(), parts: B::Parts::default() };
+    pub(crate) fn new(items: IndexMap<K, V>, mut placed: impl FnMut(&K) -> (B, Option<ByteRange>)) -> Self {
+        let mut map = Self {
+            items: IndexMap::default(),
+            buckets: HashMap::default(),
+            parts: B::Parts::default(),
+            spans: HashMap::default(),
+        };
         for (key, value) in items {
-            map.insert(key, value, &mut bucket_of);
+            map.insert(key, value, &mut placed);
         }
         map
     }
 
-    /// Python `__setitem__`: `bucket_of` is asked only of a new cell.
-    pub(crate) fn insert(&mut self, key: K, value: V, bucket_of: impl FnOnce(&K) -> B) {
+    /// Python `__setitem__`: `placed`, a cell's bucket and span, is asked
+    /// only of a new cell.
+    pub(crate) fn insert(&mut self, key: K, value: V, placed: impl FnOnce(&K) -> (B, Option<ByteRange>)) {
         if !self.items.contains_key(&key) {
-            let bucket = bucket_of(&key);
+            let (bucket, span) = placed(&key);
             let keys = self.buckets.entry(bucket.clone()).or_insert_with(|| {
                 bucket.held(&mut self.parts);
-                IndexSet::default()
+                IndexMap::default()
             });
-            keys.insert(key.clone());
+            let at = span.map(|span| self.spans.entry(bucket).or_insert_with(Spans::new).add(key.clone(), span));
+            keys.insert(key.clone(), at);
         }
         self.items.insert(key, value);
     }
@@ -58,27 +111,43 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
     ///
     /// `reached` are the buckets the write may touch (every bucket when
     /// None); `overlaps` is the exact test, asked only of their cells.
-    pub(crate) fn kill(&mut self, reached: Option<HashSet<B>>, mut overlaps: impl FnMut(&K) -> bool) {
+    /// `displaced` is (buckets, span): a cell in those buckets can only be
+    /// reached if its bytes meet the span, so only those are asked.
+    pub(crate) fn kill(
+        &mut self,
+        reached: Option<HashSet<B>>,
+        mut overlaps: impl FnMut(&K) -> bool,
+        displaced: Option<(HashSet<B>, ByteRange)>,
+    ) {
         let mut doomed = Vec::new();
-        let mut test = |bucket: &B, keys: &IndexSet<K>| {
-            doomed.extend(keys.iter().filter(|key| overlaps(key)).map(|key| (bucket.clone(), key.clone())));
+        let mut test = |bucket: &B| {
+            let mut ask = |key: &K| {
+                if overlaps(key) {
+                    doomed.push((bucket.clone(), key.clone()));
+                }
+            };
+            match self._spanned(bucket, displaced.as_ref()) {
+                Some((spans, span)) => spans.meeting(span).for_each(&mut ask),
+                None => self.buckets.get(bucket).into_iter().flat_map(IndexMap::keys).for_each(&mut ask),
+            }
         };
         match &reached {
-            None => self.buckets.iter().for_each(|(bucket, keys)| test(bucket, keys)),
-            Some(reached) => reached
-                .iter()
-                .filter_map(|bucket| self.buckets.get(bucket).map(|keys| (bucket, keys)))
-                .for_each(|(bucket, keys)| test(bucket, keys)),
+            None => self.buckets.keys().for_each(&mut test),
+            Some(reached) => reached.iter().for_each(&mut test),
         }
         #[cfg(test)]
-        if let Some(reached) = &reached {
-            if VERIFYING.with(std::cell::Cell::get) {
-                for (bucket, keys) in &self.buckets {
-                    if !reached.contains(bucket) {
-                        VERIFIED.with(|checked| checked.set(checked.get() + keys.len()));
-                        assert!(!keys.iter().any(&mut overlaps), "a skipped bucket holds a cell the write reaches");
-                    }
+        if VERIFYING.with(std::cell::Cell::get) {
+            let buckets = reached.clone().unwrap_or_else(|| self.buckets.keys().cloned().collect());
+            let mut asked = HashSet::default();
+            for bucket in &buckets {
+                match self._spanned(bucket, displaced.as_ref()) {
+                    Some((spans, span)) => asked.extend(spans.meeting(span)),
+                    None => asked.extend(self.buckets.get(bucket).into_iter().flat_map(IndexMap::keys)),
                 }
+            }
+            for key in self.items.keys().filter(|key| !asked.contains(key)) {
+                VERIFIED.with(|checked| checked.set(checked.get() + 1));
+                assert!(!overlaps(key), "a skipped cell is one the write reaches");
             }
         }
         if doomed.is_empty() {
@@ -86,15 +155,32 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
         }
         for (bucket, key) in &doomed {
             let keys = self.buckets.get_mut(bucket).expect("a doomed cell's bucket is held");
-            keys.swap_remove(key);
+            if let Some(at) = keys.swap_remove(key).expect("a doomed cell is held") {
+                self.spans.get_mut(bucket).expect("a spanned cell's bucket is indexed").remove(at);
+            }
             if keys.is_empty() {
                 self.buckets.remove(bucket);
+                self.spans.remove(bucket);
                 bucket.released(&mut self.parts);
             }
         }
         // Python's `del` keeps the rest in order; so does one retain.
         let gone = doomed.into_iter().map(|(_, key)| key).collect::<HashSet<_>>();
         self.items.retain(|key, _| !gone.contains(key));
+    }
+
+    /// Python `_asked`'s first case: `bucket`'s spans, where `displaced` asks
+    /// only the cells meeting its span.
+    fn _spanned<'a>(
+        &'a self,
+        bucket: &B,
+        displaced: Option<&(HashSet<B>, ByteRange)>,
+    ) -> Option<(&'a Spans<K>, ByteRange)> {
+        let (near, span) = displaced?;
+        if !near.contains(bucket) {
+            return None;
+        }
+        self.spans.get(bucket).map(|spans| (spans, *span))
     }
 
     pub(crate) fn into_items(self) -> IndexMap<K, V> {

@@ -14,6 +14,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 use num_bigint::BigInt;
 
 use super::cellmap::{Bucket, CellMap};
+use super::regions::ByteRange;
 use super::consts::{self, Known};
 use super::{induction, loops, ranges};
 use crate::model::memory::{self, Identity, MemoryKind, MemoryObject, Provenance, Slice};
@@ -810,7 +811,7 @@ pub fn points_to(
                 }
             }
             incoming.insert(block.at, state.clone());
-            let mut state = CellMap::new(state, _key_bucket);
+            let mut state = CellMap::new(state, _key_place);
             for phi in &block.phis {
                 let parts = phi
                     .incoming
@@ -874,7 +875,7 @@ pub fn points_to(
                         // contents; an exact pointer store then defines it.
                         _kill(&mut state, key.as_ref());
                         if let (Some(key), Some(source)) = (key, &source) {
-                            state.insert(key, source.clone(), _key_bucket);
+                            state.insert(key, source.clone(), _key_place);
                         }
                     }
                 }
@@ -955,7 +956,7 @@ pub fn points_to(
                 .flat_map(|one| escape_out[one].iter().cloned())
                 .collect::<BTreeSet<_>>();
             escape_in.insert(block.at, state.clone());
-            let mut cells = CellMap::new(incoming[&block.at].clone(), _key_bucket);
+            let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
             for op in &block.ops {
                 let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
                 visible.extend(state.iter().cloned());
@@ -1043,7 +1044,7 @@ pub fn points_to(
                         let key = _cell_key(&keyed);
                         _kill(&mut cells, key.as_ref());
                         if let (Some(key), Some(source)) = (key, &source) {
-                            cells.insert(key, source.clone(), _key_bucket);
+                            cells.insert(key, source.clone(), _key_place);
                         }
                     }
                 }
@@ -1100,14 +1101,23 @@ pub(crate) fn _key_bucket(key: &CellKey) -> KeyBucket {
     }
 }
 
+/// A key's bucket, and no span: Python's map has no `span_of`.
+pub(crate) fn _key_place(key: &CellKey) -> (KeyBucket, Option<ByteRange>) {
+    (_key_bucket(key), None)
+}
+
 /// Drop the cells a store to `key` may overwrite, keeping `key` itself.
 pub(crate) fn _kill<V>(cells: &mut CellMap<CellKey, V, KeyBucket>, key: Option<&CellKey>) {
     let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
-    cells.kill(reached, |old| {
-        #[cfg(test)]
-        ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
-        Some(old) != key && _keys_overlap(Some(old), key)
-    });
+    cells.kill(
+        reached,
+        |old| {
+            #[cfg(test)]
+            ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
+            Some(old) != key && _keys_overlap(Some(old), key)
+        },
+        None,
+    );
 }
 
 #[cfg(test)]
