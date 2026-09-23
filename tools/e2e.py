@@ -14,9 +14,13 @@ a wrong expectation, and it fails the run anyway, because an unexplained base
 is not a base.
 """
 
+import os
 import sys
 import shutil
+import hashlib
 import argparse
+import tempfile
+import subprocess
 from pathlib import Path
 from typing import NamedTuple
 from dataclasses import dataclass
@@ -28,10 +32,12 @@ from dosbox import Run
 from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
+from dosbox import host_path
 from configs import DIVERGES
 from cache import cached_launch
 from configs import switches_for
 from cache import toolchain_identity
+from port_diff import rust_binary
 
 from qbopt.rewrite import rewrite
 
@@ -191,6 +197,42 @@ def through_qbopt(data: bytes) -> bytes:
     return rewrite(data, dry_run=False)[0]
 
 
+REWRITERS = ("python", "rust")
+
+
+def rewriter_command(rewriter: str) -> list[str]:
+    return [sys.executable, "-m", "qbopt.rewrite"] if rewriter == "python" else [str(rust_binary("llrm-omf"))]
+
+
+def driver(command: list[str], cfg: Config, *options: str) -> Callable[[bytes], bytes]:
+    """The rewrite as its command line runs it, the object linked against cfg's runtime.
+
+    The link unit's fingerprint, and so the output's marker, hashes the
+    input's path, so the input is named by its content: every rewriter sees
+    the same path and writes the same bytes.
+    """
+    runtime = host_path(cfg.mount, cfg.runtime)
+    inputs = BUILD / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+
+    def change(data: bytes) -> bytes:
+        source = inputs / f"{hashlib.sha256(data).hexdigest()}.obj"
+        with tempfile.TemporaryDirectory(dir=inputs) as scratch:
+            # another configuration may be writing the same object
+            (Path(scratch) / "in.obj").write_bytes(data)
+            os.replace(Path(scratch) / "in.obj", source)
+            out = Path(scratch) / "out.obj"
+            manifest = Path(scratch) / "out.json"
+            argv = [*command, str(source), str(runtime), "-o", str(out), "--manifest", str(manifest), *options]
+            done = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True)
+            if done.returncode:
+                said = done.stderr.strip().splitlines()
+                raise RuntimeError(said[-1] if said else f"{command[-1]} exited {done.returncode}")
+            return out.read_bytes()
+
+    return change
+
+
 def run(
     tag: str,
     only: str | None = None,
@@ -253,15 +295,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--rewriter", choices=REWRITERS, default="python")
     args = ap.parse_args(argv)
 
-    result = run(
-        args.config,
-        args.prog,
-        dry_run=args.dry_run,
-        timeout=args.timeout,
-        transform=lambda data: rewrite(data, dry_run=False, cpu=args.cpu)[0],
-    )
+    command = rewriter_command(args.rewriter)
+    print(f"rewriter: {' '.join(command)}")
+    options = ["--cpu", args.cpu] + (["--dry-run"] if args.dry_run else [])
+    change = driver(command, CONFIGS[args.config], *options)
+    result = run(args.config, args.prog, timeout=args.timeout, transform=change)
     for v in result.verdicts:
         print(f"  {v.program:10} {v.status:9} {v.detail}")
     print(f"{args.config}: {'PASS' if result.ok else 'FAIL'}   (build/e2e/{args.config})")

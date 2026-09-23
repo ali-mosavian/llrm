@@ -9,6 +9,7 @@ now in the output, and these tests are what keep it there.
 """
 
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -89,3 +90,15 @@ def test_long_program_names_use_the_same_dos_output_stem_when_judged(tmp_path: P
     got = e2e.judge(work, "algebra", golden)
 
     assert got.status == "PASS"
+
+
+def test_e2e_dry_run_hands_the_object_back_unchanged(monkeypatch) -> None:
+    """`e2e.py --dry-run` rewrote anyway: its transform hard-coded dry_run=False."""
+    cfg = e2e.CONFIGS["q-O"]
+    if not cfg.available:
+        pytest.skip("no QB 4.5 toolchain")
+    seen = {}
+    monkeypatch.setattr(e2e, "run", lambda *args, transform, **kwargs: seen.setdefault("change", transform) and e2e.Result("q-O", []))
+    e2e.main(["q-O", "--dry-run"])
+    data = (Path(__file__).resolve().parent.parent / "fixtures/omf/hotlop-q-o.obj").read_bytes()
+    assert seen["change"](data) == data
