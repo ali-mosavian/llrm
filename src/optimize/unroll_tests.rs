@@ -42,36 +42,6 @@ fn op(at: i64, operation: Operation, name: &str, kind: Kind) -> Op {
 }
 
 #[test]
-fn test_unroll_profitability_uses_the_selected_cpu() {
-    let add = op(1, Operation::Binary, "add", Kind::Add);
-    let mut branch = op(1, Operation::Branch, "jne", Kind::Branch);
-    branch.target = Some(1);
-    let original = MirBody::new(
-        0,
-        vec![
-            MirBlock::new(0, vec![], vec![], vec![1]),
-            MirBlock::new(1, vec![], vec![add, branch], vec![1, 2]),
-            MirBlock::new(2, vec![], vec![], vec![]),
-        ],
-    );
-    let moves = (0..3).map(|at| op(at, Operation::Move, "mov", Kind::Copy)).collect();
-    let mut result = MirBody::new(
-        0,
-        vec![MirBlock::new(0, vec![], moves, vec![2]), MirBlock::new(2, vec![], vec![], vec![])],
-    );
-    result.repetitions = vec![(1, 2)];
-    let (original, result) = (Rc::new(original), Rc::new(result));
-    let with = |name: &str| Where {
-        costs: cpu::profile(name).expect("a known cpu").operations.clone(),
-        ..Where::default()
-    };
-
-    assert!(_profitable(&original, &result, 1, 2, &with("386")));
-    assert!(!_profitable(&original, &result, 1, 2, &with("P5")));
-}
-
-/// FPCSE retained dead unrolled stores because a zero-byte clone could not donate bytes to its neighbor.
-#[test]
 fn test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes() {
     let cell = MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }), 4);
     let store = |at: i64, value: i64| {

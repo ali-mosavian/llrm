@@ -1,4 +1,4 @@
-//! Exact CFG loop peeling, accepted only after ordinary MIR simplifies it.
+//! Exact CFG loop peeling, priced before anything is cloned.
 //!
 //! Port of `qbopt/optimize/peel.py`.  Peeling is the general CFG counterpart
 //! of full straight-line unrolling: clone every block of a proven exact loop,
@@ -12,7 +12,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::analysis::loops::{self, Loop};
-use crate::analysis::peelsize::{self, Signature};
+use crate::analysis::peelsize;
 use crate::analysis::{consts, induction};
 use crate::model::mir::{Kind, MirBlock, MirBody};
 use crate::model::passes::{MIRTransform, Where};
@@ -43,7 +43,7 @@ impl MIRTransform for Peel {
     }
 
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
-        let found = _candidate(&body, &self.r#where, &BTreeSet::new(), &BTreeSet::new())?;
+        let found = _candidate(&body, &self.r#where, &BTreeSet::new())?;
         Ok(match found {
             None => body,
             Some(found) => found.0,
@@ -64,13 +64,9 @@ fn _conditional_floating(loop_: &Loop, blocks: &BTreeMap<i64, &MirBlock>) -> boo
         })
 }
 
-/// Clone the first bounded exact loop, returning body, latch, count and signature.
-fn _candidate(
-    body: &Rc<MirBody>,
-    r#where: &Where,
-    skip: &BTreeSet<i64>,
-    tried: &BTreeSet<Signature>,
-) -> Result<Option<(Rc<MirBody>, i64, i64, Signature)>, String> {
+/// Clone the first bounded exact loop `peelsize::admitted` prices as worth it, returning
+/// body, latch and count.
+fn _candidate(body: &Rc<MirBody>, r#where: &Where, skip: &BTreeSet<i64>) -> Result<Option<(Rc<MirBody>, i64, i64)>, String> {
     let closed = lcssa::closed(body)?;
     let facts = consts::known(&closed, Some(&r#where.dgroup), Some(&r#where.named()), None, None);
     for loop_ in loops::loops(&closed.blocks, Some(closed.entry)) {
@@ -88,10 +84,6 @@ fn _candidate(
             continue;
         }
         if !peelsize::admitted(&closed, &loop_, &count, &facts, r#where) {
-            continue;
-        }
-        let signature = peelsize::signature(&closed, &loop_, &count, &facts);
-        if tried.contains(&signature) {
             continue;
         }
         let emitted = closed
@@ -112,50 +104,30 @@ fn _candidate(
         }
         let count = count.to_i64().expect("count fits");
         if let Some(candidate) = loopclone::peeled(&closed, &loop_, count)? {
-            return Ok(Some((Rc::new(candidate), latch, count, signature)));
+            return Ok(Some((Rc::new(candidate), latch, count)));
         }
     }
     Ok(None)
 }
 
-/// Peel exact loops transactionally and retain only target-priced wins.
+/// Peel every exact loop `peelsize::admitted` prices as worth it, once each; the
+/// caller's fixed point settles the copies and proves each residual loop dead.
 pub fn optimized(
     body: &Rc<MirBody>,
     r#where: &Where,
-    optimize: &mut dyn FnMut(Rc<MirBody>) -> Result<Rc<MirBody>, String>,
-    tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<Rc<MirBody>, String> {
     if !unroll::priced(body, r#where) {
         return Ok(body.clone());
     }
     let mut body = body.clone();
-    let mut rejected = BTreeSet::<i64>::new();
-    let mut baseline: Option<Rc<MirBody>> = None;
-    loop {
-        let found = _candidate(&body, r#where, &rejected, &tried.borrow())?;
-        let Some((candidate, latch, count, signature)) = found else {
-            return Ok(baseline.unwrap_or(body));
-        };
-        let result = optimize(candidate.clone())?;
-        if baseline.is_none() {
-            baseline = Some(optimize(body.clone())?); // settled as the copy is: see unroll::optimized
-        }
-        let settled = baseline.as_ref().expect("settled above");
-        if let Some(rejection) = unroll::_rejection(settled, &result, latch, count, r#where, Some(&body)) {
-            if let Some(watch) = watch.as_deref_mut() {
-                watch(&format!("peel-rejected-{rejection}"), &result);
-            }
-            rejected.insert(latch);
-            tried.borrow_mut().insert(signature);
-            continue;
-        }
+    let mut peeled = BTreeSet::<i64>::new();
+    while let Some((candidate, latch, _)) = _candidate(&body, r#where, &peeled)? {
         if let Some(watch) = watch.as_deref_mut() {
-            watch("peel-candidate", &candidate);
-            watch("peel-accepted", &result);
+            watch("peel-accepted", &candidate);
         }
-        body = result;
-        baseline = None;
-        rejected.clear();
+        peeled.insert(latch);
+        body = candidate;
     }
+    Ok(body)
 }

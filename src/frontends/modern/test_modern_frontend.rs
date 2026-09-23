@@ -5,8 +5,7 @@
 //!
 //! skipped: `execute.run` assertions (`qbopt/hir/execute.py` is tools-only),
 //! and the tests made of nothing else; test_dos_bootstrap_enters_the_runtime_before_language_main
-//! (reads runtime sources, no compiler); test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round
-//! (monkeypatches `unroll._rejection`).
+//! (reads runtime sources, no compiler).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

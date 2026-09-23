@@ -817,28 +817,6 @@ def test_dictionary_comprehension_deduplicates_and_has_explicit_lookup(tmp_path:
     assert modern_compile.written(program, entry="main", source=source)
 
 
-def test_a_rejected_loop_copy_is_not_rebuilt_in_a_later_round(monkeypatch: pytest.MonkeyPatch) -> None:
-    """nbody rebuilt and re-priced the same rejected unroll every fixed-point round."""
-    from collections import Counter
-
-    from qbopt.optimize import unroll
-
-    real = unroll._rejection
-    rejected: Counter = Counter()
-
-    def recording(before, after, latch, count, where, copied=None):
-        why = real(before, after, latch, count, where, copied)
-        if why is not None:
-            rejected[unroll._signature(before if copied is None else copied, latch, count, where)] += 1
-        return why
-
-    monkeypatch.setattr(unroll, "_rejection", recording)
-    modern_compile.assembled(driver.parsed(NBODY), entry="main")
-
-    assert rejected
-    assert max(rejected.values()) == 1
-
-
 def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
     """Unpriced FIXED_MUL left nbody unpriceable, so every loop copy was built only to be refused."""
     from qbopt import hir

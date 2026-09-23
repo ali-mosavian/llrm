@@ -197,7 +197,7 @@ def test_direct_mir_default_has_a_bounded_complete_peel_budget(monkeypatch: pyte
     """
     observed = []
 
-    def recording(body, where, *, optimize, tried, watch=None):
+    def recording(body, where, *, watch=None):
         observed.append((where.options.max_unroll_iterations, where.options.max_unrolled_operations))
         return body
 

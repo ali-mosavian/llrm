@@ -1,4 +1,4 @@
-"""Exact CFG loop peeling, accepted only after ordinary MIR simplifies it.
+"""Exact CFG loop peeling, priced before anything is cloned.
 
 Full straight-line unrolling deliberately rejects branches and nested loops.
 Peeling is its general CFG counterpart: clone every block of a proven exact
@@ -54,9 +54,8 @@ def _candidate(
     where: Where,
     *,
     skip: frozenset[int] = frozenset(),
-    tried: frozenset[tuple] | set[tuple] = frozenset(),
 ) -> tuple[mir.MirBody, int, int, tuple] | None:
-    """Clone the first bounded exact loop, returning body, latch, count and signature."""
+    """Clone the first bounded exact loop `peelsize.admitted` prices as worth it, returning body, latch and count."""
     closed = lcssa.closed(body)
     facts = consts.known(closed, where.dgroup, where.named)
     for loop in loops.loops(closed.blocks, closed.entry):
@@ -70,9 +69,6 @@ def _candidate(
             continue
         if not peelsize.admitted(closed, loop, count, facts, where):
             continue
-        signature = peelsize.signature(closed, loop, count, facts)
-        if signature in tried:
-            continue
         emitted = sum(
             op.kind is not mir.Kind.NOTHING for block in closed.blocks if block.at in loop.body for op in block.ops
         )
@@ -83,7 +79,7 @@ def _candidate(
             continue
         candidate = loopclone.peeled(closed, loop, count)
         if candidate is not None:
-            return candidate, latch, count, signature
+            return candidate, latch, count
     return None
 
 
@@ -91,32 +87,17 @@ def optimized(
     body: mir.MirBody,
     where: Where,
     *,
-    optimize: Callable[[mir.MirBody], mir.MirBody],
-    tried: set[tuple],
     watch: Callable[[str, mir.MirBody], None] | None = None,
 ) -> mir.MirBody:
-    """Peel exact loops transactionally and retain only target-priced wins."""
+    """Peel every exact loop `peelsize.admitted` prices as worth it, once each; the
+    caller's fixed point settles the copies and proves each residual loop dead."""
     if not unroll.priced(body, where):
         return body
-    rejected: set[int] = set()
-    baseline = None
-    while True:
-        found = _candidate(body, where, skip=frozenset(rejected), tried=tried)
-        if found is None:
-            return baseline or body
-        candidate, latch, count, signature = found
-        result = optimize(candidate)
-        baseline = baseline or optimize(body)  # settled as the copy is: see unroll.optimized
-        rejection = unroll._rejection(baseline, result, latch, count, where, body)
-        if rejection is not None:
-            if watch is not None:
-                watch(f"peel-rejected-{rejection}", result)
-            rejected.add(latch)
-            tried.add(signature)
-            continue
+    peeled: set[int] = set()
+    while (found := _candidate(body, where, skip=frozenset(peeled))) is not None:
+        candidate, latch, _ = found
         if watch is not None:
-            watch("peel-candidate", candidate)
-            watch("peel-accepted", result)
-        body = result
-        baseline = None
-        rejected.clear()
+            watch("peel-accepted", candidate)
+        peeled.add(latch)
+        body = candidate
+    return body

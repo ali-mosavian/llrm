@@ -968,7 +968,7 @@ pub(crate) fn _result(
     None
 }
 
-fn _carry(op: &Op, facts: &IndexMap<Value, Known>, here: &Cells) -> Option<BigInt> {
+pub(crate) fn _carry(op: &Op, facts: &IndexMap<Value, Known>, here: &Cells) -> Option<BigInt> {
     if op.kind != Kind::Add || op.args.len() != 2 || op.results.len() != 1 {
         return None;
     }

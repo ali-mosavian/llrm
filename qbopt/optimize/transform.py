@@ -34,7 +34,6 @@ from qbopt.analysis import avail
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
 from qbopt.model.passes import O2
-from qbopt.optimize import profit
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
 from qbopt.model.mir import MirBody
@@ -3243,10 +3242,6 @@ def applied(
             watch("r01-peel", body)
         return _unreachable(body)
 
-    # Candidates rejected anywhere in this call, including inside another
-    # candidate's own fixed point.
-    tried: set[tuple] = set()
-
     def fixed(state: MirBody, *, consider_unroll: bool = False, prefix: str = "") -> MirBody:
         # A monotone chain may expose one simplification per operation.
         # Scale with the body and separately reject a repeated state, so an
@@ -3261,21 +3256,17 @@ def applied(
                 if watch is not None:
                     watch(f"{prefix}r{iteration + 1:02d}-{one.name}", state)
             # Ask at the original pipeline boundary. Fully converging the
-            # scalar passes first destroys matmul's exact counted-loop shape;
-            # accepting the candidate still requires a separately converged
-            # result, so profitability never compares a rough expansion.
+            # scalar passes first destroys matmul's exact counted-loop shape.
+            # A copy's constant indices are new exact leaves, so it crosses
+            # the structural boundary before the scalar passes settle it.
             if consider_unroll and unrollers:
-                state = unroll.optimized(
+                unrolled = unroll.optimized(
                     state,
                     where,
-                    optimize=lambda candidate: structural_candidate(
-                        candidate,
-                        stage=f"{prefix}candidate-unroll",
-                        prefix=f"{prefix}candidate-unroll-",
-                    ),
-                    tried=tried,
                     watch=(None if watch is None else lambda stage, candidate: watch(f"{prefix}{stage}", candidate)),
                 )
+                if unrolled is not state:
+                    state = scalarized(unrolled, f"{prefix}unrolled")
             if only is not None or state == before:
                 # A structural candidate can make its last cloned region
                 # unreachable on the same round that reaches the scalar
@@ -3288,59 +3279,11 @@ def applied(
             history.append(state)
         raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")
 
-    def structural_candidate(
-        candidate: MirBody,
-        *,
-        stage: str,
-        prefix: str,
-        consider_unroll: bool = False,
-    ) -> MirBody:
-        """Normalize addresses and newly exact leaves before pricing a CFG clone.
-
-        Structural cloning crosses pointer decomposition and SROA before
-        scalar convergence.  That convergence can itself make indexed
-        accesses singleton leaves, so a second boundary is part of the same
-        candidate transaction.  Only scalar MIR reconverges after that
-        boundary: a further structural choice belongs to the next
-        independently priced transaction.
-        """
-        state = fixed(
-            scalarized(candidate, stage),
-            consider_unroll=consider_unroll,
-            prefix=prefix,
-        )
-        scalar = scalarized(state, f"{stage}-settled")
-        if scalar == state:
-            return state
-        # The unscalarized side already pays for each explicit aggregate
-        # load/store.  Charging its address and stored values as full-lived
-        # register residents as well counted the same memory representation
-        # twice (matmul: estimated 8,815 versus 3,396 after allocation).
-        # Once SROA removes those homes, however, every retained SSA leaf has
-        # to fit the finite register file or be recreated in a spill slot.
-        before = profit.weighted(state, where.costs)
-        settled = fixed(scalar, prefix=f"{prefix}settled-")
-        after = profit.pressure_adjusted(settled, where.costs, where.registers)
-        if before is not None and after is not None and after > before:
-            if watch is not None:
-                watch(f"{stage}-settled-rejected-pressure", settled)
-            return state
-        return settled
-
     body = fixed(body, consider_unroll=bool(unrollers))
     if peelers:
-        body = peel.optimized(
-            body,
-            where,
-            optimize=lambda candidate: structural_candidate(
-                candidate,
-                stage="candidate-peel",
-                consider_unroll=bool(unrollers),
-                prefix="candidate-peel-",
-            ),
-            tried=tried,
-            watch=watch,
-        )
+        peeled = peel.optimized(body, where, watch=watch)
+        if peeled is not body:
+            body = fixed(scalarized(peeled, "peeled"), consider_unroll=bool(unrollers), prefix="peeled-")
     if options.unswitch:
         from qbopt.optimize import unswitch
 

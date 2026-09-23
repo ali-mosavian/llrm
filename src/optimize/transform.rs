@@ -3882,16 +3882,13 @@ pub(crate) fn applied(
 }
 
 /// The closure state `applied`'s nested `scalarized`, `fixed` and
-/// `structural_candidate` share; they recurse through unroll and peel.
+/// share; they recurse through unroll.
 struct _Transaction<'w, 'a> {
     r#where: &'w crate::model::passes::Where,
     boundary: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     passes: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     unrollers: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     only: bool,
-    // Candidates rejected anywhere in this call, including inside another
-    // candidate's own fixed point.
-    tried: std::cell::RefCell<BTreeSet<crate::analysis::peelsize::Signature>>,
     watch: std::cell::RefCell<Option<&'a mut dyn FnMut(&str, &MirBody)>>,
 }
 
@@ -3933,21 +3930,21 @@ impl _Transaction<'_, '_> {
                     self.watch(&format!("{prefix}r{:02}-{}", iteration + 1, one.name()), &state);
                 }
             }
-            // Ask at the original pipeline boundary; accepting the candidate
-            // still requires a separately converged result.
+            // Ask at the original pipeline boundary: fully converging the
+            // scalar passes first destroys matmul's exact counted-loop shape.
             if consider_unroll && !self.unrollers.borrow().is_empty() {
-                let stage = format!("{prefix}candidate-unroll");
-                let inner = format!("{prefix}candidate-unroll-");
-                let mut optimize = |candidate: Rc<MirBody>| self.structural_candidate(candidate, &stage, &inner, false);
                 let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
                 let watching = self.watching();
-                state = crate::optimize::unroll::optimized(
+                let unrolled = crate::optimize::unroll::optimized(
                     &state,
                     self.r#where,
-                    &mut optimize,
-                    &self.tried,
                     if watching { Some(&mut watch) } else { None },
                 )?;
+                // A copy's constant indices are new exact leaves, so it crosses the
+                // structural boundary before the scalar passes settle it.
+                if !Rc::ptr_eq(&unrolled, &state) {
+                    state = self.scalarized(unrolled, &format!("{prefix}unrolled"))?;
+                }
             }
             if self.only || state == before {
                 // A structural candidate can make its last cloned region
@@ -3961,34 +3958,6 @@ impl _Transaction<'_, '_> {
             history.push(Rc::clone(&state));
         }
         Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
-    }
-
-    /// Normalize addresses and newly exact leaves before pricing a CFG clone.
-    fn structural_candidate(
-        &self,
-        candidate: Rc<MirBody>,
-        stage: &str,
-        prefix: &str,
-        consider_unroll: bool,
-    ) -> Result<Rc<MirBody>, String> {
-        let state = self.fixed(self.scalarized(candidate, stage)?, consider_unroll, prefix)?;
-        let scalar = self.scalarized(Rc::clone(&state), &format!("{stage}-settled"))?;
-        if scalar == state {
-            return Ok(state);
-        }
-        // The unscalarized side already pays for each explicit aggregate
-        // load/store; once SROA removes those homes, every retained SSA leaf
-        // has to fit the finite register file or be recreated in a spill slot.
-        let before = crate::optimize::profit::weighted(&state, &self.r#where.costs, None);
-        let settled = self.fixed(scalar, false, &format!("{prefix}settled-"))?;
-        let after = crate::optimize::profit::pressure_adjusted(&settled, &self.r#where.costs, self.r#where.registers, None);
-        if let (Some(before), Some(after)) = (before, after) {
-            if after > before {
-                self.watch(&format!("{stage}-settled-rejected-pressure"), &settled);
-                return Ok(state);
-            }
-        }
-        Ok(settled)
     }
 }
 
@@ -4067,7 +4036,6 @@ fn _applied(
         passes: std::cell::RefCell::new(passes),
         unrollers: std::cell::RefCell::new(Vec::new()),
         only: only.is_some(),
-        tried: std::cell::RefCell::new(BTreeSet::new()),
         watch: std::cell::RefCell::new(watch),
     };
 
@@ -4089,18 +4057,16 @@ fn _applied(
 
     body = transaction.fixed(body, has_unrollers, "")?;
     if !peelers.is_empty() {
-        let mut optimize = |candidate: Rc<MirBody>| {
-            transaction.structural_candidate(candidate, "candidate-peel", "candidate-peel-", has_unrollers)
-        };
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
-        body = crate::optimize::peel::optimized(
+        let peeled = crate::optimize::peel::optimized(
             &body,
             &r#where,
-            &mut optimize,
-            &transaction.tried,
             if watching { Some(&mut watch) } else { None },
         )?;
+        if !Rc::ptr_eq(&peeled, &body) {
+            body = transaction.fixed(transaction.scalarized(peeled, "peeled")?, has_unrollers, "peeled-")?;
+        }
     }
     if options.unswitch {
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);

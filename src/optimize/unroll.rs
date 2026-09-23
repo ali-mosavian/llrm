@@ -10,7 +10,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::analysis::loops::{self, Loop};
-use crate::analysis::peelsize::{self, Signature};
+use crate::analysis::peelsize;
 use crate::analysis::{consts, floatfacts, induction, ssa};
 use crate::model::mir::{Arg, Kind, MirBlock, MirBody, Op, OrderedMap, Value};
 use crate::model::passes::{MIRTransform, Where};
@@ -36,7 +36,7 @@ impl MIRTransform for Unroll {
     }
 
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
-        expanded(&body, &self.r#where, &self.r#where.named(), &BTreeSet::new(), None)
+        expanded(&body, &self.r#where, &self.r#where.named(), &BTreeSet::new())
     }
 }
 
@@ -49,7 +49,6 @@ pub fn expanded(
     r#where: &Where,
     calls: &IndexMap<i64, String>,
     skip: &BTreeSet<i64>,
-    tried: Option<&BTreeSet<Signature>>,
 ) -> Result<Rc<MirBody>, String> {
     let blocks = body
         .blocks
@@ -209,9 +208,6 @@ pub fn expanded(
         if count < BigInt::from(2) || !peelsize::admitted(body, &loop_, &count, &facts, r#where) {
             continue;
         }
-        if tried.is_some_and(|tried| tried.contains(&peelsize::signature(body, &loop_, &count, &facts))) {
-            continue;
-        }
         let count = count.to_i64().expect("count fits");
         if header.phis.iter().any(|phi| {
             phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([entry, latch.at])
@@ -242,196 +238,32 @@ pub fn expanded(
     Ok(body.clone())
 }
 
-fn _size(body: &MirBody) -> i64 {
-    body.blocks
-        .iter()
-        .map(|block| {
-            (block.phis.len() + block.ops.iter().filter(|op| op.kind != Kind::Nothing).count()) as i64
-        })
-        .sum()
-}
-
-/// Conservative semantic operations attributable to one expanded sequence.
-fn _expanded_operations(before: &MirBody, after: &MirBody, latch: i64, count: i64) -> i64 {
-    let found = loops::loops(&before.blocks, Some(before.entry))
-        .into_iter()
-        .filter(|one| one.latches.contains(&latch))
-        .collect::<Vec<_>>();
-    if found.len() != 1 {
-        return _size(after);
-    }
-    let inside = &found[0].body;
-    let loop_size = before
-        .blocks
-        .iter()
-        .filter(|block| inside.contains(&block.at))
-        .map(|block| {
-            (block.phis.len() + block.ops.iter().filter(|op| op.kind != Kind::Nothing).count()) as i64
-        })
-        .sum::<i64>();
-    let outside = 0.max(_size(before) - loop_size);
-    let settled = 0.max(_size(after) - outside);
-    settled.max(loop_size * count)
-}
-
-/// Whether exact dynamic savings pay for the optimized straight-line body.
-fn _profitable(before: &Rc<MirBody>, after: &Rc<MirBody>, latch: i64, count: i64, r#where: &Where) -> bool {
-    _rejection(before, after, latch, count, r#where, None).is_none()
-}
-
-/// Why a structural candidate loses, or `None` when it wins.
-///
-/// `before` is what the candidate is priced against; `copied`, the body the
-/// loop was copied from, is what must have lost that loop. A settled
-/// `before` may already have turned it into a fill.
-pub(crate) fn _rejection(
-    before: &Rc<MirBody>,
-    after: &Rc<MirBody>,
-    latch: i64,
-    count: i64,
-    r#where: &Where,
-    copied: Option<&Rc<MirBody>>,
-) -> Option<&'static str> {
-    let copied = copied.unwrap_or(before);
-    if loops::loops(&after.blocks, Some(after.entry)).len() >= loops::loops(&copied.blocks, Some(copied.entry)).len() {
-        return Some("residual-loops");
-    }
-    if !r#where.options.grows && _size(after) > _size(before) {
-        return Some("size-growth");
-    }
-    if r#where.options.max_unroll_iterations != 0
-        && count > r#where.options.max_unroll_iterations
-        && _size(after) > _size(before)
-    {
-        // A large exact loop may still be an excellent constant-folding
-        // vehicle: allow it when scalar optimization erases all expansion
-        // growth. Otherwise obey the target's complete-peel budget before an
-        // expensive branch makes arbitrary duplication look free.
-        return Some("iteration-growth");
-    }
-    let trips = IndexMap::from_iter([(latch, count)]);
-    let dynamic_before = profit::weighted(before, &r#where.costs, Some(&trips));
-    let dynamic_after = profit::weighted(after, &r#where.costs, None);
-    let (Some(dynamic_before), Some(dynamic_after)) = (dynamic_before, dynamic_after) else {
-        return Some("unpriced");
-    };
-    if dynamic_after >= dynamic_before {
-        return Some("no-saving");
-    }
-    let pressure_before = profit::spill_risk(before, &r#where.costs, r#where.registers, Some(&trips));
-    let pressure_after = profit::spill_risk(after, &r#where.costs, r#where.registers, None);
-    let (Some(pressure_before), Some(pressure_after)) = (pressure_before, pressure_after) else {
-        return Some("unpriced");
-    };
-    let total_before = dynamic_before + pressure_before;
-    let total_after = dynamic_after + pressure_after;
-    let sequence = _expanded_operations(copied, after, latch, count);
-    if pressure_after > 0
-        && r#where.options.max_unrolled_operations != 0
-        && sequence > r#where.options.max_unrolled_operations
-        && (pressure_after >= pressure_before || total_before - total_after <= sequence * r#where.costs.r#move)
-    {
-        // GCC's target-independent `max-completely-peeled-insns` is 200.
-        // An oversized spill-prone candidate must both lower pressure and
-        // save enough dynamic work to pay for its whole expanded sequence.
-        return Some("operation-growth");
-    }
-    if total_after >= total_before {
-        return Some("pressure");
-    }
-    // MIR cannot know final encoding bytes. Charge one register move per added
-    // semantic operation, amortized over the exact executions only when the
-    // candidate is not already predicted to spill.
-    let mut growth = 0.max(_size(after) - _size(before)) * r#where.costs.r#move;
-    if pressure_after == 0 {
-        growth = (growth + count - 1).div_euclid(count);
-    }
-    if total_before - total_after <= growth {
-        Some("growth")
-    } else {
-        None
-    }
-}
-
-/// Repeatedly expand one profitable exact loop and re-run scalar MIR.
-///
-/// `tried` outlives this call: the fixed point asks every round, and a loop
-/// it already rejected, unchanged, is not asked about again.
+/// Expand every exact loop `peelsize::admitted` prices as worth it, once each; the
+/// caller's fixed point settles the copies.
 pub fn optimized(
     body: &Rc<MirBody>,
     r#where: &Where,
-    optimize: &mut dyn FnMut(Rc<MirBody>) -> Result<Rc<MirBody>, String>,
-    tried: &std::cell::RefCell<BTreeSet<Signature>>,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<Rc<MirBody>, String> {
     if !priced(body, r#where) {
         return Ok(body.clone());
     }
     let mut body = body.clone();
-    let mut rejected = BTreeSet::<i64>::new();
-    // Once settled for pricing, the loop left alone is where the fixed point is
-    // going anyway; handing it back saves redoing that work round by round.
-    let mut baseline: Option<Rc<MirBody>> = None;
     loop {
-        let candidate = expanded(&body, r#where, &r#where.named(), &rejected, Some(&tried.borrow()))?;
+        let candidate = expanded(&body, r#where, &r#where.named(), &BTreeSet::new())?;
         if Rc::ptr_eq(&candidate, &body) {
-            return Ok(baseline.unwrap_or(body));
-        }
-        let additions = &candidate.repetitions[body.repetitions.len()..];
-        if additions.len() != 1 {
-            return Ok(baseline.unwrap_or(body));
-        }
-        let (latch, count) = additions[0];
-        if rejected.contains(&latch) {
-            return Ok(baseline.unwrap_or(body));
+            return Ok(body);
         }
         if let Some(watch) = watch.as_deref_mut() {
-            watch("unroll-candidate", &candidate);
+            watch("unroll-accepted", &candidate);
         }
-        let result = optimize(candidate)?;
-        // Both sides settled: the loop left as it is gets the same passes the
-        // copy does. Pricing the copy against the loop mid-round let `[0; 8, 8]`
-        // unroll into eight fills that, left alone, merge into one.
-        if baseline.is_none() {
-            baseline = Some(optimize(body.clone())?);
-        }
-        let settled = baseline.as_ref().expect("settled above");
-        if let Some(rejection) = _rejection(settled, &result, latch, count, r#where, Some(&body)) {
-            if let Some(watch) = watch.as_deref_mut() {
-                watch(&format!("unroll-rejected-{rejection}"), &result);
-            }
-            rejected.insert(latch);
-            tried.borrow_mut().insert(_signature(&body, latch, count, r#where));
-            continue;
-        }
-        body = result;
-        baseline = None;
-        if let Some(watch) = watch.as_deref_mut() {
-            watch("unroll-accepted", &body);
-        }
-        rejected.clear();
+        body = candidate;
     }
 }
 
-/// Whether a candidate here could be accepted at all: `_rejection` prices both sides.
+/// Whether the target prices every operation here, which a copy's cost needs.
 pub(crate) fn priced(body: &MirBody, r#where: &Where) -> bool {
     profit::r#static(body, &r#where.costs).is_some()
-}
-
-fn _signature(body: &Rc<MirBody>, latch: i64, count: i64, r#where: &Where) -> Signature {
-    let found = loops::loops(&body.blocks, Some(body.entry))
-        .into_iter()
-        .filter(|one| one.latches.contains(&latch))
-        .collect::<Vec<_>>();
-    let [loop_] = found.as_slice() else {
-        panic!("ValueError: expected one loop with latch {latch}, found {}", found.len());
-    };
-    peelsize::signature(
-        body,
-        loop_,
-        &BigInt::from(count),
-        &consts::known(body, Some(&r#where.dgroup), Some(&r#where.named()), None, None),
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
