@@ -175,18 +175,3 @@ def classes_may_alias(one: AliasClass, other: AliasClass) -> bool:
     if {one.kind, other.kind} <= {Kind.GLOBAL, Kind.EXTERNAL}:
         return Kind.EXTERNAL in (one.kind, other.kind)
     return False
-    for this, that in ((one, other), (other, one)):
-        if this.kind is Kind.UNKNOWN:
-            return True
-    for this, that in ((one, other), (other, one)):
-        if this.kind is Kind.NONLOCAL:
-            return that.captured and that.kind not in (Kind.FRAME, Kind.STACK)
-    for this, that in ((one, other), (other, one)):
-        if this.kind is Kind.PARAMETER:
-            # An incoming pointer predates this activation and cannot designate
-            # one of its frame objects. At a call site the parameter object is
-            # replaced by the actual provenance before caller-side queries.
-            return that.captured and that.kind is not Kind.FRAME
-    if {one.kind, other.kind} <= {Kind.GLOBAL, Kind.EXTERNAL}:
-        return Kind.EXTERNAL in (one.kind, other.kind)
-    return False
