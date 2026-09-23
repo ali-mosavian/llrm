@@ -2485,6 +2485,11 @@ pub fn lowered(
     cpu: impl Into<cpu::ProfileOrName<'static>>,
     options: Lowered,
 ) -> Result<lir::LirBody, Unlowered> {
+    if std::env::var_os("LLRM_COST").is_some() {
+        let costs = crate::model::passes::OperationCosts::default();
+        let weighted = crate::optimize::profit::weighted(&std::rc::Rc::new(body.clone()), &costs, None);
+        eprintln!("COST {name} {weighted:?}");
+    }
     // Width does not identify a type here: the C path runs lower_int64 first.
     let default_hints = AllocationHints::new();
     let hints = options.hints.unwrap_or(&default_hints);
