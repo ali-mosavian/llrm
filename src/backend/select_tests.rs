@@ -630,7 +630,7 @@ fn test_a_frame_derived_indirect_cell_keeps_its_stack_segment() {
 // tests/test_test_immediate.py
 #[test]
 fn test_test_immediate_keeps_mask_and_flags() {
-    let reference = crate::frontend::declen::decode(&[0xf7, 0x46, 0x06, 0x00, 0x80], 0).expect("decodes");
+    let reference = crate::frontends::bc::declen::decode(&[0xf7, 0x46, 0x06, 0x00, 0x80], 0).expect("decodes");
     for (width, value) in [(1_u32, 0x80_u64), (2, 0x8000), (4, 0x80000000), (2, 1)] {
         for memory in [false, true] {
             let operand = if memory {
@@ -640,7 +640,7 @@ fn test_test_immediate_keeps_mask_and_flags() {
             };
             let what = sem(Operation::Compare, Some("test"), vec![], vec![operand, imm(value as i64, width)], None, false);
             let made = made(emitted(&what));
-            let decoded = crate::frontend::declen::decode(&made.code, 0).expect("decodes");
+            let decoded = crate::frontends::bc::declen::decode(&made.code, 0).expect("decodes");
             assert_eq!(decoded.insn.mnemonic(), Mnemonic::Test);
             assert_eq!(decoded.insn.immediate(1) & ((1_u64 << (width * 8)) - 1), value);
             assert_eq!(decoded.insn.rflags_written(), reference.insn.rflags_written());
@@ -694,7 +694,7 @@ fn test_a_word_index_is_encoded_with_word_addressing() {
 fn test_selected_indexed_frame_cell_keeps_bp_and_its_dynamic_index() {
     let cell = ir::Mem { through: Register::BP, base: Some(h(1, 2)), index_through: Register::SI, ..frame(-96, 4) };
     let code = made(move_from(Register::EAX, &cell, 0)).code;
-    let instruction = crate::frontend::declen::decode(&code, 0).expect("decodes");
+    let instruction = crate::frontends::bc::declen::decode(&code, 0).expect("decodes");
     assert_eq!(instruction.insn.memory_base(), Register::BP);
     assert_eq!(instruction.insn.memory_index(), Register::SI);
     assert_eq!(instruction.insn.memory_displacement64() & 65535, (-96_i64 & 65535) as u64);

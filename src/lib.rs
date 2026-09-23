@@ -3,15 +3,13 @@
 pub mod abi;
 pub mod analysis;
 pub mod backend;
-pub mod cfront;
 pub mod cycles;
 pub mod flow;
-pub mod frontend;
+pub mod frontends;
 pub mod hir;
 pub mod legacy;
 pub mod model;
 pub mod objectfile;
-pub mod old;
 pub mod optimize;
 pub mod rewrite;
 pub mod support;

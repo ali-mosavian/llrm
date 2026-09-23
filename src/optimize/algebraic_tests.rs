@@ -9,7 +9,7 @@ use num_bigint::BigInt;
 
 use super::*;
 use crate::analysis::ssa;
-use crate::frontend::blocks::Block;
+use crate::frontends::bc::blocks::Block;
 use crate::model::ir::Operation;
 use crate::model::mir::{
     self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Synth,
@@ -1466,7 +1466,7 @@ fn test_addrm_reuses_word_scale_for_long_address() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         let result = testing::emitted_lir(format!("fixtures/omf/addrm-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
-        let shifts: Vec<iced_x86::Instruction> = crate::frontend::blocks::instructions(&found)
+        let shifts: Vec<iced_x86::Instruction> = crate::frontends::bc::blocks::instructions(&found)
             .unwrap()
             .into_iter()
             .map(|one| one.insn)
@@ -1486,7 +1486,7 @@ fn test_nested_combines_row_scale_in_emitted_code() {
         let result = testing::emitted_lir(format!("fixtures/omf/nested-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
         let insns: Vec<iced_x86::Instruction> =
-            crate::frontend::blocks::instructions(&found).unwrap().into_iter().map(|one| one.insn).collect();
+            crate::frontends::bc::blocks::instructions(&found).unwrap().into_iter().map(|one| one.insn).collect();
         let factors: Vec<i16> =
             insns.iter().filter(|one| one.code() == Code::Imul_r16_rm16_imm8).map(|one| one.immediate8to16()).collect();
         let strides: Vec<i16> =
@@ -1510,7 +1510,7 @@ fn test_nbody_damping_keeps_negation_whole() {
     let result = testing::emitted_lir(NBODY_STACK);
     let found = testing::loaded_bytes(&result.data).unwrap();
     let whole = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
-    assert!(crate::frontend::blocks::instructions(&found)
+    assert!(crate::frontends::bc::blocks::instructions(&found)
         .unwrap()
         .iter()
         .filter(|one| one.insn.mnemonic() == iced_x86::Mnemonic::Neg)
@@ -1523,7 +1523,7 @@ fn test_nbody_damping_keeps_negation_whole() {
 fn test_nbody_damping_reverses_subtraction_without_negation() {
     let result = testing::emitted_lir(NBODY_STACK);
     let found = testing::loaded_bytes(&result.data).unwrap();
-    assert!(!crate::frontend::blocks::instructions(&found)
+    assert!(!crate::frontends::bc::blocks::instructions(&found)
         .unwrap()
         .iter()
         .any(|one| one.insn.mnemonic() == iced_x86::Mnemonic::Neg));

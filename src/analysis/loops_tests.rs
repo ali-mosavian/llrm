@@ -125,8 +125,8 @@ fn test_a_block_with_one_predecessor_is_never_a_frontier() {
 /// `corpus.partitioned(obj)`, as the `MirBlock`s standing in for its blocks.
 fn partitioned(obj: &std::path::Path) -> Vec<MirBlock> {
     let found = loaded(obj).unwrap();
-    let mapped = crate::frontend::blocks::code_map(&found).unwrap_or_else(|why| panic!("{obj:?}: {why}"));
-    crate::support::testing::graph(&crate::frontend::blocks::partition(&found, &mapped))
+    let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap_or_else(|why| panic!("{obj:?}: {why}"));
+    crate::support::testing::graph(&crate::frontends::bc::blocks::partition(&found, &mapped))
 }
 
 /// Measured across the corpus: BC never emits an irreducible graph.

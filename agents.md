@@ -7,11 +7,10 @@ code and its tests are the specification. Rust is how it is written down,
 not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
 
 - The crate is `llrm`; every command is `llrm-*`.
-- The layout mirrors Python: `qbopt/<pkg>/<mod>.py` is `src/<pkg>/<mod>.rs`,
-  and every Python function has a Rust function of the same name. Frontends
-  move to `src/frontends/{c,qb,modern,bc}` only after cutover.
-- `src/old/` is the frozen LLVM-style pipeline. Do not edit it; consult it
-  only. It is deleted when the ported drivers take over.
+- Frontends live under `src/frontends/<lang>` (`c`, `qb`, `modern`, `bc`);
+  everything else mirrors `qbopt/`: `qbopt/<pkg>/<mod>.py` is
+  `src/<pkg>/<mod>.rs`. Every Python function has a Rust function of the
+  same name.
 - Behaviour, refusals, ordering and emitted code match Python. Correct
   output by a different mechanism is a failed port. So is a "safe subset",
   a textbook version of a pass with the same name, or a new abstraction the

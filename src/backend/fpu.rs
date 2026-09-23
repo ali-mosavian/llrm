@@ -11,7 +11,7 @@
 //! refuses int 3Ch, whose override is not in the bytes it can see.
 
 use crate::backend::select::Emitted;
-use crate::frontend::declen::{EMULATED, ESC, INTERRUPT, Insn, Stands, stood_in_for};
+use crate::frontends::bc::declen::{EMULATED, ESC, INTERRUPT, Insn, Stands, stood_in_for};
 
 /// Reapply an existing emulator protocol to newly selected x87 bytes.
 pub fn wrapped(made: &Emitted, protocol: u8) -> Option<Emitted> {
@@ -90,7 +90,7 @@ mod tests {
     //! check reads iced's decoded fields: iced is built without a formatter.
 
     use super::*;
-    use crate::frontend::declen::decode;
+    use crate::frontends::bc::declen::decode;
     use iced_x86::{Code, Mnemonic, Register};
 
     const WAIT: u8 = 0x9B;

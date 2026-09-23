@@ -273,7 +273,7 @@ mod tests {
     }
 
     fn _modern(fixture: &str, name: &str) -> String {
-        use crate::frontend::modern::test_modern_frontend as modern;
+        use crate::frontends::modern::test_modern_frontend as modern;
 
         let program = modern::parsed(&modern::fixture(&format!("{fixture}.mod")));
         _procedure(&modern::listing(&program, "main", &crate::model::passes::O2()), name)

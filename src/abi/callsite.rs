@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use iced_x86::{Code, Register};
 
 use crate::abi::runtime::{Contract, Reg};
-use crate::frontend::blocks;
-use crate::frontend::declen::Insn;
+use crate::frontends::bc::blocks;
+use crate::frontends::bc::declen::Insn;
 use crate::objectfile::module::Module;
 use crate::support::hash::IndexMap;
 

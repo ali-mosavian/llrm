@@ -8,7 +8,7 @@
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::frontend::extent;
+use crate::frontends::bc::extent;
 use crate::objectfile::module;
 use crate::objectfile::omf::{self, Record};
 use crate::support::hash::IndexMap;

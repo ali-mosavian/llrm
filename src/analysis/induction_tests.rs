@@ -27,7 +27,7 @@ use crate::analysis::occurrence::operations;
 use crate::model::ir::Operation;
 use crate::analysis::ssa;
 use crate::backend::lower;
-use crate::frontend::blocks;
+use crate::frontends::bc::blocks;
 use crate::model::lir::LirBody;
 use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Symbol, Value};
 use crate::model::passes::O2;

@@ -9,9 +9,9 @@ use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, Tab
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
 use crate::abi::ports;
-use crate::frontend::blocks::{Block, CodeMap, INLINE_TABLE, code_map, partition as block_partition};
-use crate::frontend::declen::Insn;
-use crate::frontend::extent::{Body, Partition, partition as body_partition};
+use crate::frontends::bc::blocks::{Block, CodeMap, INLINE_TABLE, code_map, partition as block_partition};
+use crate::frontends::bc::declen::Insn;
+use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
 use crate::legacy::lift::{FIXUP, classify_with as classify};
 use crate::objectfile::module::Module;
 use crate::support::hash::IndexMap;

@@ -2094,7 +2094,7 @@ impl<'a> Lowering<'a> {
             return Ok(vec![]);
         };
         let mut registers: IndexMap<Register, Register> = IndexMap::default();
-        for one in crate::frontend::declen::instruction_info_factory().info(&node.insn.insn).used_registers() {
+        for one in crate::frontends::bc::declen::instruction_info_factory().info(&node.insn.insn).used_registers() {
             registers.insert(ir::root(one.register()), one.register());
         }
         if inputs {

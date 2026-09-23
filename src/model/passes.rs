@@ -306,7 +306,7 @@ pub struct Where {
     pub dgroup: BTreeSet<i64>,
     pub calls: Option<IndexMap<i64, String>>,
     pub bounds: Option<IndexMap<(Space, i64), Vec<i64>>>,
-    pub blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    pub blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
     pub found: Option<Rc<crate::objectfile::module::Module>>,
     pub registers: i64,
     // Values the target can keep live across an ordinary call.

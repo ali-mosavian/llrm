@@ -2,7 +2,7 @@
 //! backend cannot encode.
 
 use crate::backend::lower::Unlowered;
-use crate::frontend::raising_floats;
+use crate::frontends::bc::raising_floats;
 use crate::model::mir::{Kind, MirBody, Op};
 
 fn _removed(op: &Op) -> Result<bool, Unlowered> {

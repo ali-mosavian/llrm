@@ -29,9 +29,9 @@ use crate::abi::runtime;
 use crate::model::memory::{Identity, MemoryKind, MemoryObject};
 use crate::model::mir::{Arg, Kind, MemRef, MirBody, Symbol, Value};
 use crate::abi::{events, handlers};
-use crate::frontend::blocks::Block;
-use crate::frontend::declen::Insn;
-use crate::frontend::extent;
+use crate::frontends::bc::blocks::Block;
+use crate::frontends::bc::declen::Insn;
+use crate::frontends::bc::extent;
 use crate::objectfile::module::{Module, Space};
 use crate::objectfile::omf;
 
@@ -345,7 +345,7 @@ fn _exposure(found: &Module, blocks: &[Block]) -> Result<Option<Exposure>, Strin
 pub fn private(
     body: &MirBody,
     found: Option<&Rc<crate::objectfile::module::Module>>,
-    blocks: Option<&Rc<Vec<crate::frontend::blocks::Block>>>,
+    blocks: Option<&Rc<Vec<crate::frontends::bc::blocks::Block>>>,
 ) -> Result<Option<Box<dyn Fn(&MemRef) -> bool>>, String> {
     let exposed = match (found, blocks) {
         (Some(found), Some(blocks)) => match exposure(found, blocks)? {

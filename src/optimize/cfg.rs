@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn test_udtrng_guards_constrain_subsequent_reads_of_slot() {
         use crate::analysis::ranges::Interval;
-        use crate::frontend::arrayfacts::{_edge, _read, _transfer, Fact, State};
+        use crate::frontends::bc::arrayfacts::{_edge, _read, _transfer, Fact, State};
         let (_, body) = udtrng();
         let block = |at: i64| body.block(at).unwrap();
         let (state, _) = _transfer(block(0x30), &State::default(), false);
@@ -501,9 +501,9 @@ mod tests {
         use crate::abi::runtime::{self, Control};
         use crate::support::testing;
         let found = testing::module("fixtures/regressions/udtrng-p-g2.obj");
-        let mapped = crate::frontend::blocks::code_map(&found).unwrap();
+        let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
         let contracts = runtime::for_module(&found, None).unwrap();
-        let original: Vec<_> = crate::frontend::blocks::partition(&found, &mapped)
+        let original: Vec<_> = crate::frontends::bc::blocks::partition(&found, &mapped)
             .into_iter()
             .filter(|block| {
                 let last = block.insns.last().map(|insn| insn.at as i64);
@@ -517,7 +517,7 @@ mod tests {
                 contract.established = known;
                 contract.control = if terminal { Control::Never } else { Control::Returns };
             }
-            let kept = crate::frontend::raising_control::terminal_edges(original.clone(), &changed);
+            let kept = crate::frontends::bc::raising_control::terminal_edges(original.clone(), &changed);
             assert_eq!(kept, original, "known={known} terminal={terminal}");
         }
     }
@@ -540,7 +540,7 @@ mod tests {
         for tag in ["q-o", "p-g2", "v-g3"] {
             let result = testing::emitted_lir(format!("fixtures/regressions/localp-{tag}.obj"));
             let found = testing::loaded_bytes(&result.data).unwrap();
-            let mapped = crate::frontend::blocks::code_map(&found).unwrap();
+            let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
             let terminals: Vec<i64> =
                 found.calls.iter().filter(|(_, name)| name.as_str() == "B$CENP").map(|(at, _)| *at).collect();
             let [terminal] = <[i64; 1]>::try_from(terminals).unwrap();

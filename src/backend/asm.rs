@@ -20,7 +20,7 @@ use iced_x86::{OpKind, Register};
 use crate::analysis::flags::Flag;
 use crate::backend::select::{self, Emitted, HeldMap, RegisterMap, Where};
 use crate::backend::{fpu, target};
-use crate::frontend::declen::STANDS_IN;
+use crate::frontends::bc::declen::STANDS_IN;
 use crate::legacy::calls::{self as machine, CallSite};
 use crate::model::ir::nodes::{self, Node};
 use crate::model::ir::{Loc, Operation, Semantics};

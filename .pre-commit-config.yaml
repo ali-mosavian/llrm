@@ -1,6 +1,6 @@
 # Preserve byte-measured parser artifacts and DOS CRLF corpus files exactly.
 # Whitespace and EOF normalization changes their meaning or invalidates hashes.
-exclude: '(^|/)fixtures/|^frontends/qb/compat/.*\.(bas|bsv|inc|out|txt)$|^src/frontend/qb/grammar/qbasbnf\.prs$'
+exclude: '(^|/)fixtures/|^frontends/qb/compat/.*\.(bas|bsv|inc|out|txt)$'
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit

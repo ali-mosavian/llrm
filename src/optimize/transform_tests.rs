@@ -702,8 +702,8 @@ mod corpus_tests {
         let mut seen = 0;
         for obj in objects {
             let found = testing::loaded(&obj).unwrap();
-            let Ok(mapped) = crate::frontend::blocks::code_map(&found) else { continue };
-            let blocks = crate::frontend::blocks::partition(&found, &mapped);
+            let Ok(mapped) = crate::frontends::bc::blocks::code_map(&found) else { continue };
+            let blocks = crate::frontends::bc::blocks::partition(&found, &mapped);
             for (_, body) in testing::raised_from(&found, &blocks, None).values {
                 let after = forwarded(&body, &found.dgroup.members, &found.calls, false).unwrap();
                 if std::rc::Rc::ptr_eq(&after, &body) {

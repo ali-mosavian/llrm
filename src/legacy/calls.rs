@@ -12,9 +12,9 @@ use iced_x86::{
 };
 
 use crate::analysis::flags::{ALL, Flag};
-use crate::frontend::blocks::Block;
-use crate::frontend::declen::{BITNESS, Insn, to_signed};
-use crate::frontend::stack::{PUSH_BYTES, frames};
+use crate::frontends::bc::blocks::Block;
+use crate::frontends::bc::declen::{BITNESS, Insn, to_signed};
+use crate::frontends::bc::stack::{PUSH_BYTES, frames};
 use crate::legacy::lift::Emitted;
 pub use crate::legacy::lift::relocated_memory;
 use crate::objectfile::module::{Addr, Module, Space};

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpKind, Register};
 
 use super::*;
-use crate::frontend::{blocks as split, declen};
+use crate::frontends::bc::{blocks as split, declen};
 use crate::model::ir::{self, nodes, Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::mir;

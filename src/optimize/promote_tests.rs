@@ -20,7 +20,7 @@ use super::*;
 use crate::analysis::ranges::Interval;
 use crate::analysis::regions::{self, RegionLayout};
 use crate::analysis::{consts, loops};
-use crate::frontend::blocks::Block;
+use crate::frontends::bc::blocks::Block;
 use crate::model::ir::Operation;
 use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
 use crate::model::mir::{

@@ -12,8 +12,8 @@ use std::path::Path;
 use super::{cleanups, interfaces};
 use crate::abi::runtime::{self, Memory};
 use crate::backend::nativeframe;
-use crate::frontend::blocks::{self, Block};
-use crate::frontend::extent;
+use crate::frontends::bc::blocks::{self, Block};
+use crate::frontends::bc::extent;
 use crate::objectfile::module;
 use crate::support::hash::IndexMap;
 

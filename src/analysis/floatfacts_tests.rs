@@ -109,7 +109,7 @@ fn test_a_loop_exit_repeats_its_stores_every_iteration() {
     use crate::objectfile::{module, omf};
     let data = std::fs::read("fixtures/omf/fpcse-p-g2.obj").unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
-    let blocks = crate::frontend::blocks::partition(&found, &crate::frontend::blocks::code_map(&found).unwrap());
+    let blocks = crate::frontends::bc::blocks::partition(&found, &crate::frontends::bc::blocks::code_map(&found).unwrap());
     let raised = crate::model::mir::bodies(&found, &blocks, None, false, false).unwrap();
     let (_, body) = &raised.values[0];
     let exits = super::loop_exits(body, &found.dgroup.members, &found.calls);

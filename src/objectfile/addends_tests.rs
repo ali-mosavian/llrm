@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::*;
-use crate::frontend::{blocks, fppatches};
+use crate::frontends::bc::{blocks, fppatches};
 use crate::objectfile::module;
 
 fn word(code: &[u8], at: i64) -> i64 {
