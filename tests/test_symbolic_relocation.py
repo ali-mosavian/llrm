@@ -86,3 +86,27 @@ def test_a_generated_read_modify_write_binds_its_one_symbolic_field():
     done = asm.assemble([op], 0, found, source=SourceMap())
     assert not isinstance(done, str), done
     assert [addr for _where, addr in done.symbols] == [cell.addr]
+
+
+def test_a_register_sum_drops_the_fixup_of_the_read_it_replaced():
+    """matrix refused 0x0048: "add has 1 fixups and 0 fields to put them in".
+
+    `add ax,[d]` was served from a register and then became `lea` of two
+    registers. An Address with no `addr` is arithmetic and has no field.
+    """
+    source, other, result = mir.Value(1, 0x48), mir.Value(2, 0x48), mir.Value(3, 0x48)
+    op = mir.Op(0x48, ir.Operation.BINARY, "add", (result,), (source, other), kind=mir.Kind.ADD, id=1, symbol=True)
+    lea = ir.Semantics(
+        ir.Operation.ADDRESS,
+        "lea",
+        (ir.Reg(Register.AX, 2),),
+        (ir.Address(None, through=Register.EBX, index=Register.ECX),),
+    )
+    insn = lir.Insn(0x48, (0x48, 0x4C), lea, (3,), (1, 2), op=op, symbol=True)
+    refs = {1: (0x4A,)}
+    found = SimpleNamespace(
+        code=bytes(0x4C), seg=0, absorbed={}, fixup_at={}, calls={}, refs=refs, float_protocols={}
+    )
+    done = asm.assemble([insn], 0x48, found, fields=frozenset({0x4A}), source=SourceMap(refs=refs))
+    assert not isinstance(done, str), done
+    assert done.relocations == ()

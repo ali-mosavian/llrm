@@ -72,7 +72,6 @@ fn test_absorbed_division_survives_removed_call_result_pins() {
 
 /// hotlop refused its branch at 0x45 after the copy at loop entry 0x5e disappeared.
 #[test]
-#[ignore = "fails in Python too: 0x0048: add has 1 fixups and 0 fields to put them in"]
 fn test_a_loop_label_survives_coalescing_its_first_copy() {
     for name in ["hotlop", "press", "matrix", "jumps"] {
         let data = std::fs::read(format!("fixtures/omf/{name}-p-g2.obj")).unwrap();

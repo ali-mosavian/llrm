@@ -250,8 +250,11 @@ pub fn _relocatable(what: Option<&Semantics>) -> bool {
         // A call or jump carries its fixup in the target, not in an operand.
         return true;
     }
+    // An Address with no `addr` is register arithmetic -- `lea eax,[eax+eax*2]`
+    // -- where a Mem with none is a cell whose address is unknown.
     what.dests.iter().chain(&what.sources).any(|one| match one {
-        Loc::Address(_) | Loc::Imm(_) => true,
+        Loc::Imm(_) => true,
+        Loc::Address(address) => address.addr.is_some_and(|addr| matches!(addr.space, Space::Segment | Space::External)),
         Loc::Mem(mem) => mem.addr.is_none_or(|addr| matches!(addr.space, Space::Segment | Space::External)),
         _ => false,
     })

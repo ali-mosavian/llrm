@@ -251,8 +251,11 @@ def _relocatable(what: "ir.Semantics | None") -> bool:
         # A call or jump carries its fixup in the target, not in an operand:
         # read as operands only, every far call went out as `call 0:0`.
         return True
+    # An Address with no `addr` is register arithmetic -- `lea eax,[eax+eax*2]`
+    # -- where a Mem with none is a cell whose address is unknown.
     return any(
-        isinstance(one, (ir.Address, ir.Imm))
+        isinstance(one, ir.Imm)
+        or (isinstance(one, ir.Address) and one.addr is not None and one.addr.space in (Space.SEGMENT, Space.EXTERNAL))
         or (isinstance(one, ir.Mem) and (one.addr is None or one.addr.space in (Space.SEGMENT, Space.EXTERNAL)))
         for one in (*what.dests, *what.sources)
     )
