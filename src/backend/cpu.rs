@@ -218,8 +218,12 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
 /// Native medium-model addressing, then the legal secondary 67h form.
 fn _address_forms(costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
     vec![
-        AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None)
-            .expect("no fallback to disagree"),
+        // A word base+index is bx or bp plus si or di, and bp is the frame:
+        // one register pairs with at most two others.
+        AddressForm {
+            partners: Some(2),
+            ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")
+        },
         AddressForm::new(
             4,
             BTreeSet::from([1, 2, 4, 8]),

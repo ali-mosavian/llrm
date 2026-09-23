@@ -144,9 +144,10 @@ pub(crate) fn reduced(
     }
 
     let reads = _Reads::of(body);
+    let partners = address_forms.iter().find(|form| !form.secondary).and_then(|form| form.partners);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
     for (loop_, _basics, derived) in &found {
-        candidate_groups.insert(loop_.header, _candidates(&reads, derived, scales));
+        candidate_groups.insert(loop_.header, _candidates(&reads, derived, scales, partners));
     }
     let replacement_credits = if control_recurrences {
         &_replacement_credits(body, &found, &candidate_groups, costs)
@@ -626,7 +627,7 @@ pub(crate) fn reduced(
     Ok(Rc::new(ssa::constructed(&changed, &(first..=taken).collect())?))
 }
 
-fn _candidates(reads: &_Reads, derived: &[Derived], scales: &BTreeSet<i64>) -> Vec<Derived> {
+fn _candidates(reads: &_Reads, derived: &[Derived], scales: &BTreeSet<i64>, partners: Option<i64>) -> Vec<Derived> {
     let body = reads.body;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let candidates = derived
@@ -650,10 +651,70 @@ fn _candidates(reads: &_Reads, derived: &[Derived], scales: &BTreeSet<i64>) -> V
         })
         .cloned()
         .collect::<Vec<_>>();
-    candidates
-        .into_iter()
-        .filter(|one| scales.is_empty() || !_indexed(reads, one))
-        .collect()
+    if scales.is_empty() {
+        return candidates;
+    }
+    let indexed = candidates.iter().filter(|one| _indexed(reads, one)).collect::<Vec<_>>();
+    if !_paired(&indexed, partners) {
+        return candidates;
+    }
+    let dropped = indexed.iter().map(|one| one.op).collect::<BTreeSet<_>>();
+    candidates.into_iter().filter(|one| !dropped.contains(&one.op)).collect()
+}
+
+/// Whether these base-plus-counter addresses fit the native form's pairs at once.
+///
+/// Every pair must share one register, and the rest are its partners. Past
+/// that, lowering reloads a base on every use.
+fn _paired(indexed: &[&Derived], partners: Option<i64>) -> bool {
+    let Some(partners) = partners.filter(|_| !indexed.is_empty()) else {
+        return true;
+    };
+    let counters = indexed.iter().map(|one| one.of.value).collect::<BTreeSet<_>>();
+    let bases = indexed
+        .iter()
+        .flat_map(|one| &one.offsets)
+        .filter_map(|(offset, _)| match offset {
+            Arg::Held(held) => Some((held.value, held.width)),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    counters.len() == 1 && bases.len() as i64 <= partners
+}
+
+/// How many invariants die because every read of them is a carried formula.
+///
+/// A pointer carried in place of `base + counter` holds the register the base
+/// held, so it adds no pressure.
+fn _released(
+    body: &MirBody,
+    candidates: &[Derived],
+    selected: &BTreeSet<OpOccurrence>,
+    references: &BTreeMap<u32, i64>,
+) -> i64 {
+    let mut reads = BTreeMap::<Value, i64>::new();
+    for one in candidates.iter().filter(|one| selected.contains(&one.op)) {
+        let bases = one
+            .offsets
+            .iter()
+            .filter_map(|(offset, _)| match offset {
+                Arg::Held(held) => Some(held.value),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let args = body.blocks[one.op.block_index()].ops[one.op.operation_index()]
+            .args
+            .iter()
+            .filter_map(|arg| match arg {
+                Arg::Held(held) => Some(held.value),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for value in bases.intersection(&args) {
+            *reads.entry(*value).or_insert(0) += 1;
+        }
+    }
+    reads.iter().filter(|(value, count)| references.get(&value.id) == Some(*count)).count() as i64
 }
 
 #[derive(Clone, Debug)]
@@ -1158,15 +1219,15 @@ fn _formula_set(
             .collect();
     };
 
+    let empty = BTreeMap::new();
+    let references = references.unwrap_or(&empty);
     let slots = |selected: &BTreeSet<OpOccurrence>| {
         selected
             .iter()
             .filter(|one| !free.contains(one) && !credited.contains(one))
             .count() as i64
+            - _released(body, candidates, selected, references)
     };
-
-    let empty = BTreeMap::new();
-    let references = references.unwrap_or(&empty);
     while slots(&selected) > room {
         let overflow = slots(&selected) - room;
         let mut choices = Vec::<(i64, i64, i64, &Derived, Vec<&Derived>)>::new();

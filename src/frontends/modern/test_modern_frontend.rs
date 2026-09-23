@@ -1157,3 +1157,12 @@ fn test_a_loop_whose_latch_copies_ends_on_its_branch() {
     assert!(!top.contains("jmp"), "{top}");
 }
 
+#[test]
+fn test_three_views_past_the_index_pairs_step_their_own_pointers() {
+    // sum_three indexed three bases off one counter, and word base+index holds two: two reloads a trip.
+    let function = sum_three_on_486();
+    let loop_ = closed_on_jne(&function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
+    assert!(!loop_.contains("[bp"), "{loop_}");
+    let added = Regex::new(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]").unwrap();
+    assert_eq!(added.find_iter(&loop_).count(), 3, "{loop_}");
+}

@@ -129,6 +129,8 @@ pub struct AddressForm {
     pub use_cost: i64,
     pub extension_cost: i64,
     pub secondary: bool,
+    // How many distinct bases one index can pair with at once; None is any.
+    pub partners: Option<i64>,
     // Compatibility name for `secondary`; both views stay identical.
     pub fallback: Option<bool>,
 }
@@ -155,6 +157,7 @@ impl AddressForm {
             use_cost,
             extension_cost,
             secondary: selected,
+            partners: None,
             fallback: Some(selected),
         })
     }
