@@ -12,7 +12,8 @@
 //! `test_c_nbody_peels_the_fixed_triangular_interaction_loop`,
 //! `test_c_shellsort_retains_large_exact_loops_instead_of_cloning_every_store`.
 //! Skipped, failing in Python at this commit:
-//! `test_production_fpdeep_unrolls_through_lcssa_exits`,
+//! `test_production_fpdeep_unrolls_through_lcssa_exits` (it passes
+//! `unroll.expanded` a `Group` where it takes a `Where`, which Rust cannot say),
 //! `test_runtime_input_loop_is_not_expanded_without_exact_folding`,
 //! `test_fpdeep_unroll_preserves_order_and_fresh_definitions`,
 //! `test_unrolled_latch_explicitly_skips_the_original_header`,
