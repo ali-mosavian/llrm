@@ -1,15 +1,13 @@
 //! Port of `tests/test_loops.py`.
 //!
-//! `frontend.blocks.Block` is not ported; `MirBlock` stands in, as both are
-//! a `Node`. Skipped, needing the corpus and `frontend.blocks`:
-//! test_every_fixture_is_reducible,
-//! test_a_loop_body_always_contains_its_own_header_and_latch,
-//! test_nothing_in_the_corpus_nests_past_two_loops.
+//! `MirBlock` stands in for `frontend.blocks.Block`: the walks read only a
+//! block's address and successors.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::model::mir::MirBlock;
+use crate::objectfile::module::tests::{loaded, objects};
 
 fn block(at: i64, succ: &[i64]) -> MirBlock {
     MirBlock::new(at, vec![], vec![], succ.to_vec())
@@ -122,4 +120,48 @@ fn test_a_loop_header_is_on_its_own_frontier() {
 fn test_a_block_with_one_predecessor_is_never_a_frontier() {
     let chain = [block(0, &[1]), block(1, &[2]), block(2, &[])];
     assert!(frontiers(&chain, None).values().all(|where_| !where_.contains(&1) && !where_.contains(&2)));
+}
+
+/// `corpus.partitioned(obj)`, as the `MirBlock`s standing in for its blocks.
+fn partitioned(obj: &std::path::Path) -> Vec<MirBlock> {
+    let found = loaded(obj).unwrap();
+    let mapped = crate::frontend::blocks::code_map(&found).unwrap_or_else(|why| panic!("{obj:?}: {why}"));
+    crate::frontend::blocks::partition(&found, &mapped)
+        .iter()
+        .map(|one| block(one.at as i64, &one.succ.iter().map(|&at| at as i64).collect::<Vec<_>>()))
+        .collect()
+}
+
+/// Measured across the corpus: BC never emits an irreducible graph.
+#[test]
+fn test_every_fixture_is_reducible() {
+    for obj in objects() {
+        assert_eq!(irreducible(&partitioned(&obj), None), BTreeSet::new(), "{obj:?}");
+    }
+}
+
+#[test]
+fn test_a_loop_body_always_contains_its_own_header_and_latch() {
+    for obj in objects() {
+        let partitioned = partitioned(&obj);
+        let known: BTreeSet<i64> = partitioned.iter().map(|one| one.at).collect();
+        for found in loops(&partitioned, None) {
+            assert!(found.body.contains(&found.header), "{obj:?}");
+            assert!(found.latches.is_subset(&found.body), "{obj:?}");
+            assert!(found.body.is_subset(&known), "{obj:?}: a loop body never names a block outside the graph");
+        }
+    }
+}
+
+/// Loop depth is bounded by the source, RESUME's dispatch included: divmod,
+/// the /X program, once reported a depth in the twenties.
+#[test]
+fn test_nothing_in_the_corpus_nests_past_two_loops() {
+    let deepest = objects()
+        .iter()
+        .map(|obj| depth(&partitioned(obj), None).values().copied().max().unwrap_or(0))
+        .max()
+        .unwrap();
+    // Two: matrix, nested, spill and segld are written with a nested FOR.
+    assert_eq!(deepest, 2, "nothing nests past two loops");
 }

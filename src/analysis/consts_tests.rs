@@ -16,6 +16,7 @@ use crate::frontend::blocks::Block;
 use crate::model::ir::nodes::{span, Node};
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Synth, Value};
+use crate::objectfile::module::tests::objects;
 use crate::objectfile::module::{Addr, Space};
 use crate::optimize::transform;
 use crate::support::testing;
@@ -149,14 +150,7 @@ fn raised(obj: &str) -> Vec<Rc<MirBody>> {
 }
 
 fn fixtures() -> Vec<String> {
-    let mut found: Vec<String> = std::fs::read_dir(testing::path("fixtures/omf"))
-        .unwrap()
-        .map(|one| one.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
-    found.sort();
-    found
+    objects().iter().map(|path| path.to_string_lossy().into_owned()).collect()
 }
 
 /// HARR's descriptor at segment 5 + 6 was reported as the constant zero.
