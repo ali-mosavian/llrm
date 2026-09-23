@@ -9,7 +9,6 @@
 //! guess, which credits a third of what is left as likely to fold.
 
 use std::collections::{BTreeMap, BTreeSet};
-use crate::support::hash::HashMap;
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
@@ -54,21 +53,44 @@ pub(crate) fn admitted(
         .map(|block| (block.at, block))
         .collect::<BTreeMap<i64, &MirBlock>>();
     let (Some(order), Some(count)) = (_ordered(&blocks, loop_.header), count.to_i64()) else {
-        return count * BigInt::from(size - folded) <= BigInt::from(size);
+        let shrinks = count * BigInt::from(size - folded) <= BigInt::from(size);
+        crate::debug!("unroll", "loop b{} x{count}: holds a loop, {size} ops, {}", loop_.header, if shrinks { "shrinks" } else { "refused: not innermost and code would grow" });
+        return shrinks;
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
     let limit = budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100;
     let Some(unrolled) = unrolled(&blocks, &order, loop_, count, facts, r#where, limit.max(size)) else {
+        crate::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
         return false;
     };
-    if unrolled.size <= size {
-        return true;
-    }
-    !(!limits.grows
-        || (limits.max_unroll_iterations != 0 && count > limits.max_unroll_iterations)
-        || unrolled.calls
-        || unrolled.branches > MAX_PEEL_BRANCHES
-        || unrolled.size > budget.saturating_mul(_boost(&unrolled)) / 100)
+    let boost = _boost(&unrolled);
+    // GCC's reasons, in its order.
+    let refusal = if unrolled.size <= size {
+        None
+    } else if !limits.grows {
+        Some("size would grow")
+    } else if limits.max_unroll_iterations != 0 && count > limits.max_unroll_iterations {
+        Some("max-completely-peel-times")
+    } else if unrolled.calls {
+        Some("contains call and code would grow")
+    } else if unrolled.branches > MAX_PEEL_BRANCHES {
+        Some("max-peel-branches")
+    } else if unrolled.size > budget.saturating_mul(boost) / 100 {
+        Some("max-completely-peeled-insns")
+    } else {
+        None
+    };
+    crate::debug!(
+        "unroll",
+        "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches{}), {}",
+        loop_.header,
+        unrolled.size,
+        unrolled.rolled,
+        unrolled.branches,
+        if unrolled.calls { ", calls" } else { "" },
+        refusal.map_or("admitted".to_owned(), |why| format!("refused: {why}"))
+    );
+    refusal.is_none()
 }
 
 /// LLVM's `getFullUnrollBoostingFactor`: the rolled work per unrolled operation, in

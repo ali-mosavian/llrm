@@ -3947,6 +3947,7 @@ impl _Transaction<'_, '_> {
                 }
             }
             if self.only || state == before {
+                crate::debug!("fixed", "{}settled after {} rounds, {size} ops in", if prefix.is_empty() { "" } else { prefix }, iteration + 1);
                 // A structural candidate can make its last cloned region
                 // unreachable on the same round that reaches the scalar fixed
                 // point, so normalize the public boundary itself.
