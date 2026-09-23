@@ -1521,6 +1521,19 @@ SUB b\r\nPRINT PEEK(1)\r\nEND SUB\r\n";
     assert!(optimized_sub(text, "A").contains("<- -24576:2"));
 }
 
+/// Each function numbered its own places, and a global's object was named by
+/// that number, so b read a different b$seg than a wrote. a's DEF SEG before
+/// calling b was deleted as dead, and b POKEd through a stale segment.
+#[test]
+fn test_a_global_is_one_object_in_every_function() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr%(100)\r\na\r\n\
+SUB a\r\nn% = 5\r\nDEF SEG = VARSEG(arr%(0))\r\nb\r\nDEF SEG = &HA000\r\nPOKE 1, n%\r\nEND SUB\r\n\
+SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
+    let stores = regex::Regex::new(r"cell\(global\d+:[?\d]+\[0:2:1/1\]\):2 <-").expect("a pattern");
+    let optimized = optimized_sub(text, "A");
+    assert_eq!(stores.find_iter(&optimized).count(), 2, "{optimized}");
+}
+
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
 /// PLASMA reloaded three descriptors per pixel: the store carried provenance,
 /// and provenance never asked where its segment points.
