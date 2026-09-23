@@ -1154,6 +1154,15 @@ fn test_port_io_narrows_a_float_through_integer_and_prints_both_operands() {
     assert!(lines.iter().any(|line| line.starts_with("fistp word ptr")), "{lines:?}");
 }
 
+/// oimad's OPEN was refused: B$OPEN had no audited stack effect (RETF 8).
+#[test]
+fn test_open_compiles_with_its_callee_cleaned_arguments() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "OPENS.BAS", b"open \"DATA.DAT\" for binary as #1\r\nclose #1\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(listing(&source).contains("B$OPEN"));
+}
+
 /// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.
 #[test]
 fn test_an_unsuffixed_decimal_above_32767_is_a_long_literal() {

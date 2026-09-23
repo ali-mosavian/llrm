@@ -102,7 +102,16 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
     ("B$FTAB", 2),
 ]));
 
-static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([("B$BEEP", 0), ("B$LNIN", 10), ("B$SLEP", 4)]));
+static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
+    IndexMap::from_iter([
+        ("B$BEEP", 0),
+        ("B$LNIN", 10),
+        // Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
+        // B$OPEN at 0224 returns with RETF 8 at 0252.
+        ("B$OPEN", 8),
+        ("B$SLEP", 4),
+    ])
+});
 
 #[derive(Clone, Debug)]
 pub struct Physicalized {
