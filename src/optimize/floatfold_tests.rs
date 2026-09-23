@@ -1,11 +1,4 @@
 //! Port of tests/test_floatfold.py.
-//!
-//! Skipped, needing `wholeseg`:
-//! `test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic`,
-//! `test_qb_fpcse_preserves_entry_when_first_load_disappears` and
-//! `test_collapsed_fpcse_has_no_empty_jump_trampoline`.
-//! Skipped, failing in Python at this commit (a completed `Op` has no `node`):
-//! `test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance`.
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
@@ -15,6 +8,7 @@ use crate::analysis::floatfacts::{Finite, Fraction};
 use crate::model::floating::{Precision, Rounding, Semantics};
 use crate::model::ir::{Addr, Operation, Space};
 use crate::model::mir::{Held, MemRef, MirBlock, OpCode};
+use crate::support::testing;
 
 fn op(at: i64, operation: Operation, name: &str, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut op = Op::new(at, OpCode::Operation(operation), name, defines, uses);
@@ -195,4 +189,43 @@ fn test_exact_pair_keeps_checks_and_refuses_observable_results() {
         }));
         assert_eq!(crate::optimize::transform::dead(&changed).unwrap(), changed);
     }
+}
+
+/// FPCSE's WAIT was called NOTHING in MIR, hiding an observation boundary from passes.
+#[test]
+#[ignore = "fails in Python too: AttributeError: 'Op' object has no attribute 'node'"]
+fn test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance() {
+    let body = testing::nth(&testing::raised_with("fixtures/omf/fpcse-p-g2.obj", true, false), 0);
+    let check = testing::ops(&body).into_iter().find(|op| op.at == 0x7A).unwrap();
+    assert_eq!(check.kind, Kind::Fcheck);
+    assert!(check.name.is_empty() && check.node().is_some());
+    assert_eq!(check.raising.as_ref().and_then(|raising| raising.covers), Some((0x7A, 0x7C)));
+    let what = crate::backend::lower::current(&check, crate::backend::lower::Place::Default, None).unwrap().unwrap();
+    assert_eq!(what.name.as_deref(), Some("wait"));
+}
+
+fn emitted(path: &str) -> Vec<iced_x86::Instruction> {
+    testing::instructions(&testing::emitted_lir(path).data)
+}
+
+/// QB FPDEEP still computed d=12 and e=6 on x87 after proving both exact.
+#[test]
+fn test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic() {
+    use iced_x86::Mnemonic;
+    let instructions = emitted("fixtures/omf/fpdeep-q-o.obj");
+    let arithmetic = [Mnemonic::Fld, Mnemonic::Fmul, Mnemonic::Fmulp, Mnemonic::Fdiv, Mnemonic::Fdivp];
+    assert!(!instructions.iter().any(|one| arithmetic.contains(&one.mnemonic())));
+    assert!(!instructions.iter().any(|one| one.mnemonic() == Mnemonic::Wait));
+}
+
+/// QB FPCSE falsely reported five overlapping bytes when entry 0x30 became source 0x35.
+#[test]
+fn test_qb_fpcse_preserves_entry_when_first_load_disappears() {
+    testing::emitted_lir("fixtures/omf/fpcse-q-o.obj");
+}
+
+/// QB FPCSE's constant result still ran three jumps through its empty loop header.
+#[test]
+fn test_collapsed_fpcse_has_no_empty_jump_trampoline() {
+    assert!(!emitted("fixtures/omf/fpcse-q-o.obj").iter().any(|one| one.mnemonic() == iced_x86::Mnemonic::Jmp));
 }
