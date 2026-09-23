@@ -925,12 +925,11 @@ pub fn points_to(
     let started = std::time::Instant::now();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
-    let mut escape_in = body
+    let mut escape_out = body
         .blocks
         .iter()
         .map(|block| (block.at, BTreeSet::<MemoryObject>::new()))
         .collect::<IndexMap<_, _>>();
-    let mut escape_out = escape_in.clone();
     let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::default();
     let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::default();
     for block in &body.blocks {
@@ -988,22 +987,15 @@ pub fn points_to(
     // Only calls read what escaped before them; an op sharing a call's address
     // shares its entry.
     let asked = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind == Kind::Call).map(|op| op.at).collect::<BTreeSet<_>>();
-    loop {
-        let before = escape_out.clone();
-        for block in &body.blocks {
-            let mut state = predecessors
-                .get(&block.at)
-                .unwrap_or(&none)
-                .iter()
-                .flat_map(|one| escape_out[one].iter().cloned())
-                .collect::<BTreeSet<_>>();
-            escape_in.insert(block.at, state.clone());
-            let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
-            for op in &block.ops {
-                if asked.contains(&op.at) {
-                    escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
-                }
-                let mut newly = BTreeSet::new();
+    // What each op publishes does not depend on what reached it, so it is
+    // found once; only the unions along edges iterate. The gen/kill form of a
+    // forward dataflow, where every round used to redo each op's cells.
+    let mut publishes: IndexMap<i64, Vec<BTreeSet<MemoryObject>>> = IndexMap::default();
+    for block in &body.blocks {
+        let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
+        let mut mine = Vec::with_capacity(block.ops.len());
+        for op in &block.ops {
+            let mut newly = BTreeSet::new();
                 if let Some(arguments) = arguments.filter(|_| op.kind == Kind::Call) {
                     let actual = _resolved_actuals(arguments.get(&op.at).map_or(&[][..], Vec::as_slice), &values);
                     match captures.and_then(|captures| captures.get(&op.at)).and_then(Option::as_ref) {
@@ -1090,15 +1082,34 @@ pub fn points_to(
                         }
                     }
                 }
-                state.extend(pointees(newly, &cells));
-                if asked.contains(&op.at) {
-                    escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
-                }
-            }
+            mine.push(pointees(newly, &cells));
+        }
+        publishes.insert(block.at, mine);
+    }
+    let entering = |at: i64, escape_out: &IndexMap<i64, BTreeSet<MemoryObject>>| {
+        predecessors.get(&at).unwrap_or(&none).iter().flat_map(|one| escape_out[one].iter().cloned()).collect::<BTreeSet<_>>()
+    };
+    loop {
+        let before = escape_out.clone();
+        for block in &body.blocks {
+            let mut state = entering(block.at, &escape_out);
+            publishes[&block.at].iter().for_each(|escapes| state.extend(escapes.iter().cloned()));
             escape_out.insert(block.at, state);
         }
         if escape_out == before {
             break;
+        }
+    }
+    for block in &body.blocks {
+        let mut state = entering(block.at, &escape_out);
+        for (op, escapes) in block.ops.iter().zip(&publishes[&block.at]) {
+            if asked.contains(&op.at) {
+                escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+            }
+            state.extend(escapes.iter().cloned());
+            if asked.contains(&op.at) {
+                escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+            }
         }
     }
     crate::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
