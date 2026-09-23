@@ -282,9 +282,9 @@ fn _meet(maps: &[&Holders]) -> Holders {
 /// Which value each cell holds, at every block's entry and exit.
 pub fn holders(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, calls: Option<&IndexMap<i64, String>>) -> Held {
     let calls = calls.cloned().unwrap_or_default();
-    // Python's `dgroup` is always a set here; its members only key the consts cache.
-    let known: BTreeMap<Value, Interval> =
-        ranges::constants(body, Some(&BTreeSet::new()), Some(&calls)).into_iter().collect();
+    // Register facts only: fold has already written a cell's known value into the
+    // body, and a memory-aware solve per gvn run was a third of its time.
+    let known: BTreeMap<Value, Interval> = ranges::constants(body, None, None).into_iter().collect();
     let mut preds: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
     for block in &body.blocks {
         for succ in &block.succ {
