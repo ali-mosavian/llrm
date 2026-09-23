@@ -3922,27 +3922,37 @@ impl _Transaction<'_, '_> {
         let limit = std::cmp::max(16, size + 1);
         let mut state = state;
         let mut history = vec![Rc::clone(&state)];
-        let logging = crate::support::debug::enabled("fixed");
         crate::debug!("fixed", "{prefix}start: {size} ops, at most {limit} rounds");
+        // The body each pass last left unchanged. Passes are pure, so a pass
+        // handed that same body again would change nothing: a round after the
+        // last change skips every pass that already saw it.
+        let mut settled: Vec<Option<Rc<MirBody>>> = vec![None; self.passes.borrow().len()];
+        let mut unroll_settled: Option<Rc<MirBody>> = None;
         for iteration in 0..limit {
             let before = Rc::clone(&state);
             let started = std::time::Instant::now();
             let mut changed = Vec::new();
             {
                 let mut passes = self.passes.borrow_mut();
-                for one in passes.iter_mut() {
-                    let name = one.name().to_owned();
-                    let input = Rc::clone(&state);
-                    state = crate::support::debug::timed(&name, || one.transform(state))?;
-                    if logging && !Rc::ptr_eq(&input, &state) && *input != *state {
-                        changed.push(name);
+                for (one, settled) in passes.iter_mut().zip(&mut settled) {
+                    if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
+                        let name = one.name().to_owned();
+                        let input = Rc::clone(&state);
+                        state = crate::support::debug::timed(&name, || one.transform(state))?;
+                        if Rc::ptr_eq(&input, &state) || *input == *state {
+                            state = Rc::clone(&input);
+                            *settled = Some(input);
+                        } else {
+                            *settled = None;
+                            changed.push(name);
+                        }
                     }
                     self.watch(&format!("{prefix}r{:02}-{}", iteration + 1, one.name()), &state);
                 }
             }
             // Ask at the original pipeline boundary: fully converging the
             // scalar passes first destroys matmul's exact counted-loop shape.
-            if consider_unroll && !self.unrollers.borrow().is_empty() {
+            if consider_unroll && !self.unrollers.borrow().is_empty() && !unroll_settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
                 let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
                 let watching = self.watching();
                 let unrolled = crate::support::debug::timed("unroll", || {
@@ -3950,7 +3960,9 @@ impl _Transaction<'_, '_> {
                 })?;
                 // A copy's constant indices are new exact leaves, so it crosses the
                 // structural boundary before the scalar passes settle it.
-                if !Rc::ptr_eq(&unrolled, &state) {
+                if Rc::ptr_eq(&unrolled, &state) {
+                    unroll_settled = Some(Rc::clone(&state));
+                } else {
                     changed.push("unroll".to_owned());
                     state = self.scalarized(unrolled, &format!("{prefix}unrolled"))?;
                 }
