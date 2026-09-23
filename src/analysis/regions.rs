@@ -570,7 +570,7 @@ pub(crate) struct OverlapShape {
 
 /// An interned `OverlapShape`: equal shapes share one, so a cell map hashes
 /// and copies a word rather than an object's identity.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct OverlapBucket(u32);
 
 thread_local! {
@@ -659,11 +659,13 @@ pub(crate) fn object_bucket(one: Option<MemoryObject>, frame: Option<Frame>) -> 
 /// Only these can hold a cell `overlapping` does not rule out: one whose
 /// object is unknown, one in the write's `_displaced` frame, one in the
 /// write's own object, and one whose alias class may alias the write's.
-pub(crate) fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<HashSet<OverlapBucket>> {
+///
+/// Sorted and without repeats: a set per write, rehashed as it grew, was dearer than the kill.
+pub(crate) fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<OverlapBucket>> {
     let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
-    let mut reached = parts.objects.get(&None).cloned().unwrap_or_default();
+    let mut reached = parts.objects.get(&None).into_iter().flatten().copied().collect::<Vec<_>>();
     if let Some(frame) = _frame(reference) {
         if let Some(buckets) = parts.frames.get(&Some(frame)) {
             reached.extend(buckets.iter().copied());
@@ -681,6 +683,8 @@ pub(crate) fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Optio
             reached.extend(buckets.iter().copied());
         }
     }
+    reached.sort_unstable();
+    reached.dedup();
     Some(reached)
 }
 

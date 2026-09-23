@@ -60,6 +60,9 @@ pub(crate) struct _MemoryQueries {
     pub named: NamedBytes,
     pub facts: BTreeMap<Value, Interval>,
     pub addressed: HashMap<usize, Vec<(MemRef, Rc<MemRef>)>>,
+    /// Every reference asked lives in one borrowed body for as long as this
+    /// does, so an address is that reference: no copy to keep, none to compare.
+    pub pinned: Option<HashMap<usize, Rc<MemRef>>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
     // `named`'s per-byte entries never change; `learn` adds whole symbols only.
     pub exact: HashMap<(Addr, u32), Option<(MemoryObject, i64)>>,
@@ -104,6 +107,7 @@ impl _MemoryQueries {
             named,
             facts: _intervals(known),
             addressed: HashMap::default(),
+            pinned: None,
             overlaps: HashMap::default(),
             exact: HashMap::default(),
             places: HashMap::default(),
@@ -112,6 +116,10 @@ impl _MemoryQueries {
 
     pub(crate) fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
         let key = std::ptr::from_ref(reference) as usize;
+        if let Some(pinned) = &mut self.pinned {
+            let known = &self.known;
+            return Rc::clone(pinned.entry(key).or_insert_with(|| Rc::new(_addressed(reference, known))));
+        }
         let known = &self.known;
         let entries = self.addressed.entry(key).or_default();
         let same = |source: &MemRef| {
@@ -667,6 +675,7 @@ fn _cells_solved(
     let empty = IndexMap::default();
     let known = known.unwrap_or(&empty);
     let mut queries = memory_queries(body, known, dgroup);
+    queries.pinned = Some(HashMap::default());
     let initial = match initial {
         Some(initial) => initial.clone(),
         None => {

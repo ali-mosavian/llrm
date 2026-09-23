@@ -115,7 +115,7 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
     /// reached if its bytes meet the span, so only those are asked.
     pub(crate) fn kill(
         &mut self,
-        reached: Option<HashSet<B>>,
+        reached: Option<Vec<B>>,
         mut overlaps: impl FnMut(&K) -> bool,
         displaced: Option<(HashSet<B>, ByteRange)>,
     ) {
