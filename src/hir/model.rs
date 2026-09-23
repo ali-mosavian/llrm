@@ -571,6 +571,9 @@ pub struct DataObject {
     // Placement class, independently of mutability. Near objects participate
     // in DGROUP; far/huge objects live in a separately addressed segment.
     pub address: AddressKind,
+    // False when no code takes its address, this module's or another's: only
+    // a reference naming it reaches it.
+    pub addressed: bool,
 }
 
 impl DataObject {
@@ -583,6 +586,7 @@ impl DataObject {
             relocations: Vec::new(),
             linkage: DataLinkage::Internal,
             address: AddressKind::Near,
+            addressed: true,
         }
     }
 }

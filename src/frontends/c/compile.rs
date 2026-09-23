@@ -99,7 +99,12 @@ pub fn assembled(
         .iter()
         .map(|one| {
             let procedure =
-                alias::Procedure { body: one.body.clone(), calls: one.calls.clone(), arguments: one.arguments.clone() };
+                alias::Procedure {
+                    body: one.body.clone(),
+                    calls: one.calls.clone(),
+                    arguments: one.arguments.clone(),
+                    named: Default::default(),
+                };
             (one.name.clone(), procedure)
         })
         .collect();

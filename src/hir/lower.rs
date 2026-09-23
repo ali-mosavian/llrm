@@ -136,17 +136,34 @@ fn _provenance(
         }
         return Ok(Provenance { slices, restrict: BTreeSet::new() });
     }
+    _one(_global(place, escaped), 0, width)
+}
+
+fn _global(place: &model::Place, escaped: &BTreeSet<i64>) -> MemoryObject {
     let identity = Identity::Tuple(vec![Identity::Storage(place.storage), Identity::Int(place.id)]);
-    let private = matches!(place.storage, model::Storage::Static | model::Storage::Module)
+    let private = matches!(place.storage, model::Storage::Static | model::Storage::Module | model::Storage::External)
         && !escaped.contains(&place.symbol);
-    let object_ = MemoryObject {
+    MemoryObject {
         identity: Some(identity),
         extent: place.extent,
         addressed: !private,
         captured: !private,
         ..MemoryObject::new(MemoryKind::Global)
-    };
-    _one(object_, 0, width)
+    }
+}
+
+/// The objects code outside `module` reaches by name only: no pointer holds
+/// them, yet any callee this module cannot see may read or write them.
+pub fn named_externals(module: &model::Module) -> BTreeSet<MemoryObject> {
+    let escaped = escape::escaped(module);
+    module
+        .functions
+        .iter()
+        .flat_map(|function| &function.places)
+        .filter(|place| place.storage == model::Storage::External)
+        .map(|place| _global(place, &escaped))
+        .filter(|object_| !object_.addressed)
+        .collect()
 }
 
 /// `memory.Provenance.one(object_, low, high)`.

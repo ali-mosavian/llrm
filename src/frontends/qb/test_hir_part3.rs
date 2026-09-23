@@ -1433,6 +1433,15 @@ fn optimized_blit(text: &str) -> String {
     optimized_sub(text, "BLIT")
 }
 
+/// For each far store in `text`, whether its selector is reloaded from memory.
+fn far_selectors_loaded(text: &str) -> Vec<bool> {
+    let selector = regex::Regex::new(r"cell\(far\+\w+@(v\d+)\):\d+ <-").expect("a pattern");
+    selector
+        .captures_iter(text)
+        .map(|found| text.contains(&format!("{} <- load", &found[1])))
+        .collect()
+}
+
 /// deedlines' cycleblobs kept every local in memory: its POKE went through a
 /// far pointer, and the frontend marked each local as addressed though none
 /// had its address taken, so the store clobbered the loop counters.
@@ -1451,3 +1460,19 @@ fn test_rotation_skips_a_loop_whose_update_is_outside_the_latch() {
     records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"), "T.BAS");
 }
 
+/// Every POKE reloaded the DEF SEG word from b$seg: the far store might have
+/// written b$seg, though the runtime never hands its address out. That hid
+/// the segment from range analysis and kept the loop's globals in memory.
+#[test]
+fn test_a_poke_takes_its_segment_from_the_def_seg_before_it() {
+    assert_eq!(far_selectors_loaded(&optimized_blit(ROW_LOOP)), [false]);
+}
+
+/// A call that may run DEF SEG must still make the next POKE reload b$seg.
+#[test]
+fn test_a_poke_after_a_call_reloads_its_segment() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\na\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nb\r\nPOKE 3, 4\r\nEND SUB\r\n\
+SUB b\r\nDEF SEG\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, true]);
+}

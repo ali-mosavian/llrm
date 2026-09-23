@@ -222,5 +222,13 @@ pub fn parsed(
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
-    codec::decode(&stdout).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))
+    let mut program =
+        codec::decode(&stdout).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
+    let family = program.runtime.value();
+    for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
+        if object_.linkage == model::DataLinkage::External && crate::abi::runtime::named_only(&object_.name, family) {
+            object_.addressed = false;
+        }
+    }
+    Ok(program)
 }

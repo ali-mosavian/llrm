@@ -306,6 +306,21 @@ pub struct Procedure {
     pub body: MirBody,
     pub calls: IndexMap<i64, String>,
     pub arguments: IndexMap<i64, Vec<Actual>>,
+    /// Objects no pointer reaches that a callee outside the unit names.
+    pub named: BTreeSet<MemoryObject>,
+}
+
+/// What a callee nobody summarized may reach at `at`.
+fn _unknown_visible(
+    procedure: &Procedure,
+    facts: &PointsTo,
+    at: i64,
+    actual: &[Provenance],
+) -> Result<BTreeSet<Slice>, String> {
+    let mut visible = NONLOCAL.slices.clone();
+    visible.extend(_whole(actual, &facts.escaped_before.get(&at).unwrap_or_default())?);
+    visible.extend(_whole([], &procedure.named)?);
+    Ok(visible)
 }
 
 fn _actuals(procedure: &Procedure, facts: &PointsTo, at: i64) -> Vec<Provenance> {
@@ -495,8 +510,7 @@ pub fn summaries(
                     let callee = target.and_then(|target| result.get(target));
                     let actual = _actuals(procedure, &facts, op.at);
                     let Some(callee) = callee else {
-                        let mut visible = NONLOCAL.slices.clone();
-                        visible.extend(_whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?);
+                        let visible = _unknown_visible(procedure, &facts, op.at, &actual)?;
                         reads.extend(visible.iter().cloned());
                         writes.extend(visible);
                         captures.extend(
@@ -599,8 +613,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             let mut effect = match target.and_then(|target| known.get(target)) {
                 Some(callee) => callee.instantiated(&actual),
                 None => {
-                    let mut visible = NONLOCAL.slices.clone();
-                    visible.extend(_whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?);
+                    let visible = _unknown_visible(procedure, &facts, op.at, &actual)?;
                     Summary {
                         reads: visible.clone(),
                         writes: visible,
@@ -1741,6 +1754,7 @@ mod tests {
             body,
             calls: calls.iter().map(|(at, name)| (*at, (*name).to_owned())).collect(),
             arguments: arguments.into_iter().collect(),
+            named: BTreeSet::new(),
         }
     }
 

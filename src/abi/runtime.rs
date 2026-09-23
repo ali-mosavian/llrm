@@ -1578,6 +1578,12 @@ pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'s
         )])
     });
 
+/// Whether `name` is a runtime cell only a reference naming it reaches: one
+/// `WRITERS` lists, whose address no runtime routine hands out.
+pub fn named_only(name: &str, family: &str) -> bool {
+    WRITERS.keys().any(|&(cell, of)| cell == name && of == family)
+}
+
 /// The per-site map for a whole module, from the object itself.
 ///
 /// One place, because the raise and the lowering must be handed the same

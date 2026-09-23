@@ -159,7 +159,7 @@ plain_record!(Function, None, id => "id", name => "name", result_type => "result
     external_entries => "external_entries", linkage => "linkage");
 plain_record!(DataRelocation, None, at => "at", target => "target", addend => "addend", address => "address");
 plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", readonly => "readonly",
-    relocations => "relocations", linkage => "linkage", address => "address");
+    relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
     data => "data", callables => "callables");
 plain_record!(Program, None, dialect => "dialect", runtime => "runtime", modules => "modules",
@@ -885,6 +885,7 @@ static DATA_OBJECT: _Record = _Record {
         ("relocations", _Hint::Tuple(&_Hint::Record(&DATA_RELOCATION)), false),
         ("linkage", enum_hint!(DataLinkage), false),
         ("address", enum_hint!(AddressKind), false),
+        ("addressed", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -895,6 +896,7 @@ static DATA_OBJECT: _Record = _Record {
             relocations: _default(args, "relocations", Vec::new())?,
             linkage: _default(args, "linkage", model::DataLinkage::Internal)?,
             address: _default(args, "address", model::AddressKind::Near)?,
+            addressed: _default(args, "addressed", true)?,
         })
     },
 };

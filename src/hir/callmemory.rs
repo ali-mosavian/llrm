@@ -27,6 +27,7 @@ pub fn annotated(
     let types: IndexMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
     let callables: IndexMap<i64, &model::Callable> = module.callables.iter().map(|one| (one.id, one)).collect();
     let mut procedures: IndexMap<String, alias::Procedure> = IndexMap::default();
+    let named = crate::hir::lower::named_externals(module);
     let mut lowered_by_name: IndexMap<String, Lowered> = IndexMap::default();
     for (function, lowered) in functions.iter().zip(semantic) {
         let body = alias::annotated(&std::rc::Rc::new(lowered.body.clone()))?;
@@ -75,7 +76,7 @@ pub fn annotated(
             );
         }
         let name = object_name(&function.name);
-        let procedure = alias::Procedure { body: body.clone(), calls, arguments };
+        let procedure = alias::Procedure { body: body.clone(), calls, arguments, named: named.clone() };
         procedures.insert(name.clone(), procedure);
         lowered_by_name.insert(name, Lowered { body, ..lowered.clone() });
     }

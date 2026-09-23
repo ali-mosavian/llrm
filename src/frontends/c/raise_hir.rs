@@ -896,7 +896,12 @@ impl<'a> _Raise<'a> {
         let body = RaisedBody { body: alias::annotated(&Rc::new(body)).map_err(Unsupported)?, origin, pins };
         // Even an unknown C callee has a precise language-level boundary.
         let procedure =
-            alias::Procedure { body: body.body.clone(), calls: self.calls.clone(), arguments: self.arguments.clone() };
+            alias::Procedure {
+                body: body.body.clone(),
+                calls: self.calls.clone(),
+                arguments: self.arguments.clone(),
+                named: Default::default(),
+            };
         let body = RaisedBody { body: alias::calls_annotated(&procedure, &IndexMap::default()).map_err(Unsupported)?, ..body };
         let body = mir::with_live_outs(body);
         let problems = mir::verify(&body);
