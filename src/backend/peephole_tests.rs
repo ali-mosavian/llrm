@@ -1539,6 +1539,31 @@ fn test_transitive_extension_preserves_nonlocal_machine_state() {
     }
 }
 
+/// Unrolling marked every clone symbolic; matmul then kept seven of its eight
+/// `mov bx,[m]; movsx ebx,bx` pairs unfolded in the hot loop.
+#[test]
+fn test_register_only_extension_clone_does_not_claim_a_relocation() {
+    let cell = Loc::Mem(Mem { through: Register::BX, ..Mem::new(None, 1) });
+    let mut narrow =
+        insn(0, Some((0, 3)), Some(sem(Operation::Extend, "movzx", vec![rl(Register::DX, 2)], vec![cell.clone()])), vec![1], vec![]);
+    narrow.symbol = Some(true);
+    let mut wide = insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Extend, "movzx", vec![rl(Register::EDX, 4)], vec![rl(Register::DX, 2)])),
+        vec![2],
+        vec![1],
+    );
+    wide.symbol = Some(true);
+    let input = body("cloned-extension", 0, vec![block(0, vec![Arc::new(narrow), Arc::new(wide)], vec![])]);
+
+    let result = extensions(&input).insns();
+
+    assert_eq!(result[0].symbol, Some(true));
+    assert_eq!(result[1].symbol, Some(false));
+    assert_eq!(result[0].what.as_ref().unwrap().sources, vec![cell]);
+}
+
 #[test]
 fn test_constant_knowledge_is_local_and_invalidated() {
     for interruption in

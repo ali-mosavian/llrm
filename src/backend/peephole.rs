@@ -432,6 +432,11 @@ pub fn extensions(body: &LirBody) -> LirBody {
 /// batch their entry loads.  Refuse whenever those intervening instructions
 /// observe or replace any newly-written physical lane.
 fn _extension_may_move_before(made: &Insn, first: &Insn, crossed: &[Arc<Insn>]) -> bool {
+    if crossed.is_empty() {
+        // Nothing to cross. Asking anyway refused every unrolled clone, whose
+        // effects `_register_effects` will not read.
+        return true;
+    }
     let original = _register_effects(first, false, true);
     let combined = _register_effects(made, false, true);
     let (Some(original), Some(combined)) = (original, combined) else {
