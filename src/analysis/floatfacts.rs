@@ -624,6 +624,19 @@ fn _analyzed(
     calls: &IndexMap<i64, String>,
     initial: Option<&IndexMap<Addr, BigInt>>,
 ) -> (IndexMap<Value, Finite>, consts::HeldCells) {
+    if initial.is_some() {
+        return _solved(body, dgroup, calls, initial);
+    }
+    let solved = super::manager::cached(body, (dgroup.clone(), calls.clone()), || _solved(body, dgroup, calls, None));
+    solved.as_ref().clone()
+}
+
+fn _solved(
+    body: &Rc<MirBody>,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    initial: Option<&IndexMap<Addr, BigInt>>,
+) -> (IndexMap<Value, Finite>, consts::HeldCells) {
     let seed = initial.map(|initial| {
         initial
             .iter()

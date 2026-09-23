@@ -3878,7 +3878,7 @@ pub(crate) fn applied(
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
 ) -> Result<Rc<MirBody>, String> {
-    crate::analysis::consts::reusing(|| crate::analysis::alias::reusing(|| _reusing_halves(|| _applied(body, dgroup, calls, options))))
+    crate::analysis::consts::reusing(|| crate::analysis::manager::scoped(|| _reusing_halves(|| _applied(body, dgroup, calls, options))))
 }
 
 /// The closure state `applied`'s nested `scalarized`, `fixed` and

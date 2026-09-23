@@ -5,6 +5,7 @@ pub mod avail;
 pub(crate) mod cellmap;
 pub(crate) mod constant_cycles;
 pub(crate) mod consts;
+pub(crate) mod manager;
 pub mod effects;
 pub mod flags;
 pub(crate) mod floatbounds;

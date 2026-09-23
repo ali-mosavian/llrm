@@ -734,36 +734,10 @@ fn _direct(op: &Op, values: &IndexMap<Value, Provenance>) -> Result<Option<Prove
     Ok(None)
 }
 
-thread_local! {
-    /// `points_to` per body within one `reusing` scope. Holding the body keeps
-    /// its address from being recycled, as consts' `_reuse` does.
-    static _POINTED: RefCell<Option<HashMap<usize, (Rc<MirBody>, Rc<PointsTo>)>>> = const { RefCell::new(None) };
-}
-
-/// Share `points_to` between the passes of one transaction, for bodies they did not change.
-pub(crate) fn reusing<T>(inside: impl FnOnce() -> T) -> T {
-    let token = _POINTED.with(|pointed| pointed.replace(Some(HashMap::default())));
-    let result = inside();
-    _POINTED.with(|pointed| *pointed.borrow_mut() = token);
-    result
-}
-
 /// `points_to` of a whole body with no caller context, solved once per body.
 pub(crate) fn pointers(body: &Rc<MirBody>) -> Result<Rc<PointsTo>, String> {
-    let key = Rc::as_ptr(body) as usize;
-    let saved = _POINTED.with(|pointed| {
-        pointed.borrow().as_ref().and_then(|cache| cache.get(&key).map(|(_, facts)| Rc::clone(facts)))
-    });
-    if let Some(saved) = saved {
-        return Ok(saved);
-    }
-    let facts = Rc::new(points_to(body, None, None)?);
-    _POINTED.with(|pointed| {
-        if let Some(cache) = pointed.borrow_mut().as_mut() {
-            cache.insert(key, (Rc::clone(body), Rc::clone(&facts)));
-        }
-    });
-    Ok(facts)
+    let solved = super::manager::cached(body, (), || points_to(body, None, None).map(Rc::new));
+    solved.as_ref().clone()
 }
 
 /// Flow pointer objects through values, exact spill slots and CFG joins.
