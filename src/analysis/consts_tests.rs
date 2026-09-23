@@ -1,31 +1,24 @@
 //! Port of `tests/test_consts.py`.
 //!
-//! Skipped, needing `transform`, `lower` or the corpus raise:
-//! `test_pointer_displacement_constants_preserve_order_and_width`,
-//! `test_relocated_descriptor_address_is_not_integer_zero`,
-//! `test_folded_extraction_has_no_implicit_machine_result`,
-//! `test_constant_subtraction_preserves_operand_order`,
-//! `test_constant_operand_keeps_its_memory_address_dependency`,
-//! `test_a_known_factor_becomes_a_multiply_operand`,
-//! `test_a_fact_never_claims_more_bytes_than_the_instruction_wrote`,
-//! `test_every_known_value_is_defined_by_an_operation_that_computes_it`,
-//! `test_a_comparison_result_folds_to_basics_own_true`,
-//! `test_nothing_is_folded_through_a_phi`.
-//! `test_signed_widening_produces_a_whole_long_constant` keeps its
-//! `_result` half; the `transform.folded` half is skipped.
 //! `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
 //! keeps its mutation half; counting `_solved` calls needs a monkeypatch.
 
 use std::rc::Rc;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use super::{_defined, _result, ARITH, Cells, Known, UNARY, known, masked, reusing};
-use crate::model::ir::Operation;
-use crate::model::mir::{Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Synth, Value};
+use crate::backend::lower::{self, Placed};
+use crate::frontend::blocks::Block;
+use crate::model::ir::nodes::{span, Node};
+use crate::model::ir::{self, Loc, Operation};
+use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Synth, Value};
 use crate::objectfile::module::{Addr, Space};
+use crate::optimize::transform;
+use crate::support::testing;
 
 fn op(at: i64, operation: OpCode, name: &str, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut made = Op::new(at, operation, name, defines, uses);
@@ -94,6 +87,256 @@ fn test_signed_widening_produces_a_whole_long_constant() {
             Some(Known::new(expected, 4))
         );
         assert_eq!(_result(&widen, &facts([(source, Known::new(number, 1))]), None, None), None);
+        let mut literal = widen.clone();
+        literal.args = vec![Arg::Const(Const::new(number, 2))];
+        literal.uses = vec![];
+        let body = Rc::new(MirBody::new(0, vec![MirBlock::new(0, vec![], vec![literal], vec![])]));
+        let folded = transform::folded(&body, &BTreeSet::new(), &IndexMap::default()).unwrap();
+        assert_eq!(folded.blocks[0].ops[0].kind, Kind::Copy);
+        assert_eq!(folded.blocks[0].ops[0].args, [Arg::Const(Const::new(expected, 4))]);
+    }
+}
+
+/// NDMAX's zero displacement should fold without interpreting its base as an integer offset.
+#[test]
+fn test_pointer_displacement_constants_preserve_order_and_width() {
+    for width in [2, 4] {
+        let (pointer, displacement, result) = (Value::new(990, 0), Value::new(991, 0), Value::new(992, 0));
+        let args = vec![held(pointer, 4), held(displacement, 4)];
+        let mut ptr = op(0, OpCode::Operation(Operation::Nothing), "", vec![result], vec![pointer, displacement], Kind::PtrOffset);
+        ptr.args = args.clone();
+        ptr.results = vec![held(result, 4)];
+        let changed = transform::_constant_operands(
+            &ptr,
+            &facts([(pointer, Known::new(0x1234_0000, 4)), (displacement, Known::new(0, width))]),
+            None,
+            None,
+        );
+        let second = if width == 4 { Arg::Const(Const::new(0, 4)) } else { args[1].clone() };
+        assert_eq!(changed.args, [args[0].clone(), second], "{width}");
+        assert!(changed.uses.contains(&pointer));
+    }
+}
+
+/// Every body of `obj`, raised one at a time from its decoded IR.
+fn raised(obj: &str) -> Vec<Rc<MirBody>> {
+    let found = testing::loaded(obj).unwrap();
+    let partitioned = testing::partitioned(obj);
+    let Ok(result) = testing::bodies(obj) else {
+        return vec![];
+    };
+    if partitioned.is_empty() {
+        return vec![];
+    }
+    let nodes: IndexMap<i64, Arc<Node>> =
+        result.iter().flat_map(|body| &body.nodes).map(|node| (span(node).0 as i64, node.clone())).collect();
+    let mut out = vec![];
+    for body in &result {
+        let mine: Vec<Block> = partitioned
+            .iter()
+            .filter(|block| body.body.ranges.iter().any(|&(lo, hi)| lo <= block.at && block.at < hi))
+            .cloned()
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let built = mir::raise_body(&mine, &nodes, Some(body.body.seed as i64), Some(&found.calls), None, None, None, None)
+            .unwrap()
+            .unwrap_or_else(|why| panic!("{obj}: {why}"));
+        out.push(Rc::new(built.body));
+    }
+    out
+}
+
+fn fixtures() -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(testing::path("fixtures/omf"))
+        .unwrap()
+        .map(|one| one.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    found.sort();
+    found
+}
+
+/// HARR's descriptor at segment 5 + 6 was reported as the constant zero.
+#[test]
+fn test_relocated_descriptor_address_is_not_integer_zero() {
+    let obj = "fixtures/omf/harr-p-g2.obj";
+    let found = testing::loaded(obj).unwrap();
+    assert_eq!(found.operands[&0x70].disp, 6);
+    let body = raised(obj).into_iter().find(|body| testing::ops(body).iter().any(|op| op.at == 0x6F)).unwrap();
+    let op = testing::ops(&body).into_iter().find(|op| op.at == 0x6F).unwrap();
+    assert!(!known(&body, None, None, None, None).contains_key(&op.defines[0]));
+    let Placed::Loc(Loc::Imm(immediate)) = lower::operand(&op.args[0]) else { panic!("{:?}", op.args[0]) };
+    assert_eq!(immediate.address, Some(found.operands[&0x70]));
+}
+
+/// CHAIN printed MODMOD=92344 instead of 13106 after stale DX replaced a folded high word.
+#[test]
+fn test_folded_extraction_has_no_implicit_machine_result() {
+    let found = testing::module("fixtures/regressions/chain-stack-q-o.obj");
+    let body = testing::main_body(&found, &testing::blocks_of(&found));
+    let folded = transform::folded(&body, &found.dgroup.members, &found.calls).unwrap();
+    let folded = transform::folded(&folded, &found.dgroup.members, &found.calls).unwrap();
+    let extracts: BTreeSet<Value> = testing::ops(&body)
+        .iter()
+        .filter(|op| op.kind == Kind::Extract)
+        .map(|op| match &op.results[0] {
+            Arg::Held(one) => one.value,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let copies: Vec<Op> = testing::ops(&folded)
+        .into_iter()
+        .filter(|op| {
+            op.kind == Kind::Copy
+                && matches!(op.results.first(), Some(Arg::Held(one)) if extracts.contains(&one.value))
+                && matches!(op.args[0], Arg::Const(_))
+        })
+        .collect();
+    assert!(!copies.is_empty());
+    let calls = IndexMap::default();
+    let lowering = lower::Lowering::new(
+        &folded,
+        extracts.iter().map(|value| value.id).collect(),
+        &calls,
+        BTreeSet::new(),
+        None,
+        "386",
+        lower::Options::default(),
+    )
+    .unwrap();
+    for op in &copies {
+        assert_eq!(lowering._idiom(op, false).unwrap(), vec![]);
+    }
+}
+
+/// NESTED kept constant loop bounds in registers; propagating them must not reverse subtraction.
+#[test]
+fn test_constant_subtraction_preserves_operand_order() {
+    for constant_first in [false, true] {
+        for same in [false, true] {
+            let (mut source, bound, result) = (Value::new(910, 0), Value::new(911, 0), Value::new(912, 1));
+            if same {
+                source = bound;
+            }
+            let mut args = vec![held(source, 2), held(bound, 2)];
+            if constant_first {
+                args.reverse();
+            }
+            let mut uses = vec![source];
+            if bound != source {
+                uses.push(bound);
+            }
+            let mut compare = op(1, OpCode::Operation(Operation::Compare), "cmp", vec![result], uses, Kind::Sub);
+            compare.args = args.clone();
+            let changed = transform::_constant_operands(&compare, &facts([(bound, Known::new(5, 2))]), None, None);
+            let expected =
+                if !constant_first || same { vec![args[0].clone(), Arg::Const(Const::new(5, 2))] } else { args.clone() };
+            assert_eq!(changed.args, expected, "{constant_first} {same}");
+            let Arg::Held(first) = &args[0] else { unreachable!() };
+            assert!(changed.uses.contains(&first.value));
+        }
+    }
+}
+
+/// Substituting p in memory[p] - p orphaned the address value while the load still used it.
+#[test]
+fn test_constant_operand_keeps_its_memory_address_dependency() {
+    for address_part in ["base", "segment"] {
+        let (pointer, result) = (Value::new(920, 0), Value::new(921, 1));
+        let mut reference = MemRef::new(None, 2);
+        if address_part == "base" {
+            reference.base = Some(pointer);
+        } else {
+            reference.segment = Some(pointer);
+        }
+        let mut sub = op(1, OpCode::Operation(Operation::Binary), "sub", vec![result], vec![pointer], Kind::Sub);
+        sub.args = vec![Arg::Cell(Cell { r#ref: reference.clone() }), held(pointer, 2)];
+        sub.results = vec![held(result, 2)];
+        sub.loads = vec![reference.clone()];
+        let changed = transform::_constant_operands(&sub, &facts([(pointer, Known::new(16, 2))]), None, None);
+        assert_eq!(changed.args, [Arg::Cell(Cell { r#ref: reference }), Arg::Const(Const::new(16, 2))]);
+        assert_eq!(changed.uses, [pointer]);
+    }
+}
+
+#[test]
+fn test_a_known_factor_becomes_a_multiply_operand() {
+    for constant_first in [false, true] {
+        let (source, factor, result) = (Value::new(900, 0), Value::new(901, 0), Value::new(902, 1));
+        let mut args = vec![held(source, 2), held(factor, 2)];
+        if constant_first {
+            args.reverse();
+        }
+        let mut multiply = op(1, OpCode::Operation(Operation::Multiply), "", vec![result], vec![source, factor], Kind::Mul);
+        multiply.args = args;
+        multiply.results = vec![held(result, 2)];
+        let changed = transform::_constant_operands(&multiply, &facts([(factor, Known::new(20, 2))]), None, None);
+        assert_eq!(changed.args, [held(source, 2), Arg::Const(Const::new(20, 2))]);
+        assert_eq!(changed.uses, [source]);
+    }
+}
+
+/// `mov ax,5` does not make eax five. Claiming it would fold a 32-bit use of
+/// a value only half of which is known, and the answer would look reasonable.
+#[test]
+fn test_a_fact_never_claims_more_bytes_than_the_instruction_wrote() {
+    for obj in fixtures() {
+        for body in raised(&obj) {
+            for fact in known(&body, None, None, None, None).values() {
+                assert!([1, 2, 4].contains(&fact.width), "{obj}");
+                assert!(BigInt::from(0) <= fact.n && fact.n < BigInt::from(1) << (fact.width * 8), "{obj}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_every_known_value_is_defined_by_an_operation_that_computes_it() {
+    for obj in fixtures() {
+        for body in raised(&obj) {
+            let facts = known(&body, None, None, None, None);
+            let defined: IndexMap<Option<Value>, Op> =
+                testing::ops(&body).into_iter().map(|op| (_defined(&op), op)).collect();
+            for value in facts.keys() {
+                let op = defined.get(&Some(*value)).unwrap_or_else(|| panic!("{obj}: {value:?} is known but nothing defines it"));
+                let node = op.node().unwrap_or_else(|| panic!("{obj}: {value:?}"));
+                assert!(ir::modelled(node.semantics()), "{obj}: {value:?}");
+            }
+        }
+    }
+}
+
+/// BC materialises a comparison as `mov ax,0` then a conditional `dec ax` --
+/// and -1 is what BASIC calls true.
+#[test]
+fn test_a_comparison_result_folds_to_basics_own_true() {
+    let mut seen = 0;
+    for body in raised("fixtures/omf/cmpord-p-evt.obj") {
+        let facts = known(&body, None, None, None, None);
+        for op in testing::ops(&body) {
+            let Some(target) = _defined(&op) else { continue };
+            if op.name == "dec" && facts.contains_key(&target) {
+                assert_eq!(facts[&target], Known::new(0xFFFF, 2));
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen > 0, "cmpord materialises comparison results");
+}
+
+/// A phi is where two definitions meet, so its value is not one of them.
+#[test]
+fn test_nothing_is_folded_through_a_phi() {
+    for obj in fixtures().into_iter().take(20) {
+        for body in raised(&obj) {
+            let facts = known(&body, None, None, None, None);
+            for phi in body.blocks.iter().flat_map(|block| &block.phis) {
+                assert!(!facts.contains_key(&phi.result), "{obj}");
+            }
+        }
     }
 }
 
