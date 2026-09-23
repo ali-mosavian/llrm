@@ -111,9 +111,9 @@ class _MemoryQueries:
         return self.exact[where]
 
     def bucket(self, where: tuple) -> tuple:
-        """Cell `where`'s ``mir.overlap_bucket``: the object its bytes name, if any."""
+        """Cell `where`'s ``mir.overlap_bucket``, from the object its bytes name, if any."""
         named = self._named(where)
-        return (None if named is None else named[0], (None, None, where[0].space, where[0].index))
+        return mir.object_bucket(None if named is None else named[0], (None, None, where[0].space, where[0].index))
 
     def owned(self, here: Cells) -> cellmap.CellMap:
         """A copy of `here` indexed by this epoch's buckets, for one operation to change."""
@@ -372,7 +372,7 @@ def _kills(
             continue
         if not owned:
             here, owned = queries.owned(here), True
-        here.kill(mir.overlap_buckets(ref, here.buckets), lambda where: queries.may_overlap(where, ref))
+        here.kill(mir.overlap_buckets(ref, here), lambda where: queries.may_overlap(where, ref))
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             queries.learn(ref)
             here.update(_fragments(ref, put))

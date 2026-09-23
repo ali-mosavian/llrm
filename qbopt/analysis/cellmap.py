@@ -10,21 +10,31 @@ class CellMap(dict):
     ran deedlines' alias walk through 43M overlap tests in 90 s, all but
     1218 of them between different objects.
 
-    `bucket_of` names a cell's bucket; it must not change while the cell is
-    held.
+    `bucket_of` names a cell's bucket, a tuple; it must not change while
+    the cell is held. `part(i)` finds buckets by their i-th component, so a
+    write can look its buckets up rather than test each one.
     """
 
-    __slots__ = ("bucket_of", "buckets")
+    __slots__ = ("bucket_of", "buckets", "parts")
 
     def __init__(self, bucket_of: Callable[[Hashable], Hashable], items: Iterable = ()) -> None:
         super().__init__()
         self.bucket_of = bucket_of
-        self.buckets: dict[Hashable, set] = {}
+        self.buckets: dict[tuple, set] = {}
+        self.parts: list[dict[Hashable, set]] = []
         self.update(items)
 
     def __setitem__(self, key, value) -> None:
         if key not in self:
-            self.buckets.setdefault(self.bucket_of(key), set()).add(key)
+            bucket = self.bucket_of(key)
+            keys = self.buckets.get(bucket)
+            if keys is None:
+                keys = self.buckets[bucket] = set()
+                for i, part in enumerate(bucket):
+                    if i == len(self.parts):
+                        self.parts.append({})
+                    self.parts[i].setdefault(part, set()).add(bucket)
+            keys.add(key)
         super().__setitem__(key, value)
 
     def __delitem__(self, key) -> None:
@@ -34,6 +44,15 @@ class CellMap(dict):
         keys.discard(key)
         if not keys:
             del self.buckets[bucket]
+            for i, part in enumerate(bucket):
+                held = self.parts[i][part]
+                held.discard(bucket)
+                if not held:
+                    del self.parts[i][part]
+
+    def part(self, i: int) -> dict[Hashable, set]:
+        """The buckets held, by their i-th component."""
+        return self.parts[i] if i < len(self.parts) else {}
 
     def update(self, items=(), **named) -> None:
         pairs = items.items() if isinstance(items, dict) else items
@@ -47,6 +66,7 @@ class CellMap(dict):
         dict.update(new, self)
         new.bucket_of = self.bucket_of
         new.buckets = {bucket: set(keys) for bucket, keys in self.buckets.items()}
+        new.parts = [{part: set(held) for part, held in parts.items()} for parts in self.parts]
         return new
 
     def kill(self, reached: Iterable[Hashable] | None, overlaps: Callable[[Hashable], bool]) -> None:
@@ -78,6 +98,7 @@ class CellMap(dict):
     def clear(self) -> None:
         super().clear()
         self.buckets.clear()
+        self.parts.clear()
 
     def __ior__(self, other):
         self.update(other)

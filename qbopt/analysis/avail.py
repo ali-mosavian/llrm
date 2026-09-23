@@ -405,7 +405,7 @@ def _cells(overwritten: dict[MemRef, int]) -> cellmap.CellMap:
 
 def _clobber(overwritten: cellmap.CellMap, ref: MemRef, unnamed: bool, private, dgroup, bounds) -> None:
     """Forget the cells an access through `ref` may touch; an `unnamed` one cannot reach a private cell."""
-    overwritten.kill(mir.overlap_buckets(ref, overwritten.buckets), lambda one: not (unnamed and private(one)) and mir.overlapping(one, ref, dgroup, bounds))
+    overwritten.kill(mir.overlap_buckets(ref, overwritten), lambda one: not (unnamed and private(one)) and mir.overlapping(one, ref, dgroup, bounds))
 
 
 def dead_stores(

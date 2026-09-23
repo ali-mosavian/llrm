@@ -2807,38 +2807,43 @@ def overlapping(
 
 def overlap_bucket(ref: MemRef) -> tuple:
     """What `overlapping` needs of a cell to rule a write out unseen: its one
-    object (None if it has no single one) and the frame `_displaced` compares
-    displacements in (None for a pointer)."""
+    object (None if it has no single one), the frame `_displaced` compares
+    displacements in (None for a pointer), and the object's alias class."""
     slices = ref.provenance.slices if ref.provenance is not None else ()
-    return (next(iter(slices)).object if len(slices) == 1 else None, _frame(ref))
+    one = next(iter(slices)).object if len(slices) == 1 else None
+    return object_bucket(one, _frame(ref))
 
 
-def overlap_shape(ref: MemRef) -> tuple | None:
-    """A write's side of `overlap_reaches`; None where it may reach every bucket."""
+def object_bucket(one: "memory.Object | None", frame: tuple | None) -> tuple:
+    return (one, frame, None if one is None else memory.alias_class(one))
+
+
+def overlap_buckets(ref: MemRef, cells) -> set | None:
+    """The buckets of `cells` (a CellMap keyed by `object_bucket`) a write
+    through `ref` may reach; None for all of them.
+
+    Only these can hold a cell `overlapping` does not rule out: one whose
+    object is unknown, one in the write's `_displaced` frame, one in the
+    write's own object, and one whose alias class may alias the write's.
+    """
     if ref.provenance is None:
         return None
-    return (frozenset(one.object for one in ref.provenance.slices), _frame(ref))
+    objects, frames, classes = cells.part(0), cells.part(1), cells.part(2)
+    reached = set(objects.get(None, ()))
+    if (frame := _frame(ref)) is not None:
+        reached |= frames.get(frame, set())
+    for one in _objects(ref.provenance):
+        reached |= objects.get(one, set())
+        kind = memory.alias_class(one)
+        for other, buckets in classes.items():
+            if other is not None and memory.classes_may_alias(kind, other):
+                reached |= buckets
+    return reached
 
 
-@functools.lru_cache(maxsize=1 << 16)
-def overlap_reaches(shape: tuple, bucket: tuple) -> bool:
-    """Whether a write of `shape` may overlap a cell in `bucket`.
-
-    False only where `overlapping` would say so for every such pair: both
-    carry provenance, no `_displaced` frame is shared, and no two objects
-    may alias.
-    """
-    objects, frame = shape
-    one, cell_frame = bucket
-    if one is None or (frame is not None and frame == cell_frame):
-        return True
-    return any(memory.objects_may_alias(other, one) for other in objects)
-
-
-def overlap_buckets(ref: MemRef, buckets) -> list | None:
-    """The `buckets` a write through `ref` may reach; None for all of them."""
-    shape = overlap_shape(ref)
-    return None if shape is None else [bucket for bucket in buckets if overlap_reaches(shape, bucket)]
+@functools.lru_cache(maxsize=1 << 12)
+def _objects(provenance: memory.Provenance) -> frozenset:
+    return frozenset(one.object for one in provenance.slices)
 
 
 def _frame(ref: MemRef) -> tuple | None:
