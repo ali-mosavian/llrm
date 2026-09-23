@@ -222,7 +222,7 @@ fn test_countdown_refuses_an_observed_source_counter() {
 /// call's answer to the loop counter; decide folded the exit away and the
 /// segment was refused.
 #[test]
-#[ignore = "fails in Python too: main (main): Unlowered: 0x0079: no instruction for opaque"]
+#[ignore = "fails in Python too: 0x03f7: 45 bytes between the ops are not instructions"]
 fn test_entering_mains_first_loop_at_its_body_keeps_the_code_after_it() {
     crate::support::testing::emitted_lir("fixtures/regressions/qbdemo-fil2.obj");
 }

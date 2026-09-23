@@ -250,8 +250,11 @@ pub fn _relocatable(what: Option<&Semantics>) -> bool {
         // A call or jump carries its fixup in the target, not in an operand.
         return true;
     }
+    // An Address with no `addr` is register arithmetic -- `lea eax,[eax+eax*2]`
+    // -- where a Mem with none is a cell whose address is unknown.
     what.dests.iter().chain(&what.sources).any(|one| match one {
-        Loc::Address(_) | Loc::Imm(_) => true,
+        Loc::Imm(_) => true,
+        Loc::Address(address) => address.addr.is_some_and(|addr| matches!(addr.space, Space::Segment | Space::External)),
         Loc::Mem(mem) => mem.addr.is_none_or(|addr| matches!(addr.space, Space::Segment | Space::External)),
         _ => false,
     })
@@ -952,15 +955,18 @@ pub fn assemble(
                 relocations.push((out.len() as i64 + r#where as i64, field));
             }
         } else {
-            let mut addresses: Vec<Addr> = what
-                .dests
-                .iter()
-                .chain(&what.sources)
-                .filter_map(|arg| match arg {
-                    Loc::Mem(mem) => mem.addr.filter(|addr| matches!(addr.space, Space::Segment | Space::External)),
-                    _ => None,
-                })
-                .collect();
+            // A read-modify-write names its one memory operand as a
+            // destination and a source; it is still one field.
+            let mut addresses: Vec<Addr> = Vec::new();
+            for arg in what.dests.iter().chain(&what.sources) {
+                if let Loc::Mem(mem) = arg {
+                    if let Some(addr) = mem.addr.filter(|addr| matches!(addr.space, Space::Segment | Space::External)) {
+                        if !addresses.contains(&addr) {
+                            addresses.push(addr);
+                        }
+                    }
+                }
+            }
             let immediate = _generated_immediate(op, Some(&what));
             if let Some(immediate) = immediate {
                 if matches!(immediate.space, Space::Segment | Space::External) {

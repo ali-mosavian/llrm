@@ -526,7 +526,7 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
     from qbopt.frontend.blocks import code_map
 
     got = wholeseg.emitted(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.fallback_reason}"
+    assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.reason}"
     after = module.of(omf.parse(got.data))
     entry = min(one.at for block in split.partition(after, code_map(after)) for one in block.insns)
     written = {

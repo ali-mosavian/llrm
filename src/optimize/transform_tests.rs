@@ -526,6 +526,62 @@ mod folded_tests {
         }
     }
 }
+mod reused_divides_tests {
+    use std::collections::BTreeSet;
+    use std::rc::Rc;
+
+    use crate::model::ir::Operation;
+    use crate::model::mir::{Arg, Held, Kind, MirBlock, MirBody, Op, OpCode, Value};
+    use crate::optimize::transform::reused_divides;
+
+    fn held(value: Value) -> Arg {
+        Arg::Held(Held { value, width: 4 })
+    }
+
+    /// lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no operand".
+    ///
+    /// The second divide became a copy of the first's remainder, and the third
+    /// was served the second's quotient, which that copy no longer computes.
+    #[test]
+    fn test_a_third_equal_divide_reads_the_answer_the_first_computed() {
+        let (dividend, divisor) = (Value::new(1, 0), Value::new(2, 0));
+        let divide = |at: i64| {
+            let (quotient, remainder) = (Value::new(at as u32 + 3, at), Value::new(at as u32 + 4, at));
+            let mut op =
+                Op::new(at, OpCode::Operation(Operation::Divide), "idiv", vec![quotient, remainder], vec![dividend, divisor]);
+            op.kind = Kind::Divmod;
+            op.args = vec![held(dividend), held(divisor)];
+            op.results = vec![held(quotient), held(remainder)];
+            op
+        };
+        let (first, second, third) = (divide(0), divide(8), divide(16));
+        let (remainder, quotient, total) = (Value::new(12, 8), Value::new(19, 16), Value::new(40, 24));
+        let mut add = Op::new(24, OpCode::Operation(Operation::Binary), "add", vec![total], vec![remainder, quotient]);
+        add.kind = Kind::Add;
+        add.args = vec![held(remainder), held(quotient)];
+        add.results = vec![held(total)];
+        let mut returned = Op::new(28, OpCode::Operation(Operation::Return), "ret", vec![], vec![total]);
+        returned.kind = Kind::Return;
+        returned.args = vec![held(total)];
+        let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![first, second, third, add, returned], vec![])]);
+
+        let done = reused_divides(&Rc::new(body), &BTreeSet::new(), None).unwrap();
+        let ops = &done.blocks[0].ops;
+        assert_eq!(ops[..3].iter().map(|op| op.kind).collect::<Vec<_>>(), [Kind::Divmod, Kind::Copy, Kind::Copy]);
+
+        let mut computed: BTreeSet<Value> = ops
+            .iter()
+            .flat_map(|op| &op.results)
+            .filter_map(|one| if let Arg::Held(held) = one { Some(held.value) } else { None })
+            .collect();
+        computed.extend([dividend, divisor]);
+        for op in ops {
+            for value in &op.uses {
+                assert!(computed.contains(value), "{value:?} is read and nothing computes it");
+            }
+        }
+    }
+}
 mod pipeline_tests {
     use std::collections::BTreeSet;
 

@@ -251,8 +251,11 @@ def _relocatable(what: "ir.Semantics | None") -> bool:
         # A call or jump carries its fixup in the target, not in an operand:
         # read as operands only, every far call went out as `call 0:0`.
         return True
+    # An Address with no `addr` is register arithmetic -- `lea eax,[eax+eax*2]`
+    # -- where a Mem with none is a cell whose address is unknown.
     return any(
-        isinstance(one, (ir.Address, ir.Imm))
+        isinstance(one, ir.Imm)
+        or (isinstance(one, ir.Address) and one.addr is not None and one.addr.space in (Space.SEGMENT, Space.EXTERNAL))
         or (isinstance(one, ir.Mem) and (one.addr is None or one.addr.space in (Space.SEGMENT, Space.EXTERNAL)))
         for one in (*what.dests, *what.sources)
     )
@@ -946,13 +949,17 @@ def assemble(
             for where, field in zip(landed, wanted, strict=False):
                 relocations.append((len(out) + where, field))
         else:
-            addresses = [
-                arg.addr
-                for arg in (*what.dests, *what.sources)
-                if isinstance(arg, ir.Mem)
-                and arg.addr is not None
-                and arg.addr.space in (Space.SEGMENT, Space.EXTERNAL)
-            ]
+            # A read-modify-write names its one memory operand as a
+            # destination and a source; it is still one field.
+            addresses = list(
+                dict.fromkeys(
+                    arg.addr
+                    for arg in (*what.dests, *what.sources)
+                    if isinstance(arg, ir.Mem)
+                    and arg.addr is not None
+                    and arg.addr.space in (Space.SEGMENT, Space.EXTERNAL)
+                )
+            )
             immediate = _generated_immediate(op, what)
             if immediate is not None and immediate.space in (Space.SEGMENT, Space.EXTERNAL):
                 addresses.append(immediate)

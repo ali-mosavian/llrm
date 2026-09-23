@@ -140,7 +140,6 @@ fn test_only_the_main_body_owns_a_variable_nothing_else_names() {
 
 /// deltaX, deltaY, dist2, falloff and a product slot: five dead writes per pass.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
 fn test_nbody_writes_no_scratch_variable_in_its_inner_loop() {
     let (result, states) = testing::emitted_mir(&testing::data(NBODY), "mir-widen", "main");
     assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
@@ -191,7 +190,6 @@ fn _nbody_inner_loop() -> Vec<Instruction> {
 /// Exit-phi copies extended both accumulators across the branch and made the
 /// allocator spill the hotter counter.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
 fn test_nbody_counts_its_inner_loop_in_one_register() {
     let loop_ = _nbody_inner_loop();
     let branch_at =

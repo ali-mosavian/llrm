@@ -8,8 +8,7 @@
 //! Skipped, failing in Python at this commit:
 //! test_procedure_frame_fields_reuse_stored_values,
 //! test_unpromotable_memory_update_does_not_cancel_other_cells,
-//! test_hotlop_multiply_uses_the_initialized_value,
-//! test_promoted_global_remains_visible_outside_the_body, and
+//! test_hotlop_multiply_uses_the_initialized_value, and
 //! test_addrm_long_accumulator_survives_split_initialization's p-g2 and q-O
 //! cases (a load stays in the loop).
 
@@ -989,6 +988,40 @@ fn test_guarded_indexed_accumulators_do_not_reload_in_loop() {
             .filter(|(_, one)| one.base.is_some() && one.width == 4)
             .collect();
         assert!(wide.is_empty(), "{tag}: {wide:?}");
+    }
+}
+
+/// press's loop counter is global: forwarding its load cannot delete its stores.
+#[test]
+fn test_promoted_global_remains_visible_outside_the_body() {
+    let found = testing::module("fixtures/omf/press-p-g2.obj");
+    let body = testing::main_body(&found, &testing::blocks_of(&found));
+    let bounds = module::landmarks(&found);
+    let result = promoted(&body, &found.dgroup.members, Some(&bounds), false, true, false).unwrap();
+    let stores = |body: &MirBody| -> Vec<MemRef> {
+        body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.stores.clone()).collect()
+    };
+    assert_eq!(stores(&body), stores(&result));
+    let load = testing::ops(&result).into_iter().find(|op| op.at == 0x94).unwrap();
+    assert!(load.loads.is_empty(), "the loop should use the value stored in its header");
+}
+
+/// Every candidate is a cell in the program's own data, and a runtime call
+/// could write one -- until `runtime.toml` said which cells it can reach.
+/// arith's long, pushed as two words, kept every global in memory.
+#[test]
+fn test_promotion_is_only_sound_because_the_runtime_was_measured() {
+    use crate::abi::runtime::{contract, Memory};
+
+    let found = testing::module("fixtures/omf/arith-p-g2.obj");
+    assert!(!found.calls.is_empty(), "arith calls the runtime");
+    assert!(
+        found.calls.values().any(|name| contract(Some(name)).writes == Memory::Own),
+        "no call in arith carries the measurement, so this proves nothing"
+    );
+    let bounds = module::landmarks(&found);
+    for (_who, body) in &testing::raised_from(&found, &testing::blocks_of(&found), None).values {
+        assert!(!promotable(body, &found.dgroup.members, Some(&bounds), false).is_empty());
     }
 }
 

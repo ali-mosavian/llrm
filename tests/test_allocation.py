@@ -48,7 +48,7 @@ def test_harr_keeps_its_inner_loop_value_out_of_a_spill_slot() -> None:
     from qbopt import wholeseg
 
     result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped

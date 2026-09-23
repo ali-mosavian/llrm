@@ -535,10 +535,18 @@ mod tests {
         assert!(!overlaps(Register::AL, Register::BL));
     }
 
-    /// QCport's pl_game_reset assigned LES's selector result to BX.
+    /// QCport's pl_game_reset selected LES before allocation, but the selector
+    /// result was assigned BX; fresh OMF emission then refused the impossible
+    /// `les ax:bx,[di+table]` form.
+    ///
+    /// The selector result is in the segment-register class rather than pinned
+    /// to ES: allocation picks one and the rewriter spells les, lfs or lgs.
     #[test]
-    #[ignore = "fails in Python at 5c22b69b too: the selector is a class now, not a pin"]
-    fn test_far_load_pins_its_selector_result() {
+    fn test_far_load_confines_its_selector_result_to_a_segment_register() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Insn, LirBlock, LirBody};
+
         let what = semantics(
             Operation::Move,
             "les",
@@ -551,10 +559,19 @@ mod tests {
                 ..ir::Mem::new(None, 4)
             })],
         );
+        let load = Insn::new(0x10, Some((0x10, 0x13)), Some(what.clone()), vec![1, 2], vec![3]);
+        let body = LirBody::new(
+            "far",
+            0x10,
+            vec![LirBlock::new(0x10, vec![Arc::new(load)])],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
 
+        assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            requirements(&what),
-            IndexMap::from_iter([(Occurrence::new("dest", 1), Register::ES)])
+            crate::backend::allocate::classes(&body, &BTreeSet::new())[&2],
+            BTreeSet::from(SELECTORS)
         );
     }
 

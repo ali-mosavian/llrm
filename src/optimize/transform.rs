@@ -617,6 +617,9 @@ pub(crate) fn reused_divides(
     }
     let alive = live(body);
     let mut into: IndexMap<*const Op, Op> = IndexMap::default();
+    // A divide made a copy computes neither answer any more; one after it
+    // reads them from the divide that copy was served by.
+    let mut answers: IndexMap<mir::Value, mir::Held> = IndexMap::default();
     for (_at, earlier, one) in pairs_found {
         if one.results.len() != 2 || earlier.results.len() != 2 {
             continue;
@@ -625,7 +628,7 @@ pub(crate) fn reused_divides(
         for (mine, theirs) in one.results.iter().zip(&earlier.results) {
             if let (Arg::Held(mine), Arg::Held(theirs)) = (mine, theirs) {
                 if alive.contains(&mine.value) {
-                    (served, wanted) = (Some(*theirs), Some(*mine));
+                    (served, wanted) = (Some(*answers.get(&theirs.value).unwrap_or(theirs)), Some(*mine));
                 }
             }
         }
@@ -655,6 +658,12 @@ pub(crate) fn reused_divides(
                 ..one.clone()
             },
         );
+        for (mine, theirs) in one.results.iter().zip(&earlier.results) {
+            if let (Arg::Held(mine), Arg::Held(theirs)) = (mine, theirs) {
+                let leader = *answers.get(&theirs.value).unwrap_or(theirs);
+                answers.insert(mine.value, leader);
+            }
+        }
     }
     if into.is_empty() {
         return Ok(body.clone());

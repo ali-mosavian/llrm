@@ -314,6 +314,10 @@ def _extension_may_move_before(made: lir.Insn, first: lir.Insn, crossed: list[li
     batch their entry loads.  Refuse whenever those intervening instructions
     observe or replace any newly-written physical lane.
     """
+    if not crossed:
+        # Nothing to cross. Asking anyway refused every unrolled clone, whose
+        # effects `_register_effects` will not read.
+        return True
     original = _register_effects(first, flags=True)
     combined = _register_effects(made, flags=True)
     if original is None or combined is None:

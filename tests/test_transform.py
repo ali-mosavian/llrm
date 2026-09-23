@@ -403,6 +403,49 @@ def test_divisor_constants_propagate_without_reordering(number, safe):
     assert transform._constant_operands(op, {divisor: consts.Known(number, 2)}) == op
 
 
+def test_a_third_equal_divide_reads_the_answer_the_first_computed() -> None:
+    """lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no operand".
+
+    The second divide became a copy of the first's remainder, and the third
+    was served the second's quotient, which that copy no longer computes.
+    """
+    dividend, divisor = mir.Value(1, 0), mir.Value(2, 0)
+
+    def divide(at: int) -> mir.Op:
+        quotient, remainder = mir.Value(at + 3, at), mir.Value(at + 4, at)
+        return mir.Op(
+            at,
+            ir.Operation.DIVIDE,
+            "idiv",
+            (quotient, remainder),
+            (dividend, divisor),
+            kind=mir.Kind.DIVMOD,
+            args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
+            results=(mir.Held(quotient, 4), mir.Held(remainder, 4)),
+        )
+
+    first, second, third = divide(0), divide(8), divide(16)
+    remainder, quotient, total = second.results[1].value, third.results[0].value, mir.Value(40, 24)
+    add = mir.Op(
+        24,
+        ir.Operation.BINARY,
+        "add",
+        (total,),
+        (remainder, quotient),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(remainder, 4), mir.Held(quotient, 4)),
+        results=(mir.Held(total, 4),),
+    )
+    returned = mir.Op(28, ir.Operation.RETURN, "ret", (), (total,), kind=mir.Kind.RETURN, args=(mir.Held(total, 4),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, second, third, add, returned), ()),))
+
+    ops = transform.reused_divides(body, frozenset()).blocks[0].ops
+    assert [op.kind for op in ops[:3]] == [mir.Kind.DIVMOD, mir.Kind.COPY, mir.Kind.COPY]
+
+    computed = {one.value for op in ops for one in op.results}
+    assert {value for op in ops for value in op.uses} <= computed | {dividend, divisor}
+
+
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
     first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, args=(mir.Const(3, 2),))
     survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, args=(mir.Const(21, 2),))

@@ -72,7 +72,6 @@ fn test_absorbed_division_survives_removed_call_result_pins() {
 
 /// hotlop refused its branch at 0x45 after the copy at loop entry 0x5e disappeared.
 #[test]
-#[ignore = "fails in Python too: 0x0048: add has 1 fixups and 0 fields to put them in"]
 fn test_a_loop_label_survives_coalescing_its_first_copy() {
     for name in ["hotlop", "press", "matrix", "jumps"] {
         let data = std::fs::read(format!("fixtures/omf/{name}-p-g2.obj")).unwrap();
@@ -240,7 +239,7 @@ fn test_a_body_that_falls_back_is_not_reported_as_lir() {
 #[test]
 fn test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() {
     let got = default_emitted(&std::fs::read("fixtures/omf/lngmix-p-g2.obj").unwrap());
-    assert_eq!(got.outcome, Emission::Lir, "it fell back: {:?}", got.fallback_reason);
+    assert_eq!(got.outcome, Emission::Lir, "it fell back: {}", got.reason);
     let after = parsed(&got.data);
     let mapped = split::code_map(&after).unwrap();
     let entry = split::partition(&after, &mapped).iter().flat_map(|block| block.insns.iter().map(|one| one.at)).min().unwrap();
@@ -273,7 +272,6 @@ fn test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() {
 
 /// NBODY printed an unprintable error: a copied IN acquired XOR and a stray MOV opcode.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
 fn test_nbody_port_read_does_not_copy_neighbor_instructions() {
     let result = default_emitted(&std::fs::read("fixtures/bench/nbody-v-g3.obj").unwrap());
     assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);

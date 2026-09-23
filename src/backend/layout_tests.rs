@@ -682,6 +682,80 @@ fn test_inserted_instruction_never_reads_original_interrupt_bytes() {
     assert_eq!(done.code, [0xB8, 0x01, 0x00]);
 }
 
+/// VBDOS nbody refused 0x02b7: "cannot bind a generated symbolic memory operand".
+///
+/// `add [x],eax` names its cell as destination and source; counted twice,
+/// one field could not take both.
+#[test]
+fn test_a_generated_read_modify_write_binds_its_one_symbolic_field() {
+    let addr = module::Addr { index: 5, ..module::Addr::new(module::Space::Segment, 0xA) };
+    let cell = Loc::Mem(ir::Mem { disp_width: 2, ..ir::Mem::new(Some(addr), 4) });
+    let what = Semantics {
+        dests: vec![cell.clone()],
+        sources: vec![cell, Loc::Reg(Reg { register: Register::EAX, width: 4 })],
+        ..sem(Operation::Binary, "add")
+    };
+    let found = bare(&[0x90]);
+    let done = asm::assemble(
+        &[Item::Op(insn(0x10, what))],
+        0,
+        &found,
+        &BTreeSet::new(),
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(&SourceMap::default()),
+    )
+    .unwrap();
+    assert_eq!(done.symbols.iter().map(|&(_where, addr)| addr).collect::<Vec<_>>(), [addr]);
+}
+
+/// matrix refused 0x0048: "add has 1 fixups and 0 fields to put them in".
+///
+/// `add ax,[d]` was served from a register and then became `lea` of two
+/// registers. An Address with no `addr` is arithmetic and has no field.
+#[test]
+fn test_a_register_sum_drops_the_fixup_of_the_read_it_replaced() {
+    let (source, other, result) = (mir::Value::new(1, 0x48), mir::Value::new(2, 0x48), mir::Value::new(3, 0x48));
+    let op = mir::Op {
+        kind: mir::Kind::Add,
+        id: Some(1),
+        symbol: Some(true),
+        ..mir::Op::new(0x48, mir::OpCode::Operation(Operation::Binary), "add", vec![result], vec![source, other])
+    };
+    let lea = Semantics {
+        dests: vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
+        sources: vec![Loc::Address(ir::Address {
+            through: Register::EBX,
+            index: Register::ECX,
+            ..ir::Address::new(None)
+        })],
+        ..sem(Operation::Address, "lea")
+    };
+    let mut made = Insn::new(0x48, Some((0x48, 0x4C)), Some(lea), vec![3], vec![1, 2]);
+    made.op = Some(Arc::new(op));
+    made.symbol = Some(true);
+    let mut found = bare(&[0; 0x4C]);
+    found.refs.insert(1, vec![0x4A]);
+    let source_map = SourceMap { refs: found.refs.clone(), ..SourceMap::default() };
+    let done = asm::assemble(
+        &[Item::Op(Arc::new(made))],
+        0x48,
+        &found,
+        &BTreeSet::from([0x4A]),
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(&source_map),
+    )
+    .unwrap();
+    assert!(done.relocations.is_empty());
+}
+
 // tests/test_lir_emission_order.py
 
 /// Qrender h_frame reported build time zero: layout moved XOR across CMP.
