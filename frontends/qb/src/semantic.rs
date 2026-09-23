@@ -2325,8 +2325,7 @@ impl Compiler {
                 },
                 Statement::DefSeg { value, .. } => {
                     if let Some(value) = value {
-                        let (value, type_id) = self.expression(value)?;
-                        let value = self.convert(value, type_id, INTEGER)?;
+                        let value = self.unsigned_word(value)?;
                         // B$DSEG only stores this word in the runtime-owned
                         // b$seg cell.  PEEK/POKE in every procedure and module
                         // load that same external cell, so expose the store
@@ -2928,7 +2927,7 @@ impl Compiler {
                         let [port, value] = arguments.as_slice() else {
                             return self.fail("OUT expects a port and a byte value");
                         };
-                        let port = self.port_operand(port)?;
+                        let port = self.unsigned_word(port)?;
                         let (value, value_type) = self.expression(value)?;
                         let value = self.convert(value, value_type, BYTE)?;
                         self.emit("port_out", Vec::new(), vec![port, value]);
@@ -2948,7 +2947,7 @@ impl Compiler {
                             this.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
                             Ok::<_, SemanticError>(cell)
                         };
-                        let port_value = self.port_operand(port)?;
+                        let port_value = self.unsigned_word(port)?;
                         let port_cell = match port_value.clone() {
                             Operand::Constant(..) => None,
                             value => {
@@ -3008,8 +3007,7 @@ impl Compiler {
                         if arguments.len() != 2 {
                             return self.fail("POKE expects an offset and byte value");
                         }
-                        let (offset, offset_type) = self.expression(&arguments[0])?;
-                        let offset = self.convert(offset, offset_type, INTEGER)?;
+                        let offset = self.unsigned_word(&arguments[0])?;
                         let (value, value_type) = self.expression(&arguments[1])?;
                         let value = self.convert(value, value_type, BYTE)?;
                         let segment_place = self.def_segment_place();
@@ -5630,7 +5628,7 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::PortIn {
-            let port = self.port_operand(&arguments[0])?;
+            let port = self.unsigned_word(&arguments[0])?;
             let byte = self.value(BYTE);
             self.emit("port_in", vec![byte], vec![port]);
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
@@ -5638,8 +5636,7 @@ impl Compiler {
         }
         if intrinsic.lowering == Lowering::Peek {
             let segment_place = self.def_segment_place();
-            let (offset, offset_type) = self.expression(&arguments[0])?;
-            let offset = self.convert(offset, offset_type, INTEGER)?;
+            let offset = self.unsigned_word(&arguments[0])?;
             let segment = self.value(INTEGER);
             self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
             let pointer_type = self.far_pointer_type(BYTE);
@@ -5904,9 +5901,22 @@ impl Compiler {
     /// element -- and the array's descriptor.
     /// A port number is a 16-bit word; a constant one stays constant so the
     /// target can see which device it names.
-    fn port_operand(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
-        let (port, port_type) = self.expression(expression)?;
-        self.convert(port, port_type, INTEGER)
+    /// An address or port, as QB's I4toU2 (qb/ir/exio.asm) takes it: coerced
+    /// to LONG, then its low word, if the high word is all zeros or all ones.
+    fn unsigned_word(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        let (value, type_id) = self.expression(expression)?;
+        let (value, type_id) = if matches!(type_id, SINGLE | DOUBLE) {
+            (self.convert(value, type_id, LONG)?, LONG)
+        } else {
+            (value, type_id)
+        };
+        if let Operand::Constant(_, Number::Integer(value)) = value {
+            if !(-65536..=65535).contains(&value) {
+                return self.fail("Math overflow");
+            }
+            return Ok(Operand::Constant(INTEGER, Number::Integer(value as u16 as i16 as i64)));
+        }
+        self.convert(value, type_id, INTEGER)
     }
 
     fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
@@ -5940,20 +5950,15 @@ impl Compiler {
                 return self.fail("BSAVE expects a path, offset, and length");
             };
             let path = self.string_descriptor(path)?;
-            let (offset, offset_type) = self.expression(offset)?;
-            let offset = self.convert(offset, offset_type, INTEGER)?;
-            let (length, length_type) = self.expression(length)?;
-            let length = self.convert(length, length_type, INTEGER)?;
+            let offset = self.unsigned_word(offset)?;
+            let length = self.unsigned_word(length)?;
             self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
             return Ok(());
         }
 
         let (path, offset, supplied) = match arguments {
             [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
-            [path, offset] => {
-                let (offset, offset_type) = self.expression(offset)?;
-                (path, self.convert(offset, offset_type, INTEGER)?, 1)
-            }
+            [path, offset] => (path, self.unsigned_word(offset)?, 1),
             _ => return self.fail("BLOAD expects a path and optional offset"),
         };
         let path = self.string_descriptor(path)?;

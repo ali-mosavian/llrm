@@ -2386,3 +2386,23 @@ fn graphics_put_passes_the_runtime_action_codes() {
         .collect();
     assert_eq!(actions, ["3", "2", "1", "0", "4", "4"], "{hir}");
 }
+
+#[test]
+fn an_address_takes_a_long_as_an_unsigned_word() {
+    // deedlines' `BSAVE f$, 0, 64000` was refused as "Math overflow": the
+    // LONG length went through INTEGER's range. QB's I4toU2 (exio.asm) keeps
+    // the low word of -65536..65535 for every address and port.
+    let module = parse(
+        "DEF SEG = 40960&\r\nBSAVE \"V.BIN\", 0, 64000&\r\nPOKE 65535&, PEEK(-1&)\r\nOUT 65535&, 1\r\n",
+        Dialect::QuickBasic45,
+    )
+    .unwrap();
+    let hir = compile(&module, "words", Dialect::QuickBasic45, "qb45").unwrap();
+    for word in [-24576, -1536] {
+        assert!(hir.contains(&format!("\"constant\",\"type\":1,\"value\":{word}}}")), "{word}: {hir}");
+    }
+    assert!(hir.contains("\"op\":\"port_out\",\"operands\":[{\"tag\":\"constant\",\"type\":1,\"value\":-1}"), "{hir}");
+    let module = parse("BSAVE \"V.BIN\", 0, 65536&\r\n", Dialect::QuickBasic45).unwrap();
+    let error = compile(&module, "wide", Dialect::QuickBasic45, "qb45").expect_err("65536 is no word");
+    assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
+}
