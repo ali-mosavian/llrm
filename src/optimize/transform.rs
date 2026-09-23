@@ -2076,7 +2076,7 @@ pub(crate) fn decided(
     let body = _threaded(body)?;
     let facts = consts::known(&body, Some(dgroup), Some(calls), None, None);
     let held = consts::cells(&body, dgroup, calls, Some(&facts), None, None, None, None);
-    let pointers = alias::points_to(&body, None, None)?;
+    let pointers = alias::pointers(&body)?;
     let successors = |block: &MirBlock,
                       values: &IndexMap<Value, consts::Known>,
                       states: &IndexMap<Value, constant_cycles::State>| {
@@ -3878,7 +3878,7 @@ pub(crate) fn applied(
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
 ) -> Result<Rc<MirBody>, String> {
-    crate::analysis::consts::reusing(|| _reusing_halves(|| _applied(body, dgroup, calls, options)))
+    crate::analysis::consts::reusing(|| crate::analysis::alias::reusing(|| _reusing_halves(|| _applied(body, dgroup, calls, options))))
 }
 
 /// The closure state `applied`'s nested `scalarized`, `fixed` and

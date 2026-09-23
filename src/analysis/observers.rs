@@ -343,7 +343,7 @@ fn _exposure(found: &Module, blocks: &[Block]) -> Result<Option<Exposure>, Strin
 /// it, so the frame rule needs nothing the module would have said.
 #[allow(clippy::type_complexity)]
 pub fn private(
-    body: &MirBody,
+    body: &Rc<MirBody>,
     found: Option<&Rc<crate::objectfile::module::Module>>,
     blocks: Option<&Rc<Vec<crate::frontends::bc::blocks::Block>>>,
 ) -> Result<Option<Box<dyn Fn(&MemRef) -> bool>>, String> {
@@ -361,7 +361,7 @@ pub fn private(
     };
     let calls: IndexMap<i64, String> = found.map(|found| found.calls.clone()).unwrap_or_default();
     let escapes = frameescape::analysed(body);
-    let pointers = alias::points_to(body, None, None)?;
+    let pointers = alias::pointers(body)?;
     let mut published: BTreeSet<MemoryObject> = pointers.escaped.clone();
     published.extend(_descriptor_publications(body, &pointers, &calls));
     let read_allocations: BTreeSet<Symbol> = body
