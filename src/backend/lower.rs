@@ -2607,6 +2607,28 @@ mod tests {
         let op = &named.blocks[0].ops[0];
         assert_eq!((op.op, op.name.as_str()), (Some(OpCode::Operation(Operation::Move)), "mov"));
     }
+    /// Lower keyed `origin` by `mir.Value` in Python and the assembler looked up
+    /// the instruction's value ids, so a moved value was emitted in BC's register.
+    #[test]
+    fn test_a_lowered_origin_lets_the_assembler_remap_a_moved_value() {
+        let made = Value { variable: 7, ..Value::new(1, 0x10) };
+        let mut copy = Op::new(0x10, OpCode::Operation(Operation::Move), "mov", vec![made], vec![]);
+        copy.kind = Kind::Copy;
+        copy.args = vec![Arg::Const(mir::Const::new(1, 2))];
+        copy.results = vec![Arg::Held(Held { value: made, width: 2 })];
+        let body = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![copy], vec![])]);
+        let mut hints = AllocationHints::new();
+        hints.origins.insert(7, Register::EAX);
+        let options = Lowered { hints: Some(&hints), ..Default::default() };
+        let low = lowered("origin", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", options)
+            .unwrap();
+        let insns = low.insns();
+        let [one] = insns.as_slice() else { panic!("{insns:?}") };
+        let assignment: IndexMap<u32, Register> = [(made.id, Register::EBX)].into_iter().collect();
+        let r#where = super::super::asm::_where(one, Some(&assignment), Some(&low.origin)).expect("a remap");
+        assert_eq!(r#where.0.get(&Register::AX), Some(&Register::BX));
+    }
+
     fn switched() -> MirBody {
         let selector = Value { variable: 1, version: 1, ..Value::new(1, 0) };
         let merged = Value { variable: 2, version: 1, ..Value::new(2, 20) };

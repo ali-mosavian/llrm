@@ -1539,7 +1539,7 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
                     for one in lir.without(
                         block.insns,
                         _discardable_identity,
-                        lambda one: _placed_for_rewrite(one, held, body.origin),
+                        lambda one: _placed_for_rewrite(one, held),
                     )
                 ),
                 succ=block.succ,
@@ -1604,7 +1604,7 @@ def _discardable_identity(one: lir.Insn) -> bool:
     return one.group is None and _pointless(one)
 
 
-def _placed_for_rewrite(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
+def _placed_for_rewrite(one: lir.Insn, held: dict) -> lir.Insn:
     """Place one instruction without discarding an inserted definition.
 
     A copy can become an identity after placement.  It emits no instruction,
@@ -1614,7 +1614,7 @@ def _placed_for_rewrite(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     copies that own original bytes; the marker retains byte ownership while its
     now-absent symbolic operand no longer owns a relocation.
     """
-    placed = _placed(one, held, origin)
+    placed = _placed(one, held)
     if placed.group is None and _pointless(placed):
         return lir.anchor(placed)
     return placed
@@ -1631,12 +1631,12 @@ def _pointless(one: lir.Insn) -> bool:
     return isinstance(into, ir.Reg) and isinstance(out_of, ir.Reg) and into.register == out_of.register
 
 
-def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
+def _placed(one: lir.Insn, held: dict) -> lir.Insn:
     if one.what is None:
         return one
     what = one.what
-    dests = tuple(_settled(x, held, origin) for x in what.dests)
-    sources = tuple(_settled(x, held, origin) for x in what.sources)
+    dests = tuple(_settled(x, held) for x in what.dests)
+    sources = tuple(_settled(x, held) for x in what.sources)
     # Unconditionally, with no "nothing changed" shortcut: `Mem.through` is
     # `compare=False`, so a cell that just gained the register its base was
     # given compares equal to the one without it, and the shortcut returned
@@ -1647,7 +1647,7 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     return replace(one, what=replace(what, name=name, dests=dests, sources=sources))
 
 
-def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
+def _settled(where: ir.Loc | ir.Held, held: dict) -> ir.Loc:
     """One operand with its value resolved to the register holding it."""
     if isinstance(where, ir.Mem) and where.selector is not None:
         register = held.get(where.selector.value)

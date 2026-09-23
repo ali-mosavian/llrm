@@ -94,6 +94,30 @@ def test_moving_a_preserved_value_does_not_rewrite_the_destination() -> None:
     assert _shown(made.code) == "mov ax,1", f"the destination moved with a value that is not it: {_shown(made.code)}"
 
 
+def test_a_lowered_origin_lets_the_assembler_remap_a_moved_value() -> None:
+    """Lower keyed `origin` by `mir.Value` and the assembler looked up the
+    instruction's value ids, so a value allocated away from where BC had it
+    found no origin and was emitted in BC's register."""
+    from qbopt.backend import lower
+
+    made = mir.Value(1, 0x10, variable=7)
+    copy = mir.Op(
+        0x10,
+        ir.Operation.MOVE,
+        "mov",
+        (made,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(1, 2),),
+        results=(mir.Held(made, 2),),
+    )
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (copy,), ()),))
+    low = lower.lowered("origin", body, {}, set(), {}, hints=mir.AllocationHints(origins={7: Register.EAX}))
+    (one,) = low.insns
+    where = asm._where(one, {made.id: Register.EBX}, low.origin)
+    assert where is not None and where[0][Register.AX] == Register.BX, where
+
+
 def test_lir_says_a_two_address_operand_is_one_register() -> None:
     """`add ax,[c]` is ax at two moments, not two places."""
     ax = ir.Reg(register=Register.AX, width=2)
@@ -616,7 +640,7 @@ def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
     from qbopt.backend import allocate
 
     for register in (Register.EBX, Register.ESI):
-        got = allocate._settled(_based_cell().what.sources[0], {21: register}, {})
+        got = allocate._settled(_based_cell().what.sources[0], {21: register})
         assert isinstance(got, ir.Mem)
         assert got.through == target.named(register, 2), f"{register}: {got.through}"
         assert got.base == ir.Held(21, 2), "the cell stopped naming its value"

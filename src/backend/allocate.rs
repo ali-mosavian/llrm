@@ -1636,7 +1636,7 @@ pub fn applied(body: &LirBody, got: &Assignment) -> Result<LirBody, Error> {
             insns: lir::without(
                 &block.insns,
                 |one| _discardable_identity(one),
-                Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held, &body.origin) {
+                Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held) {
                     Ok(placed) => placed,
                     Err(error) => {
                         failed.borrow_mut().get_or_insert(error);
@@ -1732,12 +1732,8 @@ fn _discardable_identity(one: &Insn) -> bool {
 }
 
 /// Place one instruction without discarding an inserted definition.
-fn _placed_for_rewrite(
-    one: &Arc<Insn>,
-    held: &IndexMap<u32, Register>,
-    origin: &IndexMap<u32, Register>,
-) -> Result<Arc<Insn>, Unplaced> {
-    let placed = _placed(one, held, origin)?;
+fn _placed_for_rewrite(one: &Arc<Insn>, held: &IndexMap<u32, Register>) -> Result<Arc<Insn>, Unplaced> {
+    let placed = _placed(one, held)?;
     if placed.group.is_none() && _pointless(&placed) {
         return Ok(lir::anchor(placed));
     }
@@ -1758,16 +1754,12 @@ fn _pointless(one: &Insn) -> bool {
     matches!((&what.dests[0], &what.sources[0]), (Loc::Reg(into), Loc::Reg(out_of)) if into.register == out_of.register)
 }
 
-fn _placed(
-    one: &Arc<Insn>,
-    held: &IndexMap<u32, Register>,
-    origin: &IndexMap<u32, Register>,
-) -> Result<Arc<Insn>, Unplaced> {
+fn _placed(one: &Arc<Insn>, held: &IndexMap<u32, Register>) -> Result<Arc<Insn>, Unplaced> {
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
-    let dests = what.dests.iter().map(|x| _settled(x, held, origin)).collect::<Result<Vec<_>, _>>()?;
-    let sources = what.sources.iter().map(|x| _settled(x, held, origin)).collect::<Result<Vec<_>, _>>()?;
+    let dests = what.dests.iter().map(|x| _settled(x, held)).collect::<Result<Vec<_>, _>>()?;
+    let sources = what.sources.iter().map(|x| _settled(x, held)).collect::<Result<Vec<_>, _>>()?;
     let mut name = what.name.clone();
     if target::far_load(what) {
         if let Loc::Reg(selector) = &dests[1] {
@@ -1782,7 +1774,7 @@ fn _placed(
 }
 
 /// One operand with its value resolved to the register holding it.
-fn _settled(place: &Loc, held: &IndexMap<u32, Register>, _origin: &IndexMap<u32, Register>) -> Result<Loc, Unplaced> {
+fn _settled(place: &Loc, held: &IndexMap<u32, Register>) -> Result<Loc, Unplaced> {
     let mut place = place.clone();
     if let Loc::Mem(cell) = &place {
         if let Some(selector) = cell.selector {
@@ -2150,7 +2142,7 @@ mod tests {
     fn test_a_placed_cell_reaches_memory_by_the_register_its_value_got() {
         for register in [Register::EBX, Register::ESI] {
             let was = cell_of(&_based_cell());
-            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &IndexMap::default()).expect("placed");
+            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)])).expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
             assert_eq!(got.through, target::named(register, 2), "{register:?}: {:?}", got.through);
             assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");

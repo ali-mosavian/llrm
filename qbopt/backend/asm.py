@@ -346,7 +346,7 @@ def _seats(op: lir.Insn, assignment: dict | None, origin: dict | None) -> "tuple
     """
     seats = []
     for one in op.results:
-        value = getattr(one, "value", None)
+        value = getattr(getattr(one, "value", None), "id", None)
         if value is None:
             return None
         where = assignment.get(value) if assignment is not None else (origin or {}).get(value)

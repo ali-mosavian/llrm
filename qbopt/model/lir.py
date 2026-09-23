@@ -245,9 +245,9 @@ class LirBody:
     name: str
     entry: int
     blocks: tuple[LirBlock, ...]
-    # What the raise saw each value in. The allocator's input, not its
-    # answer, and the fallback for an operand it could not place.
-    origin: dict
+    # What the raise saw each value in, by value id. The allocator's input,
+    # not its answer, and the fallback for an operand it could not place.
+    origin: "dict[int, Register_]"
     # Where the raise fixed a value, by value id.
     pins: "dict[int, Register_]"
     # Values supplied by the caller in registers rather than defined by an

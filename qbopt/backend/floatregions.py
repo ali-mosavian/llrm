@@ -5,12 +5,7 @@ from collections import defaultdict
 
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.model import mir
 from qbopt.analysis import loops
-
-
-def _identifier(value: int | mir.Value) -> int:
-    return value if isinstance(value, int) else value.id
 
 
 def boundary(one: lir.Insn) -> bool:
@@ -29,7 +24,7 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
     definitions, readers = defaultdict(list), defaultdict(list)
     widths = defaultdict(set)
     pinned = set(body.pins)
-    identifiers = {_identifier(value) for value in body.origin} | pinned
+    identifiers = set(body.origin) | pinned
     for block in body.blocks:
         for phi in block.phis:
             identifiers.update((phi.result, *(value for _, value in phi.incoming)))

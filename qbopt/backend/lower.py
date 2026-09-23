@@ -738,7 +738,7 @@ def lowered(
             )
             for block in body.blocks
         ),
-        origin=origin,
+        origin={value.id: where for value, where in origin.items()},
         inputs=frozenset(value.id for value in liveness.entry_values(body) if not value.flags and value.id is not None),
         loop_trip_counts=trip_counts,
         ordered=True,
