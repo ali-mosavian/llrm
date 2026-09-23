@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::loops;
 use crate::analysis::ssa::{self, SubstitutionError};
-use crate::model::mir::{Kind, MirBlock, MirBody, Op, OpCode, Phi};
+use crate::model::mir::{Kind, MirBody, Op, OpCode};
 use crate::optimize::transform::_empty_operation;
 
 /// Direct port of `qbopt/optimize/cfg.py:_empty`.
@@ -132,74 +132,58 @@ pub(crate) fn merged(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
             }
 
             let kept = first.ops.len() - usize::from(erased.is_some());
-            let mut moved = first.ops[..kept].to_vec();
-            moved.extend(erased);
-            moved.extend(between.iter().flat_map(|block| block.ops.iter().cloned()));
-            let mut marker = Op::new(target, OpCode::nothing(), "", Vec::new(), Vec::new());
-            marker.kind = Kind::Nothing;
-            moved.push(marker);
-            moved.extend(second.ops.iter().cloned());
             replacement = Some((
                 first.at,
                 target,
-                MirBlock {
-                    at: first.at,
-                    phis: first.phis.clone(),
-                    ops: moved,
-                    succ: second.succ.clone(),
-                    cold: first.cold,
-                },
-                std::iter::once(target)
-                    .chain(between.iter().map(|block| block.at))
-                    .collect::<BTreeSet<_>>(),
+                kept,
+                erased,
+                between.iter().map(|block| block.at).collect::<Vec<_>>(),
                 swaps,
             ));
             break;
         }
 
-        let Some((first_at, target, combined, removed, swaps)) = replacement else {
+        let Some((first_at, target, kept, erased, between, swaps)) = replacement else {
             return Ok(body);
         };
-        let mut blocks = Vec::with_capacity(body.blocks.len());
-        for block in &body.blocks {
-            if removed.contains(&block.at) {
-                continue;
-            }
-            let block = if block.at == first_at {
-                &combined
-            } else {
-                block
-            };
-            let phis = block
-                .phis
-                .iter()
-                .map(|phi| Phi {
-                    result: phi.result,
-                    incoming: phi
+        // In place, moving ops rather than copying them: a chain merges one
+        // block at a time, and a copy per merge made unrolled bodies quadratic.
+        let blocks = &mut Rc::make_mut(&mut body).blocks;
+        let mut taken = |at: i64| {
+            let block = blocks.iter_mut().find(|block| block.at == at).expect("a merged block is present");
+            (std::mem::take(&mut block.ops), std::mem::take(&mut block.succ))
+        };
+        let (mut moved, _) = taken(first_at);
+        moved.truncate(kept);
+        moved.extend(erased);
+        for at in &between {
+            moved.extend(taken(*at).0);
+        }
+        let mut marker = Op::new(target, OpCode::nothing(), "", Vec::new(), Vec::new());
+        marker.kind = Kind::Nothing;
+        moved.push(marker);
+        let (second, succ) = taken(target);
+        moved.extend(second);
+        let first = blocks.iter_mut().find(|block| block.at == first_at).expect("the first block is present");
+        first.ops = moved;
+        first.succ = succ;
+        blocks.retain(|block| block.at != target && !between.contains(&block.at));
+        for block in blocks.iter_mut() {
+            for phi in &mut block.phis {
+                if phi.incoming.contains_key(&target) || phi.incoming.values().any(|value| swaps.contains_key(&value.id)) {
+                    phi.incoming = phi
                         .incoming
                         .iter()
                         .map(|(at, value)| {
-                            (
-                                if *at == target { first_at } else { *at },
-                                swaps.get(&value.id).copied().unwrap_or(*value),
-                            )
+                            (if *at == target { first_at } else { *at }, swaps.get(&value.id).copied().unwrap_or(*value))
                         })
-                        .collect(),
-                })
-                .collect::<Vec<_>>();
-            blocks.push(MirBlock {
-                at: block.at,
-                phis,
-                ops: block
-                    .ops
-                    .iter()
-                    .map(|op| ssa::substituted(op, &swaps))
-                    .collect::<Result<_, _>>()?,
-                succ: block.succ.clone(),
-                cold: block.cold,
-            });
+                        .collect();
+                }
+            }
+            if !swaps.is_empty() {
+                block.ops = block.ops.iter().map(|op| ssa::substituted(op, &swaps)).collect::<Result<_, _>>()?;
+            }
         }
-        Rc::make_mut(&mut body).blocks = blocks;
     }
 }
 
