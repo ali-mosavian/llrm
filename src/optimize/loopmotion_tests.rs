@@ -136,16 +136,9 @@ fn test_an_accumulator_without_zero_trip_initialization_stays_in_the_loop() {
 #[test]
 fn test_indexed_record_accumulators_store_only_after_loop() {
     for tag in ["p-g2", "v-g3"] {
-        let mut states: Vec<MirBody> = vec![];
-        let mut watch = |_: &str, _: Option<&str>, low: crate::wholeseg::Watched<'_>| {
-            if let crate::wholeseg::Watched::Mir(body) = low {
-                states.push(body.clone());
-            }
-        };
-        let data = testing::data(format!("fixtures/regressions/udtrng-{tag}.obj"));
-        let result = testing::emitted_watching(&data, Some(&mut watch));
+        let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/regressions/udtrng-{tag}.obj")));
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
-        let body = states.last().unwrap();
+        let body = &states.last().unwrap().2;
         let hot: BTreeSet<i64> =
             loops::loops(&body.blocks, Some(body.entry)).into_iter().flat_map(|one| one.body).collect();
         let wide: Vec<(i64, MemRef)> = body
@@ -163,13 +156,11 @@ fn test_indexed_record_accumulators_store_only_after_loop() {
 /// NBODYS stored `other` every inner iteration: a float op kept the loop's stores for a handler it has not got.
 #[test]
 fn test_a_float_loop_sinks_its_counter_store_without_an_error_handler() {
+    let (_, states) = testing::emitted_states(&testing::data("fixtures/bench/nbodys-v-g3.obj"));
     let mut last: IndexMap<Option<String>, MirBody> = IndexMap::default();
-    let mut watch = |stage: &str, name: Option<&str>, low: crate::wholeseg::Watched<'_>| {
-        if let (true, crate::wholeseg::Watched::Mir(body)) = (stage.starts_with("mir-"), low) {
-            last.insert(name.map(str::to_owned), body.clone());
-        }
-    };
-    testing::emitted_watching(&testing::data("fixtures/bench/nbodys-v-g3.obj"), Some(&mut watch));
+    for (_, name, body) in states.into_iter().filter(|(stage, _, _)| stage.starts_with("mir-")) {
+        last.insert(name, body);
+    }
     let body = last
         .values()
         .find(|one| one.blocks.iter().flat_map(|block| &block.ops).any(|op| op.kind == Kind::Fmul))

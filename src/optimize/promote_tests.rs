@@ -1,8 +1,8 @@
 //! Port of `tests/test_promote.py`.
 //!
-//! Skipped, needing `wholeseg`:
-//! test_guarded_indexed_accumulators_do_not_reload_in_loop,
-//! test_production_press_keeps_the_loop_counter_in_a_value.
+//! test_guarded_indexed_accumulators_do_not_reload_in_loop leaves out q-O,
+//! which fails in Python at this commit (0x005b: 6 bytes between the ops are
+//! not instructions).
 //! Skipped, monkeypatching `promote`:
 //! test_nested_memory_update_becomes_a_value_and_preserves_its_store.
 //! Skipped, failing in Python at this commit:
@@ -969,4 +969,40 @@ fn test_addrm_long_accumulator_survives_split_initialization() {
     // PRINT still gets u, from the cell or from the value promoted out of it.
     let remaining: BTreeSet<Option<u32>> = all_ops(&result).filter(|op| op.kind == Kind::Arg).map(|op| op.id).collect();
     assert!(output.iter().all(|id| remaining.contains(id)));
+}
+
+/// UDTRNG reloaded both LONG record fields on each of seven accumulator updates.
+#[test]
+fn test_guarded_indexed_accumulators_do_not_reload_in_loop() {
+    for tag in ["p-g2", "v-g3"] {
+        let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/regressions/udtrng-{tag}.obj")));
+        assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
+        let body = &states.last().unwrap().2;
+        let hot: BTreeSet<i64> =
+            loops::loops(&body.blocks, Some(body.entry)).into_iter().flat_map(|one| one.body).collect();
+        let wide: Vec<(i64, MemRef)> = body
+            .blocks
+            .iter()
+            .filter(|block| hot.contains(&block.at))
+            .flat_map(|block| &block.ops)
+            .flat_map(|op| op.loads.iter().map(move |one| (op.at, one.clone())))
+            .filter(|(_, one)| one.base.is_some() && one.width == 4)
+            .collect();
+        assert!(wide.is_empty(), "{tag}: {wide:?}");
+    }
+}
+
+/// press reloaded J each iteration despite having just stored that value.
+#[test]
+fn test_production_press_keeps_the_loop_counter_in_a_value() {
+    let raw = testing::data("fixtures/omf/press-p-g2.obj");
+    let found = testing::loaded_bytes(&raw).unwrap();
+    let body = testing::main_body(&found, &testing::partitioned_bytes(&raw));
+    let cell = testing::ops(&body).into_iter().find(|op| op.at == 0x94).unwrap().loads[0].clone();
+    let result = testing::emitted(&raw);
+    assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
+    let emitted = testing::loaded_bytes(&result.data).unwrap();
+    let bodies = testing::raised_from(&emitted, &testing::partitioned_bytes(&result.data), None);
+    let refs: Vec<MemRef> = testing::all_ops(&bodies).into_iter().flat_map(|op| op.loads).collect();
+    assert!(!refs.iter().any(|one| one.addr == cell.addr), "the emitted loop still reloads J");
 }

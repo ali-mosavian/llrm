@@ -163,19 +163,26 @@ pub fn emitted_with(data: &[u8], basic_semantics: bool, bounds_checks: bool) -> 
         .unwrap()
 }
 
-/// `wholeseg.emitted(data, watch=...)`, keeping the MIR of each body named
-/// `name...` at `stage`.
-pub fn emitted_mir(data: &[u8], stage: &str, name: &str) -> (Emitted, Vec<MirBody>) {
+/// `wholeseg.emitted(data, watch=...)`, keeping every MIR state as
+/// `(stage, name, body)` in the order watched.
+pub fn emitted_states(data: &[u8]) -> (Emitted, Vec<(String, Option<String>, MirBody)>) {
     let mut states = vec![];
-    let mut watch = |seen: &str, named: Option<&str>, low: Watched<'_>| {
-        if let (true, Some(named), Watched::Mir(state)) = (seen == stage, named, low) {
-            if named.starts_with(name) {
-                states.push(state.clone());
-            }
+    let mut watch = |stage: &str, name: Option<&str>, low: Watched<'_>| {
+        if let Watched::Mir(state) = low {
+            states.push((stage.to_owned(), name.map(str::to_owned), state.clone()));
         }
     };
     let result = emitted_watching(data, Some(&mut watch));
     (result, states)
+}
+
+/// `wholeseg.emitted(data, watch=...)`, keeping the MIR of each body named
+/// `name...` at `stage`.
+pub fn emitted_mir(data: &[u8], stage: &str, name: &str) -> (Emitted, Vec<MirBody>) {
+    let (result, states) = emitted_states(data);
+    let named = |one: &Option<String>| one.as_deref().is_some_and(|one| one.starts_with(name));
+    let kept = states.into_iter().filter(|(seen, one, _)| seen == stage && named(one)).map(|(_, _, body)| body);
+    (result, kept.collect())
 }
 
 /// `wholeseg.emitted` of a fixture, asserting the LIR emitter wrote it.
