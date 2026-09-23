@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
+use crate::support::bits::Bits;
 use crate::support::hash::{HashMap, HashSet};
 
 use crate::support::hash::IndexMap;
@@ -1168,17 +1169,19 @@ pub(crate) fn _available(
         .map(|(at, _)| at)
         .collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&body.blocks);
-    let mut leaving = reachable
-        .iter()
-        .map(|at| (*at, cells.keys().cloned().collect::<HashSet<_>>()))
-        .collect::<BTreeMap<_, _>>();
-    let refs = cells
-        .iter()
-        .map(|(addr, width)| (addr.clone(), _reference(addr, *width)))
-        .collect::<IndexMap<_, _>>();
-    let initializers = _initializers(body, cells, dgroup, bounds);
+    // Cells by their index in `cells`: a Key can hold a whole MemRef, too dear to hash per op.
+    let refs = cells.iter().map(|(addr, width)| _reference(addr, *width)).collect::<Vec<_>>();
+    let mut every = Bits::new(cells.len());
+    (0..cells.len()).for_each(|at| every.insert(at));
+    let mut leaving = reachable.iter().map(|at| (*at, every.clone())).collect::<BTreeMap<_, _>>();
+    let initializers = _initializers(body, cells, dgroup, bounds)
+        .into_iter()
+        .map(|(at, facts)| (at, facts.keys().filter_map(|key| cells.get_index_of(key)).collect::<Vec<_>>()))
+        .collect::<HashMap<_, _>>();
+    // Whether an op's stores may write a cell, per (op, cell): every round asks again.
+    let clobbered = std::cell::RefCell::new(HashMap::<(usize, usize), bool>::default());
 
-    let entering = |at: i64, leaving: &BTreeMap<i64, HashSet<Key>>| -> HashSet<Key> {
+    let entering = |at: i64, leaving: &BTreeMap<i64, Bits>| -> Bits {
         let parents = predecessors
             .get(&at)
             .into_iter()
@@ -1186,60 +1189,64 @@ pub(crate) fn _available(
             .filter(|parent| reachable.contains(parent))
             .collect::<Vec<_>>();
         if parents.is_empty() || at == body.entry {
-            return HashSet::default();
+            return Bits::new(cells.len());
         }
         let mut result = leaving[parents[0]].clone();
         for parent in &parents[1..] {
-            result.retain(|key| leaving[*parent].contains(key));
+            result.intersect_with(&leaving[*parent]);
         }
         result
     };
 
-    let through = |block_index: usize,
-                   mut available: HashSet<Key>,
-                   mut reads: Option<&mut HashSet<(usize, usize)>>| {
+    let through = |block_index: usize, mut available: Bits, mut reads: Option<&mut HashSet<(usize, usize)>>| {
         let block = &body.blocks[block_index];
-        let redefined = |available: &mut HashSet<Key>, values: &HashSet<Value>| {
-            available.retain(|key| {
-                let r#ref = &refs[key];
-                !(r#ref.base.is_some_and(|base| values.contains(&base))
-                    || r#ref
-                        .segment
-                        .is_some_and(|segment| values.contains(&segment)))
-            });
+        let redefined = |available: &mut Bits, values: &HashSet<Value>| {
+            if values.is_empty() {
+                return;
+            }
+            let gone = available
+                .iter()
+                .filter(|at| {
+                    let r#ref = &refs[*at];
+                    r#ref.base.is_some_and(|base| values.contains(&base))
+                        || r#ref.segment.is_some_and(|segment| values.contains(&segment))
+                })
+                .collect::<Vec<_>>();
+            gone.into_iter().for_each(|at| available.remove(at));
         };
 
-        redefined(
-            &mut available,
-            &block.phis.iter().map(|phi| phi.result).collect(),
-        );
+        redefined(&mut available, &block.phis.iter().map(|phi| phi.result).collect());
         for (op_index, op) in block.ops.iter().enumerate() {
             if effects::unmodeled_write(op) {
-                available.clear();
+                available = Bits::new(cells.len());
                 continue;
             }
             let cell = _cell(op);
-            let key = cell.as_ref().and_then(|cell| _key(cell, &BTreeSet::new()));
-            if let (Some(reads), Some(cell), Some(key)) = (reads.as_deref_mut(), &cell, &key) {
+            let key = cell.as_ref().and_then(|cell| _key(cell, &BTreeSet::new())).and_then(|key| cells.get_index_of(&key));
+            if let (Some(reads), Some(cell), Some(key)) = (reads.as_deref_mut(), &cell, key) {
                 if !op.loads.is_empty() && available.contains(key) && cell.width == cells[key] {
                     reads.insert((block_index, op_index));
                 }
             }
             redefined(&mut available, &op.defines.iter().copied().collect());
-            available.retain(|addr| {
-                !op.stores
+            if !op.stores.is_empty() {
+                let gone = available
                     .iter()
-                    .any(|written| overlapping(&refs[addr], written, layout.as_ref()))
-            });
-            if let (Some(cell), Some(key)) = (&cell, &key) {
-                if op.kind == Kind::Store
-                    && cells.get(key).is_some_and(|width| cell.width == *width)
-                {
-                    available.insert(key.clone());
+                    .filter(|at| {
+                        *clobbered.borrow_mut().entry((std::ptr::from_ref(op) as usize, *at)).or_insert_with(|| {
+                            op.stores.iter().any(|written| overlapping(&refs[*at], written, layout.as_ref()))
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                gone.into_iter().for_each(|at| available.remove(at));
+            }
+            if let (Some(cell), Some(key)) = (&cell, key) {
+                if op.kind == Kind::Store && cell.width == cells[key] {
+                    available.insert(key);
                 }
             }
             if let Some(initialized) = initializers.get(&(block_index, op_index)) {
-                available.extend(initialized.keys().cloned());
+                initialized.iter().for_each(|at| available.insert(*at));
             }
         }
         available
