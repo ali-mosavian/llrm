@@ -84,14 +84,14 @@ impl std::error::Error for Error {}
 impl Error {
     /// Python's class name and message, for a caller that catches by class.
     pub fn raised(&self) -> Exception {
-        let kind = match self {
-            Self::Unplaced(_) => "Unplaced",
-            Self::Spilled(_) => "Spilled",
-            Self::Impossible(_) => "Impossible",
-            Self::Refused(_) => "Refused",
-            Self::Value(_) => "ValueError",
+        let (module, kind) = match self {
+            Self::Unplaced(_) => ("qbopt.backend.allocate", "Unplaced"),
+            Self::Spilled(_) => ("qbopt.backend.allocate", "Spilled"),
+            Self::Impossible(_) => ("qbopt.backend.constrain", "Impossible"),
+            Self::Refused(_) => ("qbopt.backend.frame", "Refused"),
+            Self::Value(_) => ("builtins", "ValueError"),
         };
-        Exception::new(kind, self.to_string())
+        Exception::defined_in(module, kind, self.to_string())
     }
 }
 

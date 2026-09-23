@@ -44,18 +44,33 @@ pub trait MIRTransform {
     }
 }
 
-/// A Python exception crossing a boundary: `type(error).__name__` and
-/// `str(error)`. A caller that catches by class, as `wholeseg` does, reads
-/// `kind`.
+/// A Python exception crossing a boundary: `type(error).__module__`,
+/// `__name__` and `str(error)`. A caller that catches by class, as
+/// `wholeseg` does, reads `kind`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Exception {
+    pub module: &'static str,
     pub kind: &'static str,
     pub message: String,
 }
 
 impl Exception {
+    /// A builtin: `ValueError`, `OSError`, `Exception`.
     pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
-        Exception { kind, message: message.into() }
+        Self::defined_in("builtins", kind, message)
+    }
+
+    /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s `Unprintable`.
+    pub fn defined_in(module: &'static str, kind: &'static str, message: impl Into<String>) -> Self {
+        Exception { module, kind, message: message.into() }
+    }
+
+    /// The last line of the traceback Python prints when this escapes.
+    pub fn traceback(&self) -> String {
+        match self.module {
+            "builtins" => format!("{}: {}", self.kind, self.message),
+            module => format!("{module}.{}: {}", self.kind, self.message),
+        }
     }
 }
 

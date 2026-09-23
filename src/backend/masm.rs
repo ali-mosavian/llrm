@@ -41,6 +41,12 @@ impl fmt::Display for Unprintable {
 
 impl std::error::Error for Unprintable {}
 
+impl From<Unprintable> for crate::model::passes::Exception {
+    fn from(one: Unprintable) -> Self {
+        Self::defined_in("qbopt.backend.masm", "Unprintable", one.0)
+    }
+}
+
 /// `InlinePart`: bytes, or `(kind, symbol, offset)` for a fixup.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InlinePart {

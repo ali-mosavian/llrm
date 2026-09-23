@@ -17,7 +17,7 @@ fn main() -> ExitCode {
     match llrm::rewrite::main(&arguments) {
         Ok(status) => ExitCode::from(u8::try_from(status).unwrap_or(1)),
         Err(raised) => {
-            eprintln!("Traceback (most recent call last):\n{}: {}", raised.kind, raised.message);
+            eprintln!("Traceback (most recent call last):\n{}", raised.traceback());
             ExitCode::from(1)
         }
     }

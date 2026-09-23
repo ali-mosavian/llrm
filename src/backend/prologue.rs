@@ -83,7 +83,7 @@ impl LIRTransform for Prologue {
     }
 
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| Exception::new("Refused", refused.0))
+        reserved(&body, &self.frame.borrow(), Some(&self.calls)).map_err(|refused| Exception::defined_in("qbopt.backend.prologue", "Refused", refused.0))
     }
 }
 
