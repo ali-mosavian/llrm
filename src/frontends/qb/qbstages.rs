@@ -137,7 +137,7 @@ fn _pretty_preamble(program: &model::Program, module: &masm::Module) -> String {
         while index < items.len() {
             let item = &items[index];
             let following = items.get(index + 1);
-            if let (masm::Datum::Label(label), Some(masm::Datum::Bytes(following))) = (item, following) {
+            if let (masm::Datum::Label(label) | masm::Datum::Object(label), Some(masm::Datum::Bytes(following))) = (item, following) {
                 if let Some((extent, type_name)) = globals_.get(&label.name) {
                     if following.len() as i64 == *extent && following.iter().all(|byte| *byte == 0) {
                         if !source_heading {

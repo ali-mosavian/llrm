@@ -190,7 +190,7 @@ fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Da
         };
         let items = &mut grouped[segment];
         let label = names[&(Space::Segment, object_.id)].clone();
-        items.push(masm::Datum::Label(masm::Label { name: label }));
+        items.push(masm::Datum::Object(masm::Label { name: label }));
         let mut cursor = 0;
         let mut relocations: Vec<&model::DataRelocation> = object_.relocations.iter().collect();
         relocations.sort_by_key(|one| one.at);
@@ -303,7 +303,7 @@ fn _object_data(
 ) {
     for item in items {
         match item {
-            masm::Datum::Label(masm::Label { name }) => {
+            masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, segment.image.len()));
             }
             masm::Datum::Fill(masm::Fill { size, byte: None }) => segment.skip(*size as usize),
@@ -1832,7 +1832,8 @@ pub fn object_bytes(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = assembled(program, observer, options)?;
+    let module = omfwrite::live(&assembled(program, observer, options)?)
+        .map_err(|error| CompileError::Value(error.to_string()))?;
     // Build the same semantic segments as backend.omfwrite.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
     // serializer to write OMF.

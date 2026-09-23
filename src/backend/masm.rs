@@ -108,6 +108,8 @@ pub struct Align {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Datum {
     Label(Label),
+    /// A label heading data a writer drops when nothing names it: up to the next Object.
+    Object(Label),
     Fill(Fill),
     Pointer(Pointer),
     Align(Align),
@@ -167,7 +169,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 
 pub fn datum(item: &Datum) -> Vec<String> {
     match item {
-        Datum::Label(Label { name }) => vec![format!("{name} label byte")],
+        Datum::Label(Label { name }) | Datum::Object(Label { name }) => vec![format!("{name} label byte")],
         Datum::Fill(Fill { size, byte }) => {
             vec![format!("    db {size} dup ({})", byte.map_or_else(|| "?".to_owned(), |one| one.to_string()))]
         }

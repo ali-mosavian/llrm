@@ -739,6 +739,21 @@ fn test_readonly_literals_use_the_measured_near_descriptor_and_far_payload() {
     );
 }
 
+/// Every static array carried a descriptor in BC_CN whether code read it or
+/// not: deedlines' 29 unread ones cost 522 bytes of DGROUP, and its string
+/// space ran out ("Out of string space") where BC's build ran.
+#[test]
+fn test_a_descriptor_nothing_reads_takes_no_dgroup() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let constants = |text: &str| {
+        let source = written(&directory, "T.BAS", text.as_bytes());
+        segment(&records(&parsed_as(&source, "qb45", "qb45"), "T.BAS"), "BC_CN").1
+    };
+    assert_eq!(constants("DEFINT A-Z\r\nDIM a(10)\r\na(3) = 5\r\nPRINT a(3)\r\n"), 0);
+    let whole = "DEFINT A-Z\r\nDECLARE SUB s (b())\r\nDIM a(10)\r\na(3) = 5\r\nCALL s(a())\r\nSUB s (b())\r\nPRINT b(3)\r\nEND SUB\r\n";
+    assert_eq!(constants(whole), 18);
+}
+
 /// PRINT "A" emitted VBDOS's far bridge and printed garbage under QB 4.5 and PDS 7.1.
 #[test]
 fn test_qb_and_pds_literals_use_their_measured_near_descriptor() {

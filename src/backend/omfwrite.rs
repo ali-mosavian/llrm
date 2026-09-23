@@ -589,7 +589,83 @@ pub fn _resolved_fixup(one: &omf::Fixup, offset: i64, disp: i64) -> Result<Vec<u
     Ok(body)
 }
 
+/// `module` without the data objects nothing reaches.
+///
+/// A `Datum::Object` starts a unit that stays only if code, a public, or a
+/// kept unit names one of its labels. Items before a segment's first Object
+/// always stay.
+pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
+    if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
+        return Ok(module.clone());
+    }
+    let mut reached: BTreeSet<String> = module.publics.iter().cloned().collect();
+    for (number, procedure) in module.procedures.iter().enumerate() {
+        reached.insert(procedure.name.clone());
+        for item in masm::listing(procedure, number)? {
+            for one in _items(&item, &module.names, number)? {
+                match one {
+                    Encoded::Piece(Piece { fixups, .. }) => {
+                        reached.extend(fixups.iter().map(|fixup| _target(&fixup.name).to_owned()));
+                    }
+                    Encoded::Near(Near { name }) => {
+                        reached.insert(name);
+                    }
+                    Encoded::Label(_) | Encoded::Jump(_) => {}
+                }
+            }
+        }
+    }
+    // (segment entry, droppable, items)
+    let mut units: Vec<(usize, bool, Vec<masm::Datum>)> = Vec::new();
+    for (entry, (_segment, items)) in module.data.iter().enumerate() {
+        units.push((entry, false, Vec::new()));
+        for item in items {
+            if matches!(item, masm::Datum::Object(_)) {
+                units.push((entry, true, Vec::new()));
+            }
+            units.last_mut().expect("a unit is open").2.push(item.clone());
+        }
+    }
+    let labels: Vec<BTreeSet<&str>> = units
+        .iter()
+        .map(|(_, _, run)| {
+            run.iter()
+                .filter_map(|item| match item {
+                    masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    let mut kept: Vec<bool> = units.iter().map(|(_, droppable, _)| !droppable).collect();
+    let mut pending: Vec<usize> = (0..units.len()).filter(|&index| kept[index]).collect();
+    while let Some(index) = pending.pop() {
+        for item in &units[index].2 {
+            if let masm::Datum::Pointer(masm::Pointer { name, .. }) | masm::Datum::SegmentWord(name) = item {
+                reached.insert(_target(name).to_owned());
+            }
+        }
+        for other in 0..units.len() {
+            if !kept[other] && labels[other].iter().any(|name| reached.contains(*name)) {
+                kept[other] = true;
+                pending.push(other);
+            }
+        }
+    }
+    let mut data: Vec<(String, Vec<masm::Datum>)> =
+        module.data.iter().map(|(segment, _)| (segment.clone(), Vec::new())).collect();
+    for ((entry, _, run), keep) in units.into_iter().zip(kept) {
+        if keep {
+            data[entry].1.extend(run);
+        }
+    }
+    Ok(masm::Module { data, ..module.clone() })
+}
+
 pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
+    let module = &live(module)?;
     let mut segments = vec![Segment::new(&module.code, "CODE", false)];
     let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
     for (name, _items) in &module.data {
@@ -617,7 +693,7 @@ pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
 pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols: &mut IndexMap<String, (usize, usize)>) {
     for item in items {
         match item {
-            masm::Datum::Label(masm::Label { name }) => {
+            masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, segment.image.len()));
             }
             masm::Datum::Fill(masm::Fill { size, byte: None }) => segment.skip(*size as usize),
