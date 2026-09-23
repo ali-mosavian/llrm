@@ -421,8 +421,9 @@ pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &Ind
     if !body.blocks.iter().any(|block| block.ops.iter().any(|op| op.kind == Kind::Fstore)) {
         return Vec::new();
     }
-    let integers = consts::known(body, Some(dgroup), Some(calls), None, None);
-    let memory = cells(body, dgroup, calls);
+    // Solved only once a loop has the shape asked for: most bodies have none.
+    let solved = std::cell::OnceCell::new();
+    let solve = || solved.get_or_init(|| (consts::known(body, Some(dgroup), Some(calls), None, None), cells(body, dgroup, calls)));
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<IndexMap<_, _>>();
     let predecessors = loops::predecessors(&body.blocks);
     let mut exits = Vec::new();
@@ -474,14 +475,15 @@ pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &Ind
         {
             continue;
         }
-        let Some(count) = induction::agreed_count(&induction::counted(body, &loop_, Some(&integers), false)) else {
+        let (integers, memory) = solve();
+        let Some(count) = induction::agreed_count(&induction::counted(body, &loop_, Some(integers), false)) else {
             continue;
         };
-        let mut asked = consts::memory_queries(body, &integers, dgroup);
+        let mut asked = consts::memory_queries(body, integers, dgroup);
         let initial = consts::_kills(
             (*memory[&(entry.at, entry.ops.len() - 1)]).clone(),
             entry.ops.last().expect("entry ops"),
-            &integers,
+            integers,
             dgroup,
             calls,
             None,
@@ -489,7 +491,7 @@ pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &Ind
             false,
             Some(&mut asked),
         );
-        let Some(last) = repeated(&latch.ops, &count, &initial, dgroup, Some(&integers), Some(&mut asked)) else {
+        let Some(last) = repeated(&latch.ops, &count, &initial, dgroup, Some(integers), Some(&mut asked)) else {
             continue;
         };
         let facts = stored
