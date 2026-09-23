@@ -862,8 +862,13 @@ pub fn points_to(
 
     let started = std::time::Instant::now();
     loop {
-        let before_values = values.clone();
-        let before_outgoing = outgoing.clone();
+        let changed = std::cell::Cell::new(false);
+        let learn = |values: &mut IndexMap<Value, Provenance>, value: Value, fact: Provenance| {
+            if values.get(&value) != Some(&fact) {
+                values.insert(value, fact);
+                changed.set(true);
+            }
+        };
         for block in &body.blocks {
             let parents_at = predecessors.get(&block.at).unwrap_or(&none);
             let has_back_edge = parents_at.iter().any(|parent| back_edges.contains(&(*parent, block.at)));
@@ -919,7 +924,7 @@ pub fn points_to(
                         }
                     }
                     if let Some(fact) = fact {
-                        values.insert(phi.result, fact);
+                        learn(&mut values, phi.result, fact);
                         pointer_values.insert(phi.result);
                     }
                 }
@@ -933,7 +938,7 @@ pub fn points_to(
                     // result loses facts as soon as a MIR pass synthesizes or
                     // reparents one of those otherwise ordinary values.
                     if let Some(direct) = direct.as_ref().filter(|_| !body.pointer_seeds.contains_key(result)) {
-                        values.insert(*result, direct.clone());
+                        learn(&mut values, *result, direct.clone());
                         pointer_values.insert(*result);
                     }
                 }
@@ -944,7 +949,7 @@ pub fn points_to(
                             .map(|reference| _cell_key(reference).and_then(|key| state.get(&key))),
                     );
                     if let Some(loaded) = loaded {
-                        values.insert(op.defines[0], loaded);
+                        learn(&mut values, op.defines[0], loaded);
                     }
                 }
                 if !op.stores.is_empty() {
@@ -965,9 +970,13 @@ pub fn points_to(
                     }
                 }
             }
-            outgoing.insert(block.at, state.into_items());
+            let state = state.into_items();
+            if outgoing[&block.at] != state {
+                outgoing.insert(block.at, state);
+                changed.set(true);
+            }
         }
-        if values == before_values && outgoing == before_outgoing {
+        if !changed.get() {
             break;
         }
     }
