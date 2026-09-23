@@ -241,6 +241,7 @@ pub fn assembled(
         data,
         procedures,
         private: BTreeSet::new(),
+        requests: BTreeSet::new(),
     })
 }
 

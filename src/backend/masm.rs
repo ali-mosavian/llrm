@@ -130,6 +130,8 @@ pub struct Module {
     pub procedures: Vec<Procedure>,
     /// data segments outside DGROUP; only ever asked for membership
     pub private: BTreeSet<String>,
+    /// Externs nothing references, declared so LINK pulls in their module.
+    pub requests: BTreeSet<String>,
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {

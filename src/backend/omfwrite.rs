@@ -867,7 +867,8 @@ pub fn _records(
     // masm.text's order, data externals first; LINK searches libraries in EXTDEF order.
     let mut declared: Vec<&String> = externs.keys().collect();
     declared.sort_by_key(|name| externs[*name] != "byte");
-    let order: Vec<&String> = declared.into_iter().filter(|name| used.contains(*name)).collect();
+    let order: Vec<&String> =
+        declared.into_iter().filter(|name| used.contains(*name) || module.requests.contains(*name)).collect();
     let numbered: IndexMap<String, i64> =
         order.iter().enumerate().map(|(n, name)| ((*name).clone(), n as i64 + 1)).collect();
     let mut data = Vec::new();
@@ -1139,6 +1140,7 @@ mod tests {
                 vec![(2, masm::Callee::new("_f", true))],
             )],
             private: BTreeSet::new(),
+            requests: BTreeSet::new(),
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1224,6 +1226,7 @@ mod tests {
                 ),
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
+            requests: BTreeSet::new(),
         };
         assert_eq!(
             masm::text(&rich).unwrap(),

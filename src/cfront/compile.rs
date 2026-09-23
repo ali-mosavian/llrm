@@ -513,6 +513,7 @@ pub fn assembled(
             .filter(|one| one.attr & hir::PRIVATE != 0)
             .map(|one| one.name.clone())
             .collect(),
+        requests: BTreeSet::new(),
     };
     write(dump, "asm", &masm::text(&built)?)?;
     Ok(built)

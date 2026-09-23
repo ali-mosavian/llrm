@@ -359,6 +359,16 @@ fn test_constant_screen_mode_pulls_its_graphics_driver() {
     assert!(externals(&source, "SCN9.BAS").iter().any(|one| one == "B$EGAUSED"));
 }
 
+/// qbdemo's SCREEN 13 raised "Illegal function call" under QB45: nothing
+/// references B$VGAUSED, so the OBJ writer pruned the EXTDEF that links it.
+#[test]
+fn test_a_qb45_screen_mode_keeps_its_driver_request() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SCN13.BAS", b"screen 13\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(externals(&source, "SCN13.BAS").iter().any(|one| one == "B$VGAUSED"));
+}
+
 /// Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame.
 #[test]
 fn test_variable_screen_mode_pulls_all_graphics_drivers() {
@@ -860,6 +870,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
             callees: last.callees,
         }],
         private: BTreeSet::new(),
+        requests: BTreeSet::new(),
     })
     .expect("prints");
     assert!(assembly.contains("db 0d9h,0feh"));
