@@ -861,16 +861,52 @@ pub fn points_to(
     let none = BTreeSet::new();
 
     let started = std::time::Instant::now();
+    // A block reads its parents' cells and these values. With neither changed
+    // since its last visit it would compute what it already holds, widening
+    // included, as widening an object's whole slice gives the same slice.
+    let reads = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut read = HashSet::default();
+            read.extend(block.phis.iter().flat_map(|phi| phi.incoming.values().copied()));
+            for op in &block.ops {
+                read.extend(op.uses.iter().copied());
+                read.extend(op.args.iter().filter_map(|arg| match arg {
+                    Arg::Held(held) => Some(held.value),
+                    _ => None,
+                }));
+                read.extend(op.loads.iter().chain(&op.stores).filter_map(|reference| reference.base));
+            }
+            read
+        })
+        .collect::<Vec<_>>();
+    let tick = std::cell::Cell::new(0_u64);
+    let touched = RefCell::new(HashMap::<Value, u64>::default());
+    let mut sent = HashMap::<i64, u64>::default();
+    let mut visited = vec![None::<u64>; body.blocks.len()];
     loop {
         let changed = std::cell::Cell::new(false);
         let learn = |values: &mut IndexMap<Value, Provenance>, value: Value, fact: Provenance| {
             if values.get(&value) != Some(&fact) {
                 values.insert(value, fact);
+                touched.borrow_mut().insert(value, tick.get());
                 changed.set(true);
             }
         };
-        for block in &body.blocks {
+        for (index, block) in body.blocks.iter().enumerate() {
             let parents_at = predecessors.get(&block.at).unwrap_or(&none);
+            if let Some(last) = visited[index] {
+                let since = |stamp: Option<&u64>| stamp.is_some_and(|stamp| *stamp >= last);
+                let touched = touched.borrow();
+                if !parents_at.iter().any(|parent| since(sent.get(parent)))
+                    && !reads[index].iter().any(|value| since(touched.get(value)))
+                {
+                    continue;
+                }
+            }
+            tick.set(tick.get() + 1);
+            visited[index] = Some(tick.get());
             let has_back_edge = parents_at.iter().any(|parent| back_edges.contains(&(*parent, block.at)));
             let mut state = IndexMap::default();
             {
@@ -973,6 +1009,7 @@ pub fn points_to(
             let state = state.into_items();
             if outgoing[&block.at] != state {
                 outgoing.insert(block.at, state);
+                sent.insert(block.at, tick.get());
                 changed.set(true);
             }
         }
