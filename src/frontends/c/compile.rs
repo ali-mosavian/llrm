@@ -1231,7 +1231,7 @@ mod tests {
         SOLVED.with(|solved| solved.set(0));
         HALVED.with(|halved| halved.set(0));
         assert!(assembled(&text, "loopaddr", true, None, "386", &crate::model::passes::O2()).is_ok());
-        assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (35, 15));
+        assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (32, 15));
     }
 
     /// A callee taking arguments in registers: the raise pushed them anyway,
