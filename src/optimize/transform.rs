@@ -89,12 +89,18 @@ pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_s
     let whole = _widths(body);
     let demanded = halves(body);
 
-    let exact = if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
-        floatfacts::known(body, dgroup, &IndexMap::default(), None)
-    } else {
-        IndexMap::default()
+    // Float facts are asked only by an exact Fstore or a float op met twice.
+    let exact = std::cell::OnceCell::new();
+    let exact = || {
+        exact.get_or_init(|| {
+            if body.blocks.iter().any(|block| block.ops.iter().any(|op| op.floating.is_some())) {
+                floatfacts::known(body, dgroup, &IndexMap::default(), None)
+            } else {
+                IndexMap::default()
+            }
+        })
     };
-    let bounded = floatbounds::exact(body, &exact, dgroup)?;
+    let bounded = std::cell::OnceCell::new();
 
     let mut seen: IndexMap<_Computation, Vec<(usize, usize, Op)>> = IndexMap::default();
     // What a name numbers as -- copies included.  `standing` mirrors it for
@@ -107,7 +113,7 @@ pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_s
     for (occurrence, block, op) in occurrence::operations(body) {
         let index = occurrence.operation_index();
         let here = order[&block.at];
-        if let Some(stored) = _exact_stored_load(op, &exact) {
+        if let Some(stored) = _exact_stored_load(op, exact) {
             if let Some(key) = _computation(&stored, &stands, &whole) {
                 seen.entry(key).or_default().push((here, index, stored));
             }
@@ -154,7 +160,13 @@ pub(crate) fn subexpressions(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, avoid_s
             continue;
         };
         if op.floating.is_some()
-            && !_reusable_float_path(body, body.blocks[at].at, where_, block.at, index, &exact, &bounded)
+            && !_reusable_float_path(body, body.blocks[at].at, where_, block.at, index, exact(), match bounded.get() {
+                Some(bounded) => bounded,
+                None => {
+                    let found = floatbounds::exact(body, exact(), dgroup)?;
+                    bounded.get_or_init(|| found)
+                }
+            })
         {
             candidates.push((here, index, op.clone()));
             continue;
@@ -307,7 +319,10 @@ pub(crate) fn _unchanged_float_environment(op: &Op) -> bool {
 }
 
 /// An exact storage conversion leaves the source value available for reloads.
-pub(crate) fn _exact_stored_load(op: &Op, facts: &IndexMap<Value, crate::analysis::floatfacts::Finite>) -> Option<Op> {
+pub(crate) fn _exact_stored_load<'a>(
+    op: &Op,
+    facts: impl FnOnce() -> &'a IndexMap<Value, crate::analysis::floatfacts::Finite>,
+) -> Option<Op> {
     use crate::model::floating::{Format, Precision, Rounding, Semantics};
 
     let floating = op.floating.as_ref()?;
@@ -316,7 +331,7 @@ pub(crate) fn _exact_stored_load(op: &Op, facts: &IndexMap<Value, crate::analysi
         || !matches!(floating.result, Format::Binary32 | Format::Binary64)
         || op.stores.len() != 1
         || !op.loads.is_empty()
-        || !_exact_floating(op, facts)
+        || !_exact_floating(op, facts())
     {
         return None;
     }
