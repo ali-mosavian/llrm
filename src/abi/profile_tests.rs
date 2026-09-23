@@ -1,8 +1,7 @@
 //! Port of `tests/test_contract_profile.py`.
 //!
-//! Skipped, needing `rewrite.main`, `rewrite.rewrite`, `tools/stages.py`,
-//! `wholeseg` or a BC runtime library, and each spying through a `Mock`:
-//! `test_stale_dependency_does_not_overwrite_cli_output`,
+//! `test_stale_dependency_does_not_overwrite_cli_output` lives in `rewrite.rs`.
+//! Skipped, spying through a `Mock`:
 //! `test_stage_dumps_use_the_same_profile_and_native_mode`,
 //! `test_cli_forwards_profile_and_marks_its_identity`.
 
