@@ -600,7 +600,8 @@ pub(crate) type Frame = (Option<Value>, Option<Value>, Space, i64);
 /// The buckets held, by object, frame and alias class: Python's `parts`.
 #[derive(Clone, Default)]
 pub(crate) struct OverlapParts {
-    pub objects: HashMap<Option<MemoryObject>, HashSet<OverlapBucket>>,
+    pub objects: HashMap<MemoryObject, HashSet<OverlapBucket>>,
+    pub objectless: HashSet<OverlapBucket>,
     pub frames: HashMap<Option<Frame>, HashSet<OverlapBucket>>,
     pub classes: HashMap<Option<AliasClass>, HashSet<OverlapBucket>>,
 }
@@ -610,7 +611,10 @@ impl Bucket for OverlapBucket {
 
     fn held(&self, parts: &mut OverlapParts) {
         self.shape(|shape| {
-            parts.objects.entry(shape.object.clone()).or_default().insert(*self);
+            match &shape.object {
+                Some(object) => parts.objects.entry(object.clone()).or_default().insert(*self),
+                None => parts.objectless.insert(*self),
+            };
             parts.frames.entry(shape.frame).or_default().insert(*self);
             parts.classes.entry(shape.class).or_default().insert(*self);
         });
@@ -629,7 +633,12 @@ impl Bucket for OverlapBucket {
             }
         }
         self.shape(|shape| {
-            drop_from(&mut parts.objects, &shape.object, self);
+            match &shape.object {
+                Some(object) => drop_from(&mut parts.objects, object, self),
+                None => {
+                    parts.objectless.remove(self);
+                }
+            }
             drop_from(&mut parts.frames, &shape.frame, self);
             drop_from(&mut parts.classes, &shape.class, self);
         });
@@ -665,17 +674,26 @@ pub(crate) fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Optio
     let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
-    let mut reached = parts.objects.get(&None).into_iter().flatten().copied().collect::<Vec<_>>();
+    let mut reached = parts.objectless.iter().copied().collect::<Vec<_>>();
     if let Some(frame) = _frame(reference) {
         if let Some(buckets) = parts.frames.get(&Some(frame)) {
             reached.extend(buckets.iter().copied());
         }
     }
-    let written = provenance.slices.iter().map(|one| &one.object).collect::<HashSet<_>>();
-    let kinds = written.iter().map(|one| alias_class(one)).collect::<HashSet<_>>();
-    for one in written {
-        if let Some(buckets) = parts.objects.get(&Some(one.clone())) {
+    // A write names one or two objects: a list is cheaper than a set.
+    let mut kinds = Vec::with_capacity(provenance.slices.len());
+    let mut written = Vec::<&MemoryObject>::with_capacity(provenance.slices.len());
+    for one in &provenance.slices {
+        if written.contains(&&one.object) {
+            continue;
+        }
+        written.push(&one.object);
+        if let Some(buckets) = parts.objects.get(&one.object) {
             reached.extend(buckets.iter().copied());
+        }
+        let kind = alias_class(&one.object);
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
         }
     }
     for (kind, buckets) in &parts.classes {
