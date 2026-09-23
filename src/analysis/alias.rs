@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
+use crate::support::bits::Bits;
 use crate::support::hash::{HashMap, IndexMap, IndexSet};
 use std::cell::RefCell;
 use num_bigint::BigInt;
@@ -925,11 +926,6 @@ pub fn points_to(
     let started = std::time::Instant::now();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
-    let mut escape_out = body
-        .blocks
-        .iter()
-        .map(|block| (block.at, BTreeSet::<MemoryObject>::new()))
-        .collect::<IndexMap<_, _>>();
     let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::default();
     let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::default();
     for block in &body.blocks {
@@ -1086,34 +1082,56 @@ pub fn points_to(
         }
         publishes.insert(block.at, mine);
     }
-    let entering = |at: i64, escape_out: &IndexMap<i64, BTreeSet<MemoryObject>>| {
-        predecessors.get(&at).unwrap_or(&none).iter().flat_map(|one| escape_out[one].iter().cloned()).collect::<BTreeSet<_>>()
+    // Objects numbered once, so the unions along edges are word operations.
+    let objects = publishes.values().flatten().flatten().cloned().collect::<IndexSet<_>>();
+    let number = |escapes: &BTreeSet<MemoryObject>| {
+        let mut bits = Bits::new(objects.len());
+        escapes.iter().for_each(|one| bits.insert(objects.get_index_of(one).expect("numbered")));
+        bits
     };
-    loop {
-        let before = escape_out.clone();
+    let generated = publishes
+        .iter()
+        .map(|(at, mine)| {
+            let mut all = Bits::new(objects.len());
+            mine.iter().for_each(|escapes| all.union_with(&number(escapes)));
+            (*at, all)
+        })
+        .collect::<IndexMap<_, _>>();
+    let mut out = body.blocks.iter().map(|block| (block.at, Bits::new(objects.len()))).collect::<IndexMap<_, _>>();
+    let entering = |at: i64, out: &IndexMap<i64, Bits>| {
+        let mut state = Bits::new(objects.len());
+        predecessors.get(&at).unwrap_or(&none).iter().for_each(|one| state.union_with(&out[one]));
+        state
+    };
+    let mut changing = true;
+    while changing {
+        changing = false;
         for block in &body.blocks {
-            let mut state = entering(block.at, &escape_out);
-            publishes[&block.at].iter().for_each(|escapes| state.extend(escapes.iter().cloned()));
-            escape_out.insert(block.at, state);
-        }
-        if escape_out == before {
-            break;
+            let mut state = entering(block.at, &out);
+            state.union_with(&generated[&block.at]);
+            if state != out[&block.at] {
+                out.insert(block.at, state);
+                changing = true;
+            }
         }
     }
+    let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     for block in &body.blocks {
-        let mut state = entering(block.at, &escape_out);
+        let mut state = entering(block.at, &out);
         for (op, escapes) in block.ops.iter().zip(&publishes[&block.at]) {
             if asked.contains(&op.at) {
-                escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+                escaped_before.entry(op.at).or_default().extend(named(&state));
             }
-            state.extend(escapes.iter().cloned());
+            state.union_with(&number(escapes));
             if asked.contains(&op.at) {
-                escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+                escaped_before.entry(op.at).or_default().extend(named(&state));
             }
         }
     }
+    let mut every = Bits::new(objects.len());
+    out.values().for_each(|one| every.union_with(one));
+    let escaped = named(&every);
     crate::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
-    let escaped = escape_out.values().flatten().cloned().collect();
     Ok(PointsTo {
         values,
         escaped,
