@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use crate::support::hash::HashMap;
+use crate::support::hash::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -477,6 +477,31 @@ fn _selector(
     Some(segment)
 }
 
+/// Every value an op that writes memory reads: `_kills` asks `known` of no other.
+fn _memory_reads(body: &MirBody) -> HashSet<Value> {
+    let mut read = HashSet::default();
+    let cell = |reference: &MemRef, read: &mut HashSet<Value>| read.extend(reference.base.iter().chain(&reference.segment).copied());
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        if op.stores.is_empty() && op.memory_values.is_empty() {
+            continue;
+        }
+        read.extend(op.uses.iter().chain(&op.exits).chain(op.merges.keys()).copied());
+        for argument in op.args.iter().chain(&op.results) {
+            match argument {
+                Arg::Held(held) => {
+                    read.insert(held.value);
+                }
+                Arg::Cell(one) => cell(&one.r#ref, &mut read),
+                _ => {}
+            }
+        }
+        for reference in op.loads.iter().chain(&op.stores).chain(op.memory_values.iter().map(|(one, _)| one)) {
+            cell(reference, &mut read);
+        }
+    }
+    read
+}
+
 /// What each value is, as the alias lattice asks for it.
 fn _intervals(known: &IndexMap<Value, Known>) -> BTreeMap<Value, Interval> {
     known
@@ -623,7 +648,7 @@ pub(crate) fn cells(
     known: Option<&IndexMap<Value, Known>>,
     initial: Option<&Cells>,
     edges: Option<&IndexMap<(i64, i64), Cells>>,
-    mut assume: Option<&mut BTreeSet<Value>>,
+    assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> HeldCells {
     crate::support::debug::timed("analysis consts.cells", || _cells_solved(body, dgroup, calls, known, initial, edges, assume, allowed))
@@ -1196,6 +1221,13 @@ fn _solved(
         _ => IndexMap::default(),
     };
     let empty = Cells::default();
+    // The cells read only what ops that write memory name; until a round
+    // learns one of those, solving them again gives the same answer.
+    let read = match (dgroup, calls) {
+        (Some(_), Some(_)) => _memory_reads(body),
+        _ => HashSet::default(),
+    };
+    let mut learned = true;
     let mut rounds = 0;
     let mut changing = true;
     while changing {
@@ -1204,7 +1236,10 @@ fn _solved(
         // What memory holds, recomputed from what is known so far: the two
         // feed each other and run to one fixed point together.
         if let (Some(dgroup), Some(calls)) = (dgroup, calls) {
-            held = cells(body, dgroup, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+            if learned {
+                held = cells(body, dgroup, calls, Some(&facts), initial, edges, assume.as_mut(), allowed);
+            }
+            learned = false;
         }
         for block in &body.blocks {
             // A join is known where every path into it agrees.
@@ -1220,6 +1255,7 @@ fn _solved(
                     continue;
                 }
                 let fact = (*known[0]).clone();
+                learned |= read.contains(&phi.result);
                 facts.insert(phi.result, fact);
                 changing = true;
             }
@@ -1243,6 +1279,7 @@ fn _solved(
                     }
                 }
                 if let Some(found) = found {
+                    learned |= read.contains(&target);
                     facts.insert(target, found);
                     changing = true;
                 }
