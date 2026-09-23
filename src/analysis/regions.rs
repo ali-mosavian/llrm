@@ -43,7 +43,6 @@ pub(crate) enum RegionPart {
     Alloc,
     Segment(i64),
     Allocation(Symbol),
-    Selector(BigInt),
     // Only the translation to provenance uses this: DGROUP less its uncaptured segments.
     Nonlocal,
 }
@@ -303,33 +302,49 @@ fn holes(reference: &MemRef, layout: Option<&RegionLayout>) -> Result<BTreeSet<S
     Ok(out)
 }
 
-fn absolute(
-    reference: &MemRef,
-    known: Option<&BTreeMap<Value, Interval>>,
-) -> Option<(Region, Origin)> {
-    let selector = reference.segment?;
-    let interval = known?.get(&selector)?;
-    if interval.low != interval.high {
-        // Selectors spanning memory the machine keeps no program data in
-        // reach only other absolute memory.
-        // A selector is an unsigned word; ranges may carry it signed.
-        let (low, high) = (interval.low.to_i64()?, interval.high.to_i64()?);
-        if (low < 0) != (high < 0) {
-            return None;
-        }
-        let word = |one: i64| if one < 0 { one + 0x1_0000 } else { one };
-        if !crate::abi::machine::current().foreign_selectors(word(low), word(high)) {
-            return None;
-        }
-        return Some((Region(vec![RegionPart::Absolute]), Origin::Here));
+/// Memory addressed linearly, which no program object occupies. Its slice
+/// offsets are linear addresses, so one object covers every selector.
+fn linear() -> MemoryObject {
+    MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
+}
+
+/// The linear bytes `reference` reaches, when its selector's range lands it
+/// wholly in memory the machine keeps no program data in.
+fn foreign(reference: &MemRef, known: Option<&BTreeMap<Value, Interval>>) -> Option<Slice> {
+    let known = known?;
+    // A selector or offset is an unsigned word; ranges may carry it signed,
+    // and an offset wraps within its segment.
+    let words = |low: BigInt, high: BigInt| -> Option<(i64, i64)> {
+        let (low, high) = (low.to_i64()?, high.to_i64()?);
+        let word = |one: i64| one.rem_euclid(0x1_0000);
+        (high - low < 0x1_0000 && word(low) <= word(high)).then(|| (word(low), word(high)))
+    };
+    let selector = known.get(&reference.segment?)?;
+    let selectors = words(selector.low.clone(), selector.high.clone())?;
+    let disp = BigInt::from(reference.addr?.disp);
+    let offsets = match reference.base {
+        None => words(disp.clone(), disp),
+        Some(base) => known
+            .get(&base)
+            .filter(|interval| interval.width == reference.base_width)
+            .and_then(|interval| words(&disp + &interval.low, &disp + &interval.high)),
     }
-    Some((
-        Region(vec![
-            RegionPart::Absolute,
-            RegionPart::Selector(interval.low.clone()),
-        ]),
-        Origin::Here,
-    ))
+    .unwrap_or((0, 0xFFFF));
+    let width = i64::from(reference.width.max(1));
+    let (start, end) = crate::abi::machine::current().foreign_span(selectors, offsets, width)?;
+    Some(Slice::new(linear(), start, end - width + 1, 1, width).expect("a foreign span holds one access"))
+}
+
+/// What `reference` may name under `facts`: its linear bytes when its
+/// segment lands it in foreign memory, else its provenance narrowed.
+fn refined(
+    reference: &MemRef,
+    facts: Option<&BTreeMap<Value, Interval>>,
+) -> Result<Option<Provenance>, RegionError> {
+    if let Some(slice) = foreign(reference, facts) {
+        return Ok(Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() }));
+    }
+    reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
 }
 
 fn spans(
@@ -348,7 +363,7 @@ fn spans(
             })
             .collect());
     }
-    if let Some((region, origin)) = absolute(reference, known) {
+    if let Some((region, origin)) = foreign(reference, known).map(|_| (Region(vec![RegionPart::Absolute]), Origin::Here)) {
         return Ok(BTreeSet::from([Span::whole(region, origin)]));
     }
     if let Some(allocation) = reference.allocation {
@@ -489,12 +504,8 @@ pub(crate) fn may_alias(
     if typed_apart(one, other) {
         return Ok(false);
     }
-    if let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) {
-        return Ok(narrowed(one, one_provenance, known)?.intersects(&narrowed(
-            other,
-            other_provenance,
-            other_known,
-        )?));
+    if let (Some(one), Some(other)) = (refined(one, known)?, refined(other, other_known)?) {
+        return Ok(one.intersects(&other));
     }
     Ok(regions(one, known, layout)?.intersects(&regions(other, other_known, layout)?))
 }
@@ -929,14 +940,7 @@ fn _object(region: &Region, origin: &Origin, private: &BTreeSet<i64>) -> MemoryO
                 ..MemoryObject::new(MemoryKind::Allocation)
             };
         }
-        [RegionPart::Absolute] => return MemoryObject::new(MemoryKind::Absolute),
-        [RegionPart::Absolute, RegionPart::Selector(selector), ..] => {
-            let selector = i64::try_from(selector).expect("a selector is a 16-bit value");
-            return MemoryObject {
-                identity: Some(Identity::Str(format!("{selector:#06x}"))),
-                ..MemoryObject::new(MemoryKind::Absolute)
-            };
-        }
+        [RegionPart::Absolute] => return linear(),
         _ => {}
     }
     if *region == Region::named() {

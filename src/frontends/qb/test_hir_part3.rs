@@ -1521,6 +1521,20 @@ SUB b\r\nPRINT PEEK(1)\r\nEND SUB\r\n";
     assert!(optimized_sub(text, "A").contains("<- -24576:2"));
 }
 
+/// A POKE into VGA memory counted as reaching a local array's descriptor, so
+/// PLASMA reloaded three descriptors per pixel: the store carried provenance,
+/// and provenance never asked where its segment points.
+#[test]
+fn test_a_poke_to_video_memory_leaves_a_local_arrays_descriptor_hoisted() {
+    let text = optimized_sub(
+        "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nblit\r\nSUB blit\r\nDIM a(320)\r\nDEF SEG = &HA000\r\n\
+FOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE x, a(x)\r\nNEXT x\r\nNEXT y\r\nEND SUB\r\n",
+        "BLIT",
+    );
+    let row = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the POKE's block");
+    assert!(!row.contains("load cell(frame"), "{text}");
+}
+
 /// A POKE into VGA memory counted as reaching every global, so the row loop
 /// reloaded yy() and xp() per pixel. A segment the machine keeps no program
 /// data in reaches none.

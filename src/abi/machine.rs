@@ -55,14 +55,16 @@ impl Machine {
         Self::parse(&std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?)
     }
 
-    /// Whether every far address with a selector in [low, high] lands in
-    /// memory no program data occupies, whatever its offset.
-    pub fn foreign_selectors(&self, low: i64, high: i64) -> bool {
-        if self.addressing != Addressing::Real || low < 0 || high > 0xFFFF || low > high {
-            return false;
+    /// The linear [start, end) that `width`-byte accesses at every selector
+    /// and offset in the inclusive ranges given span, when all of it is memory
+    /// no program data occupies.
+    pub fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+        let word = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF;
+        if self.addressing != Addressing::Real || !word(selectors) || !word(offsets) {
+            return None;
         }
-        let (start, end) = (low * 16, high * 16 + 0x1_0000);
-        self.foreign.iter().any(|&(from, to)| from <= start && end <= to)
+        let (start, end) = (selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width);
+        self.foreign.iter().any(|&(from, to)| from <= start && end <= to).then_some((start, end))
     }
 
     pub fn silent_port(&self, port: i64) -> bool {
@@ -89,10 +91,12 @@ mod tests {
     #[test]
     fn test_vga_selectors_are_foreign_only_in_real_mode() {
         let dos = Machine::parse(DOS).unwrap();
-        assert!(dos.foreign_selectors(0xA000, 0xAF8C));
-        assert!(!dos.foreign_selectors(0xA000, 0xB001));
-        assert!(!dos.foreign_selectors(0x9FFF, 0xA000));
+        let every = (0, 0xFFFF);
+        assert_eq!(dos.foreign_span((0xA000, 0xAF8C), every, 1), Some((0xA0000, 0xAF8C0 + 0x1_0000)));
+        assert_eq!(dos.foreign_span((0xA000, 0xB001), every, 1), None);
+        assert_eq!(dos.foreign_span((0x9FFF, 0xA000), every, 1), None);
+        assert_eq!(dos.foreign_span((0x9FFF, 0x9FFF), (0x10, 0x11), 2), Some((0xA0000, 0xA0003)));
         let protected = Machine { addressing: Addressing::Protected, ..dos };
-        assert!(!protected.foreign_selectors(0xA000, 0xA000));
+        assert_eq!(protected.foreign_span((0xA000, 0xA000), every, 1), None);
     }
 }
