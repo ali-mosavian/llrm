@@ -732,16 +732,15 @@ def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> N
     assert what.sources[1] == machine.Reg(Register.EAX, 4)
 
 
-def test_far_load_pins_its_selector_result() -> None:
+def test_far_load_confines_its_selector_result_to_a_segment_register() -> None:
     """QCport's pl_game_reset selected LES before allocation, but the selector
     result was assigned BX; fresh OMF emission then refused the impossible
     ``les ax:bx,[di+table]`` form.
 
-    A far-load instruction defines its selector in the segment register named
-    by the opcode, even when no later far-memory use happens to constrain it.
+    The selector result is in the segment-register class rather than pinned
+    to ES: allocation picks one and the rewriter spells les, lfs or lgs.
     """
-    from iced_x86 import Register
-
+    from qbopt.model import lir
     from qbopt.backend import target
     from qbopt.model import ir as machine
 
@@ -751,8 +750,11 @@ def test_far_load_pins_its_selector_result() -> None:
         (machine.Held(1, 2), machine.Held(2, 2)),
         (machine.Mem(None, 4, base=machine.Held(3, 2)),),
     )
+    load = lir.Insn(0x10, (0x10, 0x13), what, (1, 2), (3,))
+    body = lir.LirBody("far", 0x10, (lir.LirBlock(0x10, (load,)),), {}, {})
 
-    assert target.requirements(what) == {target.Occurrence("dest", 1): Register.ES}
+    assert target.Occurrence("dest", 1) not in target.requirements(what)
+    assert allocate.classes(body)[2] == frozenset(target.SELECTORS)
 
 
 def _lngmix_through_the_lir_route():
