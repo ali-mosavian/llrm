@@ -1,4 +1,4 @@
-//! Ports of `qbopt/frontend`, plus the Rust QB and modern parsers Python calls.
+//! Ports of `qbopt/frontend`, plus the modern parser Python calls.
 
 pub mod addressfacts;
 pub mod arrayfacts;
@@ -9,7 +9,6 @@ pub mod fppatches;
 pub mod fpstack;
 pub mod modern;
 pub mod pairs;
-pub mod qb;
 pub mod qbc;
 pub mod raising_address_state;
 pub mod raising_addresses;

@@ -33,10 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buildprs"
-version = "0.1.0"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,11 +157,9 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 name = "llrm"
 version = "0.1.0"
 dependencies = [
- "buildprs",
  "iced-x86",
  "indexmap",
  "num-bigint",
- "num-rational",
  "num-traits",
  "regex",
  "rustc-hash",
@@ -196,17 +190,6 @@ version = "0.1.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
 dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "num-rational"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
-dependencies = [
- "num-bigint",
- "num-integer",
  "num-traits",
 ]
 

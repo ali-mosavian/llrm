@@ -10,8 +10,6 @@ not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
 - The layout mirrors Python: `qbopt/<pkg>/<mod>.py` is `src/<pkg>/<mod>.rs`,
   and every Python function has a Rust function of the same name. Frontends
   move to `src/frontends/{c,qb,modern,bc}` only after cutover.
-- `src/old/` is the frozen LLVM-style pipeline. Do not edit it; consult it
-  only. It is deleted when the ported drivers take over.
 - Behaviour, refusals, ordering and emitted code match Python. Correct
   output by a different mechanism is a failed port. So is a "safe subset",
   a textbook version of a pass with the same name, or a new abstraction the

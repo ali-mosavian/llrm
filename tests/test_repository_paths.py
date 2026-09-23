@@ -9,8 +9,6 @@ CARGO_PATHS = frozenset(
     {
         "Cargo.lock",
         "Cargo.toml",
-        "tools/buildprs/Cargo.lock",
-        "tools/buildprs/Cargo.toml",
     }
 )
 

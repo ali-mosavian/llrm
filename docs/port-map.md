@@ -20,8 +20,8 @@ bodies, records, source map) were replayed through the Rust `written_bc` for
 every object under `fixtures/omf` and `fixtures/regressions`, with identical
 bytes or refusal.
 
-`src/old/` is the frozen LLVM-style pipeline. Ported code may import from it
-only for a module still `todo`, and never after cutover.
+`llrm-objdump` and `llrm-opt` were built on the deleted `src/old` pipeline.
+They are still to be ported, from `tools/dump.py` and `tools/stages.py`.
 
 | Phase | Python | Lines | Rust | Status | Python tests |
 |---|---|---:|---|---|---|
