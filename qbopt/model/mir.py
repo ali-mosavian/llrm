@@ -59,6 +59,7 @@ no transform can still carry their bytes verbatim without exposing a node to
 an optimization pass.
 """
 
+import functools
 import itertools
 from enum import StrEnum
 from typing import overload
@@ -454,6 +455,10 @@ class Kind(StrEnum):
     ADDRESS = "address"  # c := the number an address is
     PTR_OFFSET = "ptr_offset"  # c := pointer a advanced by a byte displacement
     FILL = "fill"  # args (value, count, address): count cells of the value's width from address, each := value
+    # Device I/O, always volatile: c := the byte at port a; port a := byte b.
+    # Memory reach is the port's device's, from qbopt.abi.ports.
+    PORT_IN = "port_in"
+    PORT_OUT = "port_out"
 
     # control
     CALL = "call"
@@ -2818,6 +2823,67 @@ def overlapping(
         if apart is not None:
             return not apart
     return regions.may_alias(one, other, bounds, known, other_known, dgroup)
+
+
+def overlap_bucket(ref: MemRef) -> tuple:
+    """What `overlapping` needs of a cell to rule a write out unseen: its one
+    object (None if it has no single one), the frame `_displaced` compares
+    displacements in (None for a pointer), and the object's alias class."""
+    slices = ref.provenance.slices if ref.provenance is not None else ()
+    one = next(iter(slices)).object if len(slices) == 1 else None
+    return object_bucket(one, _frame(ref))
+
+
+def object_bucket(one: "memory.Object | None", frame: tuple | None) -> tuple:
+    return (one, frame, None if one is None else memory.alias_class(one))
+
+
+def overlap_buckets(ref: MemRef, cells) -> set | None:
+    """The buckets of `cells` (a CellMap keyed by `object_bucket`) a write
+    through `ref` may reach; None for all of them.
+
+    Only these can hold a cell `overlapping` does not rule out: one whose
+    object is unknown, one in the write's `_displaced` frame, one in the
+    write's own object, and one whose alias class may alias the write's.
+    """
+    if ref.provenance is None:
+        return None
+    if not cells:
+        return set()
+    objects, frames, classes = cells.parts
+    reached = set(objects.get(None, ()))
+    if (frame := _frame(ref)) is not None and frame in frames:
+        reached |= frames[frame]
+    written, kinds = _write_reach(ref.provenance)
+    for one in written:
+        if one in objects:
+            reached |= objects[one]
+    for kind, buckets in classes.items():
+        if kind is not None and _classes_reach(kinds, kind):
+            reached |= buckets
+    return reached
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _write_reach(provenance: memory.Provenance) -> tuple[frozenset, frozenset]:
+    """A write's objects and their alias classes."""
+    written = frozenset(one.object for one in provenance.slices)
+    return written, frozenset(memory.alias_class(one) for one in written)
+
+
+@functools.lru_cache(maxsize=1 << 12)
+def _classes_reach(kinds: frozenset, kind: memory.AliasClass) -> bool:
+    return any(memory.classes_may_alias(one, kind) for one in kinds)
+
+
+def _frame(ref: MemRef) -> tuple | None:
+    if ref.pointer:
+        return None
+    if ref.symbolic is not None:
+        return (None, None, ref.symbolic.space, ref.symbolic.index)
+    if ref.addr is None:
+        return None
+    return (ref.base, ref.segment, ref.addr.space, ref.addr.index)
 
 
 def _displaced(one: MemRef, other: MemRef) -> bool | None:

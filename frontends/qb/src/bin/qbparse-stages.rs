@@ -29,13 +29,14 @@ fn main() -> ExitCode {
 
     let input = PathBuf::from(input_name);
     let output = PathBuf::from(output_name);
-    let source = match source::load_with_map(&input, &[input.parent().unwrap_or(Path::new(".")).into()]) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("qbparse-stages: {}: {error}", input.display());
-            return ExitCode::FAILURE;
-        }
-    };
+    let source =
+        match source::load_with_map(&input, &[input.parent().unwrap_or(Path::new(".")).into()]) {
+            Ok(source) => source,
+            Err(error) => {
+                eprintln!("qbparse-stages: {}: {error}", input.display());
+                return ExitCode::FAILURE;
+            }
+        };
     let parsed = match parse_vertical_slice(&source.text, dialect) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -61,12 +62,7 @@ fn main() -> ExitCode {
                 format!("{:#?}\n", parsed.actions),
             )
         })
-        .and_then(|()| {
-            fs::write(
-                output.join("20-ast.txt"),
-                format!("{:#?}\n", parsed.module),
-            )
-        })
+        .and_then(|()| fs::write(output.join("20-ast.txt"), format!("{:#?}\n", parsed.module)))
     {
         eprintln!("qbparse-stages: {}: {error}", output.display());
         return ExitCode::FAILURE;

@@ -1740,6 +1740,17 @@ def test_constant_screen_mode_pulls_its_graphics_driver(tmp_path: Path) -> None:
     assert "B$EGAUSED" in omf.externals(records)
 
 
+def test_a_qb45_screen_mode_keeps_its_driver_request(tmp_path: Path) -> None:
+    """qbdemo's SCREEN 13 raised "Illegal function call" under QB45: nothing
+    references B$VGAUSED, so the OBJ writer pruned the EXTDEF that links it."""
+    basic = tmp_path / "SCN13.BAS"
+    basic.write_bytes(b"screen 13\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+
+    records = omf.parse(qb_compile.object_bytes(source, "SCN13.BAS"))
+    assert "B$VGAUSED" in omf.externals(records)
+
+
 def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None:
     """Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame."""
     basic = tmp_path / "SCNVAR.BAS"
@@ -1751,11 +1762,12 @@ def test_variable_screen_mode_pulls_all_graphics_drivers(tmp_path: Path) -> None
 
 
 def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
-    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot."""
+    """Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
+    Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`."""
     basic = tmp_path / "NESTDIV.BAS"
     basic.write_bytes(
-        b"declare function scale (maxCol)\r\n"
         b"defint a-z\r\n"
+        b"declare function scale (maxCol)\r\n"
         b"print scale(80)\r\n"
         b"end\r\n"
         b"function scale (maxCol)\r\n"
@@ -1770,6 +1782,41 @@ def test_nested_integer_division_keeps_each_dividend(tmp_path: Path) -> None:
     assert "mov eax, 30\n" in scale
     assert scale.count("idiv e") == 2
     assert "idiv ax" not in scale
+
+
+def test_a_float_compare_status_word_does_not_overwrite_a_live_ax(tmp_path: Path) -> None:
+    """-2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`."""
+    basic = tmp_path / "POWSIGN.BAS"
+    basic.write_bytes(b"b! = -2\r\ne! = 3\r\nr! = b! ^ e!\r\nprint r!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    ax = re.compile(r"\b(e?ax|al|ah)\b")
+    for index, line in enumerate(lines):
+        if line != "fnstsw ax":
+            continue
+        for later in lines[index + 1 :]:
+            if later == "sahf" or later.startswith(("j", "L0_")):
+                continue
+            mnemonic, _, operands = later.partition(" ")
+            destination, _, sources = operands.partition(",")
+            assert not ax.search(sources) and not (ax.search(destination) and mnemonic not in ("mov", "fnstsw")), (
+                f"AX read after fnstsw: {later}"
+            )
+            if ax.search(destination):
+                break
+
+
+def test_a_statement_under_an_error_handler_keeps_its_code_contiguous(tmp_path: Path) -> None:
+    """RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
+    layout put the raise after B$CEND, outside its statement's code."""
+    basic = tmp_path / "POWRES.BAS"
+    basic.write_bytes(
+        b"on error goto h\r\nb! = -8: e! = .5\r\nfor i% = 1 to 2\r\nr! = b! ^ e!\r\nprint r!\r\nnext\r\nsystem\r\n"
+        b"h:\r\nresume next\r\n"
+    )
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    calls = [line.split()[-1] for line in masm.text(qb_compile.assembled(source)).splitlines() if "call" in line]
+    assert calls.index("B$SERR") < calls.index("B$PER4"), calls
 
 
 def test_byref_dynamic_array_field_copies_through_a_near_formal(tmp_path: Path) -> None:
@@ -2927,3 +2974,51 @@ def test_a_string_function_copies_its_result_before_freeing_other_locals(tmp_pat
 
     assert calls.index("B$SCPF") < calls.index("B$STDL")
     assert exit_.terminator.operands == (hir.ValueRef(copied.results[0]),)
+
+
+def test_port_io_narrows_a_float_through_integer_and_prints_both_operands(tmp_path: Path) -> None:
+    """OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
+    listing printed `out dx` / `in al` without their second operand."""
+    basic = tmp_path / "PORTS.BAS"
+    basic.write_bytes(b"defint a-z\r\np = &H3C8: f! = 41.6\r\nout p, f!\r\npoke 0, f!\r\na = inp(p + 1)\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = {" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()}
+    assert {"out dx, al", "in al, dx"} <= lines, sorted(lines)
+    assert any(line.startswith("fistp word ptr") for line in lines), sorted(lines)
+
+
+def test_open_compiles_with_its_callee_cleaned_arguments(tmp_path: Path) -> None:
+    """oimad's OPEN was refused: B$OPEN had no audited stack effect (RETF 8)."""
+    basic = tmp_path / "OPENS.BAS"
+    basic.write_bytes(b'open "DATA.DAT" for binary as #1\r\nclose #1\r\n')
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$OPEN" in masm.text(qb_compile.assembled(source))
+
+
+def test_rnd_without_an_argument_compiles(tmp_path: Path) -> None:
+    """oimad's bare RND was refused: B$RND0 had no audited stack effect."""
+    basic = tmp_path / "RND0.BAS"
+    basic.write_bytes(b"x! = rnd\r\nprint x!\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    assert "B$RND0" in masm.text(qb_compile.assembled(source))
+
+
+def test_circle_pushes_one_radius(tmp_path: Path) -> None:
+    """oimad froze after a few hundred frames: CIRCLE pushed its radius twice,
+    four stack bytes B$CIRC never pops. QB45 circle.asm and the VBDOS /A
+    listing both take one parmD radius and one color word."""
+    basic = tmp_path / "CIRC.BAS"
+    basic.write_bytes(b"screen 13\r\nr! = 16\r\ncircle (10, 100), r!, 5\r\n")
+    source = qb_driver.parsed(basic, dialect="qb45", runtime="qb45")
+    lines = [" ".join(line.split(";")[0].split()) for line in masm.text(qb_compile.assembled(source)).splitlines()]
+    start = lines.index("call far ptr B$N1I2")
+    end = lines.index("call far ptr B$CIRC")
+    widths = {"pushd": 4, "pushw": 2}
+    pushed = 0
+    for line in lines[start + 1 : end]:
+        mnemonic, _, operand = line.partition(" ")
+        if mnemonic in widths:
+            pushed += widths[mnemonic]
+        elif mnemonic == "push":
+            pushed += 4 if operand.startswith(("dword", "e")) else 2
+    assert pushed == 6, lines[start:end + 1]

@@ -3,6 +3,7 @@
 from dataclasses import replace
 from dataclasses import dataclass
 
+from qbopt.abi import ports
 from qbopt.model import ir
 from qbopt.hir import model
 from qbopt.model import mir
@@ -44,7 +45,9 @@ def _stored_format(type_: model.Type) -> floating.Format:
     if type_.kind is model.TypeKind.FLOAT:
         return floating.Format.BINARY32 if type_.width == 4 else floating.Format.BINARY64
     if type_.kind in (model.TypeKind.INTEGER, model.TypeKind.BOOLEAN):
-        return floating.Format.SIGNED16 if type_.width == 2 else floating.Format.SIGNED32
+        stored = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32}.get(type_.width)
+        if stored is not None:
+            return stored
     raise InvalidHIR(f"{type_.name}: no floating storage format")
 
 
@@ -1222,6 +1225,10 @@ def _function(
             results = (args[0],)
             args = (args[1],)
             uses = tuple(dict.fromkeys((*address_uses, *(one.value for one in args if isinstance(one, mir.Held)))))
+        port = instruction.op in (model.Op.PORT_IN, model.Op.PORT_OUT)
+        # A device with no path to memory leaves every cell alone; any other
+        # port may start a transfer, so its memory effect stays unknown.
+        silent_port = port and isinstance(args[0], mir.Const) and ports.silent(args[0].n)
         final = mir.Op(
             at,
             operation_kind,
@@ -1236,9 +1243,12 @@ def _function(
             results=results,
             id=instruction.id,
             args_known=True,
-            memory_complete=instruction.op is not model.Op.CALL and instruction.op not in _STRING_COMPARISONS,
+            memory_complete=(
+                instruction.op is not model.Op.CALL and instruction.op not in _STRING_COMPARISONS and not port
+            )
+            or silent_port,
             reads_complete=instruction.op is not model.Op.CALL and instruction.op not in _STRING_COMPARISONS,
-            volatile=any(reference.volatile for reference in (*loads, *stores)),
+            volatile=port or any(reference.volatile for reference in (*loads, *stores)),
         )
         return (*before, final)
 

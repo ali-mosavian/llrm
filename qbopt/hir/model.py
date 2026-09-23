@@ -247,6 +247,10 @@ class Op(StrEnum):
     FATAN = "fatan"
     FLOG2 = "flog2"
     FEXP2 = "fexp2"
+    # An I/O port: port_in reads a byte from operands[0]; port_out writes
+    # operands[1], a byte, to operands[0]. Both are observable and ordered.
+    PORT_IN = "port_in"
+    PORT_OUT = "port_out"
     CALL = "call"
 
 

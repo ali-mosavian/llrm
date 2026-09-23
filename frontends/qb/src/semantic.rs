@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::dialect::Dialect;
+use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
-    Procedure, ProcedureKind, ResumeTarget, Statement, TypeName, Unary,
+    Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 
 const VOID: u32 = 0;
@@ -116,7 +116,8 @@ struct Signature {
 
 fn signatures_compatible(left: &Signature, right: &Signature) -> bool {
     left.result == right.result
-        && left.callee == right.callee
+        // `f%` and a DEFINT `f` are one FUNCTION; the result type decides.
+        && canonical(&left.callee) == canonical(&right.callee)
         && left.cdecl == right.cdecl
         && left.parameters.len() == right.parameters.len()
         && left
@@ -259,7 +260,18 @@ struct Compiler {
     def_segment_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
     floating_literals: BTreeMap<(u32, Vec<u8>), u32>,
-    default_types: [u32; 26],
+    // The table each DEFtype leaves, by source position. BC reads the file
+    // once: a DEFtype governs every name from it to the next one, across
+    // SUB and FUNCTION boundaries, and `c` either side of `DEFINT C` is two
+    // variables, C! and C%.
+    default_changes: Vec<((usize, usize), [u32; 26])>,
+    position: (usize, usize),
+    // Every module-level variable, and the keys of those with the SHARED
+    // attribute.
+    module_variables: BTreeMap<String, Variable>,
+    shared_keys: BTreeSet<String>,
+    // A dynamic array is declared up front but allocated where its DIM runs.
+    pending_allocations: BTreeMap<((usize, usize), String), (Declaration, u32, u32, u32)>,
     option_base: i64,
     statement_entries: Vec<(u32, u32, u16)>,
     data_entries: Vec<u32>,
@@ -322,7 +334,7 @@ pub fn compile_with_options(
         mbf,
         alternate_math,
     );
-    compiler.apply_default_types(&module.statements)?;
+    compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
     compiler.signatures(module)?;
@@ -331,11 +343,20 @@ pub fn compile_with_options(
     compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
+    compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
 
-    let module_default_types = compiler.default_types;
-    let module_variables = compiler.variables.clone();
+    compiler.module_variables = compiler.variables.clone();
+    // A procedure sees only what the module declared SHARED; the rest of
+    // the module's variables are local to it, and a procedure's SHARED
+    // statement adds the ones it names.
+    let shared_variables: BTreeMap<String, Variable> = compiler
+        .module_variables
+        .iter()
+        .filter(|(key, _)| compiler.shared_keys.contains(*key))
+        .map(|(key, variable)| (key.clone(), variable.clone()))
+        .collect();
     let module_constants = compiler.constants.clone();
     let module_places = compiler.functions[0].places.clone();
     for (index, procedure) in module
@@ -345,7 +366,11 @@ pub fn compile_with_options(
         .enumerate()
     {
         compiler.reset_function(
-            module_variables.clone(),
+            if procedure.module_scope {
+                compiler.module_variables.clone()
+            } else {
+                shared_variables.clone()
+            },
             module_constants.clone(),
             module_places.clone(),
         );
@@ -354,7 +379,7 @@ pub fn compile_with_options(
         } else {
             "local"
         };
-        compiler.default_types = module_default_types;
+        compiler.position = source_position(procedure.span);
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
         for parameter in &procedure.parameters {
@@ -384,7 +409,7 @@ pub fn compile_with_options(
             parameter_bytes += compiler.width(value_type).max(2);
             if is_array {
                 compiler.variables.insert(
-                    variable_key(&parameter.declaration.name).into(),
+                    compiler.declaration_key(&parameter.declaration)?,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -419,7 +444,7 @@ pub fn compile_with_options(
                 );
             } else {
                 compiler.variables.insert(
-                    variable_key(&parameter.declaration.name).into(),
+                    compiler.declaration_key(&parameter.declaration)?,
                     Variable {
                         place: 0,
                         type_id: parameter_type,
@@ -465,10 +490,6 @@ pub fn compile_with_options(
             let place = compiler.declare_as(&declaration, "local")?;
             compiler.result_place = Some((place, result_type));
         }
-        // A procedure is its own DEF-type scope in Microsoft BASIC. Its
-        // directives govern all declarations in the body regardless of
-        // source order, but not the already-declared procedure signature.
-        compiler.apply_default_types(&procedure.body)?;
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler
@@ -497,7 +518,11 @@ pub fn compile_with_options(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported { "external" } else { "internal" },
+            if procedure.exported {
+                "external"
+            } else {
+                "internal"
+            },
         );
     }
     Ok(compiler.json())
@@ -583,14 +608,20 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
                 Statement::OnError { label, .. } if label != "0" => {
                     targets.insert(canonical(label).into());
                 }
-                Statement::If { then_branch, else_branch, .. } => {
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
                     error_targets(then_branch, targets);
                     error_targets(else_branch, targets);
                 }
                 Statement::For { body, .. }
                 | Statement::While { body, .. }
                 | Statement::Do { body, .. } => error_targets(body, targets),
-                Statement::Select { arms, otherwise, .. } => {
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
                     for (_, body) in arms {
                         error_targets(body, targets);
                     }
@@ -605,15 +636,22 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         match statement {
             Statement::Resume { .. } => true,
             Statement::Runtime { name, .. } if matches!(name.as_str(), "END" | "SYSTEM") => true,
-            Statement::If { then_branch, else_branch, .. } => {
+            Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 then_branch.iter().any(ends_error_handler)
                     || else_branch.iter().any(ends_error_handler)
             }
             Statement::For { body, .. }
             | Statement::While { body, .. }
             | Statement::Do { body, .. } => body.iter().any(ends_error_handler),
-            Statement::Select { arms, otherwise, .. } => {
-                arms.iter().any(|(_, body)| body.iter().any(ends_error_handler))
+            Statement::Select {
+                arms, otherwise, ..
+            } => {
+                arms.iter()
+                    .any(|(_, body)| body.iter().any(ends_error_handler))
                     || otherwise.iter().any(ends_error_handler)
             }
             _ => false,
@@ -624,14 +662,20 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         for statement in statements {
             match statement {
                 Statement::OnError { local, .. } => *local = true,
-                Statement::If { then_branch, else_branch, .. } => {
+                Statement::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
                     localize_error_handlers(then_branch);
                     localize_error_handlers(else_branch);
                 }
                 Statement::For { body, .. }
                 | Statement::While { body, .. }
                 | Statement::Do { body, .. } => localize_error_handlers(body),
-                Statement::Select { arms, otherwise, .. } => {
+                Statement::Select {
+                    arms, otherwise, ..
+                } => {
                     for (_, body) in arms {
                         localize_error_handlers(body);
                     }
@@ -656,12 +700,12 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
         .statements
         .iter()
         .filter_map(|statement| match statement {
-            Statement::Call { name, arguments, .. } if name == "GOSUB" => {
-                match arguments.as_slice() {
-                    [Expr::Name(target, _)] => Some(canonical(target).to_string()),
-                    _ => None,
-                }
-            }
+            Statement::Call {
+                name, arguments, ..
+            } if name == "GOSUB" => match arguments.as_slice() {
+                [Expr::Name(target, _)] => Some(canonical(target).to_string()),
+                _ => None,
+            },
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -691,9 +735,14 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             if covered.contains(&index) {
                 continue;
             }
-            if let Statement::Call { name, arguments, .. } = statement {
+            if let Statement::Call {
+                name, arguments, ..
+            } = statement
+            {
                 if name == "GOSUB" {
-                    let [Expr::Name(target, _)] = arguments.as_slice() else { unreachable!() };
+                    let [Expr::Name(target, _)] = arguments.as_slice() else {
+                        unreachable!()
+                    };
                     statements.extend(regions[canonical(target)].clone());
                     continue;
                 }
@@ -780,6 +829,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             declaration: false,
             is_static: false,
             exported: false,
+            module_scope: true,
             span,
         });
         removed[start..=end].fill(true);
@@ -892,7 +942,11 @@ impl Compiler {
             def_segment_symbol: None,
             far_string_segment_symbol: None,
             floating_literals: BTreeMap::new(),
-            default_types: [SINGLE; 26],
+            default_changes: Vec::new(),
+            position: (0, 0),
+            module_variables: BTreeMap::new(),
+            shared_keys: BTreeSet::new(),
+            pending_allocations: BTreeMap::new(),
             option_base: 0,
             statement_entries: Vec::new(),
             data_entries: Vec::new(),
@@ -1243,29 +1297,89 @@ impl Compiler {
             .ok_or_else(|| SemanticError {
                 message: format!("{name} has no initial letter for default typing"),
             })?;
-        Ok(self.default_types[(first - b'A') as usize])
+        Ok(self
+            .default_changes
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= self.position)
+            .map_or(SINGLE, |(_, table)| table[(first - b'A') as usize]))
     }
 
-    fn apply_default_types(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
-        for statement in statements {
-            let Statement::DefType {
-                type_name, ranges, ..
-            } = statement
-            else {
-                continue;
-            };
+    /// The scalar an unsuffixed name denotes here: an AS-declared one if
+    /// it exists, otherwise the one its DEFtype names, e.g. `c` -> `C%`.
+    fn variable_key(&self, name: &str) -> String {
+        self.namespace_key(name, "")
+    }
+
+    /// Arrays are a namespace of their own: deedlines has both `g%` and
+    /// `g%()`. The key is the scalar spelling marked `()`.
+    fn array_key(&self, name: &str) -> String {
+        self.namespace_key(name, "()")
+    }
+
+    fn namespace_key(&self, name: &str, marker: &str) -> String {
+        let declared = format!("{name}{marker}");
+        if suffix(name).is_some() || self.variables.contains_key(&declared) {
+            return declared;
+        }
+        let typed = self.typed_name(name).unwrap_or_else(|_| name.into());
+        format!("{typed}{marker}")
+    }
+
+    fn declaration_key(&self, declaration: &Declaration) -> Result<String, SemanticError> {
+        let name = self.typed_declaration(declaration)?.name;
+        Ok(if declaration.array {
+            format!("{name}()")
+        } else {
+            name
+        })
+    }
+
+    fn typed_name(&self, name: &str) -> Result<String, SemanticError> {
+        let type_id = self.named_type(name, None)?;
+        Ok(format!("{name}{}", type_suffix(type_id)))
+    }
+
+    /// A declaration without AS or suffix declares its DEFtype-named variable.
+    fn typed_declaration(&self, declaration: &Declaration) -> Result<Declaration, SemanticError> {
+        let mut typed = declaration.clone();
+        if suffix(&declaration.name).is_none() && declaration.type_name.is_none() {
+            typed.name = self.typed_name(&declaration.name)?;
+        }
+        Ok(typed)
+    }
+
+    fn record_default_types(&mut self, module: &Module) -> Result<(), SemanticError> {
+        let mut directives = module
+            .statements
+            .iter()
+            .chain(module.procedures.iter().flat_map(|one| one.body.iter()))
+            .filter_map(|statement| match statement {
+                Statement::DefType {
+                    type_name,
+                    ranges,
+                    span,
+                } => Some((source_position(*span), type_name, ranges)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        directives.sort_by_key(|(position, ..)| *position);
+        let mut table = [SINGLE; 26];
+        for (position, type_name, ranges) in directives {
             let selected = self.resolve_type(Some(type_name))?;
             for (first, last) in ranges {
                 for letter in (*first as u8)..=(*last as u8) {
-                    self.default_types[(letter - b'A') as usize] = selected;
+                    table[(letter - b'A') as usize] = selected;
                 }
             }
+            self.default_changes.push((position, table));
         }
         Ok(())
     }
 
     fn signatures(&mut self, module: &Module) -> Result<(), SemanticError> {
         for procedure in &module.procedures {
+            self.position = source_position(procedure.span);
             let key = canonical(&procedure.name);
             let symbol = self
                 .signatures
@@ -1331,6 +1445,7 @@ impl Compiler {
         storage: &'static str,
     ) -> Result<(), SemanticError> {
         for statement in statements {
+            self.position = source_position(statement.span());
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
@@ -1341,7 +1456,7 @@ impl Compiler {
                             // module GOSUB creates INTEGER i, while
                             // DrawGorilla deliberately declares a local
                             // SINGLE i.
-                            self.variables.remove(variable_key(&item.name));
+                            self.variables.remove(&self.declaration_key(item)?);
                         }
                         if storage == "local" && item.array {
                             // Microsoft documents every explicitly DIMmed
@@ -1357,8 +1472,18 @@ impl Compiler {
                 }
                 Statement::Static(items) => {
                     for item in items {
-                        self.variables.remove(variable_key(&item.name));
+                        self.variables.remove(&self.declaration_key(item)?);
                         self.declare_as(item, "static")?;
+                    }
+                }
+                Statement::Shared(items) => {
+                    for item in items {
+                        let key = self.declaration_key(item)?;
+                        let Some(variable) = self.module_variables.get(&key) else {
+                            return self
+                                .fail(format!("SHARED {} names no module variable", item.name));
+                        };
+                        self.variables.insert(key, variable.clone());
                     }
                 }
                 Statement::DefType { .. }
@@ -1366,7 +1491,7 @@ impl Compiler {
                 | Statement::OptionBase(_, _) => {}
                 Statement::Redim(items) => {
                     for item in items {
-                        if self.variables.contains_key(variable_key(&item.name)) {
+                        if self.variables.contains_key(&self.declaration_key(item)?) {
                             continue;
                         }
                         // REDIM is itself a declaration in QB, including
@@ -1384,7 +1509,7 @@ impl Compiler {
                         .constants
                         .insert(canonical(name).into(), literal)
                         .is_some()
-                        || self.variables.contains_key(variable_key(name))
+                        || self.variables.contains_key(&self.variable_key(name))
                     {
                         return self.fail(format!("duplicate declaration {name}"));
                     }
@@ -1395,12 +1520,92 @@ impl Compiler {
         Ok(())
     }
 
+    /// A variable only procedures' SHARED statements name is still the
+    /// module's: declare it there before the procedures are compiled.
+    fn declare_procedure_shared(&mut self, module: &Module) -> Result<(), SemanticError> {
+        for procedure in module.procedures.iter().filter(|one| !one.declaration) {
+            for statement in &procedure.body {
+                let Statement::Shared(items) = statement else {
+                    continue;
+                };
+                self.position = source_position(statement.span());
+                for item in items {
+                    if !self.variables.contains_key(&self.declaration_key(item)?) {
+                        self.declare_as(item, "module")?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Run a dynamic array's B$DDIM where its DIM statement executes, so its
+    /// bounds read the values they have there.
+    fn allocate(&mut self, item: &Declaration) -> Result<(), SemanticError> {
+        let key = self.declaration_key(item)?;
+        let Some((declaration, descriptor_place, descriptor_type, element)) =
+            self.pending_allocations.remove(&(self.position, key))
+        else {
+            return Ok(());
+        };
+        let declaration = &declaration;
+        let pointer_type = self.pointer_type(descriptor_type);
+        let descriptor = self.value(pointer_type);
+        self.emit(
+            "address",
+            vec![descriptor],
+            vec![Operand::Place(descriptor_place)],
+        );
+        let mut operands = Vec::new();
+        for bound in &declaration.bounds {
+            let lower = if let Some(lower) = &bound.lower {
+                let (lower, type_id) = self.expression(lower)?;
+                self.convert(lower, type_id, INTEGER)?
+            } else {
+                Operand::Constant(INTEGER, Number::Integer(self.option_base))
+            };
+            let (upper, type_id) = self.expression(&bound.upper)?;
+            let upper = self.convert(upper, type_id, INTEGER)?;
+            operands.push(lower);
+            operands.push(upper);
+        }
+        operands.extend([
+            Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
+            Operand::Constant(
+                INTEGER,
+                Number::Integer(
+                    declaration.bounds.len() as i64
+                        | if element == STRING {
+                            0x8000
+                        } else if self.huge_arrays {
+                            0x0200
+                        } else {
+                            0x0100
+                        },
+                ),
+            ),
+            Operand::Value(descriptor),
+        ]);
+        let mut order = Vec::new();
+        for dimension in (0..declaration.bounds.len()).rev() {
+            order.extend([2 * dimension, 2 * dimension + 1]);
+        }
+        order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
+        self.emit_call("B$DDIM", Vec::new(), operands, order, false);
+        Ok(())
+    }
+
     fn declare_as(
         &mut self,
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
-        if self.variables.contains_key(variable_key(&declaration.name))
+        let key = self.declaration_key(declaration)?;
+        if storage == "module" && declaration.shared {
+            self.shared_keys.insert(key.clone());
+        }
+        let declaration = &self.typed_declaration(declaration)?;
+        if self.variables.contains_key(&key)
             || self.constants.contains_key(canonical(&declaration.name))
         {
             return self.fail(format!("duplicate declaration {}", declaration.name));
@@ -1457,11 +1662,18 @@ impl Compiler {
             );
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
-                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+                (
+                    0,
+                    self.module_data(module_symbol.clone(), descriptor_extent),
+                )
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                    if matches!(storage, "local" | "parameter") {
+                        0
+                    } else {
+                        1
+                    },
                 )
             };
             let descriptor_place = self.next_place;
@@ -1478,53 +1690,17 @@ impl Compiler {
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
-            let pointer_type = self.pointer_type(descriptor_type);
-            let descriptor = self.value(pointer_type);
-            self.emit(
-                "address",
-                vec![descriptor],
-                vec![Operand::Place(descriptor_place)],
-            );
-            let mut operands = Vec::new();
-            for bound in &declaration.bounds {
-                let lower = if let Some(lower) = &bound.lower {
-                    let (lower, type_id) = self.expression(lower)?;
-                    self.convert(lower, type_id, INTEGER)?
-                } else {
-                    Operand::Constant(INTEGER, Number::Integer(self.option_base))
-                };
-                let (upper, type_id) = self.expression(&bound.upper)?;
-                let upper = self.convert(upper, type_id, INTEGER)?;
-                operands.push(lower);
-                operands.push(upper);
-            }
-            operands.extend([
-                Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
-                Operand::Constant(
-                    INTEGER,
-                    Number::Integer(
-                        declaration.bounds.len() as i64
-                            | if element == STRING {
-                                0x8000
-                            } else if self.huge_arrays {
-                                0x0200
-                            } else {
-                                0x0100
-                            },
-                    ),
+            self.pending_allocations.insert(
+                (self.position, key.clone()),
+                (
+                    declaration.clone(),
+                    descriptor_place,
+                    descriptor_type,
+                    element,
                 ),
-                Operand::Value(descriptor),
-            ]);
-            let mut order = Vec::new();
-            for dimension in (0..declaration.bounds.len()).rev() {
-                order.extend([2 * dimension, 2 * dimension + 1]);
-            }
-            order.extend(
-                2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3,
             );
-            self.emit_call("B$DDIM", Vec::new(), operands, order, false);
             self.variables.insert(
-                variable_key(&declaration.name).into(),
+                key.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1556,11 +1732,18 @@ impl Compiler {
             );
             let descriptor_extent = self.width(descriptor_type);
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
-                (0, self.module_data(module_symbol.clone(), descriptor_extent))
+                (
+                    0,
+                    self.module_data(module_symbol.clone(), descriptor_extent),
+                )
             } else {
                 (
                     self.place_offset(storage, descriptor_extent),
-                    if matches!(storage, "local" | "parameter") { 0 } else { 1 },
+                    if matches!(storage, "local" | "parameter") {
+                        0
+                    } else {
+                        1
+                    },
                 )
             };
             let descriptor_place = self.next_place;
@@ -1584,7 +1767,7 @@ impl Compiler {
                 ));
             }
             self.variables.insert(
-                variable_key(&declaration.name).into(),
+                key.clone(),
                 Variable {
                     place: 0,
                     type_id: element,
@@ -1718,7 +1901,7 @@ impl Compiler {
             None
         };
         self.variables.insert(
-            variable_key(&declaration.name).into(),
+            key,
             Variable {
                 place,
                 type_id,
@@ -1754,12 +1937,7 @@ impl Compiler {
         symbol
     }
 
-    fn basic_global_name(
-        &self,
-        name: &str,
-        declared: Option<&TypeName>,
-        type_id: u32,
-    ) -> String {
+    fn basic_global_name(&self, name: &str, declared: Option<&TypeName>, type_id: u32) -> String {
         if suffix(name).is_some() {
             return name.to_ascii_uppercase();
         }
@@ -1770,14 +1948,7 @@ impl Compiler {
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
             Some(TypeName::Named(_)) => "",
-            None => match type_id {
-                INTEGER => "%",
-                LONG => "&",
-                SINGLE => "!",
-                DOUBLE => "#",
-                STRING => "$",
-                _ => "",
-            },
+            None => type_suffix(type_id),
         };
         format!("{}{suffix}", name.to_ascii_uppercase())
     }
@@ -1959,10 +2130,12 @@ impl Compiler {
     fn statement_list(&mut self, statements: &[Statement]) -> Result<(), SemanticError> {
         for statement in statements {
             self.current_source_line = statement.span().line;
+            self.position = source_position(statement.span());
             let metadata_only = matches!(
                 statement,
                 Statement::Dim(_)
                     | Statement::Static(_)
+                    | Statement::Shared(_)
                     | Statement::DefType { .. }
                     | Statement::TypeDecl { .. }
                     | Statement::Const { .. }
@@ -1982,8 +2155,13 @@ impl Compiler {
                 self.begin_resumable_statement(line);
             }
             match statement {
-                Statement::Dim(_)
-                | Statement::Static(_)
+                Statement::Dim(items) => {
+                    for item in items {
+                        self.allocate(item)?;
+                    }
+                }
+                Statement::Static(_)
+                | Statement::Shared(_)
                 | Statement::DefType { .. }
                 | Statement::TypeDecl { .. }
                 | Statement::Const { .. }
@@ -2004,10 +2182,7 @@ impl Compiler {
                             } if arguments.is_empty() => name,
                             _ => return self.fail("ERASE requires bare array names"),
                         };
-                        let variable = self.variable(name)?;
-                        if variable.element.is_none() {
-                            return self.fail(format!("ERASE target {name} is not an array"));
-                        }
+                        let variable = self.array(name)?;
                         if variable.descriptor.is_none() && variable.descriptor_place.is_none() {
                             return self.fail(format!(
                                 "static-array ERASE for {name} requires native zero-fill lowering"
@@ -2131,9 +2306,8 @@ impl Compiler {
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
-                            return self.fail(
-                                "the audited RANDOMIZE form requires one seed expression",
-                            );
+                            return self
+                                .fail("the audited RANDOMIZE form requires one seed expression");
                         };
                         let (seed, seed_type) = self.expression(seed)?;
                         let seed = self.convert(seed, seed_type, DOUBLE)?;
@@ -2277,10 +2451,7 @@ impl Compiler {
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
                 Statement::Print {
-                    file,
-                    using,
-                    items,
-                    ..
+                    file, using, items, ..
                 } => {
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
@@ -2301,9 +2472,7 @@ impl Compiler {
                     }
                     for item in items {
                         if let Expr::Apply {
-                            name,
-                            arguments,
-                            ..
+                            name, arguments, ..
                         } = &item.value
                         {
                             if canonical(name) == "TAB" {
@@ -2381,11 +2550,16 @@ impl Compiler {
                         // flag bit 0 as prompt-comma (no '?') and bit 1 as the
                         // leading semicolon's keep-cursor behavior.
                         let empty_prompt = Expr::Literal(Literal::String(String::new()), *span);
-                        let prompt = self.string_descriptor(prompt.as_ref().unwrap_or(&empty_prompt))?;
-                        let count = u16::try_from(destinations.len() + 1)
-                            .map_err(|_| SemanticError { message: "INPUT has too many destinations".into() })?;
+                        let prompt =
+                            self.string_descriptor(prompt.as_ref().unwrap_or(&empty_prompt))?;
+                        let count =
+                            u16::try_from(destinations.len() + 1).map_err(|_| SemanticError {
+                                message: "INPUT has too many destinations".into(),
+                            })?;
                         let mut table = Vec::from(count.to_le_bytes());
-                        table.push(u8::from(*suppress_question_mark) | (u8::from(*keep_cursor) << 1));
+                        table.push(
+                            u8::from(*suppress_question_mark) | (u8::from(*keep_cursor) << 1),
+                        );
                         for (_, type_id) in &resolved_destinations {
                             table.push(match type_id {
                                 &INTEGER | &BOOLEAN | &BYTE => 0x02,
@@ -2409,7 +2583,11 @@ impl Compiler {
                             // constant segment. QB/PDS put the block in
                             // DGROUP and pass DS:offset, as documented by
                             // QB45 runtime/rt/inptty.asm's pBlock contract.
-                            address: if self.runtime == "vbdos" { "far" } else { "near" },
+                            address: if self.runtime == "vbdos" {
+                                "far"
+                            } else {
+                                "near"
+                            },
                         });
                         let place = self.next_place;
                         self.next_place += 1;
@@ -2622,7 +2800,8 @@ impl Compiler {
                             if let Some(argument) = arguments.get(index) {
                                 if !matches!(argument, Expr::Omitted(_)) {
                                     let (value, type_id) = self.expression(argument)?;
-                                    let value = self.stored_float_argument(value, type_id, SINGLE)?;
+                                    let value =
+                                        self.stored_float_argument(value, type_id, SINGLE)?;
                                     self.emit_runtime_call(callee, Vec::new(), vec![value]);
                                 }
                             }
@@ -2639,17 +2818,13 @@ impl Compiler {
                         } else {
                             Operand::Constant(INTEGER, Number::Integer(-1))
                         };
-                        // BC passes the radius twice. The runtime applies the
-                        // independently latched aspect ratio to the two axes.
-                        self.emit_runtime_call(
-                            "B$CIRC",
-                            Vec::new(),
-                            vec![radius.clone(), radius, color],
-                        );
+                        self.emit_runtime_call("B$CIRC", Vec::new(), vec![radius, color]);
                     }
                     "LINE" => {
                         if !(4..=6).contains(&arguments.len()) {
-                            return self.fail("LINE expects two coordinate pairs, an optional color, and B or BF");
+                            return self.fail(
+                                "LINE expects two coordinate pairs, an optional color, and B or BF",
+                            );
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
@@ -2677,7 +2852,8 @@ impl Compiler {
                     }
                     "PAINT" => {
                         if !(3..=4).contains(&arguments.len()) {
-                            return self.fail("PAINT expects coordinates, fill, and optional border");
+                            return self
+                                .fail("PAINT expects coordinates, fill, and optional border");
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let (fill, fill_type) = self.expression(&arguments[2])?;
@@ -2692,7 +2868,8 @@ impl Compiler {
                     }
                     "PSET" | "PRESET" => {
                         if !(2..=3).contains(&arguments.len()) {
-                            return self.fail(format!("{name} expects coordinates and optional color"));
+                            return self
+                                .fail(format!("{name} expects coordinates and optional color"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let color = if let Some(argument) = arguments.get(2) {
@@ -2709,11 +2886,17 @@ impl Compiler {
                     "GET" | "PUT" => {
                         let expected = if name == "GET" { 5 } else { 4 };
                         if arguments.len() != expected {
-                            return self.fail(format!("graphics {name} has the wrong number of operands"));
+                            return self
+                                .fail(format!("graphics {name} has the wrong number of operands"));
                         }
                         self.graphics_coordinate("B$N1I2", "B$N1R4", &arguments[0], &arguments[1])?;
                         let array_index = if name == "GET" {
-                            self.graphics_coordinate("B$N2I2", "B$N2R4", &arguments[2], &arguments[3])?;
+                            self.graphics_coordinate(
+                                "B$N2I2",
+                                "B$N2R4",
+                                &arguments[2],
+                                &arguments[3],
+                            )?;
                             4
                         } else {
                             2
@@ -2721,19 +2904,105 @@ impl Compiler {
                         let mut operands = self.graphics_array(&arguments[array_index])?;
                         if name == "PUT" {
                             let mode = match &arguments[3] {
+                                // getput.asm's PutGetInit table, not its
+                                // header comment.
                                 Expr::Name(mode, _) => match canonical(mode) {
-                                    "PSET" => 3,
-                                    "PRESET" => 2,
+                                    "OR" => 0,
                                     "AND" => 1,
-                                    "OR" => 4,
-                                    "XOR" => 5,
+                                    "PRESET" => 2,
+                                    "PSET" => 3,
+                                    "XOR" => 4,
                                     _ => return self.fail("graphics PUT mode is not recognized"),
                                 },
                                 _ => return self.fail("graphics PUT requires a raster operation"),
                             };
                             operands.push(Operand::Constant(INTEGER, Number::Integer(mode)));
                         }
-                        self.emit_runtime_call(if name == "GET" { "B$GGET" } else { "B$GPUT" }, Vec::new(), operands);
+                        self.emit_runtime_call(
+                            if name == "GET" { "B$GGET" } else { "B$GPUT" },
+                            Vec::new(),
+                            operands,
+                        );
+                    }
+                    "OUT" => {
+                        let [port, value] = arguments.as_slice() else {
+                            return self.fail("OUT expects a port and a byte value");
+                        };
+                        let port = self.port_operand(port)?;
+                        let (value, value_type) = self.expression(value)?;
+                        let value = self.convert(value, value_type, BYTE)?;
+                        self.emit("port_out", Vec::new(), vec![port, value]);
+                    }
+                    "WAIT" => {
+                        // BC 4.5 polls inline: in, xor with the optional
+                        // second mask, and with the first, until nonzero.
+                        let (port, and_mask, xor_mask) = match arguments.as_slice() {
+                            [port, and_mask] => (port, and_mask, None),
+                            [port, and_mask, xor_mask] => (port, and_mask, Some(xor_mask)),
+                            _ => return self.fail("WAIT expects a port and one or two masks"),
+                        };
+                        let mask = |this: &mut Self, expression: &Expr| {
+                            let (value, value_type) = this.expression(expression)?;
+                            let value = this.convert(value, value_type, BYTE)?;
+                            let cell = this.temporary(BYTE)?;
+                            this.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+                            Ok::<_, SemanticError>(cell)
+                        };
+                        let port_value = self.port_operand(port)?;
+                        let port_cell = match port_value.clone() {
+                            Operand::Constant(..) => None,
+                            value => {
+                                let cell = self.temporary(INTEGER)?;
+                                self.emit("store", Vec::new(), vec![Operand::Place(cell), value]);
+                                Some(cell)
+                            }
+                        };
+                        let and_cell = mask(self, and_mask)?;
+                        let xor_cell = xor_mask.map(|one| mask(self, one)).transpose()?;
+                        let poll = self.new_block();
+                        let done = self.new_block();
+                        self.terminate("jump", Vec::new(), vec![poll])?;
+                        self.select_block(poll);
+                        let port = match port_cell {
+                            Some(cell) => {
+                                let port = self.value(INTEGER);
+                                self.emit("load", vec![port], vec![Operand::Place(cell)]);
+                                Operand::Value(port)
+                            }
+                            None => port_value.clone(),
+                        };
+                        let mut read = self.value(BYTE);
+                        self.emit("port_in", vec![read], vec![port]);
+                        if let Some(xor_cell) = xor_cell {
+                            let xor = self.value(BYTE);
+                            self.emit("load", vec![xor], vec![Operand::Place(xor_cell)]);
+                            let flipped = self.value(BYTE);
+                            self.emit(
+                                "xor",
+                                vec![flipped],
+                                vec![Operand::Value(read), Operand::Value(xor)],
+                            );
+                            read = flipped;
+                        }
+                        let and = self.value(BYTE);
+                        self.emit("load", vec![and], vec![Operand::Place(and_cell)]);
+                        let masked = self.value(BYTE);
+                        self.emit(
+                            "and",
+                            vec![masked],
+                            vec![Operand::Value(read), Operand::Value(and)],
+                        );
+                        let ready = self.value(BOOLEAN);
+                        self.emit(
+                            "ne",
+                            vec![ready],
+                            vec![
+                                Operand::Value(masked),
+                                Operand::Constant(BYTE, Number::Integer(0)),
+                            ],
+                        );
+                        self.terminate("branch", vec![Operand::Value(ready)], vec![done, poll])?;
+                        self.select_block(done);
                     }
                     "POKE" => {
                         if arguments.len() != 2 {
@@ -2777,11 +3046,9 @@ impl Compiler {
                         if left_type != right_type {
                             return self.fail("SWAP variables must have identical types");
                         }
-                        let aggregate = self
-                            .udts
-                            .values()
-                            .any(|record| record.type_id == left_type)
-                            || self.string_width(left_type).is_some_and(|width| width != 0);
+                        let aggregate =
+                            self.udts.values().any(|record| record.type_id == left_type)
+                                || self.string_width(left_type).is_some_and(|width| width != 0);
                         if aggregate {
                             let temporary = Operand::Place(self.temporary(left_type)?);
                             let width = self.width(left_type);
@@ -2793,16 +3060,8 @@ impl Compiler {
                             self.emit("load", vec![left_value], vec![left.clone()]);
                             let right_value = self.value(right_type);
                             self.emit("load", vec![right_value], vec![right.clone()]);
-                            self.emit(
-                                "store",
-                                Vec::new(),
-                                vec![left, Operand::Value(right_value)],
-                            );
-                            self.emit(
-                                "store",
-                                Vec::new(),
-                                vec![right, Operand::Value(left_value)],
-                            );
+                            self.emit("store", Vec::new(), vec![left, Operand::Value(right_value)]);
+                            self.emit("store", Vec::new(), vec![right, Operand::Value(left_value)]);
                         }
                     }
                     "COLOR" => {
@@ -2826,18 +3085,17 @@ impl Compiler {
                     "RESTORE" => {
                         let row = match arguments.as_slice() {
                             [] => None,
-                            [Expr::Name(label, _)] => Some(*self
-                                .data_labels
-                                .get(canonical(label))
-                                .ok_or_else(|| SemanticError {
-                                    message: format!("unknown RESTORE label {label}"),
-                                })?),
+                            [Expr::Name(label, _)] => {
+                                Some(*self.data_labels.get(canonical(label)).ok_or_else(|| {
+                                    SemanticError {
+                                        message: format!("unknown RESTORE label {label}"),
+                                    }
+                                })?)
+                            }
                             _ => return self.fail("RESTORE expects zero or one label"),
                         };
-                        let callee = row.map_or_else(
-                            || "B$RSTB".to_string(),
-                            |row| format!("$QB$RSTB:{row}"),
-                        );
+                        let callee = row
+                            .map_or_else(|| "B$RSTB".to_string(), |row| format!("$QB$RSTB:{row}"));
                         self.emit_runtime_call(
                             &callee,
                             Vec::new(),
@@ -3180,11 +3438,7 @@ impl Compiler {
         self.terminate("jump", Vec::new(), vec![test_block])?;
         self.select_block(test_block);
         let step_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![step_value],
-            vec![Operand::Place(step_place)],
-        );
+        self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
         let direction = self.value(BOOLEAN);
         let zero = if matches!(counter_type, SINGLE | DOUBLE) {
             self.floating_literal("0.0", counter_type)?
@@ -3205,11 +3459,7 @@ impl Compiler {
         self.select_block(positive_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![end_value],
-            vec![Operand::Place(end_place)],
-        );
+        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
             "le",
@@ -3225,11 +3475,7 @@ impl Compiler {
         self.select_block(negative_test);
         let counter_value = self.load_destination(counter)?;
         let end_value = self.value(counter_type);
-        self.emit(
-            "load",
-            vec![end_value],
-            vec![Operand::Place(end_place)],
-        );
+        self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
             "ge",
@@ -3249,11 +3495,7 @@ impl Compiler {
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(counter_type);
-            self.emit(
-                "load",
-                vec![step_value],
-                vec![Operand::Place(step_place)],
-            );
+            self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
             let advanced = self.value(counter_type);
             self.emit(
                 if matches!(counter_type, SINGLE | DOUBLE) {
@@ -3480,9 +3722,6 @@ impl Compiler {
                     return self.fail(format!("constant {name} is not assignable"));
                 }
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let operand = if let Some(base) = variable.indirect {
                     Operand::Indirect {
                         base,
@@ -3499,10 +3738,8 @@ impl Compiler {
             Expr::Apply {
                 name, arguments, ..
             } => {
-                let variable = self.variable(name)?;
-                let Some(element) = variable.element else {
-                    return self.fail(format!("{name} is not an array"));
-                };
+                let variable = self.array(name)?;
+                let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
                 if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
@@ -3584,9 +3821,6 @@ impl Compiler {
         match expression {
             Expr::Name(name, _) => {
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let base = variable
                     .indirect
                     .map(|base| ProjectionBase::Indirect(base, true, false))
@@ -3596,10 +3830,8 @@ impl Compiler {
             Expr::Apply {
                 name, arguments, ..
             } => {
-                let variable = self.variable(name)?;
-                let Some(element) = variable.element else {
-                    return self.fail(format!("{name} is not an array"));
-                };
+                let variable = self.array(name)?;
+                let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
                 if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
@@ -4068,7 +4300,7 @@ impl Compiler {
         self.terminate("jump", Vec::new(), vec![done])?;
 
         if let Some(call) = call {
-    self.select_block(call);
+            self.select_block(call);
             let called = self.value(INTEGER);
             self.emit_runtime_call(
                 if upper { "B$UBND" } else { "B$LBND" },
@@ -4430,6 +4662,14 @@ impl Compiler {
     }
 
     fn string_descriptor(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Expr::Unary {
+            op: Unary::Grouped,
+            operand,
+            ..
+        } = expression
+        {
+            return self.string_descriptor(operand);
+        }
         if let Expr::Name(name, _) = expression {
             if let Some(intrinsic) = intrinsics::find(canonical(name), self.dialect) {
                 if intrinsic.accepts(0) {
@@ -4711,7 +4951,7 @@ impl Compiler {
             Expr::Apply { name, .. }
                 if intrinsics::find(canonical(name), self.dialect).is_none()
                     && !self.signatures.contains_key(canonical(name))
-                    && self.variables.contains_key(variable_key(name)) =>
+                    && self.variables.contains_key(&self.array_key(name)) =>
             {
                 Some(self.destination(expression)?)
             }
@@ -4735,10 +4975,8 @@ impl Compiler {
         if !declaration.array || declaration.bounds.is_empty() {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
-        let variable = self.variable(&declaration.name)?;
-        let element = variable.element.ok_or_else(|| SemanticError {
-            message: format!("REDIM target {} is not an array", declaration.name),
-        })?;
+        let variable = self.array(&declaration.name)?;
+        let element = variable.element.expect("an array has an element type");
         let inferred = suffix(&declaration.name);
         let selected = declaration.type_name.as_ref().or(inferred.as_ref());
         let same_element = if matches!(selected, Some(TypeName::String)) {
@@ -4822,9 +5060,6 @@ impl Compiler {
                     });
                 }
                 let variable = self.variable(name)?;
-                if variable.element.is_some() {
-                    return self.fail(format!("array {name} requires subscripts"));
-                }
                 let result = self.value(variable.type_id);
                 let source = if let Some(base) = variable.indirect {
                     Operand::Indirect {
@@ -4880,14 +5115,14 @@ impl Compiler {
             }
             Expr::Unary { op, operand, .. } => {
                 let (operand, type_id) = self.expression(operand)?;
-                if *op == Unary::Positive {
+                if matches!(op, Unary::Positive | Unary::Grouped) {
                     return Ok((operand, type_id));
                 }
                 let operation = match op {
                     Unary::Negative if matches!(type_id, SINGLE | DOUBLE) => "fneg",
                     Unary::Negative => "neg",
                     Unary::Not => "not",
-                    Unary::Positive => unreachable!(),
+                    Unary::Positive | Unary::Grouped => unreachable!(),
                 };
                 if *op == Unary::Not && !matches!(type_id, INTEGER | LONG | BOOLEAN) {
                     return self.fail("NOT requires an integral operand");
@@ -4942,10 +5177,7 @@ impl Compiler {
                 } if arguments.is_empty() => name,
                 _ => return self.fail(format!("{name} requires a bare array name")),
             };
-            let variable = self.variable(array_name)?;
-            if variable.element.is_none() {
-                return self.fail(format!("{array_name} is not an array"));
-            }
+            let variable = self.array(array_name)?;
             let descriptor = self.descriptor_pointer(&variable)?;
             let dimension = if let Some(dimension) = arguments.get(1) {
                 let (dimension, type_id) = self.expression(dimension)?;
@@ -5030,7 +5262,11 @@ impl Compiler {
             let pointer_type = self.pointer_type(SINGLE);
             let pointer = self.value(pointer_type);
             self.emit_runtime_call(
-                if operands.is_empty() { "B$RND0" } else { "B$RND1" },
+                if operands.is_empty() {
+                    "B$RND0"
+                } else {
+                    "B$RND1"
+                },
                 vec![pointer],
                 operands,
             );
@@ -5271,8 +5507,7 @@ impl Compiler {
                                 }
                             }
                         }
-                        let (numerator, numerator_type) =
-                            self.expression(numerator_expression)?;
+                        let (numerator, numerator_type) = self.expression(numerator_expression)?;
                         if matches!(numerator_type, INTEGER | BOOLEAN | BYTE) {
                             // INTEGER operands are exact in QB's SINGLE division.
                             // Keep floor(n / positive-constant) integral until the
@@ -5315,10 +5550,7 @@ impl Compiler {
                             self.emit(
                                 "lt",
                                 vec![negative],
-                                vec![
-                                    numerator,
-                                    Operand::Constant(INTEGER, Number::Integer(0)),
-                                ],
+                                vec![numerator, Operand::Constant(INTEGER, Number::Integer(0))],
                             );
                             let has_remainder = self.value(BOOLEAN);
                             self.emit(
@@ -5396,6 +5628,13 @@ impl Compiler {
             let result = self.value(type_id);
             self.emit("fsub", vec![result], vec![Operand::Value(adjusted), above]);
             return Ok(Some((Operand::Value(result), type_id)));
+        }
+        if intrinsic.lowering == Lowering::PortIn {
+            let port = self.port_operand(&arguments[0])?;
+            let byte = self.value(BYTE);
+            self.emit("port_in", vec![byte], vec![port]);
+            let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
+            return Ok(Some((result, INTEGER)));
         }
         if intrinsic.lowering == Lowering::Peek {
             let segment_place = self.def_segment_place();
@@ -5587,7 +5826,11 @@ impl Compiler {
         ))
     }
 
-    fn floor_float(&mut self, operand: Operand, type_id: u32) -> Result<(Operand, u32), SemanticError> {
+    fn floor_float(
+        &mut self,
+        operand: Operand,
+        type_id: u32,
+    ) -> Result<(Operand, u32), SemanticError> {
         // INT is floor, while x87's current conversion rounds to nearest.
         // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
         // Express the correction in ordinary HIR so optimization sees every
@@ -5657,19 +5900,33 @@ impl Compiler {
         Ok(Operand::Place(place))
     }
 
+    /// The far address GET/PUT starts at -- the array's data or the named
+    /// element -- and the array's descriptor.
+    /// A port number is a 16-bit word; a constant one stays constant so the
+    /// target can see which device it names.
+    fn port_operand(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        let (port, port_type) = self.expression(expression)?;
+        self.convert(port, port_type, INTEGER)
+    }
+
     fn graphics_array(&mut self, expression: &Expr) -> Result<Vec<Operand>, SemanticError> {
-        let name = match expression {
-            Expr::Name(name, _) => name,
-            Expr::Apply { name, arguments, .. } if arguments.is_empty() => name,
-            _ => return self.fail("graphics GET/PUT requires a bare array"),
+        let (name, element_named) = match expression {
+            Expr::Name(name, _) => (name, false),
+            Expr::Apply {
+                name, arguments, ..
+            } => (name, !arguments.is_empty()),
+            _ => return self.fail("graphics GET/PUT requires an array"),
         };
-        let variable = self.variable(name)?;
-        let element = variable.element.ok_or_else(|| SemanticError {
-            message: format!("graphics GET/PUT target {name} is not an array"),
-        })?;
+        let variable = self.array(name)?;
         let descriptor = self.descriptor_pointer(&variable)?;
-        let data_type = self.far_pointer_type(element);
-        let data = self.descriptor_field(descriptor, 0, data_type);
+        let data = if element_named {
+            let (place, type_id) = self.destination(expression)?;
+            self.far_address(place, type_id)
+        } else {
+            let element = variable.element.expect("an array has an element type");
+            let data_type = self.far_pointer_type(element);
+            self.descriptor_field(descriptor, 0, data_type)
+        };
         Ok(vec![Operand::Value(data), Operand::Value(descriptor)])
     }
 
@@ -5692,11 +5949,7 @@ impl Compiler {
         }
 
         let (path, offset, supplied) = match arguments {
-            [path] => (
-                path,
-                Operand::Constant(INTEGER, Number::Integer(0)),
-                0,
-            ),
+            [path] => (path, Operand::Constant(INTEGER, Number::Integer(0)), 0),
             [path, offset] => {
                 let (offset, offset_type) = self.expression(offset)?;
                 (path, self.convert(offset, offset_type, INTEGER)?, 1)
@@ -5787,7 +6040,7 @@ impl Compiler {
                         "array argument for {name} must use empty parentheses"
                     ));
                 }
-                let variable = self.variable(array_name)?;
+                let variable = self.array(array_name)?;
                 if *parameter_type != ANY && variable.element != Some(*parameter_type) {
                     return self.fail(format!("array argument type does not match {name}"));
                 }
@@ -5890,11 +6143,7 @@ impl Compiler {
                             }
                             let near = self.pointer_type(*parameter_type);
                             let address = self.value(near);
-                            self.emit(
-                                "address",
-                                vec![address],
-                                vec![Operand::Place(temporary)],
-                            );
+                            self.emit("address", vec![address], vec![Operand::Place(temporary)]);
                             operands.push(Operand::Value(address));
                             byref_copybacks.push((original, temporary, *parameter_type));
                         } else if offset == 0 {
@@ -5974,10 +6223,7 @@ impl Compiler {
         // Pascal evaluates actuals left-to-right but BC copies aliased far
         // fields back from the last formal to the first.
         for (destination, temporary, type_id) in byref_copybacks.into_iter().rev() {
-            let aggregate = self
-                .udts
-                .values()
-                .any(|record| record.type_id == type_id)
+            let aggregate = self.udts.values().any(|record| record.type_id == type_id)
                 || self.string_width(type_id).is_some_and(|width| width != 0);
             if aggregate {
                 self.aggregate_assignment(
@@ -5988,7 +6234,11 @@ impl Compiler {
             } else {
                 let value = self.value(type_id);
                 self.emit("load", vec![value], vec![Operand::Place(temporary)]);
-                self.emit("store", Vec::new(), vec![destination, Operand::Value(value)]);
+                self.emit(
+                    "store",
+                    Vec::new(),
+                    vec![destination, Operand::Value(value)],
+                );
             }
         }
         // BC ends the lifetime of each descriptor it materialized solely for
@@ -6120,6 +6370,14 @@ impl Compiler {
     }
 
     fn string_syntax(&self, expression: &Expr) -> bool {
+        if let Expr::Unary {
+            op: Unary::Grouped,
+            operand,
+            ..
+        } = expression
+        {
+            return self.string_syntax(operand);
+        }
         if self
             .place_syntax_type(expression)
             .is_some_and(|type_id| self.string_width(type_id).is_some())
@@ -6157,7 +6415,7 @@ impl Compiler {
     }
 
     fn bare_function_type(&self, name: &str) -> Option<u32> {
-        if self.variables.contains_key(variable_key(name)) {
+        if self.variables.contains_key(&self.variable_key(name)) {
             return None;
         }
         self.signatures.get(canonical(name)).and_then(|signature| {
@@ -6171,10 +6429,13 @@ impl Compiler {
 
     fn place_syntax_type(&self, expression: &Expr) -> Option<u32> {
         match expression {
-            Expr::Name(name, _) => self.variables.get(variable_key(name)).map(|one| one.type_id),
+            Expr::Name(name, _) => self
+                .variables
+                .get(&self.variable_key(name))
+                .map(|one| one.type_id),
             Expr::Apply { name, .. } => self
                 .variables
-                .get(variable_key(name))
+                .get(&self.array_key(name))
                 .and_then(|one| one.element),
             Expr::Index { base, .. } => {
                 let base = self.place_syntax_type(base)?;
@@ -6267,15 +6528,15 @@ impl Compiler {
         }
 
         // x87 has no single POW instruction. Keep the mathematical structure
-        // visible as log2(base), exponent multiply, exp2. This identity is
-        // valid for a positive base; reject other domains until their
-        // sign/integer-exponent CFG is represented.
-        let (base_type, base) = self.constant(left).map_err(|_| SemanticError {
-            message: "inline power currently requires a positive constant base".into(),
-        })?;
-        if as_real(&base)? <= 0.0 {
-            return self.fail("inline power currently requires a positive constant base");
-        }
+        // visible as log2(base), exponent multiply, exp2. That identity holds
+        // for a positive base, which a constant one proves here.
+        let Some((base_type, base)) = self
+            .constant(left)
+            .ok()
+            .filter(|(_, base)| as_real(base).is_ok_and(|value| value > 0.0))
+        else {
+            return self.general_power(left, right);
+        };
         let (exponent, exponent_type) = self.expression(right)?;
         let common = common_type(base_type, exponent_type, Binary::Power)?;
         let exponent = self.convert(exponent, exponent_type, common)?;
@@ -6305,6 +6566,164 @@ impl Compiler {
         Ok((Operand::Value(result), common))
     }
 
+    /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
+    /// 1.414214, -2^3 is -8, 0^0 is 1, 0^2 is 0; 0^-1 and -8^(1/3) raise
+    /// error 5. A float value neither crosses a block nor is read twice, so
+    /// each block reloads x and y from their cells.
+    fn general_power(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Operand, u32), SemanticError> {
+        let (base, base_type) = self.expression(left)?;
+        let (exponent, exponent_type) = self.expression(right)?;
+        let common = common_type(base_type, exponent_type, Binary::Power)?;
+        let base = self.convert(base, base_type, common)?;
+        let exponent = self.convert(exponent, exponent_type, common)?;
+        let [x, y, result] = [
+            self.temporary(common)?,
+            self.temporary(common)?,
+            self.temporary(common)?,
+        ];
+        self.emit("store", Vec::new(), vec![Operand::Place(x), base]);
+        self.emit("store", Vec::new(), vec![Operand::Place(y), exponent]);
+        let load = |this: &mut Self, place: u32| {
+            let value = this.value(common);
+            this.emit("load", vec![value], vec![Operand::Place(place)]);
+            Operand::Value(value)
+        };
+        let compare = |this: &mut Self, op: &'static str, place: u32, literal: &str| {
+            let left = load(this, place);
+            let right = this.floating_literal(literal, common)?;
+            let truth = this.value(BOOLEAN);
+            this.emit(op, vec![truth], vec![left, right]);
+            Ok::<_, SemanticError>(Operand::Value(truth))
+        };
+        // exp2(y * log2(magnitude)) into `result`.
+        let exponential = |this: &mut Self, negate_base: bool| {
+            let mut magnitude = load(this, x);
+            if negate_base {
+                let negated = this.value(common);
+                this.emit("fneg", vec![negated], vec![magnitude]);
+                magnitude = Operand::Value(negated);
+            }
+            let logarithm = this.value(common);
+            this.emit("flog2", vec![logarithm], vec![magnitude]);
+            let exponent = load(this, y);
+            let product = this.value(common);
+            this.emit(
+                "fmul",
+                vec![product],
+                vec![Operand::Value(logarithm), exponent],
+            );
+            let power = this.value(common);
+            this.emit("fexp2", vec![power], vec![Operand::Value(product)]);
+            this.emit(
+                "store",
+                Vec::new(),
+                vec![Operand::Place(result), Operand::Value(power)],
+            );
+        };
+        let positive = self.new_block();
+        let not_positive = self.new_block();
+        let zero = self.new_block();
+        let zero_not_positive = self.new_block();
+        let negative = self.new_block();
+        let negative_integral = self.new_block();
+        let odd = self.new_block();
+        let illegal = self.error_block();
+        let join = self.new_block();
+        let constant = |this: &mut Self, literal: &str| -> Result<(), SemanticError> {
+            let value = this.floating_literal(literal, common)?;
+            this.emit("store", Vec::new(), vec![Operand::Place(result), value]);
+            this.terminate("jump", Vec::new(), vec![join])
+        };
+
+        let truth = compare(self, "gt", x, "0")?;
+        self.terminate("branch", vec![truth], vec![positive, not_positive])?;
+        self.select_block(positive);
+        exponential(self, false);
+        self.terminate("jump", Vec::new(), vec![join])?;
+
+        self.select_block(not_positive);
+        let truth = compare(self, "eq", x, "0")?;
+        self.terminate("branch", vec![truth], vec![zero, negative])?;
+        self.select_block(zero);
+        let truth = compare(self, "gt", y, "0")?;
+        let zero_result = self.new_block();
+        self.terminate("branch", vec![truth], vec![zero_result, zero_not_positive])?;
+        self.select_block(zero_result);
+        constant(self, "0")?;
+        self.select_block(zero_not_positive);
+        let truth = compare(self, "eq", y, "0")?;
+        let one_result = self.new_block();
+        self.terminate("branch", vec![truth], vec![one_result, illegal])?;
+        self.select_block(one_result);
+        constant(self, "1")?;
+
+        // A negative base needs an integral exponent; its parity is the sign.
+        self.select_block(negative);
+        let exponent = load(self, y);
+        let whole = self.convert(exponent, common, LONG)?;
+        let whole_cell = self.temporary(LONG)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(whole_cell), whole]);
+        let whole = self.value(LONG);
+        self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
+        let back = self.convert(Operand::Value(whole), LONG, common)?;
+        let exponent = load(self, y);
+        let truth = self.value(BOOLEAN);
+        self.emit("eq", vec![truth], vec![back, exponent]);
+        self.terminate(
+            "branch",
+            vec![Operand::Value(truth)],
+            vec![negative_integral, illegal],
+        )?;
+        self.select_block(negative_integral);
+        exponential(self, true);
+        let whole = self.value(LONG);
+        self.emit("load", vec![whole], vec![Operand::Place(whole_cell)]);
+        let parity = self.value(LONG);
+        self.emit(
+            "and",
+            vec![parity],
+            vec![
+                Operand::Value(whole),
+                Operand::Constant(LONG, Number::Integer(1)),
+            ],
+        );
+        let truth = self.value(BOOLEAN);
+        self.emit(
+            "ne",
+            vec![truth],
+            vec![
+                Operand::Value(parity),
+                Operand::Constant(LONG, Number::Integer(0)),
+            ],
+        );
+        self.terminate("branch", vec![Operand::Value(truth)], vec![odd, join])?;
+        self.select_block(odd);
+        let magnitude = load(self, result);
+        let negated = self.value(common);
+        self.emit("fneg", vec![negated], vec![magnitude]);
+        self.emit(
+            "store",
+            Vec::new(),
+            vec![Operand::Place(result), Operand::Value(negated)],
+        );
+        self.terminate("jump", Vec::new(), vec![join])?;
+
+        self.select_block(illegal);
+        self.emit_runtime_call(
+            "B$SERR",
+            Vec::new(),
+            vec![Operand::Constant(INTEGER, Number::Integer(5))],
+        );
+        self.terminate("unreachable", Vec::new(), Vec::new())?;
+
+        self.select_block(join);
+        Ok((load(self, result), common))
+    }
+
     fn convert(&mut self, operand: Operand, from: u32, to: u32) -> Result<Operand, SemanticError> {
         if from == to {
             return Ok(operand);
@@ -6319,6 +6738,19 @@ impl Compiler {
                 self.name(to)
             ));
         }
+        if let Operand::Constant(_, Number::Integer(value)) = operand {
+            if let Some(range) = integer_range(to) {
+                if !range.contains(&value) {
+                    return self.fail("Math overflow");
+                }
+                return Ok(Operand::Constant(to, Number::Integer(value)));
+            }
+        }
+        if to == BYTE && matches!(from, SINGLE | DOUBLE) {
+            // BC rounds to INTEGER (B$FIS2) and keeps the low byte.
+            let integer = self.convert(operand, from, INTEGER)?;
+            return self.convert(integer, INTEGER, BYTE);
+        }
         if matches!(from, INTEGER | LONG | BOOLEAN | BYTE) && matches!(to, SINGLE | DOUBLE) {
             let place = self.temporary(from)?;
             self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
@@ -6331,14 +6763,21 @@ impl Compiler {
         Ok(Operand::Value(result))
     }
 
+    fn array(&self, name: &str) -> Result<Variable, SemanticError> {
+        match self.variables.get(&self.array_key(name)) {
+            Some(variable) => Ok(variable.clone()),
+            None => self.fail(format!("{name} is not an array")),
+        }
+    }
+
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {
-        if let Some(variable) = self.variables.get(variable_key(name)) {
+        let key = self.variable_key(name);
+        if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
         }
-        let type_id = self.named_type(name, None)?;
         let declaration = Declaration {
-            name: name.into(),
-            type_name: Some(type_name(type_id)),
+            name: key.clone(),
+            type_name: None,
             array: false,
             bounds: Vec::new(),
             fixed_length: None,
@@ -6351,7 +6790,7 @@ impl Compiler {
             },
         };
         self.declare_as(&declaration, self.implicit_storage)?;
-        Ok(self.variables[variable_key(name)].clone())
+        Ok(self.variables[&key].clone())
     }
 
     fn constant(&self, expression: &Expr) -> Result<(u32, Number), SemanticError> {
@@ -6386,7 +6825,7 @@ impl Compiler {
             Expr::Unary { op, operand, .. } => {
                 let (type_id, value) = self.constant(operand)?;
                 match (op, value) {
-                    (Unary::Positive, value) => Ok((type_id, value)),
+                    (Unary::Positive | Unary::Grouped, value) => Ok((type_id, value)),
                     (Unary::Negative, Number::Integer(value)) => {
                         Ok((type_id, Number::Integer(narrow(-value, type_id))))
                     }
@@ -7394,12 +7833,23 @@ fn suffix(name: &str) -> Option<TypeName> {
     }
 }
 
+fn source_position(span: Span) -> (usize, usize) {
+    (span.line, span.start)
+}
+
 fn canonical(name: &str) -> &str {
     name.trim_end_matches(['%', '&', '!', '#', '$'])
 }
 
-fn variable_key(name: &str) -> &str {
-    name
+fn type_suffix(type_id: u32) -> &'static str {
+    match type_id {
+        INTEGER => "%",
+        LONG => "&",
+        SINGLE => "!",
+        DOUBLE => "#",
+        STRING => "$",
+        _ => "",
+    }
 }
 
 fn arity_description(minimum: usize, maximum: usize) -> String {
@@ -7432,6 +7882,15 @@ fn narrow(value: i64, type_id: u32) -> i64 {
         INTEGER => value as i16 as i64,
         LONG => value as i32 as i64,
         _ => value,
+    }
+}
+
+fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
+    match type_id {
+        BYTE => Some(0..=u8::MAX as i64),
+        INTEGER => Some(i16::MIN as i64..=i16::MAX as i64),
+        LONG => Some(i32::MIN as i64..=i32::MAX as i64),
+        _ => None,
     }
 }
 

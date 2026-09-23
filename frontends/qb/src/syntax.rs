@@ -90,6 +90,9 @@ pub struct Procedure {
     pub declaration: bool,
     pub is_static: bool,
     pub exported: bool,
+    /// DEF FN and an outlined module GOSUB run in the module's variable
+    /// scope; SUB and FUNCTION see only what is SHARED.
+    pub module_scope: bool,
     pub span: Span,
 }
 
@@ -105,6 +108,8 @@ pub enum Unary {
     Positive,
     Negative,
     Not,
+    /// A parenthesized reference: a value, so a BYREF formal gets a copy.
+    Grouped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,6 +203,8 @@ pub enum Statement {
     },
     Dim(Vec<Declaration>),
     Static(Vec<Declaration>),
+    /// A procedure's SHARED statement: module variables it may name.
+    Shared(Vec<Declaration>),
     Redim(Vec<Declaration>),
     Erase(Vec<Expr>),
     Const {
@@ -327,12 +334,24 @@ pub enum Statement {
 impl Statement {
     pub fn span(&self) -> Span {
         match self {
-            Self::Dim(items) | Self::Static(items) | Self::Redim(items) => items
-                .first()
-                .map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span),
-            Self::Erase(items) => items
-                .first()
-                .map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
+            Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) => {
+                items.first().map_or(
+                    Span {
+                        line: 0,
+                        start: 0,
+                        end: 0,
+                    },
+                    |item| item.span,
+                )
+            }
+            Self::Erase(items) => items.first().map_or(
+                Span {
+                    line: 0,
+                    start: 0,
+                    end: 0,
+                },
+                Expr::span,
+            ),
             Self::DefType { span, .. }
             | Self::TypeDecl { span, .. }
             | Self::Const { span, .. }

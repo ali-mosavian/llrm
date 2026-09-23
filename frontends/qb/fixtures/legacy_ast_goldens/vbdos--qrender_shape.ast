@@ -547,6 +547,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 10,
                 start: 8,
@@ -689,6 +690,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            module_scope: false,
             span: Span {
                 line: 38,
                 start: 0,

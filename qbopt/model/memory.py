@@ -7,6 +7,8 @@ describes byte lanes selected by an indexed access, not merely its hull.
 """
 
 from math import gcd
+from typing import NamedTuple
+from functools import cache
 from enum import StrEnum
 from dataclasses import field
 from dataclasses import dataclass
@@ -133,12 +135,46 @@ class Provenance:
         return any(one.intersects(two) for one in self.slices for two in other.slices)
 
 
+class AliasClass(NamedTuple):
+    """All `objects_may_alias` asks of an object besides its identity."""
+
+    addressed: bool
+    kind: Kind
+    captured: bool
+
+
+def alias_class(one: Object) -> AliasClass:
+    return AliasClass(one.addressed, one.kind, one.captured)
+
+
 def objects_may_alias(one: Object, other: Object) -> bool:
     if one == other:
         return True
+    # classes_may_alias's first rule, asked before building either class.
+    return one.addressed and other.addressed and classes_may_alias(alias_class(one), alias_class(other))
+
+
+@cache
+def classes_may_alias(one: AliasClass, other: AliasClass) -> bool:
+    """Whether two distinct objects of these classes may alias."""
     # Only a reference naming an unaddressed object reaches it.
     if not (one.addressed and other.addressed):
         return False
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.UNKNOWN:
+            return True
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.NONLOCAL:
+            return that.captured and that.kind not in (Kind.FRAME, Kind.STACK)
+    for this, that in ((one, other), (other, one)):
+        if this.kind is Kind.PARAMETER:
+            # An incoming pointer predates this activation and cannot designate
+            # one of its frame objects. At a call site the parameter object is
+            # replaced by the actual provenance before caller-side queries.
+            return that.captured and that.kind is not Kind.FRAME
+    if {one.kind, other.kind} <= {Kind.GLOBAL, Kind.EXTERNAL}:
+        return Kind.EXTERNAL in (one.kind, other.kind)
+    return False
     for this, that in ((one, other), (other, one)):
         if this.kind is Kind.UNKNOWN:
             return True

@@ -131,6 +131,8 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.FNEG: (ir.Operation.FLOAT_UNARY, "fchs"),
     mir.Kind.FABS: (ir.Operation.FLOAT_UNARY, "fabs"),
     mir.Kind.FSQRT: (ir.Operation.FLOAT_UNARY, "fsqrt"),
+    mir.Kind.PORT_IN: (ir.Operation.BARRIER, "in"),
+    mir.Kind.PORT_OUT: (ir.Operation.BARRIER, "out"),
     # FloatAlloc picks fcom, fcomp or fcompp by what dies.
     mir.Kind.FCOMPARE: (ir.Operation.COMPARE, "fcom"),
     mir.Kind.FCHECK: (ir.Operation.NOTHING, "fwait"),
@@ -1011,13 +1013,17 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
         return None  # Legacy folded sites order results by their runtime entry point.
     if (
         width not in (2, 4)
-        or not all(isinstance(arg, mir.Held) and arg.width == width for arg in (op.args[0], *op.results))
-        or not isinstance(op.args[1], (mir.Held, mir.Const))
-        or op.args[1].width != width
+        or not all(isinstance(arg, mir.Held) and arg.width == width for arg in op.results)
+        or not all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == width for arg in op.args)
     ):
         return None
     dividend, divisor = map(operand, op.args)
     unsigned = op.kind is mir.Kind.UDIVMOD
+    setup = ()
+    if isinstance(op.args[0], mir.Const):
+        held = ir.Held(lowering.fresh(), width)
+        setup = (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (dividend,)),)
+        dividend = held
     if isinstance(op.args[1], mir.Const) and not unsigned:
         reciprocal = division.reciprocal(
             dividend,
@@ -1028,11 +1034,10 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
             remainder=op.results[1].value.id in lowering._read,
         )
         if reciprocal is not None:
-            return reciprocal
-    setup = ()
+            return (*setup, *reciprocal)
     if isinstance(op.args[1], mir.Const):
         held = ir.Held(lowering.fresh(), width)
-        setup = (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (divisor,)),)
+        setup += (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (divisor,)),)
         divisor = held
     high = ir.Held(lowering.fresh(), width)
     widened = (
@@ -1242,6 +1247,31 @@ def _signed_high_product(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics
         sources.append(source)
     low = ir.Held(lowering.fresh(), result.width)
     return (*setup, ir.Semantics(ir.Operation.MULTIPLY, "imul", (low, operand(result)), tuple(sources)))
+
+
+def _port(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    """`in al,port` or `out port,al`: a port below 256 is an immediate, any other is dx.
+
+    A BARRIER, so no machine pass reorders, merges or deletes the access.
+    """
+    reading = op.kind is mir.Kind.PORT_IN
+    if len(op.args) != (1 if reading else 2) or len(op.results) != (1 if reading else 0):
+        raise Unlowered(f"unsupported port access at {op.at:#x}")
+    setup: list[ir.Semantics] = []
+
+    def held(arg: mir.Arg, width: int) -> ir.Loc:
+        if isinstance(arg, mir.Const):
+            register = ir.Held(lowering.fresh(), width)
+            setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (register,), (ir.Imm(arg.n & ((1 << 8 * width) - 1), width),)))
+            return register
+        return operand(arg)
+
+    port_arg = op.args[0]
+    port = ir.Imm(port_arg.n, 1) if isinstance(port_arg, mir.Const) and 0 <= port_arg.n < 256 else held(port_arg, 2)
+    if reading:
+        return (*setup, ir.Semantics(ir.Operation.BARRIER, "in", (operand(op.results[0]),), (port,)))
+    value = held(op.args[1], 1)
+    return (*setup, ir.Semantics(ir.Operation.BARRIER, "out", (), (port, value)))
 
 
 def _pointer_offset(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
@@ -1456,6 +1486,8 @@ _EXPANDS: dict = {
     mir.Kind.FIXED_MUL: _fixed_multiply,
     mir.Kind.FIXED_DIV: _fixed_division,
     mir.Kind.PTR_OFFSET: _pointer_offset,
+    mir.Kind.PORT_IN: _port,
+    mir.Kind.PORT_OUT: _port,
 }
 
 

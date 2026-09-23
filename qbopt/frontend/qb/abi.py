@@ -82,7 +82,8 @@ _AUDITED_GRAPHICS_STACK: dict[str, int] = {
     "B$CSTT": 4,
     "B$CSTO": 4,
     "B$CASP": 4,
-    "B$CIRC": 10,
+    # circle.asm: parmD Radius, parmW Color.
+    "B$CIRC": 6,
     "B$LINE": 6,
     "B$PAIN": 4,
     "B$PSTC": 2,
@@ -96,6 +97,9 @@ _AUDITED_GRAPHICS_STACK: dict[str, int] = {
 _AUDITED_STATEMENT_STACK: dict[str, int] = {
     "B$BEEP": 0,
     "B$LNIN": 10,
+    # Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
+    # B$OPEN at 0224 returns with RETF 8 at 0252.
+    "B$OPEN": 8,
     "B$SLEP": 4,
 }
 
@@ -712,6 +716,20 @@ def _contract(name: str, cleanup: model.StackCleanup, pushed: int, family: model
                 f"{found.evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 "
                 "reads its R8 seed at [BP+0Ah] and returns with RETF 8; "
                 "MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
+            ),
+        )
+    if name == "B$RND0" and pushed == 0:
+        return replace(
+            found,
+            cleanup=0,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            established=True,
+            inputs=frozenset(),
+            i386=True,
+            evidence=(
+                f"{found.evidence} QB45 random.asm declares B$RND0 with no "
+                "parameters and returns its result address in AX with a bare RETF."
             ),
         )
     if name == "B$RND1" and pushed == 4:

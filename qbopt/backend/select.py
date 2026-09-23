@@ -1684,6 +1684,20 @@ def emit(
             return float_memory(name, memory[0], at) if memory else bare(name, at)
         case ir.Operation.BARRIER if what.name == "fnstsw" and dests == (ir.Reg(Register.AX, 2),):
             return _assemble(Instruction.create_reg(Code.FNSTSW_AX, Register.AX), at)
+        case ir.Operation.BARRIER if what.name == "in" and dests == (ir.Reg(Register.AL, 1),):
+            match sources:
+                case (ir.Imm(value=port),):
+                    return _assemble(Instruction.create_reg_u32(Code.IN_AL_IMM8, Register.AL, port), at)
+                case (ir.Reg(register=Register.DX),):
+                    return _assemble(Instruction.create_reg_reg(Code.IN_AL_DX, Register.AL, Register.DX), at)
+            return None
+        case ir.Operation.BARRIER if what.name == "out" and not dests and len(sources) == 2:
+            match sources:
+                case (ir.Imm(value=port), ir.Reg(register=Register.AL)):
+                    return _assemble(Instruction.create_u32_reg(Code.OUT_IMM8_AL, port, Register.AL), at)
+                case (ir.Reg(register=Register.DX), ir.Reg(register=Register.AL)):
+                    return _assemble(Instruction.create_reg_reg(Code.OUT_DX_AL, Register.DX, Register.AL), at)
+            return None
         case ir.Operation.BARRIER if what.name in CONTROL_WORD and len(dests + sources) == 1:
             match (dests + sources)[0]:
                 case ir.Mem(width=2) as cell:

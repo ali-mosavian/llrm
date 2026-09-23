@@ -66,7 +66,10 @@ fn generated_lexer_preserves_token_order_and_spans_over_qbasic_port_corpus() {
             let tokens = generated_parser::lex(source, dialect)
                 .unwrap_or_else(|error| panic!("{name} rejected for {dialect:?}: {error:?}"));
             accepted += 1;
-            assert!(!tokens.is_empty(), "{name} produced no tokens for {dialect:?}");
+            assert!(
+                !tokens.is_empty(),
+                "{name} produced no tokens for {dialect:?}"
+            );
             let mut previous = (1, 0, 0);
             for token in tokens {
                 let current = (token.span.line, token.span.start, token.span.end);

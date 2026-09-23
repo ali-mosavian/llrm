@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from qbopt.model import mir
 from qbopt.model import memory
+from qbopt.analysis.cellmap import CellMap
 from qbopt.objectfile.module import Space
 
 UNKNOWN = memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN))
@@ -496,6 +497,7 @@ def points_to(
                             fact = _widened(previous_incoming[key].union(fact))
                         state[key] = fact
             incoming[block.at] = dict(state)
+            state = CellMap(_key_bucket, state)
             for phi in block.phis:
                 parts = [values.get(one) for one in phi.incoming.values()]
                 if phi.result in pointer_values or parts and all(one is not None for one in parts):
@@ -533,7 +535,7 @@ def points_to(
                         key = _cell_key(replace(ref, provenance=provenance))
                         # Any possibly overlapping write invalidates prior cell
                         # contents; an exact pointer store then defines it.
-                        state = {old: fact for old, fact in state.items() if old == key or not _keys_overlap(old, key)}
+                        _kill(state, key)
                         if key is not None and source is not None:
                             state[key] = source
             outgoing[block.at] = state
@@ -580,7 +582,7 @@ def points_to(
         for block in body.blocks:
             state = set().union(*(escape_out[one] for one in predecessors.get(block.at, ())))
             escape_in[block.at] = set(state)
-            cells = dict(incoming[block.at])
+            cells = CellMap(_key_bucket, incoming[block.at])
             for op in block.ops:
                 escaped_before[op.at] = frozenset(set(escaped_before.get(op.at, ())) | state)
                 newly = set()
@@ -616,7 +618,7 @@ def points_to(
                     for ref in op.stores:
                         provenance = _resolved_reference(ref, values)
                         key = _cell_key(replace(ref, provenance=provenance))
-                        cells = {old: fact for old, fact in cells.items() if old == key or not _keys_overlap(old, key)}
+                        _kill(cells, key)
                         if key is not None and source is not None:
                             cells[key] = source
                 state.update(pointees(newly, cells))
@@ -640,6 +642,16 @@ def _resolved_actuals(actuals: tuple[object, ...], values: dict[mir.Value, memor
         else:
             out.append(UNKNOWN)
     return tuple(out)
+
+
+def _key_bucket(key) -> tuple:
+    """The object a cell key lies in: only keys sharing it can overlap."""
+    return key[:2] if len(key) == 4 else (key[0],)
+
+
+def _kill(cells: CellMap, key) -> None:
+    """Drop the cells a store to `key` may overwrite, keeping `key` itself."""
+    cells.kill(None if key is None else (_key_bucket(key),), lambda old: old != key and _keys_overlap(old, key))
 
 
 def _keys_overlap(one, other) -> bool:

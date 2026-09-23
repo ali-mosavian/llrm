@@ -29,6 +29,7 @@ from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.model.mir import Op
 from qbopt.analysis import loops
+from qbopt.analysis import cellmap
 from qbopt.model.mir import Kind
 from qbopt.model.mir import Value
 from qbopt.analysis import effects
@@ -341,7 +342,7 @@ def _dead_in(
     the caller can carry the second to the predecessors.
     """
     found: list[int] = []
-    overwritten = dict(overwritten)
+    overwritten = _cells(overwritten)
     for op in reversed(block.ops):
         # Nothing can read a private cell but by its name: not a call, and
         # not an address this cannot resolve.
@@ -360,7 +361,7 @@ def _dead_in(
             # across a call, and the op's own cells are read as any op's.
             caught = exception and sealed and private is not None and not op.barrier and not effects.unmodeled_write(op)
             kept = (shielded and op.kind is Kind.CALL) or caught
-            overwritten = {one: at for one, at in overwritten.items() if private(one)} if kept else {}
+            overwritten = _cells({one: at for one, at in overwritten.items() if private(one)} if kept else {})
             if not caught:
                 continue
 
@@ -378,12 +379,7 @@ def _dead_in(
         for ref in op.loads:
             if ref.addr is not None and ref.addr.space is Space.STACK:
                 continue  # a pop, for the same reason a push is skipped below
-            unnamed = shielded and (op.kind is Kind.CALL or not _fixed(ref))
-            overwritten = {
-                one: at
-                for one, at in overwritten.items()
-                if (unnamed and private(one)) or not mir.overlapping(one, ref, dgroup, bounds)
-            }
+            _clobber(overwritten, ref, shielded and (op.kind is Kind.CALL or not _fixed(ref)), private, dgroup, bounds)
         if wrote is None:
             for ref in op.stores:
                 if ref.addr is not None and ref.addr.space is Space.STACK:
@@ -396,13 +392,20 @@ def _dead_in(
                     # call were wiping everything known, which is where the
                     # seven stores memory.py finds and this did not all sat.
                     continue
-                unnamed = shielded and (op.kind is Kind.CALL or not _fixed(ref))
-                overwritten = {
-                    one: at
-                    for one, at in overwritten.items()
-                    if (unnamed and private(one)) or not mir.overlapping(one, ref, dgroup, bounds)
-                }
+                _clobber(overwritten, ref, shielded and (op.kind is Kind.CALL or not _fixed(ref)), private, dgroup, bounds)
     return found, overwritten
+
+
+def _cells(overwritten: dict[MemRef, int]) -> cellmap.CellMap:
+    """A copy of `overwritten` to change, bucketed as ``mir.overlapping`` rules writes out."""
+    if isinstance(overwritten, cellmap.CellMap):
+        return overwritten.copy()
+    return cellmap.CellMap(mir.overlap_bucket, overwritten)
+
+
+def _clobber(overwritten: cellmap.CellMap, ref: MemRef, unnamed: bool, private, dgroup, bounds) -> None:
+    """Forget the cells an access through `ref` may touch; an `unnamed` one cannot reach a private cell."""
+    overwritten.kill(mir.overlap_buckets(ref, overwritten), lambda one: not (unnamed and private(one)) and mir.overlapping(one, ref, dgroup, bounds))
 
 
 def dead_stores(

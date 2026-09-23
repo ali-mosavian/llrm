@@ -9,6 +9,7 @@ class InvalidHIR(ValueError):
 
 _RESULTS = {
     model.Op.STORE: 0,
+    model.Op.PORT_OUT: 0,
     model.Op.CALL: None,
     model.Op.DIVMOD: 2,
     model.Op.UDIVMOD: 2,
@@ -300,6 +301,15 @@ def _function(module: model.Module, function: model.Function, types: dict[int, m
                 involved = [*(values[one].type for one in instruction.results), *operand_types]
                 if any(types[one].kind is not model.TypeKind.FLOAT for one in involved):
                     raise InvalidHIR(f"{prefix}: {instruction.op} has a non-floating operand")
+            if instruction.op in (model.Op.PORT_IN, model.Op.PORT_OUT):
+                widths = [types[one].width for one in operand_types]
+                expected_widths = [2] if instruction.op is model.Op.PORT_IN else [2, 1]
+                if (
+                    any(types[one].kind is not model.TypeKind.INTEGER for one in [*operand_types, *result_types])
+                    or widths != expected_widths
+                    or any(types[one].width != 1 for one in result_types)
+                ):
+                    raise InvalidHIR(f"{prefix}: {instruction.op} is not a 16-bit port and a byte")
             if instruction.op is model.Op.TRUNCATE:
                 if (
                     len(operand_types) != 1

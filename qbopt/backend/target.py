@@ -103,6 +103,14 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
             out[Occurrence("source", 2)] = Register.ES
         if len(what.dests) == 2:
             out[Occurrence("dest", 1)] = Register.EDI
+    # Port I/O moves al; a port not written as an immediate is dx.
+    if what.op is ir.Operation.BARRIER and what.name in ("in", "out"):
+        if not isinstance(what.sources[0], ir.Imm):
+            out[Occurrence("source", 0)] = Register.EDX
+        if what.name == "in":
+            out[Occurrence("dest", 0)] = Register.EAX
+        else:
+            out[Occurrence("source", 1)] = Register.EAX
     if what.op is ir.Operation.EXTEND and what.name in {"cwd", "cdq"}:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("dest", 0)] = Register.EDX
