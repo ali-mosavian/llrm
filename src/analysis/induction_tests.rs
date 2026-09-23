@@ -1,36 +1,18 @@
 //! Port of `tests/test_induction_identity.py`; `counted_loops_tests.rs` has
 //! `tests/test_counted_loops.py`.
 //!
-//! Skipped, needing `lower`, `strength`, `transform`, `wholeseg` or the
-//! corpus: `test_nine_dimensional_loop_carries_its_pointer`,
+//! `strength_tests.rs` has the tests that call `strength` directly.
+//!
+//! Skipped, monkeypatching `unroll.expanded` or a pass:
 //! `test_native_array_helper_does_not_block_frame_forwarding`,
 //! `test_huge_loop_byte_offsets_are_induction_variables`,
 //! `test_huge_loop_carries_whole_pointers`,
 //! `test_sign_extended_recurrence_requires_no_narrow_wrap`,
 //! `test_zero_extended_recurrence_cannot_cross_unsigned_wrap`,
-//! `test_zero_extended_counter_product_is_carried_as_a_wide_recurrence`,
-//! `test_matrix_reduced_stride_keeps_its_multiplier_address`,
-//! `test_harr_hoisted_descriptor_read_keeps_its_address`,
-//! `test_nbody_inner_counter_has_a_proven_upper_bound`,
-//! `test_harr_stored_row_plus_column_is_loop_carried`,
-//! `test_harr_descriptor_offset_is_read_before_inner_loop_unless_written`,
-//! `test_nested_address_advances_instead_of_recomputing_row_plus_column`,
 //! `test_strength_does_not_spill_cheap_loop_work`,
-//! `test_lngmxx_accumulator_has_a_whole_long_start`,
-//! `test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable`,
-//! `test_reduction_preserves_every_live_product_result`,
-//! `test_reduction_does_not_speculate_on_a_loop_bypass`,
-//! `test_existing_phi_inputs_follow_their_predecessor_versions`,
-//! `test_reduced_product_keeps_the_current_iteration_on_exit`,
-//! `test_inserted_counter_operations_own_their_insertion_location`,
-//! `test_cse_replaces_phi_uses_of_a_deleted_initializer`,
-//! `test_cse_keeps_distinct_linker_addresses`,
-//! `test_dead_byte_transfer_cannot_span_a_surviving_jump`,
-//! `test_nested_row_recurrences_remove_repeated_multiplication`,
-//! `test_not_equal_loop_reaches_bound_without_wrapping`.
-//! The two posttested trip-count tests keep their `trip_count` half; the
-//! `lower.lowered` half is skipped, as is the `strength.reduced` half of
-//! `test_composed_offset_can_carry_an_invariant_pointer`.
+//! `test_lngmxx_accumulator_has_a_whole_long_start`.
+//! Skipped, calling `induction._last_counter`, which Python no longer has:
+//! `test_nbody_inner_counter_has_a_proven_upper_bound`.
 
 use std::rc::Rc;
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,7 +25,17 @@ use crate::analysis::consts;
 use crate::analysis::loops::Loop;
 use crate::analysis::occurrence::operations;
 use crate::model::ir::Operation;
-use crate::model::mir::{Arg, Const, Held, Kind, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Value};
+use crate::analysis::ssa;
+use crate::backend::lower;
+use crate::frontend::blocks;
+use crate::model::lir::LirBody;
+use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Phi, Symbol, Value};
+use crate::model::passes::O2;
+use crate::objectfile::module::{Addr, Space};
+use crate::optimize::transform;
+use crate::support::testing;
+use crate::wholeseg::Emission;
+use iced_x86::Mnemonic;
 
 fn value(id: u32, at: i64, variable: u32) -> Value {
     Value {
@@ -243,6 +235,7 @@ fn test_posttested_counter_has_an_exact_fixed_trip_count() {
     let loop_ = looped(1, &[2], &[1, 2]);
     let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&Rc::new(MirBody::clone(&body)), &loop_, &facts), Some(BigInt::from(4)));
+    assert_eq!(lowered("fixed", &body).loop_trip_counts, [(1, 4)]);
 }
 
 #[test]
@@ -283,6 +276,7 @@ fn test_posttested_symbolic_sentinel_keeps_its_exact_trip_count() {
     let loop_ = looped(1, &[2], &[1, 2]);
     let facts = consts::known(&Rc::new(MirBody::clone(&body)), None, None, None, None);
     assert_eq!(trip_count(&Rc::new(MirBody::clone(&body)), &loop_, &facts), Some(BigInt::from(32)));
+    assert_eq!(lowered("symbolic", &body).loop_trip_counts, [(1, 32)]);
 }
 
 fn body() -> (MirBody, Loop) {
@@ -532,5 +526,260 @@ fn test_a_shift_recurrence_requires_a_constant_count() {
         if let Some(formula) = found.first() {
             assert_eq!(formula.by, Arg::Const(Const::new(8, 2)));
         }
+    }
+}
+
+fn lowered(name: &str, body: &MirBody) -> LirBody {
+    lower::lowered(name, body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+        .unwrap()
+}
+
+fn phi(result: Value, incoming: &[(i64, Value)]) -> Phi {
+    let mut made = Phi::new(result);
+    for (at, value) in incoming {
+        made.incoming.insert(*at, *value);
+    }
+    made
+}
+
+/// NDARR printed 1,12,2 correctly but rebuilt its nine-dimensional pointer each iteration.
+#[test]
+#[ignore = "fails in Python too: main (main): Unlowered: 0x00a9: no instruction for ptr_offset"]
+fn test_nine_dimensional_loop_carries_its_pointer() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        // `r02-strength` is the first pass that has both the promoted
+        // counter and its exact logical-test bound.
+        let data = testing::data(format!("fixtures/regressions/ndarr-{tag}.obj").to_lowercase());
+        let (result, states) = testing::emitted_mir(&data, "mir-r02-strength", "");
+        assert_eq!(result.outcome, Emission::Lir, "{tag}: {}", result.reason);
+        let body = &states[0];
+        let carried: BTreeSet<Value> = body.blocks.iter().flat_map(|block| &block.phis).map(|one| one.result).collect();
+        let stores: Vec<_> = testing::ops(body).into_iter().flat_map(|op| op.stores).filter(|one| one.pointer).collect();
+        assert!(!stores.is_empty() && stores.iter().all(|one| one.base.is_some_and(|base| carried.contains(&base))), "{tag}");
+    }
+}
+
+/// The emitted object's two-byte displacements that are zero and carry no relocation.
+fn unrelocated_zero_displacements(path: &str) -> Vec<usize> {
+    let result = testing::emitted_lir(path);
+    let found = testing::loaded_bytes(&result.data).unwrap();
+    blocks::instructions(&found)
+        .unwrap()
+        .into_iter()
+        .filter(|one| {
+            one.disp_at.is_some_and(|at| {
+                one.disp_len == 2 && found.code[at..at + 2] == [0, 0] && !found.fixup_at.contains_key(&(at as i64))
+            })
+        })
+        .map(|one| one.at)
+        .collect()
+}
+
+/// MATRIX printed T=190 instead of T=380 after its stride read DS:0 instead of w.
+#[test]
+#[ignore = "fails in Python too: 0x0048: add has 1 fixups and 0 fields to put them in"]
+fn test_matrix_reduced_stride_keeps_its_multiplier_address() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        assert_eq!(unrelocated_zero_displacements(&format!("fixtures/omf/matrix-{tag}.obj").to_lowercase()), [], "{tag}");
+    }
+}
+
+/// HARR's reduced pointer read DS:0 instead of the array-base descriptor field.
+#[test]
+fn test_harr_hoisted_descriptor_read_keeps_its_address() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let bad = unrelocated_zero_displacements(&format!("fixtures/omf/harr-{tag}.obj").to_lowercase());
+        assert!(bad.is_empty(), "{tag}: unrelocated zero displacements: {bad:?}");
+    }
+}
+
+/// HARR recomputed row + column for every element instead of advancing its stored value.
+#[test]
+#[ignore = "fails in Python too: the stored source is not a loop phi"]
+fn test_harr_stored_row_plus_column_is_loop_carried() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let found = testing::module(&format!("fixtures/omf/harr-{tag}.obj").to_lowercase());
+        let blocks = testing::blocks_of(&found);
+        let result = testing::applied(&found, Some(&blocks), &testing::main_body(&found, &blocks), O2());
+        let store = testing::ops(&result).into_iter().find(|op| op.stores.iter().any(|one| one.allocation.is_some())).unwrap();
+        let source = store.args.iter().find_map(|arg| if let Arg::Held(one) = arg { Some(one.value) } else { None }).unwrap();
+        let carried: BTreeSet<Value> = result.blocks.iter().flat_map(|block| &block.phis).map(|one| one.result).collect();
+        assert!(carried.contains(&source), "{tag}");
+    }
+}
+
+/// HARR rebuilt its full pointer with an invariant descriptor read on every iteration.
+///
+/// The unchanged case fails in Python at this commit (the read stays in the
+/// inner loop) and is left out.
+#[test]
+fn test_harr_descriptor_offset_is_read_before_inner_loop_unless_written() {
+    let changed = true;
+    let found = testing::module("fixtures/omf/harr-p-g2.obj");
+    let blocks = testing::blocks_of(&found);
+    let mut built = MirBody::clone(&testing::main_body(&found, &blocks));
+    let field = MemRef::new(Some(Addr { index: found.program_data.unwrap(), ..Addr::new(Space::Segment, 16) }), 2);
+    for op in built.blocks.iter_mut().flat_map(|block| &mut block.ops) {
+        if op.at == 0x78 {
+            op.stores = vec![field.clone()];
+            op.results = vec![Arg::Cell(Cell { r#ref: field.clone() })];
+        }
+    }
+    let result = testing::applied(&found, Some(&blocks), &Rc::new(built), O2());
+    let inner = result.blocks.iter().find(|block| block.at == 0x58).unwrap();
+    assert_eq!(inner.ops.iter().flat_map(|op| &op.loads).any(|one| mir::same_bytes(one, &field)), changed);
+}
+
+/// NESTED rebuilt (row * width + column) * 2 on each of 30 inner iterations.
+#[test]
+#[ignore = "fails in Python too: no ADD of 2 feeds the header phi"]
+fn test_nested_address_advances_instead_of_recomputing_row_plus_column() {
+    let found = testing::module("fixtures/omf/nested-p-g2.obj");
+    let blocks = testing::blocks_of(&found);
+    let result = testing::applied(&found, Some(&blocks), &testing::main_body(&found, &blocks), O2());
+    let inner = result.blocks.iter().find(|block| block.at == 0x5A).unwrap();
+    assert!(!inner.ops.iter().any(|op| op.kind == Kind::Shl));
+    let header = result.blocks.iter().find(|block| block.at == 0x86).unwrap();
+    assert!(inner.ops.iter().any(|op| {
+        op.kind == Kind::Add
+            && op.args.contains(&Arg::Const(Const::new(2, 2)))
+            && header.phis.iter().any(|one| one.incoming.get(&inner.at).is_some_and(|value| op.defines.contains(value)))
+    }));
+}
+
+#[test]
+fn test_existing_phi_inputs_follow_their_predecessor_versions() {
+    let (initial, updated, joined) = (value(10, 0, 7), value(11, 1, 7), value(12, 2, 8));
+    let mut define = op(0, Operation::Move, vec![initial], vec![], Kind::Copy);
+    define.args = vec![Arg::Const(Const::new(1, 2))];
+    define.results = vec![held(initial, 2)];
+    let mut step = define.clone();
+    step.at = 1;
+    step.defines = vec![updated];
+    step.uses = vec![initial];
+    step.kind = Kind::Add;
+    step.args = vec![held(initial, 2), Arg::Const(Const::new(1, 2))];
+    step.results = vec![held(updated, 2)];
+    let built = MirBody::new(
+        0,
+        vec![
+            MirBlock::new(0, vec![], vec![define], vec![1, 2]),
+            MirBlock::new(1, vec![], vec![step], vec![2]),
+            MirBlock::new(2, vec![phi(joined, &[(0, initial), (1, initial)])], vec![], vec![]),
+        ],
+    );
+    let result = ssa::constructed(&built, &BTreeSet::from([7])).unwrap();
+    let phi = &result.blocks[2].phis[0];
+    assert_eq!(phi.result, joined);
+    assert_eq!(*phi.incoming.get(&0).unwrap(), result.blocks[0].ops[0].defines[0]);
+    assert_eq!(*phi.incoming.get(&1).unwrap(), result.blocks[1].ops[0].defines[0]);
+    assert_eq!(result.blocks.iter().map(|block| block.ops.len()).collect::<Vec<_>>(), [1, 1, 0]);
+}
+
+/// matrix printed T=0 for T=380 after CSE deleted a zero still named by its loop phi.
+#[test]
+fn test_cse_replaces_phi_uses_of_a_deleted_initializer() {
+    for second_variable in [7, 8] {
+        for has_origin in [false, true] {
+            for symbolic in [false, true] {
+                let first = value(10, 0, 7);
+                let second = value(11, 2, second_variable);
+                let result = value(12, 4, 7);
+                let mut define = op(0, Operation::Move, vec![first], vec![], Kind::Copy);
+                define.args = vec![if symbolic {
+                    Arg::Symbol(Symbol::new(Space::Segment, 5, 6, 2))
+                } else {
+                    Arg::Const(Const::new(0, 2))
+                }];
+                define.results = vec![held(first, 2)];
+                define.source_backed = has_origin;
+                define.id = has_origin.then_some(10);
+                define.absorbed = if has_origin { vec![10] } else { vec![] };
+                let mut duplicate = define.clone();
+                duplicate.at = 2;
+                duplicate.defines = vec![second];
+                duplicate.results = vec![held(second, 2)];
+                duplicate.id = has_origin.then_some(11);
+                duplicate.absorbed = if has_origin { vec![11] } else { vec![] };
+                let mut jump = op(4, Operation::Jump, vec![], vec![], Kind::Jump);
+                jump.target = Some(6);
+                let mut used = op(6, Operation::Push, vec![], vec![result], Kind::Arg);
+                used.args = vec![held(result, 2)];
+                let mut direct = used.clone();
+                direct.at = 7;
+                direct.uses = vec![second];
+                direct.args = vec![held(second, 2)];
+                let built = Rc::new(MirBody::new(
+                    0,
+                    vec![
+                        MirBlock::new(0, vec![], vec![define], vec![2]),
+                        MirBlock::new(2, vec![], vec![duplicate, jump], vec![6]),
+                        MirBlock::new(6, vec![phi(result, &[(2, second)])], vec![used, direct], vec![]),
+                    ],
+                ));
+                let after = transform::subexpressions(&built, &BTreeSet::new(), false).unwrap();
+                let case = format!("{second_variable} {has_origin} {symbolic}");
+                assert!(!testing::ops(&after).iter().any(|op| op.defines.contains(&second)), "{case}");
+                assert_eq!(*after.blocks[2].phis[0].incoming.get(&2).unwrap(), first, "{case}");
+                assert_eq!(after.blocks[2].ops[1].args, [held(first, 2)], "{case}");
+            }
+        }
+    }
+}
+
+/// Descriptor addresses encoded as zero must not become the same value.
+#[test]
+fn test_cse_keeps_distinct_linker_addresses() {
+    for other in [Arg::Const(Const::new(0, 2)), Arg::Symbol(Symbol::new(Space::Segment, 5, 8, 2))] {
+        let (first, second) = (Value::new(100, 0), Value::new(101, 2));
+        let mut define = Op::new(0, OpCode::Operation(Operation::Move), "mov", vec![first], vec![]);
+        define.kind = Kind::Copy;
+        define.args = vec![Arg::Symbol(Symbol::new(Space::Segment, 5, 6, 2))];
+        define.results = vec![held(first, 2)];
+        let mut different = define.clone();
+        different.at = 2;
+        different.defines = vec![second];
+        different.args = vec![other.clone()];
+        different.results = vec![held(second, 2)];
+        let mut used = Op::new(4, OpCode::Operation(Operation::Push), "push", vec![], vec![second]);
+        used.kind = Kind::Arg;
+        used.args = vec![held(second, 2)];
+        let built = Rc::new(MirBody::new(0, vec![MirBlock::new(0, vec![], vec![define, different, used], vec![])]));
+        assert_eq!(transform::subexpressions(&built, &BTreeSet::new(), false).unwrap(), built, "{other:?}");
+    }
+}
+
+/// matrix refused emission after dead assigned the live jump's nine bytes twice.
+#[test]
+fn test_dead_byte_transfer_cannot_span_a_surviving_jump() {
+    let mut first = op(0, Operation::Move, vec![], vec![], Kind::Copy);
+    first.source_backed = true;
+    first.id = Some(1);
+    first.absorbed = vec![1];
+    let mut removed = first.clone();
+    removed.at = 8;
+    removed.id = Some(3);
+    removed.absorbed = vec![3];
+    let mut jump = first.clone();
+    jump.at = 4;
+    jump.kind = Kind::Jump;
+    jump.id = Some(2);
+    jump.absorbed = vec![2];
+    let result = transform::_without(&[first, removed, jump], |op| op.at == 8);
+    let mut owners: Vec<u32> = result.iter().flat_map(|op| op.absorbed.clone()).collect();
+    let unique: BTreeSet<u32> = owners.iter().copied().collect();
+    assert_eq!(owners.len(), unique.len());
+    owners.sort();
+    assert_eq!(owners, [1, 2, 3]);
+    assert_eq!(result.iter().find(|op| op.absorbed == [2]).unwrap().kind, Kind::Jump);
+}
+
+/// NESTED recomputed both row scales because all outer-loop recurrences were disabled.
+#[test]
+fn test_nested_row_recurrences_remove_repeated_multiplication() {
+    for tag in ["p-g2", "q-O", "v-g3"] {
+        let result = testing::emitted_lir(format!("fixtures/omf/nested-{tag}.obj").to_lowercase());
+        let found = testing::loaded_bytes(&result.data).unwrap();
+        assert!(!blocks::instructions(&found).unwrap().iter().any(|one| one.insn.mnemonic() == Mnemonic::Imul), "{tag}");
     }
 }
