@@ -525,6 +525,17 @@ pub fn dead_stores<'a>(
     bounds: Option<&IndexMap<(Space, i64), Vec<i64>>>,
     handles_errors: bool,
 ) -> Vec<&'a Op> {
+    crate::support::debug::timed("analysis avail.dead_stores", || _dead_stores_solved(body, dgroup, calls, private, bounds, handles_errors))
+}
+
+fn _dead_stores_solved<'a>(
+    body: &'a MirBody,
+    dgroup: Option<&RegionLayout>,
+    calls: &IndexMap<i64, String>,
+    private: Option<&dyn Fn(&MemRef) -> bool>,
+    bounds: Option<&IndexMap<(Space, i64), Vec<i64>>>,
+    handles_errors: bool,
+) -> Vec<&'a Op> {
     let known: IndexMap<i64, &MirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let stored: IndexMap<MemRef, i64> = body
         .blocks

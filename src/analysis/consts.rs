@@ -618,6 +618,19 @@ pub(crate) fn cells(
     mut assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> IndexMap<(i64, usize), Cells> {
+    crate::support::debug::timed("analysis consts.cells", || _cells_solved(body, dgroup, calls, known, initial, edges, assume, allowed))
+}
+
+fn _cells_solved(
+    body: &MirBody,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    known: Option<&IndexMap<Value, Known>>,
+    initial: Option<&Cells>,
+    edges: Option<&IndexMap<(i64, i64), Cells>>,
+    mut assume: Option<&mut BTreeSet<Value>>,
+    allowed: Option<&BTreeSet<Value>>,
+) -> IndexMap<(i64, usize), Cells> {
     let empty = IndexMap::default();
     let known = known.unwrap_or(&empty);
     let mut queries = memory_queries(body, known, dgroup);
@@ -1095,7 +1108,9 @@ pub(crate) fn known(
     }
     let mut allowed: Option<BTreeSet<Value>> = None;
     loop {
-        let (got, assumed) = _solved(body, dgroup, calls, edges, initial, Some(BTreeSet::new()), allowed.as_ref());
+        let (got, assumed) = crate::support::debug::timed("analysis consts.known", || {
+            _solved(body, dgroup, calls, edges, initial, Some(BTreeSet::new()), allowed.as_ref())
+        });
         let resolved = assumed
             .iter()
             .filter(|value| got.contains_key(*value))

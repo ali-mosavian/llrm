@@ -3907,7 +3907,8 @@ impl _Transaction<'_, '_> {
         let mut state = state;
         let mut boundary = self.boundary.borrow_mut();
         for one in boundary.iter_mut() {
-            state = one.transform(state)?;
+            let name = one.name().to_owned();
+            state = crate::support::debug::timed(&name, || one.transform(state))?;
             self.watch(&format!("{stage}-{}", one.name()), &state);
         }
         Ok(state)
@@ -3921,12 +3922,21 @@ impl _Transaction<'_, '_> {
         let limit = std::cmp::max(16, size + 1);
         let mut state = state;
         let mut history = vec![Rc::clone(&state)];
+        let logging = crate::support::debug::enabled("fixed");
+        crate::debug!("fixed", "{prefix}start: {size} ops, at most {limit} rounds");
         for iteration in 0..limit {
             let before = Rc::clone(&state);
+            let started = std::time::Instant::now();
+            let mut changed = Vec::new();
             {
                 let mut passes = self.passes.borrow_mut();
                 for one in passes.iter_mut() {
-                    state = one.transform(state)?;
+                    let name = one.name().to_owned();
+                    let input = Rc::clone(&state);
+                    state = crate::support::debug::timed(&name, || one.transform(state))?;
+                    if logging && !Rc::ptr_eq(&input, &state) && *input != *state {
+                        changed.push(name);
+                    }
                     self.watch(&format!("{prefix}r{:02}-{}", iteration + 1, one.name()), &state);
                 }
             }
@@ -3935,19 +3945,25 @@ impl _Transaction<'_, '_> {
             if consider_unroll && !self.unrollers.borrow().is_empty() {
                 let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
                 let watching = self.watching();
-                let unrolled = crate::optimize::unroll::optimized(
-                    &state,
-                    self.r#where,
-                    if watching { Some(&mut watch) } else { None },
-                )?;
+                let unrolled = crate::support::debug::timed("unroll", || {
+                    crate::optimize::unroll::optimized(&state, self.r#where, if watching { Some(&mut watch) } else { None })
+                })?;
                 // A copy's constant indices are new exact leaves, so it crosses the
                 // structural boundary before the scalar passes settle it.
                 if !Rc::ptr_eq(&unrolled, &state) {
+                    changed.push("unroll".to_owned());
                     state = self.scalarized(unrolled, &format!("{prefix}unrolled"))?;
                 }
             }
+            crate::debug!(
+                "fixed",
+                "{prefix}round {}: {} ops, {:.0} ms, changed by {}",
+                iteration + 1,
+                state.blocks.iter().map(|block| 1 + block.phis.len() + block.ops.len()).sum::<usize>(),
+                started.elapsed().as_secs_f64() * 1e3,
+                if changed.is_empty() { "nothing".to_owned() } else { changed.join(" ") }
+            );
             if self.only || state == before {
-                crate::debug!("fixed", "{}settled after {} rounds, {size} ops in", if prefix.is_empty() { "" } else { prefix }, iteration + 1);
                 // A structural candidate can make its last cloned region
                 // unreachable on the same round that reaches the scalar fixed
                 // point, so normalize the public boundary itself.
@@ -4060,11 +4076,11 @@ fn _applied(
     if !peelers.is_empty() {
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
-        let peeled = crate::optimize::peel::optimized(
+        let peeled = crate::support::debug::timed("peel", || crate::optimize::peel::optimized(
             &body,
             &r#where,
             if watching { Some(&mut watch) } else { None },
-        )?;
+        ))?;
         if !Rc::ptr_eq(&peeled, &body) {
             body = transaction.fixed(transaction.scalarized(peeled, "peeled")?, has_unrollers, "peeled-")?;
         }
