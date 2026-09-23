@@ -185,6 +185,58 @@ pub struct Place {
     pub volatile: bool,
 }
 
+/// A frame piece: its `(low, high)` frame span and its object's identity.
+pub type FramePiece = (i64, i64, crate::model::memory::Identity);
+
+/// Python `frame_pieces`: each frame place's bytes as the objects holding them.
+///
+/// A place overlapping no other is one object. Where places overlap, the frame splits at
+/// every place's edge and each piece is one object: a region filled at once is the union of
+/// the places it holds, which stay apart.
+pub fn frame_pieces(places: &[Place]) -> std::collections::HashMap<i64, Vec<FramePiece>> {
+    use crate::model::memory::Identity;
+    let top = |one: &Place| one.offset + one.extent.unwrap_or(0);
+    let mut frame: Vec<&Place> =
+        places.iter().filter(|one| matches!(one.storage, Storage::Local | Storage::Parameter)).collect();
+    frame.sort_by_key(|one| (one.offset, one.id));
+    let mut pieces = std::collections::HashMap::new();
+    let mut at = 0;
+    while at < frame.len() {
+        let mut end = top(frame[at]);
+        let mut group = at + 1;
+        while group < frame.len() && frame[group].offset < end {
+            end = end.max(top(frame[group]));
+            group += 1;
+        }
+        let members = &frame[at..group];
+        let edges: std::collections::BTreeSet<i64> =
+            members.iter().flat_map(|one| [one.offset, top(one)]).collect();
+        let edges: Vec<i64> = edges.into_iter().collect();
+        let spans: Vec<FramePiece> = edges
+            .windows(2)
+            .map(|edge| {
+                let (low, high) = (edge[0], edge[1]);
+                let owner = members
+                    .iter()
+                    .filter(|one| one.offset <= low && high <= top(one))
+                    .min_by_key(|one| (one.extent.unwrap_or(0), one.id))
+                    .expect("a group's pieces are covered");
+                let mut identity = vec![Identity::Storage(owner.storage), Identity::Int(owner.id)];
+                if owner.offset != low || top(owner) != high {
+                    identity.push(Identity::Int(low - owner.offset));
+                }
+                (low, high, Identity::Tuple(identity))
+            })
+            .collect();
+        for one in members {
+            let within = spans.iter().filter(|span| one.offset <= span.0 && span.1 <= top(one)).cloned().collect();
+            pieces.insert(one.id, within);
+        }
+        at = group;
+    }
+    pieces
+}
+
 impl Place {
     /// Python's five-required-field construction with every default.
     pub fn new(id: i64, name: &str, r#type: i64, storage: Storage, offset: i64) -> Self {

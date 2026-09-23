@@ -455,6 +455,45 @@ def test_hir_lowers_typed_array_index_to_whole_offset_arithmetic() -> None:
     assert any(insn.what is not None for insn in lir.insns)
 
 
+def _region(written: int) -> hir.Program:
+    """`$zero` holds `low` and `high`; `pieces(at)` stores `written` to `$zero[at]` and returns `high`."""
+    void = hir.Type(0, "void", hir.TypeKind.VOID, 0)
+    word = hir.Type(1, "word", hir.TypeKind.INTEGER, 2, signed=False)
+    words = hir.Type(2, "words", hir.TypeKind.ARRAY, 8, element=1, rank=1, bounds=((0, 3),))
+    region = hir.Place(1, "$zero", 2, hir.Storage.LOCAL, -8, extent=8)
+    low = hir.Place(2, "low", 1, hir.Storage.LOCAL, -8, extent=2)
+    high = hir.Place(3, "high", 1, hir.Storage.LOCAL, -4, extent=2)
+    block = hir.Block(
+        1,
+        (
+            hir.Instruction(1, hir.Op.STORE, (), (hir.ArrayElement(1, (hir.ValueRef(1),)), hir.Constant(1, written))),
+            hir.Instruction(2, hir.Op.STORE, (), (hir.PlaceRef(2), hir.Constant(1, 5))),
+            hir.Instruction(3, hir.Op.LOAD, (2,), (hir.PlaceRef(3),)),
+        ),
+        hir.Terminator(hir.TerminatorKind.RETURN, (hir.ValueRef(2),)),
+    )
+    values = (hir.Value(1, 1), hir.Value(2, 1))
+    function = hir.Function(1, "pieces", 1, values, (region, low, high), (block,), 1, parameters=(1,))
+    module = hir.Module(1, "frame", (void, word, words), (function,))
+    return hir.Program(hir.Dialect.VBDOS, hir.RuntimeProfile.VBDOS, (module,))
+
+
+def test_a_frame_region_aliases_the_places_it_holds_which_stay_apart() -> None:
+    """A region lowered as its own object, so the fill zeroing it reached none of the arrays in it."""
+    (lowered,) = hir.lower(_region(0))
+    region, low, high = (
+        reference for op in lowered.body.blocks[0].ops for reference in (*op.stores, *op.loads) if reference.provenance
+    )
+    assert region.provenance.intersects(low.provenance)
+    assert region.provenance.intersects(high.provenance)
+    assert not low.provenance.intersects(high.provenance)
+
+
+def test_execution_shares_the_bytes_of_overlapping_frame_places() -> None:
+    """Each place had its own bytes, so a store through a region never reached its members."""
+    assert hir.execute.run(_region(9), "pieces", (2,)).value == 9
+
+
 def test_hir_lowering_honors_qb_multidimensional_array_order(tmp_path: Path) -> None:
     """Nibbles indexed ARENA(row,col) as row*80+col and passed garbage colors to B$COLR."""
     basic = tmp_path / "ORDER.BAS"

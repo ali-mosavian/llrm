@@ -267,6 +267,49 @@ fn test_hir_lowers_typed_array_index_to_whole_offset_arithmetic() {
     assert!(lowered_insns(&lowered.name, &lowered.body) > 0);
 }
 
+/// Python `_region`: `$zero` holds `low` and `high`; `pieces(at)` stores `written` to
+/// `$zero[at]` and returns `high`.
+fn region(written: i64) -> Program {
+    let void = Type::new(0, "void", TypeKind::Void, 0);
+    let word = Type { signed: Some(false), ..Type::new(1, "word", TypeKind::Integer, 2) };
+    let words = Type { element: Some(1), rank: 1, bounds: vec![(0, 3)], ..Type::new(2, "words", TypeKind::Array, 8) };
+    let region = Place { extent: Some(8), ..Place::new(1, "$zero", 2, Storage::Local, -8) };
+    let low = Place { extent: Some(2), ..Place::new(2, "low", 1, Storage::Local, -8) };
+    let high = Place { extent: Some(2), ..Place::new(3, "high", 1, Storage::Local, -4) };
+    let element = model::Operand::ArrayElement(ArrayElement { place: 1, indices: vec![model::Operand::value_ref(1)] });
+    let block = Block::new(
+        1,
+        vec![
+            instruction(1, Op::Store, &[], vec![element, model::Operand::constant(1, written)]),
+            instruction(2, Op::Store, &[], vec![model::Operand::place_ref(2), model::Operand::constant(1, 5)]),
+            instruction(3, Op::Load, &[2], vec![model::Operand::place_ref(3)]),
+        ],
+        Terminator::new(TerminatorKind::Return, vec![model::Operand::value_ref(2)], vec![]),
+    );
+    let function = with_parameters(
+        Function::new(1, "pieces", 1, values(&[(1, 1), (2, 1)]), vec![region, low, high], vec![block], 1),
+        &[1],
+    );
+    vbdos(vec![Module::new(1, "frame", vec![void, word, words], vec![function])])
+}
+
+/// A region lowered as its own object, so the fill zeroing it reached none of the arrays in it.
+#[test]
+fn test_a_frame_region_aliases_the_places_it_holds_which_stay_apart() {
+    let lowered = lower(&region(0)).unwrap().remove(0);
+    let references: Vec<&mir::MemRef> = lowered.body.blocks[0]
+        .ops
+        .iter()
+        .flat_map(|op| op.stores.iter().chain(op.loads.iter()))
+        .filter(|one| one.provenance.is_some())
+        .collect();
+    let [region, low, high] = references[..] else { panic!("three references: {references:?}") };
+    let provenance = |one: &mir::MemRef| one.provenance.clone().expect("filtered");
+    assert!(provenance(region).intersects(&provenance(low)));
+    assert!(provenance(region).intersects(&provenance(high)));
+    assert!(!provenance(low).intersects(&provenance(high)));
+}
+
 #[test]
 fn test_canonical_mir_dump_keeps_call_identity() {
     let void = Type::new(0, "void", TypeKind::Void, 0);

@@ -13,7 +13,7 @@ use crate::hir::model;
 use crate::hir::verify::{InvalidHIR, verify};
 use crate::model::floating;
 use crate::model::ir::Operation;
-use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
+use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance, Slice};
 use crate::model::mir::{self, Arg, Cell, Const, Held, MemRef, OpCode};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr;
@@ -93,20 +93,43 @@ fn _space(place: &model::Place) -> Space {
     Space::Segment
 }
 
-fn _object(place: &model::Place, escaped: &BTreeSet<i64>) -> MemoryObject {
-    let identity = Identity::Tuple(vec![Identity::Storage(place.storage), Identity::Int(place.id)]);
+type _Pieces = std::collections::HashMap<i64, Vec<model::FramePiece>>;
+
+/// `width` bytes from `place`'s start, in the objects holding them.
+fn _provenance(
+    place: &model::Place,
+    width: i64,
+    escaped: &BTreeSet<i64>,
+    pieces: &_Pieces,
+) -> Result<Provenance, InvalidHIR> {
     if _space(place) == Space::Frame {
-        return MemoryObject { identity: Some(identity), extent: place.extent, ..MemoryObject::new(MemoryKind::Frame) };
+        let (start, end) = (place.offset, place.offset + width);
+        let mut slices = BTreeSet::new();
+        for (low, high, identity) in &pieces[&place.id] {
+            if *low < end && start < *high {
+                let object_ = MemoryObject {
+                    identity: Some(identity.clone()),
+                    extent: Some(high - low),
+                    ..MemoryObject::new(MemoryKind::Frame)
+                };
+                let slice = Slice::new(object_, start.max(*low) - low, end.min(*high) - low, 1, 1)
+                    .map_err(|error| InvalidHIR(error.to_string()))?;
+                slices.insert(slice);
+            }
+        }
+        return Ok(Provenance { slices, restrict: BTreeSet::new() });
     }
+    let identity = Identity::Tuple(vec![Identity::Storage(place.storage), Identity::Int(place.id)]);
     let private = matches!(place.storage, model::Storage::Static | model::Storage::Module)
         && !escaped.contains(&place.symbol);
-    MemoryObject {
+    let object_ = MemoryObject {
         identity: Some(identity),
         extent: place.extent,
         addressed: !private,
         captured: !private,
         ..MemoryObject::new(MemoryKind::Global)
-    }
+    };
+    _one(object_, 0, width)
 }
 
 /// `memory.Provenance.one(object_, low, high)`.
@@ -118,11 +141,15 @@ fn _addr(space: Space, disp: i64, index: i64) -> Addr {
     Addr { index, ..Addr::new(space, disp) }
 }
 
-fn _ref(place: &model::Place, type_: &model::Type, escaped: &BTreeSet<i64>) -> Result<MemRef, InvalidHIR> {
+fn _ref(
+    place: &model::Place,
+    type_: &model::Type,
+    escaped: &BTreeSet<i64>,
+    pieces: &_Pieces,
+) -> Result<MemRef, InvalidHIR> {
     let space = _space(place);
     let index = if space == Space::Frame { 0 } else { place.symbol };
-    let object_ = _object(place, escaped);
-    let provenance = _one(object_, 0, type_.width)?;
+    let provenance = _provenance(place, type_.width, escaped, pieces)?;
     Ok(MemRef {
         space: Some(space),
         provenance: Some(provenance),
@@ -346,6 +373,7 @@ struct _Scope<'a> {
     value_types: IndexMap<i64, &'a model::Type>,
     integer_ranges: mir::OrderedMap<mir::Value, mir::IntegerRange>,
     places: IndexMap<i64, &'a model::Place>,
+    pieces: _Pieces,
     parameter_numbers: IndexMap<i64, i64>,
     next_frame_offset: i64,
     at: i64,
@@ -417,7 +445,7 @@ impl<'a> _Scope<'a> {
             ))),
             model::Operand::PlaceRef(model::PlaceRef { place }) => {
                 let type_ = self.types[&self.places[place].r#type];
-                Ok(Arg::Cell(Cell { r#ref: _ref(self.places[place], type_, self.escaped)? }))
+                Ok(Arg::Cell(Cell { r#ref: _ref(self.places[place], type_, self.escaped, &self.pieces)? }))
             }
             model::Operand::ArrayElement(model::ArrayElement { place: place_id, indices }) => {
                 let place = self.places[place_id];
@@ -468,8 +496,12 @@ impl<'a> _Scope<'a> {
                 );
                 let space = _space(place);
                 let index = if space == Space::Frame { 0 } else { place.symbol };
-                let object_ = _object(place, self.escaped);
-                let provenance = _one(object_, 0, place.extent.filter(|one| *one != 0).unwrap_or(array.width))?;
+                let provenance = _provenance(
+                    place,
+                    place.extent.filter(|one| *one != 0).unwrap_or(array.width),
+                    self.escaped,
+                    &self.pieces,
+                )?;
                 let r#ref = MemRef {
                     base: Some(offset.value),
                     space: Some(space),
@@ -492,8 +524,12 @@ impl<'a> _Scope<'a> {
                 let field_type = self.types[type_id];
                 let space = _space(place);
                 let segment = if space == Space::Frame { 0 } else { place.symbol };
-                let object_ = _object(place, self.escaped);
-                let provenance = _one(object_, 0, place.extent.filter(|one| *one != 0).unwrap_or(root.width))?;
+                let provenance = _provenance(
+                    place,
+                    place.extent.filter(|one| *one != 0).unwrap_or(root.width),
+                    self.escaped,
+                    &self.pieces,
+                )?;
                 if indices.is_empty() {
                     return Ok(Arg::Cell(Cell {
                         r#ref: MemRef {
@@ -1519,6 +1555,7 @@ fn _function(
         value_types,
         integer_ranges: mir::OrderedMap::new(),
         places,
+        pieces: model::frame_pieces(&function.places),
         parameter_numbers,
         next_frame_offset,
         at: 0,

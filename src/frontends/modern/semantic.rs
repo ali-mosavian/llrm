@@ -843,6 +843,8 @@ struct FunctionCompiler<'a> {
     types: &'a mut TypeRegistry,
     constant_places: BTreeMap<u32, u32>,
     rules: &'static Rules,
+    /// Each entry-zeroed array binding's descriptor offset.
+    zeroed: Vec<(Span, i32)>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -878,6 +880,7 @@ impl<'a> FunctionCompiler<'a> {
             types,
             constant_places: BTreeMap::new(),
             rules: &conversions::I386_REAL_MODE,
+            zeroed: Vec::new(),
         };
         for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
             let value = compiler.value_type(resolved.hir_type());
@@ -913,6 +916,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile(mut self, function: &Function) -> Result<hir::Function, Diagnostic> {
+        self.zero_fill(&function.body, function.span)?;
         self.statements(&function.body)?;
         if self.open() {
             if function.result == TypeName::Void {
@@ -954,6 +958,51 @@ impl<'a> FunctionCompiler<'a> {
             parameters: self.parameters,
             calls: self.calls,
         })
+    }
+
+    /// Lays the zero-filled arrays a call binds at most once side by side, descriptors
+    /// included, and zeroes them with one fill on entry. Each binding then stores only its
+    /// descriptor.
+    fn zero_fill(&mut self, body: &[Statement], span: Span) -> Result<(), Diagnostic> {
+        let mut extent = 0;
+        for (bind, element, dims, value) in repeated_bindings(body) {
+            let Ok(ElementType::Scalar(type_name)) = self.types.resolve_element(element, bind) else {
+                continue;
+            };
+            if !is_zero(&value, type_name) {
+                continue;
+            }
+            let shape = Shape::new(dims);
+            self.zeroed.push((bind, extent as i32));
+            extent += width(type_name) * shape.len() + descriptor::size(shape.rank);
+        }
+        if extent == 0 {
+            return Ok(());
+        }
+        let shape = Shape::new(&[extent.div_ceil(2)]);
+        let element = ElementType::Scalar(TypeName::U16);
+        let type_id = self.types.array(element, shape);
+        let region = self.local_place("$zero", type_id, 2 * shape.len(), true);
+        let base = self.next_frame_offset;
+        for (_, offset) in &mut self.zeroed {
+            *offset += base;
+        }
+        self.statement(&Statement::Bind {
+            mutable: false,
+            name: "$$zero_fill".into(),
+            annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::U16))),
+            value: Expr::Integer(0, span),
+            span,
+        })?;
+        self.scopes.last_mut().expect("scope").insert(
+            "$zero".into(),
+            Binding {
+                type_: BindingType::Array { element, shape },
+                mutable: true,
+                storage: Storage::Place(region),
+            },
+        );
+        self.fill("$zero", shape, span)
     }
 
     fn prune_unreachable(&mut self) {
@@ -1087,7 +1136,8 @@ impl<'a> FunctionCompiler<'a> {
                             ))
                         }
                     };
-                    if let Expr::Repeat { value, .. } = value {
+                    let zeroed = self.zeroed.iter().find(|(bind, _)| bind == span).map(|(_, at)| *at);
+                    if let (Expr::Repeat { value, .. }, None) = (value, zeroed) {
                         // Evaluated before the new name exists, which it may shadow.
                         self.statement(&Statement::Bind {
                             mutable: false,
@@ -1099,13 +1149,16 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     let element = self.types.resolve_element(element, *span)?;
                     let type_id = self.types.array(element, shape);
-                    let place = self.array_place(name, type_id, element, shape, *mutable);
+                    let place = match zeroed {
+                        Some(at) => self.array_place_at(at, name, type_id, element, shape, *mutable),
+                        None => self.array_place(name, type_id, element, shape, *mutable),
+                    };
                     let binding = |mutable| Binding {
                         type_: BindingType::Array { element, shape },
                         mutable,
                         storage: Storage::Place(place),
                     };
-                    if matches!(value, Expr::Repeat { .. }) {
+                    if matches!(value, Expr::Repeat { .. }) && zeroed.is_none() {
                         // Filling stores through the name, which a `let` would refuse.
                         self.scopes
                             .last_mut()
@@ -5126,9 +5179,23 @@ impl<'a> FunctionCompiler<'a> {
         mutable: bool,
     ) -> u32 {
         let extent = self.types.width(element.id()) * shape.len();
-        let size = descriptor::size(shape.rank);
-        self.next_frame_offset -= (extent + size) as i32;
+        self.next_frame_offset -= (extent + descriptor::size(shape.rank)) as i32;
         let descriptor_offset = self.next_frame_offset;
+        self.array_place_at(descriptor_offset, name, type_id, element, shape, mutable)
+    }
+
+    /// An array whose descriptor starts at `descriptor_offset`, its data right after.
+    fn array_place_at(
+        &mut self,
+        descriptor_offset: i32,
+        name: &str,
+        type_id: u32,
+        element: ElementType,
+        shape: Shape,
+        mutable: bool,
+    ) -> u32 {
+        let extent = self.types.width(element.id()) * shape.len();
+        let size = descriptor::size(shape.rank);
         let descriptor = shape.descriptor();
         for (word, (label, value)) in descriptor.into_iter().enumerate() {
             let place = self.next_place;
@@ -5418,6 +5485,53 @@ fn literal_elements<'e>(
         }
     }
     Ok(out)
+}
+
+/// The fixed-array bindings of a repeated literal that run at most once per call, with
+/// their element, dimensions and repeated value.
+fn repeated_bindings(statements: &[Statement]) -> Vec<(Span, &TypeSpec, &[u32], Expr)> {
+    let mut found = Vec::new();
+    for statement in statements {
+        match statement {
+            Statement::Bind {
+                annotation: Some(TypeAnnotation::Array { element, dims }),
+                value,
+                span,
+                ..
+            } => {
+                let repeated = repeated_literal(value, dims);
+                if let Expr::Repeat { value, counts, .. } = repeated.as_ref().unwrap_or(value) {
+                    if repeat_counts(counts).is_ok_and(|counts| counts == *dims) {
+                        found.push((*span, element, dims.as_slice(), value.as_ref().clone()));
+                    }
+                }
+            }
+            Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                found.extend(repeated_bindings(then_branch));
+                found.extend(repeated_bindings(else_branch));
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Whether `literal`, as a `type_name`, is all zero bytes.
+fn is_zero(literal: &Expr, type_name: TypeName) -> bool {
+    use TypeName::*;
+    match (literal, type_name) {
+        (Expr::Integer(0, _), I8 | U8 | I16 | U16 | I32 | U32 | I64) => true,
+        (Expr::Float(text, _), F32 | F64) => text
+            .parse::<f64>()
+            .is_ok_and(|value| value == 0.0 && value.is_sign_positive()),
+        (Expr::Character(0, _), Char) => true,
+        (Expr::Boolean(false, _), Bool) => true,
+        _ => false,
+    }
 }
 
 /// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills rather than storing each element.

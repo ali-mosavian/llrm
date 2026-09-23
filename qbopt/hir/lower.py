@@ -63,6 +63,9 @@ class Lowered:
     source_instructions: dict[int, int] | None = None
 
 
+_Pieces = dict[int, tuple[tuple[int, int, tuple[object, ...]], ...]]
+
+
 def _space(place: model.Place) -> Space:
     if place.storage in (model.Storage.LOCAL, model.Storage.PARAMETER):
         return Space.FRAME
@@ -71,19 +74,38 @@ def _space(place: model.Place) -> Space:
     return Space.SEGMENT
 
 
-def _object(place: model.Place, escaped: frozenset[int]) -> memory.Object:
-    identity = (place.storage, place.id)
+def _provenance(place: model.Place, width: int, escaped: frozenset[int], pieces: _Pieces) -> memory.Provenance:
+    """`width` bytes from `place`'s start, in the objects holding them."""
     if _space(place) is Space.FRAME:
-        return memory.Object(memory.Kind.FRAME, identity, extent=place.extent)
+        start, end = place.offset, place.offset + width
+        return memory.Provenance(
+            frozenset(
+                memory.Slice(
+                    memory.Object(memory.Kind.FRAME, identity, extent=high - low),
+                    max(start, low) - low,
+                    min(end, high) - low,
+                    1,
+                    1,
+                )
+                for low, high, identity in pieces[place.id]
+                if low < end and start < high
+            )
+        )
     private = place.storage in (model.Storage.STATIC, model.Storage.MODULE) and place.symbol not in escaped
-    return memory.Object(memory.Kind.GLOBAL, identity, extent=place.extent, addressed=not private, captured=not private)
+    object_ = memory.Object(
+        memory.Kind.GLOBAL,
+        (place.storage, place.id),
+        extent=place.extent,
+        addressed=not private,
+        captured=not private,
+    )
+    return memory.Provenance.one(object_, 0, width)
 
 
-def _ref(place: model.Place, type_: model.Type, escaped: frozenset[int]) -> mir.MemRef:
+def _ref(place: model.Place, type_: model.Type, escaped: frozenset[int], pieces: _Pieces) -> mir.MemRef:
     space = _space(place)
     index = 0 if space is Space.FRAME else place.symbol
-    object_ = _object(place, escaped)
-    provenance = memory.Provenance.one(object_, 0, type_.width)
+    provenance = _provenance(place, type_.width, escaped, pieces)
     return mir.MemRef(
         Addr(space, place.offset, index),
         type_.width,
@@ -290,6 +312,7 @@ def _function(
         return 10 if type_.kind is model.TypeKind.FLOAT else type_.width
 
     places = {one.id: one for one in function.places}
+    pieces = model.frame_pieces(function.places)
     parameter_numbers = {value: number for number, value in enumerate(function.parameters)}
     next_frame_offset = min(
         (one.offset for one in function.places if one.storage in (model.Storage.LOCAL, model.Storage.PARAMETER)),
@@ -368,7 +391,7 @@ def _function(
                 raise InvalidHIR(f"{module}.{function.name}: floating constants require a constant-pool place")
             case model.PlaceRef(place):
                 type_ = types[places[place].type]
-                return mir.Cell(_ref(places[place], type_, escaped))
+                return mir.Cell(_ref(places[place], type_, escaped, pieces))
             case model.ArrayElement(place_id, indices):
                 place = places[place_id]
                 array = types[place.type]
@@ -400,8 +423,7 @@ def _function(
                 )
                 space = _space(place)
                 index = 0 if space is Space.FRAME else place.symbol
-                object_ = _object(place, escaped)
-                provenance = memory.Provenance.one(object_, 0, place.extent or array.width)
+                provenance = _provenance(place, place.extent or array.width, escaped, pieces)
                 ref = mir.MemRef(
                     Addr(space, place.offset, index),
                     element.width,
@@ -419,8 +441,7 @@ def _function(
                 field_type = types[type_id]
                 space = _space(place)
                 segment = 0 if space is Space.FRAME else place.symbol
-                object_ = _object(place, escaped)
-                provenance = memory.Provenance.one(object_, 0, place.extent or root.width)
+                provenance = _provenance(place, place.extent or root.width, escaped, pieces)
                 if not indices:
                     return mir.Cell(
                         mir.MemRef(
