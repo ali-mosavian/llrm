@@ -31,6 +31,13 @@ pub fn loaded(relative: impl AsRef<Path>) -> Option<Module> {
     loaded_bytes(&data(relative))
 }
 
+/// Frontend blocks as the `MirBlock`s `analysis::loops` walks; the walks read
+/// only `at` and `succ`.
+pub fn graph(blocks: &[Block]) -> Vec<mir::MirBlock> {
+    let edges = |one: &Block| one.succ.iter().map(|&at| at as i64).collect();
+    blocks.iter().map(|one| mir::MirBlock::new(one.at as i64, vec![], vec![], edges(one))).collect()
+}
+
 /// `corpus.loaded`, of an object's bytes.
 pub fn loaded_bytes(data: &[u8]) -> Option<Module> {
     module::of(&omf::parse(data).unwrap())
