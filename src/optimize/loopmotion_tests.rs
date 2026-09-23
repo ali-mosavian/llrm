@@ -11,7 +11,6 @@
 //! `test_nested_accumulator_seed_follows_outer_phi`,
 //! `test_addrm_exit_store_requires_complete_initial_memory`.
 //! Skipped, failing in Python at this commit:
-//! `test_counter_is_written_once_at_the_exit_not_every_iteration` (writes at 0x5E),
 //! `test_rotated_accumulator_store_uses_exit_phi` (the latch keeps its store).
 
 use std::collections::BTreeSet;
@@ -39,6 +38,30 @@ fn hotlop() -> (Rc<MirBody>, BTreeSet<i64>, Bounds, MemRef) {
     let dgroup = found.dgroup.members.clone();
     let promoted = promote::promoted(&body, &dgroup, Some(&bounds), false, true, false).unwrap();
     (promoted, dgroup, bounds, counter)
+}
+
+#[test]
+fn test_counter_is_written_once_at_the_exit_not_every_iteration() {
+    let (body, dgroup, bounds, counter) = hotlop();
+    let result = sunk_stores(&body, &dgroup, Some(&bounds), true).unwrap();
+    let hot: BTreeSet<i64> =
+        loops::loops(&result.blocks, Some(result.entry)).into_iter().flat_map(|one| one.body).collect();
+    let writes: Vec<i64> = result
+        .blocks
+        .iter()
+        .flat_map(|block| block.ops.iter().filter(|op| op.stores.contains(&counter)).map(move |_| block.at))
+        .collect();
+    assert_eq!(writes, [0x66]);
+    assert!(writes.iter().all(|at| !hot.contains(at)));
+    let stored = |body: &MirBody| -> Vec<(Kind, Vec<Arg>)> {
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter(|op| op.stores.contains(&counter))
+            .map(|op| (op.kind, op.args.clone()))
+            .collect()
+    };
+    assert_eq!(stored(&body), stored(&result));
 }
 
 /// NESTED's accumulator is sunk past the outer loop or folded to its final 675.

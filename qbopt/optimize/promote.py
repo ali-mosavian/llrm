@@ -108,24 +108,24 @@ def _leaf(ref: mir.MemRef) -> _Leaf | None:
     return _Leaf(span.object, span.low, high, None if ref.typed is None else ref.typed[0])
 
 
-def _blocked_objects(refs: list[mir.MemRef]) -> frozenset[memory.Object]:
-    """Objects whose accesses cannot form disjoint scalar leaves.
+def _blocked(refs: list[mir.MemRef]) -> frozenset[memory.Slice]:
+    """Bytes whose accesses cannot form disjoint scalar leaves.
 
     Equal ranges are repeated accesses to one leaf.  Disjoint ranges are
     independent leaves.  A proper overlap means that no leaf partition can
-    represent both accesses without observable partial writes, so the whole
-    object remains memory.  Ambiguous multi-object provenance is likewise not
-    an object identity on which scalar replacement may be based.
+    represent both accesses without observable partial writes, so both stay
+    memory; the rest of their object is unaffected.  Ambiguous multi-object
+    provenance is likewise not an identity on which scalar replacement may be
+    based, so every slice it names stays memory.
     """
     accesses: dict[memory.Object, list[_Leaf]] = {}
-    blocked: set[memory.Object] = set()
+    blocked: set[memory.Slice] = set()
     for ref in refs:
         provenance = ref.provenance
         if provenance is None:
             continue
-        objects = {span.object for span in provenance.slices}
-        if len(objects) != 1 or len(provenance.slices) != 1:
-            blocked.update(objects)
+        if len({span.object for span in provenance.slices}) != 1 or len(provenance.slices) != 1:
+            blocked.update(provenance.slices)
             continue
         if (leaf := _leaf(ref)) is not None:
             accesses.setdefault(leaf.object, []).append(leaf)
@@ -136,18 +136,21 @@ def _blocked_objects(refs: list[mir.MemRef]) -> frozenset[memory.Object]:
                 overlaps = max(one.low, other.low) < min(one.high, other.high)
                 same_range = (one.low, one.high) == (other.low, other.high)
                 if overlaps and (not same_range or one.type_class != other.type_class):
-                    blocked.add(object_)
-                    break
-            if object_ in blocked:
-                break
+                    blocked.add(memory.Slice(object_, one.low, one.high))
+                    blocked.add(memory.Slice(object_, other.low, other.high))
     return frozenset(blocked)
 
 
-def _key(ref, blocked: frozenset[memory.Object] = frozenset()):
+def _touches(ref: mir.MemRef, blocked: frozenset[memory.Slice]) -> bool:
+    """Whether the reference reaches a byte of its own object that is blocked."""
+    spans = () if ref.provenance is None else ref.provenance.slices
+    return any(span.object == one.object and span.intersects(one) for span in spans for one in blocked)
+
+
+def _key(ref, blocked: frozenset[memory.Slice] = frozenset()):
     if ref.volatile:
         return None
-    objects = set() if ref.provenance is None else {span.object for span in ref.provenance.slices}
-    if objects & blocked:
+    if _touches(ref, blocked):
         return None
     if (leaf := _leaf(ref)) is not None:
         return leaf
@@ -755,7 +758,7 @@ def promotable(
     writes cannot. Availability excludes reads after intervening aliasing writes.
     """
     every = [one for block in body.blocks for op in block.ops for one in (*op.loads, *op.stores)]
-    blocked = _blocked_objects(every)
+    blocked = _blocked(every)
     seen: Counter = Counter()
     widths: dict = {}
     for one in every:
@@ -894,7 +897,7 @@ def promoted(
     aggregate_objects = None
     if aggregate_only:
         refs = [ref for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores)]
-        blocked = _blocked_objects(refs)
+        blocked = _blocked(refs)
         aggregate_objects = _aggregate_objects(
             key for ref in refs if (key := _key(ref, blocked)) is not None
         )

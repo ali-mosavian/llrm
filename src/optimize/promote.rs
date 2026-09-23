@@ -131,11 +131,12 @@ pub(crate) fn _leaf(r#ref: &MemRef) -> Option<_Leaf> {
     })
 }
 
-/// Objects whose accesses cannot form disjoint scalar leaves.
+/// Bytes whose accesses cannot form disjoint scalar leaves.
 ///
-/// Equal ranges are one leaf, disjoint ranges independent leaves; a proper
-/// overlap or ambiguous multi-object provenance keeps the object in memory.
-pub(crate) fn _blocked_objects(refs: &[&MemRef]) -> BTreeSet<MemoryObject> {
+/// Equal ranges are one leaf, disjoint ranges independent leaves.  A proper
+/// overlap keeps both ranges in memory and leaves the rest of their object
+/// alone; ambiguous multi-object provenance keeps every slice it names.
+pub(crate) fn _blocked(refs: &[&MemRef]) -> BTreeSet<Slice> {
     let mut accesses = IndexMap::<MemoryObject, Vec<_Leaf>>::default();
     let mut blocked = BTreeSet::new();
     for r#ref in refs {
@@ -148,7 +149,7 @@ pub(crate) fn _blocked_objects(refs: &[&MemRef]) -> BTreeSet<MemoryObject> {
             .map(|span| span.object.clone())
             .collect::<BTreeSet<_>>();
         if objects.len() != 1 || provenance.slices.len() != 1 {
-            blocked.extend(objects);
+            blocked.extend(provenance.slices.iter().cloned());
             continue;
         }
         if let Some(leaf) = _leaf(r#ref) {
@@ -162,30 +163,31 @@ pub(crate) fn _blocked_objects(refs: &[&MemRef]) -> BTreeSet<MemoryObject> {
                 let overlaps = one.low.max(other.low) < one.high.min(other.high);
                 let same_range = (one.low, one.high) == (other.low, other.high);
                 if overlaps && (!same_range || one.type_class != other.type_class) {
-                    blocked.insert(object.clone());
-                    break;
+                    blocked.insert(slice(object.clone(), one.low, one.high));
+                    blocked.insert(slice(object.clone(), other.low, other.high));
                 }
-            }
-            if blocked.contains(object) {
-                break;
             }
         }
     }
     blocked
 }
 
-pub(crate) fn _key(r#ref: &MemRef, blocked: &BTreeSet<MemoryObject>) -> Option<Key> {
+/// Whether the reference reaches a byte of its own object that is blocked.
+fn _touches(r#ref: &MemRef, blocked: &BTreeSet<Slice>) -> bool {
+    r#ref.provenance.as_ref().is_some_and(|provenance| {
+        provenance
+            .slices
+            .iter()
+            .any(|span| blocked.iter().any(|one| span.object == one.object && span.intersects(one)))
+    })
+}
+
+pub(crate) fn _key(r#ref: &MemRef, blocked: &BTreeSet<Slice>) -> Option<Key> {
     if r#ref.volatile {
         return None;
     }
-    if let Some(provenance) = &r#ref.provenance {
-        if provenance
-            .slices
-            .iter()
-            .any(|span| blocked.contains(&span.object))
-        {
-            return None;
-        }
+    if _touches(r#ref, blocked) {
+        return None;
     }
     if let Some(leaf) = _leaf(r#ref) {
         return Some(Key::Leaf(leaf));
@@ -1037,7 +1039,7 @@ pub(crate) fn promotable(
         .flat_map(|block| &block.ops)
         .flat_map(|op| op.loads.iter().chain(&op.stores))
         .collect::<Vec<_>>();
-    let blocked = _blocked_objects(&every);
+    let blocked = _blocked(&every);
     let mut seen = IndexMap::<Key, usize>::default();
     let mut widths = HashMap::<Key, BTreeSet<u32>>::default();
     for one in &every {
@@ -1287,7 +1289,7 @@ pub(crate) fn promoted(
             .flat_map(|block| &block.ops)
             .flat_map(|op| op.loads.iter().chain(&op.stores))
             .collect::<Vec<_>>();
-        let blocked = _blocked_objects(&refs);
+        let blocked = _blocked(&refs);
         let keys = refs
             .iter()
             .filter_map(|r#ref| _key(r#ref, &blocked))
