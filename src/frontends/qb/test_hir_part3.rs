@@ -260,6 +260,14 @@ fn backward_loop(procedure: &str) -> String {
     panic!("no loop")
 }
 
+#[test]
+fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
+    // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and `jmp` back.
+    let loop_ = backward_loop(&sum_three(false));
+    assert!(regex::Regex::new(r"\bjne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
+    assert!(!loop_.contains("jmp"), "{loop_}");
+}
+
 /// `_function`.
 fn function_in(directory: &tempfile::TempDir, name: &str, text: &str, wanted: &str, dialect: &str) -> (hir::Program, hir::Function) {
     let source = written(directory, name, text.as_bytes());

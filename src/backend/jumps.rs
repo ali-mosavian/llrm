@@ -48,7 +48,7 @@ impl LIRTransform for ControlFlow {
 
 /// Choose the cheapest common-tail fixed point without adding hot work.
 pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    let mut candidate = placed(body)?;
+    let mut candidate = placed(&_hoisted(body))?;
     let baseline = threaded(&candidate);
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
@@ -179,11 +179,23 @@ pub fn _onward(
     if let Some(by_at) = by_at {
         targets.sort_by_key(|target| target.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold)));
     }
+    // Only a jump to a placed block: threading removes it, and placing it
+    // next would strand the other edge behind a jump of its own.
+    let spent = |target: &Option<i64>| {
+        by_at.is_some_and(|by_at| {
+            target.is_some_and(|at| by_at.get(&at).is_some_and(|block| _passage(block).is_some_and(|to| done.contains(&to))))
+        })
+    };
     // Keep a loop chain together before following an exit.  The final jump is
     // still preferred when both edges stay in the loop, preserving the source
     // fall-through unless doing so would strand the rest of the loop.
     for target in &targets {
-        if target.is_none_or(|at| !done.contains(&at)) && target.is_some_and(|at| inside.contains(&at)) {
+        if target.is_none_or(|at| !done.contains(&at)) && target.is_some_and(|at| inside.contains(&at)) && !spent(target) {
+            return *target;
+        }
+    }
+    for target in &targets {
+        if target.is_none_or(|at| !done.contains(&at)) && !spent(target) {
             return *target;
         }
     }
