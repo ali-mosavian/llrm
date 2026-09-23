@@ -37,6 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
+        model::Op::PortOut => Some(Some(0)),
         model::Op::Call => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -448,6 +449,16 @@ fn _function(
                     .collect();
                 if involved.iter().any(|one| types[one].kind != model::TypeKind::Float) {
                     invalid!("{prefix}: {} has a non-floating operand", instruction.op);
+                }
+            }
+            if matches!(instruction.op, model::Op::PortIn | model::Op::PortOut) {
+                let widths: Vec<i64> = operand_types.iter().map(|one| types[one].width).collect();
+                let expected_widths: &[i64] = if instruction.op == model::Op::PortIn { &[2] } else { &[2, 1] };
+                if operand_types.iter().chain(&result_types).any(|one| types[one].kind != model::TypeKind::Integer)
+                    || widths != expected_widths
+                    || result_types.iter().any(|one| types[one].width != 1)
+                {
+                    invalid!("{prefix}: {} is not a 16-bit port and a byte", instruction.op);
                 }
             }
             if instruction.op == model::Op::Truncate

@@ -5,6 +5,9 @@ use std::collections::BTreeSet;
 
 use crate::support::hash::IndexMap;
 
+use num_traits::ToPrimitive;
+
+use crate::abi::ports;
 use crate::hir::escape;
 use crate::hir::model;
 use crate::hir::verify::{InvalidHIR, verify};
@@ -59,7 +62,11 @@ fn _stored_format(type_: &model::Type) -> Result<floating::Format, InvalidHIR> {
         return Ok(if type_.width == 4 { floating::Format::Binary32 } else { floating::Format::Binary64 });
     }
     if matches!(type_.kind, model::TypeKind::Integer | model::TypeKind::Boolean) {
-        return Ok(if type_.width == 2 { floating::Format::Signed16 } else { floating::Format::Signed32 });
+        match type_.width {
+            2 => return Ok(floating::Format::Signed16),
+            4 => return Ok(floating::Format::Signed32),
+            _ => {}
+        }
     }
     Err(InvalidHIR(format!("{}: no floating storage format", type_.name)))
 }
@@ -1431,7 +1438,11 @@ impl<'a> _Scope<'a> {
             }
         }
         let complete = instruction.op != model::Op::Call && !_STRING_COMPARISONS.contains(&instruction.op);
-        let volatile = loads.iter().chain(&stores).any(|reference| reference.volatile);
+        let port = matches!(instruction.op, model::Op::PortIn | model::Op::PortOut);
+        // A device with no path to memory leaves every cell alone; any other
+        // port may start a transfer, so its memory effect stays unknown.
+        let silent_port = port && matches!(args.first(), Some(Arg::Const(one)) if one.n.to_i64().is_some_and(ports::silent));
+        let volatile = port || loads.iter().chain(&stores).any(|reference| reference.volatile);
         let final_ = mir::Op {
             floating: semantics,
             loads,
@@ -1441,7 +1452,7 @@ impl<'a> _Scope<'a> {
             results,
             id: Some(instruction.id as u32),
             args_known: true,
-            memory_complete: complete,
+            memory_complete: (complete && !port) || silent_port,
             reads_complete: complete,
             volatile,
             ..mir::Op::new(self.at, OpCode::Operation(operation_kind), operation_name, made, uses)

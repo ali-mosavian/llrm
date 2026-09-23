@@ -47,6 +47,14 @@ fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, h
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
+/// Each listing line without its comment, whitespace collapsed.
+fn stripped_lines(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(|line| line.split(';').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
 fn externals(program: &hir::Program, name: &str) -> Vec<String> {
     omf::externals(&records(program, name))
 }
@@ -361,6 +369,7 @@ fn test_variable_screen_mode_pulls_all_graphics_drivers() {
 }
 
 /// Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
+/// Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`.
 #[test]
 fn test_nested_integer_division_keeps_each_dividend() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -368,8 +377,8 @@ fn test_nested_integer_division_keeps_each_dividend() {
         &directory,
         "NESTDIV.BAS",
         concat!(
-            "declare function scale (maxCol)\r\n",
             "defint a-z\r\n",
+            "declare function scale (maxCol)\r\n",
             "print scale(80)\r\n",
             "end\r\n",
             "function scale (maxCol)\r\n",
@@ -1127,6 +1136,22 @@ fn test_unchecked_bounds_read_the_descriptor_without_runtime_calls() {
 
     assert!(!procedure.contains("B$LBND") && !procedure.contains("B$UBND"));
     assert!(has_indexed_field(&procedure, "16"));
+}
+
+/// OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
+/// listing printed `out dx` / `in al` without their second operand.
+#[test]
+fn test_port_io_narrows_a_float_through_integer_and_prints_both_operands() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "PORTS.BAS",
+        b"defint a-z\r\np = &H3C8: f! = 41.6\r\nout p, f!\r\npoke 0, f!\r\na = inp(p + 1)\r\n",
+    );
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines: BTreeSet<String> = stripped_lines(&listing(&source)).into_iter().collect();
+    assert!(lines.contains("out dx, al") && lines.contains("in al, dx"), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("fistp word ptr")), "{lines:?}");
 }
 
 /// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.

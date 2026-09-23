@@ -108,6 +108,17 @@ pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
             out.insert(Occurrence::new("dest", 1), Register::EDI);
         }
     }
+    // Port I/O moves al; a port not written as an immediate is dx.
+    if what.op == Operation::Barrier && matches!(what.name.as_deref(), Some("in" | "out")) {
+        if !matches!(what.sources[0], Loc::Imm(_)) {
+            out.insert(Occurrence::new("source", 0), Register::EDX);
+        }
+        if what.name.as_deref() == Some("in") {
+            out.insert(Occurrence::new("dest", 0), Register::EAX);
+        } else {
+            out.insert(Occurrence::new("source", 1), Register::EAX);
+        }
+    }
     if what.op == Operation::Extend && matches!(what.name.as_deref(), Some("cwd" | "cdq")) {
         out.insert(Occurrence::new("source", 0), Register::EAX);
         out.insert(Occurrence::new("dest", 0), Register::EDX);

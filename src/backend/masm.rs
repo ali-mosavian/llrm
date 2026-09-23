@@ -480,7 +480,7 @@ pub fn _instruction(
         }
         Operation::Call if what.indirect && sources.len() == 1 => vec![format!("call {}", sources[0])],
         Operation::Barrier => {
-            vec![format!("{name} {}", if dests.is_empty() { &sources[0] } else { &dests[0] })]
+            vec![format!("{name} {}", dests.iter().chain(&sources).cloned().collect::<Vec<_>>().join(", "))]
         }
         Operation::FloatLoad => {
             if matches!(name, "fldz" | "fld1") || sources.is_empty() {
