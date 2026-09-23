@@ -1172,6 +1172,31 @@ fn test_rnd_without_an_argument_compiles() {
     assert!(listing(&source).contains("B$RND0"));
 }
 
+/// oimad froze after a few hundred frames: CIRCLE pushed its radius twice,
+/// four stack bytes B$CIRC never pops. QB45 circle.asm and the VBDOS /A
+/// listing both take one parmD radius and one color word.
+#[test]
+fn test_circle_pushes_one_radius() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "CIRC.BAS", b"screen 13\r\nr! = 16\r\ncircle (10, 100), r!, 5\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines = stripped_lines(&listing(&source));
+    let start = lines.iter().position(|line| line == "call far ptr B$N1I2").expect("B$N1I2");
+    let end = lines.iter().position(|line| line == "call far ptr B$CIRC").expect("B$CIRC");
+    let mut pushed = 0;
+    for line in &lines[start + 1..end] {
+        let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
+        pushed += match mnemonic {
+            "pushd" => 4,
+            "pushw" => 2,
+            "push" if operand.starts_with("dword") || operand.starts_with('e') => 4,
+            "push" => 2,
+            _ => 0,
+        };
+    }
+    assert_eq!(pushed, 6, "{:?}", &lines[start..=end]);
+}
+
 /// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.
 #[test]
 fn test_an_unsuffixed_decimal_above_32767_is_a_long_literal() {
