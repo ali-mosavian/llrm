@@ -1413,3 +1413,32 @@ fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
     assert!(syntax("modern", "vbdos").contains("unknown QB dialect"));
     assert!(syntax("vbdos", "freestanding").contains("unknown QB runtime"));
 }
+
+const ROW_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nDIM SHARED sp(100), yy(3), xp(3), cd(100)\r\nblit\r\n\
+SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000 + yp\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
+dn = sp(yy(1) + x - xp(1)) + sp(yy(2) + x - xp(2))\r\nPOKE x, cd(dn)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";
+
+/// `name` optimized after the module's call memory effects, as compiled.
+fn optimized_sub(text: &str, name: &str) -> String {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+    let (index, function) = function_named(&source, name);
+    let module = &source.modules[0];
+    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"))
+        .expect("annotates");
+    mir_text(&optimized(&source, function, &bodies[index]))
+}
+
+fn optimized_blit(text: &str) -> String {
+    optimized_sub(text, "BLIT")
+}
+
+/// deedlines' cycleblobs kept every local in memory: its POKE went through a
+/// far pointer, and the frontend marked each local as addressed though none
+/// had its address taken, so the store clobbered the loop counters.
+#[test]
+fn test_a_poke_does_not_reach_a_local_whose_address_is_never_taken() {
+    let text = optimized_blit(ROW_LOOP);
+    assert!(!text.contains("load cell(frame"), "{text}");
+}
+

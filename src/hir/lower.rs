@@ -93,7 +93,22 @@ fn _space(place: &model::Place) -> Space {
     Space::Segment
 }
 
-type _Pieces = std::collections::HashMap<i64, Vec<model::FramePiece>>;
+/// A frame piece and whether any place holding it has its address handed out.
+type _Pieces = std::collections::HashMap<i64, Vec<(i64, i64, Identity, bool)>>;
+
+fn _pieces(function: &model::Function) -> _Pieces {
+    let pieces = model::frame_pieces(&function.places);
+    let exposed = escape::exposed_frame(function);
+    let reached: BTreeSet<&Identity> =
+        exposed.iter().flat_map(|place| pieces.get(place).into_iter().flatten()).map(|piece| &piece.2).collect();
+    pieces
+        .iter()
+        .map(|(place, spans)| {
+            let spans = spans.iter().map(|(low, high, identity)| (*low, *high, identity.clone(), reached.contains(identity)));
+            (*place, spans.collect())
+        })
+        .collect()
+}
 
 /// `width` bytes from `place`'s start, in the objects holding them.
 fn _provenance(
@@ -105,11 +120,13 @@ fn _provenance(
     if _space(place) == Space::Frame {
         let (start, end) = (place.offset, place.offset + width);
         let mut slices = BTreeSet::new();
-        for (low, high, identity) in &pieces[&place.id] {
+        for (low, high, identity, exposed) in &pieces[&place.id] {
             if *low < end && start < *high {
                 let object_ = MemoryObject {
                     identity: Some(identity.clone()),
                     extent: Some(high - low),
+                    addressed: *exposed,
+                    captured: *exposed,
                     ..MemoryObject::new(MemoryKind::Frame)
                 };
                 let slice = Slice::new(object_, start.max(*low) - low, end.min(*high) - low, 1, 1)
@@ -1555,7 +1572,7 @@ fn _function(
         value_types,
         integer_ranges: mir::OrderedMap::new(),
         places,
-        pieces: model::frame_pieces(&function.places),
+        pieces: _pieces(function),
         parameter_numbers,
         next_frame_offset,
         at: 0,
