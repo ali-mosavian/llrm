@@ -1,8 +1,7 @@
 //! Port of `tests/test_lir.py`'s tests over raised BC objects.
 //!
-//! Skipped: `test_an_opaque_address_keeps_the_registers_it_is_written_in`
-//! (needs `rewrite`), and the two `_EXPANDS` tests (monkeypatch a table the
-//! Rust lowering has as a match). The rest of the module is ported beside
+//! Skipped: the two `_EXPANDS` tests (monkeypatch a table the Rust lowering
+//! has as a match). The rest of the module is ported beside
 //! the code it tests.
 
 use std::collections::BTreeSet;
@@ -295,4 +294,32 @@ fn test_a_stores_address_is_the_value_that_computed_it() {
         }
     }
     assert!(seen >= 3, "only {seen} based cells; addrm-p-g2 has three");
+}
+
+/// hotlpx rebuilt twice printed S=250 for 630: `lea ax,[ebx+ebx*4]` pinned
+/// nothing, and the product it reads was allocated to ax. The decoded
+/// address, not a historical register name, is the oracle.
+#[test]
+#[ignore = "fails in Python too: ValueError: not enough values to unpack (expected 1, got 0)"]
+fn test_an_opaque_address_keeps_the_registers_it_is_written_in() {
+    let data = testing::data("fixtures/omf/hotlpx-p-g2.obj");
+    let rebuilt = crate::rewrite::rewrite(&data, &crate::rewrite::Rewrite::new(false)).unwrap().0;
+    let found = testing::loaded_bytes(&rebuilt).unwrap();
+    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
+    let raised = mir::bodies(&found, &blocks, Some(&mut contracts), false, false).unwrap();
+    let (name, body) = &raised.values[0];
+    let low = lowered(name, body, &found, &raised, &contracts, None);
+    let leas: Vec<_> = low
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter(|one| one.op.as_ref().is_some_and(|op| op.kind == Kind::Address))
+        .collect();
+    let [lea] = <[_; 1]>::try_from(leas).unwrap();
+    let ir::Loc::Address(address) = &lea.node.as_ref().unwrap().semantics().sources[0] else { panic!("not an address") };
+    let expected: BTreeSet<Register> =
+        [address.through, address.index].into_iter().filter(|&one| one != Register::None).map(root).collect();
+    assert!(!expected.is_empty(), "the fixture no longer has a register-based address");
+    assert_eq!(lea.requires.iter().map(|(_, register)| root(*register)).collect::<BTreeSet<_>>(), expected);
 }
