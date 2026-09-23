@@ -82,8 +82,42 @@ pub(crate) fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>
 /// A block unreachable from the entry gets the empty set rather than "every
 /// block".
 pub(crate) fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BTreeSet<i64>> {
+    dominance(blocks, entry).named()
+}
+
+/// Each block's dominators as bits over the sorted block addresses; naming
+/// them as sets costs more than finding them.
+pub(crate) struct Dominance {
+    ats: Vec<i64>,
+    doms: Vec<Bits>,
+}
+
+impl Dominance {
+    fn slot(&self, at: i64) -> Option<usize> {
+        self.ats.binary_search(&at).ok()
+    }
+
+    /// Whether the entry reaches `at`: only then does anything dominate it.
+    pub(crate) fn reachable(&self, at: i64) -> bool {
+        self.slot(at).is_some_and(|slot| !self.doms[slot].is_empty())
+    }
+
+    pub(crate) fn dominates(&self, dominator: i64, at: i64) -> bool {
+        match (self.slot(dominator), self.slot(at)) {
+            (Some(dominator), Some(at)) => self.doms[at].contains(dominator),
+            _ => false,
+        }
+    }
+
+    fn named(self) -> BTreeMap<i64, BTreeSet<i64>> {
+        let ats = &self.ats;
+        ats.iter().zip(&self.doms).map(|(at, set)| (*at, set.iter().map(|one| ats[one]).collect())).collect()
+    }
+}
+
+pub(crate) fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
     if blocks.is_empty() {
-        return BTreeMap::new();
+        return Dominance { ats: Vec::new(), doms: Vec::new() };
     }
     let start = entry.unwrap_or_else(|| blocks[0].at());
     let indexed = blocks.iter().map(|block| (block.at(), block)).collect::<BTreeMap<_, _>>();
@@ -146,10 +180,7 @@ pub(crate) fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<
             }
         }
     }
-    ats.iter()
-        .zip(doms)
-        .map(|(at, set)| (*at, set.iter().map(|one| ats[one]).collect()))
-        .collect()
+    Dominance { ats, doms }
 }
 
 /// One natural loop: where control comes back to, and what is inside.
@@ -171,6 +202,19 @@ pub(crate) fn back_edges<N: Node>(blocks: &[N], doms: &BTreeMap<i64, BTreeSet<i6
     for block in blocks {
         for &successor in block.succ() {
             if known.contains(&successor) && doms.get(&block.at()).is_some_and(|one| one.contains(&successor)) {
+                found.push((block.at(), successor));
+            }
+        }
+    }
+    found
+}
+
+fn _back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
+    let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
+    let mut found = Vec::new();
+    for block in blocks {
+        for &successor in block.succ() {
+            if known.contains(&successor) && dominance.dominates(successor, block.at()) {
                 found.push((block.at(), successor));
             }
         }
@@ -204,12 +248,12 @@ pub(crate) fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>
 /// Back edges sharing a header are one loop whose body is the union of
 /// theirs.
 pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
-    let doms = dominators(blocks, entry);
-    let preds = predecessors(&blocks.iter().filter(|block| !doms[&block.at()].is_empty()).collect::<Vec<_>>());
+    let doms = dominance(blocks, entry);
+    let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
     let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for (latch, header) in back_edges(blocks, &doms) {
+    for (latch, header) in _back_edges(blocks, &doms) {
         latches.entry(header).or_default().insert(latch);
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));
     }
@@ -227,9 +271,9 @@ pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 /// Decided by actually cutting the edges and looking for a remaining cycle,
 /// not by address order.
 pub(crate) fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
-    let doms = dominators(blocks, entry);
-    let known = blocks.iter().filter(|block| !doms[&block.at()].is_empty()).map(Node::at).collect::<BTreeSet<_>>();
-    let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
+    let doms = dominance(blocks, entry);
+    let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
+    let cut = _back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
     let forward = blocks
         .iter()
         .filter(|block| known.contains(&block.at()))

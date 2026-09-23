@@ -845,12 +845,12 @@ pub fn points_to(
     }
     // A pointer value is otherwise an exact byte slice.  Natural-loop joins
     // are the one place those exact facts can grow without a program bound.
-    let dominators = loops::dominators(&body.blocks, Some(body.entry));
+    let dominance = loops::dominance(&body.blocks, Some(body.entry));
     let back_edges = body
         .blocks
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
-        .filter(|(at, successor)| dominators.get(at).is_some_and(|dominating| dominating.contains(successor)))
+        .filter(|(at, successor)| dominance.dominates(*successor, *at))
         .collect::<BTreeSet<_>>();
     let mut incoming = body
         .blocks
