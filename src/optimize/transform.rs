@@ -1784,7 +1784,7 @@ pub(crate) fn _outcome(
     op: &Op,
     facts: &IndexMap<Value, crate::analysis::consts::Known>,
     held: &crate::analysis::consts::HeldCells,
-    pointers: Option<&crate::analysis::alias::PointsTo>,
+    nonnull: Option<&dyn Fn(Value) -> bool>,
 ) -> Option<bool> {
     use crate::analysis::consts;
     let (index, compare) = _comparison(block, op)?;
@@ -1808,7 +1808,7 @@ pub(crate) fn _outcome(
         if !matches!(op.test, Some(Kind::Eq | Kind::Ne)) {
             return None;
         }
-        let pointers = pointers?;
+        let nonnull = nonnull?;
         let pointer = compare
             .args
             .iter()
@@ -1821,7 +1821,7 @@ pub(crate) fn _outcome(
                 }
                 _ => None,
             })?;
-        if !pointers.nonnull(pointer) {
+        if !nonnull(pointer) {
             return None;
         }
         return Some(op.test == Some(Kind::Ne));
@@ -1871,7 +1871,7 @@ pub(crate) fn _executable_successors(
     facts: &IndexMap<Value, crate::analysis::consts::Known>,
     states: &IndexMap<Value, crate::analysis::constant_cycles::State>,
     held: &crate::analysis::consts::HeldCells,
-    pointers: Option<&crate::analysis::alias::PointsTo>,
+    nonnull: Option<&dyn Fn(Value) -> bool>,
 ) -> Option<Vec<i64>> {
     use crate::analysis::constant_cycles::State;
     let pending = |args: &[Arg]| {
@@ -1897,7 +1897,7 @@ pub(crate) fn _executable_successors(
     if !last.target.is_some_and(|target| block.succ.contains(&target)) {
         return Some(block.succ.clone());
     }
-    if let Some(answer) = _outcome(block, last, facts, held, pointers) {
+    if let Some(answer) = _outcome(block, last, facts, held, nonnull) {
         return Some(if answer {
             vec![last.target.expect("a successor")]
         } else {
@@ -2076,11 +2076,14 @@ pub(crate) fn decided(
     let body = _threaded(body)?;
     let facts = consts::known(&body, Some(dgroup), Some(calls), None, None);
     let held = consts::shared_cells(&body, dgroup, calls, Some(&facts), None, None, None, None);
-    let pointers = alias::pointers(&body)?;
+    // Points-to only for a branch that compares a pointer with zero, as LLVM
+    // asks isKnownNonZero of one value rather than solving every pointer.
+    let pointers = std::cell::OnceCell::new();
+    let nonnull = |value: Value| pointers.get_or_init(|| alias::pointers(&body)).as_ref().is_ok_and(|facts| facts.nonnull(value));
     let successors = |block: &MirBlock,
                       values: &IndexMap<Value, consts::Known>,
                       states: &IndexMap<Value, constant_cycles::State>| {
-        _executable_successors(block, values, states, &held, Some(&pointers))
+        _executable_successors(block, values, states, &held, Some(&nonnull))
     };
     let facts = constant_cycles::propagated(&body, &facts, Some(&successors));
     let scoped = ranges::bounded(&body)?;
@@ -2115,7 +2118,7 @@ pub(crate) fn decided(
             changed = true;
             continue;
         }
-        let mut answer = _outcome(block, last, &facts, &held, Some(&pointers));
+        let mut answer = _outcome(block, last, &facts, &held, Some(&nonnull));
         if answer.is_none() && last.kind == Kind::Branch && block.succ.len() == 2 {
             if let Some(scope) = scoped.get(&block.at) {
                 let mut possible = Vec::new();
