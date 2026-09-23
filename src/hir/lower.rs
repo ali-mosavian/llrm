@@ -155,17 +155,19 @@ fn _global(place: &model::Place, escaped: &BTreeSet<i64>) -> MemoryObject {
     }
 }
 
-/// The objects code outside `module` reaches by name only: no pointer holds
-/// them, yet any callee this module cannot see may read or write them.
-pub fn named_externals(module: &model::Module) -> BTreeSet<MemoryObject> {
+/// The objects code outside `module` reaches by name only, with that name
+/// (one per function naming it): no pointer holds them, yet any callee this
+/// module cannot see may read or write them.
+pub fn named_externals(module: &model::Module) -> Vec<(String, MemoryObject)> {
     let escaped = escape::escaped(module);
+    let name = |symbol: i64| module.data.iter().find(|one| one.id == symbol).map(|one| one.name.clone());
     module
         .functions
         .iter()
         .flat_map(|function| &function.places)
         .filter(|place| place.storage == model::Storage::External)
-        .map(|place| _global(place, &escaped))
-        .filter(|object_| !object_.addressed)
+        .filter_map(|place| Some((name(place.symbol)?, _global(place, &escaped))))
+        .filter(|(_, object_)| !object_.addressed)
         .collect()
 }
 

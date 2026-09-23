@@ -1041,7 +1041,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
     };
     let program = vbdos(module.clone());
 
-    let bodies = qb_compile::_alias_annotated(&module, &module.functions, &lower(&program).unwrap()).expect("annotates");
+    let bodies = qb_compile::_alias_annotated(&module, &module.functions, &lower(&program).unwrap(), program.runtime.value()).expect("annotates");
     let call = ops(&bodies[0].body).into_iter().find(|one| one.kind == Kind::Call).expect("the call");
 
     assert!(call.memory_complete);
@@ -1434,7 +1434,7 @@ fn optimized_sub(text: &str, name: &str) -> String {
     let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let (index, function) = function_named(&source, name);
     let module = &source.modules[0];
-    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"))
+    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"), source.runtime.value())
         .expect("annotates");
     mir_text(&optimized(&source, function, &bodies[index]))
 }
@@ -1485,6 +1485,40 @@ fn test_a_poke_after_a_call_reloads_its_segment() {
 SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nb\r\nPOKE 3, 4\r\nEND SUB\r\n\
 SUB b\r\nDEF SEG\r\nEND SUB\r\n";
     assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, true]);
+}
+
+/// Every runtime call counted as a DEF SEG, so PLASMA's POKE reloaded b$seg
+/// after INKEY$ and never saw &HA000. Only b$seg's listed writers write it.
+#[test]
+fn test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\na\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nk$ = INKEY$\r\nPOKE 3, 4\r\nb\r\nPOKE 5, 6\r\nEND SUB\r\n\
+SUB b\r\nPRINT \"b\"\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, false, false]);
+}
+
+/// Code this module cannot see may run DEF SEG: another module's SUB, or an
+/// error handler entered from inside a runtime call. Keeping the segment
+/// across either POKEs the wrong memory.
+#[test]
+fn test_a_poke_after_code_that_may_run_def_seg_reloads_its_segment() {
+    let elsewhere = "DECLARE SUB a ()\r\nDECLARE SUB other ()\r\na\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nother\r\nPOKE 3, 4\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(elsewhere, "A")), [false, true]);
+    let handled = "DECLARE SUB a ()\r\nON ERROR GOTO fail\r\na\r\nEND\r\nfail:\r\nDEF SEG = 0\r\nRESUME NEXT\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nk$ = INKEY$\r\nPOKE 3, 4\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(handled, "A")), [false, true]);
+}
+
+/// Each function names b$seg through its own place. Keeping one object per
+/// name lost the caller's, so fractaleffect's DEF SEG before fracline, which
+/// PEEKs through it, was deleted as a dead store.
+#[test]
+fn test_a_def_seg_before_a_sub_that_peeks_is_kept() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr(10)\r\na\r\n\
+SUB a\r\narr(1) = 2\r\nDEF SEG = &HA000\r\nb\r\nDEF SEG = 0\r\nb\r\nEND SUB\r\n\
+SUB b\r\nPRINT PEEK(1)\r\nEND SUB\r\n";
+    assert!(optimized_sub(text, "A").contains("<- -24576:2"));
 }
 
 /// A POKE into VGA memory counted as reaching every global, so the row loop

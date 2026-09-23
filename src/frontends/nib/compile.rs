@@ -30,7 +30,7 @@ pub fn semantic_lowered(program: &model::Program) -> Result<Vec<Lowered>, String
     let module = &program.modules[0];
     let functions = &module.functions;
     let lowered = hir::lower::lower(program).map_err(|error| error.to_string())?;
-    callmemory::annotated(module, functions, &lowered, None)
+    callmemory::annotated(module, functions, &lowered, None, None)
 }
 
 /// Run the common MIR fixed point for one Nib function.

@@ -1338,13 +1338,23 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, CompileErr
     Ok(rewritten.iter().flat_map(omf::Record::emit).collect())
 }
 
-/// Apply the shared source-level call-graph mod/ref fixed point.
+/// Apply the shared source-level call-graph mod/ref fixed point. A runtime
+/// routine's contract says which runtime cells it writes, unless an error
+/// handler can run the program's own code from inside it.
 pub(crate) fn _alias_annotated(
     module: &model::Module,
     functions: &[model::Function],
     semantic: &[Lowered],
+    family: &str,
 ) -> Result<Vec<Lowered>, CompileError> {
-    callmemory::annotated(module, functions, semantic, Some(&_object_name))
+    let handled = module.functions.iter().any(|function| function.error_handler.is_some());
+    let named_writes = |routine: &str| -> Option<Vec<String>> {
+        if handled {
+            return None;
+        }
+        Some(crate::abi::runtime::named_writes(routine, family)?.into_iter().map(str::to_owned).collect())
+    };
+    callmemory::annotated(module, functions, semantic, Some(&_object_name), Some(&named_writes))
         .map_err(|error| EmissionError(error).into())
 }
 
@@ -1416,7 +1426,7 @@ pub fn assembled(
     if semantic.len() != functions.len() {
         return emission("HIR lowering did not preserve the function table");
     }
-    let semantic = _alias_annotated(module, &module.functions, &semantic)?;
+    let semantic = _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?;
 
     let callable_names: IndexMap<&str, String> =
         module.callables.iter().map(|one| (one.name.as_str(), _object_name(&one.name))).collect();

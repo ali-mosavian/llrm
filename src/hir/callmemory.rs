@@ -14,12 +14,15 @@ use crate::model::mir;
 /// common boundary where all source frontends can compute mod/ref effects,
 /// before ABI physicalization chooses stack order or register locations.
 ///
-/// `object_name` defaults to the identity.
+/// `object_name` defaults to the identity. `named_writes` answers which
+/// by-name-only data a call to the frontend's runtime (a call with no
+/// callable) writes, when the frontend knows; None says any of it.
 pub fn annotated(
     module: &model::Module,
     functions: &[model::Function],
     semantic: &[Lowered],
     object_name: Option<&dyn Fn(&str) -> String>,
+    named_writes: Option<&dyn Fn(&str) -> Option<Vec<String>>>,
 ) -> Result<Vec<Lowered>, String> {
     let identity = |name: &str| name.to_owned();
     let object_name: &dyn Fn(&str) -> String = object_name.unwrap_or(&identity);
@@ -27,7 +30,13 @@ pub fn annotated(
     let types: IndexMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
     let callables: IndexMap<i64, &model::Callable> = module.callables.iter().map(|one| (one.id, one)).collect();
     let mut procedures: IndexMap<String, alias::Procedure> = IndexMap::default();
-    let named = crate::hir::lower::named_externals(module);
+    let by_name = crate::hir::lower::named_externals(module);
+    let named: std::collections::BTreeSet<_> = by_name.iter().map(|(_, object_)| object_.clone()).collect();
+    let written = |callee: &str| -> Option<std::collections::BTreeSet<_>> {
+        let cells = named_writes?(callee)?;
+        Some(by_name.iter().filter(|(name, _)| cells.contains(name)).map(|(_, object_)| object_.clone()).collect())
+    };
+    let mut outside: IndexMap<String, std::collections::BTreeSet<_>> = IndexMap::default();
     let mut lowered_by_name: IndexMap<String, Lowered> = IndexMap::default();
     for (function, lowered) in functions.iter().zip(semantic) {
         let body = alias::annotated(&std::rc::Rc::new(lowered.body.clone()))?;
@@ -83,11 +92,15 @@ pub fn annotated(
                 Some(callee) => callables[&callee].name.as_str(),
                 None => operation.name.as_str(),
             };
+            if let (None, Some(writes)) = (site.callee, written(target)) {
+                outside.insert(object_name(target), writes);
+            }
             calls.insert(operation.at, object_name(target));
             arguments.insert(operation.at, actuals(instruction));
         }
         let name = object_name(&function.name);
-        let procedure = alias::Procedure { body: body.clone(), calls, arguments, named: named.clone() };
+        let procedure =
+            alias::Procedure { body: body.clone(), calls, arguments, named: named.clone(), outside: outside.clone() };
         procedures.insert(name.clone(), procedure);
         lowered_by_name.insert(name, Lowered { body, ..lowered.clone() });
     }

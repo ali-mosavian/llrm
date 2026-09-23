@@ -203,7 +203,7 @@ pub fn result_only_functions(bodies: &[(&str, &MirBody)], found: &Module) -> Res
             .collect();
         candidates.insert(
             procedure.name.to_uppercase(),
-            (alias::Procedure { body: seeded, calls, arguments: IndexMap::default(), named: Default::default() }, hidden),
+            (alias::Procedure { body: seeded, calls, arguments: IndexMap::default(), named: Default::default(), outside: Default::default() }, hidden),
         );
     }
 

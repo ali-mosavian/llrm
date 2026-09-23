@@ -111,6 +111,7 @@ pub fn assembled(
                     calls: one.calls.clone(),
                     arguments: one.arguments.clone(),
                     named: Default::default(),
+                    outside: Default::default(),
                 };
             (one.name.clone(), procedure)
         })

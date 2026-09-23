@@ -901,6 +901,7 @@ impl<'a> _Raise<'a> {
                 calls: self.calls.clone(),
                 arguments: self.arguments.clone(),
                 named: Default::default(),
+                outside: Default::default(),
             };
         let body = RaisedBody { body: alias::calls_annotated(&procedure, &IndexMap::default()).map_err(Unsupported)?, ..body };
         let body = mir::with_live_outs(body);
