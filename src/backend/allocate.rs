@@ -175,27 +175,73 @@ pub fn live(body: &LirBody) -> (Live, Live) {
         exposed.insert(block.at, alive.difference(&arrives).copied().collect());
     }
 
-    let mut live_in: Live = body.blocks.iter().map(|block| (block.at, BTreeSet::new())).collect();
-    let mut live_out: Live = body.blocks.iter().map(|block| (block.at, BTreeSet::new())).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in &body.blocks {
-            let mut out: BTreeSet<u32> = BTreeSet::new();
-            for at in &block.succ {
-                if let Some(found) = live_in.get(at) {
-                    out.extend(found.iter().copied());
-                }
-            }
-            let mut into = exposed[&block.at].clone();
-            into.extend(out.difference(&defines[&block.at]).copied());
-            if out != live_out[&block.at] || into != live_in[&block.at] {
-                live_out.insert(block.at, out);
-                live_in.insert(block.at, into);
-                changing = true;
+    // The least fixed point of a backward problem, found by a worklist over dense bit
+    // sets: the round-robin over sorted sets it replaces reached the same sets.
+    // Values numbered densely: ids can be far apart.
+    let numbered: Vec<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| defines[&block.at].iter().chain(&exposed[&block.at]).copied())
+        .collect::<BTreeSet<u32>>()
+        .into_iter()
+        .collect();
+    let number: crate::support::hash::HashMap<u32, usize> =
+        numbered.iter().enumerate().map(|(at, value)| (*value, at)).collect();
+    let words = numbered.len() / 64 + 1;
+    let bits = |values: &BTreeSet<u32>| {
+        let mut set = vec![0u64; words];
+        for value in values {
+            let at = number[value];
+            set[at / 64] |= 1 << (at % 64);
+        }
+        set
+    };
+    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut predecessors = vec![Vec::new(); body.blocks.len()];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for successor in &block.succ {
+            if let Some(&to) = position.get(successor) {
+                predecessors[to].push(at);
             }
         }
     }
+    let kept: Vec<Vec<u64>> = body.blocks.iter().map(|block| bits(&defines[&block.at]).iter().map(|word| !word).collect()).collect();
+    let generated: Vec<Vec<u64>> = body.blocks.iter().map(|block| bits(&exposed[&block.at])).collect();
+    let mut into: Vec<Vec<u64>> = generated.clone();
+    let mut out: Vec<Vec<u64>> = vec![vec![0u64; words]; body.blocks.len()];
+    let mut pending: Vec<usize> = (0..body.blocks.len()).collect();
+    let mut queued = vec![true; body.blocks.len()];
+    while let Some(at) = pending.pop() {
+        queued[at] = false;
+        let mut now = vec![0u64; words];
+        for successor in &body.blocks[at].succ {
+            if let Some(&from) = position.get(successor) {
+                for (word, bits) in now.iter_mut().zip(&into[from]) {
+                    *word |= bits;
+                }
+            }
+        }
+        let entering: Vec<u64> = (0..words).map(|word| generated[at][word] | (now[word] & kept[at][word])).collect();
+        out[at] = now;
+        if entering != into[at] {
+            into[at] = entering;
+            for &pred in &predecessors[at] {
+                if !queued[pred] {
+                    queued[pred] = true;
+                    pending.push(pred);
+                }
+            }
+        }
+    }
+    let numbered = &numbered;
+    let values = |set: &[u64]| -> BTreeSet<u32> {
+        set.iter()
+            .enumerate()
+            .flat_map(|(word, bits)| (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| numbered[word * 64 + bit]))
+            .collect()
+    };
+    let live_in: Live = body.blocks.iter().zip(&into).map(|(block, set)| (block.at, values(set))).collect();
+    let live_out: Live = body.blocks.iter().zip(&out).map(|(block, set)| (block.at, values(set))).collect();
     (live_in, live_out)
 }
 
@@ -1097,7 +1143,7 @@ impl RegAlloc {
         let mut retained: BTreeSet<u32> = BTreeSet::new();
 
         let mut already: BTreeSet<u32> = BTreeSet::new();
-        for _round in 0..Self::ROUNDS {
+        for round in 0..Self::ROUNDS {
             let abandoned: BTreeSet<usize> = body
                 .blocks
                 .iter()
@@ -1111,13 +1157,24 @@ impl RegAlloc {
             let (answer, now) = _assigned_plan(&body, &self.pinned, &reloads, &retained, &cpu)?;
             let mut got = answer;
             retained = now;
+            crate::debug!(
+                "regalloc",
+                "{}: round {}: {} insns, {} spilled",
+                body.name,
+                round + 1,
+                body.blocks.iter().map(|block| block.insns.len()).sum::<usize>(),
+                got.spilled.len()
+            );
             let pinned = self.pinned.clone();
             let trial_of = |candidate: &LirBody,
                             unspillable: &BTreeSet<u32>,
                             protected: &BTreeSet<u32>|
              -> Result<Option<Assignment>, Error> {
                 match allocate(candidate, Some(&pinned), Some(unspillable), Some(protected), None, (&cpu).into()) {
-                    Ok(trial) => Ok(Some(trial)),
+                    Ok(trial) => {
+                        crate::debug!("regalloc", "  trial allocation: {} spilled", trial.spilled.len());
+                        Ok(Some(trial))
+                    }
                     Err(Error::Unplaced(_)) => Ok(None),
                     Err(other) => Err(other),
                 }
@@ -1271,6 +1328,7 @@ impl RegAlloc {
                 let mut wanted = prefer.clone();
                 wanted.extend(constrain::required(&cut)?);
                 let after = allocate(&cut, Some(&wanted), Some(&reloads), None, None, (&cpu).into())?;
+                crate::debug!("regalloc", "  split v{value}, reallocated: {} spilled", after.spilled.len());
                 if after.spilled.is_empty() {
                     return applied(&cut, &after);
                 }
