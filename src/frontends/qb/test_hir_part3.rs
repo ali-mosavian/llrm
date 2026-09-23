@@ -47,6 +47,14 @@ fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, h
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
+/// Each listing line without its comment, whitespace collapsed.
+fn stripped_lines(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(|line| line.split(';').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
 fn externals(program: &hir::Program, name: &str) -> Vec<String> {
     omf::externals(&records(program, name))
 }
@@ -351,6 +359,16 @@ fn test_constant_screen_mode_pulls_its_graphics_driver() {
     assert!(externals(&source, "SCN9.BAS").iter().any(|one| one == "B$EGAUSED"));
 }
 
+/// qbdemo's SCREEN 13 raised "Illegal function call" under QB45: nothing
+/// references B$VGAUSED, so the OBJ writer pruned the EXTDEF that links it.
+#[test]
+fn test_a_qb45_screen_mode_keeps_its_driver_request() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SCN13.BAS", b"screen 13\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(externals(&source, "SCN13.BAS").iter().any(|one| one == "B$VGAUSED"));
+}
+
 /// Gorillas SCREEN Mode linked no graphics modules and failed before drawing its first frame.
 #[test]
 fn test_variable_screen_mode_pulls_all_graphics_drivers() {
@@ -361,6 +379,7 @@ fn test_variable_screen_mode_pulls_all_graphics_drivers() {
 }
 
 /// Gorillas emitted IDIV AX twice for 30 \\ (80 \\ MaxCol), faulting on its first shot.
+/// Once the frontend folded 80 to a LONG constant, lowering dropped it: `idiv eax`.
 #[test]
 fn test_nested_integer_division_keeps_each_dividend() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -368,8 +387,8 @@ fn test_nested_integer_division_keeps_each_dividend() {
         &directory,
         "NESTDIV.BAS",
         concat!(
-            "declare function scale (maxCol)\r\n",
             "defint a-z\r\n",
+            "declare function scale (maxCol)\r\n",
             "print scale(80)\r\n",
             "end\r\n",
             "function scale (maxCol)\r\n",
@@ -386,6 +405,53 @@ fn test_nested_integer_division_keeps_each_dividend() {
     assert!(scale.contains("mov eax, 30\n"));
     assert_eq!(scale.matches("idiv e").count(), 2);
     assert!(!scale.contains("idiv ax"));
+}
+
+/// -2 ^ 3 printed 8: the exponent's parity sat in eax across `fnstsw ax`.
+#[test]
+fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "POWSIGN.BAS", b"b! = -2\r\ne! = 3\r\nr! = b! ^ e!\r\nprint r!\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines = stripped_lines(&listing(&source));
+    let ax = regex::Regex::new(r"\b(e?ax|al|ah)\b").unwrap();
+    for (index, line) in lines.iter().enumerate() {
+        if line != "fnstsw ax" {
+            continue;
+        }
+        for later in &lines[index + 1..] {
+            if later == "sahf" || later.starts_with('j') || later.starts_with("L0_") {
+                continue;
+            }
+            let (mnemonic, operands) = later.split_once(' ').unwrap_or((later, ""));
+            let (destination, sources) = operands.split_once(',').unwrap_or((operands, ""));
+            assert!(
+                !ax.is_match(sources) && !(ax.is_match(destination) && !matches!(mnemonic, "mov" | "fnstsw")),
+                "AX read after fnstsw: {later}"
+            );
+            if ax.is_match(destination) {
+                break;
+            }
+        }
+    }
+}
+
+/// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
+/// layout put the raise after B$CEND, outside its statement's code.
+#[test]
+fn test_a_statement_under_an_error_handler_keeps_its_code_contiguous() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "POWRES.BAS",
+        b"on error goto h\r\nb! = -8: e! = .5\r\nfor i% = 1 to 2\r\nr! = b! ^ e!\r\nprint r!\r\nnext\r\nsystem\r\nh:\r\nresume next\r\n",
+    );
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let assembly = listing(&source);
+    let calls: Vec<&str> =
+        assembly.lines().filter(|line| line.contains("call")).map(|line| line.split_whitespace().last().unwrap()).collect();
+    let at = |name: &str| calls.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name}: {calls:?}"));
+    assert!(at("B$SERR") < at("B$PER4"), "{calls:?}");
 }
 
 /// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal.
@@ -851,6 +917,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
             callees: last.callees,
         }],
         private: BTreeSet::new(),
+        requests: BTreeSet::new(),
     })
     .expect("prints");
     assert!(assembly.contains("db 0d9h,0feh"));
@@ -1127,6 +1194,65 @@ fn test_unchecked_bounds_read_the_descriptor_without_runtime_calls() {
 
     assert!(!procedure.contains("B$LBND") && !procedure.contains("B$UBND"));
     assert!(has_indexed_field(&procedure, "16"));
+}
+
+/// OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
+/// listing printed `out dx` / `in al` without their second operand.
+#[test]
+fn test_port_io_narrows_a_float_through_integer_and_prints_both_operands() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "PORTS.BAS",
+        b"defint a-z\r\np = &H3C8: f! = 41.6\r\nout p, f!\r\npoke 0, f!\r\na = inp(p + 1)\r\n",
+    );
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines: BTreeSet<String> = stripped_lines(&listing(&source)).into_iter().collect();
+    assert!(lines.contains("out dx, al") && lines.contains("in al, dx"), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("fistp word ptr")), "{lines:?}");
+}
+
+/// oimad's OPEN was refused: B$OPEN had no audited stack effect (RETF 8).
+#[test]
+fn test_open_compiles_with_its_callee_cleaned_arguments() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "OPENS.BAS", b"open \"DATA.DAT\" for binary as #1\r\nclose #1\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(listing(&source).contains("B$OPEN"));
+}
+
+/// oimad's bare RND was refused: B$RND0 had no audited stack effect.
+#[test]
+fn test_rnd_without_an_argument_compiles() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "RND0.BAS", b"x! = rnd\r\nprint x!\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    assert!(listing(&source).contains("B$RND0"));
+}
+
+/// oimad froze after a few hundred frames: CIRCLE pushed its radius twice,
+/// four stack bytes B$CIRC never pops. QB45 circle.asm and the VBDOS /A
+/// listing both take one parmD radius and one color word.
+#[test]
+fn test_circle_pushes_one_radius() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "CIRC.BAS", b"screen 13\r\nr! = 16\r\ncircle (10, 100), r!, 5\r\n");
+    let source = parsed_as(&basic, "qb45", "qb45");
+    let lines = stripped_lines(&listing(&source));
+    let start = lines.iter().position(|line| line == "call far ptr B$N1I2").expect("B$N1I2");
+    let end = lines.iter().position(|line| line == "call far ptr B$CIRC").expect("B$CIRC");
+    let mut pushed = 0;
+    for line in &lines[start + 1..end] {
+        let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
+        pushed += match mnemonic {
+            "pushd" => 4,
+            "pushw" => 2,
+            "push" if operand.starts_with("dword") || operand.starts_with('e') => 4,
+            "push" => 2,
+            _ => 0,
+        };
+    }
+    assert_eq!(pushed, 6, "{:?}", &lines[start..=end]);
 }
 
 /// Qlight printed 3492255: 1000000 was lexed as INTEGER 0x4240 and sign-extended.

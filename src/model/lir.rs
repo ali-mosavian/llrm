@@ -242,6 +242,10 @@ pub struct LirBody {
     pub loop_trip_counts: Vec<(i64, i64)>,
     pub ordered: bool,
     pub noreturn: bool,
+    /// Blocks keep the order they arrive in. A BASIC body with an error
+    /// handler says so: RESUME NEXT finds the statement after the faulting
+    /// address, which holds only while each statement's code is contiguous.
+    pub source_order: bool,
 }
 
 impl LirBody {
@@ -264,6 +268,7 @@ impl LirBody {
             loop_trip_counts: Vec::new(),
             ordered: false,
             noreturn: false,
+            source_order: false,
         }
     }
 
@@ -280,6 +285,7 @@ impl LirBody {
             loop_trip_counts: self.loop_trip_counts.clone(),
             ordered: self.ordered,
             noreturn: self.noreturn,
+            source_order: self.source_order,
         }
     }
 

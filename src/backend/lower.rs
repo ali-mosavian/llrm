@@ -169,6 +169,8 @@ fn _named(kind: Kind) -> Option<(Operation, &'static str)> {
         Kind::Fneg => (Operation::FloatUnary, "fchs"),
         Kind::Fabs => (Operation::FloatUnary, "fabs"),
         Kind::Fsqrt => (Operation::FloatUnary, "fsqrt"),
+        Kind::PortIn => (Operation::Barrier, "in"),
+        Kind::PortOut => (Operation::Barrier, "out"),
         // FloatAlloc picks fcom, fcomp or fcompp by what dies.
         Kind::Fcompare => (Operation::Compare, "fcom"),
         Kind::Fcheck => (Operation::Nothing, "fwait"),
@@ -900,6 +902,41 @@ fn _signed_high_product(op: &Op, lowering: &mut Lowering) -> Parts {
     Ok(setup)
 }
 
+/// `in al,port` or `out port,al`: a port below 256 is an immediate, any other is dx.
+///
+/// A BARRIER, so no machine pass reorders, merges or deletes the access.
+fn _port(op: &Op, lowering: &mut Lowering) -> Parts {
+    let reading = op.kind == Kind::PortIn;
+    if op.args.len() != if reading { 1 } else { 2 } || op.results.len() != usize::from(reading) {
+        return Err(Unlowered(format!("unsupported port access at {:#x}", op.at)));
+    }
+    let mut setup = vec![];
+    let mut held_in = |arg: &Arg, width: u32| -> Result<Loc, Unlowered> {
+        if let Arg::Const(constant) = arg {
+            let register = held(lowering.fresh(), width);
+            let masked: BigInt = &constant.n & ((BigInt::from(1) << (8 * width)) - 1);
+            let value = immediate(masked.to_i64().expect("a masked word fits an int64"), width);
+            setup.push(sem(Operation::Move, "mov", vec![register.clone()], vec![value]));
+            return Ok(register);
+        }
+        located(arg)
+    };
+    let port = match &op.args[0] {
+        Arg::Const(constant) if constant.n >= BigInt::from(0) && constant.n < BigInt::from(256) => {
+            immediate(constant.n.to_i64().unwrap(), 1)
+        }
+        other => held_in(other, 2)?,
+    };
+    if reading {
+        let result = located(&op.results[0])?;
+        setup.push(sem(Operation::Barrier, "in", vec![result], vec![port]));
+        return Ok(setup);
+    }
+    let value = held_in(&op.args[1], 1)?;
+    setup.push(sem(Operation::Barrier, "out", vec![], vec![port, value]));
+    Ok(setup)
+}
+
 fn _pointer_offset(op: &Op, lowering: &mut Lowering) -> Parts {
     let Some(model) = lowering.pointer_model.clone() else {
         return Err(Unlowered(format!("pointer offset at {:#x} needs an established pointer ABI", op.at)));
@@ -1620,16 +1657,21 @@ fn _word_division(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Sem
         return Ok(None); // Legacy folded sites order results by their runtime entry point.
     }
     if !matches!(width, 2 | 4)
-        || !std::iter::once(&op.args[0]).chain(&op.results).all(|arg| matches!(arg, Arg::Held(one) if one.width == width))
-        || !held_or_const(&op.args[1])
-        || arg_width(&op.args[1]) != Some(width)
+        || !op.results.iter().all(|arg| matches!(arg, Arg::Held(one) if one.width == width))
+        || !op.args.iter().all(|arg| held_or_const(arg) && arg_width(arg) == Some(width))
     {
         return Ok(None);
     }
-    let (dividend, mut divisor) = (located(&op.args[0])?, located(&op.args[1])?);
+    let (mut dividend, mut divisor) = (located(&op.args[0])?, located(&op.args[1])?);
     let unsigned = op.kind == Kind::Udivmod;
+    let mut setup = vec![];
+    if matches!(op.args[0], Arg::Const(_)) {
+        let into = held(lowering.fresh(), width);
+        setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![dividend]));
+        dividend = into;
+    }
     if let (Arg::Const(constant), false) = (&op.args[1], unsigned) {
-        let Loc::Held(held_dividend) = dividend else { unreachable!() };
+        let Loc::Held(held_dividend) = dividend.clone() else { unreachable!() };
         let results: Vec<ir::Held> = op
             .results
             .iter()
@@ -1644,11 +1686,11 @@ fn _word_division(op: &Op, lowering: &mut Lowering) -> Result<Option<Vec<ir::Sem
         let cpu = lowering.cpu;
         let reciprocal = division::reciprocal(held_dividend, n, &results, &mut || lowering.fresh(), cpu, remainder)
             .map_err(Unlowered)?;
-        if reciprocal.is_some() {
-            return Ok(reciprocal);
+        if let Some(reciprocal) = reciprocal {
+            setup.extend(reciprocal);
+            return Ok(Some(setup));
         }
     }
-    let mut setup = vec![];
     if matches!(op.args[1], Arg::Const(_)) {
         let into = held(lowering.fresh(), width);
         setup.push(sem(Operation::Move, "mov", vec![into.clone()], vec![divisor]));
@@ -2264,6 +2306,7 @@ impl<'a> Lowering<'a> {
             Kind::FixedMul => Some(_fixed_multiply(op, self)?),
             Kind::FixedDiv => Some(_fixed_division(op, self)?),
             Kind::PtrOffset => Some(_pointer_offset(op, self)?),
+            Kind::PortIn | Kind::PortOut => Some(_port(op, self)?),
             _ => _pointer_access(op, self)?,
         };
         let or = |made: Option<Vec<ir::Semantics>>, parts: Option<Vec<ir::Semantics>>| {

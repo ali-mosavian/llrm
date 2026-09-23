@@ -91,7 +91,8 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
     ("B$CSTT", 4),
     ("B$CSTO", 4),
     ("B$CASP", 4),
-    ("B$CIRC", 10),
+    // circle.asm: parmD Radius, parmW Color.
+    ("B$CIRC", 6),
     ("B$LINE", 6),
     ("B$PAIN", 4),
     ("B$PSTC", 2),
@@ -102,7 +103,16 @@ static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(||
     ("B$FTAB", 2),
 ]));
 
-static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| IndexMap::from_iter([("B$BEEP", 0), ("B$LNIN", 10), ("B$SLEP", 4)]));
+static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
+    IndexMap::from_iter([
+        ("B$BEEP", 0),
+        ("B$LNIN", 10),
+        // Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
+        // B$OPEN at 0224 returns with RETF 8 at 0252.
+        ("B$OPEN", 8),
+        ("B$SLEP", 4),
+    ])
+});
 
 #[derive(Clone, Debug)]
 pub struct Physicalized {
@@ -590,6 +600,15 @@ pub(crate) fn _contract(
                 "{evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 \
                  reads its R8 seed at [BP+0Ah] and returns with RETF 8; \
                  MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
+            ),
+        ));
+    }
+    if name == "B$RND0" && pushed == 0 {
+        return Ok(returns(
+            0,
+            format!(
+                "{evidence} QB45 random.asm declares B$RND0 with no \
+                 parameters and returns its result address in AX with a bare RETF."
             ),
         ));
     }

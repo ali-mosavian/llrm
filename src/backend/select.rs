@@ -1647,6 +1647,37 @@ pub fn emit(
     {
         return _assemble(&raised(create_reg(Code::Fnstsw_AX, Register::AX)), at, true);
     }
+    if op == Operation::Barrier
+        && what.name.as_deref() == Some("in")
+        && dests.as_slice() == [Loc::Reg(ir::Reg { register: Register::AL, width: 1 })]
+    {
+        return match sources.as_slice() {
+            [Loc::Imm(port)] => {
+                let port = u32::try_from(port.value).map_err(overflow);
+                _assemble(&raised(port.and_then(|port| {
+                    Instruction::with2(Code::In_AL_imm8, Register::AL, port).map_err(|error| error.to_string())
+                })), at, true)
+            }
+            [Loc::Reg(ir::Reg { register: Register::DX, .. })] => {
+                _assemble(&raised(create_reg_reg(Code::In_AL_DX, Register::AL, Register::DX)), at, true)
+            }
+            _ => None,
+        };
+    }
+    if op == Operation::Barrier && what.name.as_deref() == Some("out") && dests.is_empty() && sources.len() == 2 {
+        return match sources.as_slice() {
+            [Loc::Imm(port), Loc::Reg(ir::Reg { register: Register::AL, .. })] => {
+                let port = u32::try_from(port.value).map_err(overflow);
+                _assemble(&raised(port.and_then(|port| {
+                    Instruction::with2(Code::Out_imm8_AL, port, Register::AL).map_err(|error| error.to_string())
+                })), at, true)
+            }
+            [Loc::Reg(ir::Reg { register: Register::DX, .. }), Loc::Reg(ir::Reg { register: Register::AL, .. })] => {
+                _assemble(&raised(create_reg_reg(Code::Out_DX_AL, Register::DX, Register::AL)), at, true)
+            }
+            _ => None,
+        };
+    }
     let control = what.name.as_deref().and_then(|name| CONTROL_WORD.get(name));
     if let (Operation::Barrier, Some(control), 1) = (op, control, dests.len() + sources.len()) {
         if let Some(cell) = all().next().and_then(mem_of).filter(|cell| cell.width == 2) {

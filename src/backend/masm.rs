@@ -130,6 +130,8 @@ pub struct Module {
     pub procedures: Vec<Procedure>,
     /// data segments outside DGROUP; only ever asked for membership
     pub private: BTreeSet<String>,
+    /// Externs nothing references, declared so LINK pulls in their module.
+    pub requests: BTreeSet<String>,
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {
@@ -480,7 +482,7 @@ pub fn _instruction(
         }
         Operation::Call if what.indirect && sources.len() == 1 => vec![format!("call {}", sources[0])],
         Operation::Barrier => {
-            vec![format!("{name} {}", if dests.is_empty() { &sources[0] } else { &dests[0] })]
+            vec![format!("{name} {}", dests.iter().chain(&sources).cloned().collect::<Vec<_>>().join(", "))]
         }
         Operation::FloatLoad => {
             if matches!(name, "fldz" | "fld1") || sources.is_empty() {

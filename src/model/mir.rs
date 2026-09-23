@@ -581,6 +581,10 @@ pub enum Kind {
     Address,
     PtrOffset,
     Fill,
+    // Device I/O, always volatile: c := the byte at port a; port a := byte b.
+    // Memory reach is the port's device's, from `abi::ports`.
+    PortIn,
+    PortOut,
     Call,
     Branch,
     Switch,
@@ -608,7 +612,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Self; 65] = [
+    pub const ALL: [Self; 67] = [
         Self::Add,
         Self::Sub,
         Self::AddCarry,
@@ -650,6 +654,8 @@ impl Kind {
         Self::Address,
         Self::PtrOffset,
         Self::Fill,
+        Self::PortIn,
+        Self::PortOut,
         Self::Call,
         Self::Branch,
         Self::Switch,
@@ -719,6 +725,8 @@ impl Kind {
             Self::Address => "address",
             Self::PtrOffset => "ptr_offset",
             Self::Fill => "fill",
+            Self::PortIn => "port_in",
+            Self::PortOut => "port_out",
             Self::Call => "call",
             Self::Branch => "branch",
             Self::Switch => "switch",
@@ -792,6 +800,8 @@ impl Kind {
             Self::Address => "ADDRESS",
             Self::PtrOffset => "PTR_OFFSET",
             Self::Fill => "FILL",
+            Self::PortIn => "PORT_IN",
+            Self::PortOut => "PORT_OUT",
             Self::Call => "CALL",
             Self::Branch => "BRANCH",
             Self::Switch => "SWITCH",
@@ -2653,7 +2663,7 @@ mod tests {
     #[test]
     fn kind_members_match_python() {
         let got: Vec<(&str, &str)> = Kind::ALL.iter().map(|kind| (kind.name(), kind.as_str())).collect();
-        assert_eq!(got, [("ADD", "add"), ("SUB", "sub"), ("ADD_CARRY", "addcarry"), ("SUB_BORROW", "subborrow"), ("INCREMENT", "increment"), ("DECREMENT", "decrement"), ("MUL", "mul"), ("SMULHI", "smulhi"), ("FIXED_MUL", "fixed_mul"), ("FIXED_DIV", "fixed_div"), ("DIV", "div"), ("REM", "rem"), ("DIVMOD", "divmod"), ("UDIVMOD", "udivmod"), ("AND", "and"), ("OR", "or"), ("XOR", "xor"), ("SHL", "shl"), ("SHR", "shr"), ("SAR", "sar"), ("NEG", "neg"), ("NOT", "not"), ("LT", "lt"), ("LE", "le"), ("GT", "gt"), ("GE", "ge"), ("EQ", "eq"), ("NE", "ne"), ("BELOW", "below"), ("BELOW_EQ", "beloweq"), ("ABOVE", "above"), ("ABOVE_EQ", "aboveeq"), ("COPY", "copy"), ("LOAD", "load"), ("STORE", "store"), ("CONVERT", "convert"), ("SIGN_EXTEND", "sign_extend"), ("ZERO_EXTEND", "zero_extend"), ("ADDRESS", "address"), ("PTR_OFFSET", "ptr_offset"), ("FILL", "fill"), ("CALL", "call"), ("BRANCH", "branch"), ("SWITCH", "switch"), ("JUMP", "jump"), ("RETURN", "return"), ("ESCAPE", "escape"), ("FADD", "fadd"), ("FSUB", "fsub"), ("FMUL", "fmul"), ("FDIV", "fdiv"), ("FNEG", "fneg"), ("FABS", "fabs"), ("FSQRT", "fsqrt"), ("FLOAD", "fload"), ("FSTORE", "fstore"), ("FCOMPARE", "fcompare"), ("FCHECK", "fcheck"), ("ARG", "arg"), ("RESULT", "result"), ("JOIN", "join"), ("EXTRACT", "extract"), ("CONCAT", "concat"), ("OPAQUE", "opaque"), ("NOTHING", "nothing")]);
+        assert_eq!(got, [("ADD", "add"), ("SUB", "sub"), ("ADD_CARRY", "addcarry"), ("SUB_BORROW", "subborrow"), ("INCREMENT", "increment"), ("DECREMENT", "decrement"), ("MUL", "mul"), ("SMULHI", "smulhi"), ("FIXED_MUL", "fixed_mul"), ("FIXED_DIV", "fixed_div"), ("DIV", "div"), ("REM", "rem"), ("DIVMOD", "divmod"), ("UDIVMOD", "udivmod"), ("AND", "and"), ("OR", "or"), ("XOR", "xor"), ("SHL", "shl"), ("SHR", "shr"), ("SAR", "sar"), ("NEG", "neg"), ("NOT", "not"), ("LT", "lt"), ("LE", "le"), ("GT", "gt"), ("GE", "ge"), ("EQ", "eq"), ("NE", "ne"), ("BELOW", "below"), ("BELOW_EQ", "beloweq"), ("ABOVE", "above"), ("ABOVE_EQ", "aboveeq"), ("COPY", "copy"), ("LOAD", "load"), ("STORE", "store"), ("CONVERT", "convert"), ("SIGN_EXTEND", "sign_extend"), ("ZERO_EXTEND", "zero_extend"), ("ADDRESS", "address"), ("PTR_OFFSET", "ptr_offset"), ("FILL", "fill"), ("PORT_IN", "port_in"), ("PORT_OUT", "port_out"), ("CALL", "call"), ("BRANCH", "branch"), ("SWITCH", "switch"), ("JUMP", "jump"), ("RETURN", "return"), ("ESCAPE", "escape"), ("FADD", "fadd"), ("FSUB", "fsub"), ("FMUL", "fmul"), ("FDIV", "fdiv"), ("FNEG", "fneg"), ("FABS", "fabs"), ("FSQRT", "fsqrt"), ("FLOAD", "fload"), ("FSTORE", "fstore"), ("FCOMPARE", "fcompare"), ("FCHECK", "fcheck"), ("ARG", "arg"), ("RESULT", "result"), ("JOIN", "join"), ("EXTRACT", "extract"), ("CONCAT", "concat"), ("OPAQUE", "opaque"), ("NOTHING", "nothing")]);
     }
 
     /// The order CPython 3.13 iterates a set of Values built, thinned and
