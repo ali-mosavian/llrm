@@ -754,6 +754,26 @@ fn test_a_descriptor_nothing_reads_takes_no_dgroup() {
     assert_eq!(constants(whole), 18);
 }
 
+/// deedlines' `g% = 0` shared the label of `DIM SHARED g%(255)`: the scalar
+/// sat inside the array's descriptor, and getpal wrote the palette over the
+/// interrupt vectors.
+#[test]
+fn test_a_scalar_and_an_array_of_one_name_do_not_share_storage() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = written(&directory, "T.BAS", b"DIM SHARED g%(3)\r\ng% = 7\r\ng%(0) = 5\r\nPRINT g%, g%(0)\r\n");
+    let records = records(&parsed_as(&source, "qb45", "qb45"), "T.BAS");
+    let (code, size) = by_name(&records)["T_CODE"];
+    let image = omf::segment_image(&records, code, size);
+    let stored = |value: u8| {
+        let at = image
+            .windows(6)
+            .position(|one| one[..2] == [0xC7, 0x06] && one[4..] == [value, 0])
+            .unwrap_or_else(|| panic!("no store of {value}"));
+        &image[at + 2..at + 4]
+    };
+    assert_ne!(stored(7), stored(5));
+}
+
 /// PRINT "A" emitted VBDOS's far bridge and printed garbage under QB 4.5 and PDS 7.1.
 #[test]
 fn test_qb_and_pds_literals_use_their_measured_near_descriptor() {

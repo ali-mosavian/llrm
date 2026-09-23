@@ -131,14 +131,17 @@ pub fn _object_name(name: &str) -> String {
     name.trim_end_matches(['%', '&', '!', '#', '$']).to_uppercase()
 }
 
-/// BC keeps source globals typed; compiler-owned data keeps `$D<n>`.
-fn _data_name(module: &model::Module, object_: &model::DataObject) -> String {
+/// BC keeps source globals typed; compiler-owned data keeps `$D<n>`, and so
+/// does a global whose name is `taken`: a scalar and an array may share one.
+fn _data_name(module: &model::Module, object_: &model::DataObject, taken: &BTreeSet<String>) -> String {
+    let name = object_.name.to_uppercase();
     if object_.linkage == model::DataLinkage::Internal
         && !object_.name.starts_with('$')
         && !object_.name.ends_with("$static")
         && !object_.name.ends_with("$descriptor")
+        && !taken.contains(&name)
     {
-        return object_.name.to_uppercase();
+        return name;
     }
     format!("{}$D{}", _object_name(&module.name), object_.id)
 }
@@ -167,15 +170,18 @@ fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Da
         .filter(|one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
         .map(|one| (one.id, one))
         .collect();
+    let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
         if reserved.contains(&object_.name.as_str()) {
             continue;
         }
-        if object_.linkage == model::DataLinkage::External {
-            names.insert((Space::External, object_.id), object_.name.clone());
+        let (key, name) = if object_.linkage == model::DataLinkage::External {
+            ((Space::External, object_.id), object_.name.clone())
         } else {
-            names.insert((Space::Segment, object_.id), _data_name(module, object_));
-        }
+            ((Space::Segment, object_.id), _data_name(module, object_, &taken))
+        };
+        taken.insert(name.to_uppercase());
+        names.insert(key, name);
     }
 
     let mut grouped: IndexMap<String, Vec<masm::Datum>> =
