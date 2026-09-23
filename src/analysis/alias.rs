@@ -1003,28 +1003,42 @@ pub fn points_to(
         }
     }
 
+    // Objects numbered once, so closures and unions compare indices instead
+    // of identity trees.
+    let objects = RefCell::new(IndexSet::<MemoryObject>::default());
+    let number = |object: &MemoryObject| {
+        let mut objects = objects.borrow_mut();
+        match objects.get_index_of(object) {
+            Some(index) => index,
+            None => objects.insert_full(object.clone()).0,
+        }
+    };
+    let pointer_fields = pointer_fields
+        .iter()
+        .map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>()))
+        .collect::<HashMap<_, _>>();
     // Close publication through pointer-valued fields of known objects.
     let pointees = |objects: BTreeSet<MemoryObject>, cells: &IndexMap<CellKey, Provenance>| {
-        if objects.is_empty() {
-            return objects;
+        let mut reached = objects.iter().map(number).collect::<HashSet<_>>();
+        if reached.is_empty() {
+            return Vec::new();
         }
-        let mut reached = objects;
         loop {
             let before = reached.len();
             for (key, provenance) in cells {
                 if let CellKey::Object(object, _, _) = key {
-                    if reached.contains(object) {
-                        reached.extend(provenance.slices.iter().map(|one| one.object.clone()));
+                    if reached.contains(&number(object)) {
+                        reached.extend(provenance.slices.iter().map(|one| number(&one.object)));
                     }
                 }
             }
-            for object in reached.iter().cloned().collect::<Vec<_>>() {
+            for object in reached.iter().copied().collect::<Vec<_>>() {
                 if let Some(fields) = pointer_fields.get(&object) {
-                    reached.extend(fields.iter().cloned());
+                    reached.extend(fields.iter().copied());
                 }
             }
             if reached.len() == before {
-                return reached;
+                return reached.into_iter().collect();
             }
         }
     };
@@ -1035,7 +1049,7 @@ pub fn points_to(
     // What each op publishes does not depend on what reached it, so it is
     // found once; only the unions along edges iterate. The gen/kill form of a
     // forward dataflow, where every round used to redo each op's cells.
-    let mut publishes: IndexMap<i64, Vec<BTreeSet<MemoryObject>>> = IndexMap::default();
+    let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
     for block in &body.blocks {
         let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
         let mut mine = Vec::with_capacity(block.ops.len());
@@ -1131,11 +1145,10 @@ pub fn points_to(
         }
         publishes.insert(block.at, mine);
     }
-    // Objects numbered once, so the unions along edges are word operations.
-    let objects = publishes.values().flatten().flatten().cloned().collect::<IndexSet<_>>();
-    let number = |escapes: &BTreeSet<MemoryObject>| {
+    let objects = objects.into_inner();
+    let number = |escapes: &Vec<usize>| {
         let mut bits = Bits::new(objects.len());
-        escapes.iter().for_each(|one| bits.insert(objects.get_index_of(one).expect("numbered")));
+        escapes.iter().for_each(|one| bits.insert(*one));
         bits
     };
     let generated = publishes
