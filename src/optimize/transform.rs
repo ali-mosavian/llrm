@@ -2079,7 +2079,19 @@ pub(crate) fn decided(
     // Points-to only for a branch that compares a pointer with zero, as LLVM
     // asks isKnownNonZero of one value rather than solving every pointer.
     let pointers = std::cell::OnceCell::new();
-    let nonnull = |value: Value| pointers.get_or_init(|| alias::pointers(&body)).as_ref().is_ok_and(|facts| facts.nonnull(value));
+    let defining = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.defines.iter().map(move |value| (*value, op)))
+        .collect::<crate::support::hash::HashMap<_, _>>();
+    let pointing = alias::may_point(&body);
+    let nonnull = |value: Value| {
+        pointing.contains(&value)
+            && alias::nonnull_by_definition(&body, defining.get(&value).copied(), value).unwrap_or_else(|| {
+            pointers.get_or_init(|| alias::pointers(&body)).as_ref().is_ok_and(|facts| facts.nonnull(value))
+        })
+    };
     let successors = |block: &MirBlock,
                       values: &IndexMap<Value, consts::Known>,
                       states: &IndexMap<Value, constant_cycles::State>| {

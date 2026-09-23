@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use crate::support::bits::Bits;
-use crate::support::hash::{HashMap, IndexMap, IndexSet};
+use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 use std::cell::RefCell;
 use num_bigint::BigInt;
 
@@ -75,7 +75,21 @@ pub struct PointsTo {
     pub values: IndexMap<Value, Provenance>,
     pub escaped: BTreeSet<MemoryObject>,
     /// Objects visible immediately before each source operation address.
-    pub escaped_before: IndexMap<i64, BTreeSet<MemoryObject>>,
+    pub escaped_before: EscapedBefore,
+}
+
+/// Objects escaped before each call, kept as bits over one numbering and named
+/// only when asked: most solves never read them.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EscapedBefore {
+    objects: Rc<IndexSet<MemoryObject>>,
+    at: IndexMap<i64, Bits>,
+}
+
+impl EscapedBefore {
+    pub fn get(&self, at: &i64) -> Option<BTreeSet<MemoryObject>> {
+        self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
+    }
 }
 
 impl PointsTo {
@@ -101,6 +115,71 @@ impl PointsTo {
                     MemoryKind::Frame | MemoryKind::Global | MemoryKind::External | MemoryKind::Named
                 )
             })
+    }
+}
+
+/// `PointsTo::nonnull` of `value` where its definition alone settles it, as
+/// LLVM's `isKnownNonZero` reads a pointer's underlying object instead of
+/// solving every pointer; `None` where only the whole-body solve can say.
+///
+/// Exact, not an estimate: `points_to` never replaces a seed defined without a
+/// load, and an address taken of a fixed object is that object on every round.
+pub(crate) fn nonnull_by_definition(body: &MirBody, defining: Option<&Op>, value: Value) -> Option<bool> {
+    let op = defining.filter(|op| op.loads.is_empty())?;
+    let nonnull = |provenance: &Provenance| {
+        !provenance.slices.is_empty()
+            && provenance.slices.iter().all(|one| {
+                matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Global | MemoryKind::External | MemoryKind::Named)
+            })
+    };
+    if let Some(seed) = body.pointer_seeds.get(&value) {
+        return Some(nonnull(seed));
+    }
+    let fixed = matches!(
+        (op.kind, op.args.as_slice()),
+        (Kind::Address, [Arg::FrameAddress(FrameAddress { extent: Some(_), .. })])
+            | (Kind::Address, [Arg::Cell(_)])
+            | (Kind::Copy, [Arg::Symbol(_)])
+    );
+    if !fixed {
+        return None;
+    }
+    _direct(op, &IndexMap::default()).ok().flatten().map(|provenance| nonnull(&provenance))
+}
+
+/// Every value `points_to` could give a fact: the seeds and frontend pointer
+/// values, closed under what `_direct` and phis propagate. Any other value is
+/// never a pointer, so asking about it needs no solve.
+pub(crate) fn may_point(body: &MirBody) -> HashSet<Value> {
+    let mut pointing = body.pointer_seeds.keys().chain(&body.pointer_values).copied().collect::<HashSet<_>>();
+    loop {
+        let before = pointing.len();
+        for block in &body.blocks {
+            for phi in &block.phis {
+                if phi.incoming.values().any(|one| pointing.contains(one)) {
+                    pointing.insert(phi.result);
+                }
+            }
+            for op in &block.ops {
+                let derived = match op.kind {
+                    Kind::Address => true,
+                    Kind::Copy | Kind::Extract | Kind::Concat | Kind::Add | Kind::PtrOffset | Kind::Sub => {
+                        op.args.iter().any(|arg| match arg {
+                            Arg::Held(held) => pointing.contains(&held.value),
+                            Arg::Symbol(_) => true,
+                            _ => false,
+                        })
+                    }
+                    _ => false,
+                };
+                if derived {
+                    pointing.extend(op.defines.iter().copied());
+                }
+            }
+        }
+        if pointing.len() == before {
+            return pointing;
+        }
     }
 }
 
@@ -417,8 +496,7 @@ pub fn summaries(
                     let actual = _actuals(procedure, &facts, op.at);
                     let Some(callee) = callee else {
                         let mut visible = NONLOCAL.slices.clone();
-                        let empty = BTreeSet::new();
-                        visible.extend(_whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?);
+                        visible.extend(_whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?);
                         reads.extend(visible.iter().cloned());
                         writes.extend(visible);
                         captures.extend(
@@ -522,8 +600,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
                 Some(callee) => callee.instantiated(&actual),
                 None => {
                     let mut visible = NONLOCAL.slices.clone();
-                    let empty = BTreeSet::new();
-                    visible.extend(_whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?);
+                    visible.extend(_whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?);
                     Summary {
                         reads: visible.clone(),
                         writes: visible,
@@ -531,13 +608,12 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
                     }
                 }
             };
-            let empty = BTreeSet::new();
             if effect.unknown_read {
-                let visible = _whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?;
+                let visible = _whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?;
                 effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             }
             if effect.unknown_write {
-                let visible = _whole(&actual, facts.escaped_before.get(&op.at).unwrap_or(&empty))?;
+                let visible = _whole(&actual, &facts.escaped_before.get(&op.at).unwrap_or_default())?;
                 effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             }
             let sorted = |items: &BTreeSet<Slice>| {
@@ -900,7 +976,6 @@ pub fn points_to(
     let started = std::time::Instant::now();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
-    let mut escaped_before: IndexMap<i64, BTreeSet<MemoryObject>> = IndexMap::default();
     let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::default();
     for block in &body.blocks {
         for op in &block.ops {
@@ -1090,21 +1165,22 @@ pub fn points_to(
         }
     }
     let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
+    // The state after an op holds the state before it, so one union per op
+    // sharing a call's address is what reached that address.
+    let mut before = IndexMap::<i64, Bits>::default();
     for block in &body.blocks {
         let mut state = entering(block.at, &out);
         for (op, escapes) in block.ops.iter().zip(&publishes[&block.at]) {
-            if asked.contains(&op.at) {
-                escaped_before.entry(op.at).or_default().extend(named(&state));
-            }
             state.union_with(&number(escapes));
             if asked.contains(&op.at) {
-                escaped_before.entry(op.at).or_default().extend(named(&state));
+                before.entry(op.at).or_insert_with(|| Bits::new(objects.len())).union_with(&state);
             }
         }
     }
     let mut every = Bits::new(objects.len());
     out.values().for_each(|one| every.union_with(one));
     let escaped = named(&every);
+    let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
     crate::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     Ok(PointsTo {
         values,
