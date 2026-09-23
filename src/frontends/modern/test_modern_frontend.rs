@@ -1112,3 +1112,17 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
         refused(&source);
     }
 }
+
+#[test]
+fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
+    // Copies were built for any trip count the simulation priced as folding: deedlines'
+    // 16384-trip loops became 360K operations. GCC refuses past 16 before looking.
+    let directory = tempfile::tempdir().expect("a directory");
+    let rolled = |trips: i16| {
+        let text = format!("fn value(k: i16) -> i16:\n    var total: i16 = k\n    for i in 0..{trips}:\n        total = total + i\n    return total\n");
+        let body = _settled(&directory, &text, &O2());
+        !loops::loops(&body.blocks, Some(body.entry)).is_empty()
+    };
+    assert!(!rolled(16), "within the cap the loop is copied out");
+    assert!(rolled(17));
+}

@@ -108,7 +108,7 @@ fn nbody() -> (Rc<Module>, Rc<Vec<Block>>, Vec<(String, Rc<MirBody>)>) {
 }
 
 fn private_in(body: &MirBody, found: &Rc<Module>, blocks: &Rc<Vec<Block>>) -> Box<dyn Fn(&MemRef) -> bool> {
-    super::private(body, Some(found), Some(blocks)).unwrap().expect("a private test")
+    super::private(&std::rc::Rc::new(body.clone()), Some(found), Some(blocks)).unwrap().expect("a private test")
 }
 
 #[test]
