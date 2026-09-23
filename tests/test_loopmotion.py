@@ -442,3 +442,34 @@ def test_a_float_loop_sinks_its_counter_store_without_an_error_handler():
     ]
     innermost = min(floating, key=lambda loop: len(loop.body))
     assert not any(op.kind is mir.Kind.STORE for at in innermost.body for op in blocks[at].ops)
+
+
+def test_intervals_are_not_copied_per_op_per_loop(tmp_path, monkeypatch) -> None:
+    """sunk_stores copied every known constant into a map per body op, per
+    loop: 2 MB here for ten loops, and deedlines past 7 GB until killed."""
+    import tracemalloc
+
+    from qbopt.frontend.qb import driver
+    from qbopt.frontend.qb import compile as qb_compile
+
+    peak = 0
+    original = loopmotion.sunk_stores
+
+    def traced(*args, **named):
+        nonlocal peak
+        tracemalloc.start()
+        try:
+            return original(*args, **named)
+        finally:
+            peak = max(peak, tracemalloc.get_traced_memory()[1])
+            tracemalloc.stop()
+
+    monkeypatch.setattr(loopmotion, "sunk_stores", traced)
+    basic = tmp_path / "LOOPS.BAS"
+    lines = ["DEFINT A-Z"]
+    for k in range(10):
+        lines += [f"x{k} = {k}", f"FOR i = 1 TO 10: s{k} = s{k} + i: NEXT"]
+    lines += ["PRINT " + " + ".join(f"s{k} + x{k}" for k in range(10))]
+    basic.write_bytes("\r\n".join(lines).encode() + b"\r\n")
+    qb_compile.object_bytes(driver.parsed(basic, dialect="qb45", runtime="qb45"), basic.name)
+    assert peak < 1 << 20, peak
