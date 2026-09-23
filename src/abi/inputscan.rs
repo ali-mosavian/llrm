@@ -17,7 +17,7 @@ use iced_x86::{
 };
 
 use crate::abi::runtime::{self, Reg};
-use crate::frontend::declen::{READS, WRITES, instruction_info_factory};
+use crate::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
 use crate::objectfile::omf::{self, Fixup, Record, ValueError};
 use crate::support::hash::{HashSet, IndexMap, IndexSet};
 

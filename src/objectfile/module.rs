@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use iced_x86::{FlowControl, Mnemonic, OpKind, Register};
 
-use crate::frontend::declen::{self, Insn};
+use crate::frontends::bc::declen::{self, Insn};
 use crate::model::ir::nodes::Node;
 use crate::objectfile::omf::{self, Fixup, Record};
 use crate::support::hash::IndexMap;
@@ -421,7 +421,7 @@ pub fn escaped(found: &Module) -> BTreeSet<(i64, i64)> {
 /// Not a sweep from the segment's start: that decodes the module header as
 /// code.
 pub fn _instructions(found: &Module) -> Option<Vec<Insn>> {
-    use crate::frontend::blocks;
+    use crate::frontends::bc::blocks;
 
     let mapped = blocks::code_map(found).ok()?;
     Some(mapped.starts.iter().filter_map(|&at| declen::decode(&found.code, at)).collect())
@@ -430,7 +430,7 @@ pub fn _instructions(found: &Module) -> Option<Vec<Insn>> {
 /// Numeric argument pushes, including nested long-arithmetic call frames.
 pub fn _numeric_arguments(found: &Module, instructions: Option<&[Insn]>) -> BTreeSet<i64> {
     use crate::abi::runtime;
-    use crate::frontend::{blocks, stack};
+    use crate::frontends::bc::{blocks, stack};
 
     let local = defines(&found.records, found.seg);
     let calls: IndexMap<i64, String> =

@@ -7,7 +7,7 @@ use iced_x86::Code;
 
 use crate::abi::handlers::registered;
 use crate::abi::runtime::{self, Contract};
-use crate::frontend::blocks;
+use crate::frontends::bc::blocks;
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf::{self, Fixup};
 use crate::support::hash::IndexMap;

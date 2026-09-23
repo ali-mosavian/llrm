@@ -3842,7 +3842,7 @@ pub(crate) static PASSES_ON: std::sync::LazyLock<Vec<String>> =
 
 /// `applied`'s keyword arguments, with Python's defaults.
 pub(crate) struct Applied<'a> {
-    pub blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    pub blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
     pub found: Option<Rc<crate::objectfile::module::Module>>,
     pub options: crate::model::passes::Options,
     pub only: Option<String>,

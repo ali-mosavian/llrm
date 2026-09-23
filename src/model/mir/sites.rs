@@ -13,7 +13,7 @@ use super::{
     raising_ranges, restore_pair,
 };
 use crate::analysis::flags as flagged;
-use crate::frontend::blocks::Block;
+use crate::frontends::bc::blocks::Block;
 use crate::legacy::calls::{self as machine, CallSite};
 use crate::model::ir::nodes::{Node, RESTORE_EFFECTS, Restore};
 use crate::objectfile::module::{Module, Object};

@@ -5,8 +5,8 @@ use std::ops::{BitAnd, BitOr, BitOrAssign, Not};
 
 use iced_x86::{FlowControl, RflagsBits};
 
-use crate::frontend::blocks::Block;
-use crate::frontend::declen::Insn;
+use crate::frontends::bc::blocks::Block;
+use crate::frontends::bc::declen::Insn;
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
 

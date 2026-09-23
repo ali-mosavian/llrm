@@ -69,7 +69,7 @@ pub(crate) fn optimized<'a>(
     calls: &IndexMap<i64, String>,
     cpu: impl Into<ProfileOrName<'a>>,
     options: Options,
-    blocks: Option<Rc<Vec<crate::frontend::blocks::Block>>>,
+    blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
     found: Option<Rc<crate::objectfile::module::Module>>,
     only: Option<String>,
     watch: Option<&mut dyn FnMut(&str, &MirBody)>,

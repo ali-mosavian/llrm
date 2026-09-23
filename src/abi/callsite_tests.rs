@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::caller_cleanup;
 use crate::abi::runtime::{self, Contract, EVERY, Memory, Reg};
-use crate::frontend::declen::decode;
+use crate::frontends::bc::declen::decode;
 use crate::objectfile::module::{self, Module};
 use crate::support::hash::IndexMap;
 

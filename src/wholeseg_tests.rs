@@ -25,7 +25,7 @@ use iced_x86::{
 use super::*;
 use crate::backend::frame::Frame;
 use crate::backend::spiller;
-use crate::frontend::blocks as split;
+use crate::frontends::bc::blocks as split;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock};
 use crate::rewrite::{rewrite, Rewrite};

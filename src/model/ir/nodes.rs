@@ -13,7 +13,7 @@ use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
 
 use iced_x86::Register;
 
-use crate::frontend::declen::Insn;
+use crate::frontends::bc::declen::Insn;
 use crate::legacy::lift::Decoded;
 
 /// An instruction with no long-pair or call idiom attached to it.
@@ -272,12 +272,12 @@ mod tests {
     use super::{
         Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, pinned, span,
     };
-    use crate::frontend::declen::decode;
+    use crate::frontends::bc::declen::decode;
     use crate::legacy::lift::{Decoded, Kind};
     use crate::model::ir::{Effects, RESTORE_IDIOM, TABLE_DATA, UNMODELLED, barrier};
     
 
-    fn insn(at: usize) -> crate::frontend::declen::Insn {
+    fn insn(at: usize) -> crate::frontends::bc::declen::Insn {
         let mut bytes = vec![0x90; at];
         bytes.extend([0x89, 0xC0]);
         decode(&bytes, at).unwrap()

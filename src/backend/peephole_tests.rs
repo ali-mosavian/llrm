@@ -688,7 +688,7 @@ fn test_scaled_lea_does_not_require_another_shift() {
                 };
                 assert_eq!(names(&result), expected, "{amount} {following} {width}");
                 if following == "cmp" {
-                    let emitted = crate::frontend::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
+                    let emitted = crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
                     assert_eq!(emitted.memory_index_scale(), 1 << amount);
                 }
             }

@@ -15,7 +15,7 @@ use iced_x86::{
 use crate::support::hash::IndexMap;
 
 use crate::backend::target;
-use crate::frontend::declen::BITNESS;
+use crate::frontends::bc::declen::BITNESS;
 use crate::legacy::calls as machine;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
 use crate::model::mir;

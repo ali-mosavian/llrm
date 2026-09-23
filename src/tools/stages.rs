@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 use crate::analysis::{floatfacts, frameescape, loops};
-use crate::frontend::fpstack;
+use crate::frontends::bc::fpstack;
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
 use crate::model::mir::{self, Arg, Cell, Kind, MemRef, MirBody, Op};
@@ -604,11 +604,11 @@ fn _bodies(
     let Some(found) = crate::objectfile::module::of(&records) else {
         return Ok((None, Vec::new()));
     };
-    let Ok(mapped) = crate::frontend::blocks::code_map(&found) else {
+    let Ok(mapped) = crate::frontends::bc::blocks::code_map(&found) else {
         return Ok((Some(found), Vec::new()));
     };
     let mut contracts = crate::abi::runtime::for_module(&found, external).map_err(|error| error.to_string())?;
-    let blocks = crate::frontend::blocks::partition(&found, &mapped);
+    let blocks = crate::frontends::bc::blocks::partition(&found, &mapped);
     let raised = mir::bodies(&found, &blocks, Some(&mut contracts), basic_semantics, bounds_checks)?;
     Ok((Some(found), raised.values))
 }
@@ -762,7 +762,7 @@ fn _asm(out: &mut String, data: &[u8]) -> Result<(), String> {
     };
     let mut formatter = NasmFormatter::new();
     let _ = writeln!(out, "  --- reachable code (FP emulator instructions shown as x87 equivalents)");
-    let instructions = match crate::frontend::blocks::instructions(&found) {
+    let instructions = match crate::frontends::bc::blocks::instructions(&found) {
         Ok(instructions) => instructions,
         Err(why) => {
             let _ = writeln!(out, "  --- cannot map code: {why}");

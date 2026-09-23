@@ -6,9 +6,9 @@ use std::sync::Arc;
 use iced_x86::{Code, FlowControl, Register};
 use crate::support::hash::IndexMap;
 
-use crate::frontend::blocks::Block;
-use crate::frontend::declen::{Insn, WRITES, instruction_info_factory};
-use crate::frontend::stack::touches_sp;
+use crate::frontends::bc::blocks::Block;
+use crate::frontends::bc::declen::{Insn, WRITES, instruction_info_factory};
+use crate::frontends::bc::stack::touches_sp;
 use crate::model::ir::{self, Loc, Space};
 use crate::model::lir::LirBody;
 
@@ -446,8 +446,8 @@ mod tests {
 
     use super::{balanced, entry, plan};
     use crate::backend::{frame, prologue};
-    use crate::frontend::blocks::{Block, Ends};
-    use crate::frontend::declen::{self, Insn};
+    use crate::frontends::bc::blocks::{Block, Ends};
+    use crate::frontends::bc::declen::{self, Insn};
     use crate::model::lir::{self, LirBlock, LirBody};
     use crate::objectfile::omf;
 

@@ -18,9 +18,9 @@ use std::rc::Rc;
 
 use super::AllocationHints;
 use crate::analysis::regions;
-use crate::frontend::blocks::{self as split, Block};
-use crate::frontend::extent::BodyKind;
-use crate::frontend::{
+use crate::frontends::bc::blocks::{self as split, Block};
+use crate::frontends::bc::extent::BodyKind;
+use crate::frontends::bc::{
     raising_addresses, raising_array_access, raising_arrays, raising_bytes, raising_call_memory, raising_calls,
     raising_carried, raising_conditions, raising_control, raising_copies, raising_defseg, raising_dispatch,
     raising_division, raising_float_calls, raising_float_results, raising_float_values, raising_floats, raising_frame,

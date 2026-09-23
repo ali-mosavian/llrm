@@ -10,7 +10,7 @@ use super::{
     ANY_MEMORY, Address, Effects, Flag, Imm, Loc, Mem, Operation, Reg, Semantics, St, UNMODELLED, barrier, root,
 };
 use crate::analysis::flags::{ALL, CLOBBERS, written_by};
-use crate::frontend::declen::{Insn, READS, WRITES, instruction_info_factory, to_signed};
+use crate::frontends::bc::declen::{Insn, READS, WRITES, instruction_info_factory, to_signed};
 use crate::legacy::lift::{Resolver, operand as long_operand};
 use crate::objectfile::module::Space;
 

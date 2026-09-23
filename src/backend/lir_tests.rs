@@ -11,7 +11,7 @@ use iced_x86::Register;
 
 use crate::abi::runtime;
 use crate::backend::{lower, target};
-use crate::frontend::blocks::{self, Block};
+use crate::frontends::bc::blocks::{self, Block};
 use crate::model::ir::{self, Loc, Operation, root};
 use crate::model::lir::LirBody;
 use crate::model::mir::{self, Kind, MirBody, RaisedBodies};

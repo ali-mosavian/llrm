@@ -772,8 +772,8 @@ mod tests {
         assert_eq!(restore.sources, [Loc::Reg(Reg { register: Register::CX, width: 2 })]);
     }
 
-    fn _any_insn() -> crate::frontend::declen::Insn {
-        crate::frontend::declen::decode(&[0x89, 0xC0], 0).unwrap()
+    fn _any_insn() -> crate::frontends::bc::declen::Insn {
+        crate::frontends::bc::declen::decode(&[0x89, 0xC0], 0).unwrap()
     }
 
     fn _shift(count: u32) -> Insn {

@@ -12,7 +12,7 @@ use crate::support::hash::IndexMap;
 use iced_x86::{Code, Register};
 
 use crate::abi::{callsite, events};
-use crate::frontend::blocks::{self, INLINE_TABLE};
+use crate::frontends::bc::blocks::{self, INLINE_TABLE};
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf::ValueError;
 use crate::support::pyrepr::{self, Repr};

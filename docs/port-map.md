@@ -80,11 +80,11 @@ They are still to be ported, from `tools/dump.py` and `tools/stages.py`.
 | 2 | `qbopt/backend/timing.py` | 42 | `src/backend/timing.rs` | ported (C path) | test_timing_bounds |
 | 2 | `qbopt/backend/twoaddr.py` | 244 | `src/backend/twoaddr.rs` | ported (C path) | test_lir |
 | 2 | `qbopt/backend/verify.py` | 200 | `src/backend/verify.rs` | ported (C path) | test_addressforms, test_flow, test_memory_folding, test_peephole, test_phi_widths, test_regthrash |
-| 2 | `qbopt/cfront/compile.py` | 779 | `src/cfront/compile.rs` | ported (C path) | test_cfront, test_cfront_frontend, test_cpu_profile, test_float_values, test_frontend_parity, test_indvars, test_inline, test_jumps, test_omfwrite, test_quality, test_spiller, test_stack_segment, test_unroll |
-| 2 | `qbopt/cfront/hir.py` | 268 | `src/cfront/hir.rs` | ported | test_cfront_frontend |
-| 2 | `qbopt/cfront/libfunc.py` | 36 | `src/cfront/libfunc.rs` | ported (C path) | - |
-| 2 | `qbopt/cfront/raise_hir.py` | 1630 | `src/cfront/raise_hir.rs` | ported (C path) | test_algebraic, test_cfront_frontend |
-| 2 | `qbopt/cfront/stream.py` | 65 | `src/cfront/stream.rs` | ported | test_cfront_frontend |
+| 2 | `qbopt/cfront/compile.py` | 779 | `src/frontends/c/compile.rs` | ported (C path) | test_cfront, test_cfront_frontend, test_cpu_profile, test_float_values, test_frontend_parity, test_indvars, test_inline, test_jumps, test_omfwrite, test_quality, test_spiller, test_stack_segment, test_unroll |
+| 2 | `qbopt/cfront/hir.py` | 268 | `src/frontends/c/hir.rs` | ported | test_cfront_frontend |
+| 2 | `qbopt/cfront/libfunc.py` | 36 | `src/frontends/c/libfunc.rs` | ported (C path) | - |
+| 2 | `qbopt/cfront/raise_hir.py` | 1630 | `src/frontends/c/raise_hir.rs` | ported (C path) | test_algebraic, test_cfront_frontend |
+| 2 | `qbopt/cfront/stream.py` | 65 | `src/frontends/c/stream.rs` | ported | test_cfront_frontend |
 | 2 | `qbopt/cycles/cycles.py` | 478 | `src/cycles/cycles.rs` | ported | test_cpu_profile |
 | 2 | `qbopt/cycles/timings.py` | 239 | `src/cycles/timings.rs` | ported (C path) | - |
 | 2 | `qbopt/flow.py` | 198 | `src/flow.rs` | ported (C path, BC dump) | test_allocation, test_coalesce, test_cpu_profile, test_flow, test_jumps, test_lir_verify, test_native_frame, test_parcopy, test_raising_copies, test_spiller, test_wholeseg |
@@ -144,15 +144,15 @@ They are still to be ported, from `tools/dump.py` and `tools/stages.py`.
 | 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | ported (C path) | - |
 | 3 | `qbopt/analysis/peelsize.py` | 102 | `src/analysis/peelsize.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
-| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontend/modern/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
-| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontend/modern/driver.rs` | ported | test_modern_frontend |
-| 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontend/qbc/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
-| 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontend/qbc/main.rs` (`llrm-qb`) | ported | - |
-| 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontend/qbc/abi.rs` | ported | test_hir |
-| 4 | `qbopt/frontend/qb/compile.py` | 1645 | `src/frontend/qbc/compile.rs` | ported | - |
-| 4 | `qbopt/frontend/qb/driver.py` | 204 | `src/frontend/qbc/driver.rs` | ported | test_hir, test_qb_frontend_command |
-| 4 | `qbopt/frontend/qb/inline_x87.py` | 64 | `src/frontend/qbc/inline_x87.rs` | ported | - |
-| 4 | `qbopt/frontend/qb/stage_text.py` | 178 | `src/frontend/qbc/stage_text.rs` (+ `tools/qbstages.py` as `qbstages.rs`) | ported | - |
+| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontends/modern/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
+| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontends/modern/driver.rs` | ported | test_modern_frontend |
+| 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontends/qb/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
+| 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontends/qb/main.rs` (`llrm-qb`) | ported | - |
+| 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontends/qb/abi.rs` | ported | test_hir |
+| 4 | `qbopt/frontend/qb/compile.py` | 1645 | `src/frontends/qb/compile.rs` | ported | - |
+| 4 | `qbopt/frontend/qb/driver.py` | 204 | `src/frontends/qb/driver.rs` | ported | test_hir, test_qb_frontend_command |
+| 4 | `qbopt/frontend/qb/inline_x87.py` | 64 | `src/frontends/qb/inline_x87.rs` | ported | - |
+| 4 | `qbopt/frontend/qb/stage_text.py` | 178 | `src/frontends/qb/stage_text.rs` (+ `tools/qbstages.py` as `qbstages.rs`) | ported | - |
 | 4 | `qbopt/hir/__init__.py` | 93 | `src/hir/mod.rs` | ported (test_hir HIR-only cases) | test_hir, test_hir_execute, test_modern_e2e, test_modern_frontend, test_qbstages |
 | 4 | `qbopt/hir/__main__.py` | 29 | `src/hir/__main__.rs` | n/a (no tool runs it; docs/hir/readme.md only) | - |
 | 4 | `qbopt/hir/callmemory.py` | 71 | `src/hir/callmemory.rs` | ported | - |
@@ -172,42 +172,42 @@ They are still to be ported, from `tools/dump.py` and `tools/stages.py`.
 | 5 | `qbopt/abi/ports.py` | 15 | `src/abi/ports.rs` | ported (tests, BC harness) | - |
 | 5 | `qbopt/abi/profile.py` | 113 | `src/abi/profile.rs` | ported (tests, BC harness) | - |
 | 5 | `qbopt/abi/runtime.py` | 1436 | `src/abi/runtime.rs` | ported (tests, BC harness) | test_allocation, test_callsite_abi, test_cfg_merge, test_coalesce, test_constant_call_memory, test_environ_contract, test_float_values, test_floatbounds, test_flow, test_huge_array_access, test_invariant_shift, test_ivshare, test_lir, test_literal_initializers, test_loopmotion, test_mir, test_noreturn, test_numeric_argument_escape, test_parcopy, test_raising_calls, test_redim_contract, test_regions, test_rounding_contracts, test_rule5, test_runtime, test_runtime_cells, test_transform |
-| 5 | `qbopt/frontend/addressfacts.py` | 36 | `src/frontend/addressfacts.rs` | ported (tests, BC dump) | test_array_facts |
-| 5 | `qbopt/frontend/arrayfacts.py` | 403 | `src/frontend/arrayfacts.rs` | ported (tests, BC dump) | test_array_facts, test_cfg_merge |
-| 5 | `qbopt/frontend/blocks.py` | 671 | `src/frontend/blocks.rs` | ported (tests, BC harness) | test_algebraic, test_allocation, test_array_facts, test_avail, test_basic_semantics, test_blocks, test_c_discovery, test_c_segment_addresses, test_cfg_merge, test_coalesce, test_dispatch_edges, test_e2e, test_extent, test_float_constants, test_float_identity, test_float_values, test_flow, test_fpu, test_induction_identity, test_ir, test_layout, test_licm_operand_dependencies, test_lir, test_loopexit, test_loops, test_mir, test_native_status_flags, test_observers, test_pairs, test_parcopy, test_peephole, test_raising_addresses, test_regions, test_runtime, test_scoreboard, test_select, test_simplify, test_spiller, test_stack, test_stages, test_transform, test_twoaddr, test_unswitch, test_wholeseg |
-| 5 | `qbopt/frontend/declen.py` | 265 | `src/frontend/declen.rs` | ported (tests, BC harness) | test_addressforms, test_blocks, test_c_segment_addresses, test_calls, test_callsite_abi, test_declen, test_e2e, test_float_register_arithmetic, test_fpu, test_ir, test_layout, test_lift, test_machine_copyprop, test_peephole, test_raising_copies, test_raising_frame, test_reencode, test_runtime, test_select, test_stack, test_stack_segment, test_test_immediate |
-| 5 | `qbopt/frontend/extent.py` | 244 | `src/frontend/extent.rs` | ported (tests, BC harness) | test_extent, test_extent_cv, test_ir, test_native_frame, test_native_stack_arguments |
-| 5 | `qbopt/frontend/fppatches.py` | 70 | `src/frontend/fppatches.rs` | ported (tests, BC harness) | test_c_discovery, test_far_load_identity, test_float_constants, test_float_register_arithmetic, test_licm_operand_dependencies, test_opaque_memory_effects, test_unary_promotion |
-| 5 | `qbopt/frontend/fpstack.py` | 208 | `src/frontend/fpstack.rs` | ported (tests, BC dump) | test_fpstack |
-| 5 | `qbopt/frontend/pairs.py` | 410 | `src/frontend/pairs.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_address_state.py` | 137 | `src/frontend/raising_address_state.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_addresses.py` | 104 | `src/frontend/raising_addresses.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_array_access.py` | 397 | `src/frontend/raising_array_access.rs` | ported (tests, BC dump) | test_array_access, test_huge_array_access |
-| 5 | `qbopt/frontend/raising_array_bounds.py` | 285 | `src/frontend/raising_array_bounds.rs` | ported (tests, BC dump) | test_array_bounds, test_array_facts |
-| 5 | `qbopt/frontend/raising_arrays.py` | 161 | `src/frontend/raising_arrays.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_bytes.py` | 54 | `src/frontend/raising_bytes.rs` | ported (tests, BC dump) | test_raising_bytes |
-| 5 | `qbopt/frontend/raising_call_memory.py` | 558 | `src/frontend/raising_call_memory.rs` | ported (tests, BC dump) | test_raising_call_memory |
-| 5 | `qbopt/frontend/raising_calls.py` | 255 | `src/frontend/raising_calls.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_carried.py` | 73 | `src/frontend/raising_carried.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_conditions.py` | 45 | `src/frontend/raising_conditions.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_control.py` | 21 | `src/frontend/raising_control.rs` | ported (tests, BC harness) | - |
-| 5 | `qbopt/frontend/raising_copies.py` | 185 | `src/frontend/raising_copies.rs` | ported (tests, BC dump) | test_raising_copies |
-| 5 | `qbopt/frontend/raising_defseg.py` | 234 | `src/frontend/raising_defseg.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_dispatch.py` | 123 | `src/frontend/raising_dispatch.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_division.py` | 77 | `src/frontend/raising_division.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_fields.py` | 69 | `src/frontend/raising_fields.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_float_calls.py` | 244 | `src/frontend/raising_float_calls.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_float_results.py` | 56 | `src/frontend/raising_float_results.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_float_values.py` | 175 | `src/frontend/raising_float_values.rs` | ported (tests, BC dump) | test_fpstack |
-| 5 | `qbopt/frontend/raising_floats.py` | 113 | `src/frontend/raising_floats.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_frame.py` | 172 | `src/frontend/raising_frame.rs` | ported (tests, BC dump) | test_raising_frame |
-| 5 | `qbopt/frontend/raising_literals.py` | 199 | `src/frontend/raising_literals.rs` | ported (tests, BC dump) | test_literal_initializers, test_raising_copies |
-| 5 | `qbopt/frontend/raising_longs.py` | 515 | `src/frontend/raising_longs.rs` | ported (tests, BC dump) | test_raising_longs, test_raising_unary |
-| 5 | `qbopt/frontend/raising_numeric_policy.py` | 47 | `src/frontend/raising_numeric_policy.rs` | ported (tests, BC dump) | test_float_cse_paths |
-| 5 | `qbopt/frontend/raising_returns.py` | 31 | `src/frontend/raising_returns.rs` | ported (tests, BC dump) | - |
-| 5 | `qbopt/frontend/raising_words.py` | 122 | `src/frontend/raising_words.rs` | ported (tests, BC dump) | test_raising_words, test_word_arithmetic_carry |
-| 5 | `qbopt/frontend/stack.py` | 131 | `src/frontend/stack.rs` | ported (tests, BC harness) | test_stack |
-| 5 | `qbopt/frontend/wide.py` | 312 | `src/frontend/wide.rs` | n/a (tools only) | test_wide |
+| 5 | `qbopt/frontend/addressfacts.py` | 36 | `src/frontends/bc/addressfacts.rs` | ported (tests, BC dump) | test_array_facts |
+| 5 | `qbopt/frontend/arrayfacts.py` | 403 | `src/frontends/bc/arrayfacts.rs` | ported (tests, BC dump) | test_array_facts, test_cfg_merge |
+| 5 | `qbopt/frontend/blocks.py` | 671 | `src/frontends/bc/blocks.rs` | ported (tests, BC harness) | test_algebraic, test_allocation, test_array_facts, test_avail, test_basic_semantics, test_blocks, test_c_discovery, test_c_segment_addresses, test_cfg_merge, test_coalesce, test_dispatch_edges, test_e2e, test_extent, test_float_constants, test_float_identity, test_float_values, test_flow, test_fpu, test_induction_identity, test_ir, test_layout, test_licm_operand_dependencies, test_lir, test_loopexit, test_loops, test_mir, test_native_status_flags, test_observers, test_pairs, test_parcopy, test_peephole, test_raising_addresses, test_regions, test_runtime, test_scoreboard, test_select, test_simplify, test_spiller, test_stack, test_stages, test_transform, test_twoaddr, test_unswitch, test_wholeseg |
+| 5 | `qbopt/frontend/declen.py` | 265 | `src/frontends/bc/declen.rs` | ported (tests, BC harness) | test_addressforms, test_blocks, test_c_segment_addresses, test_calls, test_callsite_abi, test_declen, test_e2e, test_float_register_arithmetic, test_fpu, test_ir, test_layout, test_lift, test_machine_copyprop, test_peephole, test_raising_copies, test_raising_frame, test_reencode, test_runtime, test_select, test_stack, test_stack_segment, test_test_immediate |
+| 5 | `qbopt/frontend/extent.py` | 244 | `src/frontends/bc/extent.rs` | ported (tests, BC harness) | test_extent, test_extent_cv, test_ir, test_native_frame, test_native_stack_arguments |
+| 5 | `qbopt/frontend/fppatches.py` | 70 | `src/frontends/bc/fppatches.rs` | ported (tests, BC harness) | test_c_discovery, test_far_load_identity, test_float_constants, test_float_register_arithmetic, test_licm_operand_dependencies, test_opaque_memory_effects, test_unary_promotion |
+| 5 | `qbopt/frontend/fpstack.py` | 208 | `src/frontends/bc/fpstack.rs` | ported (tests, BC dump) | test_fpstack |
+| 5 | `qbopt/frontend/pairs.py` | 410 | `src/frontends/bc/pairs.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_address_state.py` | 137 | `src/frontends/bc/raising_address_state.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_addresses.py` | 104 | `src/frontends/bc/raising_addresses.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_array_access.py` | 397 | `src/frontends/bc/raising_array_access.rs` | ported (tests, BC dump) | test_array_access, test_huge_array_access |
+| 5 | `qbopt/frontend/raising_array_bounds.py` | 285 | `src/frontends/bc/raising_array_bounds.rs` | ported (tests, BC dump) | test_array_bounds, test_array_facts |
+| 5 | `qbopt/frontend/raising_arrays.py` | 161 | `src/frontends/bc/raising_arrays.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_bytes.py` | 54 | `src/frontends/bc/raising_bytes.rs` | ported (tests, BC dump) | test_raising_bytes |
+| 5 | `qbopt/frontend/raising_call_memory.py` | 558 | `src/frontends/bc/raising_call_memory.rs` | ported (tests, BC dump) | test_raising_call_memory |
+| 5 | `qbopt/frontend/raising_calls.py` | 255 | `src/frontends/bc/raising_calls.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_carried.py` | 73 | `src/frontends/bc/raising_carried.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_conditions.py` | 45 | `src/frontends/bc/raising_conditions.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_control.py` | 21 | `src/frontends/bc/raising_control.rs` | ported (tests, BC harness) | - |
+| 5 | `qbopt/frontend/raising_copies.py` | 185 | `src/frontends/bc/raising_copies.rs` | ported (tests, BC dump) | test_raising_copies |
+| 5 | `qbopt/frontend/raising_defseg.py` | 234 | `src/frontends/bc/raising_defseg.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_dispatch.py` | 123 | `src/frontends/bc/raising_dispatch.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_division.py` | 77 | `src/frontends/bc/raising_division.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_fields.py` | 69 | `src/frontends/bc/raising_fields.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_float_calls.py` | 244 | `src/frontends/bc/raising_float_calls.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_float_results.py` | 56 | `src/frontends/bc/raising_float_results.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_float_values.py` | 175 | `src/frontends/bc/raising_float_values.rs` | ported (tests, BC dump) | test_fpstack |
+| 5 | `qbopt/frontend/raising_floats.py` | 113 | `src/frontends/bc/raising_floats.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_frame.py` | 172 | `src/frontends/bc/raising_frame.rs` | ported (tests, BC dump) | test_raising_frame |
+| 5 | `qbopt/frontend/raising_literals.py` | 199 | `src/frontends/bc/raising_literals.rs` | ported (tests, BC dump) | test_literal_initializers, test_raising_copies |
+| 5 | `qbopt/frontend/raising_longs.py` | 515 | `src/frontends/bc/raising_longs.rs` | ported (tests, BC dump) | test_raising_longs, test_raising_unary |
+| 5 | `qbopt/frontend/raising_numeric_policy.py` | 47 | `src/frontends/bc/raising_numeric_policy.rs` | ported (tests, BC dump) | test_float_cse_paths |
+| 5 | `qbopt/frontend/raising_returns.py` | 31 | `src/frontends/bc/raising_returns.rs` | ported (tests, BC dump) | - |
+| 5 | `qbopt/frontend/raising_words.py` | 122 | `src/frontends/bc/raising_words.rs` | ported (tests, BC dump) | test_raising_words, test_word_arithmetic_carry |
+| 5 | `qbopt/frontend/stack.py` | 131 | `src/frontends/bc/stack.rs` | ported (tests, BC harness) | test_stack |
+| 5 | `qbopt/frontend/wide.py` | 312 | `src/frontends/bc/wide.rs` | n/a (tools only) | test_wide |
 | 5 | `qbopt/objectfile/addends.py` | 48 | `src/objectfile/addends.rs` | ported (tests, BC harness) | test_omf_addends |
 | 5 | `qbopt/objectfile/cvinfo.py` | 777 | `src/objectfile/cvinfo.rs` | ported (tests, BC harness) | test_cvinfo |
 | 5 | `qbopt/objectfile/module.py` | 573 | `src/objectfile/module.rs` | ported (tests, BC harness) | test_address_roles, test_addressforms, test_algebraic, test_allocation, test_arithmetic_immediates, test_array_access, test_array_bounds, test_array_facts, test_avail, test_availability_call_effects, test_availability_operands, test_blocks, test_cfg_merge, test_coalesce, test_constant_arguments, test_constant_call_memory, test_constant_cells, test_constant_index, test_constant_stores, test_constrain, test_consts, test_countdown, test_dead_ownership, test_dispatch_edges, test_e2e, test_edge_ranges, test_extent, test_extent_cv, test_extract, test_far_memory_identity, test_farload, test_float_constants, test_float_cse_paths, test_float_values, test_floatalloc, test_floatbounds, test_floatfacts, test_floatfold, test_flow, test_folded_relocations, test_gvn_join, test_hir, test_huge_array_access, test_in_place, test_induction_identity, test_indvars, test_inline, test_ir, test_layout, test_lift, test_lir, test_literal_initializers, test_load_pre, test_loopmotion, test_lower_arguments, test_lower_conditions, test_machinecse, test_masm, test_memory_folding, test_memory_joins, test_memory_opportunities, test_memoryssa, test_memoryssa_forward, test_mir, test_mir_alias, test_multiply_select, test_numeric_argument_escape, test_observers, test_omf_addends, test_omfwrite, test_pairs, test_parcopy, test_peephole, test_pointer_constants, test_pointer_memory, test_pointer_offset, test_postallocation, test_private_frame, test_promote, test_raising_addresses, test_raising_arrays, test_raising_call_memory, test_raising_calls, test_raising_frame, test_raising_longs, test_ranges, test_regions, test_rewrite, test_runtime, test_runtime_cells, test_scaled_addressing, test_sccp, test_schedule, test_scoreboard, test_select, test_simplify, test_spiller, test_splitkit, test_stack_segment, test_stages, test_store_combine, test_symbolic_relocation, test_test_immediate, test_transform, test_twoaddr, test_unroll, test_wholeseg, test_wide |

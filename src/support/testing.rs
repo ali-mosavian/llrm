@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::analysis::regions::{self, RegionLayout};
-use crate::frontend::blocks::{self, Block, CodeMap};
+use crate::frontends::bc::blocks::{self, Block, CodeMap};
 use crate::model::ir::decode::{self, BodyIR};
 use crate::model::mir::{self, Arg, MemRef, MirBody, Op, RaisedBodies};
 use crate::abi::runtime::Contract;

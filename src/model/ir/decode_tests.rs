@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use iced_x86::{Code, Register};
 
 use super::*;
-use crate::frontend::blocks::Ends;
-use crate::frontend::declen::decode;
-use crate::frontend::extent::BodyKind;
+use crate::frontends::bc::blocks::Ends;
+use crate::frontends::bc::declen::decode;
+use crate::frontends::bc::extent::BodyKind;
 use crate::model::ir::nodes::pinned;
 use crate::model::ir::{ANY_MEMORY, Flag, barrier, modelled, root};
 use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};

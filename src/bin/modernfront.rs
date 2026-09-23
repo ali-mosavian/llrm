@@ -38,7 +38,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let tokens = match llrm::frontend::modern::lex(&source) {
+    let tokens = match llrm::frontends::modern::lex(&source) {
         Ok(tokens) => tokens,
         Err(error) => return report(&input, error),
     };
@@ -48,7 +48,7 @@ fn main() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     }
-    let module = match llrm::frontend::modern::parse(tokens) {
+    let module = match llrm::frontends::modern::parse(tokens) {
         Ok(module) => module,
         Err(error) => return report(&input, error),
     };
@@ -60,7 +60,7 @@ fn main() -> ExitCode {
         .file_stem()
         .and_then(|one| one.to_str())
         .unwrap_or("module");
-    match llrm::frontend::modern::semantic::compile(&module, module_name) {
+    match llrm::frontends::modern::semantic::compile(&module, module_name) {
         Ok(hir) => {
             print!("{hir}");
             ExitCode::SUCCESS
@@ -69,7 +69,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn report(path: &str, error: llrm::frontend::modern::Diagnostic) -> ExitCode {
+fn report(path: &str, error: llrm::frontends::modern::Diagnostic) -> ExitCode {
     eprintln!(
         "{path}:{}:{}: {}",
         error.span.line, error.span.column, error.message

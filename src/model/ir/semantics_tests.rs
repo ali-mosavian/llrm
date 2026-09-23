@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use iced_x86::Register;
 
 use super::*;
-use crate::frontend::declen::decode;
+use crate::frontends::bc::declen::decode;
 use crate::model::ir::nodes::{Node, Opaque, pinned};
 use crate::model::ir::{Address, modelled};
 use crate::objectfile::module::{Addr, literal_only};

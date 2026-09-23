@@ -12,7 +12,7 @@ use num_bigint::BigInt;
 
 use super::{_defined, _result, ARITH, Cells, Known, UNARY, known, masked, reusing};
 use crate::backend::lower::{self, Placed};
-use crate::frontend::blocks::Block;
+use crate::frontends::bc::blocks::Block;
 use crate::model::ir::nodes::{span, Node};
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Synth, Value};

@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 use iced_x86::{Code, FlowControl};
 
 use crate::abi::runtime::{self, Contract, Reg};
-use crate::frontend::blocks::{Block, local_call_target};
-use crate::frontend::declen::Insn;
-use crate::frontend::extent::Partition;
+use crate::frontends::bc::blocks::{Block, local_call_target};
+use crate::frontends::bc::declen::Insn;
+use crate::frontends::bc::extent::Partition;
 use crate::objectfile::module::Module;
 use crate::support::hash::IndexMap;
 

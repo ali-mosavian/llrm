@@ -8,7 +8,7 @@ use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, Mnemonic, OpKi
 use crate::support::hash::IndexMap;
 
 use crate::analysis::avail;
-use crate::frontend::blocks::{self, Block};
+use crate::frontends::bc::blocks::{self, Block};
 use crate::wholeseg::Emission;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, FrameAddress, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};

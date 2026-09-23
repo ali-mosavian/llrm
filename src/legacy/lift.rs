@@ -13,7 +13,7 @@ use iced_x86::{Code, Register};
 use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
 
 
-use crate::frontend::declen::Insn;
+use crate::frontends::bc::declen::Insn;
 
 /// The seven single-half forms `lift.classify()` recognises.
 ///
@@ -358,7 +358,7 @@ pub fn classify_with(insn: &Insn, resolve: &Resolver) -> Option<Decoded> {
 #[cfg(test)]
 mod tests {
     use super::{Decoded, FIXUP, Kind, classify, operand};
-    use crate::frontend::declen::{Insn, decode};
+    use crate::frontends::bc::declen::{Insn, decode};
     use crate::objectfile::module::{Addr, Space, far_pointer, literal_only};
     
 

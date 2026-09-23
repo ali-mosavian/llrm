@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
 
 use super::*;
-use crate::frontend::blocks::{code_map, instructions, partition};
-use crate::frontend::declen::decode;
+use crate::frontends::bc::blocks::{code_map, instructions, partition};
+use crate::frontends::bc::declen::decode;
 use crate::legacy::lift::FIXUP;
 use crate::objectfile::module::tests::{bare, fixtures, loaded};
 

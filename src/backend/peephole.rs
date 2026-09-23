@@ -16,7 +16,7 @@ use crate::backend::{
     copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
     target,
 };
-use crate::frontend::declen;
+use crate::frontends::bc::declen;
 use crate::model::ir::{self, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::mir;
