@@ -676,6 +676,7 @@ pub(crate) fn shared_cells(
     assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
 ) -> HeldCells {
+    let edges = edges.filter(|edges| !edges.is_empty());
     let read = super::manager::cached(body, (), || _memory_reads(body));
     let relevant = known
         .map(|known| read.iter().filter_map(|value| known.get(value).map(|fact| (*value, fact.clone()))).collect::<BTreeMap<_, _>>())
@@ -1189,6 +1190,8 @@ pub(crate) fn known(
     edges: Option<&IndexMap<(i64, i64), Cells>>,
     initial: Option<&Cells>,
 ) -> IndexMap<Value, Known> {
+    // No edge facts is no edges: the solve reads only a nonempty map.
+    let edges = edges.filter(|edges| !edges.is_empty());
     let key = _reuse_key(body, dgroup, calls, edges, initial);
     let mut checked = None;
     if let Some(key) = &key {
