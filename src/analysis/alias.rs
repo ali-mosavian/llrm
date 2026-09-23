@@ -809,6 +809,7 @@ pub fn points_to(
     let mut outgoing = incoming.clone();
     let none = BTreeSet::new();
 
+    let started = std::time::Instant::now();
     loop {
         let before_values = values.clone();
         let before_outgoing = outgoing.clone();
@@ -920,6 +921,8 @@ pub fn points_to(
         }
     }
 
+    let solved_values = started.elapsed();
+    let started = std::time::Instant::now();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut escape_in = body
@@ -958,6 +961,9 @@ pub fn points_to(
 
     // Close publication through pointer-valued fields of known objects.
     let pointees = |objects: BTreeSet<MemoryObject>, cells: &IndexMap<CellKey, Provenance>| {
+        if objects.is_empty() {
+            return objects;
+        }
         let mut reached = objects;
         loop {
             let before = reached.len();
@@ -979,6 +985,9 @@ pub fn points_to(
         }
     };
 
+    // Only calls read what escaped before them; an op sharing a call's address
+    // shares its entry.
+    let asked = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind == Kind::Call).map(|op| op.at).collect::<BTreeSet<_>>();
     loop {
         let before = escape_out.clone();
         for block in &body.blocks {
@@ -991,9 +1000,9 @@ pub fn points_to(
             escape_in.insert(block.at, state.clone());
             let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
             for op in &block.ops {
-                let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
-                visible.extend(state.iter().cloned());
-                escaped_before.insert(op.at, visible);
+                if asked.contains(&op.at) {
+                    escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+                }
                 let mut newly = BTreeSet::new();
                 if let Some(arguments) = arguments.filter(|_| op.kind == Kind::Call) {
                     let actual = _resolved_actuals(arguments.get(&op.at).map_or(&[][..], Vec::as_slice), &values);
@@ -1082,9 +1091,9 @@ pub fn points_to(
                     }
                 }
                 state.extend(pointees(newly, &cells));
-                let mut visible = escaped_before.get(&op.at).cloned().unwrap_or_default();
-                visible.extend(state.iter().cloned());
-                escaped_before.insert(op.at, visible);
+                if asked.contains(&op.at) {
+                    escaped_before.entry(op.at).or_default().extend(state.iter().cloned());
+                }
             }
             escape_out.insert(block.at, state);
         }
@@ -1092,6 +1101,7 @@ pub fn points_to(
             break;
         }
     }
+    crate::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     let escaped = escape_out.values().flatten().cloned().collect();
     Ok(PointsTo {
         values,
