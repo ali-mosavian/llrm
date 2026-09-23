@@ -1783,7 +1783,7 @@ pub(crate) fn _outcome(
     block: &MirBlock,
     op: &Op,
     facts: &IndexMap<Value, crate::analysis::consts::Known>,
-    held: &IndexMap<(i64, usize), crate::analysis::consts::Cells>,
+    held: &crate::analysis::consts::HeldCells,
     pointers: Option<&crate::analysis::alias::PointsTo>,
 ) -> Option<bool> {
     use crate::analysis::consts;
@@ -1802,7 +1802,7 @@ pub(crate) fn _outcome(
     let parts = compare
         .args
         .iter()
-        .map(|one| consts::_operand(compare, one, facts, held.get(&(block.at, index))))
+        .map(|one| consts::_operand(compare, one, facts, held.get(&(block.at, index)).map(|here| &**here)))
         .collect::<Vec<_>>();
     if parts.iter().any(Option::is_none) {
         if !matches!(op.test, Some(Kind::Eq | Kind::Ne)) {
@@ -1870,7 +1870,7 @@ pub(crate) fn _executable_successors(
     block: &MirBlock,
     facts: &IndexMap<Value, crate::analysis::consts::Known>,
     states: &IndexMap<Value, crate::analysis::constant_cycles::State>,
-    held: &IndexMap<(i64, usize), crate::analysis::consts::Cells>,
+    held: &crate::analysis::consts::HeldCells,
     pointers: Option<&crate::analysis::alias::PointsTo>,
 ) -> Option<Vec<i64>> {
     use crate::analysis::constant_cycles::State;
@@ -2692,7 +2692,7 @@ pub(crate) fn folded(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &IndexMa
     for block in &body.blocks {
         let mut ops = Vec::new();
         for (index, op) in block.ops.iter().enumerate() {
-            let here = memory.get(&(block.at, index)).unwrap_or(&nothing);
+            let here = memory.get(&(block.at, index)).map(|here| &**here).unwrap_or(&nothing);
             if let Some(numbers) = consts::division(op, &facts, here) {
                 let replacements = _folded_division(op, numbers, &wanted);
                 changed |= replacements.as_slice() != std::slice::from_ref(op);

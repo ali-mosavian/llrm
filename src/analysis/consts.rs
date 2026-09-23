@@ -44,6 +44,9 @@ pub(crate) static UNARY: [(Kind, Unary); 2] = [(Kind::Neg, |a| -a), (Kind::Not, 
 /// joins do not discard an untouched neighbor.
 pub(crate) type Cells = IndexMap<(Addr, u32), Known>;
 
+/// What each operation `(block, index)` sees in memory; runs of ops share one map.
+pub(crate) type HeldCells = IndexMap<(i64, usize), Rc<Cells>>;
+
 /// Alias questions for one immutable known-value epoch.
 ///
 /// Python keys both caches on `id(ref)`. An address is that identity only
@@ -622,7 +625,7 @@ pub(crate) fn cells(
     edges: Option<&IndexMap<(i64, i64), Cells>>,
     mut assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
-) -> IndexMap<(i64, usize), Cells> {
+) -> HeldCells {
     crate::support::debug::timed("analysis consts.cells", || _cells_solved(body, dgroup, calls, known, initial, edges, assume, allowed))
 }
 
@@ -635,7 +638,7 @@ fn _cells_solved(
     edges: Option<&IndexMap<(i64, i64), Cells>>,
     mut assume: Option<&mut BTreeSet<Value>>,
     allowed: Option<&BTreeSet<Value>>,
-) -> IndexMap<(i64, usize), Cells> {
+) -> HeldCells {
     let empty = IndexMap::default();
     let known = known.unwrap_or(&empty);
     let mut queries = memory_queries(body, known, dgroup);
@@ -755,8 +758,13 @@ fn _cells_solved(
     let mut found = IndexMap::default();
     for block in &body.blocks {
         let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
+        // Ops between two writes see one map, shared rather than copied per op.
+        let mut shared: Option<Rc<Cells>> = None;
         for (index, op) in block.ops.iter().enumerate() {
-            found.insert((block.at, index), here.cells().clone());
+            found.insert((block.at, index), Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
+            if op.kind == Kind::Call || effects::unmodeled_write(op) || !op.stores.is_empty() {
+                shared = None;
+            }
             here = _killed(
                 here,
                 op,
@@ -1182,7 +1190,7 @@ fn _solved(
     SOLVED.with(|solved| solved.set(solved.get() + 1));
     let mut facts = IndexMap::<Value, Known>::default();
     let mut carries = IndexMap::<Value, BigInt>::default();
-    let mut held = IndexMap::<(i64, usize), Cells>::default();
+    let mut held = HeldCells::default();
     let pointer_stores = match (dgroup, calls) {
         (Some(dgroup), Some(_)) => _pointer_stores(body, dgroup),
         _ => IndexMap::default(),
@@ -1216,7 +1224,7 @@ fn _solved(
                 changing = true;
             }
             for (index, op) in block.ops.iter().enumerate() {
-                let here = held.get(&(block.at, index)).unwrap_or(&empty);
+                let here = held.get(&(block.at, index)).map(|here| &**here).unwrap_or(&empty);
                 if let Some(carry) = _carry(op, &facts, here) {
                     for value in &op.defines {
                         if value.flags && !carries.contains_key(value) {

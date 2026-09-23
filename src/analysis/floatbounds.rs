@@ -236,7 +236,7 @@ pub(crate) fn exact(
                     _memory(
                         arg,
                         *format,
-                        memory.get(&(at, index)).unwrap_or(&empty_cells),
+                        memory.get(&(at, index)).map(|here| &**here).unwrap_or(&empty_cells),
                         scoped.get(&at).unwrap_or(&empty_scope),
                         &definitions,
                     )

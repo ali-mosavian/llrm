@@ -1130,7 +1130,7 @@ pub(crate) fn _initializers(
             }) else {
                 continue;
             };
-            let before = memory.get(&(block.at, index)).cloned().unwrap_or_default();
+            let before = memory.get(&(block.at, index)).map(|here| (**here).clone()).unwrap_or_default();
             let after = consts::_kills(
                 before, op, &nothing, dgroup, &calls, None, None, false, Some(&mut asked),
             );

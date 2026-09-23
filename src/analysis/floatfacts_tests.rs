@@ -165,7 +165,7 @@ fn test_entry_bytes_are_killed_by_a_store() {
     alone.blocks = vec![MirBlock::new(body.entry, vec![], vec![store.clone()], vec![])];
     let seed: consts::Cells = [((reference.addr.unwrap(), 1), consts::Known::new(255, 1))].into_iter().collect();
     let before = consts::cells(&alone, &found.dgroup.members, &found.calls, None, Some(&seed), None, None, None);
-    assert_eq!(before[&(body.entry, 0)], seed);
+    assert_eq!(*before[&(body.entry, 0)], seed);
     let after = consts::_kills(seed, &store, &IndexMap::default(), &found.dgroup.members, &found.calls, None, None, false, None);
     assert_eq!(after[&(reference.addr.unwrap(), 1)].n, BigInt::from(0));
 }

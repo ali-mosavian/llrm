@@ -290,7 +290,7 @@ struct _Exit<'a> {
     definitions: BTreeMap<Value, &'a Op>,
     blocks: BTreeMap<i64, &'a MirBlock>,
     predecessors: BTreeMap<i64, BTreeSet<i64>>,
-    memory: Option<(IndexMap<(i64, usize), Cells>, IndexMap<i64, String>)>,
+    memory: Option<(consts::HeldCells, IndexMap<i64, String>)>,
     handles_errors: bool,
 }
 
@@ -331,7 +331,7 @@ impl _Exit<'_> {
         arg
     }
 
-    fn memory(&mut self) -> Result<&(IndexMap<(i64, usize), Cells>, IndexMap<i64, String>), String> {
+    fn memory(&mut self) -> Result<&(consts::HeldCells, IndexMap<i64, String>), String> {
         if self.memory.is_none() {
             let barriers = self
                 .body
@@ -378,7 +378,7 @@ impl _Exit<'_> {
                     if fact.is_none() {
                         let (body, dgroup) = (self.body, self.dgroup);
                         let (facts, barriers) = self.memory()?;
-                        let before = facts.get(&(at, index)).cloned().unwrap_or_default();
+                        let before = facts.get(&(at, index)).map(|here| (**here).clone()).unwrap_or_default();
                         let nothing = IndexMap::default();
                         let mut asked = consts::memory_queries(body, &nothing, dgroup);
                         let after = consts::_kills(

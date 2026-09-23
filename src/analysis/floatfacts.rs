@@ -479,7 +479,7 @@ pub(crate) fn loop_exits(body: &Rc<MirBody>, dgroup: &BTreeSet<i64>, calls: &Ind
         };
         let mut asked = consts::memory_queries(body, &integers, dgroup);
         let initial = consts::_kills(
-            memory[&(entry.at, entry.ops.len() - 1)].clone(),
+            (*memory[&(entry.at, entry.ops.len() - 1)]).clone(),
             entry.ops.last().expect("entry ops"),
             &integers,
             dgroup,
@@ -614,7 +614,7 @@ pub(crate) fn cells(
     body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
-) -> IndexMap<(i64, usize), Cells> {
+) -> consts::HeldCells {
     _analyzed(body, dgroup, calls, None).1
 }
 
@@ -623,7 +623,7 @@ fn _analyzed(
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     initial: Option<&IndexMap<Addr, BigInt>>,
-) -> (IndexMap<Value, Finite>, IndexMap<(i64, usize), Cells>) {
+) -> (IndexMap<Value, Finite>, consts::HeldCells) {
     let seed = initial.map(|initial| {
         initial
             .iter()
@@ -665,7 +665,7 @@ fn _analyzed(
         let empty = Cells::default();
         for block in &body.blocks {
             for (index, op) in block.ops.iter().enumerate() {
-                let Some(inputs) = _inputs(op, &integers, memory.get(&(block.at, index)).unwrap_or(&empty), &facts)
+                let Some(inputs) = _inputs(op, &integers, memory.get(&(block.at, index)).map(|here| &**here).unwrap_or(&empty), &facts)
                 else {
                     continue;
                 };

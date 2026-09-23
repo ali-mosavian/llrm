@@ -127,7 +127,7 @@ pub(crate) fn specialized(
         let last = entry.ops.len().checked_sub(1).expect("the entry has an operation");
         let mut asked = consts::memory_queries(body, &facts, dgroup);
         let initial = consts::_kills(
-            memory[&(entry_at, last)].clone(),
+            (*memory[&(entry_at, last)]).clone(),
             &entry.ops[last],
             &facts,
             dgroup,

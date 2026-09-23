@@ -170,7 +170,7 @@ fn unrolled(
             let mut compared = IndexMap::default();
             for (index, op) in block.ops.iter().enumerate() {
                 if Some(index) == compare {
-                    compared.insert((block.at, index), cells.clone());
+                    compared.insert((block.at, index), std::rc::Rc::new(cells.clone()));
                 }
                 // A compare is free when the branch reading it is decided, and counted there if not.
                 if op.kind != Kind::Nothing {

@@ -440,7 +440,7 @@ fn _native(body: RaisedBody, found: &Module, bounds_checks: bool) -> Result<Rais
         for block in &body.blocks {
             for (index, op) in block.ops.iter().enumerate() {
                 if op.kind == Kind::Arg && op.args.len() == 1 {
-                    let here = memory.get(&(block.at, index)).unwrap_or(&empty);
+                    let here = memory.get(&(block.at, index)).map(|here| &**here).unwrap_or(&empty);
                     argument_facts.insert((block.at, index), consts::_operand(op, &op.args[0], &known, Some(here)));
                 }
             }
@@ -615,7 +615,7 @@ fn _native(body: RaisedBody, found: &Module, bounds_checks: bool) -> Result<Rais
                             shape.as_ref(),
                             symbol.as_ref(),
                             &indices,
-                            memory.get(&(block.at, position)).unwrap_or(&empty),
+                            memory.get(&(block.at, position)).map(|here| &**here).unwrap_or(&empty),
                         )
                     };
                 }
