@@ -68,3 +68,21 @@ def test_inserted_instruction_never_reads_original_interrupt_bytes():
     done = asm.assemble([op], 0, found, source=SourceMap())
     assert not isinstance(done, str), done
     assert done.code == bytes.fromhex("b80100")
+
+
+def test_a_generated_read_modify_write_binds_its_one_symbolic_field():
+    """VBDOS nbody refused 0x02b7: "cannot bind a generated symbolic memory operand".
+
+    `add [x],eax` names its cell as destination and source; counted twice,
+    one field could not take both.
+    """
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    cell = ir.Mem(Addr(Space.SEGMENT, 0xA, 5), 4, disp_width=2)
+    what = ir.Semantics(ir.Operation.BINARY, "add", (cell,), (cell, ir.Reg(Register.EAX, 4)))
+    op = lir.Insn(0x10, (0x10, 0x10), what, (), ())
+    found = SimpleNamespace(code=b"\x90", seg=0, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
+    done = asm.assemble([op], 0, found, source=SourceMap())
+    assert not isinstance(done, str), done
+    assert [addr for _where, addr in done.symbols] == [cell.addr]

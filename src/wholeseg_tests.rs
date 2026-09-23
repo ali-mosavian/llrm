@@ -273,7 +273,6 @@ fn test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() {
 
 /// NBODY printed an unprintable error: a copied IN acquired XOR and a stray MOV opcode.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
 fn test_nbody_port_read_does_not_copy_neighbor_instructions() {
     let result = default_emitted(&std::fs::read("fixtures/bench/nbody-v-g3.obj").unwrap());
     assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);

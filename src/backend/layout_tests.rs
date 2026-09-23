@@ -682,6 +682,36 @@ fn test_inserted_instruction_never_reads_original_interrupt_bytes() {
     assert_eq!(done.code, [0xB8, 0x01, 0x00]);
 }
 
+/// VBDOS nbody refused 0x02b7: "cannot bind a generated symbolic memory operand".
+///
+/// `add [x],eax` names its cell as destination and source; counted twice,
+/// one field could not take both.
+#[test]
+fn test_a_generated_read_modify_write_binds_its_one_symbolic_field() {
+    let addr = module::Addr { index: 5, ..module::Addr::new(module::Space::Segment, 0xA) };
+    let cell = Loc::Mem(ir::Mem { disp_width: 2, ..ir::Mem::new(Some(addr), 4) });
+    let what = Semantics {
+        dests: vec![cell.clone()],
+        sources: vec![cell, Loc::Reg(Reg { register: Register::EAX, width: 4 })],
+        ..sem(Operation::Binary, "add")
+    };
+    let found = bare(&[0x90]);
+    let done = asm::assemble(
+        &[Item::Op(insn(0x10, what))],
+        0,
+        &found,
+        &BTreeSet::new(),
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(&SourceMap::default()),
+    )
+    .unwrap();
+    assert_eq!(done.symbols.iter().map(|&(_where, addr)| addr).collect::<Vec<_>>(), [addr]);
+}
+
 // tests/test_lir_emission_order.py
 
 /// Qrender h_frame reported build time zero: layout moved XOR across CMP.

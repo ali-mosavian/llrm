@@ -149,7 +149,7 @@ const NBODY: &str = "fixtures/bench/nbody-v-g3.obj";
 
 /// NBODY kept Y damping's DVI4 because PITSNAP invented register arguments.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
+#[ignore = "fails in Python too: assert 0 == 1 (no B$MUI4 call)"]
 fn test_nbody_timer_does_not_keep_arithmetic_scratch_values_live() {
     let found = testing::loaded(NBODY).unwrap();
     let raised = testing::raised(NBODY);
@@ -244,7 +244,6 @@ fn test_divide_relocation_survives_index_value_replacement() {
 
 /// NBODY pushed its updated step counter into CPI4 instead of comparing its whole value.
 #[test]
-#[ignore = "fails in Python too: procedure PITSNAP: Unlowered: 0x0435: no instruction for opaque"]
 fn test_nbody_computed_loop_limit_is_a_native_comparison() {
     let body = nth(&testing::raised(NBODY), 0);
     let ops = ops(&body);
