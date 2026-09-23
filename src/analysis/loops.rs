@@ -196,20 +196,7 @@ pub(crate) struct Loop {
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
-pub(crate) fn back_edges<N: Node>(blocks: &[N], doms: &BTreeMap<i64, BTreeSet<i64>>) -> Vec<(i64, i64)> {
-    let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
-    let mut found = Vec::new();
-    for block in blocks {
-        for &successor in block.succ() {
-            if known.contains(&successor) && doms.get(&block.at()).is_some_and(|one| one.contains(&successor)) {
-                found.push((block.at(), successor));
-            }
-        }
-    }
-    found
-}
-
-fn _back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
+pub(crate) fn back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = Vec::new();
     for block in blocks {
@@ -253,7 +240,7 @@ pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 
     let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for (latch, header) in _back_edges(blocks, &doms) {
+    for (latch, header) in back_edges(blocks, &doms) {
         latches.entry(header).or_default().insert(latch);
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));
     }
@@ -273,7 +260,7 @@ pub(crate) fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 pub(crate) fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
     let doms = dominance(blocks, entry);
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
-    let cut = _back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
+    let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
     let forward = blocks
         .iter()
         .filter(|block| known.contains(&block.at()))
