@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 330" width="1040" height="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>llrm pipeline: four frontends, one target-neutral middle end, one x86 real-mode backend</title>
+  <style>
+    .band { fill: #f6f8fa; stroke: #d0d7de; }
+    .head { fill: #57606a; font-size: 13px; font-weight: 600; letter-spacing: .08em; }
+    .sub { fill: #6e7781; font-size: 11px; }
+    .box { fill: #ffffff; stroke: #8c959f; }
+    .ir { fill: #ddf4ff; stroke: #0969da; }
+    .out { fill: #dafbe1; stroke: #1a7f37; }
+    .t { fill: #1f2328; font-size: 13px; }
+    .ti { fill: #0550ae; font-size: 13px; font-weight: 600; }
+    .to { fill: #116329; font-size: 13px; font-weight: 600; }
+    .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+    .arrow { fill: #57606a; }
+    .loop { stroke: #0969da; stroke-width: 1.5; fill: none; stroke-dasharray: 4 3; }
+    .loopa { fill: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      .band { fill: #161b22; stroke: #30363d; }
+      .head { fill: #8b949e; }
+      .sub { fill: #6e7681; }
+      .box { fill: #0d1117; stroke: #6e7681; }
+      .ir { fill: #0c2d6b; stroke: #58a6ff; }
+      .out { fill: #033a16; stroke: #3fb950; }
+      .t { fill: #e6edf3; }
+      .ti { fill: #a5d6ff; }
+      .to { fill: #aff5b4; }
+      .edge { stroke: #8b949e; }
+      .arrow { fill: #8b949e; }
+      .loop { stroke: #58a6ff; }
+      .loopa { fill: #58a6ff; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="loopa" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- bands -->
+  <rect class="band" x="10" y="10" width="330" height="310" rx="10"/>
+  <text class="head" x="26" y="36">FRONTENDS</text>
+  <rect class="band" x="355" y="10" width="225" height="310" rx="10"/>
+  <text class="head" x="371" y="36">MIDDLE END</text>
+  <text class="sub" x="371" y="53">target-neutral</text>
+  <rect class="band" x="595" y="10" width="435" height="310" rx="10"/>
+  <text class="head" x="611" y="36">BACKEND</text>
+  <text class="sub" x="611" y="53">x86 real mode, 386 to Core</text>
+
+  <!-- inputs -->
+  <rect class="box" x="20" y="66" width="208" height="40" rx="6"/>
+  <text class="t" x="124" y="91" text-anchor="middle">QB 4.5 · QBasic · PDS · VBDOS</text>
+  <rect class="box" x="20" y="120" width="208" height="40" rx="6"/>
+  <text class="t" x="124" y="145" text-anchor="middle">llrm language</text>
+  <rect class="box" x="20" y="190" width="208" height="46" rx="6"/>
+  <text class="t" x="124" y="209" text-anchor="middle">C</text>
+  <text class="sub" x="124" y="226" text-anchor="middle">Open Watcom front end</text>
+  <rect class="box" x="20" y="250" width="208" height="46" rx="6"/>
+  <text class="t" x="124" y="269" text-anchor="middle">BC-built .OBJ</text>
+  <text class="sub" x="124" y="286" text-anchor="middle">decode and raise</text>
+
+  <!-- HIR -->
+  <rect class="ir" x="258" y="95" width="66" height="36" rx="18"/>
+  <text class="ti" x="291" y="118" text-anchor="middle">HIR</text>
+  <path class="edge" d="M228,86 C244,86 242,106 256,107" marker-end="url(#a)"/>
+  <path class="edge" d="M228,140 C244,140 242,120 256,119" marker-end="url(#a)"/>
+
+  <!-- MIR -->
+  <rect class="ir" x="372" y="160" width="84" height="40" rx="20"/>
+  <text class="ti" x="414" y="179" text-anchor="middle">MIR</text>
+  <text class="sub" x="414" y="193" text-anchor="middle">SSA</text>
+  <path class="edge" d="M324,113 C350,113 345,168 370,172" marker-end="url(#a)"/>
+  <path class="edge" d="M228,213 C300,213 330,182 370,180" marker-end="url(#a)"/>
+  <path class="edge" d="M228,273 C320,273 335,195 370,189" marker-end="url(#a)"/>
+
+  <!-- optimizer -->
+  <rect class="box" x="478" y="160" width="86" height="40" rx="6"/>
+  <text class="t" x="521" y="185" text-anchor="middle">optimizer</text>
+  <path class="edge" d="M456,180 L476,180" marker-end="url(#a)"/>
+  <path class="loop" d="M500,160 C500,128 542,128 542,158" marker-end="url(#b)"/>
+  <text class="sub" x="521" y="122" text-anchor="middle">fixed point</text>
+
+  <!-- backend chain -->
+  <rect class="box" x="613" y="160" width="70" height="40" rx="6"/>
+  <text class="t" x="648" y="185" text-anchor="middle">lower</text>
+  <rect class="box" x="703" y="160" width="96" height="40" rx="6"/>
+  <text class="t" x="751" y="176" text-anchor="middle">register</text>
+  <text class="t" x="751" y="192" text-anchor="middle">allocation</text>
+  <rect class="box" x="819" y="160" width="80" height="40" rx="6"/>
+  <text class="t" x="859" y="185" text-anchor="middle">peephole</text>
+  <path class="out" d="M927,160 L1016,160 L1004,200 L915,200 z"/>
+  <text class="to" x="966" y="185" text-anchor="middle">OMF .OBJ</text>
+
+  <path class="edge" d="M564,180 L611,180" marker-end="url(#a)"/>
+  <path class="edge" d="M683,180 L701,180" marker-end="url(#a)"/>
+  <path class="edge" d="M799,180 L817,180" marker-end="url(#a)"/>
+  <path class="edge" d="M899,180 L917,180" marker-end="url(#a)"/>
+</svg>

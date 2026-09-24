@@ -4,9 +4,7 @@
 code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86
 backend, and writes linkable OMF `.OBJ` files.
 
-```text
-source or .OBJ -> frontend -> MIR passes -> lower -> register allocation -> peephole -> OMF
-```
+![llrm pipeline: four frontends meet at MIR, one target-neutral optimizer, one x86 real-mode backend](docs/pipeline.svg)
 
 MIR passes are machine-independent; only lowering, allocation and peephole see
 registers or instructions. See [the MIR boundary](docs/split.md). The goal is
