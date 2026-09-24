@@ -1534,6 +1534,26 @@ SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     assert_eq!(stores.find_iter(&optimized).count(), 2, "{optimized}");
 }
 
+/// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
+/// pixel: seven subtracts and seven multiplies of the counter, where one
+/// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
+#[test]
+fn test_affine_terms_of_one_counter_share_its_scaled_value() {
+    let text = optimized_sub(
+        "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
+DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2) + f(x - xp(2))) + \
+sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
+sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n",
+        "T",
+    );
+    let counter = &regex::Regex::new(r"f\d+ <- (v\d+):2 sub -?\d+:2").expect("a pattern").captures(&text).unwrap_or_else(|| panic!("{text}"))[1];
+    let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
+    let reads = body
+        .lines()
+        .filter(|line| line.trim_start().starts_with('v') && line.contains(&format!("{counter}:2 ")) && !line.contains(" add 1:2"));
+    assert_eq!(reads.count(), 1, "{text}");
+}
+
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
 /// PLASMA reloaded three descriptors per pixel: the store carried provenance,
 /// and provenance never asked where its segment points.

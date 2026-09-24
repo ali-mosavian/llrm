@@ -1640,7 +1640,24 @@ fn _start(body: &MirBody, into: Value, one: &Derived, preheader: i64) -> Op {
 /// Initialize scale * start plus invariant offsets once, before the loop.
 ///
 /// Not `counted`, the offsets alone: the base an index is added to.
-fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: bool) -> Vec<Op> {
+pub(crate) fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: bool) -> Vec<Op> {
+    let mut number = 0;
+    let mut temporary = || {
+        number += 1;
+        Value { id: into.id + 1 + number, at: preheader, flags: false, variable: into.variable + number, version: 1 }
+    };
+    starts_through(body, into, one, preheader, counted, &mut temporary)
+}
+
+/// `_starts`, with each temporary it needs taken from `temporary`.
+pub(crate) fn starts_through(
+    body: &MirBody,
+    into: Value,
+    one: &Derived,
+    preheader: i64,
+    counted: bool,
+    temporary: &mut dyn FnMut() -> Value,
+) -> Vec<Op> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let beside = op_at(one.op);
     let unit = matches!(&one.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
@@ -1661,25 +1678,17 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
         return vec![_start(body, into, one, preheader)];
     }
     let width = _width(beside);
-    let count = _start_temporary_count(one, counted);
-    let mut temporaries = (0..count).map(|number| Value {
-        id: into.id + 2 + number,
-        at: preheader,
-        flags: false,
-        variable: into.variable + 1 + number,
-        version: 1,
-    });
     let mut current = None;
     let mut operations = Vec::new();
     if counted {
-        let temporary = temporaries.next().expect("counted");
+        let temporary = temporary();
         operations.push(_start(body, temporary, one, preheader));
         current = Some(temporary);
     }
     for (index, (offset, coefficient)) in one.offsets.iter().enumerate() {
         let mut offset = offset.clone();
         if *coefficient != BigInt::from(1_u8) {
-            let product = temporaries.next().expect("counted");
+            let product = temporary();
             operations.push(_made(
                 Kind::Mul,
                 "imul",
@@ -1697,7 +1706,7 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
             });
         }
         let result = if one.pointer.is_some() || index != one.offsets.len() - 1 {
-            temporaries.next().expect("counted")
+            temporary()
         } else {
             into
         };
@@ -1751,7 +1760,7 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
 ///
 /// A pointer result cannot reuse `into` for its final offset sum; each
 /// product and intermediate sum is counted directly.
-fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
+pub(crate) fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
     let unit = matches!(&one.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
     let direct_pointer = one.pointer.is_some() && unit && one.offsets.is_empty();
     if direct_pointer || one.pointer.is_none() && one.offsets.is_empty() {

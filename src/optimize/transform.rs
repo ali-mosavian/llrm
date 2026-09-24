@@ -1238,6 +1238,13 @@ pub(crate) fn _consumed(op: &Op) -> BTreeSet<Value> {
     mir::consumed(op)
 }
 
+/// Whether nothing may move out of a loop holding `ops`: a call, an escape,
+/// or an opaque machine barrier. A source volatile access has a complete
+/// footprint and only orders itself against other volatile accesses.
+pub(crate) fn motion_blocked<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool {
+    ops.into_iter().any(|one| matches!(one.kind, Kind::Call | Kind::Escape) || (one.barrier() && !one.volatile))
+}
+
 /// The ops in this loop whose result never changes, in order.
 ///
 /// Grown rather than filtered, to a fixed point.  A loop holding a call is
@@ -1267,10 +1274,7 @@ pub(crate) fn _invariant_run<'a>(
     // An opaque machine barrier makes every unmodelled resource observable;
     // a source volatile access has a complete footprint and only orders
     // itself against other volatile accesses.
-    if ops
-        .iter()
-        .any(|one| matches!(one.kind, Kind::Call | Kind::Escape) || (one.barrier() && !one.volatile))
-    {
+    if motion_blocked(ops.iter().copied()) {
         return Ok(Vec::new());
     }
     let mut made: BTreeSet<Value> = BTreeSet::new();
@@ -3839,6 +3843,7 @@ pub(crate) fn pipeline(
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant x87 preparation out afterwards.
         Box::new(FloatLoop { r#where: r#where.clone() }),
+        Box::new(crate::optimize::affine::Affine { r#where: r#where.clone() }),
         Box::new(Hoist { r#where: r#where.clone() }),
         Box::new(DropStores { r#where: r#where.clone() }),
         Box::new(Gvn { r#where: r#where.clone() }),
