@@ -3,7 +3,7 @@ name = "llrm"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.87"
-description = "LLVM-style optimizing compiler and object rewriter for 16-bit x86"
+description = "Compiler suite for 16-bit real-mode DOS with GCC/LLVM-quality code generation"
 default-run = "llrm-qb"
 
 [dependencies]

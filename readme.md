@@ -1,104 +1,55 @@
 # llrm
 
-`llrm` is the LLVM-organized Rust compiler and OMF rewriter being built in this
-repository. It is designed to accept QuickBASIC-family source, existing WCC
-capture streams, and BC-produced OMF objects, then share a typed IR, optimizer,
-x86 backend, and object writer across those frontends.
+`llrm` is a compiler suite for 16-bit real-mode DOS that aims at GCC/LLVM-quality
+code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86
+backend, and writes linkable OMF `.OBJ` files.
 
-The legacy Python package is still named `qbopt` while the Rust port reaches
-cutover. It rewrites the OMF `.OBJ` that QuickBASIC, PDS, or VBDOS produces
-before it is linked. New production Rust paths, binaries, formats, and
-documentation use the `llrm` name.
-
-The goal is output within 1.5× a hand-derived modern-compiler listing for
-every suite program. See [targets](docs/targets.md) for the evidence and
-current gaps.
-
-## Rust port
-
-The Rust crate is a 1:1 port of the Python compiler, which stays as its
-reference. The tools are named by their input: `llrm-qb` for QB-family
-source, `llrm-c` for WCC `.cgs` captures, `llrm-modern` for the modern
-language, and `llrm-omf` for BC-produced OMF objects. `tools/port_diff.py`
-checks each against Python's stage dumps; [the port map](docs/port-map.md)
-tracks every module.
-
-## Legacy Python use
-
-Python 3.13+ and [uv](https://docs.astral.sh/uv/) are required.
-
-```sh
-uv sync
-uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 386
-LINK PROGRAMQ.OBJ
+```text
+source or .OBJ -> frontend -> MIR passes -> lower -> register allocation -> peephole -> OMF
 ```
 
-Pass every object and library in the same order as the LINK invocation when
-the program spans modules. qbopt resolves each external against that complete
-link unit, optimizes every standalone object, and writes only after all of them
-have completed:
+MIR passes are machine-independent; only lowering, allocation and peephole see
+registers or instructions. See [the MIR boundary](docs/split.md). The goal is
+output within 1.5× a hand-derived modern-compiler listing for every suite
+program; [targets](docs/targets.md) has the evidence and current gaps.
+
+## Frontends
+
+| Tool | Input |
+| --- | --- |
+| `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
+| `llrm-c` | C, through a patched Open Watcom front end (`owshim/`) |
+| `llrm-modern` | llrm's own language; see [the language](docs/modern-language.md) |
+| `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
+
+`llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
+coprocessor is required.
+
+## Use
 
 ```sh
-uv run python -m qbopt.rewrite MAIN.OBJ DRAW.OBJ BCOM45.LIB \
-  --output-dir build/optimized --cpu 386
+cargo build --release
+target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
+target/release/llrm-c program.c --opt -o PROGRAM.OBJ
+target/release/llrm-modern program.mod -o PROGRAM.OBJ
+target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
+```
+
+`llrm-omf` takes every object and library in LINK order when a program spans
+modules, and writes nothing unless all of them succeed:
+
+```sh
+target/release/llrm-omf MAIN.OBJ DRAW.OBJ BCOM45.LIB --output-dir build/optimized
 LINK build/optimized/MAIN.OBJ+build/optimized/DRAW.OBJ,,,BCOM45.LIB
 ```
 
-For a resolved definition whose audited runtime interface is not already
-known, qbopt follows the OMF call graph and conservatively discovers which
-entry-register values can reach a read. Recursive, indirect, ambiguous, and
-otherwise unresolved edges consume all allocatable GP inputs. This narrows
-only the call's input liveness; memory, clobber, control, cleanup, and error
-effects remain opaque.
-
-Unsupported OMF records, unresolved or ambiguous externals, incomplete
-lowering, allocation failures, and unencodable instructions are errors by
-default. `--allow-unchanged` is the explicit compatibility mode for retaining
-an input object when its backend refuses it. With multiple objects, qbopt
-finishes the entire link unit in memory before creating any output, so a
-failure cannot leave a partly optimized set behind.
-
-Useful options:
-
-```sh
-# Keep BASIC numeric runtime behavior, including its conversion/error paths.
-uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --basic-semantics
-
-# Preserve array checking; omit checks proven unnecessary. Independent of numeric semantics.
-uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --bounds-checks
-
-# Use real x87 instead of BC's emulator interrupt protocol.
-# Requires a coprocessor; incompatible with --basic-semantics.
-uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --native-fpu
-
-# Inspect a rewrite or dump every pipeline stage.
-uv run python -m qbopt.rewrite PROGRAM.OBJ --report
-uv run python tools/stages.py PROGRAM.OBJ --dump build/stages/PROGRAM
-```
-
-Audited project calls can be supplied with `--contracts PROFILE.json`
-and `--contract-root OBJECT_DIRECTORY` (also supported by `tools/stages.py`).
-The loader checks every artifact's SHA-256 and each symbol's defining object
-before enabling register-input/stack-cleanup facts. Unspecified effects stay
-unknown; this does not automatically prove contracts. See
+Unsupported records, unresolved externals and unencodable code are errors;
+`--allow-unchanged` keeps a refused object as it was. `--basic-semantics` keeps
+BASIC's numeric runtime errors and conversions, and `--bounds-checks` keeps
+array checks. Audited external calls come from `--contracts PROFILE.json`; see
 [the profile format](docs/contracts/readme.md).
 
-Native arithmetic is the default, but it is not fast-math: floating-point
-reassociation and observable storage rounding are not discarded. Native LONG
-division uses machine/C behavior; `--basic-semantics` retains `B$DVI4` instead.
-
 ## Optimizations
-
-```text
-OMF -> decode -> raise -> MIR passes -> lower -> register allocation -> peephole -> OMF
-```
-
-The raise recognizes BC-specific LONG pairs, runtime arithmetic calls, and
-supported numeric array descriptors. MIR passes are machine-independent;
-only lowering, allocation, and peephole work with registers or instructions.
-See [the MIR boundary](docs/split.md).
-The [compiler foundations plan](docs/compiler-foundations.md) defines the
-correctness and code-quality goals, ownership boundaries, and delivery order.
 
 Current work includes:
 
@@ -171,14 +122,16 @@ recurrences; `si` is the `row + column` recurrence.
 ## Validate
 
 ```sh
-uv run pytest
-uv run pytest --full -n 4 -m "not e2e"
-uv run pytest --full tests/test_array_access.py
-uv run python tools/e2e.py p-g2 --prog harr
-uv run python -m qbopt.price PROGRAM.OBJ
+cargo test --release <name>
+uv run python tools/port_diff.py FIXTURE
 ```
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
-[docs/testing.md](docs/testing.md); current measured progress is in
-[docs/takeover-progress.md](docs/takeover-progress.md).
+[docs/testing.md](docs/testing.md).
+
+## Python reference
+
+`qbopt/` is the Python compiler the Rust crate was ported from. It is legacy
+and kept only as the reference `tools/port_diff.py` diffs stage dumps against;
+[the port map](docs/port-map.md) tracks every module.
