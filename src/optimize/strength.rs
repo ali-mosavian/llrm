@@ -93,6 +93,10 @@ impl crate::model::passes::MIRTransform for Strength {
         "strength"
     }
 
+    fn after_settling(&self) -> bool {
+        true
+    }
+
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         use super::{exitsink, indvars, ivshare, loopexit};
 

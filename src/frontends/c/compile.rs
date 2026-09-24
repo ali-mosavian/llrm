@@ -1253,6 +1253,22 @@ mod tests {
         assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (32, 15));
     }
 
+    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other passes to
+    /// settle, it kept two pointers and a counter, three steps per iteration.
+    #[test]
+    fn test_addresses_differing_by_base_share_one_stepped_offset() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/dot.cgs");
+        let text = std::fs::read_to_string(path).unwrap();
+        let built = assembled(&text, "dot", true, None, "486", &crate::model::passes::O2()).unwrap();
+        let asm = crate::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let back = lines.iter().position(|one| one.starts_with("jne ")).unwrap();
+        let top = lines.iter().position(|one| *one == format!("{}:", &lines[back][4..])).unwrap();
+        let steps: Vec<&&str> =
+            lines[top..back].iter().filter(|one| one.starts_with("add ") && one.ends_with(", 2") || one.starts_with("dec ")).collect();
+        assert_eq!(steps, [&"add bx, 2"], "{asm}");
+    }
+
     /// Rotation consumed the syntax that proved crc's counts, so the instrument
     /// guessed nine in ten and read 1505 executed instructions instead of 1356.
     #[test]

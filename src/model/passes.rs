@@ -31,6 +31,13 @@ pub trait MIRTransform {
         Err(format!("{} has no transform", self.class_name()))
     }
 
+    /// Whether the pass waits for the others to settle. A pass whose rewrite
+    /// cannot be undone must choose on canonical MIR, not on another pass's
+    /// leftovers.
+    fn after_settling(&self) -> bool {
+        false
+    }
+
     /// `__repr__`.
     fn repr(&self) -> String {
         format!(
