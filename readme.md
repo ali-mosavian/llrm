@@ -49,73 +49,62 @@ array checks. Audited external calls come from `--contracts PROFILE.json`; see
 
 ## Optimizations
 
-Current work includes:
+The middle end repeats its MIR passes to a fixed point: constant folding and
+propagation, algebraic simplification, GVN, load/store forwarding, promotion,
+LICM, loop rotation, unswitching, unrolling and peeling, induction variables and
+strength reduction, inlining and dead-code removal.
 
-- LONG widening; constant folding/propagation; branch and dead-code removal;
-- CSE, load/store forwarding, promotion, and proven runtime-call memory facts;
-- LICM, induction variables, affine address recurrences, and strength reduction;
-- native static, dynamic FAR, and HUGE numeric array addressing, 1–60 dimensions;
-- spill folding, constant rematerialization, reload removal, and post-allocation cleanup.
+The backend chooses x86 address forms, uses 32-bit registers and arithmetic in
+real mode on the 386 and later, allocates registers with coalescing, live-range
+splitting and spill placement, then runs machine CSE, copy propagation,
+peephole, scheduling and jump layout. The BC frontend adds recognition of BC's
+LONG register pairs, runtime arithmetic calls and array descriptors; see
+[HARR](docs/harr.md) for a before and after.
 
-Unsupported array layouts refuse unchecked lowering. Checked loop preguards
-and broader strict-FP optimization are still unfinished.
+## Example
 
-## HARR: before and after
+```c
+long dot(const int *a, const int *b, int n)
+{
+    long total = 0;
+    int i;
+    for (i = 0; i < n; i++)
+        total += (long)a[i] * b[i];
+    return total;
+}
+```
 
-`suite/harr.bas` stores and immediately rereads a two-dimensional INTEGER
-array element. The helper is `B$HARY`; `harr` is the benchmark name.
-
-Before, BC performs the address calculation twice per inner iteration:
+`llrm-c dot.c --opt --cpu 486` gives, for the medium model:
 
 ```asm
-push column
-push row
-push 2
-push descriptor
-call B$HARY                 ; returns ES:BX
-mov  [es:bx],value
-
-push column
-push row
-push 2
-push descriptor
-call B$HARY                 ; recomputes the same address
-mov  ax,[es:bx]
-add  [total],ax
+_dot proc far
+    push bp
+    mov bp, sp
+    push si
+    push di
+    xor eax, eax
+    mov bx, word ptr [bp+10]    ; n
+    mov si, word ptr [bp+6]     ; a
+    mov di, word ptr [bp+8]     ; b
+    cmp bx, 0
+    jle done
+loop:
+    movsx ecx, word ptr [si]
+    movsx edx, word ptr [di]
+    imul ecx, edx               ; 32-bit product, no runtime helper
+    add eax, ecx
+    add si, 2                   ; i is gone: both pointers step
+    add di, 2
+    dec bx                      ; the loop counts down to zero
+    jne loop
+done:
+    shld edx, eax, 16           ; return the long in DX:AX
+    pop di
+    pop si
+    pop bp
+    retf
+_dot endp
 ```
-
-Its effective offset is:
-
-```text
-((column - lowerColumn) * rowCount + row - lowerRow) * elementSize + base
-```
-
-After CSE, LICM, forwarding and induction lowering, descriptor setup is
-outside both loops:
-
-```asm
-mov  bx,[descriptor]
-mov  es,[bx+2]              ; selector loaded once
-mov  dx,44
-add  dx,[bx+10]
-mov  bx,dx                  ; outer pointer
-```
-
-The hot inner loop has no helper, multiply, descriptor load, selector reload,
-or array reread:
-
-```asm
-inner:
-mov  [es:di],si             ; matrix(row,column) = row + column
-add  cx,si                  ; reuse the just-stored value
-add  si,1                   ; column/value induction
-add  di,42                  ; 21 INTEGERs * 2 bytes
-cmp  si,dx
-jne  inner
-```
-
-The outer latch uses `add bx,2`. `di` and `bx` are the inner and outer address
-recurrences; `si` is the `row + column` recurrence.
 
 ## Validate
 
