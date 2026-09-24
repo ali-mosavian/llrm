@@ -51,8 +51,13 @@ class Run:
     seconds: float
 
 
+BUILT = Path(__file__).resolve().parents[1] / "target" / "release" / "dosbox-x"
+
+
 def dosbox_bin() -> str | None:
-    return os.environ.get("DOSBOX_BIN") or shutil.which("dosbox-x")
+    """DOSBOX_BIN, else the one cargo build links into target/release, else PATH's."""
+    built = str(BUILT) if BUILT.exists() else None
+    return os.environ.get("DOSBOX_BIN") or built or shutil.which("dosbox-x")
 
 
 def dos_file(workdir: Path, name: str) -> Path | None:

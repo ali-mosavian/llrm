@@ -1015,7 +1015,7 @@ struct Args {
 /// The code-generator stream wccq records for one C file.
 pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let wccq = root.join("owshim/bin/wccq");
+    let wccq = Path::new(env!("LLRM_WCCQ"));
     // Borland's medium model: far code, near data, cdecl, byte-packed structs,
     // 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
     // inline assembly: qcport's own uses 387 instructions.
@@ -1260,5 +1260,17 @@ mod tests {
             }
             _ => panic!("a register convention was compiled as a stack one"),
         }
+    }
+
+    /// owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
+    /// could be built on any other host and llrm-c refused every C file.
+    #[test]
+    fn test_wccq_built_here_records_the_committed_stream() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = root.join("fixtures/c/halve.c");
+        let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
+        let recorded = super::recorded(&source, &[]).expect("wccq records halve.c");
+        let committed = std::fs::read_to_string(root.join("fixtures/c/halve.cgs")).unwrap();
+        assert_eq!(without_path(&recorded), without_path(&committed));
     }
 }
