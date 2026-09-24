@@ -155,7 +155,7 @@ fn test_symbolic_control_rebases_a_nonzero_start_recurrence() {
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    assert!(induction::zero_terminating_control(&Rc::new(body.clone()), loop_, proof, candidate, None).is_some());
+    assert!(induction::zero_terminating_control(&Rc::new(body.clone()), loop_, proof, candidate, &BTreeSet::new(), None).is_some());
     assert_ne!(*symbolically_zeroed(&Rc::new(body.clone())).unwrap(), body);
 }
 
@@ -170,7 +170,7 @@ fn test_symbolic_control_proves_a_zero_terminal_recurrence() {
     let basics = induction::basics(&body, loop_);
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
-    let got = induction::zero_terminating_control(&Rc::new(MirBody::clone(&body)), loop_, proof, candidate, None).expect("a proof");
+    let got = induction::zero_terminating_control(&Rc::new(MirBody::clone(&body)), loop_, proof, candidate, &BTreeSet::new(), None).expect("a proof");
 
     assert!(std::ptr::eq(got.replacement.counted, proof));
     assert_eq!(

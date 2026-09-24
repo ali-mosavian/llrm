@@ -671,15 +671,9 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
         let inside = loop_.body.clone();
         let candidates = induction::basics(body, &loop_);
         for candidate in candidates.values() {
-            let Some(symbolic) =
-                induction::zero_terminating_control(body, &loop_, proof, candidate, Some(&facts))
-            else {
+            let Some(preheader) = proof.preheader else {
                 continue;
             };
-            let control = &symbolic.replacement;
-            let preheader = proof.preheader.expect("control_replacement proved a preheader");
-            let width = symbolic.candidate.start.width();
-            let step = &symbolic.step;
             let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
                 continue;
             };
@@ -701,7 +695,12 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             {
                 continue;
             }
-            let offsets = _offsets(phi.result, &readers, &placed, &home, &inside, &BTreeSet::from([stepping_at]), body, true);
+            // The counter itself may take the zero test: its own compare is
+            // control, and every other read must then be an offset.
+            let own_compare = (proof.compare.block_index(), proof.compare.operation_index());
+            let itself = candidate == &proof.counter;
+            let own = if itself { BTreeSet::from([stepping_at, own_compare]) } else { BTreeSet::from([stepping_at]) };
+            let offsets = _offsets(phi.result, &readers, &placed, &home, &inside, &own, body, true);
             // A direct address recurrence has no separate invariant base to
             // rebase.  It remains valid, but cannot replace control by this
             // representation.  This is a property of the affine expression,
@@ -713,6 +712,23 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             {
                 continue;
             }
+            let covered = if itself {
+                let rebased = offsets.iter().map(|(at, ..)| *at).collect::<BTreeSet<_>>();
+                crate::analysis::occurrence::operations(body)
+                    .map(|(at, ..)| at)
+                    .filter(|at| rebased.contains(&(at.block_index(), at.operation_index())))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let Some(symbolic) =
+                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
+            else {
+                continue;
+            };
+            let control = &symbolic.replacement;
+            let width = symbolic.candidate.start.width();
+            let step = &symbolic.step;
             let read = body
                 .blocks
                 .iter()
@@ -875,7 +891,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                         .phis
                         .iter()
                         .enumerate()
-                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi))
+                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
                         .map(|(phi_index, other)| {
                             if std::ptr::eq(other, phi) {
                                 Phi {

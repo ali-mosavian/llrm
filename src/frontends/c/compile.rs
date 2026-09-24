@@ -1253,20 +1253,47 @@ mod tests {
         assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (32, 15));
     }
 
+    /// The innermost loop's counting: its steps by a constant and its compares.
+    fn loop_counting(fixture: &str) -> Vec<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/c/{fixture}.cgs"));
+        let text = std::fs::read_to_string(path).unwrap();
+        let built = assembled(&text, fixture, true, None, "486", &crate::model::passes::O2()).unwrap();
+        let asm = crate::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let (top, back) = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| one.starts_with('j') && !one.starts_with("jmp"))
+            .find_map(|(at, one)| {
+                let label = format!("{}:", one.split_whitespace().nth(1)?);
+                Some((lines[..at].iter().position(|line| *line == label)?, at))
+            })
+            .expect("a loop");
+        let constant = |one: &str| one.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok());
+        lines[top..back]
+            .iter()
+            .filter(|one| {
+                one.starts_with("inc ")
+                    || one.starts_with("dec ")
+                    || one.starts_with("cmp ")
+                    || (one.starts_with("add ") || one.starts_with("sub ")) && constant(one)
+            })
+            .map(|one| (*one).to_owned())
+            .collect()
+    }
+
     /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other passes to
     /// settle, it kept two pointers and a counter, three steps per iteration.
     #[test]
     fn test_addresses_differing_by_base_share_one_stepped_offset() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/dot.cgs");
-        let text = std::fs::read_to_string(path).unwrap();
-        let built = assembled(&text, "dot", true, None, "486", &crate::model::passes::O2()).unwrap();
-        let asm = crate::backend::masm::text(&built).unwrap();
-        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-        let back = lines.iter().position(|one| one.starts_with("jne ")).unwrap();
-        let top = lines.iter().position(|one| *one == format!("{}:", &lines[back][4..])).unwrap();
-        let steps: Vec<&&str> =
-            lines[top..back].iter().filter(|one| one.starts_with("add ") && one.ends_with(", 2") || one.starts_with("dec ")).collect();
-        assert_eq!(steps, [&"add bx, 2"], "{asm}");
+        assert_eq!(loop_counting("dot"), ["add bx, 2"]);
+    }
+
+    /// `bytes` indexes by `i` itself, with a bound only known at run time: the
+    /// counter never counted to zero, so each iteration compared it with `n` in memory.
+    #[test]
+    fn test_a_counter_read_only_as_offsets_counts_to_zero() {
+        assert_eq!(loop_counting("bytes"), ["inc bx"]);
     }
 
     /// Rotation consumed the syntax that proved crc's counts, so the instrument
