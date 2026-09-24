@@ -236,6 +236,7 @@ fn test_formula_selection_prices_complete_sibling_groups() {
         &BTreeSet::new(),
         &costly_addresses,
         None,
+        None,
     );
 
     assert_eq!(
@@ -295,7 +296,8 @@ fn test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() {
             &empty,
             &empty,
             &costs,
-            Some(&references)
+            Some(&references),
+            None,
         )
         .is_empty()
     );
@@ -308,7 +310,8 @@ fn test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() {
             &empty,
             &empty,
             &costs,
-            Some(&references)
+            Some(&references),
+            None,
         )
         .is_empty()
     );
@@ -366,6 +369,7 @@ fn test_formula_selection_prices_a_complete_affine_formula_under_pressure() {
             &empty,
             &costs,
             Some(&BTreeMap::from([(answer.id, 1)])),
+            None,
         ),
         vec![complete]
     );

@@ -149,6 +149,7 @@ pub(crate) fn reduced(
 
     let reads = _Reads::of(body);
     let partners = address_forms.iter().find(|form| !form.secondary).and_then(|form| form.partners);
+    let address_registers = address_forms.iter().find(|form| !form.secondary).and_then(AddressForm::address_registers);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
     for (loop_, _basics, derived) in &found {
         candidate_groups.insert(loop_.header, _candidates(&reads, derived, scales, partners));
@@ -219,6 +220,7 @@ pub(crate) fn reduced(
             &BTreeSet::new(),
             &BTreeSet::new(),
             costs,
+            None,
             None,
         );
         let mut widened = BTreeMap::<u32, Option<Vec<(OpOccurrence, Op)>>>::new();
@@ -301,6 +303,7 @@ pub(crate) fn reduced(
             &replacement_credits,
             costs,
             Some(&references),
+            address_registers,
         );
         let mut indexes = BTreeMap::<OpOccurrence, (i64, AddressForm)>::new();
         for one in &candidates {
@@ -1284,7 +1287,10 @@ fn _replacement_credits(
 /// Carry every address of a shared product, or carry the product and keep
 /// the cheap additions; never some of each. `free` leaves are indexed
 /// memory forms and consume no recurrence. `credited` formulas replace
-/// their source control recurrence and add no net pressure.
+/// their source control recurrence and add no net pressure. At most
+/// `address_registers` pointers take a released base's register; past them
+/// a base was reloaded per use, and its pointer is a spilled recurrence.
+#[allow(clippy::too_many_arguments)]
 fn _formula_set(
     body: &MirBody,
     candidates: &[Derived],
@@ -1293,6 +1299,7 @@ fn _formula_set(
     credited: &BTreeSet<OpOccurrence>,
     costs: &OperationCosts,
     references: Option<&BTreeMap<u32, i64>>,
+    address_registers: Option<i64>,
 ) -> Vec<Derived> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let held_result = |op: &Op| match op.results.first() {
@@ -1361,7 +1368,7 @@ fn _formula_set(
             .iter()
             .filter(|one| !free.contains(one) && !credited.contains(one))
             .count() as i64
-            - _released(body, candidates, selected, references)
+            - _released(body, candidates, selected, references).min(address_registers.unwrap_or(i64::MAX))
     };
     while slots(&selected) > room {
         let overflow = slots(&selected) - room;

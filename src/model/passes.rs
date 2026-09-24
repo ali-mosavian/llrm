@@ -169,6 +169,12 @@ impl AddressForm {
         })
     }
 
+    /// How many registers can each hold an address alone: the one that
+    /// pairs and its partners. None is any.
+    pub fn address_registers(&self) -> Option<i64> {
+        self.partners.map(|partners| partners + 1)
+    }
+
     /// Whether this form is cheap enough to try before a frame spill.
     pub fn before_spill(&self, costs: &OperationCosts) -> bool {
         let direct = self.extension_cost + self.use_cost <= costs.load;
