@@ -696,3 +696,27 @@ fn test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone() {
         }
     }
 }
+
+/// deedlines failed "value#5479 is read but never defined": counting `i` itself
+/// to zero rebased `i + 512` onto a new held offset but left it out of `uses`,
+/// so dead deleted its definition.
+#[test]
+fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
+    use std::path::Path;
+
+    use crate::frontends::qb::{compile as qb_compile, driver as qb_driver};
+    use crate::model::passes::O2;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("MOD.BAS");
+    let lines = [
+        "DIM SHARED m%(-168 TO 168)",
+        "FOR i% = -168 TO 168",
+        "m%(i%) = ((i% + 512) MOD 256) \\ 2",
+        "NEXT i%",
+    ];
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let program =
+        qb_driver::parsed(&basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false).unwrap();
+    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &O2()).unwrap();
+}

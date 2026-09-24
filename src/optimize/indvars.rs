@@ -777,7 +777,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                     .map(|(index, arg)| if index == position { adjusted.as_arg() } else { arg.clone() })
                     .collect();
                 assert!(matches!(base, Arg::Held(_) | Arg::Const(_)));
-                let uses = op
+                let mut uses: Vec<Value> = op
                     .uses
                     .iter()
                     .map(|value| match &base {
@@ -788,6 +788,12 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                         _ => *value,
                     })
                     .collect();
+                // A constant offset that became a held one is a new read, placed
+                // among the held arguments where it now sits.
+                if let (Arg::Const(_), AffineOperand::Held(adjusted)) = (&base, &adjusted) {
+                    let before = op.args[..position].iter().filter(|arg| matches!(arg, Arg::Held(_))).count();
+                    uses.insert(before.min(uses.len()), adjusted.value);
+                }
                 let mut replacement = op.clone();
                 replacement.args = args;
                 replacement.uses = uses;
