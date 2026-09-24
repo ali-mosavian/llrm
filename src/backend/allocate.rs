@@ -18,7 +18,7 @@ use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
-use crate::backend::{coalesce, constrain, spiller, splitkit, target};
+use crate::backend::{coalesce, constrain, datagroup, spiller, splitkit, target};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -733,6 +733,7 @@ pub fn allocate(
     let index = ranges::indexed(body);
     let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
     let masks = _masks(body, &index);
+    let data_free = !datagroup::names_data_segment(body);
     let widths = _widest(body);
     for one in unspillable.into_iter().flatten() {
         if let Some(interval) = live.get_mut(one) {
@@ -792,6 +793,9 @@ pub fn allocate(
             None => target::order(confined.get(&value)),
             Some(register) => vec![*register],
         };
+        if !data_free {
+            order.retain(|one| _whole(*one) != *target::DATA_SEGMENT);
+        }
         if protected.contains(&value) && _reserves_word_base(body, value, &confined) {
             let word: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
             order = order
@@ -838,6 +842,9 @@ pub fn allocate(
             }
         }
 
+        // The data segment register only once the selectors run out: holding
+        // a value there costs a restore and a prefix on every data access.
+        order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
         let width = widths.get(&value).copied().unwrap_or(4);
         if let Some(got) = _free(&mine, &order, &union, &live, &masks, width) {
             r#where.insert(value, got);
@@ -854,6 +861,7 @@ pub fn allocate(
                 let elsewhere: Vec<Register> = target::order(confined.get(&other))
                     .into_iter()
                     .filter(|one| _whole(*one) != _whole(register))
+                    .filter(|one| data_free || _whole(*one) != *target::DATA_SEGMENT)
                     .collect();
                 _free(&live[&other], &elsewhere, &union, &live, &masks, widths.get(&other).copied().unwrap_or(4))
                     .is_some()
@@ -993,15 +1001,21 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
 
 pub type Masks = Vec<(i64, BTreeSet<Register>, BTreeSet<Register>)>;
 
-/// Every point a register is destroyed without being named, and which.
+/// Every point a register is destroyed without being named, and which. A
+/// point that needs the data group takes the data segment register from any
+/// value held in it.
 pub fn _masks(body: &LirBody, index: &Indexes) -> Masks {
     let mut out = Vec::new();
     for block in &body.blocks {
         for one in &block.insns {
-            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() {
+            let mut clobbers: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
+            if target::needs_data_group(one) {
+                clobbers.insert(*target::DATA_SEGMENT);
+            }
+            if !clobbers.is_empty() || !one.clobbers_high.is_empty() {
                 out.push((
                     index.at[&ranges::key(one)],
-                    one.clobbers.iter().map(|register| _whole(*register)).collect(),
+                    clobbers,
                     one.clobbers_high.iter().map(|register| _whole(*register)).collect(),
                 ));
             }
@@ -1137,6 +1151,9 @@ impl RegAlloc {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }
         let cpu = self.cpu.clone();
+        // Only a body that never names the data segment register itself may
+        // find it holding one of its values.
+        let data_free = !datagroup::names_data_segment(&body);
         let mut body = explicit_selectors(&body, Some(&self.pinned));
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
@@ -1346,7 +1363,7 @@ impl RegAlloc {
                 }
             }
             if got.spilled.is_empty() {
-                return applied(&body, &got);
+                return applied(&body, &got).map(|placed| datagroup::restored(&placed, data_free));
             }
             if !retained.is_empty() {
                 let (spilt, made) = spiller::spilled(&body, &got.spilled, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
@@ -1365,7 +1382,7 @@ impl RegAlloc {
                 let after = allocate(&cut, Some(&wanted), Some(&reloads), None, None, (&cpu).into())?;
                 crate::debug!("regalloc", "  split {} values, reallocated: {} spilled", failing.len(), after.spilled.len());
                 if after.spilled.is_empty() {
-                    return applied(&cut, &after);
+                    return applied(&cut, &after).map(|placed| datagroup::restored(&placed, data_free));
                 }
                 if _traffic(&cut, &after.spilled) < _traffic(&body, &got.spilled) {
                     body = cut;
@@ -1401,7 +1418,7 @@ impl RegAlloc {
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body)?);
         let (answer, _retained) = _assigned_plan(&body, &self.pinned, &reloads, &retained, &cpu)?;
-        applied(&body, &answer)
+        applied(&body, &answer).map(|placed| datagroup::restored(&placed, data_free))
     }
 }
 

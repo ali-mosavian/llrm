@@ -379,20 +379,81 @@ pub static SEGMENTS: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
     ])
 });
 
-/// The ones a selector value may be placed in: every one the machine's
-/// program model does not reserve.
+/// The ones a selector value may be placed in, most preferred first: every
+/// one the machine's program model does not reserve. Where the stack reaches
+/// the data group, the data segment register is free between the points that
+/// need it (`needs_data_group`), so it comes last.
 pub static SELECTORS: LazyLock<Vec<Register>> = LazyLock::new(|| {
     let segments = &crate::abi::machine::current().segments;
-    let reserved = [&segments.data, &segments.stack, &segments.code];
+    let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
+    let mut reserved = vec![&segments.stack, &segments.code];
+    if !segments.stack_is_data {
+        reserved.push(&segments.data);
+    }
     [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
         .into_iter()
-        .filter(|one| !reserved.iter().any(|name| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one])))
+        .filter(|one| !reserved.iter().any(|name| named(one, name)))
         .collect()
 });
+
+/// The segment register every access without a prefix reads.
+pub static DATA_SEGMENT: LazyLock<Register> = LazyLock::new(|| {
+    let data = &crate::abi::machine::current().segments.data;
+    *crate::backend::select::SEGMENTS
+        .iter()
+        .find(|(_, name)| name.eq_ignore_ascii_case(data))
+        .expect("the machine's data segment is a segment register")
+        .0
+});
+
+/// The register that reaches the data group while the data segment register
+/// holds something else: the stack's, where the stack lives in the data group.
+pub static DATA_THROUGH: LazyLock<Option<Register>> = LazyLock::new(|| {
+    let segments = &crate::abi::machine::current().segments;
+    segments.stack_is_data.then(|| {
+        *crate::backend::select::SEGMENTS
+            .iter()
+            .find(|(_, name)| name.eq_ignore_ascii_case(&segments.stack))
+            .expect("the machine's stack segment is a segment register")
+            .0
+    })
+});
+
+/// Whether `one` needs the data segment register to hold the data group: it
+/// calls, returns, traps or is opaque; it is an x87 instruction, whose
+/// emulator fixup spells the segment itself; or it is a string instruction,
+/// which reads the data segment without naming it.
+pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
+    let Some(what) = &one.what else {
+        return true;
+    };
+    if !one.clobbers.is_empty() && what.op == Operation::Nothing {
+        return true;
+    }
+    if matches!(
+        what.op,
+        Operation::Call
+            | Operation::Return
+            | Operation::Escape
+            | Operation::Barrier
+            | Operation::Data
+            | Operation::FloatLoad
+            | Operation::FloatStore
+            | Operation::FloatArith
+            | Operation::FloatArithPop
+            | Operation::FloatUnary
+    ) {
+        return true;
+    }
+    let name = what.name.as_deref().unwrap_or("");
+    let bare = name.trim_start_matches("rep ").trim_start_matches("repe ").trim_start_matches("repne ");
+    ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"].iter().any(|one| bare.starts_with(one))
+        || name.starts_with('f')
+}
 // One far load per selector: its selector result is in the class, not pinned,
 // and the rewriter spells the instruction for the register it was given.
 pub static FAR_LOADS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
-    IndexMap::from_iter([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs")])
+    IndexMap::from_iter([(Register::ES, "les"), (Register::FS, "lfs"), (Register::GS, "lgs"), (Register::DS, "lds")])
 });
 
 pub fn far_load(what: &Semantics) -> bool {

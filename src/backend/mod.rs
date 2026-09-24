@@ -11,6 +11,7 @@ pub mod constrain;
 pub mod copyprop;
 pub mod copysink;
 pub mod cpu;
+pub mod datagroup;
 pub mod division;
 pub mod farcall;
 pub mod farload;

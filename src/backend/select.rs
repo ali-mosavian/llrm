@@ -1210,6 +1210,7 @@ pub static FAR_LOADS: LazyLock<IndexMap<Register, (&'static str, &'static str)>>
         (Register::ES, ("les", "LES_R16_M1616")),
         (Register::FS, ("lfs", "LFS_R16_M1616")),
         (Register::GS, ("lgs", "LGS_R16_M1616")),
+        (Register::DS, ("lds", "LDS_R16_M1616")),
     ])
 });
 

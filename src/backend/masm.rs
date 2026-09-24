@@ -668,7 +668,12 @@ pub fn _memory(cell: &ir::Mem, names: &IndexMap<(Space, i64), String>) -> Result
         Space::Segment | Space::External => {
             let symbol = named(names, address);
             let indexed = if registers.is_empty() { String::new() } else { format!("[{registers}]") };
-            return Ok(format!("{size}{symbol}{disp}{indexed}"));
+            let segment = if address.segment == Register::None {
+                String::new()
+            } else {
+                format!("{}:", target::name_of(address.segment))
+            };
+            return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
             let segment = if address.segment == Register::None {

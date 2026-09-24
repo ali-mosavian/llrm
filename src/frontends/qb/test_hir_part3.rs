@@ -1587,3 +1587,33 @@ fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
     let invariant = row.lines().filter(|line| line.contains("<- load") && !line.contains("]+v")).collect::<Vec<_>>();
     assert!(invariant.is_empty(), "{text}");
 }
+
+/// PLASMA read three local arrays and VRAM with three selector registers, so
+/// one register took two of them and was reloaded for each every pixel. The
+/// data segment register is the fourth, with the data group reached through
+/// the stack segment while it holds one.
+#[test]
+fn test_a_loop_out_of_selectors_holds_one_in_the_data_segment() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "T.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED k\r\nt\r\nSUB t\r\nDIM a(320), b(320), c(128, 128)\r\n\
+DEF SEG = &HA000\r\nFOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE o, c((a(x) + k) AND 127, (b(x) + y) AND 127)\r\n\
+o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let text = listing(&parsed_as(&source, "qb45", "qb45"));
+    let function = between(&text, "T proc", "T endp");
+    let lines = function.lines().collect::<Vec<_>>();
+    let store = lines.iter().position(|line| line.contains("mov") && line.contains("byte ptr") && line.contains(":[")).expect("the POKE");
+    let top = lines[..store].iter().rposition(|line| line.ends_with(':')).expect("the loop's label");
+    let label = lines[top].trim_end_matches(':');
+    let bottom = store + lines[store..].iter().position(|line| line.trim_start().starts_with('j') && line.ends_with(label)).expect("the back edge");
+    let inner = lines[top..=bottom].join("\n");
+    assert!(!regex::Regex::new(r"\bl[efg]s\b|pushw\s+-?\d+\n\s+pop\s+[efg]s").unwrap().is_match(&inner), "{inner}");
+    // While the data segment register holds a selector, the data group is
+    // reached through the stack segment.
+    if regex::Regex::new(r"pop\s+ds|mov\s+ds,|\blds\b").unwrap().is_match(&inner) {
+        assert!(inner.lines().filter(|line| line.contains("K%")).all(|line| line.contains("ss:K%")), "{inner}");
+    }
+}
