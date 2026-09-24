@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
-use num_traits::Signed;
+use num_traits::{Signed, ToPrimitive};
 
 use crate::analysis::consts::{self, Known};
 use crate::analysis::induction::{self, Affine, AffineOperand};
@@ -671,15 +671,9 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
         let inside = loop_.body.clone();
         let candidates = induction::basics(body, &loop_);
         for candidate in candidates.values() {
-            let Some(symbolic) =
-                induction::zero_terminating_control(body, &loop_, proof, candidate, Some(&facts))
-            else {
+            let Some(preheader) = proof.preheader else {
                 continue;
             };
-            let control = &symbolic.replacement;
-            let preheader = proof.preheader.expect("control_replacement proved a preheader");
-            let width = symbolic.candidate.start.width();
-            let step = &symbolic.step;
             let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
                 continue;
             };
@@ -701,7 +695,12 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             {
                 continue;
             }
-            let offsets = _offsets(phi.result, &readers, &placed, &home, &inside, &BTreeSet::from([stepping_at]), body, true);
+            // The counter itself may take the zero test: its own compare is
+            // control, and every other read must then be an offset.
+            let own_compare = (proof.compare.block_index(), proof.compare.operation_index());
+            let itself = candidate == &proof.counter;
+            let own = if itself { BTreeSet::from([stepping_at, own_compare]) } else { BTreeSet::from([stepping_at]) };
+            let offsets = _offsets(phi.result, &readers, &placed, &home, &inside, &own, body, true);
             // A direct address recurrence has no separate invariant base to
             // rebase.  It remains valid, but cannot replace control by this
             // representation.  This is a property of the affine expression,
@@ -713,6 +712,23 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             {
                 continue;
             }
+            let covered = if itself {
+                let rebased = offsets.iter().map(|(at, ..)| *at).collect::<BTreeSet<_>>();
+                crate::analysis::occurrence::operations(body)
+                    .map(|(at, ..)| at)
+                    .filter(|at| rebased.contains(&(at.block_index(), at.operation_index())))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            let Some(symbolic) =
+                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
+            else {
+                continue;
+            };
+            let control = &symbolic.replacement;
+            let width = symbolic.candidate.start.width();
+            let step = &symbolic.step;
             let read = body
                 .blocks
                 .iter()
@@ -761,7 +777,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                     .map(|(index, arg)| if index == position { adjusted.as_arg() } else { arg.clone() })
                     .collect();
                 assert!(matches!(base, Arg::Held(_) | Arg::Const(_)));
-                let uses = op
+                let mut uses: Vec<Value> = op
                     .uses
                     .iter()
                     .map(|value| match &base {
@@ -772,6 +788,12 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                         _ => *value,
                     })
                     .collect();
+                // A constant offset that became a held one is a new read, placed
+                // among the held arguments where it now sits.
+                if let (Arg::Const(_), AffineOperand::Held(adjusted)) = (&base, &adjusted) {
+                    let before = op.args[..position].iter().filter(|arg| matches!(arg, Arg::Held(_))).count();
+                    uses.insert(before.min(uses.len()), adjusted.value);
+                }
                 let mut replacement = op.clone();
                 replacement.args = args;
                 replacement.uses = uses;
@@ -875,7 +897,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                         .phis
                         .iter()
                         .enumerate()
-                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi))
+                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
                         .map(|(phi_index, other)| {
                             if std::ptr::eq(other, phi) {
                                 Phi {
@@ -904,6 +926,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 changed.block(proof.latch).expect("the latch remains"),
                 &entry_ops,
                 Some(&[proof.latch, proof.exit]),
+                induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
             )?;
             return symbolically_zeroed(&Rc::new(rotated));
         }

@@ -93,6 +93,10 @@ impl crate::model::passes::MIRTransform for Strength {
         "strength"
     }
 
+    fn after_settling(&self) -> bool {
+        true
+    }
+
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
         use super::{exitsink, indvars, ivshare, loopexit};
 
@@ -476,6 +480,7 @@ pub(crate) fn reduced(
         };
         candidates.retain(|one| !stepped(one.op));
         let mut added = 0;
+        let mut carried = BTreeMap::<OpOccurrence, Value>::new();
         // One counter an expression.
         let mut shared = HashMap::<
             (
@@ -509,6 +514,7 @@ pub(crate) fn reduced(
                 width,
             );
             if let Some(&counter) = shared.get(&key) {
+                carried.insert(one.op, counter);
                 replacements.insert(one.op, vec![_copying(op, counter, answer, width)]);
                 if one.pointer.is_some() {
                     pointer_bindings.push((one.op, answer, counter));
@@ -610,9 +616,55 @@ pub(crate) fn reduced(
                 pointer_bindings.push((one.op, answer, start));
             }
             shared.insert(key, start);
+            carried.insert(one.op, start);
             added += 1;
         }
         let _ = added;
+        // A credited root carries its whole stride class: every other formula
+        // of its counter and multiplier is an invariant plus the root, however
+        // it was spelled. The root's phi holds this iteration's value anywhere
+        // in the body.
+        let group = &candidate_groups[&loop_.header];
+        for root in group.iter().filter(|one| _bare(one) && replacement_credits.contains(&one.op)) {
+            let Some(&recurrence) = carried.get(&root.op) else {
+                continue;
+            };
+            for member in group.iter().filter(|one| one.op != root.op && _same_stride(body, root, one)) {
+                if replacements.contains_key(&member.op) {
+                    continue;
+                }
+                let op = op_at(member.op);
+                let Some(answer) = _answer(&reads, member.op) else {
+                    continue;
+                };
+                let width = _width(op);
+                if member.offsets.is_empty() {
+                    replacements.insert(member.op, vec![_copying(op, recurrence, answer, width)]);
+                    continue;
+                }
+                taken += 1;
+                let invariant = Value {
+                    id: _next(body, taken),
+                    at: preheader,
+                    flags: false,
+                    variable: taken,
+                    version: 1,
+                };
+                ahead.entry(preheader).or_default().extend(_starts(body, invariant, member, preheader, false));
+                taken += member.offsets.len() as u32 * 2;
+                let mut sum = _made(
+                    Kind::Add,
+                    "add",
+                    answer,
+                    vec![Arg::Held(Held { value: invariant, width }), Arg::Held(Held { value: recurrence, width })],
+                    op.at,
+                    op,
+                );
+                sum.op = Some(OpCode::Operation(Operation::Binary));
+                sum.id = op.id;
+                replacements.insert(member.op, vec![sum]);
+            }
+        }
     }
 
     if replacements.is_empty() {
@@ -751,6 +803,55 @@ struct _Replacement {
     rank: (i64, i64, i64),
 }
 
+/// A formula that is its counter times its multiplier and nothing more.
+fn _bare(one: &Derived) -> bool {
+    one.offsets.is_empty() && one.pointer.is_none()
+}
+
+/// Whether `one` is `root` plus an invariant: the same counter, multiplier and width.
+fn _same_stride(body: &MirBody, root: &Derived, one: &Derived) -> bool {
+    let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
+    one.of == root.of && one.by == root.by && one.pointer.is_none() && _width(op_at(one.op)) == _width(op_at(root.op))
+}
+
+/// What carrying bare `root` replaces: its stride class, and every pure
+/// operation of the loop read only by that, which dies with it -- `i - 1`
+/// under `(i - 1) * 2`.
+fn _stride_cover(body: &MirBody, loop_: &Loop, root: &Derived, formulas: &[Derived]) -> BTreeSet<OpOccurrence> {
+    let mut covered = formulas.iter().filter(|one| _same_stride(body, root, one)).map(|one| one.op).collect::<BTreeSet<_>>();
+    let mut readers = BTreeMap::<Value, Vec<OpOccurrence>>::new();
+    for (occurrence, _, op) in operations(body) {
+        for value in &op.uses {
+            readers.entry(*value).or_default().push(occurrence);
+        }
+    }
+    let in_phis = body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.values().copied()).collect::<BTreeSet<_>>();
+    loop {
+        let before = covered.len();
+        for (occurrence, block, op) in operations(body) {
+            if covered.contains(&occurrence)
+                || !loop_.body.contains(&block.at)
+                || op.defines.is_empty()
+                || !op.loads.is_empty()
+                || !op.stores.is_empty()
+                || !op.merges.is_empty()
+                || op.barrier()
+            {
+                continue;
+            }
+            let dies = op.defines.iter().all(|value| {
+                !in_phis.contains(value) && readers.get(value).is_none_or(|read| read.iter().all(|at| covered.contains(at)))
+            }) && op.defines.iter().any(|value| readers.contains_key(value));
+            if dies {
+                covered.insert(occurrence);
+            }
+        }
+        if covered.len() == before {
+            return covered;
+        }
+    }
+}
+
 fn _formula_descendants(
     body: &MirBody,
     root: &Derived,
@@ -829,7 +930,11 @@ fn _control_credits(
                 .any(|arg| matches!(arg, Arg::Held(held) if results.contains(&held.value)))
         });
         for (order, root) in roots.enumerate() {
-            let descendants = _formula_descendants(body, root, &candidates);
+            let descendants = if _bare(root) {
+                _stride_cover(body, loop_, root, &candidates)
+            } else {
+                _formula_descendants(body, root, &candidates)
+            };
             if induction::control_replacement(body, loop_, proof, &descendants).is_none() {
                 continue;
             }
@@ -1220,6 +1325,13 @@ fn _formula_set(
     // A credited root is the exact map which discharges the old counter's
     // uses; carry it and leave its invariant field additions in the loop.
     for root in candidates.iter().filter(|one| credited.contains(&one.op)) {
+        if _bare(root) {
+            for member in candidates.iter().filter(|one| _same_stride(body, root, one)) {
+                selected.remove(&member.op);
+            }
+            selected.insert(root.op);
+            continue;
+        }
         let mut pending = vec![held_result(op(root)).expect("a root has a result")];
         while let Some(value) = pending.pop() {
             for child in candidates {

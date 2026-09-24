@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::backend::{
-    cpu, frame, jumps, lower, lower_int64, masm, omfwrite,
+    cpu, executed, frame, jumps, lower, lower_int64, masm, omfwrite,
 };
 use crate::flow;
 use crate::model::lir;
@@ -398,6 +398,7 @@ pub fn assembled(
 
     let mut mirs = Vec::new();
     let mut lirs: Vec<String> = Vec::new();
+    let mut costs: Vec<String> = Vec::new();
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     for raised in &raised_procedures {
         let body = &bodies[&raised.name];
@@ -494,11 +495,14 @@ pub fn assembled(
         let low = jumps::duplicated_returns(body, overhead);
         if dump.is_some() {
             lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
+            costs.push(executed::summary(&low));
+            costs.push(format!("{} loop trip counts {:?}", low.name, low.loop_trip_counts));
         }
         procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees });
     }
     write(dump, "mir", || mirs.join("\n"))?;
     write(dump, "lir", || lirs.join("\n"))?;
+    write(dump, "cost", || costs.join("\n") + "\n")?;
     let mut externs = _externs(&unit);
     externs.extend(shared.runtime.values().map(|one| (one.object_name(), "far".to_owned())));
     let mut data = if _optimise {
@@ -1247,6 +1251,78 @@ mod tests {
         HALVED.with(|halved| halved.set(0));
         assert!(assembled(&text, "loopaddr", true, None, "386", &crate::model::passes::O2()).is_ok());
         assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (32, 15));
+    }
+
+    /// The innermost loop's lines, from its label to its backward branch.
+    fn innermost(fixture: &str) -> Vec<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/c/{fixture}.cgs"));
+        let text = std::fs::read_to_string(path).unwrap();
+        let built = assembled(&text, fixture, true, None, "486", &crate::model::passes::O2()).unwrap();
+        let asm = crate::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let (top, back) = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| one.starts_with('j') && !one.starts_with("jmp"))
+            .find_map(|(at, one)| {
+                let label = format!("{}:", one.split_whitespace().nth(1)?);
+                Some((lines[..at].iter().position(|line| *line == label)?, at))
+            })
+            .expect("a loop");
+        lines[top..back].iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    /// The innermost loop's counting: its steps by a constant and its compares.
+    fn loop_counting(fixture: &str) -> Vec<String> {
+        let constant = |one: &str| one.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok());
+        innermost(fixture)
+            .into_iter()
+            .filter(|one| {
+                one.starts_with("inc ")
+                    || one.starts_with("dec ")
+                    || one.starts_with("cmp ")
+                    || (one.starts_with("add ") || one.starts_with("sub ")) && constant(one)
+            })
+            .collect()
+    }
+
+    /// `dot` indexes `a[i]` and `b[i]`: before strength waited for the other passes to
+    /// settle, it kept two pointers and a counter, three steps per iteration.
+    #[test]
+    fn test_addresses_differing_by_base_share_one_stepped_offset() {
+        assert_eq!(loop_counting("dot"), ["add bx, 2"]);
+    }
+
+    /// `bytes` indexes by `i` itself, with a bound only known at run time: the
+    /// counter never counted to zero, so each iteration compared it with `n` in memory.
+    #[test]
+    fn test_a_counter_read_only_as_offsets_counts_to_zero() {
+        assert_eq!(loop_counting("bytes"), ["inc bx"]);
+    }
+
+    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root beside
+    /// `i * 2`, so each array stepped its own pointer beside a counter.
+    #[test]
+    fn test_subscripts_of_one_stride_share_one_offset() {
+        assert_eq!(loop_counting("from1"), ["add bx, 2"]);
+        let loop_ = innermost("from1");
+        let two_registers = |one: &String| {
+            let inside = one.split_once("ptr [").map_or("", |(_, inside)| inside).as_bytes();
+            inside.len() > 4 && inside[2] == b'+' && inside[3].is_ascii_alphabetic()
+        };
+        assert!(loop_.iter().filter(|one| one.contains("ptr [")).all(two_registers), "{loop_:#?}");
+    }
+
+    /// Rotation consumed the syntax that proved crc's counts, so the instrument
+    /// guessed nine in ten and read 1505 executed instructions instead of 1356.
+    #[test]
+    fn test_rotation_keeps_provable_trip_counts() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/crc.cgs");
+        let text = std::fs::read_to_string(path).unwrap();
+        let dump = tempfile::tempdir().unwrap();
+        assembled(&text, "crc", true, Some(dump.path()), "486", &crate::model::passes::O2()).unwrap();
+        let cost = std::fs::read_to_string(dump.path().join("cost")).unwrap();
+        assert!(!cost.contains("loop trip counts []"), "{cost}");
     }
 
     /// A callee taking arguments in registers: the raise pushed them anyway,

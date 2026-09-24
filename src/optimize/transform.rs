@@ -11,11 +11,6 @@ use crate::analysis::occurrence::OpOccurrence;
 use crate::analysis::ssa::{provider as _provider, substituted as _substituted};
 use crate::model::mir::{self, Arg, Held, Kind, MirBlock, MirBody, Op, OrderedMap, Phi, Value};
 
-/// Erase the operations whose address is in `gone`.
-pub(crate) fn _absorb(ops: &[Op], gone: &BTreeSet<i64>) -> Vec<Op> {
-    _without(ops, |one| gone.contains(&one.at))
-}
-
 /// Remove selected computation while retaining exact source ownership.
 ///
 /// A deleted source occurrence becomes an inert marker owning the same
@@ -2181,7 +2176,10 @@ pub(crate) fn decided(
             *ops.last_mut().expect("a last operation") = jump;
             out.push(MirBlock { succ: vec![target], ..block.with_ops(ops) });
         } else {
-            let kept = _absorb(&block.ops, &BTreeSet::from([last.at]));
+            // Only the branch goes: other work can share its source address.
+            let (branch, before) = block.ops.split_last().expect("a last operation");
+            let mut kept = before.to_vec();
+            kept.extend(_without(std::slice::from_ref(branch), |_| true));
             if kept == block.ops {
                 out.push(block.clone());
                 continue;
@@ -3958,6 +3956,7 @@ impl _Transaction<'_, '_> {
         // last change skips every pass that already saw it.
         let mut settled: Vec<Option<Rc<MirBody>>> = vec![None; self.passes.borrow().len()];
         let mut unroll_settled: Option<Rc<MirBody>> = None;
+        let mut holding = !self.only && self.passes.borrow().iter().any(|one| one.after_settling());
         for iteration in 0..limit {
             let before = Rc::clone(&state);
             let started = std::time::Instant::now();
@@ -3965,6 +3964,9 @@ impl _Transaction<'_, '_> {
             {
                 let mut passes = self.passes.borrow_mut();
                 for (one, settled) in passes.iter_mut().zip(&mut settled) {
+                    if holding && one.after_settling() {
+                        continue;
+                    }
                     if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
                         let name = one.name().to_owned();
                         let input = Rc::clone(&state);
@@ -4005,6 +4007,10 @@ impl _Transaction<'_, '_> {
                 started.elapsed().as_secs_f64() * 1e3,
                 if changed.is_empty() { "nothing".to_owned() } else { changed.join(" ") }
             );
+            if holding && state == before {
+                holding = false;
+                continue;
+            }
             if self.only || state == before {
                 // A structural candidate can make its last cloned region
                 // unreachable on the same round that reaches the scalar fixed

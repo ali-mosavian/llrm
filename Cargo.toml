@@ -43,3 +43,9 @@ path = "src/bin/modernfront.rs"
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.
 [profile.release]
 incremental = true
+
+# Iteration builds: `cargo test --profile fast`. More codegen units keep a
+# one-line change from re-optimizing most of the crate.
+[profile.fast]
+inherits = "release"
+codegen-units = 256

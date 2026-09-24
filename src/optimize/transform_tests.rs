@@ -590,7 +590,7 @@ mod pipeline_tests {
 
     use crate::model::ir::Operation;
     use crate::model::mir::{Arg, Const, Kind, MirBlock, MirBody, Op, OpCode};
-    use crate::optimize::transform::{_absorb, applied, Applied, PASSES};
+    use crate::optimize::transform::{_without, applied, Applied, PASSES};
 
     fn move_(at: i64, kind: Kind, args: Vec<Arg>) -> Op {
         let mut op = Op::new(at, OpCode::Operation(Operation::Move), "mov", vec![], vec![]);
@@ -644,7 +644,7 @@ mod pipeline_tests {
         let first = move_(0, Kind::Copy, constant(3));
         let survivor = move_(3, Kind::Copy, constant(21));
         let last = move_(6, Kind::Copy, constant(5));
-        let done = _absorb(&[first, survivor.clone(), last.clone()], &BTreeSet::from([0]));
+        let done = _without(&[first, survivor.clone(), last.clone()], |op| op.at == 0);
         assert_eq!(done.iter().map(|op| op.args.clone()).collect::<Vec<_>>(), vec![survivor.args, last.args]);
     }
 
@@ -766,3 +766,78 @@ mod corpus_tests {
     }
 }
 
+
+mod decided_tests {
+    use std::collections::BTreeSet;
+
+    use crate::frontends::qb::{compile as qb_compile, driver as qb_driver};
+    use crate::model::passes::O2;
+
+    /// deedlines hung in SPHEREMAPLASMA: deciding a constant zero-trip guard
+    /// dropped every op sharing the guard's source address, which included the
+    /// countdown's seeds, so the fade loop counted from an unwritten slot.
+    #[test]
+    fn test_deciding_a_guard_keeps_the_work_sharing_its_address() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = directory.path().join("FADE.BAS");
+        let lines = [
+            "DECLARE SUB t ()",
+            "'$DYNAMIC",
+            "DIM SHARED r%(0 TO 255), g%(0 TO 255), B%(0 TO 255)",
+            "'$STATIC",
+            "t",
+            "SUB t",
+            "s% = 0: t% = 26",
+            "s1% = 0: t1% = 26",
+            "fps% = 0",
+            "DO",
+            "fps% = fps% + 1",
+            "IF fps% = 128 THEN fadeout% = 1",
+            "IF s% < t% THEN s% = s% + 1 ELSE GOTO endfadepal",
+            "OUT &H3C8, 0",
+            "FOR n% = 0 TO 255 STEP 10",
+            "OUT &H3C9, 63 + s% * ((r%(n%) - 63) / t%)",
+            "OUT &H3C9, 63 + s% * ((g%(n%) - 63) / t%)",
+            "OUT &H3C9, 63 + s% * ((B%(n%) - 63) / t%)",
+            "NEXT n%",
+            "endfadepal:",
+            "IF fadeout% = 0 THEN GOTO nofadeout",
+            "IF s1% < t1% THEN s1% = s1% + 1 ELSE GOTO gout",
+            "OUT &H3C8, 0",
+            "FOR n% = 0 TO 255 STEP 10",
+            "OUT &H3C9, r%(n%) + s1% * ((0 - r%(n%)) / t1%)",
+            "OUT &H3C9, g%(n%) + s1% * ((0 - g%(n%)) / t1%)",
+            "OUT &H3C9, B%(n%) + s1% * ((0 - B%(n%)) / t1%)",
+            "NEXT n%",
+            "nofadeout:",
+            "LOOP",
+            "gout:",
+            "END SUB",
+        ];
+        std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+        let program =
+            qb_driver::parsed(&basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false)
+                .unwrap();
+        let lowered = crate::hir::lower::lower(&program).unwrap();
+        let (function, body) = program.modules[0]
+            .functions
+            .iter()
+            .zip(&lowered)
+            .find(|(function, _)| function.name.ends_with('T'))
+            .expect("SUB t");
+        let body = qb_compile::optimized(&program, function, body, &O2()).unwrap().body;
+        let defined: BTreeSet<_> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.clone())))
+            .collect();
+        let read: BTreeSet<_> = body
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block.phis.iter().flat_map(|phi| phi.incoming.values().copied()).chain(block.ops.iter().flat_map(|op| op.uses.clone()))
+            })
+            .collect();
+        assert_eq!(read.difference(&defined).collect::<Vec<_>>(), Vec::<&crate::model::mir::Value>::new());
+    }
+}

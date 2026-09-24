@@ -2129,18 +2129,19 @@ pub(crate) fn control_replacement<'a>(
 }
 
 /// Prove that `candidate` can supply a counted loop's terminating flags.
+///
+/// `covered` are the counter's reads the caller rebases; the counter itself
+/// is a candidate when they are all its data reads.
 pub(crate) fn zero_terminating_control<'a>(
     body: &Rc<MirBody>,
     loop_: &Loop,
     proof: &'a CountedLoop,
     candidate: &Affine,
+    covered: &BTreeSet<OpOccurrence>,
     facts: Option<&IndexMap<Value, Known>>,
 ) -> Option<ZeroTerminatingControl<'a>> {
-    let replacement = control_replacement(body, loop_, proof, &BTreeSet::new())?;
+    let replacement = control_replacement(body, loop_, proof, covered)?;
     let maximum = proof.maximum.as_ref()?;
-    if candidate == &proof.counter {
-        return None;
-    }
     let width = proof.counter.start.width();
     if candidate.start.width() != width
         || candidate.step.width() != width

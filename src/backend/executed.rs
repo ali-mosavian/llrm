@@ -16,6 +16,14 @@ pub struct Executed {
     pub memory: f64,
 }
 
+/// `executed` as one line, for the `cost` channel and dump.
+pub fn summary(body: &LirBody) -> String {
+    match executed(body) {
+        Some(done) => format!("{} executes {:.0} instructions, {:.0} memory operands", body.name, done.instructions, done.memory),
+        None => format!("{} executes an unbounded amount", body.name),
+    }
+}
+
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
     let graph = crate::analysis::intervals::_graph(&body.blocks);
@@ -99,10 +107,45 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     let mut out = Executed { instructions: 0.0, memory: 0.0 };
     for (block, frequency) in body.blocks.iter().zip(&right) {
         let frequency = frequency.max(0.0);
-        for one in block.insns.iter().filter_map(|one| one.what.as_ref()) {
+        for one in block.insns.iter().filter(|one| crate::backend::masm::prints(one)) {
             out.instructions += frequency;
-            out.memory += frequency * one.dests.iter().chain(&one.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
+            if let Some(what) = &one.what {
+                out.memory += frequency * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
+            }
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use iced_x86::Register;
+
+    use super::executed;
+    use crate::model::ir::{Loc, Operation, Reg, Semantics};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    fn insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
+    }
+
+    /// NOTHING anchors print no bytes, yet each counted as an executed
+    /// instruction: nbody.c read 144 more with its asm unchanged.
+    #[test]
+    fn test_anchors_that_print_nothing_do_not_execute() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let insns = vec![
+            insn(1, Operation::Nothing, "", vec![], vec![]),
+            insn(2, Operation::Move, "mov", vec![ax], vec![bx]),
+            insn(3, Operation::Nothing, "", vec![], vec![]),
+            insn(4, Operation::Return, "ret", vec![], vec![]),
+        ];
+        let body = LirBody::new("anchored", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        assert_eq!(executed(&body).expect("straight-line").instructions, 2.0);
+    }
 }
