@@ -317,6 +317,14 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
 /// Frontends may keep every CFG edge explicit through allocation. Listing is
 /// where block order becomes physical, and therefore the first common layer
 /// that can say an unconditional edge reaches the instruction already next.
+/// Whether an instruction prints: a NOTHING anchor owns a source location
+/// but emits no bytes.
+pub fn prints(one: &lir::Insn) -> bool {
+    one.what.as_ref().is_none_or(|what| {
+        what.op != Operation::Nothing || !matches!(what.name.as_deref().unwrap_or(""), "" | "nop")
+    })
+}
+
 /// NOTHING anchors after the edge own source locations but emit no bytes, so
 /// the last instruction that actually prints is the one that matters.
 pub fn _fallthrough_jump(block: &lir::LirBlock, following: Option<i64>) -> Option<&Arc<lir::Insn>> {
@@ -324,10 +332,7 @@ pub fn _fallthrough_jump(block: &lir::LirBlock, following: Option<i64>) -> Optio
     if block.succ != [following] {
         return None;
     }
-    let last = block.insns.iter().rev().find(|one| match &one.what {
-        None => true,
-        Some(what) => what.op != Operation::Nothing || !matches!(what.name.as_deref().unwrap_or(""), "" | "nop"),
-    })?;
+    let last = block.insns.iter().rev().find(|one| prints(one))?;
     let what = last.what.as_ref()?;
     if what.op != Operation::Jump || what.target != Some(following) {
         return None;
