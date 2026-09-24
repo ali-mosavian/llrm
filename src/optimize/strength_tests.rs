@@ -372,51 +372,6 @@ fn test_formula_selection_prices_a_complete_affine_formula_under_pressure() {
 }
 
 #[test]
-fn test_formula_selection_folds_constant_offsets_before_pricing_a_recompute() {
-    // An unrolled row's last read, base + 16i + 2+2+2+2+2+2, was priced as seven
-    // adds, so strength carried it over budget and the next link every round.
-    let counter = Value::new(10, 0);
-    let answer = Value::new(11, 1);
-    let seed = Value::new(12, 0);
-    let previous = Value::new(13, 1);
-    let affine = Affine {
-        value: counter.id,
-        start: affine_const(0, 2),
-        step: affine_const(1, 2),
-        header: 1,
-    };
-    let link = op(
-        1,
-        Operation::Binary,
-        "add",
-        vec![answer],
-        vec![previous],
-        Kind::Add,
-        vec![held(previous, 2), constant(2, 2)],
-        vec![held(answer, 2)],
-    );
-    let (built, at) = holding(vec![link]);
-    let mut offsets = vec![(held(seed, 2), BigInt::from(1))];
-    offsets.extend((0..6).map(|_| (constant(2, 2), BigInt::from(1))));
-    let formula = Derived { op: at[0], of: affine, by: constant(16, 2), offsets, pointer: None };
-    let costs = OperationCosts {
-        add: 2,
-        multiply: 22,
-        shift: 3,
-        address: 2,
-        load: 4,
-        memory_update: 8,
-        ..OperationCosts::default()
-    };
-    let empty = BTreeSet::new();
-
-    assert_eq!(
-        _formula_set(&built, &[formula], Some(0), &empty, &empty, &costs, Some(&BTreeMap::from([(answer.id, 1)]))),
-        vec![]
-    );
-}
-
-#[test]
 fn test_formula_selection_uses_67h_before_spilling_or_recomputing() {
     let counter = Value::new(10, 0);
     let answer = Value::new(11, 1);

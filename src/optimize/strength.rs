@@ -1425,17 +1425,7 @@ fn _recompute_cost(body: &MirBody, one: &Derived, costs: &OperationCosts) -> i64
     } else {
         costs.multiply
     };
-    // Constant offsets fold into one term.
-    let constant: BigInt = one
-        .offsets
-        .iter()
-        .filter_map(|(offset, coefficient)| match offset {
-            Arg::Const(constant) => Some(&constant.n * coefficient),
-            _ => None,
-        })
-        .sum();
-    let held = one.offsets.iter().filter(|(offset, _)| !matches!(offset, Arg::Const(_))).count();
-    work += (held as i64 + i64::from(constant != BigInt::from(0_u8))) * costs.add;
+    work += one.offsets.len() as i64 * costs.add;
     if one.pointer.is_some() || kind == Kind::PtrOffset {
         work += costs.address;
     }
