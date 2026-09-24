@@ -131,10 +131,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
     if stage == "jumps" && crate::support::debug::enabled("cost") {
-        match crate::backend::executed::executed(&body) {
-            Some(done) => crate::debug!("cost", "{} executes {:.0} instructions, {:.0} memory operands", body.name, done.instructions, done.memory),
-            None => crate::debug!("cost", "{} executes an unbounded amount", body.name),
-        }
+        crate::debug!("cost", "{}", crate::backend::executed::summary(&body));
     }
     Ok(body)
 }

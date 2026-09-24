@@ -16,6 +16,14 @@ pub struct Executed {
     pub memory: f64,
 }
 
+/// `executed` as one line, for the `cost` channel and dump.
+pub fn summary(body: &LirBody) -> String {
+    match executed(body) {
+        Some(done) => format!("{} executes {:.0} instructions, {:.0} memory operands", body.name, done.instructions, done.memory),
+        None => format!("{} executes an unbounded amount", body.name),
+    }
+}
+
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
     let graph = crate::analysis::intervals::_graph(&body.blocks);

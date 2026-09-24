@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
-use num_traits::Signed;
+use num_traits::{Signed, ToPrimitive};
 
 use crate::analysis::consts::{self, Known};
 use crate::analysis::induction::{self, Affine, AffineOperand};
@@ -904,6 +904,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 changed.block(proof.latch).expect("the latch remains"),
                 &entry_ops,
                 Some(&[proof.latch, proof.exit]),
+                induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
             )?;
             return symbolically_zeroed(&Rc::new(rotated));
         }

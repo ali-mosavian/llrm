@@ -9,6 +9,8 @@
 //! `ssa.substituted` is a `SubstitutionError`.
 
 use std::rc::Rc;
+
+use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analysis::loops::{self, Loop};
@@ -266,6 +268,7 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
             changed_latch,
             &entry_ops,
             Some(&[changed_latch.at, proof.exit]),
+            induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
         )?));
     }
     Ok(body.clone())
@@ -336,10 +339,12 @@ pub(crate) fn rotated(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErr
                 ..Op::new(at, OpCode::jump(), "", Vec::new(), Vec::new())
             });
         }
+        let facts = consts::known(body, None, None, None, None);
+        let count = induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64());
         let body = _step_test(body, &loop_, header);
         let header = body.block(header.at).expect("header is a block");
         let first = body.block(first.at).expect("first is a block");
-        return rotated(&Rc::new(at_body(&body, &loop_, preheader, header, first, &ops, None)?));
+        return rotated(&Rc::new(at_body(&body, &loop_, preheader, header, first, &ops, None, count)?));
     }
     Ok(body.clone())
 }
@@ -534,6 +539,7 @@ pub(crate) fn at_body(
     first: &MirBlock,
     ops: &[Op],
     entry_succ: Option<&[i64]>,
+    count: Option<i64>,
 ) -> Result<MirBody, SubstitutionError> {
     let latch = *loop_
         .latches
@@ -684,7 +690,9 @@ pub(crate) fn at_body(
         .iter()
         .copied()
         .collect::<BTreeMap<_, _>>();
-    if let Some(count) = counts.remove(&header.at) {
+    // `count` is what the caller proved before rewriting the loop: rotation
+    // consumes the syntax that proved it, so a provable count must be kept.
+    if let Some(count) = counts.remove(&header.at).or(count) {
         // Rotation makes `first` the natural-loop header.  Preserve an
         // exact fact only when it does not collide with a distinct loop fact;
         // losing a measurement is preferable to attaching the wrong count.
