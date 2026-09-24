@@ -1,0 +1,31 @@
+# Dictionaries: words counted by string key, cards by struct and enum key,
+# and a table grown well past its first eight slots.
+
+enum Suit:
+    hearts
+    spades
+
+struct Card:
+    rank: u8
+    suit: Suit
+
+fn main() -> i16:
+    let words: vec[string] = ["the", "cat", "saw", "the", "dog", "and", "the", "cat", "ran"]
+    let mut counts: dict[string, i16] = {}
+    for word in words:
+        counts[word.copy()] = counts.get(word, 0) + 1
+    let the = counts["the"]
+    print(f"{counts.len} words, the x{the}, owl x{counts.get("owl", 0)}")
+
+    let hand = [Card(rank=12, suit=.hearts), Card(rank=3, suit=.spades), Card(rank=12, suit=.hearts)]
+    let mut per_suit: dict[Suit, i16] = {.hearts: 0, .spades: 0}
+    let mut held: dict[Card, bool] = {}
+    for card in hand:
+        per_suit[card.suit] += 1
+        held[card] = true
+    print(f"hearts {per_suit[.hearts]}, distinct {held.len}, queen {held.contains(Card(rank=12, suit=.hearts))}")
+
+    let squares = {n: n * n for n in range(0, 40)}
+    let n = 37
+    print(f"{squares.len} squares, {n} -> {squares[n]}")
+    return 0

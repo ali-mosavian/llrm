@@ -1,15 +1,15 @@
 struct sample:
     tag: i16
-    value: i32
+    mut value: i32
     delta: i32
 
 fn update() -> i32:
-    var samples: [sample; 5] = [
-        sample { tag: 0, value: 1, delta: 2 },
-        sample { tag: 0, value: 2, delta: 3 },
-        sample { tag: 0, value: 3, delta: 4 },
-        sample { tag: 0, value: 4, delta: 5 },
-        sample { tag: 0, value: 5, delta: 6 },
+    let mut samples: sample[5] = [
+        sample(tag=0, value=1, delta=2),
+        sample(tag=0, value=2, delta=3),
+        sample(tag=0, value=3, delta=4),
+        sample(tag=0, value=4, delta=5),
+        sample(tag=0, value=5, delta=6),
     ]
     for current in &mut samples:
         current.value += current.delta

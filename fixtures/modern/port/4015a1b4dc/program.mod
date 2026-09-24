@@ -1,2 +1,2 @@
 fn value() -> i16:
-    return i16(not 1 == 2)
+    return i16(!1 == 2)

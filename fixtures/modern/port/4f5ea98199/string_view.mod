@@ -3,7 +3,7 @@ fn first(text: string) -> char:
         return byte
     return '\0'
 fn size(text: string) -> u16:
-    return text.len() + text.capacity()
+    return text.len + text.capacity
 fn main() -> u16:
     let text: string = "abc"
     if first(text) == 'a':

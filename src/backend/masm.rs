@@ -199,6 +199,40 @@ fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> S
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
+/// Every return of `body` as `retf bytes`, for a callee that removes its
+/// arguments.
+pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, String> {
+    if !(0..=0xFFFF).contains(&bytes) {
+        return Err("far-return cleanup exceeds 16 bits".into());
+    }
+    if bytes == 0 {
+        return Ok(body.clone());
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns = block
+                .insns
+                .iter()
+                .map(|one| match one.what.as_ref() {
+                    Some(what) if what.op == Operation::Return => {
+                        let mut replaced = (**one).clone();
+                        replaced.what = Some(Semantics {
+                            sources: vec![Loc::Imm(ir::Imm { value: bytes, width: 2, address: None })],
+                            ..what.clone()
+                        });
+                        Arc::new(replaced)
+                    }
+                    _ => Arc::clone(one),
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    Ok(body.with_blocks(blocks))
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
@@ -499,6 +533,8 @@ pub fn _instruction(
         }
         Operation::FloatArith | Operation::FloatArithPop => vec![format!("{name} {}, {}", dests[0], last(&sources))],
         Operation::FloatUnary => vec![name.to_owned()],
+        // `retf n` removes the arguments too.
+        Operation::Return if !sources.is_empty() => vec![format!("{name} {}", sources[0])],
         Operation::Return => vec![name.to_owned()],
         _ => return Err(Unprintable(what.repr())),
     })

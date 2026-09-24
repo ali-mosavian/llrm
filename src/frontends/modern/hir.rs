@@ -1,5 +1,7 @@
 use std::fmt::Write;
 
+use super::syntax::Abi;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Type {
     pub id: u32,
@@ -94,6 +96,19 @@ pub struct CallSite {
     pub instruction: u32,
     pub order: Vec<u32>,
     pub callee: u32,
+    pub callee_cleans: bool,
+}
+
+impl CallSite {
+    /// A call of `count` arguments, pushed as `abi` orders them.
+    pub fn new(instruction: u32, callee: u32, count: u32, abi: Abi) -> Self {
+        Self {
+            instruction,
+            order: if abi.callee_cleans() { (0..count).collect() } else { (0..count).rev().collect() },
+            callee,
+            callee_cleans: abi.callee_cleans(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +122,10 @@ pub struct Function {
     pub entry: u32,
     pub parameters: Vec<u32>,
     pub calls: Vec<CallSite>,
+    /// Callable from other objects by its symbol.
+    pub exported: bool,
+    /// The argument bytes it removes on return, when its ABI makes it the one.
+    pub cleans: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -208,7 +227,14 @@ impl Program {
 }
 
 fn function_json(out: &mut String, function: &Function) {
-    out.push_str("{\"abi\":null,\"blocks\":[");
+    match function.cleans {
+        Some(bytes) => write!(
+            out,
+            "{{\"abi\":{{\"cleanup\":\"callee\",\"distance\":\"far\",\"parameter_bytes\":{bytes}}},\"blocks\":["
+        )
+        .unwrap(),
+        None => out.push_str("{\"abi\":null,\"blocks\":["),
+    }
     for (index, block) in function.blocks.iter().enumerate() {
         comma(out, index);
         write!(out, "{{\"id\":{},\"instructions\":[", block.id).unwrap();
@@ -244,8 +270,10 @@ fn function_json(out: &mut String, function: &Function) {
         comma(out, index);
         write!(
             out,
-            "{{\"callee\":{},\"cleanup\":\"caller\",\"distance\":\"far\",\"instruction\":{},\"order\":[",
-            call.callee, call.instruction
+            "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\",\"instruction\":{},\"order\":[",
+            call.callee,
+            if call.callee_cleans { "callee" } else { "caller" },
+            call.instruction
         )
         .unwrap();
         numbers(out, &call.order);
@@ -253,8 +281,10 @@ fn function_json(out: &mut String, function: &Function) {
     }
     write!(
         out,
-        "],\"entry\":{},\"error_handler\":null,\"error_handler_local\":false,\"external_entries\":[],\"id\":{},\"linkage\":\"internal\",\"name\":",
-        function.entry, function.id
+        "],\"entry\":{},\"error_handler\":null,\"error_handler_local\":false,\"external_entries\":[],\"id\":{},\"linkage\":\"{}\",\"name\":",
+        function.entry,
+        function.id,
+        if function.exported { "external" } else { "internal" }
     )
     .unwrap();
     string(out, &function.name);

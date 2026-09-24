@@ -36,6 +36,10 @@ name = "llrm-modern"
 path = "src/bin/llrm-modern.rs"
 
 [[bin]]
+name = "llrm-run"
+path = "src/bin/llrm-run.rs"
+
+[[bin]]
 name = "modernfront"
 path = "src/bin/modernfront.rs"
 

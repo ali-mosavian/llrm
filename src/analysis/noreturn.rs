@@ -83,6 +83,26 @@ fn _ends_cold(block: &MirBlock, terminal_calls: &BTreeSet<i64>, found: &BTreeSet
     !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))
 }
 
+/// Blocks from which no path reaches a return or `header`: a loop that
+/// leaves into one stops the program rather than going on after the loop.
+pub(crate) fn stranded(body: &MirBody, header: i64) -> BTreeSet<i64> {
+    let predecessors = crate::analysis::loops::predecessors(&body.blocks);
+    let mut returning = BTreeSet::new();
+    let mut pending = body
+        .blocks
+        .iter()
+        .filter(|block| block.ops.iter().any(|op| op.kind == Kind::Return))
+        .map(|block| block.at)
+        .chain([header])
+        .collect::<Vec<_>>();
+    while let Some(at) = pending.pop() {
+        if returning.insert(at) {
+            pending.extend(predecessors.get(&at).into_iter().flatten().copied());
+        }
+    }
+    body.blocks.iter().map(|block| block.at).filter(|at| !returning.contains(at)).collect()
+}
+
 pub(crate) fn _cannot_return(body: &MirBody, terminal_calls: &BTreeSet<i64>) -> bool {
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let mut pending = vec![body.entry];

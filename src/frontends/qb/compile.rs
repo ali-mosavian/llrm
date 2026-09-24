@@ -162,7 +162,7 @@ type Names = IndexMap<(Space, i64), String>;
 
 #[allow(clippy::type_complexity)]
 fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
-    let mut names: Names = IndexMap::from_iter([((Space::Group, 0), "DGROUP".to_owned())]);
+    let mut names: Names = crate::hir::lower::symbol_names();
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
     let internal: IndexMap<i64, &model::DataObject> = module
         .data

@@ -8,7 +8,7 @@ fn quotient(left: fixed16, right: fixed16) -> fixed16:
     return left / right
 
 fn fixed_literals() -> fixed16:
-    var value: fixed16 = 1.5
+    let mut value: fixed16 = 1.5
     value = 2.25
     print(value)
     print(f"fixed={value}")

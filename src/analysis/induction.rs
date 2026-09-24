@@ -15,6 +15,7 @@ use num_bigint::BigInt;
 
 use super::consts::{self, Known, masked};
 use super::occurrence::{OpOccurrence, PhiOccurrence, operations, phis};
+use super::noreturn;
 use super::ranges;
 use super::regions::{RegionError, RegionLayout, overlapping};
 use crate::analysis::loops::{self, Loop, predecessors};
@@ -130,6 +131,8 @@ pub(crate) struct CountedLoop {
     pub step: BigInt,
     pub posttested: bool,
     pub stepped: bool,
+    /// Some other exit stops the program; `count` is the trips when it goes on.
+    pub stops: bool,
     pub count: Option<BigInt>,
     pub first: Option<BigInt>,
     pub last: Option<BigInt>,
@@ -1079,9 +1082,10 @@ struct _Control {
     entered: i64,
     exit: i64,
     posttested: bool,
+    stops: bool,
 }
 
-/// The block whose final branch is the loop's only exit: its header, or its latch.
+/// The block whose final branch is the loop's only exit that goes on: its header, or its latch.
 fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
     // Python's dict comprehension retains the last duplicate address.
     let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
@@ -1105,11 +1109,17 @@ fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
         || control.ops.is_empty()
         || control.ops.last()?.kind != Kind::Branch
         || !control.ops.last()?.target.is_some_and(|target| control.succ.contains(&target))
-        || inside.iter().filter(|at| **at != control.at).any(|at| {
-            let block = blocks[at];
-            block.succ.is_empty() || block.succ.iter().any(|to| !inside.contains(to))
-        })
+        || inside.iter().any(|at| blocks[at].succ.is_empty())
     {
+        return None;
+    }
+    // Any other way out must stop the program: the count holds whenever it goes on.
+    let elsewhere = inside
+        .iter()
+        .filter(|at| **at != control.at)
+        .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
+        .collect::<BTreeSet<_>>();
+    if !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(body, header.at)) {
         return None;
     }
     let outside = body
@@ -1128,6 +1138,7 @@ fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
         entered: entered[0],
         exit: exits[0],
         posttested: std::ptr::eq(control, latch),
+        stops: !elsewhere.is_empty(),
     })
 }
 
@@ -1141,6 +1152,16 @@ fn _control(body: &MirBody, loop_: &Loop) -> Option<_Control> {
 /// `maximum`. Only with `inbounds` is one taken from the loop's memory
 /// accesses: that reads `derived`, which asks this for counts.
 pub(crate) fn counted(
+    body: &Rc<MirBody>,
+    loop_: &Loop,
+    facts: Option<&IndexMap<Value, Known>>,
+    inbounds: bool,
+) -> Vec<CountedLoop> {
+    counted_unless_stopped(body, loop_, facts, inbounds).into_iter().filter(|proof| !proof.stops).collect()
+}
+
+/// `counted`, also for a loop that may leave into a block that never returns.
+pub(crate) fn counted_unless_stopped(
     body: &Rc<MirBody>,
     loop_: &Loop,
     facts: Option<&IndexMap<Value, Known>>,
@@ -1284,6 +1305,7 @@ pub(crate) fn counted(
             step,
             posttested: shape.posttested,
             stepped,
+            stops: shape.stops,
             count,
             first,
             last,
@@ -1643,7 +1665,15 @@ pub(crate) fn agreed_count(proofs: &[CountedLoop]) -> Option<BigInt> {
 
 /// `agreed_count`, or the count remembered at this header when nothing proves one now.
 pub(crate) fn trip_count(body: &Rc<MirBody>, loop_: &Loop, facts: &IndexMap<Value, Known>) -> Option<BigInt> {
-    let proofs = counted(body, loop_, Some(facts), false);
+    _trips(body, loop_, &counted(body, loop_, Some(facts), false))
+}
+
+/// `trip_count` for a loop that may also stop the program: its trips whenever it does not.
+pub(crate) fn trips_unless_stopped(body: &Rc<MirBody>, loop_: &Loop, facts: &IndexMap<Value, Known>) -> Option<BigInt> {
+    _trips(body, loop_, &counted_unless_stopped(body, loop_, Some(facts), false))
+}
+
+fn _trips(body: &Rc<MirBody>, loop_: &Loop, proofs: &[CountedLoop]) -> Option<BigInt> {
     let zero = BigInt::from(0_u8);
     if !proofs.iter().any(|proof| proof.count.as_ref().is_some_and(|count| *count != zero)) {
         // A semantics-preserving loop transform may consume the syntactic
@@ -1659,7 +1689,7 @@ pub(crate) fn trip_count(body: &Rc<MirBody>, loop_: &Loop, facts: &IndexMap<Valu
             .filter_map(|(header, count)| (*header == loop_.header).then_some(BigInt::from(*count)))
             .last();
     }
-    agreed_count(&proofs)
+    agreed_count(proofs)
 }
 
 /// A counted loop whose first iteration and finite exit are proven.

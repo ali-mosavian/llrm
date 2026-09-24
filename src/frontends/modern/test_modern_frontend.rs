@@ -1,8 +1,5 @@
 //! Port of `tests/test_modern_frontend.py`.
 //!
-//! Sources are parsed by `QBOPT_MODERNFRONT` when set, else by `cargo run`,
-//! exactly as the driver does.
-//!
 //! skipped: `execute.run` assertions (`qbopt/hir/execute.py` is tools-only),
 //! and the tests made of nothing else; test_dos_bootstrap_enters_the_runtime_before_language_main
 //! (reads runtime sources, no compiler).
@@ -182,8 +179,9 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
         [(1, Some(false)), (1, Some(true)), (1, Some(false)), (2, Some(true)), (2, Some(false)), (4, Some(true)), (4, Some(false))]
     );
     assert_eq!((types["bool"].width, types["void"].width), (1, 0));
-    assert_eq!(types["f32"].evaluation, model::FloatEvaluation::Binary32);
-    assert_eq!(types["f64"].evaluation, model::FloatEvaluation::Binary64);
+    // The x87 evaluates in extended precision and rounds on store, as DOS C does.
+    assert_eq!(types["f32"].evaluation, model::FloatEvaluation::Extended80);
+    assert_eq!(types["f64"].evaluation, model::FloatEvaluation::Extended80);
     let sizes: Vec<usize> = program.modules[0].data.iter().map(|one| one.bytes.len()).collect();
     assert_eq!(sizes, [4, 8]);
 }
@@ -301,10 +299,12 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     let string = types["string"];
     assert_eq!((string.element, string.width, string.address), (Some(types["char"].id), 2, model::AddressKind::Near));
     for literal in &module.data {
-        let length = literal.bytes[0] | literal.bytes[1] << 8;
-        let capacity = literal.bytes[2] | literal.bytes[3] << 8;
+        // Static and read-only (section 13), then length and capacity.
+        assert_eq!(&literal.bytes[..2], [0x08, 0]);
+        let length = literal.bytes[2] | literal.bytes[3] << 8;
+        let capacity = literal.bytes[4] | literal.bytes[5] << 8;
         assert_eq!(length, capacity);
-        assert_eq!(length, literal.bytes.len() as i64 - 5);
+        assert_eq!(length, literal.bytes.len() as i64 - 7);
         assert_eq!(*literal.bytes.last().unwrap(), 0);
     }
 
@@ -347,7 +347,7 @@ fn test_nbody_string_places_point_after_the_descriptor() {
     let strings: Vec<&model::Place> =
         program.modules[0].functions[0].places.iter().filter(|place| place.name.starts_with("$string")).collect();
     assert!(!strings.is_empty());
-    assert!(strings.iter().all(|place| place.offset == 4));
+    assert!(strings.iter().all(|place| place.offset == 6));
 }
 
 #[test]
@@ -422,16 +422,16 @@ fn test_nbody_velocity_fields_are_stored_once_per_update() {
 const STRIDE: &str = "\
 struct sample:
     tag: i16
-    value: i32
+    mut value: i32
     delta: i32
 
 fn update() -> i32:
-    var samples: [sample; 5] = [
-        sample { tag: 0, value: 1, delta: 2 },
-        sample { tag: 0, value: 2, delta: 3 },
-        sample { tag: 0, value: 3, delta: 4 },
-        sample { tag: 0, value: 4, delta: 5 },
-        sample { tag: 0, value: 5, delta: 6 },
+    let mut samples: sample[5] = [
+        sample(tag=0, value=1, delta=2),
+        sample(tag=0, value=2, delta=3),
+        sample(tag=0, value=3, delta=4),
+        sample(tag=0, value=4, delta=5),
+        sample(tag=0, value=5, delta=6),
     ]
     for current in &mut samples:
         current.value += current.delta
@@ -444,7 +444,7 @@ fn main() -> i16:
 
 #[test]
 fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
-    // The end-relative recurrence is an affine-loop rule, not a body/16 rule.
+    // The end-relative recurrence is an affine-loop rule, !a body/16 rule.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "stride.mod", STRIDE);
 
@@ -477,29 +477,29 @@ fn test_os_copies_no_loop_into_larger_code() {
         "\
 struct sample:
     tag: i16
-    value: i32
+    mut value: i32
     delta: i32
 
 fn total(samples: &[sample]) -> i32:
-    var sum: i32 = 0
+    let mut sum: i32 = 0
     for one in &samples:
         sum += one.value
     return sum
 
 fn update(v: &[i32]) -> i32:
-    var samples: [sample; 5] = [
-        sample { tag: 0, value: v[0], delta: v[1] },
-        sample { tag: 0, value: v[1], delta: v[2] },
-        sample { tag: 0, value: v[2], delta: v[3] },
-        sample { tag: 0, value: v[3], delta: v[4] },
-        sample { tag: 0, value: v[4], delta: v[5] },
+    let mut samples: sample[5] = [
+        sample(tag=0, value=v[0], delta=v[1]),
+        sample(tag=0, value=v[1], delta=v[2]),
+        sample(tag=0, value=v[2], delta=v[3]),
+        sample(tag=0, value=v[3], delta=v[4]),
+        sample(tag=0, value=v[4], delta=v[5]),
     ]
     for current in &mut samples:
         current.value += current.delta
     return total(&samples)
 
 fn main() -> i16:
-    let v: [i32; 6] = [1, 2, 3, 4, 5, 6]
+    let v: i32[6] = [1, 2, 3, 4, 5, 6]
     update(&v)
     return 0
 ",
@@ -519,7 +519,7 @@ fn test_fixed_array_storage_has_a_prefix_descriptor() {
     let source = written(
         &directory,
         "array_descriptor.mod",
-        "fn main() -> i16:\n    var values: [i16; 3] = [10, 20, 30]\n    print(values.len())\n    return values[0]\n",
+        "fn main() -> i16:\n    let mut values: i16[3] = [10, 20, 30]\n    print(values.len)\n    return values[0]\n",
     );
 
     let program = parsed(&source);
@@ -542,7 +542,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let source = written(
         &directory,
         "array_borrow.mod",
-        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    var values: [u16; 3] = [10, 20, 30]\n    bump(&mut values)\n    return 0\n",
+        "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return 0\n",
     );
 
     let program = parsed(&source);
@@ -581,7 +581,7 @@ fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
     let aliased = written(
         &directory,
         "aliased.mod",
-        "fn use(left: &mut [u16], right: &[u16]) -> void:\n    left[0] += right[0]\nfn bad() -> void:\n    var values: [u16; 1] = [1]\n    use(&mut values, &values)\n",
+        "fn use(left: &mut [u16], right: &[u16]) -> void:\n    left[0] += right[0]\nfn bad() -> void:\n    let mut values: u16[1] = [1]\n    use(&mut values, &values)\n",
     );
     assert!(refused(&aliased).contains("aliases a mutable argument"));
 }
@@ -701,7 +701,7 @@ fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
 
 #[test]
 fn test_runtime_bounded_array_control_respects_the_recurrence_period() {
-    // A stride-two offset repeats after 32768 word updates and cannot control a longer loop.
+    // A stride-two offset repeats after 32768 word updates && cannot control a longer loop.
     let program = parsed(&fixture("sum.mod"));
     let semantic =
         modern_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
@@ -729,20 +729,12 @@ fn test_runtime_bounded_array_control_respects_the_recurrence_period() {
 }
 
 #[test]
-fn test_borrowed_array_parameter_rejects_a_repeated_fixed_length() {
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "sized_parameter.mod", "fn old(values: &[u16; 3]) -> void:\n    return\n");
-
-    assert!(refused(&source).contains("omit the length"));
-}
-
-#[test]
 fn test_scoped_array_range_is_one_descriptor_pointer_and_executes() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "slice.mod",
-        "fn sum(values: &[i16]) -> i16:\n    var total: i16 = 0\n    for value in &values:\n        total += value\n    return total\nfn main() -> i16:\n    let values: [i16; 4] = [1, 2, 3, 4]\n    return sum(&values[1:3])\n",
+        "fn sum(values: &[i16]) -> i16:\n    let mut total: i16 = 0\n    for value in &values:\n        total += value\n    return total\nfn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    return sum(&values[1:3])\n",
     );
 
     let program = parsed(&source);
@@ -761,7 +753,7 @@ fn test_a_range_is_not_a_slice() {
     let source = written(
         &directory,
         "range_slice.mod",
-        "fn sum(values: &[i16]) -> i16:\n    return values[0]\nfn main() -> i16:\n    let values: [i16; 4] = [1, 2, 3, 4]\n    return sum(&values[1..3])\n",
+        "fn sum(values: &[i16]) -> i16:\n    return values[0]\nfn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    return sum(&values[1..3])\n",
     );
 
     refused(&source);
@@ -773,7 +765,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let source = written(
         &directory,
         "data.mod",
-        "fn data(values: &[i16]) -> addr:\n    return values.data()\nfn main() -> i16:\n    let values: [i16; 2] = [4, 9]\n    data(&values)\n    return 0\n",
+        "fn data(values: &[i16]) -> addr:\n    return values.data()\nfn main() -> i16:\n    let values: i16[2] = [4, 9]\n    data(&values)\n    return 0\n",
     );
 
     let program = parsed(&source);
@@ -789,7 +781,7 @@ fn test_string_descriptor_methods_and_value_iteration_need_no_runtime() {
     let source = written(
         &directory,
         "string_view.mod",
-        "fn first(text: string) -> char:\n    for byte in text:\n        return byte\n    return '\\0'\nfn size(text: string) -> u16:\n    return text.len() + text.capacity()\nfn main() -> u16:\n    let text: string = \"abc\"\n    if first(text) == 'a':\n        return size(text)\n    return 0\n",
+        "fn first(text: &string) -> char:\n    for byte in text:\n        return byte\n    return '\\0'\nfn size(text: string) -> u16:\n    return text.len + text.capacity\nfn main() -> u16:\n    let text: string = \"abc\"\n    if first(text) == 'a':\n        return size(text)\n    return 0\n",
     );
 
     let program = parsed(&source);
@@ -816,7 +808,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
     let source = written(
         &directory,
         "comprehension.mod",
-        "fn main() -> i16:\n    let values: [i16; 4] = [1, 2, 3, 4]\n    let doubled = [value * 2 for value in values]\n    var total: i16 = 0\n    for value in (item + 1 for item in doubled):\n        total += value\n    return total\n",
+        "fn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    let doubled = [value * 2 for value in values]\n    let mut total: i16 = 0\n    for value in (item + 1 for item in doubled):\n        total += value\n    return total\n",
     );
 
     let program = parsed(&source);
@@ -830,7 +822,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     let source = written(
         &directory,
         "dictionary.mod",
-        "fn main() -> i16:\n    let values: [i16; 4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.get(1, 0) + table.get(3, 0) + table.get(9, 5)\nfn count() -> u16:\n    let values: [i16; 4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.len()\n",
+        "fn main() -> i16:\n    let values: i16[4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.get(1, 0) + table.get(3, 0) + table.get(9, 5)\nfn count() -> u16:\n    let values: i16[4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.len\n",
     );
 
     let program = parsed(&source);
@@ -861,7 +853,7 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
     let source = written(
         &directory,
         "frame_fill.mod",
-        "fn value(k: i16) -> i32:\n    var a: [i32; 64] = [0; 64]\n    a[k] = 5\n    return a[k] + a[k + 1]\nfn main() -> i16:\n    return i16(value(3))\n",
+        "fn value(k: i16) -> i32:\n    let mut a: i32[64] = [0] * 64\n    unsafe:\n        a[k] = 5\n        return a[k] + a[k + 1]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
@@ -877,7 +869,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
     let source = written(
         &directory,
         "priced_fill.mod",
-        "fn value(v: &[i16]) -> i32:\n    var a: [i32; 64] = [0; 64]\n    var total: i16 = 0\n    for i in 0..4:\n        total += v[i]\n    a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: [i16; 4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
+        "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
@@ -893,7 +885,7 @@ fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
     let source = written(
         &directory,
         "nested_fill.mod",
-        "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
+        "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
     let assembly = listing(&parsed(&source), "main", &level("Os"));
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
@@ -913,8 +905,8 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
         concat!(
             "type fix = fixed i32, fraction=8\n",
             "fn value(k: i16) -> fix:\n",
-            "    var a: [fix; 8, 8] = [0; 8, 8]\n",
-            "    var b: [fix; 8, 8] = [0; 8, 8]\n",
+            "    let mut a: fix[8, 8] = [[0] * 8] * 8\n",
+            "    let mut b: fix[8, 8] = [[0] * 8] * 8\n",
             "    for i in 0..8:\n",
             "        for j in 0..8:\n",
             "            a[i, j] = fix(i * 3 + j + 1) / 4\n",
@@ -949,10 +941,21 @@ fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir
 }
 
 #[test]
+fn test_a_negative_index_is_out_of_bounds() {
+    // The check compared signed, so `i < 0` proved `i < 8` and the optimizer deleted the panic.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "fn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    if i < 0:\n        return a[i]\n    return 0\n";
+    let body = _settled(&directory, text, &O2());
+    let panics = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.name == "_rt_panic_bounds").count();
+
+    assert_eq!(panics, 1);
+}
+
+#[test]
 fn test_a_fill_count_that_is_a_number_is_written_as_one() {
     // A merged fill's count stayed a held 64, which pricing read as an unknown ten cells.
     let directory = tempfile::tempdir().expect("a directory");
-    let text = "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\n";
+    let text = "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\n";
     let body = _settled(&directory, text, &level("Os"));
     let counts = body
         .blocks
@@ -967,11 +970,12 @@ fn test_a_fill_count_that_is_a_number_is_written_as_one() {
 
 #[test]
 fn test_an_unnamed_loop_is_priced_at_its_proven_trip_count() {
-    // Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much.
+    // Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much;
+    // a bounds check's exit into its panic did the same.
     let directory = tempfile::tempdir().expect("a directory");
     let text = concat!(
         "fn value(v: &[i16]) -> i16:\n",
-        "    var total: i16 = 0\n",
+        "    let mut total: i16 = 0\n",
         "    for i in 0..8:\n",
         "        total += v[i]\n",
         "    return total\n",
@@ -998,12 +1002,12 @@ fn test_a_new_counter_steps_where_no_condition_is_live() {
             "    value: i32\n",
             "    delta: i32\n",
             "fn total(samples: &[sample]) -> i32:\n",
-            "    var sum: i32 = 0\n",
+            "    let mut sum: i32 = 0\n",
             "    for one in &samples:\n",
             "        sum += one.value\n",
             "    return sum\n",
             "fn main() -> i16:\n",
-            "    let s: [sample; 2] = [sample { tag: 0, value: 1, delta: 2 }, sample { tag: 0, value: 2, delta: 3 }]\n",
+            "    let s: sample[2] = [sample(tag=0, value=1, delta=2), sample(tag=0, value=2, delta=3)]\n",
             "    return i16(total(&s))\n",
         ),
     );
@@ -1022,7 +1026,7 @@ fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     let source = written(
         &directory,
         "unrolled_fill.mod",
-        "fn value(k: i16) -> i32:\n    var a: [i32; 8, 8] = [0; 8, 8]\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
+        "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
     // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n.
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
@@ -1037,7 +1041,6 @@ fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
 #[test]
 fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
     for body in [
-        "    return i16(1 < 2 < 3)\n",
         "    return 1 << 16\n",
         "    return 1 << -1\n",
         "    let a: i16 = 1\n    let b: u16 = 1\n    return i16(a + b)\n",
@@ -1045,7 +1048,7 @@ fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
         "    return i16(bool(1))\n",
         "    return i16(u8(300))\n",
         "    return i16(f64(1) & f64(2))\n",
-        "    let a: [i16; 4] = [0; 3]\n    return a[0]\n",
+        "    let a: i16[4] = [0] * 3\n    return a[0]\n",
     ] {
         let directory = tempfile::tempdir().expect("a directory");
         let source = written(&directory, "rejected.mod", &format!("fn value() -> i16:\n{body}"));
@@ -1056,7 +1059,7 @@ fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
 #[test]
 fn test_not_is_not_an_operand_of_a_tighter_operator() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "not.mod", "fn value() -> bool:\n    return true == not false\n");
+    let source = written(&directory, "not.mod", "fn value() -> bool:\n    return true == !false\n");
     refused(&source);
 }
 
@@ -1084,7 +1087,7 @@ fn test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation() {
     let source = written(
         &directory,
         "struct_array_borrow.mod",
-        "struct point:\n    x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    var points: [point; 2] = [{1, 2}, {10, 20}]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
+        "struct point:\n    mut x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    let mut points: point[2] = [point(1, 2), point(10, 20)]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
     );
 
     let assembly = listing(&parsed(&source), "calculate", &O2());
@@ -1095,13 +1098,13 @@ fn test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation() {
 #[test]
 fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
     for body in [
-        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a[0]\n",
-        "    let a: [i16; 2, 2, 2, 2, 2] = [0; 2, 2, 2, 2, 2]\n    return 0\n",
-        "    let a: [i16; 2, 2] = [[1, 2], [3]]\n    return 0\n",
-        "    let a: [i16; 2, 2] = [0; 2, 3]\n    return 0\n",
-        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return a.dim(2)\n",
-        "    let a: [i16; 2, 2] = [0; 2, 2]\n    return first(&a)\n",
-        "    let a: [i16; 2, 2] = [0; 2, 2]\n    var t: i16 = 0\n    for x in a:\n        t += x\n    return t\n",
+        "    let a: i16[2, 2] = [[0] * 2] * 2\n    return a[0]\n",
+        "    let a: i16[2, 2, 2, 2, 2] = [[[[[0] * 2] * 2] * 2] * 2] * 2\n    return 0\n",
+        "    let a: i16[2, 2] = [[1, 2], [3]]\n    return 0\n",
+        "    let a: i16[2, 2] = [[0] * 3] * 2\n    return 0\n",
+        "    let a: i16[2, 2] = [[0] * 2] * 2\n    return a.dim[2]\n",
+        "    let a: i16[2, 2] = [[0] * 2] * 2\n    return first(&a)\n",
+        "    let a: i16[2, 2] = [[0] * 2] * 2\n    let mut t: i16 = 0\n    for x in a:\n        t += x\n    return t\n",
     ] {
         let directory = tempfile::tempdir().expect("a directory");
         let source = written(
@@ -1119,10 +1122,254 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     // 16384-trip loops became 360K operations. GCC refuses past 16 before looking.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
-        let text = format!("fn value(k: i16) -> i16:\n    var total: i16 = k\n    for i in 0..{trips}:\n        total = total + i\n    return total\n");
+        let text = format!("fn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total + i\n    return total\n");
         let body = _settled(&directory, &text, &O2());
         !loops::loops(&body.blocks, Some(body.entry)).is_empty()
     };
     assert!(!rolled(16), "within the cap the loop is copied out");
     assert!(rolled(17));
+}
+
+#[test]
+fn test_a_byte_argument_is_pushed_as_a_word() {
+    // A u8 or char argument reached the push as `push al`, which the assembler rejects.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "byte_argument.mod",
+        "fn digit(c: char) -> u8:\n    return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    assert!(assembly.contains("call far ptr _digit"));
+    assert!(!Regex::new(r"push [abcd]l\b").unwrap().is_match(&assembly));
+}
+
+/// `while true:` branched on a constant, which lowering refused: "branch condition must be a value".
+#[test]
+fn test_a_branch_on_a_constant_lowers_as_a_jump() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "forever.mod",
+        "fn main() -> i16:\n    let mut n = 3\n    while true:\n        if n == 0:\n            return 7\n        n -= 1\n    return 0\n",
+    );
+    lowered_named(&parsed(&source), "forever.main");
+}
+
+/// A vec borrowed as `&[T]` takes DGROUP's selector for its far data
+/// pointer, which the object writer could not name: "KeyError: (grp, 0)".
+#[test]
+fn test_a_vec_view_names_dgroup_in_the_object() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "view.mod",
+        "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
+    );
+    modern_compile::written(&parsed(&source), "main", &source, &level("O2"))
+        .expect("writes an object");
+}
+
+/// `v[0].bump()` passed the element's near pointer where `&mut T` is far:
+/// the host ran it, DOS bumped whatever the stale segment pointed at.
+#[test]
+fn test_a_method_on_a_vec_element_takes_a_far_pointer() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "bump.mod",
+        "struct T:\n    mut n: i16\n\nfn T.bump(self: &mut T) -> void:\n    self.n += 1\n\nfn main() -> i16:\n    let mut v: vec[T] = [T(n=0)]\n    v[0].bump()\n    return v[0].n\n",
+    );
+    parsed(&source);
+}
+
+/// `for t in v: t.get()` borrowed the loop binding's near element pointer
+/// for a far `&T`: "call ... passes argument 0 in the wrong width".
+#[test]
+fn test_a_method_on_a_loop_binding_over_a_vec_takes_a_far_pointer() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "each.mod",
+        "struct T:\n    mut n: i16\n\nfn T.get(self: &T) -> i16:\n    return self.n\n\nfn main() -> i16:\n    let v: vec[T] = [T(n=2), T(n=3)]\n    let mut total = 0\n    for t in v:\n        total += t.get()\n    return total\n",
+    );
+    parsed(&source);
+}
+
+/// An `extern` function is called by its C symbol, and an `export`ed one is
+/// public under its own, so C can call it back.
+#[test]
+fn test_foreign_functions_link_by_their_c_symbols() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "interop.mod",
+        "extern \"cdecl16\":\n    @link_name(\"_sum_all\")\n    fn total(values: *far i16, count: u16) -> i32\n\n\
+         export \"cdecl16\":\n    fn weight(value: i16) -> i16:\n        return value * 2\n\n\
+         fn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
+    );
+    let module = modern_compile::assembled(
+        &parsed(&source),
+        "main",
+        ProfileOrName::Name("486"),
+        &level("O2"),
+    )
+    .expect("assembles");
+    assert_eq!(module.publics, ["_weight", "_main"]);
+    assert!(
+        module
+            .externs
+            .contains(&("_sum_all".to_owned(), "far".to_owned())),
+        "{:?}",
+        module.externs
+    );
+}
+
+#[test]
+/// Every float program failed in the backend: binary32 evaluation is not what
+/// an x87 load encodes, a float argument was pushed as ten bytes, an unread
+/// float parameter was loaded anyway, and truncation was named fistp.
+fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "floats.mod",
+        "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
+    );
+    modern_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+}
+
+#[test]
+/// pascal16 pushes the first argument first, names symbols in upper case, and
+/// the callee removes the arguments with `retf n`.
+fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
+    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.mod"));
+    let module =
+        modern_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    assert_eq!(module.publics, ["CLAMP", "_main"]);
+    assert!(module.externs.contains(&("SCALE".to_owned(), "far".to_owned())), "{:?}", module.externs);
+    let text = masm::text(&module).expect("prints");
+    let clamp = &text[text.find("CLAMP proc far").expect("CLAMP")..text.find("CLAMP endp").expect("its end")];
+    assert!(clamp.contains("retf 6") && !clamp.contains("retf\n"), "{clamp}");
+    // scale(level, 255, 100): 255 is pushed first, so it is the high word of the pair.
+    assert!(text.contains(&format!("pushd {}", 255 << 16 | 100)), "{text}");
+}
+
+#[test]
+/// QB returns a float through a hidden near pointer, its last parameter. A
+/// pascal16 function whose last parameter merely has that type returned
+/// its result there instead of in st(0).
+fn test_a_pascal_float_result_returns_in_st0_whatever_its_last_parameter() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "half.mod",
+        "export \"pascal16\":\n    fn half(value: f32, out: *near f32) -> f32:\n        return value / 2.0\n\nfn main() -> i16:\n    return 0\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let half = between(&text, "HALF proc far", "HALF endp");
+    assert!(!half.contains("fstp") && half.contains("retf 6"), "{half}");
+}
+
+#[test]
+/// Section 9.2: an aggregate of 4 bytes or less comes back in registers,
+/// with no hidden slot pointer; a larger one still takes the slot.
+fn test_small_aggregates_return_in_registers() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "r.mod",
+        "struct Point:\n    mut x: i16\n    y: i16\n\n@repr(\"c16\", pack=1)\nstruct Cell:\n    glyph: u8\n    count: i16\n\n\
+         struct Box:\n    low: Point\n    high: Point\n\n\
+         fn point(x: i16, y: i16) -> Point:\n    return Point(x=x, y=y)\n\n\
+         fn cell(glyph: u8) -> Cell:\n    return Cell(glyph=glyph, count=300)\n\n\
+         fn box(p: i16) -> Box:\n    return Box(low=point(p, p), high=point(p, p))\n\n\
+         fn main() -> i16:\n    let c = cell(65)\n    return point(3, 4).y + box(1).high.x + i16(c.glyph)\n",
+    );
+    let program = parsed(&source);
+    let shape = |name: &str| {
+        let function = function(&program, name);
+        (function.parameters.len(), types(&program).values().find(|one| one.id == function.result_type).expect("a type").width)
+    };
+    assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
+    modern_compile::written(&program, "main", &source, &level("O2")).expect("writes an object");
+}
+
+#[test]
+/// Points-to read a call's pointer result as the contents of the escaped
+/// cells the call reads: a new vec's buffer took the frame array a view had
+/// published, and its elements were written through SS, not DS.
+fn test_a_call_result_does_not_point_into_a_frame_the_call_can_read() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "grow.mod",
+        "fn total(values: &[i16]) -> i16:\n    return 0\n\n\
+         fn main() -> i16:\n    let one: i16[1] = [7]\n    total(&one)\n    let many: vec[i16] = [1, 2]\n    return many[1]\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let main = between(&text, "_main proc far", "_main endp");
+    assert!(!main.contains("ss:[bx"), "{main}");
+}
+
+/// A bounds check's panic block ends in an escape with no source bytes:
+/// "'NoneType' object has no attribute 'op'" in jump threading.
+#[test]
+fn test_a_panic_path_reaches_the_object() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "checked.mod",
+        "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
+    );
+    modern_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+}
+
+#[test]
+fn a_float_converts_to_every_integer_width() {
+    // "i8: no floating storage format": no x87 store holds a byte, and a
+    // `fistp word` cannot hold u16's top half.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "convert.mod",
+        "fn main() -> i16:\n    let x: f64 = 250.5\n    let y: f64 = 4000000000.0\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("Os"), crate::frontends::modern::compile::CPU);
+    assert!(text.contains("fistp qword"), "{text}");
+}
+
+/// Parsing ran `cargo run --release` on this crate: after any edit, the first
+/// test waited a minute for a release rebuild and every other one for its lock.
+#[test]
+fn test_parsing_runs_no_cargo() {
+    if std::env::var_os("LLRM_NO_CARGO").is_some() {
+        parsed(&fixture("fixed.mod"));
+        return;
+    }
+    let name = concat!(module_path!(), "::test_parsing_runs_no_cargo").split_once("::").expect("a crate").1;
+    let run = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", name])
+        .env("LLRM_NO_CARGO", "1")
+        .env("PATH", "")
+        .output()
+        .expect("runs");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+}
+
+#[test]
+fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
+    // The data pointer read back from a slice descriptor had no exact cell
+    // fact, so it reached nothing unescaped: the array's stores were dropped
+    // and DOS printed stack garbage for 7, 8 and 9.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "enumerate.mod",
+        "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("Os"), crate::frontends::modern::compile::CPU);
+    for value in [", 7", ", 8", ", 9"] {
+        assert!(text.contains(value), "{value} is never stored:\n{text}");
+    }
 }

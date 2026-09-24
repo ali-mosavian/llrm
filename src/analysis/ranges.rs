@@ -371,7 +371,8 @@ fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width: u32
     None
 }
 
-/// Direct port of `qbopt.analysis.ranges:bounded`.
+/// Direct port of `qbopt.analysis.ranges:bounded`; a block in no counted
+/// loop keeps the facts of the branch edges that dominate it.
 pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body, None, None, None, None);
     let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::default();
@@ -393,7 +394,7 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
             .collect::<IndexMap<_, _>>();
         let counters = induction::basics(body, &loop_).values().cloned().collect::<Vec<_>>();
         let mut trips = BTreeSet::new();
-        for proof in induction::counted(body, &loop_, Some(&facts), false) {
+        for proof in induction::counted_unless_stopped(body, &loop_, Some(&facts), false) {
             if let Some((low, high)) = proof.span() {
                 known.insert(proof.phi_in(body).result, Interval { low, high, width: proof.counter.start.width() });
                 trips.insert(proof.count.expect("a span has a count") - 1_u8);
@@ -510,48 +511,57 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
             }
         }
     }
+    for (at, known) in dominated_edges(body)? {
+        result.entry(at).or_insert(known);
+    }
     Ok(result)
 }
 
-/// Facts established by unavoidable branch edges at each block.
+/// Facts established by unavoidable branch edges at each block, and what
+/// its own operations compute from them.
 ///
-/// Direct port of `qbopt.analysis.ranges:dominated_edges`.  An edge counts
-/// only when its destination has that one predecessor and dominates the
-/// queried block: a join is a second way around the check.
+/// An edge counts only when its destination has that one predecessor: a
+/// join is a second way around the check. So a block starts from its sole
+/// predecessor's facts narrowed by that edge, or else from its immediate
+/// dominator's, and each edge is applied once.
 pub(crate) fn dominated_edges(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
     let facts = consts::known(body, None, None, None, None);
     let predecessors = loops::predecessors(&body.blocks);
-    let dominators = loops::dominators(&body.blocks, Some(body.entry));
-    let mut edges = body
+    let immediate = loops::immediate_dominators(&body.blocks, Some(body.entry));
+    let blocks = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let mut known: BTreeMap<i64, IndexMap<Value, Interval>> = BTreeMap::new();
+    for at in loops::reverse_postorder(&body.blocks, body.entry) {
+        let block = blocks[&at];
+        let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
+        let mut scoped = match sole.and_then(|parent| Some((blocks.get(parent)?, known.get(parent)?))) {
+            Some((parent, inherited)) if parent.succ.iter().filter(|to| **to == at).count() == 1 => {
+                on_edge(parent, at, inherited, Some(&facts))?.unwrap_or_else(|| inherited.clone())
+            }
+            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or_default(),
+        };
+        for op in &block.ops {
+            let (Some(interval), Some(Arg::Held(held))) = (_computed(op, &scoped, &facts), op.results.first()) else {
+                continue;
+            };
+            let interval = match scoped.get(&held.value) {
+                Some(previous) if previous.width == interval.width => Interval {
+                    low: previous.low.clone().max(interval.low),
+                    high: previous.high.clone().min(interval.high),
+                    width: interval.width,
+                },
+                _ => interval,
+            };
+            if interval.low <= interval.high {
+                scoped.insert(held.value, interval);
+            }
+        }
+        known.insert(at, scoped);
+    }
+    Ok(body
         .blocks
         .iter()
-        .flat_map(|block| block.succ.iter().map(move |&successor| (block, successor)))
-        .filter(|(block, successor)| {
-            predecessors
-                .get(successor)
-                .is_some_and(|parents| parents.len() == 1 && parents.contains(&block.at))
-        })
-        .collect::<Vec<_>>();
-    edges.sort_by_key(|(_, successor)| dominators.get(successor).map_or(0, BTreeSet::len));
-    let mut result: IndexMap<i64, IndexMap<Value, Interval>> = IndexMap::default();
-    for block in &body.blocks {
-        let mut known: IndexMap<Value, Interval> = IndexMap::default();
-        // Apply the path from outermost to innermost dominator once. Repeating
-        // a relational `a < b` constraint would falsely walk both open
-        // intervals inward rather than intersecting with one original fact.
-        for &(parent, successor) in &edges {
-            if !dominators.get(&block.at).is_some_and(|dominating| dominating.contains(&successor)) {
-                continue;
-            }
-            if let Some(narrowed) = on_edge(parent, successor, &known, Some(&facts))? {
-                known = narrowed;
-            }
-        }
-        if !known.is_empty() {
-            result.insert(block.at, known);
-        }
-    }
-    Ok(result)
+        .filter_map(|block| known.get(&block.at).filter(|scoped| !scoped.is_empty()).map(|scoped| (block.at, scoped.clone())))
+        .collect())
 }
 
 /// Every value `consts` knows, as the singleton interval an alias query reads.

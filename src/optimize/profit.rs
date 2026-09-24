@@ -151,7 +151,7 @@ pub(crate) fn _frequencies(body: &Rc<MirBody>, trips: Option<&IndexMap<i64, i64>
             // an 8-trip loop priced unrolling its inner loop above a 64-cell fill.
             let facts = facts.get_or_insert_with(|| consts::known(body, None, None, None, None));
             exact.extend(
-                induction::trip_count(body, &loop_, facts).map(|count| count.to_i64().expect("a trip count fits")),
+                induction::trips_unless_stopped(body, &loop_, facts).map(|count| count.to_i64().expect("a trip count fits")),
             );
         }
         let factor = exact.iter().next().copied().unwrap_or(UNKNOWN_TRIPS);

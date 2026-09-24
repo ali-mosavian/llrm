@@ -167,6 +167,25 @@ pub fn named_externals(module: &model::Module) -> BTreeSet<MemoryObject> {
 }
 
 /// `memory.Provenance.one(object_, low, high)`.
+/// The first `width` bytes of `object_`, a frame cell at `offset`.
+fn _frame_ref(object_: MemoryObject, offset: i64, width: i64) -> Result<MemRef, InvalidHIR> {
+    Ok(MemRef {
+        space: Some(Space::Frame),
+        provenance: Some(_one(object_, 0, width)?),
+        ..MemRef::new(Some(Addr::new(Space::Frame, offset)), width as u32)
+    })
+}
+
+/// The x87 integer format a conversion to `type_` stores, and its width:
+/// the narrowest signed one that holds all of `type_`'s values.
+fn _integer_format(type_: &model::Type) -> (floating::Format, i64) {
+    match (type_.width, type_.signed == Some(true) || type_.kind == model::TypeKind::Boolean) {
+        (1, _) | (2, true) => (floating::Format::Signed16, 2),
+        (2, false) | (4, true) => (floating::Format::Signed32, 4),
+        _ => (floating::Format::Signed64, 8),
+    }
+}
+
 fn _one(object_: MemoryObject, low: i64, high: i64) -> Result<Provenance, InvalidHIR> {
     Provenance::one_with_slice(object_, low, high, 1, 1, BTreeSet::new()).map_err(|error| InvalidHIR(error.to_string()))
 }
@@ -192,6 +211,15 @@ fn _ref(
     })
 }
 
+/// The selector a far address of static data takes: DGROUP's.
+pub const DGROUP: (Space, i64) = (Space::Group, 0);
+
+/// The names of the symbols lowering itself introduces, which every
+/// object built from lowered MIR must define.
+pub fn symbol_names() -> IndexMap<(Space, i64), String> {
+    IndexMap::from_iter([(DGROUP, "DGROUP".to_owned())])
+}
+
 pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
     verify(program)?;
     let mut out = Vec::new();
@@ -207,7 +235,7 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
         for function in &module.functions {
             out.push(_function(
                 &module.name,
-                &_materialized_booleans(function, &types),
+                &_materialized_booleans(&_taken_branches(function), &types),
                 &types,
                 &externals,
                 program.array_order,
@@ -427,6 +455,41 @@ fn _const(n: i64, width: u32) -> Arg {
 }
 
 impl<'a> _Scope<'a> {
+    /// A fresh frame cell of `width` for instruction `id`'s conversion, and its offset.
+    fn frame_cell(&mut self, id: i64, width: i64) -> (MemoryObject, i64) {
+        self.next_frame_offset -= width;
+        let object_ = MemoryObject {
+            identity: Some(Identity::Tuple(vec![Identity::Str("float-convert".to_owned()), Identity::Int(id)])),
+            extent: Some(width),
+            ..MemoryObject::new(MemoryKind::Frame)
+        };
+        (object_, self.next_frame_offset)
+    }
+
+    /// `args`' float stored to `reference` as `stored` says.
+    fn float_store(&mut self, reference: &MemRef, args: &[Arg], stored: floating::Semantics, name: &str) -> mir::Op {
+        let uses = args
+            .iter()
+            .filter_map(|one| match one {
+                Arg::Held(one) => Some(one.value),
+                _ => None,
+            })
+            .collect();
+        let store = mir::Op {
+            floating: Some(stored),
+            stores: vec![reference.clone()],
+            kind: mir::Kind::Fstore,
+            args: args.to_vec(),
+            results: vec![Arg::Cell(Cell { r#ref: reference.clone() })],
+            id: Some(self.at as u32),
+            reads_complete: true,
+            memory_complete: true,
+            ..mir::Op::new(self.at, OpCode::Operation(Operation::FloatStore), name, Vec::new(), uses)
+        };
+        self.at += 1;
+        store
+    }
+
     fn fresh(&mut self, type_: &'a model::Type) -> Held {
         let value = _value(self.next_value, self.at + 1);
         self.values.insert(self.next_value, value);
@@ -915,12 +978,14 @@ impl<'a> _Scope<'a> {
             let mut offset = _value(self.next_value, self.at + 1);
             self.next_value += 1;
             self.at += 1;
-            let literal = reference.addr.is_some_and(|addr| addr.space == Space::Literal);
+            // A cell through a far pointer is `segment:base+disp` already.
+            let literal =
+                reference.addr.is_some_and(|addr| addr.space == Space::Literal) || reference.segment.is_some();
             let mut offset_ops = if let (true, Some(reference_base)) = (literal, reference.base) {
                 // An IndirectPlace is already relative to a pointer value.
                 // Its literal displacement is not an absolute symbol that can
                 // be addressed independently: the offset half is base+disp.
-                let displacement = reference.addr.expect("a literal address").disp;
+                let displacement = reference.addr.map_or(0, |addr| addr.disp);
                 vec![mir::Op {
                     kind: if displacement == 0 { mir::Kind::Copy } else { mir::Kind::Add },
                     args: if displacement == 0 {
@@ -981,10 +1046,12 @@ impl<'a> _Scope<'a> {
             let segment = _value(self.next_value, self.at + 1);
             self.next_value += 1;
             self.at += 1;
-            let selector_source = if reference.space == Some(Space::Frame) {
+            let selector_source = if let Some(segment) = reference.segment {
+                _held(segment, 2)
+            } else if reference.space == Some(Space::Frame) {
                 Arg::FrameSelector(mir::FrameSelector::default())
             } else {
-                Arg::Symbol(mir::Symbol::new(Space::Group, 0, 0, 2))
+                Arg::Symbol(mir::Symbol::new(DGROUP.0, DGROUP.1, 0, 2))
             };
             let selector = mir::Op {
                 kind: mir::Kind::Copy,
@@ -1372,67 +1439,57 @@ impl<'a> _Scope<'a> {
                 && matches!(target_type.kind, model::TypeKind::Integer | model::TypeKind::Boolean)
             {
                 kind = mir::Kind::Fstore;
-                (operation_kind, operation_name) = (Operation::FloatStore, "fistp".to_owned());
-                semantics = Some(floating::Semantics::new(
-                    vec![floating::Format::Extended80],
-                    _stored_format(target_type)?,
-                    floating::Precision::Destination,
-                    if instruction.op == model::Op::Truncate {
-                        floating::Rounding::TowardZero
-                    } else {
-                        floating::Rounding::Dynamic
-                    },
-                ));
+                let truncates = instruction.op == model::Op::Truncate;
+                // Toward zero is fisttp, which FloatAlloc spells for an x87 without one.
+                (operation_kind, operation_name) =
+                    (Operation::FloatStore, if truncates { "fisttp" } else { "fistp" }.to_owned());
+                let rounding = if truncates { floating::Rounding::TowardZero } else { floating::Rounding::Dynamic };
+                let held = _integer_format(target_type);
+                let stored = |format| {
+                    floating::Semantics::new(
+                        vec![floating::Format::Extended80],
+                        format,
+                        floating::Precision::Destination,
+                        rounding,
+                    )
+                };
+                if held.1 == target_type.width {
+                    semantics = Some(stored(held.0));
+                } else {
+                    // No x87 format is the target: its range is stored wider,
+                    // and its bytes are the low ones.
+                    let (object_, offset) = self.frame_cell(instruction.id, held.1);
+                    let reference = _frame_ref(object_.clone(), offset, held.1)?;
+                    let store = self.float_store(&reference, &args, stored(held.0), &operation_name);
+                    let narrow = _frame_ref(object_, offset, target_type.width)?;
+                    let load = mir::Op {
+                        loads: vec![narrow.clone()],
+                        kind: mir::Kind::Load,
+                        args: vec![Arg::Cell(Cell { r#ref: narrow })],
+                        results,
+                        id: Some(instruction.id as u32),
+                        reads_complete: true,
+                        memory_complete: true,
+                        ..mir::Op::new(self.at, OpCode::Operation(Operation::Move), "mov", made, Vec::new())
+                    };
+                    before.push(store);
+                    before.push(load);
+                    return Ok(before);
+                }
             } else if source_id.kind == model::TypeKind::Float && target_type.kind == model::TypeKind::Float {
                 if target_type.width >= source_id.width {
                     kind = mir::Kind::Copy;
                     (operation_kind, operation_name) = (Operation::Move, "mov".to_owned());
                 } else {
-                    self.next_frame_offset -= target_type.width;
-                    let object_ = MemoryObject {
-                        identity: Some(Identity::Tuple(vec![
-                            Identity::Str("float-convert".to_owned()),
-                            Identity::Int(instruction.id),
-                        ])),
-                        extent: Some(target_type.width),
-                        ..MemoryObject::new(MemoryKind::Frame)
-                    };
-                    let reference = MemRef {
-                        space: Some(Space::Frame),
-                        provenance: Some(_one(object_, 0, target_type.width)?),
-                        ..MemRef::new(Some(Addr::new(Space::Frame, self.next_frame_offset)), target_type.width as u32)
-                    };
+                    let (object_, offset) = self.frame_cell(instruction.id, target_type.width);
+                    let reference = _frame_ref(object_, offset, target_type.width)?;
                     let stored = floating::Semantics::new(
                         vec![floating::Format::Extended80],
                         _stored_format(target_type)?,
                         floating::Precision::Destination,
                         floating::Rounding::Dynamic,
                     );
-                    let store_uses = args
-                        .iter()
-                        .filter_map(|one| match one {
-                            Arg::Held(one) => Some(one.value),
-                            _ => None,
-                        })
-                        .collect();
-                    let store = mir::Op {
-                        floating: Some(stored),
-                        stores: vec![reference.clone()],
-                        kind: mir::Kind::Fstore,
-                        args: args.clone(),
-                        results: vec![Arg::Cell(Cell { r#ref: reference.clone() })],
-                        id: Some(self.at as u32),
-                        reads_complete: true,
-                        memory_complete: true,
-                        ..mir::Op::new(
-                            self.at,
-                            OpCode::Operation(Operation::FloatStore),
-                            "fstp",
-                            Vec::new(),
-                            store_uses,
-                        )
-                    };
-                    self.at += 1;
+                    let store = self.float_store(&reference, &args, stored, "fstp");
                     let loaded = floating::Semantics::new(
                         vec![_stored_format(target_type)?],
                         floating::Format::Extended80,
@@ -1881,4 +1938,50 @@ fn _function(
         externals: Some(externals.clone()),
         source_instructions: Some(source_instructions),
     })
+}
+
+/// `function` with each branch on a constant the jump it takes, and
+/// without the blocks that leaves unreachable.
+fn _taken_branches(function: &model::Function) -> model::Function {
+    let mut function = function.clone();
+    for block in &mut function.blocks {
+        block.terminator = taken(&block.terminator);
+    }
+    let roots = [function.entry]
+        .into_iter()
+        .chain(function.error_handler)
+        .chain(function.external_entries.iter().copied());
+    let mut reached: BTreeSet<i64> = BTreeSet::new();
+    let mut work: Vec<i64> = roots.collect();
+    while let Some(id) = work.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        if let Some(block) = function.blocks.iter().find(|one| one.id == id) {
+            work.extend(
+                block
+                    .terminator
+                    .targets
+                    .iter()
+                    .chain(block.terminator.cases.iter().map(|(_, target)| target)),
+            );
+        }
+    }
+    function.blocks.retain(|one| reached.contains(&one.id));
+    function
+}
+
+/// `terminator`, a branch on a constant being the jump it takes.
+fn taken(terminator: &model::Terminator) -> model::Terminator {
+    match (&terminator.kind, terminator.operands.as_slice()) {
+        (
+            model::TerminatorKind::Branch,
+            [model::Operand::Constant(model::Constant { value, .. })],
+        ) => {
+            let taken = !matches!(value, model::Number::Int(0));
+            let target = terminator.targets[usize::from(!taken)];
+            model::Terminator::new(model::TerminatorKind::Jump, Vec::new(), vec![target])
+        }
+        _ => terminator.clone(),
+    }
 }

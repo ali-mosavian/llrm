@@ -315,8 +315,23 @@ fn _function(
         if order != (0..instruction.operands.len() as i64).collect::<Vec<_>>() {
             invalid!("{prefix}: call {} has invalid argument order", site.instruction);
         }
-        if site.callee.is_some_and(|callee| !module.callables.iter().any(|one| one.id == callee)) {
+        let Some(callable) = site.callee.map(|callee| module.callables.iter().find(|one| one.id == callee)) else {
+            continue;
+        };
+        let Some(callable) = callable else {
             invalid!("{prefix}: call {} names an unknown callable", site.instruction);
+        };
+        // A value passes in its parameter's representation: a near pointer is not a far one.
+        if callable.parameter_types.len() == instruction.operands.len() {
+            for (index, (operand, parameter)) in instruction.operands.iter().zip(&callable.parameter_types).enumerate() {
+                let (model::Operand::ValueRef(_), true) = (operand, callable.by_value[index]) else {
+                    continue;
+                };
+                let actual = _operand_type(operand, &values, &places)?;
+                if types.get(&actual).map(|one| one.width) != types.get(parameter).map(|one| one.width) {
+                    invalid!("{prefix}: call {} passes argument {index} in the wrong width", site.instruction);
+                }
+            }
         }
     }
     for value in values.values() {
@@ -428,7 +443,7 @@ fn _function(
             }
             if instruction.op == model::Op::Store {
                 if operand_types.len() != 2 || operand_types[0] != operand_types[1] {
-                    invalid!("{prefix}: store value type does not match its place");
+                    invalid!("{prefix}: store value type does not match its place: {operand_types:?}");
                 }
                 if !matches!(
                     instruction.operands[0],
@@ -436,6 +451,7 @@ fn _function(
                         | model::Operand::ArrayElement(_)
                         | model::Operand::ProjectedPlace(_)
                         | model::Operand::IndirectPlace(_)
+                        | model::Operand::DescriptorPlace(_)
                 ) {
                     invalid!("{prefix}: store destination is not a place");
                 }

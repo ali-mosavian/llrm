@@ -29,7 +29,7 @@ fn f64_value() -> f64:
     return -2.25
 
 fn unsigned_divide(left: u32, right: u32) -> u32:
-    return left / right
+    return left // right
 
 fn unsigned_remainder(left: u16, right: u16) -> u16:
     return left % right

@@ -124,6 +124,14 @@ pub struct Physicalized {
     pub hints: mir::AllocationHints,
 }
 
+fn part_width(argument: &Arg) -> u32 {
+    match argument {
+        Arg::Cell(cell) => cell.r#ref.width,
+        Arg::Held(one) => one.width,
+        _ => 2,
+    }
+}
+
 fn _bytes(argument: &Arg) -> Result<i64, AbiError> {
     let width = match argument {
         Arg::Cell(cell) => Some(cell.r#ref.width),
@@ -899,7 +907,9 @@ pub fn physicalize(
         .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
         .collect();
     let callee_cleanup = function.abi.as_ref().is_some_and(|abi| abi.cleanup == model::StackCleanup::Callee);
+    // BASIC's own function convention; a modern Pascal function returns in st(0).
     let returns_legacy_float = result_type.kind == model::TypeKind::Float
+        && program.dialect != model::Dialect::Modern
         && callee_cleanup
         && !function.parameters.is_empty()
         && parameter_types[parameter_types.len() - 1].kind == model::TypeKind::Pointer
@@ -924,10 +934,23 @@ pub fn physicalize(
             cursor += width;
         }
     }
+    let read: BTreeSet<mir::Value> = lowered
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block.ops.iter().flat_map(|op| op.uses.iter().copied()).chain(block.phis.iter().flat_map(|phi| phi.incoming.values().copied()))
+        })
+        .collect();
     for (number, ((parameter, type_), parameter_offset)) in
         function.parameters.iter().zip(&parameter_types).zip(&parameter_offsets).enumerate()
     {
         let value = lowered.values[parameter];
+        // The load is the ABI's, not the program's: a parameter nothing reads
+        // is not loaded, so a float one adds no observable operation.
+        if !read.contains(&value) && hidden_float_result != Some(value) {
+            continue;
+        }
         let object_ = parameter_object(Identity::Int(number as i64), Some(type_.width));
         let reference = mir::MemRef {
             space: Some(Space::Frame),
@@ -1067,6 +1090,43 @@ pub fn physicalize(
             }
             for argument in &stack_arguments {
                 for part in _stack_argument_parts(argument)? {
+                    let part = match part {
+                        // A push moves a word; a byte argument is zero-extended to one
+                        // first, and the callee reads its low byte at the same offset.
+                        Arg::Const(one) if one.width == 1 => {
+                            Arg::Const(mir::Const { width: 2, ..one })
+                        }
+                        Arg::Held(_) | Arg::Cell(_)
+                            if _bytes(&part)? > i64::from(part_width(&part)) =>
+                        {
+                            let value = fresh_value(&mut next_value, next_at);
+                            let uses = match &part {
+                                Arg::Held(held) => vec![held.value],
+                                Arg::Cell(cell) => cell.r#ref.base.into_iter().collect(),
+                                _ => unreachable!("a held or memory argument"),
+                            };
+                            let mut widen = mir::Op::new(
+                                next_at,
+                                OpCode::Operation(Operation::Extend),
+                                "movzx",
+                                vec![value],
+                                uses,
+                            );
+                            widen.kind = Kind::ZeroExtend;
+                            if let Arg::Cell(cell) = &part {
+                                widen.loads = vec![cell.r#ref.clone()];
+                            }
+                            widen.args = vec![part];
+                            widen.results = vec![Arg::Held(_held(value, 2))];
+                            widen.id = Some(next_at as u32);
+                            widen.reads_complete = true;
+                            widen.memory_complete = true;
+                            operations.push(widen);
+                            next_at += 1;
+                            Arg::Held(_held(value, 2))
+                        }
+                        other => other,
+                    };
                     let mut uses = match &part {
                         Arg::Held(held) => vec![held.value],
                         _ => vec![],

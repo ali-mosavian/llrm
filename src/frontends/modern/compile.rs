@@ -2,6 +2,7 @@
 //! frontend to a fresh 16-bit OMF object.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
@@ -38,6 +39,19 @@ pub fn optimized(
     target: &targets::Profile,
     calls: Option<&IndexMap<i64, String>>,
     options: &Options,
+) -> Result<Lowered, String> {
+    watched(program, function, lowered, target, calls, options, None)
+}
+
+/// `optimized`, showing `watch` the body after each pass.
+pub fn watched(
+    program: &model::Program,
+    function: &model::Function,
+    lowered: &Lowered,
+    target: &targets::Profile,
+    calls: Option<&IndexMap<i64, String>>,
+    options: &Options,
+    watch: Option<&mut dyn FnMut(&str, &MirBody)>,
 ) -> Result<Lowered, String> {
     let module = program
         .modules
@@ -77,15 +91,20 @@ pub fn optimized(
         None,
         None,
         None,
-        None,
+        watch,
     )?;
     Ok(Lowered { body: MirBody::clone(&body), ..lowered.clone() })
 }
 
 // DOS C symbols carry one leading underscore. Runtime builtins already
-// use their compact, mangled ABI names (for example `_pt`).
-fn object_name(name: &str) -> String {
-    if name.starts_with("__") { name.to_owned() } else { format!("_{name}") }
+// use their compact, mangled ABI names (for example `_pt`), and an exported
+// function is named by its ABI's symbol.
+fn object_name(function: &model::Function) -> String {
+    if function.linkage == model::FunctionLinkage::External || function.name.starts_with("__") {
+        function.name.clone()
+    } else {
+        format!("_{}", function.name)
+    }
 }
 
 fn _checked(error: flow::Checked) -> String {
@@ -115,7 +134,8 @@ pub fn assembled(
     let semantic = semantic_lowered(program)?;
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     let mut referenced: IndexMap<String, String> = IndexMap::default();
-    let source_names: BTreeSet<&str> = module.functions.iter().map(|function| function.name.as_str()).collect();
+    let linked_names: BTreeMap<&str, String> =
+        module.functions.iter().map(|function| (function.name.as_str(), object_name(function))).collect();
 
     assert_eq!(module.functions.len(), semantic.len(), "zip(strict=True)");
     for (function, lowered) in module.functions.iter().zip(&semantic) {
@@ -173,6 +193,7 @@ pub fn assembled(
         }
 
         let body = addressvalues::converted(&body);
+        let body = masm::cleaned_returns(&body, function.abi.as_ref().map_or(0, |abi| abi.parameter_bytes))?;
 
         let reserve = {
             let frame = owned_frame.borrow();
@@ -186,16 +207,17 @@ pub fn assembled(
                 continue;
             }
             let far = physical.far_calls.contains(at);
-            let linked_name = if source_names.contains(name.as_str()) { object_name(name) } else { name.clone() };
+            let linked_name = linked_names.get(name.as_str()).cloned().unwrap_or_else(|| name.clone());
             callees.insert(*at, masm::Callee::new(linked_name.clone(), far));
             referenced.insert(linked_name, if far { "far" } else { "near" }.to_owned());
         }
 
         let is_entry = function.name == entry;
-        let linked_name = object_name(&function.name);
+        let public = is_entry || function.linkage == model::FunctionLinkage::External;
+        let linked_name = linked_names[function.name.as_str()].clone();
         let procedure = masm::Procedure {
             name: linked_name.clone(),
-            public: is_entry,
+            public,
             far: true,
             body,
             reserve,
@@ -203,11 +225,10 @@ pub fn assembled(
         };
         let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
         let body = jumps::duplicated_returns(procedure.body, overhead);
-        procedures.push(masm::Procedure { name: linked_name, public: is_entry, far: true, body, reserve, callees });
+        procedures.push(masm::Procedure { name: linked_name, public, far: true, body, reserve, callees });
     }
 
-    let linked_entry = object_name(entry);
-    if !procedures.iter().any(|procedure| procedure.name == linked_entry) {
+    if !linked_names.contains_key(entry) {
         return Err(format!("entry function {} does not exist", pyrepr::string(entry)));
     }
 
@@ -218,8 +239,8 @@ pub fn assembled(
         .map(|(name, distance)| (name.clone(), distance.clone()))
         .collect();
     externs.sort();
-    let names: IndexMap<(Space, i64), String> =
-        module.data.iter().map(|item| ((Space::Segment, item.id), format!("{}$D{}", module.name, item.id))).collect();
+    let mut names = crate::hir::lower::symbol_names();
+    names.extend(module.data.iter().map(|item| ((Space::Segment, item.id), format!("{}$D{}", module.name, item.id))));
     let data = vec![(
         "_DATA".to_owned(),
         module
@@ -237,7 +258,11 @@ pub fn assembled(
         code: format!("{}_TEXT", module.name.to_uppercase()),
         names,
         externs,
-        publics: vec![linked_entry],
+        publics: procedures
+            .iter()
+            .filter(|one| one.public)
+            .map(|one| one.name.clone())
+            .collect(),
         data,
         procedures,
         private: BTreeSet::new(),
@@ -246,9 +271,12 @@ pub fn assembled(
 }
 
 /// Compile a modern program directly to an OMF object.
+/// The processor objects are compiled for.
+pub const CPU: &str = "486";
+
 pub fn written(program: &model::Program, entry: &str, source: &Path, options: &Options) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    omfwrite::written(&assembled(program, entry, ProfileOrName::Name("386"), options)?, &name)
+    omfwrite::written(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, &name)
         .map_err(|error| error.to_string())
 }
 

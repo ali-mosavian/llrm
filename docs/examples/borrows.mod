@@ -1,0 +1,54 @@
+# Borrows: a function returns a reference into what it was lent, a `let mut`
+# view is moved along a line, and nothing is copied.
+
+struct Player:
+    name: string
+    score: i16
+
+fn leader(a: &Player, b: &Player) -> &Player:
+    return a.score >= b.score ? a : b
+
+fn best(team: &[Player]) -> Option[&Player]:
+    if team.len == 0:
+        return .none
+    let mut at: u16 = 0
+    for i in range(1, team.len):
+        if team[i].score > team[at].score:
+            at = i
+    return .some(team[at])
+
+fn first_name(team: &[Player]) -> &string:
+    match team:
+        [first, *_]:
+            let same = first
+            return same.name
+        []:
+            return "nobody"
+
+fn word(line: &string, start: u16) -> &string:
+    let mut end = start
+    while end < line.len && line[end] != ' ':
+        end += 1
+    return &line[start:end]
+
+fn main() -> i16:
+    let ada = Player(name="ada", score=31)
+    let bob = Player(name="bob", score=45)
+    print(f"leader {leader(ada, bob).name}")
+    let team = [Player(name="cy", score=12), Player(name="di", score=58), Player(name="ed", score=40)]
+    match best(team):
+        .some(winner):
+            print(f"best {winner.name} with {winner.score}")
+        .none:
+            print("no team")
+    print(f"first {first_name(team)}")
+    let line = "move north then east"
+    let mut at: u16 = 0
+    let mut current = word(line, at)
+    while current.len > 0:
+        print(f"[{current}]")
+        at += current.len + 1
+        if at >= line.len:
+            break
+        current = word(line, at)
+    return 0

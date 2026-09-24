@@ -96,7 +96,35 @@ fn test_guard_refines_subscript_without_leaking_to_the_join() {
     assert_eq!(known[&30][&counter], interval(0, 3, 2));
     assert_eq!(known[&30][&offset], interval(0, 6, 2));
     assert_eq!(known[&40][&counter], interval(0, 9, 2));
-    assert!(!known.get(&50).is_some_and(|facts| facts.contains_key(&counter)));
+    assert_eq!(known[&50][&counter], interval(10, 32767, 2));
+}
+
+#[test]
+fn test_a_compare_under_the_same_compare_is_decided_outside_any_loop() {
+    // Only counted loops were scoped, so `x < 8` under `x < 8` in straight-line code kept both branches.
+    let x = value(1, 0);
+    let compare = |at: i64, yes: i64, no: i64| {
+        let mut block = guarded_loop().blocks[2].clone();
+        block.at = at;
+        block.succ = vec![yes, no];
+        block.ops[0].args = vec![word(x), Arg::Const(Const::new(8, 2))];
+        block.ops[0].uses = vec![x];
+        block.ops[1].target = Some(yes);
+        block
+    };
+    let body = Rc::new(MirBody::new(
+        0,
+        vec![
+            compare(0, 10, 30),
+            compare(10, 20, 40),
+            MirBlock::new(20, vec![], vec![], vec![]),
+            MirBlock::new(30, vec![], vec![], vec![]),
+            MirBlock::new(40, vec![], vec![], vec![]),
+        ],
+    ));
+    let scoped = bounded(&body).unwrap();
+
+    assert_eq!(on_edge(&body.blocks[1], 40, &scoped[&10], None).unwrap(), None);
 }
 
 #[test]

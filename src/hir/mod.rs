@@ -5,6 +5,7 @@ pub mod callmemory;
 pub mod codec;
 pub mod dump;
 pub mod escape;
+pub mod execute;
 pub mod lower;
 pub mod model;
 pub mod verify;

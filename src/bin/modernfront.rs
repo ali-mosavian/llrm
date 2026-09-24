@@ -7,8 +7,17 @@ fn main() -> ExitCode {
     let mut tokens_only = false;
     let mut syntax_only = false;
     let mut input = None;
-    for argument in env::args().skip(1) {
-        if argument == "--tokens" {
+    let mut declare = None;
+    let mut arguments = env::args().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--declare" {
+            let Some(language) = arguments.next().as_deref().and_then(llrm::frontends::modern::declarations::Language::named)
+            else {
+                eprintln!("modernfront: --declare takes h, bi or inc");
+                return ExitCode::from(2);
+            };
+            declare = Some(language);
+        } else if argument == "--tokens" {
             tokens_only = true;
         } else if argument == "--syntax" {
             syntax_only = true;
@@ -28,7 +37,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let Some(input) = input else {
-        eprintln!("usage: modernfront [--tokens|--syntax] FILE");
+        eprintln!("usage: modernfront [--tokens|--syntax|--declare h|bi|inc] FILE");
         return ExitCode::from(2);
     };
     let source = match fs::read_to_string(&input) {
@@ -38,41 +47,39 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let tokens = match llrm::frontends::modern::lex(&source) {
-        Ok(tokens) => tokens,
-        Err(error) => return report(&input, error),
-    };
-    if tokens_only {
-        for token in tokens {
-            println!("{}:{} {:?}", token.span.line, token.span.column, token.kind);
-        }
-        return ExitCode::SUCCESS;
+    if tokens_only || syntax_only {
+        let text = if tokens_only {
+            llrm::frontends::modern::tokens_text(&source)
+        } else {
+            llrm::frontends::modern::syntax_text(&source)
+        };
+        return match text {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => report(&input, error),
+        };
     }
-    let module = match llrm::frontends::modern::parse(tokens) {
-        Ok(module) => module,
-        Err(error) => return report(&input, error),
-    };
-    if syntax_only {
-        println!("{module:#?}");
-        return ExitCode::SUCCESS;
+    if let Some(language) = declare {
+        return match llrm::frontends::modern::declare_file(Path::new(&input), language) {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err((path, error)) => report(&path.display().to_string(), error),
+        };
     }
-    let module_name = Path::new(&input)
-        .file_stem()
-        .and_then(|one| one.to_str())
-        .unwrap_or("module");
-    match llrm::frontends::modern::semantic::compile(&module, module_name) {
+    match llrm::frontends::modern::compile_file(Path::new(&input)) {
         Ok(hir) => {
             print!("{hir}");
             ExitCode::SUCCESS
         }
-        Err(error) => report(&input, error),
+        Err((path, error)) => report(&path.display().to_string(), error),
     }
 }
 
 fn report(path: &str, error: llrm::frontends::modern::Diagnostic) -> ExitCode {
-    eprintln!(
-        "{path}:{}:{}: {}",
-        error.span.line, error.span.column, error.message
-    );
+    eprintln!("{path}:{error}");
     ExitCode::FAILURE
 }
