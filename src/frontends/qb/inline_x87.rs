@@ -35,9 +35,7 @@ pub struct Finalized {
 
 /// Replace allocated QB intrinsic pseudos with inline-byte placeholders.
 pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized, String> {
-    if !(0..=0xFFFF).contains(&parameter_bytes) {
-        return Err("QB far-return cleanup exceeds 16 bits".into());
-    }
+    let body = masm::cleaned_returns(body, parameter_bytes)?;
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -46,17 +44,6 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
             let what = instruction.what.as_ref();
             let code = what.and_then(|what| _CODE(what.name.as_deref().unwrap_or("")));
             let Some(code) = code else {
-                if let Some(what) = what {
-                    if what.op == Operation::Return && parameter_bytes != 0 {
-                        let mut replaced = (**instruction).clone();
-                        replaced.what = Some(Semantics {
-                            sources: vec![Loc::Imm(ir::Imm { value: parameter_bytes, width: 2, address: None })],
-                            ..what.clone()
-                        });
-                        instructions.push(Arc::new(replaced));
-                        continue;
-                    }
-                }
                 instructions.push(Arc::clone(instruction));
                 continue;
             };

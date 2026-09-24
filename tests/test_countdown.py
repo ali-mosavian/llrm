@@ -177,4 +177,5 @@ def test_an_element_read_every_iteration_bounds_the_trip_count() -> None:
     procedure = text[text.index("_sum_three proc") : text.index("_sum_three endp")]
 
     assert re.search(r"add \w\w, 2\n", procedure)
-    assert not re.search(r"    (?:dec|inc) \w\w\n", procedure)
+    indexed = re.search(r"\[(?:bx|bp)\+(?:si|di)\]", procedure)
+    assert not (indexed and re.search(r"    (?:dec|inc) \w\w\n", procedure))

@@ -1,5 +1,5 @@
 fn value() -> u16:
-    var x: u16 = 1
+    let mut x: u16 = 1
     x <<= 4
     x |= 3
     x ^= 1

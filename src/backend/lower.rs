@@ -287,6 +287,10 @@ fn operation_of(op: &Op) -> Result<Operation, Unlowered> {
 
 /// What this operation computes, in machine form, or None for verbatim.
 pub(crate) fn semantics(op: &Op, was: Option<&ir::Semantics>, place: Place) -> Result<Option<Unlocated>, Unlowered> {
+    // An escape a frontend wrote follows what never returns: it has no bytes.
+    if op.kind == Kind::Escape && !op.source_backed {
+        return Ok(Some(Unlocated { op: Operation::Nothing, name: Some(String::new()), dests: vec![], sources: vec![], target: None, indirect: false }));
+    }
     let same_target = was.is_none_or(|was| op.target == was.target);
     if matches!(place, Place::Default)
         && op.raised.as_ref().is_some_and(|(args, results)| op.args == *args && op.results == *results)

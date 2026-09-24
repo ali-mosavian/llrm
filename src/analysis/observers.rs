@@ -406,6 +406,15 @@ pub fn private(
             unknown_frame_publication |= op.args.iter().any(|arg| matches!(arg, Arg::FrameAddress(_)));
         }
     }
+    // An access through a pointer reads or writes what that pointer may
+    // reach without naming it: such an object is not private to its name.
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        for r#ref in op.loads.iter().chain(&op.stores).filter(|one| one.base.is_some() || one.segment.is_some()) {
+            if let Some(provenance) = pointers.reference(r#ref) {
+                published.extend(provenance.slices.into_iter().map(|one| one.object));
+            }
+        }
+    }
     let frame = escapes.reach.is_some() && escapes.opaque_addresses.is_empty();
     let reach = escapes.reach.unwrap_or_default();
     let statics = exposed.data.is_some() && Some(body.entry) == exposed.main;

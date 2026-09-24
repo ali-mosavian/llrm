@@ -1,0 +1,37 @@
+# The Mandelbrot set as text, in fixed-point arithmetic: a 486SX has no FPU,
+# and 20.12 fixed point is plenty for a terminal's resolution.
+
+type Real = fixed i32, fraction=12
+
+const WIDTH: i16 = 64
+const HEIGHT: i16 = 22
+const LIMIT: u16 = 40
+
+# Steps until z = z*z + c leaves the radius-2 circle, at most LIMIT.
+fn escape(cr: Real, ci: Real) -> u16:
+    let mut zr = Real(0)
+    let mut zi = Real(0)
+    for step in range(0, LIMIT):
+        let zr2 = zr * zr
+        let zi2 = zi * zi
+        if zr2 + zi2 > Real(4):
+            return step
+        zi = Real(2) * zr * zi + ci
+        zr = zr2 - zi2 + cr
+    return LIMIT
+
+fn main() -> i16:
+    let shades = " .:-=+*#%@"
+    let left = Real(-2.2)
+    let top = Real(1.2)
+    let dx = Real(3.2) / Real(WIDTH)
+    let dy = Real(2.4) / Real(HEIGHT)
+    for row in range(0, HEIGHT):
+        let mut line: string = ""
+        let ci = top - Real(row) * dy
+        for column in range(0, WIDTH):
+            let steps = escape(left + Real(column) * dx, ci)
+            line.push(steps == LIMIT ? '@' : shades[steps % 9])
+        print(line)
+    print(f"step {dx}, limit {LIMIT}")
+    return 0

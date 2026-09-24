@@ -1,2 +1,2 @@
 fn value() -> i16:
-    return i16(true or false and false)
+    return i16(true || false && false)

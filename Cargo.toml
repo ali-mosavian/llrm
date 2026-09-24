@@ -7,7 +7,7 @@ description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS w
 default-run = "llrm-qb"
 
 [dependencies]
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "instr_info", "nasm"] }
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm"] }
 indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -34,6 +34,10 @@ path = "src/bin/llrm-omf.rs"
 [[bin]]
 name = "llrm-modern"
 path = "src/bin/llrm-modern.rs"
+
+[[bin]]
+name = "llrm-run"
+path = "src/bin/llrm-run.rs"
 
 [[bin]]
 name = "modernfront"

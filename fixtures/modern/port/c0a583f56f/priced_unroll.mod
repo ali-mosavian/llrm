@@ -1,7 +1,7 @@
 type fix = fixed i32, fraction=8
 fn value(k: i16) -> fix:
-    var a: [fix; 8, 8] = [0; 8, 8]
-    var b: [fix; 8, 8] = [0; 8, 8]
+    let mut a: fix[8, 8] = [[0] * 8] * 8
+    let mut b: fix[8, 8] = [[0] * 8] * 8
     for i in 0..8:
         for j in 0..8:
             a[i, j] = fix(i * 3 + j + 1) / 4

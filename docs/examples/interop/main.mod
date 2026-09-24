@@ -1,0 +1,29 @@
+# Calls a C library through cdecl16, and exports the rule it calls back.
+
+@repr("c16", pack=1)
+struct CPoint:
+    x: i16
+    y: i16
+
+extern "cdecl16":
+    fn checksum(data: *far u8, count: u16) -> u16
+    fn weighted_sum(values: *far i16, count: u16) -> i32
+    fn centroid(points: *far CPoint, count: u16, out: *far mut CPoint) -> void
+
+export "cdecl16":
+    fn weight(value: i16) -> i16:
+        if value < 0:
+            return -value * 3
+        return value
+
+fn main() -> i16:
+    let bytes: u8[4] = [0x51, 0x42, 0x2A, 0x07]
+    let samples: i16[5] = [3, -1, 4, -1, 5]
+    let corners: CPoint[3] = [CPoint(x=0, y=0), CPoint(x=30, y=6), CPoint(x=6, y=30)]
+    let mut middle = CPoint(x=0, y=0)
+    unsafe:
+        print(f"checksum {checksum(&bytes, 4)}")
+        print(f"weighted {weighted_sum(&samples, 5)}")
+        centroid(&corners, 3, &mut middle)
+    print(f"centroid {middle.x},{middle.y}")
+    return 0

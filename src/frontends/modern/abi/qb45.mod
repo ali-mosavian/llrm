@@ -1,0 +1,48 @@
+# QuickBASIC 4.5's side of `export "qb45":` and `extern "qb45":` (section
+# 15). BASIC passes an argument by reference: a near pointer to the
+# variable, or to its string or array descriptor. Each adapter is that
+# pointer, and borrows what it points to.
+
+import abi.basic
+
+# `name AS T`, borrowed as `&mut T`.
+pub struct Ref[T]:
+    target: *near mut T
+
+# `name$`, its characters borrowed as `&mut [char]`.
+pub struct StringRef:
+    descriptor: *near StringDescriptor
+
+# `name() AS T`, its elements borrowed as `&mut [T, N]`.
+pub struct ArrayRef[T]:
+    descriptor: *near basic.ArrayDescriptor
+
+# A near string: its length, then its data in DGROUP (runtime strfcn.asm).
+@repr("c16", pack=1)
+pub struct StringDescriptor:
+    mut length: u16
+    mut data: *near mut char
+
+pub fn string_data(text: *near StringDescriptor) -> *far mut char:
+    unsafe:
+        let data = (*text).data
+        return data.far()
+
+pub fn string_length(text: *near StringDescriptor) -> u16:
+    unsafe:
+        return (*text).length
+
+extern "pascal16":
+    # A copy of a string on BASIC's temporaries (runtime string.asm).
+    @link_name("B$SCPY")
+    fn copied(text: *near StringDescriptor) -> *near StringDescriptor
+
+var result: StringDescriptor = StringDescriptor(length=0, data=0)
+
+# A string function's result: `data`, which is in DGROUP, copied where
+# BASIC takes it from.
+pub fn string_result(data: *far mut char, length: u16) -> *near StringDescriptor:
+    result.length = length
+    unsafe:
+        result.data = data.near()
+        return copied(&result)

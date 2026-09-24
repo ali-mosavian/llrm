@@ -875,6 +875,7 @@ impl<'f, 'c> _Stack<'f, 'c> {
             self.copy(operands[0], results[0])?;
         } else if what.op == Operation::FloatStore && operands.len() == 1 && results.is_empty() {
             self.store(operands[0])?;
+
         } else if what.op == Operation::FloatUnary && operands.len() == 1 && !results.is_empty() {
             let what = Semantics { dests: vec![st(0)], sources: vec![st(0)], ..what };
             self.consume(operands[0], what, results[0])?;
@@ -883,7 +884,13 @@ impl<'f, 'c> _Stack<'f, 'c> {
             let sources = std::iter::once(st(0)).chain(what.sources[1..].iter().cloned()).collect();
             self.consume(kept.value, Semantics { dests: vec![st(0)], sources, ..what }, results[0])?;
         } else {
-            return Err(unlowered("floating instruction has no allocation rule"));
+            return Err(unlowered(&format!(
+                "floating instruction has no allocation rule: {:?} {:?} of {} operands, {} results",
+                what.op,
+                what.name,
+                operands.len(),
+                results.len()
+            )));
         }
         Ok(())
     }

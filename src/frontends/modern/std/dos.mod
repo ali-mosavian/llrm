@@ -1,0 +1,21 @@
+# Interrupt vectors (std.dos). A handler is a function in an
+# `export "interrupt16":` block, and its name is its far address.
+
+import std.os as os
+
+# The handler interrupt `number` enters now.
+pub fn vector(number: u8) -> extern "interrupt16" fn() -> void:
+    unsafe:
+        return os.vector(number)
+
+# Makes interrupt `number` enter `handler`. The program puts the one it
+# replaced back before it ends.
+pub fn set_vector(number: u8, handler: extern "interrupt16" fn() -> void) -> void:
+    unsafe:
+        os.set_vector(number, handler)
+
+# Enters `handler` as its interrupt would, and comes back: a handler calls
+# the one it replaced this way.
+pub fn chain(handler: extern "interrupt16" fn() -> void) -> void:
+    unsafe:
+        os.chain(handler)

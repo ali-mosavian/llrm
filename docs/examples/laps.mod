@@ -1,0 +1,25 @@
+# enumerate, zip and range are library generators. Each item of a sequence
+# is a reference into it, never a copy.
+
+struct Runner:
+    name: string
+    laps: i16
+
+fn main() -> i16:
+    let splits: i16[4] = [62, 58, 60, 57]
+    let mut best: u16 = 0
+    for (lap, time) in enumerate(splits):
+        print(f"lap {lap + 1}: {time}s")
+        if time < splits[best]:
+            best = lap
+    print(f"fastest lap {best + 1}")
+    let runners = [Runner(name="ada", laps=12), Runner(name="bob", laps=9)]
+    let targets: i16[2] = [10, 10]
+    for (runner, target) in zip(runners, targets):
+        if runner.laps >= target:
+            print(f"{runner.name} made {target}")
+        else:
+            print(f"{runner.name} is {target - runner.laps} short")
+    for pace in range(58, 61):
+        print(f"{pace}s pace: {pace * 12}s for 12 laps")
+    return 0

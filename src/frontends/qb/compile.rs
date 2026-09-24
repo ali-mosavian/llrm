@@ -162,7 +162,7 @@ type Names = IndexMap<(Space, i64), String>;
 
 #[allow(clippy::type_complexity)]
 fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
-    let mut names: Names = IndexMap::from_iter([((Space::Group, 0), "DGROUP".to_owned())]);
+    let mut names: Names = crate::hir::lower::symbol_names();
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
     let internal: IndexMap<i64, &model::DataObject> = module
         .data
@@ -201,6 +201,9 @@ fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Da
         let mut relocations: Vec<&model::DataRelocation> = object_.relocations.iter().collect();
         relocations.sort_by_key(|one| one.at);
         for relocation in relocations {
+            if relocation.code {
+                return emission(format!("{}: BASIC data does not address code", object_.name));
+            }
             let far = matches!(relocation.address, model::AddressKind::Far | model::AddressKind::Huge);
             let width = if far { 4 } else { 2 };
             if relocation.at < cursor || relocation.at + width > object_.bytes.len() as i64 {
@@ -340,6 +343,7 @@ pub fn _empty_procedure(name: &str) -> masm::Procedure {
         body: lir::LirBody::new(name, 1, vec![], IndexMap::default(), IndexMap::default()),
         reserve: 0,
         callees: IndexMap::default(),
+        interrupt: None,
     }
 }
 
@@ -443,6 +447,7 @@ fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure 
         body,
         reserve: 0,
         callees: IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        interrupt: None,
     }
 }
 
@@ -1662,6 +1667,7 @@ pub fn assembled(
             // runtime-frame path above, so the native shell owns none.
             reserve: 0,
             callees,
+            interrupt: None,
         });
     }
 

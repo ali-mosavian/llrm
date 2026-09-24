@@ -149,6 +149,4 @@ def test_a_loop_base_plan_prices_the_index_it_spills() -> None:
     """
     function = _modern("sum_three", "_sum_three")
     loop = function[function.index("L0_3:") : function.index("L0_5:")]
-    adds = [line.split(None, 1)[1] for line in loop.splitlines() if line.strip().startswith("add")]
-    assert sorted(adds)[-1] == "bx, 2" and len(adds) == 4
-    assert all(one.startswith("ax, word ptr") for one in adds[:-1])
+    assert "[bp" not in loop

@@ -664,9 +664,28 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
     Ok(masm::Module { data, ..module.clone() })
 }
 
+/// How an object lays out its procedures' code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodeLayout {
+    /// All of it in one segment, where a near call may reach any procedure.
+    OneSegment,
+    /// A segment of its own for each procedure, all of one name, so that the
+    /// linker's `option eliminate` drops each one nothing calls. Every call
+    /// between procedures must then be far.
+    PerProcedure,
+}
+
 pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
+    written_as(module, source, CodeLayout::OneSegment)
+}
+
+pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Vec<u8>, Error> {
     let module = &live(module)?;
-    let mut segments = vec![Segment::new(&module.code, "CODE", false)];
+    let groups: Vec<Vec<usize>> = match layout {
+        CodeLayout::OneSegment => vec![(0..module.procedures.len()).collect()],
+        CodeLayout::PerProcedure => (0..module.procedures.len()).map(|one| vec![one]).collect(),
+    };
+    let mut segments: Vec<Segment> = groups.iter().map(|_| Segment::new(&module.code, "CODE", false)).collect();
     let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
@@ -684,7 +703,9 @@ pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
             .unwrap_or_else(|| panic!("ValueError: {} is not in list", pyrepr::string(name)));
         _data(&mut segments[index], index, items, &mut symbols);
     }
-    _code(&mut segments[0], module, &mut symbols)?;
+    for (index, group) in groups.iter().enumerate() {
+        _code(&mut segments[index], index, module, group, &mut symbols)?;
+    }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let records = _records(module, source, &mut segments, &symbols, &externs)?;
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -714,13 +735,18 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
     }
 }
 
+/// The code of `module`'s procedures numbered `group`, into `segment`, the
+/// object's segment `index`.
 pub fn _code(
     segment: &mut Segment,
+    index: usize,
     module: &masm::Module,
+    group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
 ) -> Result<(), Error> {
     let mut items: Vec<Encoded> = Vec::new();
-    for (number, procedure) in module.procedures.iter().enumerate() {
+    for &number in group {
+        let procedure = &module.procedures[number];
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in masm::listing(procedure, number)? {
             match _items(&item, &module.names, number) {
@@ -734,7 +760,7 @@ pub fn _code(
     for item in &items {
         match item {
             Encoded::Label(masm::Label { name }) => {
-                symbols.insert(name.clone(), (0, at));
+                symbols.insert(name.clone(), (index, at));
             }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
             Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long)?.code, &[]),
@@ -743,6 +769,9 @@ pub fn _code(
                 let distance = i16::try_from(distance)
                     .unwrap_or_else(|_| panic!("struct.error: 'h' format requires -32768 <= number <= 32767"));
                 segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
+            }
+            Encoded::Near(Near { name }) if module.procedures.iter().any(|one| &one.name == name) => {
+                return Err(Unencodable(format!("a near call to {name} in another code segment")).into());
             }
             Encoded::Near(Near { name }) => {
                 segment.put(&[0; 3], &[Fixup { relative: true, ..Fixup::new(1, OFFSET, name.clone()) }]);
@@ -1120,7 +1149,7 @@ mod tests {
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect() }
+        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None }
     }
 
     fn reg(register: Register) -> Loc {

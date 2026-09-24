@@ -1,31 +1,31 @@
 type scalar = fixed i32, fraction=9
 
 struct vec2i:
-    x: scalar
-    y: scalar
+    mut x: scalar
+    mut y: scalar
 
 struct body:
-    pos: vec2i
-    vel: vec2i
+    mut pos: vec2i
+    mut vel: vec2i
 
 fn nbody(step_count: i32) -> scalar:
-    var bodies: [body; 6] = [
-        {{-15, -12}, {0, 0}},
-        {{-8, -7}, {0, 0}},
-        {{-1, -2}, {0, 0}},
-        {{6, 3}, {0, 0}},
-        {{13, 8}, {0, 0}},
-        {{20, 13}, {0, 0}},
+    let mut bodies: body[6] = [
+        body(vec2i(-15, -12), vec2i(0, 0)),
+        body(vec2i(-8, -7), vec2i(0, 0)),
+        body(vec2i(-1, -2), vec2i(0, 0)),
+        body(vec2i(6, 3), vec2i(0, 0)),
+        body(vec2i(13, 8), vec2i(0, 0)),
+        body(vec2i(20, 13), vec2i(0, 0)),
     ]
     for step_no in 0..step_count:
         for current in &mut bodies:
-            var acc = vec2i { x: 0, y: 0 }
+            let mut acc = vec2i(x=0, y=0)
             for other in &bodies:
                 if current is not other:
-                    let delta = vec2i {
-                        x: other.pos.x - current.pos.x,
-                        y: other.pos.y - current.pos.y,
-                    }
+                    let delta = vec2i(
+                        x=other.pos.x - current.pos.x,
+                        y=other.pos.y - current.pos.y,
+                    )
                     let dist_2: scalar = delta.x * delta.x + delta.y * delta.y + 1
                     let falloff: scalar = 1 / dist_2
                     acc.x += delta.x * falloff

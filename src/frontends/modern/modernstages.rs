@@ -2,44 +2,42 @@
 //! frontend stage to text files.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::rc::Rc;
 
 use super::compile as modern;
-use super::driver::{self, FrontendError};
-use crate::backend::cpu as targets;
+use super::driver;
+use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::masm;
 use crate::frontends::qb::abi::physicalize;
 use crate::hir;
+use crate::model::mir::MirBody;
 use crate::model::passes::Options;
+use crate::tools::stages;
 
 /// Python's text-mode read: universal newlines.
 fn _text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// Run one diagnostic frontend boundary and return its complete output.
-fn _frontend_text(source: &Path, option: &str) -> Result<String, FrontendError> {
-    let command = driver::command();
-    let result = Command::new(&command[0])
-        .args(&command[1..])
-        .arg(option)
-        .arg(source)
-        .current_dir(driver::ROOT())
-        .output()
-        .map_err(|error| FrontendError(format!("could not start modern frontend: {error}")))?;
-    if !result.status.success() {
-        let stderr = _text(&result.stderr).trim().to_owned();
-        let message = if stderr.is_empty() {
-            format!("modernfront exited with status {}", result.status.code().unwrap_or(-1))
-        } else {
-            stderr
-        };
-        return Err(FrontendError(message));
-    }
-    Ok(_text(&result.stdout))
-}
-
 fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
+/// Runs `optimize`, writing the body after each pass to `passes/RUN/NN-PASS.txt` (rule 4).
+fn passes<T>(
+    output: &Path,
+    run: &str,
+    optimize: impl FnOnce(&mut dyn FnMut(&str, &MirBody)) -> Result<T, String>,
+) -> Result<T, String> {
+    let directory = output.join("passes").join(run);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let mut seen = Vec::new();
+    let done = optimize(&mut |stage: &str, body: &MirBody| seen.push((stage.to_owned(), body.clone())))?;
+    for (number, (stage, body)) in seen.into_iter().enumerate() {
+        let (text, _) = stages::mir_stage(&stage, &[(run.to_owned(), Rc::new(body))], None, None, None, true, true);
+        write(&directory.join(format!("{number:03}-{stage}.txt")), &text)?;
+    }
+    Ok(done)
 }
 
 /// Write source, lexical, syntax, HIR, and semantic-MIR snapshots.
@@ -47,22 +45,27 @@ pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let program = driver::parsed(source, None).map_err(|error| error.0)?;
     let lowered = modern::semantic_lowered(&program)?;
-    let target = targets::profile("386")?;
+    let target = targets::profile(modern::CPU)?;
 
     let input = std::fs::read(source).map_err(|error| error.to_string())?;
     write(&output.join("00-input.mod"), &_text(&input))?;
-    write(&output.join("01-tokens.txt"), &_frontend_text(source, "--tokens").map_err(|error| error.0)?)?;
-    write(&output.join("02-syntax.txt"), &_frontend_text(source, "--syntax").map_err(|error| error.0)?)?;
+    let text = String::from_utf8_lossy(&input);
+    let refused = |error| driver::refused(source, &error).0;
+    write(&output.join("01-tokens.txt"), &super::tokens_text(&text).map_err(refused)?)?;
+    write(&output.join("02-syntax.txt"), &super::syntax_text(&text).map_err(refused)?)?;
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
     let mut mir_files = Vec::new();
     let mut number = 4;
     assert_eq!(program.modules[0].functions.len(), lowered.len(), "zip(strict=True)");
     for (function, semantic) in program.modules[0].functions.iter().zip(&lowered) {
         let name = semantic.name.replace('.', "-");
-        let optimized = modern::optimized(&program, function, semantic, target, None, options)?;
+        let optimized = passes(output, &format!("{name}-optimized"), |watch| {
+            modern::watched(&program, function, semantic, target, None, options, Some(watch))
+        })?;
         let physical = physicalize(&program, function, &optimized).map_err(|error| error.to_string())?;
-        let optimized_physical =
-            modern::optimized(&program, function, &physical.lowered, target, Some(&physical.calls), options)?;
+        let optimized_physical = passes(output, &format!("{name}-optimized-physical"), |watch| {
+            modern::watched(&program, function, &physical.lowered, target, Some(&physical.calls), options, Some(watch))
+        })?;
         let stages = [
             ("source", semantic),
             ("optimized", &optimized),
@@ -75,6 +78,15 @@ pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf
             mir_files.push(format!("{filename}  {stage} MIR for {}", semantic.name));
             number += 1;
         }
+    }
+
+    // The emitted code, of a program with its entry or a library with exports.
+    let functions = &program.modules[0].functions;
+    if functions.iter().any(|function| function.name == "main" || function.linkage == hir::model::FunctionLinkage::External) {
+        let module = modern::assembled(&program, "main", ProfileOrName::Name(modern::CPU), options)?;
+        let filename = format!("{number:02}-listing.asm");
+        write(&output.join(&filename), &masm::text(&module).map_err(|error| error.0)?)?;
+        mir_files.push(format!("{filename}  the program as emitted, for {}", modern::CPU));
     }
 
     let mut files = vec![
@@ -132,7 +144,9 @@ mod tests {
                 "09-nbody-main-optimized-mir.txt",
                 "10-nbody-main-physical-mir.txt",
                 "11-nbody-main-optimized-physical-mir.txt",
+                "12-listing.asm",
                 "README.txt",
+                "passes",
             ]
         );
         let read = |name: &str| std::fs::read_to_string(output.join(name)).expect("dumped");
@@ -148,8 +162,19 @@ mod tests {
         let physical_mir = read("06-nbody-nbody-physical-mir.txt");
         let optimized_physical_mir = read("07-nbody-nbody-optimized-physical-mir.txt");
         assert!(source_mir.contains("function nbody.nbody"));
-        assert!(optimized_mir.contains("call _pf4"));
+        assert!(optimized_mir.contains(&format!("call {}", crate::abi::modern::PRINT_Q4)));
         assert!(source_mir.contains("mul"));
         assert_ne!(physical_mir, optimized_physical_mir);
+    }
+
+    #[test]
+    fn test_a_library_without_main_dumps_its_listing() {
+        // A library had no listing, so the runtime's code could not be read.
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = directory.path().join("lib.mod");
+        std::fs::write(&source, "export \"cdecl16\":\n    fn twice(value: i16) -> i16:\n        return value * 2\n").expect("writes");
+        let output = dumped(&source, &directory.path().join("dump"), &O2()).expect("dumps");
+        let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");
+        assert!(listing.contains("_twice"), "{listing}");
     }
 }

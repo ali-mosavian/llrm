@@ -1,0 +1,37 @@
+# Places that are not a plain name: a vec field grows, is indexed and
+# iterated in place, is lent to a function, and is viewed by a `let`.
+
+struct Student:
+    name: string
+    mut marks: vec[i16]
+
+fn curve(marks: &mut vec[i16], by: i16) -> void:
+    for i in range(0, marks.len):
+        marks[i] += by
+    marks.push(by)
+
+fn average(marks: &[i16]) -> i16:
+    let mut total: i16 = 0
+    for mark in marks:
+        total += mark
+    return total // i16(marks.len)
+
+fn main() -> i16:
+    let mut ada = Student(name="ada", marks=[])
+    ada.marks.push(71)
+    ada.marks.push(64)
+    ada.marks.push(80)
+    print(f"{ada.name}: {ada.marks.len} marks, first {ada.marks[0]}")
+    curve(ada.marks, 5)
+    let recent = &ada.marks[1:]
+    print(f"recent {recent.len}, average {average(recent)}")
+    let mut best: i16 = 0
+    for mark in ada.marks:
+        if mark > best:
+            best = mark
+    print(f"best {best}")
+    let mut weeks: vec[vec[i16]] = []
+    weeks.push([1, 2, 3])
+    weeks.push([4, 5])
+    print(f"week 2 day 2: {weeks[1][1]}, week 1 has {weeks[0].len}")
+    return 0

@@ -116,9 +116,19 @@ str_enum!(StackCleanup {
     Callee("CALLEE") = "callee",
 });
 
+// Where a procedure's float result goes: stored through a near pointer the
+// caller passes last, which comes back in `ax` (BASIC's, the default), or
+// in `st(0)`, as C and Pascal return it.
+str_enum!(FloatReturn {
+    Pointer("POINTER") = "pointer",
+    Register("REGISTER") = "register",
+});
+
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
+    // Entered by INT or an IRQ, left by `iret`.
+    Interrupt("INTERRUPT") = "interrupt",
 });
 
 #[derive(Clone, Debug, PartialEq)]
@@ -418,7 +428,24 @@ str_enum!(Op {
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
     Call("CALL") = "call",
+    // Inline machine code: operands go into its input registers, results
+    // come out of its output registers. `Instruction.asm` says which.
+    Asm("ASM") = "asm",
 });
+
+/// An inline block's code and constraints, registers named by their 16-bit whole.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Asm {
+    pub code: Vec<i64>,
+    // One per operand, in order.
+    pub inputs: Vec<String>,
+    // One per result, in order.
+    pub outputs: Vec<String>,
+    // Registers it changes besides its outputs; `flags` among them.
+    pub clobbers: Vec<String>,
+    // Whether it reads or writes memory.
+    pub memory: bool,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
@@ -428,13 +455,14 @@ pub struct Instruction {
     pub operands: Vec<Operand>,
     pub callee: Option<String>,
     pub pure: bool,
+    pub asm: Option<Asm>,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None }
     }
 }
 
@@ -482,6 +510,7 @@ pub struct CallAbi {
     pub cleanup: StackCleanup,
     pub distance: CallDistance,
     pub callee: Option<i64>,
+    pub float_return: FloatReturn,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.
@@ -502,6 +531,7 @@ pub struct ProcedureAbi {
     pub cleanup: StackCleanup,
     pub distance: CallDistance,
     pub parameter_bytes: i64,
+    pub float_return: FloatReturn,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -558,6 +588,8 @@ pub struct DataRelocation {
     pub target: i64,
     pub addend: i64,
     pub address: AddressKind,
+    /// `target` is a callable, whose code this addresses, not data.
+    pub code: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

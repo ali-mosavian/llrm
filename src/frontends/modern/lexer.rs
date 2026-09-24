@@ -15,8 +15,27 @@ pub enum TokenKind {
     Fraction,
     Struct,
     Let,
-    Var,
     Mut,
+    Const,
+    Var,
+    Loop,
+    Match,
+    Enum,
+    Bits,
+    With,
+    As,
+    Import,
+    From,
+    Pub,
+    Extern,
+    Export,
+    Protocol,
+    Yield,
+    Unsafe,
+    Asm,
+    /// An `asm(...):` block's lines, as written: it is another language.
+    AsmBody(Vec<(String, Span)>),
+    Case,
     Return,
     If,
     Else,
@@ -27,9 +46,6 @@ pub enum TokenKind {
     Continue,
     True,
     False,
-    Not,
-    And,
-    Or,
     Is,
     Char,
     I8,
@@ -51,7 +67,6 @@ pub enum TokenKind {
     LeftBrace,
     RightBrace,
     Comma,
-    Semicolon,
     Dot,
     Range,
     Colon,
@@ -72,6 +87,13 @@ pub enum TokenKind {
     Ampersand,
     Slash,
     SlashEqual,
+    SlashSlash,
+    SlashSlashEqual,
+    Bang,
+    AndAnd,
+    OrOr,
+    Question,
+    At,
     Percent,
     PercentEqual,
     AmpersandEqual,
@@ -106,9 +128,13 @@ fn token(kind: TokenKind, line: usize, start: usize, end: usize) -> Token {
 /// The operator at the start of `bytes`, longest spelling first.
 fn operator(bytes: &[u8]) -> Option<(usize, TokenKind)> {
     const OPERATORS: &[(&[u8], fn() -> TokenKind)] = &[
+        (b"//=", || TokenKind::SlashSlashEqual),
         (b"<<=", || TokenKind::ShiftLeftEqual),
         (b">>=", || TokenKind::ShiftRightEqual),
         (b"..", || TokenKind::Range),
+        (b"//", || TokenKind::SlashSlash),
+        (b"&&", || TokenKind::AndAnd),
+        (b"||", || TokenKind::OrOr),
         (b"->", || TokenKind::Arrow),
         (b"==", || TokenKind::EqualEqual),
         (b"!=", || TokenKind::NotEqual),
@@ -125,7 +151,6 @@ fn operator(bytes: &[u8]) -> Option<(usize, TokenKind)> {
         (b"|=", || TokenKind::PipeEqual),
         (b"^=", || TokenKind::CaretEqual),
         (b",", || TokenKind::Comma),
-        (b";", || TokenKind::Semicolon),
         (b".", || TokenKind::Dot),
         (b":", || TokenKind::Colon),
         (b"=", || TokenKind::Equal),
@@ -140,6 +165,9 @@ fn operator(bytes: &[u8]) -> Option<(usize, TokenKind)> {
         (b"|", || TokenKind::Pipe),
         (b"^", || TokenKind::Caret),
         (b"~", || TokenKind::Tilde),
+        (b"!", || TokenKind::Bang),
+        (b"?", || TokenKind::Question),
+        (b"@", || TokenKind::At),
     ];
     OPERATORS
         .iter()
@@ -147,7 +175,7 @@ fn operator(bytes: &[u8]) -> Option<(usize, TokenKind)> {
         .map(|(spelling, kind)| (spelling.len(), kind()))
 }
 
-fn keyword(word: &str) -> Option<TokenKind> {
+pub(crate) fn keyword(word: &str) -> Option<TokenKind> {
     Some(match word {
         "fn" => TokenKind::Fn,
         "type" => TokenKind::Type,
@@ -155,7 +183,24 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "fraction" => TokenKind::Fraction,
         "struct" => TokenKind::Struct,
         "let" => TokenKind::Let,
+        "const" => TokenKind::Const,
         "var" => TokenKind::Var,
+        "loop" => TokenKind::Loop,
+        "match" => TokenKind::Match,
+        "enum" => TokenKind::Enum,
+        "bits" => TokenKind::Bits,
+        "with" => TokenKind::With,
+        "as" => TokenKind::As,
+        "import" => TokenKind::Import,
+        "from" => TokenKind::From,
+        "pub" => TokenKind::Pub,
+        "extern" => TokenKind::Extern,
+        "export" => TokenKind::Export,
+        "protocol" => TokenKind::Protocol,
+        "yield" => TokenKind::Yield,
+        "unsafe" => TokenKind::Unsafe,
+        "asm" => TokenKind::Asm,
+        "case" => TokenKind::Case,
         "mut" => TokenKind::Mut,
         "return" => TokenKind::Return,
         "if" => TokenKind::If,
@@ -167,9 +212,6 @@ fn keyword(word: &str) -> Option<TokenKind> {
         "continue" => TokenKind::Continue,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
-        "not" => TokenKind::Not,
-        "and" => TokenKind::And,
-        "or" => TokenKind::Or,
         "is" => TokenKind::Is,
         "char" => TokenKind::Char,
         "i8" => TokenKind::I8,
@@ -188,12 +230,36 @@ fn keyword(word: &str) -> Option<TokenKind> {
     })
 }
 
+/// The source character at `at` as the target code page's byte, and its
+/// width in the UTF-8 source (section 2).
+fn code_unit(bytes: &[u8], at: usize, line: usize) -> Result<(u8, usize), Diagnostic> {
+    let width = match bytes[at] {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        _ => 4,
+    };
+    let character = bytes
+        .get(at..at + width)
+        .and_then(|one| std::str::from_utf8(one).ok())
+        .and_then(|one| one.chars().next())
+        .ok_or_else(|| Diagnostic::new(Span::new(line, at + 1, at + 2), "source text is not UTF-8"))?;
+    let unit = crate::support::codepage::encoded(character).ok_or_else(|| {
+        Diagnostic::new(Span::new(line, at + 1, at + 2), format!("{character:?} is not in the target code page"))
+    })?;
+    Ok((unit, width))
+}
+
 /// Convert source text into tokens, making layout explicit as INDENT/DEDENT.
 pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens = Vec::new();
     let mut indents = vec![0usize];
     let mut nesting = 0usize;
     let mut last_line = 1usize;
+    // Where the logical line began, and an asm body being read: the
+    // indentation of its header and the lines deeper than it.
+    let mut logical = 0usize;
+    let mut body: Option<(usize, Vec<(String, Span)>)> = None;
 
     for (zero_line, raw_line) in source.split_inclusive('\n').enumerate() {
         let line_number = zero_line + 1;
@@ -205,6 +271,21 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             .unwrap_or_else(|| raw_line.strip_suffix('\n').unwrap_or(raw_line));
         let bytes = line.as_bytes();
         let mut index = 0usize;
+
+        if let Some((header, lines)) = &mut body {
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            let text = line[indent..].trim_end();
+            if text.is_empty() || text.starts_with('#') {
+                continue;
+            }
+            if indent > *header {
+                lines.push((text.to_owned(), Span::new(line_number, indent + 1, indent + text.len() + 1)));
+                continue;
+            }
+            let (_, lines) = body.take().expect("an asm body");
+            tokens.push(token(TokenKind::AsmBody(lines), line_number - 1, 0, 0));
+            tokens.push(token(TokenKind::Newline, line_number - 1, 0, 0));
+        }
 
         if nesting == 0 {
             while index < bytes.len() && bytes[index] == b' ' {
@@ -239,6 +320,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 std::cmp::Ordering::Equal => {}
             }
+            logical = tokens.len();
         }
 
         while index < bytes.len() {
@@ -250,11 +332,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 b'#' => break,
                 b'f' if index + 1 < bytes.len() && bytes[index + 1] == b'"' => {
                     index += 1;
-                    let value = quoted(bytes, line_number, &mut index, start)?;
+                    let value = quoted(bytes, line_number, &mut index, start, true)?;
                     tokens.push(token(TokenKind::FString(value), line_number, start, index));
                 }
                 b'"' => {
-                    let value = quoted(bytes, line_number, &mut index, start)?;
+                    let value = quoted(bytes, line_number, &mut index, start, false)?;
                     tokens.push(token(TokenKind::String(value), line_number, start, index));
                 }
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -267,6 +349,36 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     let word = &line[start..index];
                     let kind = keyword(word).unwrap_or_else(|| TokenKind::Identifier(word.into()));
                     tokens.push(token(kind, line_number, start, index));
+                }
+                b'0' if matches!(
+                    bytes.get(index + 1),
+                    Some(b'x' | b'X' | b'b' | b'B' | b'o' | b'O')
+                ) =>
+                {
+                    // `0x1F`, `0b1010`, `0o17`; `_` separates digits.
+                    let radix = match bytes[index + 1] | 0x20 {
+                        b'x' => 16,
+                        b'b' => 2,
+                        _ => 8,
+                    };
+                    index += 2;
+                    let digits = index;
+                    while index < bytes.len()
+                        && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                    {
+                        index += 1;
+                    }
+                    let spelling: String = line[digits..index]
+                        .chars()
+                        .filter(|one| *one != '_')
+                        .collect();
+                    let value = i64::from_str_radix(&spelling, radix).map_err(|_| {
+                        Diagnostic::new(
+                            Span::new(line_number, start + 1, index + 1),
+                            "malformed integer literal",
+                        )
+                    })?;
+                    tokens.push(token(TokenKind::Integer(value), line_number, start, index));
                 }
                 b'0'..=b'9' => {
                     index += 1;
@@ -398,15 +510,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                             index += 1;
                             escaped
                         }
-                    } else if bytes[index].is_ascii() {
-                        let value = bytes[index];
-                        index += 1;
-                        value
                     } else {
-                        return Err(Diagnostic::new(
-                            Span::new(line_number, index + 1, index + 2),
-                            "character literals are single-byte code units",
-                        ));
+                        let (value, width) = code_unit(bytes, index, line_number)?;
+                        index += width;
+                        value
                     };
                     if index >= bytes.len() || bytes[index] != b'\'' {
                         return Err(Diagnostic::new(
@@ -488,7 +595,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             }
         }
 
-        if nesting == 0 {
+        let header = tokens.get(logical).is_some_and(|one| one.kind == TokenKind::Asm)
+            && tokens.last().is_some_and(|one| one.kind == TokenKind::Colon);
+        if nesting == 0 && header {
+            body = Some((*indents.last().expect("indentation stack"), Vec::new()));
+        } else if nesting == 0 {
             tokens.push(token(
                 TokenKind::Newline,
                 line_number,
@@ -496,6 +607,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 bytes.len(),
             ));
         }
+    }
+    if let Some((_, lines)) = body {
+        tokens.push(token(TokenKind::AsmBody(lines), last_line, 0, 0));
+        tokens.push(token(TokenKind::Newline, last_line, 0, 0));
     }
 
     if nesting != 0 {
@@ -517,12 +632,40 @@ fn quoted(
     line: usize,
     index: &mut usize,
     start: usize,
+    interpolated: bool,
 ) -> Result<Vec<u8>, Diagnostic> {
     debug_assert_eq!(bytes[*index], b'"');
     *index += 1;
     let mut value = Vec::new();
-    while *index < bytes.len() && bytes[*index] != b'"' {
+    // Inside an f-string's braces is source: kept as written, and a quote
+    // there starts a nested literal rather than ending the f-string.
+    let mut depth = 0usize;
+    while *index < bytes.len() && (depth > 0 || bytes[*index] != b'"') {
         let at = *index;
+        if interpolated && (depth > 0 || bytes[at] == b'{') {
+            match bytes[at] {
+                b'{' if depth == 0 && bytes.get(at + 1) == Some(&b'{') => {
+                    value.extend_from_slice(b"{{");
+                    *index += 2;
+                    continue;
+                }
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                b'"' => {
+                    let end = bytes[at + 1..].iter().position(|one| *one == b'"').map(|one| at + 1 + one);
+                    let Some(end) = end else {
+                        return Err(Diagnostic::new(Span::new(line, start + 1, bytes.len() + 1), "unterminated string literal"));
+                    };
+                    value.extend_from_slice(&bytes[at..=end]);
+                    *index = end + 1;
+                    continue;
+                }
+                _ => {}
+            }
+            value.push(bytes[at]);
+            *index += 1;
+            continue;
+        }
         if bytes[*index] == b'\\' {
             *index += 1;
             if *index >= bytes.len() {
@@ -568,14 +711,10 @@ fn quoted(
             };
             value.push(escaped);
             *index += 1;
-        } else if bytes[*index].is_ascii() {
-            value.push(bytes[*index]);
-            *index += 1;
         } else {
-            return Err(Diagnostic::new(
-                Span::new(line, at + 1, at + 2),
-                "string literals contain target-code-page bytes; use a byte escape",
-            ));
+            let (unit, width) = code_unit(bytes, *index, line)?;
+            value.push(unit);
+            *index += width;
         }
     }
     if *index >= bytes.len() {
@@ -668,15 +807,14 @@ mod tests {
 
     #[test]
     fn lexes_byte_strings_f_strings_and_fixed_array_punctuation() {
-        let tokens = lex("string [i32; 2] \"A\\x80\" f\"{value}\"\n").unwrap();
+        let tokens = lex("string i32[2] \"A\\x80\" f\"{value}\"\n").unwrap();
         let kinds: Vec<_> = tokens.into_iter().map(|one| one.kind).collect();
         assert_eq!(
             kinds,
             vec![
                 TokenKind::StringType,
-                TokenKind::LeftBracket,
                 TokenKind::I32,
-                TokenKind::Semicolon,
+                TokenKind::LeftBracket,
                 TokenKind::Integer(2),
                 TokenKind::RightBracket,
                 TokenKind::String(vec![b'A', 0x80]),
