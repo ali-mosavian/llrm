@@ -1253,8 +1253,8 @@ mod tests {
         assert_eq!((SOLVED.with(|solved| solved.get()), HALVED.with(|halved| halved.get())), (32, 15));
     }
 
-    /// The innermost loop's counting: its steps by a constant and its compares.
-    fn loop_counting(fixture: &str) -> Vec<String> {
+    /// The innermost loop's lines, from its label to its backward branch.
+    fn innermost(fixture: &str) -> Vec<String> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/c/{fixture}.cgs"));
         let text = std::fs::read_to_string(path).unwrap();
         let built = assembled(&text, fixture, true, None, "486", &crate::model::passes::O2()).unwrap();
@@ -1269,16 +1269,20 @@ mod tests {
                 Some((lines[..at].iter().position(|line| *line == label)?, at))
             })
             .expect("a loop");
+        lines[top..back].iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    /// The innermost loop's counting: its steps by a constant and its compares.
+    fn loop_counting(fixture: &str) -> Vec<String> {
         let constant = |one: &str| one.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok());
-        lines[top..back]
-            .iter()
+        innermost(fixture)
+            .into_iter()
             .filter(|one| {
                 one.starts_with("inc ")
                     || one.starts_with("dec ")
                     || one.starts_with("cmp ")
                     || (one.starts_with("add ") || one.starts_with("sub ")) && constant(one)
             })
-            .map(|one| (*one).to_owned())
             .collect()
     }
 
@@ -1294,6 +1298,19 @@ mod tests {
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
         assert_eq!(loop_counting("bytes"), ["inc bx"]);
+    }
+
+    /// `from1` reads `a[i]` and `b[i - 1]`: `(i - 1) * 2` was a second root beside
+    /// `i * 2`, so each array stepped its own pointer beside a counter.
+    #[test]
+    fn test_subscripts_of_one_stride_share_one_offset() {
+        assert_eq!(loop_counting("from1"), ["add bx, 2"]);
+        let loop_ = innermost("from1");
+        let two_registers = |one: &String| {
+            let inside = one.split_once("ptr [").map_or("", |(_, inside)| inside).as_bytes();
+            inside.len() > 4 && inside[2] == b'+' && inside[3].is_ascii_alphabetic()
+        };
+        assert!(loop_.iter().filter(|one| one.contains("ptr [")).all(two_registers), "{loop_:#?}");
     }
 
     /// Rotation consumed the syntax that proved crc's counts, so the instrument
