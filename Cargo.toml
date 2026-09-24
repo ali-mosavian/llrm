@@ -39,3 +39,7 @@ path = "src/bin/llrm-modern.rs"
 name = "modernfront"
 path = "src/bin/modernfront.rs"
 
+
+# Release, bench and `test --release` inherit this; only a clean rebuilds all.
+[profile.release]
+incremental = true
