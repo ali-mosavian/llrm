@@ -18,3 +18,7 @@ buildprs = { path = "crates/buildprs" }
 
 [build-dependencies]
 buildprs = { path = "crates/buildprs" }
+
+# Release, bench and `test --release` inherit this; only a clean rebuilds all.
+[profile.release]
+incremental = true
