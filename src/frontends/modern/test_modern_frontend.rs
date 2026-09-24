@@ -1166,3 +1166,41 @@ fn test_three_views_past_the_index_pairs_step_their_own_pointers() {
     let added = Regex::new(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]").unwrap();
     assert_eq!(added.find_iter(&loop_).count(), 3, "{loop_}");
 }
+
+const COLUMN: &str = "\
+fn column(m: &[i32, 2], j: i16) -> i32:
+    var total: i32 = 0
+    for k in 0..m.dim(0):
+        total += m[k, j]
+    return total
+
+fn main() -> i16:
+    var m: [i32; 4, 4] = [1; 4, 4]
+    column(&m, 1)
+    return 0
+";
+
+fn column_loop() -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "column.mod", COLUMN);
+    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
+    let function = between(&assembly, "_column proc far", "_column endp");
+    let start = function.find("L0_3:").unwrap_or_else(|| panic!("no L0_3:\n{function}"));
+    let end = function.find("L0_5:").unwrap_or_else(|| panic!("no L0_5:\n{function}"));
+    function[start..end].to_owned()
+}
+
+#[test]
+fn test_a_column_read_steps_a_pointer_by_its_runtime_stride() {
+    // `k * dim + j` had no pointer: strength could not multiply a runtime step, so every trip rebuilt it.
+    let loop_ = column_loop();
+    assert!(!loop_.contains("shl") && !loop_.contains("[bp"), "{loop_}");
+}
+
+#[test]
+fn test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence() {
+    // Strength reduced the pointer's own step, leaving a lagging copy: `xchg` and `jmp` on every trip.
+    let loop_ = column_loop();
+    assert!(Regex::new(r"\bjne L0_3\n").unwrap().is_match(&loop_), "{loop_}");
+    assert!(!Regex::new(r"\b(?:jmp|xchg)\b|mov \w\w, \w\w\n").unwrap().is_match(&loop_), "{loop_}");
+}

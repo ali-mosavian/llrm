@@ -515,9 +515,6 @@ pub(crate) fn reduced(
                 }
                 continue;
             }
-            if _times(&one.of.step, &one.by, width).is_none() {
-                continue;
-            }
             if let Arg::Cell(cell) = &one.by {
                 if op.loads != [cell.r#ref.clone()] || !op.args.contains(&one.by) {
                     continue;
@@ -546,8 +543,27 @@ pub(crate) fn reduced(
                     width,
                 });
             }
-            let Some(stride) = _times(&one.of.step, &one.by, width) else {
-                continue;
+            let stride = match _times(&one.of.step, &one.by, width) {
+                Some(stride) => stride,
+                None => {
+                    taken += 1;
+                    let product = Value {
+                        id: _next(body, taken),
+                        at: preheader,
+                        flags: false,
+                        variable: taken,
+                        version: 1,
+                    };
+                    ahead.entry(preheader).or_default().push(_made(
+                        Kind::Mul,
+                        "imul",
+                        product,
+                        vec![one.of.step.as_arg(), one.by.clone()],
+                        preheader,
+                        op,
+                    ));
+                    Arg::Held(Held { value: product, width })
+                }
             };
             taken += 1;
             let start = Value {
@@ -630,11 +646,18 @@ pub(crate) fn reduced(
 fn _candidates(reads: &_Reads, derived: &[Derived], scales: &BTreeSet<i64>, partners: Option<i64>) -> Vec<Derived> {
     let body = reads.body;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
+    // A counter's own step reads as the counter plus its stride.
+    let steps = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.phis)
+        .flat_map(|phi| phi.incoming.values().map(move |value| (phi.result.id, *value)))
+        .collect::<BTreeSet<_>>();
     let candidates = derived
         .iter()
         .filter(|one| {
             let op = op_at(one.op);
-            _answer(reads, one.op).is_some()
+            _answer(reads, one.op).is_some_and(|answer| !steps.contains(&(one.of.value, answer)))
                 && (_multiplies(body, one, derived)
                     || one.pointer.is_some()
                     || op.kind == Kind::Divmod
