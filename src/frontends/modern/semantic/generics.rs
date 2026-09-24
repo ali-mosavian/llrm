@@ -36,28 +36,19 @@ impl TypeRegistry {
                     format!("{name} takes {} type arguments", parameters.len()),
                 ));
             }
-            let mut bound = BTreeMap::new();
-            for (parameter, arg) in parameters.iter().zip(args) {
-                let TypeAnnotation::Value(arg) = arg else {
-                    return Err(Diagnostic::new(
-                        span,
-                        "a type argument cannot be an array yet",
-                    ));
-                };
-                bound.insert(parameter.clone(), arg.clone());
-            }
+            let bound: BTreeMap<String, TypeAnnotation> = parameters.iter().cloned().zip(args.iter().cloned()).collect();
             match template {
                 Template::Struct(mut one) => {
                     one.name = text.clone();
                     one.generics.clear();
-                    one.fields = substituted(one.fields, &bound);
+                    one.fields = substituted(one.fields, &bound)?;
                     self.register_struct(&one)?;
                 }
                 Template::Enum(mut one) => {
                     one.name = text.clone();
                     one.generics.clear();
                     for variant in &mut one.variants {
-                        variant.fields = substituted(std::mem::take(&mut variant.fields), &bound);
+                        variant.fields = substituted(std::mem::take(&mut variant.fields), &bound)?;
                     }
                     self.register_enum(&one)?;
                 }
@@ -101,32 +92,52 @@ impl TypeRegistry {
     }
 }
 
-/// Fields with type parameters replaced; a `void` field, as in `Result[void, E]`, has no storage.
-fn substituted(fields: Vec<StructField>, bound: &BTreeMap<String, TypeSpec>) -> Vec<StructField> {
-    fields
-        .into_iter()
-        .map(|mut field| {
-            field.type_spec = substitute(&field.type_spec, bound);
-            field
-        })
-        .filter(|field| field.type_spec != TypeSpec::Primitive(TypeName::Void))
-        .collect()
+/// Fields with type parameters replaced; a `void` field, as in
+/// `Result[void, E]`, has no storage, and a field whose type is a parameter
+/// bound to a fixed array is an array field.
+fn substituted(fields: Vec<StructField>, bound: &BTreeMap<String, TypeAnnotation>) -> Result<Vec<StructField>, Diagnostic> {
+    let mut out = Vec::new();
+    for mut field in fields {
+        match substitute_in(&TypeAnnotation::Value(field.type_spec.clone()), bound) {
+            TypeAnnotation::Value(spec) => field.type_spec = spec,
+            TypeAnnotation::Array { element, dims } if field.dims.is_empty() => {
+                field.type_spec = element;
+                field.dims = dims;
+            }
+            _ => return Err(Diagnostic::new(field.span, "an array of arrays is written as one ranked array")),
+        }
+        if field.type_spec != TypeSpec::Primitive(TypeName::Void) {
+            out.push(field);
+        }
+    }
+    Ok(out)
 }
 
+/// `spec` with each type parameter replaced by the type it is bound to.
 pub(super) fn substitute(spec: &TypeSpec, bound: &BTreeMap<String, TypeSpec>) -> TypeSpec {
-    match spec {
-        TypeSpec::Named(name) => bound.get(name).cloned().unwrap_or_else(|| spec.clone()),
-        TypeSpec::Applied { name, args } => TypeSpec::Applied {
+    let bound = bound.iter().map(|(name, one)| (name.clone(), TypeAnnotation::Value(one.clone()))).collect();
+    let TypeAnnotation::Value(spec) = substitute_in(&TypeAnnotation::Value(spec.clone()), &bound) else {
+        unreachable!("a type bound to types")
+    };
+    spec
+}
+
+/// `annotation` with each type parameter replaced by the type, possibly a
+/// fixed array, it is bound to.
+pub(super) fn substitute_in(annotation: &TypeAnnotation, bound: &BTreeMap<String, TypeAnnotation>) -> TypeAnnotation {
+    let element_of = |element: &TypeSpec| match substitute_in(&TypeAnnotation::Value(element.clone()), bound) {
+        TypeAnnotation::Value(one) => one,
+        _ => element.clone(),
+    };
+    match annotation {
+        TypeAnnotation::Value(TypeSpec::Named(name)) => bound.get(name).cloned().unwrap_or_else(|| annotation.clone()),
+        TypeAnnotation::Value(TypeSpec::Applied { name, args }) => TypeAnnotation::Value(TypeSpec::Applied {
             name: name.clone(),
-            args: args
-                .iter()
-                .map(|arg| match arg {
-                    TypeAnnotation::Value(one) => TypeAnnotation::Value(substitute(one, bound)),
-                    other => other.clone(),
-                })
-                .collect(),
-        },
-        TypeSpec::Primitive(_) => spec.clone(),
+            args: args.iter().map(|arg| substitute_in(arg, bound)).collect(),
+        }),
+        TypeAnnotation::Value(TypeSpec::Primitive(_)) => annotation.clone(),
+        TypeAnnotation::Slice { element, rank } => TypeAnnotation::Slice { element: element_of(element), rank: *rank },
+        TypeAnnotation::Array { element, dims } => TypeAnnotation::Array { element: element_of(element), dims: dims.clone() },
     }
 }
 

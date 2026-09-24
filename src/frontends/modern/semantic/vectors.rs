@@ -1,6 +1,7 @@
 //! `vec[T]`: an owned, growable sequence. Its value is a near pointer to its
 //! elements behind the descriptor a string has, so one runtime serves both.
 
+use crate::abi::modern as rt;
 use super::*;
 use crate::frontends::modern::syntax::Pattern;
 
@@ -224,7 +225,7 @@ impl FunctionCompiler<'_> {
             return self.vector_type_hint(expression).map(ElementType::Scalar);
         }
         if let Expr::Tuple(items, span) = expression {
-            let elements: Option<Vec<_>> = items.iter().map(|item| self.element_hint(item)).collect();
+            let elements: Option<Vec<_>> = items.iter().map(|item| Some((self.element_hint(item)?, None))).collect();
             return self.types.tuple(&elements?, *span).ok().map(ElementType::Struct);
         }
         // An integer constant with no type of its own is an i16.
@@ -250,6 +251,9 @@ impl FunctionCompiler<'_> {
                 self.iterated_element(&source)
             }
             Expr::Slice { base, .. } => self.iterated_item(base),
+            _ if self.fixed_array_hint(iterable).is_some_and(|(_, shape)| shape.rank == 1) => {
+                self.fixed_array_hint(iterable).map(|(element, _)| element)
+            }
             _ if builds_vector(iterable) => self
                 .vector_type_hint(iterable)
                 .and_then(|one| self.types.sequence_element(one)),
@@ -299,7 +303,7 @@ impl FunctionCompiler<'_> {
         size: hir::Operand,
     ) -> u32 {
         let grown = self
-            .emit_builtin("_rt_grow", vec![hir::Operand::Value(vector), count, size])
+            .emit_builtin(rt::BUFFER_GROW, vec![hir::Operand::Value(vector), count, size])
             .expect("a pointer");
         self.retyped(grown, type_name)
     }
@@ -379,7 +383,8 @@ impl FunctionCompiler<'_> {
         self.ranged_view(name, data, length, element, range, pointer_type, span)
     }
 
-    /// A view of `range` of the `length` elements from the far `data`.
+    /// A view of `range` of the `length` elements from the far `data`:
+    /// every slice is made here, and checked to lie within `length`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn ranged_view(
         &mut self,
@@ -393,31 +398,94 @@ impl FunctionCompiler<'_> {
     ) -> Result<hir::Operand, Diagnostic> {
         let (start, end) = match range {
             None => (None, length),
-            Some((start, end, _)) => {
-                let start = start
-                    .map(|one| {
-                        self.coerced(one, TypeName::U16)
-                            .and_then(|one| required(one, span))
-                    })
-                    .transpose()?;
-                let end = match end {
-                    Some(one) => required(self.coerced(one, TypeName::U16)?, span)?,
+            Some((start, end, range_span)) => {
+                let mut bound = |one: &Expr| self.coerced(one, TypeName::U16).and_then(|one| required(one, span));
+                let start = start.map(&mut bound).transpose()?;
+                let end = match end.map(&mut bound).transpose()? {
+                    Some(end) => {
+                        self.check_slice_bound(&end, length, range_span)?;
+                        end
+                    }
                     None => length,
                 };
+                if let Some(start) = &start {
+                    self.check_slice_bound(start, end.clone(), range_span)?;
+                }
                 (start, end)
             }
         };
         let (data, count) = match start {
-            None => (data, end),
+            None | Some(hir::Operand::Constant(_, 0)) => (data, end),
             Some(start) => {
                 let width = self.types.width(element.id());
                 let data = self.indexed_pointer(data, start.clone(), width, span)?;
-                let count = self.value(TypeName::U16);
-                self.emit("sub", vec![count], vec![end, start], None);
-                (data, hir::Operand::Value(count))
+                let count = match (&start, &end) {
+                    (hir::Operand::Constant(_, first), hir::Operand::Constant(_, last)) => hir::Operand::Constant(U16, last - first),
+                    _ => {
+                        let count = self.value(TypeName::U16);
+                        self.emit("sub", vec![count], vec![end, start], None);
+                        hir::Operand::Value(count)
+                    }
+                };
+                (data, count)
             }
         };
         Ok(self.view_descriptor(name, pointer_type, vec![count.clone(), count], data))
+    }
+
+    /// A string keeps a NUL after its last char (section 9).
+    fn terminated(&mut self, sequence: u32, type_name: TypeName) {
+        if type_name != TypeName::String {
+            return;
+        }
+        let length = self.length(sequence);
+        let end = self.element_pointer(sequence, ElementType::Scalar(TypeName::Char), length);
+        self.emit("store", Vec::new(), vec![indirect(end, TypeName::Char), hir::Operand::Constant(type_id(TypeName::Char), 0)], None);
+    }
+
+    /// Shrinks the vec `receiver` names by one: the vec, and a pointer to
+    /// the element it no longer holds, now its taker's.
+    fn popped(&mut self, receiver: &Expr, type_name: TypeName, element: ElementType, span: Span) -> Result<(u32, u32), Diagnostic> {
+        let place = self.sequence_place(receiver, span)?;
+        let vector = self.value(type_name);
+        self.emit("load", vec![vector], vec![place], None);
+        let index = self
+            .emit_builtin(
+                rt::BUFFER_SHRINK,
+                vec![hir::Operand::Value(vector), hir::Operand::Constant(U16, 1)],
+            )
+            .expect("a length");
+        Ok((vector, self.element_pointer(vector, element, index)))
+    }
+
+    /// The struct element of a vec in `receiver`, if `v.pop()` is one.
+    pub(super) fn popped_struct_type(&self, expression: &Expr) -> Option<u32> {
+        let Expr::MethodCall { receiver, name, arguments, .. } = expression else {
+            return None;
+        };
+        if name != "pop" || !arguments.is_empty() {
+            return None;
+        }
+        match self.types.sequence_element(self.expression_type_hint(receiver)?)? {
+            ElementType::Struct(id) => Some(id),
+            ElementType::Scalar(_) => None,
+        }
+    }
+
+    /// `v.pop()` of a vec of structs: the last element, moved into a
+    /// statement temporary.
+    pub(super) fn popped_struct(&mut self, receiver: &Expr, span: Span) -> Result<StructView, Diagnostic> {
+        let type_name = self.expression_type_hint(receiver).expect("a vec");
+        let element = self.types.sequence_element(type_name).expect("a vec");
+        let ElementType::Struct(struct_id) = element else {
+            unreachable!("a struct element")
+        };
+        let (_, at) = self.popped(receiver, type_name, element, span)?;
+        let taken = self.temporary(struct_id);
+        let mut stores = Vec::new();
+        self.prepare_struct_copy(&taken, &element_view(struct_id, at), &mut stores)?;
+        self.emit_stores(stores, span)?;
+        Ok(self.statement_temporary(taken))
     }
 
     fn element_pointer(&mut self, vector: u32, element: ElementType, index: hir::Operand) -> u32 {
@@ -461,10 +529,10 @@ impl FunctionCompiler<'_> {
         arguments: &[Expr],
         span: Span,
     ) -> Result<Option<TypedOperand>, Diagnostic> {
-        let Some(type_name @ TypeName::Vector { .. }) = self.expression_type_hint(receiver) else {
+        let Some(type_name @ (TypeName::Vector { .. } | TypeName::String)) = self.expression_type_hint(receiver) else {
             return Ok(None);
         };
-        let element = self.types.sequence_element(type_name).expect("a vec type");
+        let element = self.types.sequence_element(type_name).expect("a sequence type");
         let size = hir::Operand::Constant(U16, i64::from(self.types.width(element.id())));
         match (name, arguments) {
             ("push", [value]) => {
@@ -483,6 +551,7 @@ impl FunctionCompiler<'_> {
                 );
                 let at = self.element_pointer(grown, element, index);
                 self.store_element(at, element, value)?;
+                self.terminated(grown, type_name);
                 Ok(Some(TypedOperand {
                     operand: None,
                     type_name: TypeName::Void,
@@ -490,23 +559,14 @@ impl FunctionCompiler<'_> {
             }
             ("pop", []) => {
                 let ElementType::Scalar(scalar) = element else {
-                    return Err(Diagnostic::new(
-                        span,
-                        "pop() of a struct element is not supported yet",
-                    ));
+                    // Popped as a statement: the struct drops when it ends.
+                    self.popped_struct(receiver, span)?;
+                    return Ok(Some(TypedOperand { operand: None, type_name: TypeName::Void }));
                 };
-                let place = self.sequence_place(receiver, span)?;
-                let vector = self.value(type_name);
-                self.emit("load", vec![vector], vec![place], None);
-                let index = self
-                    .emit_builtin(
-                        "_rt_shrink",
-                        vec![hir::Operand::Value(vector), hir::Operand::Constant(U16, 1)],
-                    )
-                    .expect("a length");
-                let at = self.element_pointer(vector, element, index);
+                let (vector, at) = self.popped(receiver, type_name, element, span)?;
                 let value = self.value(scalar);
                 self.emit("load", vec![value], vec![indirect(at, scalar)], None);
+                self.terminated(vector, type_name);
                 Ok(Some(TypedOperand {
                     operand: Some(self.temporary_owned(hir::Operand::Value(value), scalar)),
                     type_name: scalar,
@@ -523,7 +583,7 @@ impl FunctionCompiler<'_> {
             }
             ("push" | "pop" | "copy", _) => Err(Diagnostic::new(
                 span,
-                format!("wrong arguments to vec.{name}"),
+                format!("wrong arguments to {name}"),
             )),
             _ => Ok(None),
         }
@@ -544,7 +604,7 @@ impl FunctionCompiler<'_> {
         }
         match self.assignment_target(&target, span)? {
             AssignmentPlace::Scalar(place, _) => Ok(place),
-            AssignmentPlace::Struct(_) | AssignmentPlace::Bits { .. } => {
+            AssignmentPlace::Struct(_) | AssignmentPlace::Array(..) | AssignmentPlace::Bits { .. } => {
                 unreachable!("a vec is a scalar")
             }
         }
@@ -555,7 +615,7 @@ impl FunctionCompiler<'_> {
         let element = self.types.owned_element(type_name).expect("an owning buffer");
         let size = hir::Operand::Constant(U16, i64::from(self.types.width(element.id())));
         let copy = self
-            .emit_builtin("_rt_clone", vec![operand, size])
+            .emit_builtin(rt::BUFFER_CLONE, vec![operand, size])
             .expect("a pointer");
         let copy = self.retyped(copy, type_name);
         if self.element_needs_drop(element) {

@@ -1,29 +1,30 @@
 //! The runtime routines compiled code calls, besides the formatters
-//! (runtime/modern/*.c).
+//! (runtime/modern/*.mod).
 
+use crate::abi::modern as rt;
 use super::*;
 
 /// Name, parameters, and result of each.
 pub(super) fn routines() -> Vec<(&'static str, Vec<TypeName>, TypeName)> {
     use TypeName::{Addr, I8, String, U8, U16, Void};
     vec![
-        ("_rt_drop", vec![String], Void),
-        ("_rt_reserve", vec![String, U16, U16], String),
-        ("_rt_concat", vec![String, String], String),
-        ("_rt_append", vec![String, String], String),
-        ("_rt_grow", vec![String, U16, U16], String),
-        ("_rt_shrink", vec![String, U16], U16),
-        ("_rt_clone", vec![String, U16], String),
-        ("_rt_dict_reserve", vec![String, U16], String),
-        ("_rt_compare", vec![String, String], I8),
-        ("_rt_begin", Vec::new(), Void),
-        ("_rt_end", Vec::new(), String),
-        ("_rt_field", vec![U8, U8, U8, U8], Void),
-        ("_rt_view_copy", vec![Addr, U16], String),
-        ("_rt_view_compare", vec![Addr, U16, Addr, U16], I8),
-        ("_rt_panic_bounds", Vec::new(), Void),
-        ("_rt_panic_shift", Vec::new(), Void),
-        ("_rt_panic_convert", Vec::new(), Void),
-        ("_rt_panic_key", Vec::new(), Void),
+        (rt::BUFFER_DROP, vec![String], Void),
+        (rt::BUFFER_RESERVE, vec![String, U16, U16], String),
+        (rt::TEXT_CONCAT, vec![String, String], String),
+        (rt::TEXT_APPEND, vec![String, String], String),
+        (rt::BUFFER_GROW, vec![String, U16, U16], String),
+        (rt::BUFFER_SHRINK, vec![String, U16], U16),
+        (rt::BUFFER_CLONE, vec![String, U16], String),
+        (rt::DICT_RESERVE, vec![String, U16], String),
+        (rt::TEXT_COMPARE, vec![String, String], I8),
+        (rt::PRINT_BEGIN, Vec::new(), Void),
+        (rt::PRINT_END, Vec::new(), String),
+        (rt::PRINT_FIELD, vec![U8, U8, U8, U8], Void),
+        (rt::VIEW_COPY, vec![Addr, U16], String),
+        (rt::VIEW_COMPARE, vec![Addr, U16, Addr, U16], I8),
+        (rt::ERROR_BOUNDS, Vec::new(), Void),
+        (rt::ERROR_SHIFT, Vec::new(), Void),
+        (rt::ERROR_CONVERT, Vec::new(), Void),
+        (rt::ERROR_KEY, Vec::new(), Void),
     ]
 }

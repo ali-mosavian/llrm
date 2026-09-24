@@ -1,6 +1,7 @@
 //! `string` operators and methods (section 13): the compiler emits length,
 //! indexing, and iteration inline; joining, comparing, and copying call the runtime.
 
+use crate::abi::modern as rt;
 use super::*;
 
 impl FunctionCompiler<'_> {
@@ -18,7 +19,7 @@ impl FunctionCompiler<'_> {
         let (left, right) = (required(left, span)?, required(right, span)?);
         if operation == BinaryOp::Add {
             let joined = self
-                .emit_builtin("_rt_concat", vec![left, right])
+                .emit_builtin(rt::TEXT_CONCAT, vec![left, right])
                 .expect("a string");
             let joined = self.temporary_owned(joined, TypeName::String);
             return Ok(TypedOperand {
@@ -29,7 +30,7 @@ impl FunctionCompiler<'_> {
         let compare = comparison(operation)
             .ok_or_else(|| Diagnostic::new(span, "strings support '+' and comparisons"))?;
         let order = self
-            .emit_builtin("_rt_compare", vec![left, right])
+            .emit_builtin(rt::TEXT_COMPARE, vec![left, right])
             .expect("an order");
         self.ordered(compare, order)
     }
@@ -66,7 +67,7 @@ impl FunctionCompiler<'_> {
             parts.extend(self.view_parts(descriptor));
         }
         let order = self
-            .emit_builtin("_rt_view_compare", parts)
+            .emit_builtin(rt::VIEW_COMPARE, parts)
             .expect("an order");
         self.ordered(compare, order).map(Some)
     }
@@ -101,7 +102,7 @@ impl FunctionCompiler<'_> {
         if let (true, "copy", []) = (self.is_char_view(receiver), name, arguments) {
             let (descriptor, ..) = self.view_of(receiver)?.expect("a view");
             let parts = self.view_parts(descriptor).to_vec();
-            let copy = self.emit_builtin("_rt_view_copy", parts).expect("a string");
+            let copy = self.emit_builtin(rt::VIEW_COPY, parts).expect("a string");
             let copy = self.temporary_owned(copy, TypeName::String);
             return Ok(Some(TypedOperand {
                 operand: Some(copy),
@@ -116,7 +117,7 @@ impl FunctionCompiler<'_> {
                 let text = self.coerced(receiver, TypeName::String)?;
                 let copy = self
                     .emit_builtin(
-                        "_rt_clone",
+                        rt::BUFFER_CLONE,
                         vec![required(text, span)?, hir::Operand::Constant(U16, 1)],
                     )
                     .expect("a string");
@@ -133,7 +134,7 @@ impl FunctionCompiler<'_> {
                 self.emit("load", vec![current], vec![place.clone()], None);
                 let grown = self
                     .emit_builtin(
-                        "_rt_append",
+                        rt::TEXT_APPEND,
                         vec![hir::Operand::Value(current), required(more, span)?],
                     )
                     .expect("a string");
@@ -187,7 +188,7 @@ impl FunctionCompiler<'_> {
         self.emit("load", vec![current], vec![place.clone()], None);
         let owned = self
             .emit_builtin(
-                "_rt_reserve",
+                rt::BUFFER_RESERVE,
                 vec![
                     hir::Operand::Value(current),
                     hir::Operand::Constant(U16, 0),

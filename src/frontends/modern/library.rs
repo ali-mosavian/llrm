@@ -6,7 +6,7 @@ use super::desugar::desugar;
 use super::error::Diagnostic;
 use super::lexer::lex;
 use super::parser::parse;
-use super::syntax::{Expr, Function, Module, ParameterType, TypeAnnotation, TypeSpec};
+use super::syntax::{Expr, Function, Module, ParameterType, TypeAnnotation, TypeSpec, Variant};
 
 /// Each integer type: its name, whether it is signed, and its bounds.
 const INTEGERS: [(&str, bool, i64, i64); 6] = [
@@ -53,8 +53,8 @@ const OPERATIONS: [Operation; 3] = [
     },
 ];
 
-/// `Hashable` for `module`'s own structs and payload-free enums, as their
-/// fields' methods combine; a type that defines its own keeps it.
+/// `Hashable` for `module`'s own structs and enums, as their fields' methods
+/// combine; a type that defines its own keeps it.
 pub fn derived(module: &Module) -> Result<Vec<Function>, Diagnostic> {
     let defines = |type_: &str, method: &str| module.functions.iter().any(|one| one.name == format!("{type_}.{method}"));
     let mut functions = Vec::new();
@@ -74,17 +74,52 @@ pub fn derived(module: &Module) -> Result<Vec<Function>, Diagnostic> {
         }
         functions.extend(for_type(&out, &one.name)?);
     }
-    for one in module.enums.iter().filter(|one| one.generics.is_empty() && one.variants.iter().all(|variant| variant.fields.is_empty())) {
+    for one in module.enums.iter().filter(|one| one.generics.is_empty()) {
         let mut out = String::new();
+        let payload_free = one.variants.iter().all(|variant| variant.fields.is_empty());
         if !defines(&one.name, "hash") {
-            out.push_str("fn SELF.hash(self: SELF) -> u16:\n    return u16(self)\n\n");
+            if payload_free {
+                out.push_str("fn SELF.hash(self: SELF) -> u16:\n    return u16(self)\n\n");
+            } else {
+                out.push_str("fn SELF.hash(self: &SELF) -> u16:\n    match self:\n");
+                for (index, variant) in one.variants.iter().enumerate() {
+                    let (pattern, values) = variant_pattern(variant, "value");
+                    out.push_str(&format!("        {pattern}:\n            let mut hash: u16 = {index}\n"));
+                    for value in values {
+                        out.push_str(&format!("            hash = hash * 31 + {value}.hash()\n"));
+                    }
+                    out.push_str("            return hash\n");
+                }
+                out.push('\n');
+            }
         }
         if !defines(&one.name, "eq") {
-            out.push_str("fn SELF.eq(self: SELF, other: SELF) -> bool:\n    return self == other\n\n");
+            if payload_free {
+                out.push_str("fn SELF.eq(self: SELF, other: SELF) -> bool:\n    return self == other\n\n");
+            } else {
+                out.push_str("fn SELF.eq(self: &SELF, other: &SELF) -> bool:\n    match self:\n");
+                for variant in &one.variants {
+                    let (left, lefts) = variant_pattern(variant, "left");
+                    let (right, rights) = variant_pattern(variant, "right");
+                    let fields: Vec<String> = lefts.iter().zip(&rights).map(|(left, right)| format!("{left}.eq({right})")).collect();
+                    let all = if fields.is_empty() { "true".to_owned() } else { fields.join(" && ") };
+                    out.push_str(&format!(
+                        "        {left}:\n            match other:\n                {right}:\n                    return {all}\n                _:\n                    return false\n"
+                    ));
+                }
+                out.push('\n');
+            }
         }
         functions.extend(for_type(&out, &one.name)?);
     }
     Ok(functions)
+}
+
+/// `.name(prefix0, prefix1, ...)`, and the names it binds its payload to.
+fn variant_pattern(variant: &Variant, prefix: &str) -> (String, Vec<String>) {
+    let names: Vec<String> = (0..variant.fields.len()).map(|index| format!("{prefix}{index}")).collect();
+    let pattern = if names.is_empty() { format!(".{}", variant.name) } else { format!(".{}({})", variant.name, names.join(", ")) };
+    (pattern, names)
 }
 
 /// `source`'s methods of `SELF`, made methods of `type_`: a module's type
@@ -174,7 +209,18 @@ fn protocols() -> String {
     let wide = |type_: &str| type_.ends_with("32");
     let scalars = INTEGERS.iter().map(|one| one.0).chain(["char", "bool", "f32", "f64"]);
     for type_ in scalars {
-        if !type_.starts_with('f') {
+        if type_.starts_with('f') {
+            // A float hashes its bits, -0.0 those of 0.0, which it equals.
+            let words = if type_ == "f64" { "words[0] ^ words[1]" } else { "words[0]" };
+            out.push_str(&format!(
+                "fn {type_}.hash(self: {type_}) -> u16:\n\
+                 \x20   let mut value: {type_} = self == 0.0 ? 0.0 : self\n\
+                 \x20   unsafe:\n\
+                 \x20       let place: *far mut {type_} = &mut value\n\
+                 \x20       let words = place.cast[u32]()\n\
+                 \x20       return ({words}).hash()\n\n"
+            ));
+        } else {
             // A 32-bit value folds its high word into the low one.
             let hashed = if wide(type_) { "u16(self ^ (self >> 16))" } else { "u16(self)" };
             out.push_str(&format!("fn {type_}.hash(self: {type_}) -> u16:\n    return {hashed}\n\n"));

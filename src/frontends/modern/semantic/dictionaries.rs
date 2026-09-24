@@ -6,6 +6,7 @@
 //! slots does, and the runtime grows it by the stored hashes, calling no key
 //! method. The probe is compiled here, over the slots as that vec.
 
+use crate::abi::modern as rt;
 use super::*;
 use crate::frontends::modern::lexer::lex;
 use crate::frontends::modern::parser::parse;
@@ -49,7 +50,7 @@ impl TypeRegistry {
         let entry_name = format!("{name}.entry");
         let fields = [("hash", ElementType::Scalar(TypeName::U16)), ("key", key), ("value", value)]
             .into_iter()
-            .map(|(field, element)| StructField { name: field.into(), mutable: true, type_spec: self.spec_of(element), span })
+            .map(|(field, element)| StructField { name: field.into(), mutable: true, type_spec: self.spec_of(element), dims: Vec::new(), span })
             .collect();
         self.register_struct(&Struct { name: entry_name.clone(), generics: Vec::new(), bits: None, pack: None, fields, span })?;
         let entry = self.structs[&entry_name].id;
@@ -126,7 +127,7 @@ impl FunctionCompiler<'_> {
         let binding = Binding { type_: BindingType::Scalar(type_name), mutable: true, storage: Storage::Place(place) };
         self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
         let store = |key: &Expr, value: &Expr| Statement::Assign {
-            target: AssignTarget::Index { base: name.clone(), indices: vec![key.clone()] },
+            target: AssignTarget::Index { base: Expr::Name(name.clone(), span), indices: vec![key.clone()] },
             operation: None,
             value: value.clone(),
             span,
@@ -169,7 +170,7 @@ impl FunctionCompiler<'_> {
         let table = self.dictionary_table(dictionary, type_name, span)?;
         let probe = self.probe(table, type_name, key, true, span)?;
         let found = required(self.expression(&probe.name("FOUND"), Some(TypeName::Bool))?, span)?;
-        self.panic_unless(found, "_rt_panic_key");
+        self.panic_unless(found, rt::ERROR_KEY);
         Ok(Some(probe.slot("value")))
     }
 
@@ -187,7 +188,7 @@ impl FunctionCompiler<'_> {
         let place = self.sequence_place(&Expr::Name(dictionary.into(), span), span)?;
         let table = self.value(type_name);
         self.emit("load", vec![table], vec![place.clone()], None);
-        let grown = self.emit_builtin("_rt_dict_reserve", vec![hir::Operand::Value(table), size]).expect("a table");
+        let grown = self.emit_builtin(rt::DICT_RESERVE, vec![hir::Operand::Value(table), size]).expect("a table");
         let grown = self.retyped(grown, type_name);
         self.emit("store", Vec::new(), vec![place, hir::Operand::Value(grown)], None);
         let probe = self.probe(grown, type_name, key, false, span)?;
@@ -291,7 +292,7 @@ impl FunctionCompiler<'_> {
         for statement in &mut body {
             statement.each_mut(&mut |one| match one {
                 Statement::Bind { name, .. } => rename(name),
-                Statement::Assign { target: AssignTarget::Name(name) | AssignTarget::Index { base: name, .. }, .. } => rename(name),
+                Statement::Assign { target: AssignTarget::Name(name), .. } => rename(name),
                 _ => {}
             });
             let Ok(()) = statement.walk_mut(&mut |expression| -> Result<(), std::convert::Infallible> {

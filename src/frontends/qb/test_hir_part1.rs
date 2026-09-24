@@ -502,6 +502,7 @@ fn call_function(name: &str, places: Vec<model::Place>, instruction: model::Inst
         cleanup: model::StackCleanup::Callee,
         distance: model::CallDistance::Far,
         callee: None,
+        float_return: model::FloatReturn::Pointer,
     };
     model::Function { calls: vec![call], ..model::Function::new(1, name, 0, vec![], places, vec![block], 1) }
 }

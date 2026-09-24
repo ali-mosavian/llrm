@@ -4,6 +4,9 @@ use std::collections::BTreeSet;
 pub const TUPLE: &str = "tuple";
 /// A function type `fn(A, B) -> R`, applied to its parameters then its result.
 pub const FUNCTION: &str = "fn";
+/// A foreign function pointer `extern "abi" fn(A) -> R`, applied to its
+/// function type; the name carries the ABI.
+pub const FOREIGN: &str = "extern";
 
 /// An array has one to this many dimensions.
 pub const MAX_RANK: usize = 4;
@@ -13,6 +16,8 @@ pub struct Span {
     pub line: usize,
     pub column: usize,
     pub end_column: usize,
+    /// The loaded module it is in, by load order; 0 is the main one.
+    pub module: u16,
 }
 
 impl Span {
@@ -21,7 +26,13 @@ impl Span {
             line,
             column,
             end_column,
+            module: 0,
         }
+    }
+
+    /// From this span's start, in its module, to `end_column`.
+    pub const fn to(self, end_column: usize) -> Self {
+        Self { end_column, ..self }
     }
 }
 
@@ -112,6 +123,7 @@ impl TypeSpec {
                 let space = if name == "&mut" { " " } else { "" };
                 format!("{name}{space}{}", args.iter().map(TypeAnnotation::text).collect::<String>())
             }
+            Self::Applied { name, args } if name.starts_with(FOREIGN) => format!("{name} {}", args[0].text()),
             Self::Applied { name, args } if name == FUNCTION => {
                 let texts: Vec<_> = args.iter().map(TypeAnnotation::text).collect();
                 let (result, parameters) = texts.split_last().expect("a function type has a result");
@@ -146,6 +158,7 @@ pub struct Module {
     pub public: BTreeSet<String>,
     pub fixed_types: Vec<FixedType>,
     pub consts: Vec<Const>,
+    pub statics: Vec<Static>,
     pub structs: Vec<Struct>,
     pub enums: Vec<Enum>,
     pub protocols: Vec<Protocol>,
@@ -153,9 +166,16 @@ pub struct Module {
     /// Functions another object defines, called through a foreign ABI.
     pub externs: Vec<Extern>,
     /// The functions `export` exposes, each with its foreign ABI.
-    pub exports: BTreeMap<String, Abi>,
+    pub exports: BTreeMap<String, Export>,
     /// The language's library methods, compiled only where called.
     pub library: Vec<Function>,
+    /// The linked modules' names, which spans name by index; the main
+    /// module is `""`.
+    pub sources: Vec<String>,
+    /// Each method without `pub`, by linked name, and its module's index
+    /// in `sources`. Which method a call on a value names is a type fact,
+    /// so the type checker, not the linker, refuses one from elsewhere.
+    pub private_methods: BTreeMap<String, u16>,
 }
 
 /// A foreign calling convention (section 15).
@@ -164,6 +184,70 @@ pub enum Abi {
     Cdecl16,
     /// Arguments pushed first to last; the callee removes them.
     Pascal16,
+    /// Entered by INT or an IRQ, with nothing passed, and left by `iret`.
+    Interrupt16,
+    /// A BASIC compiler's: Pascal16's order, cleanup and symbols, with a
+    /// float result through a hidden near pointer.
+    Basic(Basic),
+}
+
+/// A BASIC compiler whose programs call and are called by modern code. Its
+/// module, `abi.<name>`, holds what differs between them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Basic {
+    Qb45,
+    Pds71,
+    Vbdos,
+}
+
+impl Basic {
+    pub const ALL: [Self; 3] = [Self::Qb45, Self::Pds71, Self::Vbdos];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Qb45 => "qb45",
+            Self::Pds71 => "pds71",
+            Self::Vbdos => "vbdos",
+        }
+    }
+
+    /// The module declaring its adapters: `abi.qb45`.
+    pub fn module(self) -> String {
+        format!("abi.{}", self.name())
+    }
+}
+
+/// A parameter type `abi.<basic>` declares for an argument BASIC passes by
+/// reference (section 15).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Adapter {
+    /// `Ref[T]`: the variable.
+    Ref,
+    /// `StringRef`: a string descriptor.
+    String,
+    /// `ArrayRef[T, N]`: an array descriptor.
+    Array,
+}
+
+impl Adapter {
+    /// The adapter `spec` names, and whose.
+    pub fn of(spec: &TypeSpec) -> Option<(Basic, Self)> {
+        let (TypeSpec::Named(name) | TypeSpec::Applied { name, .. }) = spec else {
+            return None;
+        };
+        let (module, adapter) = name.rsplit_once('.')?;
+        let basic = Basic::ALL.into_iter().find(|one| one.module() == module)?;
+        let adapter = [Self::Ref, Self::String, Self::Array].into_iter().find(|one| one.name() == adapter)?;
+        Some((basic, adapter))
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Ref => "Ref",
+            Self::String => "StringRef",
+            Self::Array => "ArrayRef",
+        }
+    }
 }
 
 impl Abi {
@@ -171,7 +255,8 @@ impl Abi {
         match name {
             "cdecl16" => Some(Self::Cdecl16),
             "pascal16" => Some(Self::Pascal16),
-            _ => None,
+            "interrupt16" => Some(Self::Interrupt16),
+            _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
         }
     }
 
@@ -179,19 +264,39 @@ impl Abi {
         match self {
             Self::Cdecl16 => "cdecl16",
             Self::Pascal16 => "pascal16",
+            Self::Basic(basic) => basic.name(),
+            Self::Interrupt16 => "interrupt16",
         }
     }
 
-    /// The object symbol of `name`: C's `_name`, Pascal's `NAME`.
+    /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
     pub fn symbol(self, name: &str) -> String {
         match self {
-            Self::Cdecl16 => format!("_{name}"),
-            Self::Pascal16 => name.to_ascii_uppercase(),
+            Self::Cdecl16 | Self::Interrupt16 => format!("_{name}"),
+            Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        self == Self::Pascal16
+        self != Self::Cdecl16
+    }
+
+    /// Where a float result goes, in the HIR's words: BASIC's through a
+    /// hidden pointer, every other one in `st(0)`.
+    pub fn float_return(self) -> &'static str {
+        if self.basic().is_some() { "pointer" } else { "register" }
+    }
+
+    pub fn basic(self) -> Option<Basic> {
+        match self {
+            Self::Basic(basic) => Some(basic),
+            _ => None,
+        }
+    }
+
+    /// Whether only an interrupt enters it: nothing calls it.
+    pub fn interrupt(self) -> bool {
+        self == Self::Interrupt16
     }
 }
 
@@ -205,10 +310,28 @@ pub struct Extern {
     pub function: Function,
 }
 
+/// How an `export` block exposes a function: its ABI and object symbol,
+/// `@link_name` or the one its ABI gives the name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Export {
+    pub abi: Abi,
+    pub symbol: String,
+}
+
 /// `const NAME: T = value`, its value folded to a literal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Const {
     pub name: String,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `var NAME: T = value`: storage for the whole run, in DGROUP, set before
+/// the program starts (section 14).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Static {
+    pub name: String,
+    pub annotation: TypeAnnotation,
     pub value: Expr,
     pub span: Span,
 }
@@ -223,12 +346,15 @@ pub struct Import {
     pub span: Span,
 }
 
-/// A structural requirement: the methods a type must have.
+/// A structural requirement: the methods a type must have. `Self` in them
+/// is that type; `generics` are the other types they name, which a bound
+/// supplies, as in `S: Source[i16]`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Protocol {
     pub name: String,
-    /// Each method's name and parameter count, `self` included.
-    pub methods: Vec<(String, usize)>,
+    pub generics: Vec<String>,
+    /// Each method's header.
+    pub methods: Vec<Function>,
     pub span: Span,
 }
 
@@ -238,11 +364,12 @@ pub struct LambdaParameter {
     pub type_: Option<TypeSpec>,
 }
 
-/// A function's type parameter, as in `fn emit[W: Writer]`.
+/// A function's type parameter, as in `fn emit[W: Writer]`; its bound is a
+/// protocol and the type arguments it takes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GenericParameter {
     pub name: String,
-    pub bound: Option<String>,
+    pub bound: Option<TypeSpec>,
 }
 
 /// A tagged union. A variant's positional payload fields are named `_0`, `_1`, ...
@@ -293,6 +420,8 @@ pub struct StructField {
     /// Declared `mut`: writable in place (section 5).
     pub mutable: bool,
     pub type_spec: TypeSpec,
+    /// A fixed array field's dimensions, row-major; empty for any other.
+    pub dims: Vec<u32>,
     pub span: Span,
 }
 
@@ -415,6 +544,37 @@ pub enum Statement {
         body: Vec<Statement>,
         span: Span,
     },
+    Asm(Box<Asm>),
+}
+
+/// `asm(reg=value, out=(reg=target), clobbers=[reg]):` and its lines of assembly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Asm {
+    pub inputs: Vec<(String, Expr, Span)>,
+    pub outputs: Vec<(String, AsmTarget, Span)>,
+    pub clobbers: Vec<(String, Span)>,
+    pub lines: Vec<(String, Span)>,
+    pub span: Span,
+}
+
+/// Where an output register goes: a place, or `let [mut] name`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AsmTarget {
+    Place(AssignTarget),
+    Bind { mutable: bool, name: String },
+}
+
+impl Asm {
+    /// The inputs' values and the expressions naming output places.
+    pub fn expressions_mut(&mut self) -> Vec<&mut Expr> {
+        let values = self.inputs.iter_mut().map(|(_, value, _)| value);
+        let places = self.outputs.iter_mut().flat_map(|(_, target, _)| match target {
+            AsmTarget::Place(AssignTarget::Index { base, indices }) => std::iter::once(base).chain(indices).collect(),
+            AsmTarget::Place(AssignTarget::Member { base, .. } | AssignTarget::Deref(base)) => vec![base],
+            _ => Vec::new(),
+        });
+        values.chain(places).collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -457,6 +617,20 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    /// The names the pattern binds.
+    pub fn names(&self) -> Vec<&str> {
+        match self {
+            Self::Binding(name, _) => vec![name],
+            Self::Wildcard(_) | Self::Literal(_) => Vec::new(),
+            Self::Variant { fields, .. } | Self::Struct { fields, .. } | Self::Tuple(fields, _) => {
+                fields.iter().flat_map(Self::names).collect()
+            }
+            Self::Sequence { before, rest, after, .. } => {
+                before.iter().chain(rest.as_deref()).chain(after).flat_map(Self::names).collect()
+            }
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Self::Wildcard(span) | Self::Binding(_, span) | Self::Tuple(_, span) => *span,
@@ -541,22 +715,12 @@ impl Clause {
         }
     }
 
-    fn walk_mut<E>(
-        clauses: &mut [Clause],
-        visit: &mut impl FnMut(&mut Expr) -> Result<(), E>,
-    ) -> Result<(), E> {
-        for clause in clauses {
-            match clause {
-                Self::If(condition) => condition.walk_mut(visit)?,
-                Self::For { iterable, end, .. } => {
-                    iterable.walk_mut(visit)?;
-                    if let Some(end) = end {
-                        end.walk_mut(visit)?;
-                    }
-                }
-            }
-        }
-        Ok(())
+    /// Each clause's condition, or iterable and end, left to right.
+    pub fn expressions_mut(clauses: &mut [Clause]) -> impl Iterator<Item = &mut Expr> {
+        clauses.iter_mut().flat_map(|clause| match clause {
+            Self::If(condition) => vec![condition],
+            Self::For { iterable, end, .. } => std::iter::once(iterable).chain(end.iter_mut()).collect(),
+        })
     }
 }
 
@@ -570,7 +734,8 @@ pub enum IterationMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AssignTarget {
     Name(String),
-    Index { base: String, indices: Vec<Expr> },
+    /// `base[indices]`: an element of a named sequence or of an array field.
+    Index { base: Expr, indices: Vec<Expr> },
     Member { base: Expr, field: String },
     /// `*pointer`.
     Deref(Expr),
@@ -581,10 +746,7 @@ impl AssignTarget {
     pub fn of(expression: Expr) -> Result<Self, &'static str> {
         match expression {
             Expr::Name(name, _) => Ok(Self::Name(name)),
-            Expr::Index { base, indices, .. } => match *base {
-                Expr::Name(base, _) => Ok(Self::Index { base, indices }),
-                _ => Err("assignment target must be a named place"),
-            },
+            Expr::Index { base, indices, .. } => Ok(Self::Index { base: *base, indices }),
             Expr::Member { base, field, .. } => Ok(Self::Member { base: *base, field }),
             Expr::Unary { op: UnaryOp::Deref, operand, .. } => Ok(Self::Deref(*operand)),
             _ => Err("expression is not assignable"),
@@ -611,6 +773,7 @@ impl Statement {
             | Self::Continue(span) => *span,
             Self::Const(one) => one.span,
             Self::Function(one) => one.span,
+            Self::Asm(one) => one.span,
             Self::Expr(expression) => expression.span(),
         }
     }
@@ -700,6 +863,9 @@ pub enum Expr {
     /// `{key: value, ...}`, or `{}`.
     Dict(Vec<(Expr, Expr)>, Span),
     Boolean(bool, Span),
+    /// The expected type's value of all zero bits, which only the compiler
+    /// writes: an owner's null, so dropping it frees nothing.
+    Zero(Span),
     Name(String, Span),
     /// `base[i]`, or `base[i, j, ...]` for a ranked array.
     Index {
@@ -738,6 +904,12 @@ pub enum Expr {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        span: Span,
+    },
+    /// `a < b < c`: `operations[i]` compares `operands[i]` with `operands[i + 1]`.
+    Chain {
+        operands: Vec<Expr>,
+        operations: Vec<BinaryOp>,
         span: Span,
     },
     Call {
@@ -847,6 +1019,7 @@ impl Expr {
             | Self::Tuple(_, span)
             | Self::Lambda { span, .. }
             | Self::Boolean(_, span)
+            | Self::Zero(span)
             | Self::Name(_, span) => *span,
             Self::FString { span, .. }
             | Self::Comprehension { span, .. }
@@ -862,6 +1035,7 @@ impl Expr {
             | Self::Conversion { span, .. }
             | Self::Unary { span, .. }
             | Self::Binary { span, .. }
+            | Self::Chain { span, .. }
             | Self::Call { span, .. }
             | Self::NamedArgument { span, .. }
             | Self::Conditional { span, .. }
@@ -977,7 +1151,7 @@ impl Statement {
             Self::Assign { target, value, .. } => {
                 let mut own = match target {
                     AssignTarget::Name(_) => Vec::new(),
-                    AssignTarget::Index { indices, .. } => indices.iter_mut().collect(),
+                    AssignTarget::Index { base, indices } => std::iter::once(base).chain(indices).collect(),
                     AssignTarget::Member { base, .. } | AssignTarget::Deref(base) => vec![base],
                 };
                 own.push(value);
@@ -988,6 +1162,7 @@ impl Statement {
             Self::For { iterable, .. } => vec![iterable],
             Self::ForRange { start, end, .. } => vec![start, end],
             Self::Match { subject, .. } => vec![subject],
+            Self::Asm(asm) => asm.expressions_mut(),
             Self::Break(_) | Self::Continue(_) | Self::Unsafe { .. } | Self::Const(_) | Self::Function(_) => Vec::new(),
         }
     }
@@ -1006,7 +1181,8 @@ impl Statement {
             Self::Assign { target, value, .. } => {
                 match target {
                     AssignTarget::Name(_) => {}
-                    AssignTarget::Index { indices, .. } => {
+                    AssignTarget::Index { base, indices } => {
+                        base.walk_mut(visit)?;
                         for index in indices {
                             index.walk_mut(visit)?;
                         }
@@ -1053,6 +1229,7 @@ impl Statement {
                 arms.iter_mut()
                     .try_for_each(|arm| walk_body(&mut arm.body, visit))
             }
+            Self::Asm(asm) => asm.expressions_mut().into_iter().try_for_each(|one| one.walk_mut(visit)),
             Self::Break(_) | Self::Continue(_) | Self::Const(_) | Self::Function(_) => Ok(()),
         }
     }
@@ -1067,118 +1244,85 @@ fn walk_body<E>(
 }
 
 impl Expr {
+    /// Every name this expression reads.
+    pub fn names(&self) -> Vec<String> {
+        let mut named = Vec::new();
+        let Ok(()) = self.clone().walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
+            if let Expr::Name(name, _) = one {
+                named.push(name.clone());
+            }
+            Ok(())
+        });
+        named
+    }
+
+    /// `a.b.c` for a chain of names, as a path through an import spells it.
+    pub fn dotted(&self) -> Option<String> {
+        match self {
+            Expr::Name(name, _) => Some(name.clone()),
+            Expr::Member { base, field, .. } => Some(format!("{}.{field}", base.dotted()?)),
+            _ => None,
+        }
+    }
+
     /// Calls `visit` on this expression and every one inside it, innermost first.
     pub fn walk_mut<E>(
         &mut self,
         visit: &mut impl FnMut(&mut Expr) -> Result<(), E>,
     ) -> Result<(), E> {
+        for child in self.children_mut() {
+            child.walk_mut(visit)?;
+        }
+        visit(self)
+    }
+
+    /// The expressions directly inside this one, in evaluation order. A
+    /// lambda's body is not among them: it is visited where it is inlined,
+    /// in its own scope.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
         match self {
             Self::Integer(..)
             | Self::Float(..)
             | Self::Character(..)
             | Self::String(..)
             | Self::Boolean(..)
-            | Self::Name(..) => {}
-            Self::FString { parts, .. } => {
-                for part in parts {
-                    if let FStringPart::Value(value, _) = part {
-                        value.walk_mut(visit)?;
-                    }
-                }
-            }
-            Self::Dict(entries, _) => {
-                for (key, value) in entries {
-                    key.walk_mut(visit)?;
-                    value.walk_mut(visit)?;
-                }
-            }
-            Self::Array(items, _) | Self::Tuple(items, _) => {
-                for item in items {
-                    item.walk_mut(visit)?;
-                }
-            }
-            Self::Repeat { value, counts, .. } => {
-                value.walk_mut(visit)?;
-                for count in counts {
-                    count.walk_mut(visit)?;
-                }
-            }
+            | Self::Zero(..)
+            | Self::Name(..)
+            | Self::Lambda { .. } => Vec::new(),
+            Self::FString { parts, .. } => parts
+                .iter_mut()
+                .filter_map(|part| match part {
+                    FStringPart::Value(value, _) => Some(value),
+                    _ => None,
+                })
+                .collect(),
+            Self::Dict(entries, _) => entries.iter_mut().flat_map(|(key, value)| [key, value]).collect(),
+            Self::Array(items, _) | Self::Tuple(items, _) => items.iter_mut().collect(),
+            Self::Repeat { value, counts, .. } => std::iter::once(value.as_mut()).chain(counts).collect(),
             Self::Conversion { value, .. }
             | Self::NamedArgument { value, .. }
             | Self::Borrow { operand: value, .. }
             | Self::Unary { operand: value, .. }
             | Self::Try { operand: value, .. }
-            | Self::Member { base: value, .. } => value.walk_mut(visit)?,
-            // A lambda's body is visited where it is inlined, in its own scope.
-            Self::Lambda { .. } => {}
-            Self::Comprehension {
-                element, clauses, ..
+            | Self::Member { base: value, .. } => vec![value.as_mut()],
+            Self::Comprehension { element, clauses, .. } | Self::Generator { element, clauses, .. } => {
+                Clause::expressions_mut(clauses).chain([element.as_mut()]).collect()
             }
-            | Self::Generator {
-                element, clauses, ..
-            } => {
-                Clause::walk_mut(clauses, visit)?;
-                element.walk_mut(visit)?;
+            Self::DictComprehension { key, value, clauses, .. } => {
+                Clause::expressions_mut(clauses).chain([key.as_mut(), value.as_mut()]).collect()
             }
-            Self::DictComprehension {
-                key,
-                value,
-                clauses,
-                ..
-            } => {
-                Clause::walk_mut(clauses, visit)?;
-                key.walk_mut(visit)?;
-                value.walk_mut(visit)?;
-            }
-            Self::Index { base, indices, .. } => {
-                base.walk_mut(visit)?;
-                for index in indices {
-                    index.walk_mut(visit)?;
-                }
-            }
-            Self::Slice {
-                base, start, end, ..
-            } => {
-                base.walk_mut(visit)?;
-                for bound in [start, end].into_iter().flatten() {
-                    bound.walk_mut(visit)?;
-                }
-            }
-            Self::StructLiteral { fields, .. } => {
-                for (_, value, _) in fields {
-                    value.walk_mut(visit)?;
-                }
-            }
-            Self::Binary { left, right, .. } => {
-                left.walk_mut(visit)?;
-                right.walk_mut(visit)?;
-            }
-            Self::Call { arguments, .. } | Self::Variant { arguments, .. } => {
-                for argument in arguments {
-                    argument.walk_mut(visit)?;
-                }
-            }
-            Self::MethodCall {
-                receiver,
-                arguments,
-                ..
-            } => {
-                receiver.walk_mut(visit)?;
-                for argument in arguments {
-                    argument.walk_mut(visit)?;
-                }
-            }
-            Self::Conditional {
-                condition,
-                then,
-                otherwise,
-                ..
-            } => {
-                condition.walk_mut(visit)?;
-                then.walk_mut(visit)?;
-                otherwise.walk_mut(visit)?;
+            Self::Index { base, indices, .. } => std::iter::once(base.as_mut()).chain(indices).collect(),
+            Self::Slice { base, start, end, .. } => std::iter::once(base.as_mut())
+                .chain(start.iter_mut().chain(end.iter_mut()).map(|bound| bound.as_mut()))
+                .collect(),
+            Self::StructLiteral { fields, .. } => fields.iter_mut().map(|(_, value, _)| value).collect(),
+            Self::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
+            Self::Chain { operands, .. } => operands.iter_mut().collect(),
+            Self::Call { arguments, .. } | Self::Variant { arguments, .. } => arguments.iter_mut().collect(),
+            Self::MethodCall { receiver, arguments, .. } => std::iter::once(receiver.as_mut()).chain(arguments).collect(),
+            Self::Conditional { condition, then, otherwise, .. } => {
+                vec![condition.as_mut(), then.as_mut(), otherwise.as_mut()]
             }
         }
-        visit(self)
     }
 }

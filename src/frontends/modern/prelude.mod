@@ -16,6 +16,11 @@ fn enumerate[T](items: &[T]) -> iter[(u16, &T)]:
         yield (i, item)
         i += 1
 
+# What `.iter()` on an array, vec or view gives: its elements, in order.
+fn elements[T](items: &[T]) -> iter[T]:
+    for item in items:
+        yield item
+
 fn zip[A, B](left: &[A], right: &[B]) -> iter[(&A, &B)]:
     let mut i: u16 = 0
     while i < left.len && i < right.len:
@@ -27,3 +32,16 @@ fn range[T](start: T, end: T) -> iter[T]:
     while i < end:
         yield i
         i += 1
+
+# The protocols the language names (draft section 3); `Self` is the type
+# that satisfies one.
+
+protocol Hashable:
+    fn hash(self: &Self) -> u16
+    fn eq(self: &Self, other: &Self) -> bool
+
+protocol Ordered:
+    fn cmp(self: &Self, other: &Self) -> i8
+
+protocol Display:
+    fn display(self: &Self) -> string

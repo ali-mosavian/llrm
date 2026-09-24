@@ -54,6 +54,11 @@ impl Templates {
         self.generators.get(name)
     }
 
+    /// A generator the compiler makes, as a generator expression's.
+    pub(super) fn add_generator(&mut self, function: Function) {
+        self.generators.insert(function.name.clone(), function);
+    }
+
     pub(super) fn instance(&self, name: &str) -> Option<Signature> {
         self.instances.get(name).cloned()
     }
@@ -101,6 +106,19 @@ impl FunctionCompiler<'_> {
     ) -> Result<Option<Statement>, Diagnostic> {
         let mut rewritten = statement.clone();
         let mut renamed = false;
+        self.consumed = consumed_generators(&rewritten);
+        // `p[i] = v` through a raw pointer writes `*(p.offset(i))`.
+        if let Statement::Assign { target: target @ AssignTarget::Index { .. }, span, .. } = &mut rewritten {
+            let AssignTarget::Index { base, indices } = target else { unreachable!() };
+            if let Some(offset) = self.pointer_index(base, indices, *span) {
+                let Expr::Unary { operand, .. } = offset else { unreachable!("a dereference") };
+                *target = AssignTarget::Deref(*operand);
+                renamed = true;
+            } else if let Some(Expr::Member { base, field, .. }) = self.tuple_element(base, indices, *span) {
+                *target = AssignTarget::Member { base: *base, field };
+                renamed = true;
+            }
+        }
         for expression in rewritten.own_expressions_mut() {
             renamed |= self.prepare_expression(expression)?;
         }
@@ -111,6 +129,37 @@ impl FunctionCompiler<'_> {
     pub(super) fn prepare_expression(&mut self, expression: &mut Expr) -> Result<bool, Diagnostic> {
         let mut renamed = false;
         expression.walk_mut(&mut |one| {
+            if let Expr::MethodCall { receiver, name, type_arguments, span, .. } = one {
+                self.visible_method(receiver, name, *span)?;
+                self.declare_cast(receiver, name, type_arguments, *span)?;
+            }
+            if let Expr::Index { base, indices, span } = one {
+                if let Some(read) = self.pointer_index(base, indices, *span).or_else(|| self.tuple_element(base, indices, *span)) {
+                    *one = read;
+                    renamed = true;
+                }
+            }
+            // `.iter()` of an array, vec or view, which declares none (section 12).
+            if let Expr::MethodCall { receiver, name, arguments, span, .. } = one {
+                let declared = self.receiver_type(receiver).is_some_and(|owner| self.known_signature(&format!("{owner}.iter")).is_some());
+                if name == "iter" && arguments.is_empty() && !declared && self.iterated_item(receiver).is_some() {
+                    *one = Expr::Call { name: "elements".into(), type_arguments: Vec::new(), arguments: vec![(**receiver).clone()], span: *span };
+                    renamed = true;
+                }
+            }
+            // A generator no loop consumes escapes: it is its state.
+            if let Expr::Generator { element, clauses, span } = one {
+                if !self.consumed.contains(span) {
+                    *one = self.escaping_generator_expression(element, clauses, *span)?;
+                    renamed = true;
+                }
+            }
+            if let Expr::Call { name, arguments, span, .. } = one {
+                if self.is_generator_call(name) && !self.consumed.contains(span) {
+                    *one = self.escaping_generator(name, arguments, *span)?;
+                    renamed = true;
+                }
+            }
             if let Some(call) = self.generic_method_call(one) {
                 *one = call;
             }
@@ -146,13 +195,15 @@ impl FunctionCompiler<'_> {
                     (*name, *arguments) = self.instance_for(name, type_arguments, arguments, *span)?;
                     type_arguments.clear();
                     renamed = true;
-                } else if !type_arguments.is_empty() {
+                } else if !type_arguments.is_empty() && name != super::calls::SIZE_OF {
                     return Err(Diagnostic::new(*span, format!("{name} takes no type arguments")));
                 }
             }
             if let Expr::MethodCall { receiver, name, type_arguments, .. } = one {
-                // `x.checked_to[i8]()` names the method `checked_to[i8]`.
-                if !type_arguments.is_empty() {
+                // `x.checked_to[i8]()` names the method `checked_to[i8]`; a
+                // raw pointer's `cast[U]` keeps its argument.
+                let raw = self.expression_type_hint(receiver).and_then(|one| self.types.raw_target(one)).is_some();
+                if !type_arguments.is_empty() && !raw {
                     *name = instance_name(name, type_arguments);
                     type_arguments.clear();
                     renamed = true;
@@ -269,6 +320,7 @@ impl FunctionCompiler<'_> {
             passed: Vec::new(),
             lambdas: Vec::new(),
         };
+        let mut literals = Vec::new();
         for (parameter, argument) in template.parameters.iter().zip(arguments) {
             if let (
                 Some((lambda, scopes)),
@@ -285,10 +337,18 @@ impl FunctionCompiler<'_> {
                     .push((parameter.name.clone(), lambda, scopes));
                 continue;
             }
-            if let Some((pattern, actual)) = self.argument_type(&parameter.type_, &argument) {
-                self.unify(&pattern, actual, &generics, &mut inferred.bound);
+            if let Some(found) = self.argument_type(&parameter.type_, &argument) {
+                // A literal takes its type from the others, as an operand does.
+                if is_literal(&argument) {
+                    literals.push(found);
+                } else {
+                    self.unify(&found.0, found.1, &generics, &mut inferred.bound);
+                }
             }
             inferred.passed.push(argument);
+        }
+        for (pattern, actual) in literals {
+            self.unify(&pattern, actual, &generics, &mut inferred.bound);
         }
         Ok(inferred)
     }
@@ -299,6 +359,10 @@ impl FunctionCompiler<'_> {
         parameter: &ParameterType,
         argument: &Expr,
     ) -> Option<(TypeSpec, ElementType)> {
+        let argument = match argument {
+            Expr::Borrow { operand, .. } => operand.as_ref(),
+            other => other,
+        };
         let binding = match argument {
             Expr::Name(name, _) if self.visible(name).is_none() => {
                 // A function passed as a value has its function type.
@@ -383,7 +447,7 @@ impl FunctionCompiler<'_> {
     /// The type each of `template`'s parameters is bound to, in order;
     /// each must be bound, and satisfy its protocol.
     pub(super) fn chosen(
-        &self,
+        &mut self,
         template: &Function,
         bound: &BTreeMap<String, TypeSpec>,
         span: Span,
@@ -402,35 +466,59 @@ impl FunctionCompiler<'_> {
         Ok(chosen)
     }
 
-    /// Checks that the type chosen for `generic` has its protocol's methods.
+    /// Checks that the type chosen for `generic` has each method of its
+    /// protocol, taking and giving the same types, with `Self` and the
+    /// protocol's own type parameters bound.
     fn satisfies(
-        &self,
+        &mut self,
         generic: &GenericParameter,
         spec: &TypeSpec,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let Some(protocol) = &generic.bound else {
-            return Ok(());
+        let (name, arguments) = match &generic.bound {
+            None => return Ok(()),
+            Some(TypeSpec::Applied { name, args }) => (name, args.as_slice()),
+            Some(TypeSpec::Named(name)) => (name, [].as_slice()),
+            Some(other) => return Err(Diagnostic::new(span, format!("{} is not a protocol", other.text()))),
         };
-        let templates = self.templates.borrow();
-        let protocol = templates
+        let protocol = self
+            .templates
+            .borrow()
             .protocols
-            .get(protocol)
-            .ok_or_else(|| Diagnostic::new(span, format!("unknown protocol {protocol:?}")))?;
+            .get(name)
+            .cloned()
+            .ok_or_else(|| Diagnostic::new(span, format!("unknown protocol {name:?}")))?;
+        if arguments.len() != protocol.generics.len() {
+            return Err(Diagnostic::new(span, format!("{name} takes {} type arguments", protocol.generics.len())));
+        }
+        let mut bound = BTreeMap::from([("Self".to_owned(), spec.clone())]);
+        for (parameter, argument) in protocol.generics.iter().zip(arguments) {
+            let TypeAnnotation::Value(argument) = argument else {
+                return Err(Diagnostic::new(span, format!("{name} takes a type, not an array")));
+            };
+            bound.insert(parameter.clone(), argument.clone());
+        }
         let type_name = spec.text();
-        for (method, arity) in &protocol.methods {
-            let found = self.known_signature(&format!("{type_name}.{method}"));
-            if !found.is_some_and(|one| one.parameters.len() == *arity) {
+        for method in &protocol.methods {
+            let wanted = signature(self.types, &substituted_function(method, &method.name, &bound), 0)?;
+            let found = self.method_signature(&format!("{type_name}.{}", method.name))?;
+            if !found.is_some_and(|one| one.matches(&wanted)) {
                 return Err(Diagnostic::new(
                     span,
-                    format!(
-                        "{type_name} is not a {}: it has no method {method} of {arity} parameters",
-                        protocol.name
-                    ),
+                    format!("{type_name} is not a {name}: it has no method {} as {name} declares it", method.name),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// The method `name`'s signature: a declared one's, or the library's.
+    fn method_signature(&mut self, name: &str) -> Result<Option<Signature>, Diagnostic> {
+        if let Some(found) = self.known_signature(name) {
+            return Ok(Some(found));
+        }
+        let library = self.templates.borrow().library.get(name).cloned();
+        library.map(|function| signature(self.types, &function, 0)).transpose()
     }
 }
 
@@ -469,17 +557,8 @@ fn substituted_annotation(
     annotation: &TypeAnnotation,
     bound: &BTreeMap<String, TypeSpec>,
 ) -> TypeAnnotation {
-    match annotation {
-        TypeAnnotation::Value(spec) => TypeAnnotation::Value(generics::substitute(spec, bound)),
-        TypeAnnotation::Slice { element, rank } => TypeAnnotation::Slice {
-            element: generics::substitute(element, bound),
-            rank: *rank,
-        },
-        TypeAnnotation::Array { element, dims } => TypeAnnotation::Array {
-            element: generics::substitute(element, bound),
-            dims: dims.clone(),
-        },
-    }
+    let bound = bound.iter().map(|(name, one)| (name.clone(), TypeAnnotation::Value(one.clone()))).collect();
+    generics::substitute_in(annotation, &bound)
 }
 
 /// Binds the type parameters `pattern` names to the parts of `actual`.
@@ -532,4 +611,25 @@ fn substitute_body(body: &mut [Statement], bound: &BTreeMap<String, TypeSpec>) {
             Ok(())
         });
     }
+}
+
+/// Where `statement` calls a generator that a loop consumes in place: a
+/// `for`'s iterable, or a comprehension clause's.
+pub(super) fn consumed_generators(statement: &Statement) -> Vec<Span> {
+    let mut found = Vec::new();
+    let mut statement = statement.clone();
+    if let Statement::For { iterable: Expr::Call { span, .. } | Expr::MethodCall { span, .. } | Expr::Generator { span, .. }, .. } = &statement {
+        found.push(*span);
+    }
+    let Ok(()) = statement.walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
+        if let Expr::Comprehension { clauses, .. } | Expr::Generator { clauses, .. } | Expr::DictComprehension { clauses, .. } = one {
+            for clause in clauses {
+                if let Clause::For { iterable: Expr::Call { span, .. } | Expr::Generator { span, .. }, .. } = clause {
+                    found.push(*span);
+                }
+            }
+        }
+        Ok(())
+    });
+    found
 }

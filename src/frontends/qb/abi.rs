@@ -73,6 +73,7 @@ static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| I
     ("B$RTRM", 2),
     ("B$SASS", 4),
     ("B$SCMP", 4),
+    ("B$SCPY", 2),
     ("B$SPAC", 2),
     ("B$STRI", 4),
     ("B$STRS", 4),
@@ -122,6 +123,123 @@ pub struct Physicalized {
     pub far_calls: BTreeSet<i64>,
     pub pointer_model: pointers::Model,
     pub hints: mir::AllocationHints,
+    /// Every formal's entry cell, lowest address first: the order a caller's
+    /// pushes bind them, last push first.
+    pub parameters: Vec<mir::MemRef>,
+    /// Each inline block, by the site of the call laying it down.
+    pub inline: IndexMap<i64, InlineCode>,
+}
+
+/// An inline block's machine code and the registers its results come out of.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineCode {
+    pub code: Vec<u8>,
+    pub outputs: Vec<Register>,
+}
+
+impl Physicalized {
+    /// `hints` with each inline block's results where it leaves them. Keyed
+    /// by site, not by value: a pass that copies a block gives the copy new
+    /// values but the same site.
+    pub fn hints_for(&self, body: &mir::MirBody) -> mir::AllocationHints {
+        let mut hints = self.hints.clone();
+        for op in body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind == Kind::Call) {
+            let Some(inline) = self.inline.get(&op.at) else {
+                continue;
+            };
+            for (result, register) in op.results.iter().zip(&inline.outputs) {
+                if let Arg::Held(held) = result {
+                    hints.origins.insert(held.value.variable, *register);
+                }
+            }
+        }
+        hints
+    }
+}
+
+/// An inline block as a call: its declared registers are all it reads and changes.
+fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Vec<runtime::Reg>), AbiError> {
+    let registers = |names: &[String]| {
+        names
+            .iter()
+            .map(|name| {
+                crate::backend::inline_asm::named(name)
+                    .ok_or_else(|| AbiError(format!("inline assembly names no register {}", pyrepr::string(name))))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let (inputs, outputs, clobbers) = (registers(&asm.inputs)?, registers(&asm.outputs)?, registers(&asm.clobbers)?);
+    let memory = if asm.memory { runtime::Memory::Any } else { runtime::Memory::None };
+    let contract = Contract {
+        name: crate::hir::lower::ASM.to_owned(),
+        cleanup: Some(0),
+        control: Control::Returns,
+        enters_user_code: false,
+        raises_error: false,
+        error_handling: false,
+        writes: memory,
+        reads: memory,
+        clobbers: clobbers.iter().chain(&outputs).copied().collect(),
+        established: true,
+        evidence: "inline assembly: the inputs, outputs and clobbers it declares".to_owned(),
+        documented: None,
+        inputs: Some(inputs.iter().copied().collect()),
+        direct_inputs: None,
+        clobbers_reached: true,
+        caller_cleanup: 0,
+        // It names no 32-bit register, so it keeps every high half.
+        i386: false,
+        direct_writes: None,
+        direct_reads: None,
+    };
+    Ok((contract, inputs, outputs))
+}
+
+/// An inline block's call, its arguments in the contract's slot order, each
+/// a value: a constant is copied into one first.
+#[allow(clippy::type_complexity)]
+fn _inline_block(
+    operation: &mir::Op,
+    asm: &model::Asm,
+    next_value: &mut u32,
+    next_at: &mut i64,
+) -> Result<(Vec<mir::Op>, mir::Op, Contract, InlineCode), AbiError> {
+    let (contract, inputs, outputs) = _inline_contract(asm)?;
+    let mut slotted: Vec<(runtime::Reg, &Arg)> = inputs.into_iter().zip(&operation.args).collect();
+    slotted.sort_by_key(|(register, _)| runtime::SLOTS.iter().position(|slot| slot == register));
+    let mut copies = Vec::new();
+    let mut args = Vec::new();
+    for (_, argument) in slotted {
+        if let Arg::Held(_) = argument {
+            args.push(argument.clone());
+            continue;
+        }
+        let value = mir::Value { variable: *next_value, version: 1, ..mir::Value::new(*next_value, *next_at) };
+        *next_value += 1;
+        let held = mir::Held { value, width: 2 };
+        let mut copy = mir::Op::new(*next_at, OpCode::Operation(Operation::Move), "mov", vec![value], vec![]);
+        copy.kind = Kind::Copy;
+        copy.args = vec![argument.clone()];
+        copy.results = vec![Arg::Held(held)];
+        copy.id = Some(*next_at as u32);
+        copy.reads_complete = true;
+        copy.memory_complete = true;
+        copies.push(copy);
+        *next_at += 1;
+        args.push(Arg::Held(held));
+    }
+    let uses = args
+        .iter()
+        .filter_map(|one| match one {
+            Arg::Held(held) => Some(held.value),
+            _ => None,
+        })
+        .collect();
+    let code = InlineCode {
+        code: asm.code.iter().map(|byte| *byte as u8).collect(),
+        outputs: outputs.into_iter().filter_map(mir::as_named).collect(),
+    };
+    Ok((copies, mir::Op { args, uses, ..operation.clone() }, contract, code))
 }
 
 fn part_width(argument: &Arg) -> u32 {
@@ -130,6 +248,12 @@ fn part_width(argument: &Arg) -> u32 {
         Arg::Held(one) => one.width,
         _ => 2,
     }
+}
+
+/// A result that comes back in DX:AX, as C returns it: a 4-byte integer or
+/// far pointer.
+fn _paired(type_: &model::Type) -> bool {
+    matches!(type_.kind, model::TypeKind::Integer | model::TypeKind::Pointer) && type_.width == 4
 }
 
 fn _bytes(argument: &Arg) -> Result<i64, AbiError> {
@@ -767,7 +891,27 @@ pub fn physicalize(
         .collect();
 
     let site_of = |operation: &mir::Op| operation.id.and_then(|id| sites.get(&i64::from(id)).copied());
+    let blocks_of: IndexMap<i64, &model::Asm> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| instruction.asm.as_ref().map(|asm| (instruction.id, asm)))
+        .collect();
+    let mut inline: IndexMap<i64, InlineCode> = IndexMap::default();
+    // Below every frame place: where a float argument waits to be pushed.
+    let float_argument_at = function
+        .places
+        .iter()
+        .filter(|place| matches!(place.storage, model::Storage::Local | model::Storage::Parameter))
+        .map(|place| place.offset)
+        .min()
+        .unwrap_or(0)
+        .min(0)
+        - 8;
     let call_name = |operation: &mir::Op| -> Result<String, AbiError> {
+        if operation.id.is_some_and(|id| blocks_of.contains_key(&i64::from(id))) {
+            return Ok(operation.name.clone());
+        }
         let Some(site) = site_of(operation) else {
             return Err(AbiError(format!("call {} has no ABI site", operation.id.repr())));
         };
@@ -869,7 +1013,9 @@ pub fn physicalize(
         })
     };
 
-    let mut next_value = lowered.body.values().iter().map(|value| value.id).max().unwrap_or(0) + 1;
+    // A fresh value exceeds every one the body names: a formal is used, never defined.
+    let used = lowered.body.blocks.iter().flat_map(|block| block.ops.iter().flat_map(|op| op.uses.iter().copied()));
+    let mut next_value = lowered.body.values().into_iter().chain(used).map(|value| value.id).max().unwrap_or(0) + 1;
     let mut origins: mir::OrderedMap<u32, Register> = mir::OrderedMap::new();
 
     let fresh_value = |next_value: &mut u32, next_at: i64| -> mir::Value {
@@ -899,17 +1045,18 @@ pub fn physicalize(
     };
 
     let result_type = types[&function.result_type];
-    let returns_legacy_long = result_type.kind == model::TypeKind::Integer && result_type.width == 4;
+    let returns_legacy_long = _paired(result_type);
     let mut entry_loads = Vec::new();
+    let mut formals: Vec<(i64, mir::MemRef)> = Vec::new();
     let parameter_types: Vec<&model::Type> = function
         .parameters
         .iter()
         .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
         .collect();
     let callee_cleanup = function.abi.as_ref().is_some_and(|abi| abi.cleanup == model::StackCleanup::Callee);
-    // BASIC's own function convention; a modern Pascal function returns in st(0).
+    // BASIC's own function convention, where the ABI says so.
     let returns_legacy_float = result_type.kind == model::TypeKind::Float
-        && program.dialect != model::Dialect::Modern
+        && function.abi.as_ref().is_some_and(|abi| abi.float_return == model::FloatReturn::Pointer)
         && callee_cleanup
         && !function.parameters.is_empty()
         && parameter_types[parameter_types.len() - 1].kind == model::TypeKind::Pointer
@@ -946,11 +1093,6 @@ pub fn physicalize(
         function.parameters.iter().zip(&parameter_types).zip(&parameter_offsets).enumerate()
     {
         let value = lowered.values[parameter];
-        // The load is the ABI's, not the program's: a parameter nothing reads
-        // is not loaded, so a float one adds no observable operation.
-        if !read.contains(&value) && hidden_float_result != Some(value) {
-            continue;
-        }
         let object_ = parameter_object(Identity::Int(number as i64), Some(type_.width));
         let reference = mir::MemRef {
             space: Some(Space::Frame),
@@ -960,6 +1102,12 @@ pub fn physicalize(
             ),
             ..mir::MemRef::new(Some(Addr::new(Space::Frame, *parameter_offset)), type_.width as u32)
         };
+        formals.push((*parameter_offset, reference.clone()));
+        // The load is the ABI's, not the program's: a parameter nothing reads
+        // is not loaded, so a float one adds no observable operation.
+        if !read.contains(&value) && hidden_float_result != Some(value) {
+            continue;
+        }
         let result = _held(value, if type_.kind == model::TypeKind::Float { 10 } else { type_.width as u32 });
         let mut kind = Kind::Load;
         let mut operation = Operation::Move;
@@ -1070,6 +1218,15 @@ pub fn physicalize(
                 operations.push(operation);
                 continue;
             }
+            if let Some(asm) = operation.id.and_then(|id| blocks_of.get(&i64::from(id))) {
+                let (copies, call, contract, code) = _inline_block(&operation, asm, &mut next_value, &mut next_at)?;
+                operations.extend(copies);
+                calls.insert(call.at, call.name.clone());
+                contracts.insert(call.at, contract);
+                inline.insert(call.at, code);
+                operations.push(call);
+                continue;
+            }
             let Some(site) = site_of(&operation) else {
                 return Err(AbiError(format!("call {} has no ABI site", operation.id.repr())));
             };
@@ -1083,6 +1240,59 @@ pub fn physicalize(
                 }
                 stack_arguments = ordered[..ordered.len() - 1].to_vec();
                 fixed_arguments = ordered[ordered.len() - 1..].to_vec();
+            }
+            // A float is held extended; the callee's parameter type says the
+            // format it is passed in.
+            let passed: Vec<Option<floating::Format>> = site
+                .order
+                .iter()
+                .map(|index| {
+                    let callee = callables.get(&site.callee?)?;
+                    let type_ = types[callee.parameter_types.get(*index as usize)?];
+                    (type_.kind == model::TypeKind::Float)
+                        .then_some(if type_.width == 4 { floating::Format::Binary32 } else { floating::Format::Binary64 })
+                })
+                .collect();
+            // x87 cannot push: a float is stored in that format to the frame
+            // cell below all others, and the cell is what is pushed.
+            for (number, argument) in stack_arguments.iter_mut().enumerate() {
+                let (Arg::Held(source), Some(format)) = (&*argument, passed.get(number).copied().flatten()) else {
+                    continue;
+                };
+                if source.width != 10 {
+                    continue;
+                }
+                let width = if format == floating::Format::Binary32 { 4 } else { 8 };
+                let object_ = MemoryObject {
+                    identity: Some(Identity::Tuple(vec![Identity::Int(function.id), Identity::Str("float-argument".into())])),
+                    extent: Some(8),
+                    ..MemoryObject::new(MemoryKind::Frame)
+                };
+                let reference = mir::MemRef {
+                    space: Some(Space::Frame),
+                    provenance: Some(
+                        Provenance::one_with_slice(object_, 0, width, 1, 1, BTreeSet::new())
+                            .map_err(|error| AbiError(error.to_string()))?,
+                    ),
+                    ..mir::MemRef::new(Some(Addr::new(Space::Frame, float_argument_at)), width as u32)
+                };
+                let mut op = mir::Op::new(next_at, OpCode::Operation(Operation::FloatStore), "fstp", vec![], vec![source.value]);
+                op.floating = Some(floating::Semantics::new(
+                    vec![floating::Format::Extended80],
+                    format,
+                    floating::Precision::Destination,
+                    floating::Rounding::Dynamic,
+                ));
+                op.stores = vec![reference.clone()];
+                op.kind = Kind::Fstore;
+                op.args = vec![argument.clone()];
+                op.results = vec![Arg::Cell(mir::Cell { r#ref: reference.clone() })];
+                op.id = Some(next_at as u32);
+                op.reads_complete = true;
+                op.memory_complete = true;
+                operations.push(op);
+                next_at += 1;
+                *argument = Arg::Cell(mir::Cell { r#ref: reference });
             }
             let mut pushed = 0;
             for one in &stack_arguments {
@@ -1139,6 +1349,7 @@ pub fn physicalize(
                     let mut op = mir::Op::new(next_at, OpCode::Operation(Operation::Push), "push", vec![], uses);
                     op.kind = Kind::Arg;
                     op.args = vec![part];
+
                     op.id = Some(next_at as u32);
                     op.reads_complete = true;
                     operations.push(op);
@@ -1165,11 +1376,12 @@ pub fn physicalize(
                 },
             };
             let legacy_long = matches!(&result, Some(Arg::Held(held)) if held.width == 4)
-                && semantic_type.is_some_and(|type_| type_.kind == model::TypeKind::Integer && type_.width == 4);
+                && semantic_type.is_some_and(_paired);
             let legacy_float = matches!(&result, Some(Arg::Held(held)) if held.width == 10)
                 && callable_.is_some()
                 && semantic_type.is_some_and(|type_| type_.kind == model::TypeKind::Float)
-                && site.cleanup == model::StackCleanup::Callee;
+                && site.cleanup == model::StackCleanup::Callee
+                && site.float_return == model::FloatReturn::Pointer;
             if name == "B$HARY" {
                 if operation.results.len() != 2
                     || operation.results.iter().any(|one| !matches!(one, Arg::Held(held) if held.width == 2))
@@ -1324,5 +1536,10 @@ pub fn physicalize(
         far_calls: far,
         pointer_model: pointers::Model::new(pointers::HugeShift::Fixed(12)).expect("12 is a valid shift"),
         hints: mir::AllocationHints { origins, ..mir::AllocationHints::new() },
+        parameters: {
+            formals.sort_by_key(|(offset, _)| *offset);
+            formals.into_iter().map(|(_, reference)| reference).collect()
+        },
+        inline,
     })
 }

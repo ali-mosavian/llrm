@@ -1,10 +1,11 @@
 //! Runtime checks that invoke the panic handler: an index at or past its
-//! dimension (section 13), a shift count at or past its operand's width,
-//! and a float outside the integer type it converts to (section 3). A constant index into a known dimension is checked
+//! dimension, a slice past its sequence or reversed (section 13), a shift
+//! count at or past its operand's width, and a float outside the integer type it converts to (section 3). A constant index into a known dimension is checked
 //! here instead, and `unsafe` code, which vouches for its indices, is not
 //! checked; a check a loop's range already proves is the optimizer's to
 //! fold.
 
+use crate::abi::modern as rt;
 use super::*;
 
 impl FunctionCompiler<'_> {
@@ -25,15 +26,28 @@ impl FunctionCompiler<'_> {
     /// Panics unless `index` is below `dim`, compared unsigned so a negative
     /// index fails too.
     pub(super) fn check_bounds(&mut self, index: &hir::Operand, dim: hir::Operand, span: Span) -> Result<(), Diagnostic> {
-        self.check_below(index, dim, "_rt_panic_bounds", span)
+        self.check_below(index, dim, rt::ERROR_BOUNDS, span)
+    }
+
+    /// Panics unless the slice bound `value` is at most `limit`: a range
+    /// ends within its sequence and starts at or before its end.
+    pub(super) fn check_slice_bound(&mut self, value: &hir::Operand, limit: hir::Operand, span: Span) -> Result<(), Diagnostic> {
+        self.check_order(value, limit, true, rt::ERROR_BOUNDS, span)
     }
 
     /// Panics through `panic` unless `value` is below `limit`, compared
     /// unsigned at the wider of their widths.
     pub(super) fn check_below(&mut self, value: &hir::Operand, limit: hir::Operand, panic: &'static str, span: Span) -> Result<(), Diagnostic> {
+        self.check_order(value, limit, false, panic, span)
+    }
+
+    /// Panics through `panic` unless `value` is below `limit`, or at most
+    /// `limit` when `inclusive`; constants are checked here instead.
+    fn check_order(&mut self, value: &hir::Operand, limit: hir::Operand, inclusive: bool, panic: &'static str, span: Span) -> Result<(), Diagnostic> {
         if let (hir::Operand::Constant(_, at), hir::Operand::Constant(_, length)) = (value, &limit) {
-            if *at < 0 || at >= length {
-                return Err(Diagnostic::new(span, format!("{at} is outside 0..{length}")));
+            if *at < 0 || at > length || (at == length && !inclusive) {
+                let range = if inclusive { "..=" } else { ".." };
+                return Err(Diagnostic::new(span, format!("{at} is outside 0{range}{length}")));
             }
             return Ok(());
         }
@@ -44,7 +58,7 @@ impl FunctionCompiler<'_> {
         let unsigned = if wide { TypeName::U32 } else { TypeName::U16 };
         let [value, limit] = [value.clone(), limit].map(|one| self.unsigned(one, unsigned));
         let below = self.value(TypeName::Bool);
-        self.emit("below", vec![below], vec![value, limit], None);
+        self.emit(if inclusive { "beloweq" } else { "below" }, vec![below], vec![value, limit], None);
         self.panic_unless(hir::Operand::Value(below), panic);
         Ok(())
     }
@@ -63,7 +77,7 @@ impl FunctionCompiler<'_> {
         self.emit(if strict { "gt" } else { "ge" }, vec![above], vec![value.clone(), required(lower, span)?], None);
         self.emit("lt", vec![below], vec![value.clone(), required(upper, span)?], None);
         self.emit("and", vec![inside], vec![hir::Operand::Value(above), hir::Operand::Value(below)], None);
-        self.panic_unless(hir::Operand::Value(inside), "_rt_panic_convert");
+        self.panic_unless(hir::Operand::Value(inside), rt::ERROR_CONVERT);
         Ok(())
     }
 

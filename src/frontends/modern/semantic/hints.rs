@@ -9,9 +9,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         let struct_id = self.struct_type_hint(base, span)?;
         let field = self.types.structure(struct_id)?.fields.get(field)?;
-        match field.type_ {
-            ElementType::Scalar(type_name) => Some(type_name),
-            ElementType::Struct(_) => None,
+        match (field.type_, field.shape) {
+            (ElementType::Scalar(type_name), None) => Some(type_name),
+            _ => None,
         }
     }
 
@@ -27,14 +27,16 @@ impl<'a> FunctionCompiler<'a> {
             },
             Expr::Member { base, field, .. } => {
                 let parent = self.struct_type_hint(base, span)?;
-                match self.types.structure(parent)?.fields.get(field)?.type_ {
-                    ElementType::Struct(id) => id,
-                    ElementType::Scalar(_) => return None,
+                let field = self.types.structure(parent)?.fields.get(field)?;
+                match (field.type_, field.shape) {
+                    (ElementType::Struct(id), None) => id,
+                    _ => return None,
                 }
             }
+            Expr::MethodCall { .. } if self.popped_struct_type(expression).is_some() => self.popped_struct_type(expression)?,
             _ => match self.types.referent(self.expression_type_hint(expression)?)? {
-                ElementType::Struct(id) => id,
-                ElementType::Scalar(_) => return None,
+                ElementType::Struct(id) if self.types.array_of(id).is_none() => id,
+                ElementType::Struct(_) | ElementType::Scalar(_) => return None,
             },
         }
         .into()
@@ -50,6 +52,7 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Character(..) => Some(TypeName::Char),
             Expr::String(..) => Some(TypeName::String),
             Expr::Boolean(..) => Some(TypeName::Bool),
+            Expr::FString { .. } => Some(TypeName::String),
             Expr::Name(name, _) if self.visible(name).is_none() => self.function_value_hint(name),
             Expr::Name(name, _) => {
                 self.binding(name, expression.span())
@@ -77,6 +80,9 @@ impl<'a> FunctionCompiler<'a> {
                     ElementType::Scalar(type_name) => Some(type_name),
                     ElementType::Struct(_) => None,
                 }),
+            Expr::MethodCall { receiver, name, type_arguments, .. } if self.pointer_method_type(receiver, name, type_arguments).is_some() => {
+                self.pointer_method_type(receiver, name, type_arguments)
+            }
             Expr::MethodCall { .. } => Some(TypeName::U16),
             Expr::Unary {
                 op: UnaryOp::Not, ..
@@ -128,6 +134,7 @@ impl<'a> FunctionCompiler<'a> {
                     (None, None) => None,
                 }
             }
+            Expr::Chain { .. } => Some(TypeName::Bool),
             Expr::Conditional {
                 then, otherwise, ..
             } => self.conditional_type_hint(then, otherwise),
@@ -137,9 +144,9 @@ impl<'a> FunctionCompiler<'a> {
             } => self.types.enums.get(enum_name).and_then(|one| one.scalar()),
             Expr::Variant { .. } => None,
             Expr::Integer(..)
+            | Expr::Zero(..)
             | Expr::NamedArgument { .. }
             | Expr::Try { .. }
-            | Expr::FString { .. }
             | Expr::Array(..)
             | Expr::Repeat { .. }
             | Expr::Comprehension { .. }
@@ -151,5 +158,18 @@ impl<'a> FunctionCompiler<'a> {
             | Expr::Tuple(..)
             | Expr::Borrow { .. } => None,
         }
+    }
+}
+
+impl FunctionCompiler<'_> {
+    /// The counter type of `start..end`, as `range_statement` gives it: the
+    /// bounds' common type, a literal taking the other's, two literals `i16`.
+    pub(super) fn range_hint(&self, start: &Expr, end: &Expr) -> Option<TypeName> {
+        match (self.expression_type_hint(start), self.expression_type_hint(end)) {
+            (Some(left), Some(right)) => self.rules.common(left, right),
+            (Some(one), None) | (None, Some(one)) => Some(one),
+            (None, None) => Some(TypeName::I16),
+        }
+        .filter(|one| is_integer(*one))
     }
 }

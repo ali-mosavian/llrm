@@ -38,7 +38,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
         model::Op::PortOut => Some(Some(0)),
-        model::Op::Call => Some(None),
+        model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
         _ => None,
@@ -191,7 +191,10 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
                 invalid!("{}: {} has a non-byte initializer", module.name, object_.name);
             }
             for relocation in &object_.relocations {
-                if !data.contains_key(&relocation.target) {
+                if relocation.code && !module.callables.iter().any(|one| one.id == relocation.target) {
+                    invalid!("{}: {} relocates to unknown code", module.name, object_.name);
+                }
+                if !relocation.code && !data.contains_key(&relocation.target) {
                     invalid!("{}: {} relocates to unknown data", module.name, object_.name);
                 }
                 let width = if matches!(relocation.address, model::AddressKind::Far | model::AddressKind::Huge) {
@@ -465,6 +468,20 @@ fn _function(
                     .collect();
                 if involved.iter().any(|one| types[one].kind != model::TypeKind::Float) {
                     invalid!("{prefix}: {} has a non-floating operand", instruction.op);
+                }
+            }
+            if (instruction.op == model::Op::Asm) != instruction.asm.is_some() {
+                invalid!("{prefix}: only an asm instruction carries inline code");
+            }
+            if let Some(asm) = &instruction.asm {
+                if asm.inputs.len() != operand_types.len() || asm.outputs.len() != result_types.len() {
+                    invalid!("{prefix}: asm {} names a register for each operand and result", instruction.id);
+                }
+                // A register is its 16-bit whole; a frontend narrows or widens a part.
+                let word = |one: &i64| types[one].width == 2 && types[one].kind == model::TypeKind::Integer;
+                let near = |one: &i64| types[one].width == 2 && types[one].kind == model::TypeKind::Pointer;
+                if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
+                    invalid!("{prefix}: asm {} moves only 16-bit integers and near pointers", instruction.id);
                 }
             }
             if matches!(instruction.op, model::Op::PortIn | model::Op::PortOut) {

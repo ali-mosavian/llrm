@@ -13,6 +13,9 @@ pub(super) enum Subject {
     /// pointer: a binding then names the part, not a copy of it.
     Scalar(hir::Operand, TypeName, Option<hir::Operand>),
     Aggregate(StructView),
+    /// A fixed array: where it is (the view's type is the array's), its
+    /// element and shape.
+    Array(StructView, ElementType, Shape),
     /// A borrowed one-dimensional view: its descriptor, far data and length.
     Sequence {
         descriptor: u32,
@@ -35,6 +38,7 @@ impl FunctionCompiler<'_> {
             self.subject(subject_expression, span)?
         };
         let complete = self.check_exhaustive(&subject, arms, span)?;
+        let consumed = self.consumed_temporary(&subject);
         let join = self.block();
         let mut falls = !complete;
         for (index, arm) in arms.iter().enumerate() {
@@ -44,8 +48,7 @@ impl FunctionCompiler<'_> {
                 self.test(&arm.pattern, &subject, next)?;
             }
             self.in_scope(|this| {
-                this.bind(&arm.pattern, &subject)?;
-                this.record_pattern_borrows(subject_expression);
+                this.bind_subject(&arm.pattern, &subject, consumed, subject_expression)?;
                 this.statements(&arm.body)
             })?;
             if self.open() {
@@ -55,6 +58,9 @@ impl FunctionCompiler<'_> {
             self.current = next;
         }
         // Past the last arm: a value no arm of an integer match names.
+        if consumed {
+            self.drop_subject(&subject);
+        }
         self.terminate(jump(join));
         self.current = join;
         if !falls {
@@ -67,7 +73,18 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    fn subject(&mut self, expression: &Expr, span: Span) -> Result<Subject, Diagnostic> {
+    /// Binds `pattern`, known to match: a consumed temporary's parts go to
+    /// the bindings, and a named value's are borrowed (section 6).
+    pub(super) fn bind_subject(&mut self, pattern: &Pattern, subject: &Subject, consumed: bool, expression: &Expr) -> Result<(), Diagnostic> {
+        if consumed {
+            return self.bind_moving(pattern, subject);
+        }
+        self.bind(pattern, subject)?;
+        self.record_pattern_borrows(pattern, expression);
+        Ok(())
+    }
+
+    pub(super) fn subject(&mut self, expression: &Expr, span: Span) -> Result<Subject, Diagnostic> {
         if let Some(call) = self.method_as_call(expression) {
             return self.subject(&call, span);
         }
@@ -100,7 +117,7 @@ impl FunctionCompiler<'_> {
         let element = match subject {
             Subject::Scalar(_, type_name, _) => ElementType::Scalar(*type_name),
             Subject::Aggregate(view) => ElementType::Struct(view.struct_id),
-            Subject::Sequence { .. } => return None,
+            Subject::Array(..) | Subject::Sequence { .. } => return None,
         };
         self.types.enum_of(element).cloned()
     }
@@ -110,10 +127,8 @@ impl FunctionCompiler<'_> {
         match pattern {
             Pattern::Wildcard(_) | Pattern::Binding(..) => Ok(()),
             Pattern::Sequence { before, rest, after, span } => {
-                if !matches!(subject, Subject::Sequence { .. }) {
-                    return Err(Diagnostic::new(*span, "a sequence pattern needs a vec, array or view"));
-                }
-                self.test_sequence((before, rest.is_some(), after), subject, fail)
+                let subject = self.as_sequence(subject, *span)?;
+                self.test_sequence((before, rest.is_some(), after), &subject, fail)
             }
             Pattern::Literal(literal) => {
                 let Subject::Scalar(operand, type_name, _) = subject else {
@@ -181,8 +196,9 @@ impl FunctionCompiler<'_> {
         match pattern {
             Pattern::Wildcard(_) | Pattern::Literal(_) => Ok(()),
             Pattern::Binding(name, span) => self.bind_copy(name, subject, *span),
-            Pattern::Sequence { before, rest, after, .. } => {
-                self.bind_sequence((before, rest.as_deref(), after), subject)
+            Pattern::Sequence { before, rest, after, span } => {
+                let subject = self.as_sequence(subject, *span)?;
+                self.bind_sequence((before, rest.as_deref(), after), &subject)
             }
             Pattern::Variant {
                 name, fields, span, ..
@@ -207,6 +223,109 @@ impl FunctionCompiler<'_> {
         }
     }
 
+    /// Whether `subject` is this statement's temporary, which the match then
+    /// consumes rather than the statement dropping it.
+    pub(super) fn consumed_temporary(&mut self, subject: &Subject) -> bool {
+        let (Subject::Aggregate(view) | Subject::Array(view, ..)) = subject else {
+            return false;
+        };
+        let Some(at) = self.aggregate_temporaries.iter().position(|one| one.place == view.place && one.pointer == view.pointer) else {
+            return false;
+        };
+        self.aggregate_temporaries.remove(at);
+        true
+    }
+
+    /// Binds `pattern` on a temporary it consumes: each binding takes its
+    /// part, and what none takes drops here.
+    pub(super) fn bind_moving(&mut self, pattern: &Pattern, subject: &Subject) -> Result<(), Diagnostic> {
+        match pattern {
+            Pattern::Binding(name, span) => {
+                self.bind_copy(name, subject, *span)?;
+                let binding = self.binding(name, *span)?.clone();
+                match (binding.type_, &binding.storage) {
+                    (BindingType::Scalar(type_name), Storage::Place(place)) if super::ownership::needs_drop(type_name) => self.own(*place),
+                    (BindingType::Struct(struct_id), storage) if self.element_needs_drop(ElementType::Struct(struct_id)) => {
+                        self.own_aggregate(storage, struct_id);
+                    }
+                    (BindingType::Array { element, shape }, storage) if self.element_needs_drop(element) => {
+                        let array = self.types.array(element, shape);
+                        self.own_aggregate(storage, array);
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            Pattern::Wildcard(_) => {
+                self.drop_subject(subject);
+                Ok(())
+            }
+            Pattern::Literal(_) => Ok(()),
+            Pattern::Variant { name, fields, span, .. } => {
+                let layout = self.enum_layout(subject).expect("tested");
+                let variant = layout.variant(name, *span)?.clone();
+                for (index, (_, field)) in variant.fields.iter().enumerate() {
+                    let inner = self.field_subject(subject, *field);
+                    match fields.get(index) {
+                        Some(one) => self.bind_moving(one, &inner)?,
+                        None => self.drop_subject(&inner),
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Struct { fields, span, .. } | Pattern::Tuple(fields, span) => {
+                if let Subject::Aggregate(view) = subject {
+                    if self.types.dropped.contains_key(&view.struct_id) {
+                        return Err(Diagnostic::new(*span, "a value with a drop method moves whole: bind it by one name"));
+                    }
+                }
+                for (field, inner) in fields.iter().zip(self.struct_fields(pattern, subject, *span)?) {
+                    self.bind_moving(field, &inner)?;
+                }
+                Ok(())
+            }
+            Pattern::Sequence { before, rest, after, span } => {
+                let Subject::Array(view, element, shape) = subject else {
+                    return Err(Diagnostic::new(*span, "a sequence pattern needs a vec, array or view"));
+                };
+                if let Some(Pattern::Binding(name, _)) = rest.as_deref() {
+                    if self.element_needs_drop(*element) {
+                        return Err(Diagnostic::new(*span, format!(
+                            "*{name} would borrow what this pattern consumes: a starred binding is a borrowed slice, and what no binding takes drops as the arm starts (section 6); bind the array to a name first"
+                        )));
+                    }
+                    return self.bind(pattern, subject);
+                }
+                // Each element goes to its binding; those between, to `*_`, drop.
+                let length = shape.len() as usize;
+                for index in 0..length {
+                    let named = match index {
+                        _ if index < before.len() => before.get(index),
+                        _ if index + after.len() >= length => after.get(index + after.len() - length),
+                        _ => None,
+                    };
+                    let slot = FieldLayout { type_: *element, offset: 0, shape: None };
+                    let one = self.element_view(view, *element, *shape, index as u32);
+                    let inner = self.field_subject(&Subject::Aggregate(one), slot);
+                    match named {
+                        Some(one) => self.bind_moving(one, &inner)?,
+                        None => self.drop_subject(&inner),
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub(super) fn drop_subject(&mut self, subject: &Subject) {
+        match subject {
+            Subject::Scalar(value, type_name, _) if super::ownership::needs_drop(*type_name) => self.emit_drop(value.clone(), *type_name),
+            Subject::Aggregate(view) if self.element_needs_drop(ElementType::Struct(view.struct_id)) => self.drop_view(view),
+            Subject::Array(view, element, shape) => self.owned_array(view, *element, *shape, Owned::Drop),
+            _ => {}
+        }
+    }
+
     /// The names `pattern` binds on an `item`, and their types, without
     /// compiling a match: what `bind` would bind. `None` when one is unknown.
     pub(super) fn pattern_bindings(&self, pattern: &Pattern, item: ElementType) -> Option<Vec<(String, BindingType)>> {
@@ -223,23 +342,47 @@ impl FunctionCompiler<'_> {
             Pattern::Binding(name, _) => Some(vec![(name.clone(), binding(item))]),
             Pattern::Variant { name, fields, .. } => {
                 let variant = self.types.enum_of(item)?.variants.iter().find(|one| &one.name == name)?;
-                all(fields.iter().zip(variant.fields.iter().map(|(_, field)| field.type_)).collect())
+                self.fields_bindings(fields, variant.fields.iter().map(|(_, field)| *field))
             }
             Pattern::Struct { fields, .. } | Pattern::Tuple(fields, _) => {
                 let ElementType::Struct(id) = item else { return None };
                 let layout = self.types.structure(id)?;
-                all(fields.iter().zip(layout.order.iter().map(|field| layout.fields[field].type_)).collect())
+                self.fields_bindings(fields, layout.order.iter().map(|field| layout.fields[field]))
             }
             Pattern::Sequence { before, rest, after, .. } => {
                 let ElementType::Scalar(sequence) = item else { return None };
-                let element = self.types.sequence_element(sequence)?;
-                let mut bound = all(before.iter().chain(after).map(|one| (one, element)).collect())?;
-                if let Some(Pattern::Binding(name, _)) = rest.as_deref() {
-                    bound.push((name.clone(), BindingType::Slice { element, rank: 1 }));
-                }
-                Some(bound)
+                self.sequence_bindings(before, rest.as_deref(), after, self.types.sequence_element(sequence)?)
             }
         }
+    }
+
+    /// What `patterns` bind on the fields `layouts`, positionally.
+    fn fields_bindings(&self, patterns: &[Pattern], layouts: impl Iterator<Item = FieldLayout>) -> Option<Vec<(String, BindingType)>> {
+        let mut bound = Vec::new();
+        for (pattern, field) in patterns.iter().zip(layouts) {
+            bound.extend(match (field.shape, pattern) {
+                (None, _) => self.pattern_bindings(pattern, field.type_)?,
+                (Some(_), Pattern::Wildcard(_)) => Vec::new(),
+                (Some(shape), Pattern::Binding(name, _)) => vec![(name.clone(), BindingType::Array { element: field.type_, shape })],
+                (Some(shape), Pattern::Sequence { before, rest, after, .. }) if shape.rank == 1 => {
+                    self.sequence_bindings(before, rest.as_deref(), after, field.type_)?
+                }
+                (Some(_), _) => return None,
+            });
+        }
+        Some(bound)
+    }
+
+    /// What a sequence pattern binds on a sequence of `element`.
+    fn sequence_bindings(&self, before: &[Pattern], rest: Option<&Pattern>, after: &[Pattern], element: ElementType) -> Option<Vec<(String, BindingType)>> {
+        let mut bound = Vec::new();
+        for one in before.iter().chain(after) {
+            bound.extend(self.pattern_bindings(one, element)?);
+        }
+        if let Some(Pattern::Binding(name, _)) = rest {
+            bound.push((name.clone(), BindingType::Slice { element, rank: 1 }));
+        }
+        Some(bound)
     }
 
     /// A struct pattern's field subjects, positionally.
@@ -288,6 +431,10 @@ impl FunctionCompiler<'_> {
         let Subject::Aggregate(view) = subject else {
             unreachable!("only aggregates have fields")
         };
+        if let Some(shape) = field.shape {
+            let array = self.types.array(field.type_, shape);
+            return Subject::Array(StructView { struct_id: array, offset: view.offset + field.offset, ..view.clone() }, field.type_, shape);
+        }
         match field.type_ {
             ElementType::Scalar(type_name) => {
                 let value = self.value(type_name);
@@ -312,7 +459,27 @@ impl FunctionCompiler<'_> {
                 self.emit("load", vec![value], vec![place], None);
                 hir::Operand::Value(value)
             }
-            Subject::Sequence { .. } => unreachable!("a sequence has no tag"),
+            Subject::Array(..) | Subject::Sequence { .. } => unreachable!("a sequence has no tag"),
+        }
+    }
+
+    /// A one-dimensional array subject as the view a sequence pattern takes.
+    fn as_sequence(&mut self, subject: &Subject, span: Span) -> Result<Subject, Diagnostic> {
+        match subject {
+            Subject::Sequence { .. } => Ok(subject.clone()),
+            Subject::Array(view, element, shape) if shape.rank == 1 => {
+                let pointer = self.array_address(view);
+                let data_type = self.types.pointer(element.id(), 0);
+                let data = self.value_type(data_type);
+                self.emit("copy", vec![data], vec![hir::Operand::Value(pointer)], None);
+                let words = shape.descriptor().into_iter().map(|(_, value)| hir::Operand::Constant(U16, i64::from(value))).collect();
+                let pointer_type = self.types.slice_pointer(*element, 1);
+                let hir::Operand::Value(descriptor) = self.view_descriptor(&view.owner, pointer_type, words, data) else {
+                    unreachable!("a view is a descriptor pointer")
+                };
+                Ok(Subject::Sequence { descriptor, data, length: hir::Operand::Constant(U16, i64::from(shape.len())), element: *element })
+            }
+            _ => Err(Diagnostic::new(span, "a sequence pattern needs a vec, one-dimensional array or view")),
         }
     }
 
@@ -357,6 +524,20 @@ impl FunctionCompiler<'_> {
                 };
                 Binding { type_: BindingType::Scalar(*type_name), mutable: false, storage: Storage::Reference(pointer) }
             }
+            // An array behind a pointer is named there; any other is copied.
+            Subject::Array(source, element, shape) => {
+                let storage = if source.pointer.is_some() {
+                    Storage::Reference(self.array_address(source))
+                } else {
+                    let place = self.array_place(name, source.struct_id, *element, *shape, false);
+                    let destination = StructView { place, pointer: None, indices: Vec::new(), offset: 0, owner: name.into(), ..source.clone() };
+                    let (type_name, count) = self.types.array_run(*element, *shape);
+                    let source = RunSource::Cells(source.clone());
+                    self.emit_stores(vec![Store::Run { destination, element: ElementType::Scalar(type_name), count, source }], span)?;
+                    Storage::Place(place)
+                };
+                Binding { type_: BindingType::Array { element: *element, shape: *shape }, mutable: false, storage }
+            }
             Subject::Aggregate(source) if source.pointer.is_some() => {
                 let hir::Operand::Value(pointer) = self.address_of(source) else {
                     unreachable!("an address is a value")
@@ -391,9 +572,7 @@ impl FunctionCompiler<'_> {
                 };
                 let mut stores = Vec::new();
                 self.prepare_struct_copy(&destination, source, &mut stores)?;
-                for (place, value) in stores {
-                    self.emit("store", Vec::new(), vec![place, value], None);
-                }
+                self.emit_stores(stores, span)?;
                 Binding {
                     type_: BindingType::Struct(source.struct_id),
                     mutable: false,
@@ -422,7 +601,7 @@ impl FunctionCompiler<'_> {
             Subject::Scalar(_, type_name, _) => ElementType::Scalar(*type_name),
             Subject::Aggregate(view) => ElementType::Struct(view.struct_id),
             // A sequence match need not be complete, but may be.
-            Subject::Sequence { .. } => return Ok(covers_every_length(arms)),
+            Subject::Array(..) | Subject::Sequence { .. } => return Ok(covers_every_length(arms)),
         };
         let rows: Vec<Vec<&Pattern>> = arms.iter().map(|arm| vec![&arm.pattern]).collect();
         let Some(witness) = self.uncovered(&rows, &[element]) else {
@@ -444,7 +623,7 @@ impl EnumLayout {
         match subject {
             Subject::Scalar(_, type_name, _) => *type_name,
             Subject::Aggregate(_) => self.tag,
-            Subject::Sequence { .. } => unreachable!("a sequence has no tag"),
+            Subject::Array(..) | Subject::Sequence { .. } => unreachable!("a sequence has no tag"),
         }
     }
 }

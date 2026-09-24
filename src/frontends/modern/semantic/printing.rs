@@ -1,5 +1,6 @@
 //! print and f-string formatting.
 
+use crate::abi::modern as rt;
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -33,7 +34,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.print_value(argument, Format::default())?;
             }
         }
-        self.emit_builtin("_pn", Vec::new());
+        self.emit_builtin(rt::PRINT_NEWLINE, Vec::new());
         Ok(TypedOperand {
             operand: None,
             type_name: TypeName::Void,
@@ -115,7 +116,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             self.field(format, TypeName::String, expression.span())?;
             let parts = self.view_parts(descriptor).to_vec();
-            self.emit_builtin("_pv", parts);
+            self.emit_builtin(rt::PRINT_VIEW, parts);
             return Ok(());
         }
         let value = self.expression(expression, None)?;
@@ -142,7 +143,7 @@ impl<'a> FunctionCompiler<'a> {
         let fill = if format.zero { b'0' } else { b' ' };
         let operands = [format.width, format.radix, fill, u8::from(format.left)]
             .map(|one| hir::Operand::Constant(U8, i64::from(one)));
-        self.emit_builtin("_rt_field", operands.to_vec());
+        self.emit_builtin(rt::PRINT_FIELD, operands.to_vec());
         Ok(())
     }
 

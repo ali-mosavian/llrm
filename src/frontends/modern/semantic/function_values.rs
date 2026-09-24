@@ -93,14 +93,16 @@ impl TypeRegistry {
             .parameters
             .iter()
             .map(|one| match *one {
-                SignatureParameter::Scalar(type_name) => ParameterType::Owned(annotation(BindingType::Scalar(type_name))),
+                SignatureParameter::Scalar(type_name) | SignatureParameter::Adapter { pointer: type_name, .. } => {
+                    ParameterType::Owned(annotation(BindingType::Scalar(type_name)))
+                }
                 SignatureParameter::Owned { struct_id, .. } => ParameterType::Owned(annotation(BindingType::Struct(struct_id))),
                 SignatureParameter::Borrowed { mutable, target, .. } => ParameterType::Borrowed { mutable, target: annotation(target) },
             })
             .collect();
         let result = match (signature.view, signature.slot) {
             (Some((element, rank)), _) => annotation(BindingType::Slice { element, rank }),
-            (None, Some(struct_id)) => annotation(BindingType::Struct(struct_id)),
+            (None, Some(struct_id)) => annotation(self.aggregate_binding(struct_id)),
             (None, None) => annotation(BindingType::Scalar(signature.result)),
         };
         (parameters, result)
@@ -186,6 +188,9 @@ impl FunctionCompiler<'_> {
     /// The function `name` as a value of its type, if it names a function.
     pub(super) fn function_value(&mut self, name: &str, expected: Option<TypeName>, span: Span) -> Option<Result<TypedOperand, Diagnostic>> {
         let signature = self.signatures.get(name)?.clone();
+        if signature.abi.interrupt() {
+            return Some(self.foreign_address(&signature, expected, span));
+        }
         let type_name = self.types.function_type(&signature);
         if let Some(wanted) = expected.filter(|one| *one != type_name) {
             return Some(Err(type_mismatch(span, wanted, type_name)));
@@ -196,7 +201,12 @@ impl FunctionCompiler<'_> {
 
     /// The type of the function `name` names, as a value, if one was made.
     pub(super) fn function_value_hint(&self, name: &str) -> Option<TypeName> {
-        self.types.function_type_of(self.signatures.get(name)?)
+        let signature = self.signatures.get(name)?;
+        let function = self.types.function_type_of(signature)?;
+        if signature.abi.interrupt() {
+            return self.types.foreign_function_of(signature.abi, function);
+        }
+        Some(function)
     }
 
     /// A lambda as a value of the function type `type_name`: a function of

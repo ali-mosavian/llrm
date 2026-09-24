@@ -1,10 +1,54 @@
 //! Constants: `const W: u16 = 320` is a compile-time value. Its initializer
-//! folds to a literal when it is declared, and each use of the name stands
-//! for that literal.
+//! folds to a literal, and each use of the name stands for that literal.
 
 use std::collections::BTreeMap;
 
+use super::error::Diagnostic;
 use super::syntax::{BinaryOp, Expr, TypeAnnotation, TypeSpec, UnaryOp};
+
+/// Each of `declared`'s constants as its literal, each folded after the
+/// constants it names, whatever their order; a cycle is an error. `imported`
+/// are other modules' constants, already folded, which the result keeps.
+pub fn folded_all(
+    declared: &BTreeMap<String, (Option<TypeAnnotation>, Expr)>,
+    imported: &BTreeMap<String, Expr>,
+) -> Result<BTreeMap<String, Expr>, Diagnostic> {
+    let mut known = imported.clone();
+    for name in declared.keys() {
+        fold_declared(name, declared, &mut known, &mut Vec::new())?;
+    }
+    Ok(known)
+}
+
+fn fold_declared(
+    name: &str,
+    declared: &BTreeMap<String, (Option<TypeAnnotation>, Expr)>,
+    known: &mut BTreeMap<String, Expr>,
+    pending: &mut Vec<String>,
+) -> Result<(), Diagnostic> {
+    if known.contains_key(name) {
+        return Ok(());
+    }
+    let (annotation, value) = &declared[name];
+    if pending.iter().any(|one| one == name) {
+        return Err(Diagnostic::new(value.span(), format!("constant {name} depends on itself")));
+    }
+    pending.push(name.to_owned());
+    let named = value.names();
+    for used in named.iter().filter(|one| declared.contains_key(*one)) {
+        fold_declared(used, declared, known, pending)?;
+    }
+    pending.pop();
+    let literal = folded(value, known).ok_or_else(|| {
+        let reason = match named.iter().find(|one| !known.contains_key(*one)) {
+            Some(unknown) => format!(": {unknown} is not a constant"),
+            None => String::new(),
+        };
+        Diagnostic::new(value.span(), format!("{name} is not a compile-time value{reason}"))
+    })?;
+    known.insert(name.to_owned(), typed(literal, annotation.as_ref()));
+    Ok(())
+}
 
 /// `expression` as a literal, the constants in `known` substituted; `None`
 /// when it is not a compile-time value.
@@ -16,6 +60,7 @@ pub fn folded(expression: &Expr, known: &BTreeMap<String, Expr>) -> Option<Expr>
         | Expr::Boolean(..)
         | Expr::Character(..) => Some(expression.clone()),
         Expr::Name(name, _) => known.get(name).cloned(),
+        Expr::Member { .. } => known.get(&expression.dotted()?).cloned(),
         Expr::Conversion {
             target,
             value,

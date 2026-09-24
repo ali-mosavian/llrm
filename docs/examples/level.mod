@@ -1,157 +1,154 @@
-# qcport's map loader (src/model/mod.c) in the draft language.
-# Everything is a plain vec: no EMS, no far memory, no regions.
-# Not compilable yet.
+# A map saved as packed records, loaded back with raw reads, and walked:
+# which BSP leaf holds each point, and which faces its last split has.
 
-import host.pak.Pak
-import render.bsp as bsp
-import game.hulls as hulls
-import game.ent as ent
+import std.io as io
 
-const GEOM_W: i32 = 8192
-const GEOM_MAXREC: i32 = 20 + GEOM_MAXVTX * 6
-
-enum LoadError:
-    missing(member: &string)
-    short_read(member: &string)
-
-# ---- records: layouts match tools/mkassets.py ----
-
-bits struct FacePlane: u16
-    id: u13
-    chain: u3               # surface-cache chain head, bits 0-2
-
-bits struct FaceGeom: u16
-    ofs: u14
-    chain: u2               # bits 3-4
-
-bits struct FaceTex: u16
-    id: u10
-    chain: u6               # bits 5-10
+const MAGIC: u16 = 0x564C              # "LV" in the file
 
 bits struct FaceSide: u8
     back: bool
-    submodel: u7
+    texture: u7
 
 @repr("c16", pack=1)
-struct Face:                # 8 bytes
-    plane: FacePlane
-    geom: FaceGeom
-    tex: FaceTex
-    geom_row: u8
-    side: FaceSide
+struct Header:
+    magic: u16
+    planes: u16
+    nodes: u16
+    faces: u16
 
-@repr("c16", pack=1)
-struct Node:                # 16 bytes
-    plane_id: i16
-    child0: i16
-    child1: i16
-    lface_id: i16
-    lface_num: i16
-    bound: u8[6]
-
+# The line normal . (x, y) == distance.
 @repr("c16", pack=1)
 struct Plane:
-    norm: f32[3]
-    dist: f32
+    normal: i8[2]
+    distance: i16
+
+# A child below zero is leaf -1 - child.
+@repr("c16", pack=1)
+struct Node:
+    plane: u16
+    children: i16[2]
+    first_face: u16
+    faces: u8
 
 @repr("c16", pack=1)
-struct Submodel:            # 32 bytes
-    mins: f32[3]
-    maxs: f32[3]
-    head_node0: i16
-    head_node1: i16
-    first_face: i16
-    num_faces: i16
+struct Face:
+    plane: u16
+    side: FaceSide
 
-@repr("c16", pack=1)
-struct Counts:
-    faces: i32
-    verts: i32
-    edges: i32
-    ledges: i32
-    leaves: i32
-    planes: i32
-    nodes: i32
-    tex_infos: i32
-    clips: i32
-    textures: i32
-    face_lump_bytes: i32
-    models: i16
+enum LoadError:
+    io(error: io.IoError)
+    not_a_level
+    short(missing: u16)
 
-# ---- the level ----
-
-# Owns every array. Dropping it drops each vec, which frees its buffer;
-# this replaces mod_unload's thirty ifs.
 struct Level:
-    counts: Counts
-    faces: vec[Face]
-    nodes: vec[Node]
-    parents: vec[i16]
     planes: vec[Plane]
-    models: vec[Submodel]
-    leaves: bsp.Leaves
-    hulls: hulls.Hulls
-    ents: ent.World
-    geometry: vec[u8]           # one record per face at geom_row * GEOM_W + geom_ofs
-    light_atlas: vec[u8]
-    colormap: vec[u8]
-    pvs: vec[u8]
+    nodes: vec[Node]
+    faces: vec[Face]
 
-fn Level.load(pak: &mut Pak) -> Result[Level, LoadError]:
-    let counts = pak.read[Counts]("counts.bin")?
-    let nodes = pak.read_vec[Node]("nodes.pag", counts.nodes)?
-    let parents = bsp.build_parents(&nodes)
-    # A failing `?` drops what is built so far.
-    return .ok(Level(
-        counts = counts,
-        faces = pak.read_vec[Face]("faces.pag", counts.faces)?,
-        nodes = nodes,
-        parents = parents,
-        planes = pak.read_vec[Plane]("planes.bld", counts.planes)?,
-        models = pak.read_vec[Submodel]("models.bld", counts.models)?,
-        leaves = bsp.load_leaves(pak, &counts)?,
-        hulls = hulls.load(pak, counts.clips)?,
-        ents = ent.load(pak)?,
-        geometry = pak.read_whole("fgeom.bin")?,
-        light_atlas = pak.read_whole("lm.bin")?,
-        colormap = pak.read_whole("colmap.bin")?,
-        pvs = pak.read_whole("pvs.bin")?,
-    ))
-
-# The member's own size bounds the read, so a short last row cannot take
-# the next member's bytes.
-fn Pak.read_whole(self: &mut Pak, member: &string) -> Result[vec[u8], LoadError]:
-    let (file, size) = self.seek(member) else:
-        return .err(.missing(member))
-    let mut bytes = vec[u8].with_length(size)
-    file.read_into(&mut bytes) else:
-        return .err(.short_read(member))
-    return .ok(bytes)
-
-fn Pak.read_vec[T](self: &mut Pak, member: &string, count: i32) -> Result[vec[T], LoadError]:
-    let (file, _) = self.seek(member) else:
-        return .err(.missing(member))
-    let mut items = vec[T].with_length(count)
-    file.read_into(items.bytes_mut()) else:
-        return .err(.short_read(member))
-    return .ok(items)
-
-# ---- use ----
-
-fn main() -> Result[void, LoadError]:
-    let mut pak = Pak.open("quake.qpk")?
-    let mut name: string = "e1m1"
-    loop:
-        pak.select(&name)?
-        # `with` frees this level before the next one loads.
-        with level = Level.load(&mut pak)?:
-            name = run(&level)?
+fn read_exact(file: &mut io.File, data: *far mut u8, bytes: u16) -> Result[void, LoadError]:
+    let got = file.read_raw(data, bytes)?
+    if got < bytes:
+        return .err(.short(bytes - got))
     return .ok()
 
-# d_faces.c copies each record out because an EMS window can move; a view
-# into the vec needs no copy. A record never crosses its row.
-fn face_geometry(level: &Level, f: u16) -> &[u8]:
-    let face = &level.faces[f]
-    let ofs = i32(face.geom.ofs)
-    let row = i32(face.geom_row) * GEOM_W
-    return &level.geometry[row + ofs:row + min(ofs + GEOM_MAXREC, GEOM_W)]
+# `count` records, each read over `blank`.
+fn records[T](file: &mut io.File, count: u16, blank: T) -> Result[vec[T], LoadError]:
+    let mut items: vec[T] = []
+    let mut item = blank
+    for _ in 0..count:
+        unsafe:
+            let data: *far mut T = &mut item
+            read_exact(file, data.cast[u8](), size_of[T]())?
+        items.push(item)
+    return .ok(items)
+
+fn written[T](file: &mut io.File, items: &vec[T]) -> Result[void, LoadError]:
+    unsafe:
+        let data: *far T = &items
+        file.write_raw(data.cast[u8](), items.len * size_of[T]())?
+    return .ok()
+
+fn Level.save(self: &Level, path: &string) -> Result[void, LoadError]:
+    let mut file = io.File.create(path)?
+    let header = Header(magic=MAGIC, planes=self.planes.len, nodes=self.nodes.len, faces=self.faces.len)
+    unsafe:
+        let data: *far Header = &header
+        file.write_raw(data.cast[u8](), size_of[Header]())?
+    written(&mut file, &self.planes)?
+    written(&mut file, &self.nodes)?
+    written(&mut file, &self.faces)?
+    return .ok()
+
+fn Level.load(path: &string) -> Result[Level, LoadError]:
+    let mut file = io.File.open(path)?
+    let mut header = Header(magic=0, planes=0, nodes=0, faces=0)
+    unsafe:
+        let data: *far mut Header = &mut header
+        read_exact(&mut file, data.cast[u8](), size_of[Header]())?
+    if header.magic != MAGIC:
+        return .err(.not_a_level)
+    let planes = records(&mut file, header.planes, Plane(normal=[0, 0], distance=0))?
+    let nodes = records(&mut file, header.nodes, Node(plane=0, children=[0, 0], first_face=0, faces=0))?
+    let faces = records(&mut file, header.faces, Face(plane=0, side=FaceSide(back=false, texture=0)))?
+    return .ok(Level(planes=planes, nodes=nodes, faces=faces))
+
+# The leaf holding (x, y), and the node that split it off.
+fn Level.leaf(self: &Level, x: i16, y: i16) -> (u16, u16):
+    let mut child: i16 = 0
+    let mut last: u16 = 0
+    while child >= 0:
+        last = u16(child)
+        let node = &self.nodes[last]
+        let plane = &self.planes[node.plane]
+        let side = i16(plane.normal[0]) * x + i16(plane.normal[1]) * y - plane.distance
+        child = node.children[side >= 0 ? 0 : 1]
+    return (u16(-1 - child), last)
+
+# A 64x64 room: split at x = 32, then the east half at y = 32 and the
+# west half at y = 16.
+fn built() -> Level:
+    let planes: vec[Plane] = [
+        Plane(normal=[1, 0], distance=32),
+        Plane(normal=[0, 1], distance=32),
+        Plane(normal=[0, 1], distance=16),
+    ]
+    let nodes: vec[Node] = [
+        Node(plane=0, children=[1, 2], first_face=0, faces=1),
+        Node(plane=1, children=[-1, -2], first_face=1, faces=2),
+        Node(plane=2, children=[-3, -4], first_face=3, faces=2),
+    ]
+    let faces: vec[Face] = [
+        Face(plane=0, side=FaceSide(back=false, texture=1)),
+        Face(plane=1, side=FaceSide(back=false, texture=2)),
+        Face(plane=1, side=FaceSide(back=true, texture=2)),
+        Face(plane=2, side=FaceSide(back=false, texture=3)),
+        Face(plane=2, side=FaceSide(back=true, texture=4)),
+    ]
+    return Level(planes=planes, nodes=nodes, faces=faces)
+
+fn run() -> Result[void, LoadError]:
+    built().save("LEVEL.DAT")?
+    let level = Level.load("LEVEL.DAT")?
+    print(f"{level.planes.len} planes {level.nodes.len} nodes {level.faces.len} faces, {size_of[Header]() + level.planes.len * size_of[Plane]() + level.nodes.len * size_of[Node]() + level.faces.len * size_of[Face]()} bytes")
+    let points: vec[(i16, i16)] = [(40, 50), (40, 10), (8, 20), (8, 4)]
+    for (x, y) in points:
+        let (leaf, split) = level.leaf(x, y)
+        let node = &level.nodes[split]
+        let mut seen: string = ""
+        for at in node.first_face..node.first_face + u16(node.faces):
+            let face = &level.faces[at]
+            seen += f" {face.side.back ? 'b' : 'f'}{face.side.texture}"
+        print(f"({x},{y}) leaf {leaf} node {split}:{seen}")
+    return .ok()
+
+fn main() -> i16:
+    match run():
+        .ok(_):
+            return 0
+        .err(.io(_)):
+            print("cannot read or write LEVEL.DAT")
+        .err(.not_a_level):
+            print("LEVEL.DAT is not a level")
+        .err(.short(missing)):
+            print(f"LEVEL.DAT is {missing} bytes short")
+    return 1

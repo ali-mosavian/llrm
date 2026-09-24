@@ -11,6 +11,7 @@
 //! Python's `struct` raises; ZERO_EXTEND and SIGN_EXTEND reinterpret the
 //! source at its own width; addresses compare by identity, not content.
 
+use crate::abi::modern as rt;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
@@ -324,6 +325,8 @@ struct Machine<'p> {
     field: Option<(usize, u32, u8, bool)>,
     /// Set by a runtime panic routine, which ends the program.
     panicked: Option<String>,
+    /// Open files by DOS handle, less the five DOS opens for every program.
+    files: Vec<Option<std::fs::File>>,
 }
 
 impl<'p> Machine<'p> {
@@ -363,6 +366,7 @@ impl<'p> Machine<'p> {
             heap: Vec::new(),
             sink: None,
             field: None,
+            files: Vec::new(),
         })
     }
 
@@ -721,6 +725,14 @@ impl<'p> Machine<'p> {
                 address.offset += *displacement as i64;
                 vec![Scalar::Address(address)]
             }
+            // Pointers into one object order by their offsets in it.
+            Op::PointerOffset => {
+                let Scalar::Address(address) = &args[0] else {
+                    return fail("pointer_offset requires an address");
+                };
+                vec![Scalar::Int(i128::from(address.offset))]
+            }
+            Op::Asm => return fail("inline assembly is machine code: it does not run on the host"),
             Op::Call => {
                 let returned = self.call(instruction.callee.as_deref(), args)?;
                 match (returned, instruction.results.is_empty()) {
@@ -792,11 +804,8 @@ impl<'p> Machine<'p> {
             Op::Sub | Op::Fsub => vec![arithmetic(&args, i128::wrapping_sub, |a, b| a - b)?],
             Op::Mul | Op::Fmul => vec![arithmetic(&args, i128::wrapping_mul, |a, b| a * b)?],
             Op::Fdiv => {
-                let (left, right) = (args[0].float()?, args[1].float()?);
-                if right == 0.0 {
-                    return fail("float division by zero");
-                }
-                vec![Scalar::Float(left / right)]
+                // As the x87 with its exceptions masked: inf or nan, never a fault.
+                vec![Scalar::Float(args[0].float()? / args[1].float()?)]
             }
             Op::And => vec![Scalar::Int(args[0].whole()? & args[1].whole()?)],
             Op::Or => vec![Scalar::Int(args[0].whole()? | args[1].whole()?)],
@@ -904,7 +913,7 @@ impl<'p> Machine<'p> {
         if let Some(result) = self.runtime(name, &arguments)? {
             return Ok(result);
         }
-        if name == "_rt_field" {
+        if name == rt::PRINT_FIELD {
             let [width, radix, fill, left] =
                 [0, 1, 2, 3].map(|index| arguments[index].whole().unwrap_or(0));
             self.field = Some((width as usize, radix as u32, fill as u8, left != 0));
@@ -912,24 +921,25 @@ impl<'p> Machine<'p> {
         }
         let (width, radix, fill, left) = self.field.take().unwrap_or((0, 10, b' ', false));
         let text = match name {
-            "_pn" => "\n".to_owned(),
-            "_pt" => cp437(&runtime::string_bytes(&arguments[0])?),
-            "_pv" => cp437(&runtime::view_bytes(&arguments[0], &arguments[1])?),
-            "_pf2" | "_pf4" => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
-            "_pb" => if arguments[0].truthy() {
+            rt::PRINT_NEWLINE => "\n".to_owned(),
+            rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0])?),
+            rt::PRINT_VIEW => cp437(&runtime::view_bytes(&arguments[0], &arguments[1])?),
+            rt::PRINT_Q2 | rt::PRINT_Q4 => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
+            rt::PRINT_BOOL => if arguments[0].truthy() {
                 "true"
             } else {
                 "false"
             }
             .to_owned(),
-            "_pc" => match u8::try_from(arguments[0].whole()?) {
+            rt::PRINT_CHAR => match u8::try_from(arguments[0].whole()?) {
                 Ok(byte) => cp437(&[byte]),
-                Err(_) => return fail("_pc byte must be in range(0, 256)"),
+                Err(_) => return fail(format!("{} byte must be in range(0, 256)", rt::PRINT_CHAR)),
             },
-            "_pi1" | "_pu1" | "_pi2" | "_pu2" | "_pi4" | "_pu4" => {
+            rt::PRINT_I1 | rt::PRINT_U1 | rt::PRINT_I2 | rt::PRINT_U2 | rt::PRINT_I4 | rt::PRINT_U4 => {
                 radix_text(arguments[0].whole()?, radix)
             }
-            "_pr4" | "_pr8" => pyrepr::float(arguments[0].float()?),
+            rt::PRINT_R4 => pyrepr::float32(arguments[0].float()? as f32),
+            rt::PRINT_R8 => pyrepr::float(arguments[0].float()?),
             _ => return fail(format!("no reference implementation for external {name:?}")),
         };
         self.emit(&padded(text, width, fill, left))?;

@@ -11,6 +11,7 @@ impl<'a> FunctionCompiler<'a> {
                     "statement is unreachable",
                 ));
             }
+            let since = self.calls.len();
             match self.prepared(statement)? {
                 Some(rewritten) => self.statement(&rewritten)?,
                 None => self.statement(statement)?,
@@ -24,12 +25,15 @@ impl<'a> FunctionCompiler<'a> {
                 self.temporaries.clear();
                 self.aggregate_temporaries.clear();
             }
+            self.refuse_runtime(since, statement.span())?;
         }
         Ok(())
     }
 
     pub(super) fn statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
-        if let (Statement::Return { value: Some(value), span }, true) = (statement, self.consumers.is_empty()) {
+        // BASIC copies a string result before the frame it may view is gone.
+        let copied = self.signature.string_result.is_some();
+        if let (Statement::Return { value: Some(value), span }, true, false) = (statement, self.consumers.is_empty(), copied) {
             self.check_returned_borrows(value, *span)?;
         }
         match statement {
@@ -41,6 +45,7 @@ impl<'a> FunctionCompiler<'a> {
             } => self.destructure(pattern, value, otherwise.as_deref(), *span)?,
             Statement::Yield { value, span } => self.yield_statement(value, *span)?,
             Statement::Unsafe { body, .. } => self.unsafe_block(body)?,
+            Statement::Asm(asm) => self.asm_statement(asm)?,
             Statement::Return { value, span } if !self.consumers.is_empty() => {
                 self.generator_return(value.as_ref(), *span)?
             }
@@ -64,13 +69,15 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // A view a call returns, or another name for one.
                 if annotation.is_none() && self.view_type_of(value).is_some() {
+                    let writes = self.struct_expression_type(value, *span)?.is_some_and(|id| self.types.writable_views.contains(&id));
                     let (descriptor, element, rank) = self.view_of(value)?.expect("a view");
-                    let binding = Binding { type_: BindingType::Slice { element, rank }, mutable: false, storage: Storage::Slice(descriptor) };
+                    let binding = Binding { type_: BindingType::Slice { element, rank }, mutable: writes, storage: Storage::Slice(descriptor) };
                     self.bind_borrow(name, *mutable, binding, value);
                     return Ok(());
                 }
-                // Another name for a reference borrows what it borrows.
-                if let (None, Expr::Name(source, _)) = (annotation, value) {
+                // Another name for a reference borrows what it borrows; a
+                // mutable one is a copy of its own.
+                if let (None, Expr::Name(source, _), false) = (annotation, value, *mutable) {
                     if let Some(binding @ Binding { storage: Storage::Reference(_), .. }) = self.visible(source).cloned() {
                         if !self.owns(&binding.storage) {
                             self.bind_borrow(name, false, Binding { mutable: false, ..binding }, value);
@@ -111,12 +118,22 @@ impl<'a> FunctionCompiler<'a> {
                         );
                     }
                 }
+                // Another array's name: a copy, or a move of owned values.
+                if annotation.is_none() {
+                    if let Some((element, shape)) = self.fixed_array_hint(value) {
+                        let array = self.types.array(element, shape);
+                        let place = self.array_place(name, array, element, shape, *mutable);
+                        return self.bind_array(name, *mutable, place, element, shape, value, *span);
+                    }
+                }
                 if let Some(TypeAnnotation::Array { element, dims }) = annotation {
                     let shape = Shape::new(dims);
                     let repeated = repeated_literal(value, shape.dims());
                     let value = repeated.as_ref().unwrap_or(value);
-                    let items = match value {
-                        Expr::Array(..) => literal_elements(value, shape.dims(), *span)?,
+                    match value {
+                        Expr::Array(..) => {
+                            literal_elements(value, shape.dims(), *span)?;
+                        }
                         Expr::Repeat { counts, .. } => {
                             let counts = repeat_counts(counts)?;
                             if counts != shape.dims() {
@@ -128,21 +145,10 @@ impl<'a> FunctionCompiler<'a> {
                                     ),
                                 ));
                             }
-                            Vec::new()
                         }
-                        _ => {
-                            return Err(Diagnostic::new(
-                                *span,
-                                "fixed-array binding requires an array literal",
-                            ));
-                        }
-                    };
-                    let zeroed = self
-                        .zeroed
-                        .iter()
-                        .find(|(bind, _)| bind == span)
-                        .map(|(_, at)| *at);
-                    if let (Expr::Repeat { value, .. }, None) = (value, zeroed) {
+                        _ => {}
+                    }
+                    if let Expr::Repeat { value, .. } = value {
                         // Evaluated before the new name exists, which it may shadow.
                         self.statement(&Statement::Bind {
                             mutable: false,
@@ -154,48 +160,22 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     let element = self.types.resolve_element(element, *span)?;
                     let type_id = self.types.array(element, shape);
-                    let place = match zeroed {
-                        Some(at) => {
-                            self.array_place_at(at, name, type_id, element, shape, *mutable)
-                        }
-                        None => self.array_place(name, type_id, element, shape, *mutable),
-                    };
+                    let place = self.array_place(name, type_id, element, shape, *mutable);
+                    if !matches!(value, Expr::Repeat { .. }) {
+                        return self.bind_array(name, *mutable, place, element, shape, value, *span);
+                    }
+                    self.check_repeatable(element, *span)?;
                     let binding = |mutable| Binding {
                         type_: BindingType::Array { element, shape },
                         mutable,
                         storage: Storage::Place(place),
                     };
-                    if matches!(value, Expr::Repeat { .. }) && zeroed.is_none() {
-                        // Filling stores through the name, which a `let` would refuse.
-                        self.scopes
-                            .last_mut()
-                            .expect("scope")
-                            .insert(name.clone(), binding(true));
-                        self.fill(name, shape, *span)?;
-                    }
-                    for (at, item) in items {
-                        let indices = at
-                            .iter()
-                            .map(|one| hir::Operand::Constant(U16, i64::from(*one)))
-                            .collect::<Vec<_>>();
-                        match element {
-                            ElementType::Scalar(type_name) => {
-                                let value = self.coerced(item, type_name)?;
-                                self.emit(
-                                    "store",
-                                    Vec::new(),
-                                    vec![
-                                        hir::Operand::ArrayElement(place, indices),
-                                        required(value, item.span())?,
-                                    ],
-                                    None,
-                                );
-                            }
-                            ElementType::Struct(struct_id) => {
-                                self.initialize_struct(place, indices, struct_id, item)?;
-                            }
-                        }
-                    }
+                    // Filling stores through the name, which a `let` would refuse.
+                    self.scopes
+                        .last_mut()
+                        .expect("scope")
+                        .insert(name.clone(), binding(true));
+                    self.fill(name, shape, *span)?;
                     self.scopes
                         .last_mut()
                         .expect("scope")
@@ -241,6 +221,7 @@ impl<'a> FunctionCompiler<'a> {
                     if self.element_needs_drop(ElementType::Struct(struct_id)) {
                         self.own_aggregate(&Storage::Place(place), struct_id);
                     }
+                    self.keep_borrows(place, value);
                     self.scopes.last_mut().expect("scope").insert(
                         name.clone(),
                         Binding {
@@ -256,6 +237,7 @@ impl<'a> FunctionCompiler<'a> {
                     Some(ElementType::Struct(_)) => unreachable!(),
                     None => None,
                 };
+                let source = value;
                 let value = match expected {
                     Some(type_name) => self.coerced(value, type_name)?,
                     None => self.expression(value, None)?,
@@ -265,7 +247,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 let binding_type = value.type_name;
                 if let Some(binding) = self.reference_binding(required(value.clone(), *span)?, binding_type) {
-                    self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
+                    self.bind_borrow(name, false, binding, source);
                     return Ok(());
                 }
                 self.consume(&value, *span)?;
@@ -310,14 +292,19 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     _ => None,
                 };
+                // A frame's field with no null is dropped only while live.
+                let flag = match target {
+                    AssignTarget::Member { base, field } => self.frame_field(base, field, *span)?.flatten(),
+                    _ => None,
+                };
                 self.moves.writing = reinitialized.is_some();
                 let place = self.assignment_target(target, *span);
                 self.moves.writing = false;
-                let place = place?;
+                let place = self.written_through(place?, *operation, value);
                 let written = match &place {
                     AssignmentPlace::Scalar(_, element) => Some(ElementType::Scalar(*element)),
                     AssignmentPlace::Struct(view) => Some(ElementType::Struct(view.struct_id)),
-                    AssignmentPlace::Bits { .. } => None,
+                    AssignmentPlace::Bits { .. } | AssignmentPlace::Array(..) => None,
                 };
                 if let (Some(element), None) = (written, operation) {
                     self.check_assigned_borrows(target, value, element, *span)?;
@@ -392,17 +379,53 @@ impl<'a> FunctionCompiler<'a> {
                             ));
                         }
                         let mut stores = Vec::new();
-                        self.prepare_struct_stores(&destination, value, &mut stores)?;
+                        // A run reads its cells as it is stored, after the
+                        // batch's earlier stores: a value reading its own
+                        // target is built aside first.
+                        let runs = self.types.copy_units(ElementType::Struct(destination.struct_id)).iter().any(|(_, _, count)| *count > 1);
+                        let reads_target = borrows::written_owner(target).is_some_and(|owner| value.names().iter().any(|one| one == owner));
+                        if runs && reads_target {
+                            let staged = self.temporary(destination.struct_id);
+                            self.store_struct_expression(&staged, value)?;
+                            self.prepare_struct_copy(&destination, &staged, &mut stores)?;
+                        } else {
+                            self.prepare_struct_stores(&destination, value, &mut stores)?;
+                        }
                         if self.element_needs_drop(ElementType::Struct(destination.struct_id)) {
-                            self.drop_owner(&destination);
+                            match flag.clone() {
+                                Some(flag) => self.when_live(Some(flag), |this| this.drop_view(&destination)),
+                                None => self.drop_owner(&destination),
+                            }
                         }
-                        for (place, value) in stores {
-                            self.emit("store", Vec::new(), vec![place, value], None);
-                        }
+                        self.emit_stores(stores, *span)?;
                         if let Some(key) = Self::whole_owner(&destination) {
                             self.set_live(key, true);
                         }
                     }
+                    AssignmentPlace::Array(destination, element, shape) => {
+                        if operation.is_some() {
+                            return Err(Diagnostic::new(
+                                *span,
+                                "compound assignment requires a numeric scalar",
+                            ));
+                        }
+                        let mut stores = Vec::new();
+                        self.prepare_array_stores(&destination, element, shape, value, *span, &mut stores)?;
+                        // The new elements first, then the old ones are dropped (section 9.5).
+                        self.when_live(flag.clone(), |this| {
+                            if this.element_needs_drop(element) {
+                                this.drop_owner(&destination);
+                            }
+                        });
+                        self.emit_stores(stores, *span)?;
+                        if let Some(key) = Self::whole_owner(&destination) {
+                            self.set_live(key, true);
+                        }
+                    }
+                }
+                if let Some(flag) = flag {
+                    let live = hir::Operand::Constant(BOOL, if matches!(value, Expr::Zero(_)) { 0 } else { -1 });
+                    self.emit("store", Vec::new(), vec![flag, live], None);
                 }
                 if let Some(storage) = reinitialized {
                     self.reinitialized(&storage);
@@ -425,15 +448,19 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } if self.signature.view.is_some() => {
                 self.return_view(expression, *span)?;
+                let operands = match self.signature.string_result {
+                    Some(_) => vec![self.string_result(*span)?],
+                    None => Vec::new(),
+                };
                 self.drop_temporaries();
                 self.drop_scopes(0);
-                self.terminate(hir::Terminator { kind: "return", operands: Vec::new(), targets: Vec::new() });
+                self.terminate(hir::Terminator { kind: "return", operands, targets: Vec::new() });
             }
             Statement::Return {
                 value: Some(expression),
                 span,
             } if self.signature.slot.is_some() => {
-                let destination = self.struct_view(&Expr::Name(RESULT.into(), *span), *span)?;
+                let destination = self.result_view(*span)?;
                 self.store_struct_expression(&destination, expression)?;
                 self.drop_temporaries();
                 self.drop_scopes(0);
@@ -556,7 +583,7 @@ impl<'a> FunctionCompiler<'a> {
             .collect();
         let mut body = vec![Statement::Assign {
             target: AssignTarget::Index {
-                base: name.into(),
+                base: Expr::Name(name.into(), span),
                 indices,
             },
             operation: None,
@@ -631,13 +658,19 @@ impl<'a> FunctionCompiler<'a> {
         self.terminate(jump(condition_block));
 
         self.current = condition_block;
-        let condition = self.expression(condition, Some(TypeName::Bool))?;
-        self.drop_temporaries();
-        self.terminate(hir::Terminator {
-            kind: "branch",
-            operands: vec![required(condition, span)?],
-            targets: vec![body_block, exit_block],
-        });
+        // `loop:` leaves only by `break`.
+        let endless = matches!(condition, Expr::Boolean(true, _));
+        if endless {
+            self.terminate(jump(body_block));
+        } else {
+            let condition = self.expression(condition, Some(TypeName::Bool))?;
+            self.drop_temporaries();
+            self.terminate(hir::Terminator {
+                kind: "branch",
+                operands: vec![required(condition, span)?],
+                targets: vec![body_block, exit_block],
+            });
+        }
 
         self.current = body_block;
         self.loops

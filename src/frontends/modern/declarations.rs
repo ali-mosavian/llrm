@@ -5,7 +5,8 @@
 use std::fmt::Write;
 
 use super::error::Diagnostic;
-use super::syntax::{Abi, Function, Module, ParameterType, Span, Struct, TypeAnnotation, TypeName, TypeSpec};
+use super::standard;
+use super::syntax::{Abi, Adapter, Function, Module, ParameterType, Span, Struct, TypeAnnotation, TypeName, TypeSpec};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Language {
@@ -31,9 +32,10 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).map(|abi| (function, *abi)))
+        .filter_map(|function| module.exports.get(&function.name).map(|export| (function, export.abi)))
         .collect();
-    let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some()).collect();
+    // The compiler's own modules declare theirs for the compiler.
+    let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();
     let mut out = String::new();
     let comment = match language {
         Language::C => "/*",
@@ -69,14 +71,18 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
         Language::C => {
             writeln!(out, "#pragma pack({})\ntypedef struct {{", one.pack.expect("represented")).unwrap();
             for field in &one.fields {
-                writeln!(out, "    {};", c_declarator(&field.type_spec, &field.name, one.span)?).unwrap();
+                let dims: String = field.dims.iter().map(|dim| format!("[{dim}]")).collect();
+                writeln!(out, "    {}{dims};", c_declarator(&field.type_spec, &field.name, one.span)?).unwrap();
             }
             writeln!(out, "}} {name};\n#pragma pack()").unwrap();
         }
         Language::Basic => {
             writeln!(out, "TYPE {name}").unwrap();
             for field in &one.fields {
-                let type_ = basic_field(&field.type_spec).ok_or_else(|| unsupported(&field.name, "BASIC", field.span))?;
+                // A TYPE holds no array.
+                let type_ = basic_field(&field.type_spec)
+                    .filter(|_| field.dims.is_empty())
+                    .ok_or_else(|| unsupported(&field.name, "BASIC", field.span))?;
                 writeln!(out, "    {} AS {type_}", field.name).unwrap();
             }
             writeln!(out, "END TYPE").unwrap();
@@ -84,10 +90,12 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
         Language::Assembler => {
             writeln!(out, "{name} struct").unwrap();
             for field in &one.fields {
-                let directive = match &field.type_spec {
-                    TypeSpec::Named(inner) => format!("{} <>", symbol(inner)),
-                    spec => format!("{} ?", data_directive(width(spec).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?)),
+                let (type_, initial) = match &field.type_spec {
+                    TypeSpec::Named(inner) => (symbol(inner), "<>"),
+                    spec => (data_directive(width(spec).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
                 };
+                let count: u32 = field.dims.iter().product();
+                let directive = if field.dims.is_empty() { format!("{type_} {initial}") } else { format!("{type_} {count} dup ({initial})") };
                 writeln!(out, "    {} {directive}", field.name).unwrap();
             }
             writeln!(out, "{name} ends").unwrap();
@@ -97,6 +105,8 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
 }
 
 fn declaration(function: &Function, abi: Abi, language: Language) -> Result<String, Diagnostic> {
+    // The name its source gives it, not the one it is linked under.
+    let name = function.name.rsplit('.').next().expect("a name");
     let parameters: Vec<(&str, &TypeSpec)> = function
         .parameters
         .iter()
@@ -105,42 +115,59 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
             _ => Err(unsupported(&parameter.name, "a foreign ABI", parameter.span)),
         })
         .collect::<Result<_, _>>()?;
-    let TypeAnnotation::Value(result) = &function.result else {
-        return Err(unsupported(&function.name, "a foreign ABI", function.span));
+    // A `&string` result, BASIC's string function.
+    let text = TypeSpec::Primitive(TypeName::String);
+    let result = match &function.result {
+        TypeAnnotation::Value(result) => result,
+        TypeAnnotation::Slice { element: TypeSpec::Primitive(TypeName::Char), rank: 1 } if abi.basic().is_some() => &text,
+        _ => return Err(unsupported(&function.name, "a foreign ABI", function.span)),
     };
     let span = function.span;
+    // A BASIC float result's hidden pointer is one more word.
+    let hidden = abi.basic().is_some() && matches!(result, TypeSpec::Primitive(TypeName::F32 | TypeName::F64));
     match language {
         Language::C => {
+            if abi.basic().is_some() {
+                return Err(unsupported(&function.name, "C; BASIC calls it", span));
+            }
             let convention = match abi {
                 Abi::Cdecl16 => "__cdecl",
-                Abi::Pascal16 => "__pascal",
+                Abi::Interrupt16 => "__interrupt",
+                Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
             let arguments = parameters
                 .iter()
                 .map(|(name, spec)| c_declarator(spec, name, span))
                 .collect::<Result<Vec<_>, _>>()?;
             let arguments = if arguments.is_empty() { "void".to_owned() } else { arguments.join(", ") };
-            Ok(format!("extern {} __far {convention} {}({arguments});", c_type(result, span)?, function.name))
+            Ok(format!("extern {} __far {convention} {}({arguments});", c_type(result, span)?, name))
         }
+        // BASIC cannot name a handler's address: there is nothing to declare.
+        Language::Basic if abi.interrupt() => Ok(format!("' {name}: an interrupt16 handler")),
         Language::Basic => {
             let arguments = parameters
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
             let convention = if abi == Abi::Cdecl16 { " CDECL" } else { "" };
+            // BASIC names hold letters, digits and periods; any other takes its symbol as an alias.
+            let (name, alias) = if name.chars().all(|one| one.is_ascii_alphanumeric() || one == '.') {
+                (name.to_owned(), String::new())
+            } else {
+                (name.replace('_', ""), format!(" ALIAS \"{}\"", abi.symbol(name)))
+            };
             let arguments = if arguments.is_empty() { String::new() } else { format!(" ({})", arguments.join(", ")) };
             let head = match result {
-                TypeSpec::Primitive(TypeName::Void) => format!("SUB {}", function.name),
-                // BASIC reads a whole AX, and takes a float from its own hidden result pointer.
+                TypeSpec::Primitive(TypeName::Void) => format!("SUB {name}"),
                 spec => {
-                    let suffix = basic_suffix(spec).ok_or_else(|| unsupported(&function.name, "BASIC", span))?;
-                    format!("FUNCTION {}{suffix}", function.name)
+                    let suffix = basic_suffix(spec, abi).ok_or_else(|| unsupported(&function.name, "BASIC", span))?;
+                    format!("FUNCTION {name}{suffix}")
                 }
             };
-            Ok(format!("DECLARE {head}{convention}{arguments}"))
+            Ok(format!("DECLARE {head}{convention}{alias}{arguments}"))
         }
         Language::Assembler => {
-            let words: u32 = parameters.iter().map(|(_, spec)| width(spec).unwrap_or(2).max(2)).sum();
+            let words: u32 = parameters.iter().map(|(_, spec)| argument_width(spec)).sum::<u32>() + if hidden { 2 } else { 0 };
             let signature = parameters
                 .iter()
                 .map(|(name, spec)| format!("{name}: {}", spec.text()))
@@ -148,16 +175,25 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 .join(", ");
             let cleanup = match abi {
                 Abi::Cdecl16 => "caller removes the arguments".to_owned(),
-                Abi::Pascal16 => format!("retf {words}"),
+                Abi::Interrupt16 => "iret".to_owned(),
+                _ => format!("retf {words}"),
             };
             Ok(format!(
                 "extrn {}:far    ; {}({signature}) -> {}, {cleanup}",
-                abi.symbol(&function.name),
+                abi.symbol(name),
                 abi.name(),
                 result.text()
             ))
         }
     }
+}
+
+/// The bytes an argument of `spec` is pushed as: a BASIC adapter is a near pointer.
+fn argument_width(spec: &TypeSpec) -> u32 {
+    if Adapter::of(spec).is_some() {
+        return 2;
+    }
+    width(spec).unwrap_or(2).max(2)
 }
 
 fn unsupported(name: &str, what: &str, span: Span) -> Diagnostic {
@@ -255,6 +291,21 @@ fn basic_field(spec: &TypeSpec) -> Option<String> {
 }
 
 fn basic_parameter(name: &str, spec: &TypeSpec) -> Option<String> {
+    // An adapter is BASIC's own by-reference argument.
+    if let Some((_, adapter)) = Adapter::of(spec) {
+        let element = || match spec {
+            TypeSpec::Applied { args, .. } => match args.as_slice() {
+                [TypeAnnotation::Value(element) | TypeAnnotation::Slice { element, .. }] => basic_type(element),
+                _ => None,
+            },
+            _ => None,
+        };
+        return Some(match adapter {
+            Adapter::Ref => format!("{name} AS {}", element()?),
+            Adapter::String => format!("{name} AS STRING"),
+            Adapter::Array => format!("{name}() AS {}", element()?),
+        });
+    }
     if let Some((far, _, target)) = pointer(spec) {
         return Some(if far {
             format!("SEG {name} AS {}", basic_type(target).unwrap_or_else(|| "ANY".to_owned()))
@@ -267,11 +318,15 @@ fn basic_parameter(name: &str, spec: &TypeSpec) -> Option<String> {
     Some(format!("BYVAL {name} AS {type_}"))
 }
 
-/// The suffix of a BASIC function returning `spec`: only a whole `ax` or `dx:ax`.
-fn basic_suffix(spec: &TypeSpec) -> Option<&'static str> {
+/// The suffix of a BASIC function returning `spec`: a whole `ax` or `dx:ax`,
+/// or under a BASIC ABI a float through its hidden result pointer.
+fn basic_suffix(spec: &TypeSpec, abi: Abi) -> Option<&'static str> {
     match spec {
         TypeSpec::Primitive(TypeName::I16 | TypeName::U16) => Some("%"),
         TypeSpec::Primitive(TypeName::I32 | TypeName::U32) => Some("&"),
+        TypeSpec::Primitive(TypeName::F32) if abi.basic().is_some() => Some("!"),
+        TypeSpec::Primitive(TypeName::F64) if abi.basic().is_some() => Some("#"),
+        TypeSpec::Primitive(TypeName::String) if abi.basic().is_some() => Some("$"),
         _ => None,
     }
 }

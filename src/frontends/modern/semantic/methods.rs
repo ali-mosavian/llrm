@@ -24,6 +24,20 @@ impl FunctionCompiler<'_> {
         }
     }
 
+    /// Refuses `receiver.name(...)` of a method another module keeps
+    /// private (section 14).
+    pub(super) fn visible_method(&self, receiver: &Expr, name: &str, span: Span) -> Result<(), Diagnostic> {
+        let Some(owner) = self.receiver_type(receiver) else {
+            return Ok(());
+        };
+        for method in [format!("{owner}.{name}"), format!("{}.{name}", self.types.template_of(&owner))] {
+            if self.private_methods.get(&method).is_some_and(|&module| module != span.module) {
+                return Err(Diagnostic::new(span, format!("{method} is private to its module")));
+            }
+        }
+        Ok(())
+    }
+
     /// `receiver.name(arguments)` as the call of the method it names, if any.
     pub(super) fn method_as_call(&self, expression: &Expr) -> Option<Expr> {
         let Expr::MethodCall {
@@ -44,8 +58,7 @@ impl FunctionCompiler<'_> {
             }
         }
         let qualified = format!("{}.{name}", self.receiver_type(receiver)?);
-        self.known_signature(&qualified)
-            .is_some()
+        (self.known_signature(&qualified).is_some() || self.is_generator_call(&qualified))
             .then(|| Expr::Call {
                 name: qualified,
                 type_arguments: Vec::new(),

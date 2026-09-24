@@ -8,11 +8,13 @@ use super::lexer::TokenKind;
 use super::lexer::lex;
 use super::syntax::Abi;
 use super::syntax::AssignTarget;
+use super::syntax::{Asm, AsmTarget};
 use super::syntax::BinaryOp;
 use super::syntax::Clause;
 use super::syntax::Const;
 use super::syntax::Enum;
 use super::syntax::Expr;
+use super::syntax::Export;
 use super::syntax::Extern;
 use super::syntax::FixedStorage;
 use super::syntax::FixedType;
@@ -29,11 +31,13 @@ use super::syntax::ParameterType;
 use super::syntax::Pattern;
 use super::syntax::Protocol;
 use super::syntax::Span;
+use super::syntax::Static;
 use super::syntax::Statement;
 use super::syntax::Struct;
 use super::syntax::StructField;
 use super::syntax::TUPLE;
 use super::syntax::FUNCTION;
+use super::syntax::FOREIGN;
 use super::syntax::TypeAnnotation;
 use super::syntax::TypeName;
 use super::syntax::TypeSpec;
@@ -45,28 +49,61 @@ mod enums;
 mod patterns;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
-    Parser {
-        tokens,
-        at: 0,
-        fixed_types: BTreeMap::new(),
-        consts: BTreeMap::new(),
-    }
-    .module()
-    .map(|mut module| {
+    parse_after(tokens, 0, &BTreeMap::new())
+}
+
+/// The module, its fixed-point types numbered after the `fixed_before`
+/// other modules of its program declare, since a fixed-point type is its
+/// declaration. `imported` holds the public constants of the modules it
+/// imports, folded, each by its path here: `alias.NAME`.
+pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>) -> Result<Module, Diagnostic> {
+    let mut parser = Parser::new(tokens, fixed_before);
+    parser.module_constants(imported)?;
+    parser.module().map(|mut module| {
         super::desugar::local_declarations(&mut module);
         module
     })
+}
+
+/// What `tokens` imports, read before the module is parsed: its constants
+/// and array lengths may name an imported constant.
+pub fn imports(tokens: &[Token]) -> Result<Vec<Import>, Diagnostic> {
+    let mut parser = Parser::new(tokens.to_vec(), 0);
+    let mut imports = Vec::new();
+    for at in parser.top_level(|kind| matches!(kind, TokenKind::Import)) {
+        parser.at = at;
+        imports.push(parser.import()?);
+    }
+    Ok(imports)
+}
+
+/// One item of an `extern` or `export` block.
+struct Foreign<T> {
+    public: bool,
+    symbol: Option<String>,
+    item: T,
 }
 
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
     fixed_types: BTreeMap<String, TypeName>,
+    fixed_before: u16,
     /// Each constant declared so far, as the literal it stands for.
     consts: BTreeMap<String, Expr>,
 }
 
 impl Parser {
+    fn new(tokens: Vec<Token>, fixed_before: u16) -> Self {
+        Self {
+            tokens,
+            at: 0,
+            fixed_types: BTreeMap::new(),
+            fixed_before,
+            consts: BTreeMap::new(),
+        }
+    }
+
     fn module(&mut self) -> Result<Module, Diagnostic> {
         let mut fixed_types = Vec::new();
         let mut structs = Vec::new();
@@ -76,6 +113,7 @@ impl Parser {
         let mut imports = Vec::new();
         let mut public = BTreeSet::new();
         let mut consts = Vec::new();
+        let mut statics = Vec::new();
         let mut externs = Vec::new();
         let mut exports = BTreeMap::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
@@ -90,13 +128,24 @@ impl Parser {
                 continue;
             }
             if matches!(self.peek().kind, TokenKind::Extern) {
-                externs.extend(self.extern_block()?);
+                for (exported, declared) in self.extern_block()? {
+                    if exported {
+                        public.insert(declared.function.name.clone());
+                    }
+                    externs.push(declared);
+                }
                 continue;
             }
             if matches!(self.peek().kind, TokenKind::Export) {
                 let (abi, defined) = self.foreign_block(|parser| parser.function())?;
-                exports.extend(defined.iter().map(|one| (one.name.clone(), abi)));
-                functions.extend(defined);
+                for Foreign { public: exported, symbol, item: function } in defined {
+                    if exported {
+                        public.insert(function.name.clone());
+                    }
+                    let symbol = symbol.unwrap_or_else(|| abi.symbol(&function.name));
+                    exports.insert(function.name.clone(), Export { abi, symbol });
+                    functions.push(function);
+                }
                 continue;
             }
             let attributes = self.attributes()?;
@@ -119,9 +168,9 @@ impl Parser {
             // `pub` names the declaration that follows, whichever kind it is.
             let exported = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
             let name = match self.peek().kind.clone() {
-                TokenKind::Type if !exported => {
+                TokenKind::Type => {
                     fixed_types.push(self.fixed_type()?);
-                    continue;
+                    fixed_types.last().map(|one| one.name.clone())
                 }
                 TokenKind::Struct => {
                     let mut structure = self.structure(false)?;
@@ -152,11 +201,9 @@ impl Parser {
                     consts.push(self.constant()?);
                     consts.last().map(|one| one.name.clone())
                 }
-                TokenKind::Type => {
-                    return Err(Diagnostic::new(
-                        self.peek().span,
-                        "a fixed-point type cannot be 'pub' yet",
-                    ));
+                TokenKind::Var => {
+                    statics.push(self.static_variable()?);
+                    statics.last().map(|one| one.name.clone())
                 }
                 _ => {
                     functions.push(self.function()?);
@@ -173,17 +220,51 @@ impl Parser {
             externs,
             exports,
             consts,
+            statics,
             fixed_types,
             structs,
             enums,
             protocols,
             functions,
             library: Vec::new(),
+            sources: Vec::new(),
+            private_methods: BTreeMap::new(),
         })
     }
 
-    /// `const NAME[: T] = value`, the `const` next; the value must fold.
-    fn constant(&mut self) -> Result<Const, Diagnostic> {
+    /// Folds the module's constants before anything else is parsed, so a
+    /// constant or an array length may name one declared further down. One
+    /// that does not parse here is reported where the module parse meets it.
+    fn module_constants(&mut self, imported: &BTreeMap<String, Expr>) -> Result<(), Diagnostic> {
+        let mut declared = BTreeMap::new();
+        for at in self.top_level(|kind| matches!(kind, TokenKind::Const)) {
+            self.at = at;
+            if let Ok((name, annotation, value, _)) = self.constant_parts() {
+                declared.insert(name, (annotation, value));
+            }
+        }
+        self.at = 0;
+        self.consts = consts::folded_all(&declared, imported)?;
+        Ok(())
+    }
+
+    /// Where each top-level token `wanted` accepts is.
+    fn top_level(&self, wanted: fn(&TokenKind) -> bool) -> Vec<usize> {
+        let mut depth = 0_i32;
+        let mut found = Vec::new();
+        for (at, token) in self.tokens.iter().enumerate() {
+            match token.kind {
+                TokenKind::Indent => depth += 1,
+                TokenKind::Dedent => depth -= 1,
+                ref kind if depth == 0 && wanted(kind) => found.push(at),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// `const NAME[: T] = value`, the `const` next: its name, annotation, value and span.
+    fn constant_parts(&mut self) -> Result<(String, Option<TypeAnnotation>, Expr, Span), Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected a constant name")?;
         let annotation = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
@@ -197,12 +278,30 @@ impl Parser {
         )?;
         let value = self.expression(0)?;
         self.line_end()?;
+        Ok((name, annotation, value, span))
+    }
+
+    /// `const NAME[: T] = value`, the `const` next; the value must fold.
+    fn constant(&mut self) -> Result<Const, Diagnostic> {
+        let (name, annotation, value, span) = self.constant_parts()?;
         let literal = consts::folded(&value, &self.consts).ok_or_else(|| {
             Diagnostic::new(value.span(), format!("{name} is not a compile-time value"))
         })?;
         let value = consts::typed(literal, annotation.as_ref());
         self.consts.insert(name.clone(), value.clone());
         Ok(Const { name, value, span })
+    }
+
+    /// `var NAME: T = value`, the `var` next.
+    fn static_variable(&mut self) -> Result<Static, Diagnostic> {
+        let span = self.bump().span;
+        let (name, _) = self.identifier("expected a variable name")?;
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "a module variable declares its type")?;
+        let annotation = self.type_annotation()?;
+        self.expect(|kind| matches!(kind, TokenKind::Equal), "a module variable requires a compile-time value")?;
+        let value = self.expression(0)?;
+        self.line_end()?;
+        Ok(Static { name, annotation, value, span })
     }
 
     /// `@name(arguments)` lines before a declaration.
@@ -232,23 +331,8 @@ impl Parser {
     }
 
     /// `extern "abi":` and the headers of the functions it imports.
-    fn extern_block(&mut self) -> Result<Vec<Extern>, Diagnostic> {
+    fn extern_block(&mut self) -> Result<Vec<(bool, Extern)>, Diagnostic> {
         let (abi, declared) = self.foreign_block(|parser| {
-            let attributes = parser.attributes()?;
-            let mut symbol = None;
-            for attribute in &attributes {
-                match (attribute.name.as_str(), attribute.arguments.as_slice()) {
-                    ("link_name", [Expr::String(name, _)]) => {
-                        symbol = Some(String::from_utf8_lossy(name).into_owned())
-                    }
-                    _ => {
-                        return Err(Diagnostic::new(
-                            attribute.span,
-                            format!("@{} does not apply to a foreign function", attribute.name),
-                        ));
-                    }
-                }
-            }
             // `far fn`, the default: a far call to another code segment.
             if let TokenKind::Identifier(distance) = &parser.peek().kind {
                 match distance.as_str() {
@@ -266,38 +350,56 @@ impl Parser {
             }
             let function = parser.function_header()?;
             parser.line_end()?;
-            Ok((symbol, function))
+            Ok(function)
         })?;
         Ok(declared
             .into_iter()
-            .map(|(symbol, function)| Extern {
-                abi,
-                symbol: symbol.unwrap_or_else(|| abi.symbol(&function.name)),
-                function,
+            .map(|one| {
+                let symbol = one.symbol.unwrap_or_else(|| abi.symbol(&one.item.name));
+                (one.public, Extern { abi, symbol, function: one.item })
             })
             .collect())
+    }
+
+    /// A foreign function's `@link_name("symbol")`, its only attribute.
+    fn link_name(&mut self) -> Result<Option<String>, Diagnostic> {
+        let mut symbol = None;
+        for attribute in self.attributes()? {
+            match (attribute.name.as_str(), attribute.arguments.as_slice()) {
+                ("link_name", [Expr::String(name, _)]) => symbol = Some(String::from_utf8_lossy(name).into_owned()),
+                _ => {
+                    return Err(Diagnostic::new(
+                        attribute.span,
+                        format!("@{} does not apply to a foreign function", attribute.name),
+                    ));
+                }
+            }
+        }
+        Ok(symbol)
+    }
+
+    /// `"abi"`, a foreign ABI's name.
+    fn abi(&mut self) -> Result<Abi, Diagnostic> {
+        let token = self.bump().clone();
+        let TokenKind::String(abi) = token.kind else {
+            return Err(Diagnostic::new(token.span, "expected an ABI name, as \"cdecl16\""));
+        };
+        let name = String::from_utf8_lossy(&abi).into_owned();
+        Abi::named(&name).ok_or_else(|| {
+            Diagnostic::new(
+                token.span,
+                format!("ABI {name:?} is not supported yet; use cdecl16, pascal16, interrupt16, qb45, pds71 or vbdos"),
+            )
+        })
     }
 
     /// `extern "abi":` or `export "abi":` and the items `item` parses in it.
     fn foreign_block<T>(
         &mut self,
         mut item: impl FnMut(&mut Self) -> Result<T, Diagnostic>,
-    ) -> Result<(Abi, Vec<T>), Diagnostic> {
+    ) -> Result<(Abi, Vec<Foreign<T>>), Diagnostic> {
         self.bump();
-        let token = self.bump().clone();
-        let TokenKind::String(abi) = token.kind else {
-            return Err(Diagnostic::new(
-                token.span,
-                "expected an ABI name, as \"cdecl16\"",
-            ));
-        };
-        let name = String::from_utf8_lossy(&abi).into_owned();
-        let Some(abi) = Abi::named(&name) else {
-            return Err(Diagnostic::new(
-                token.span,
-                format!("ABI {name:?} is not supported yet; use \"cdecl16\" or \"pascal16\""),
-            ));
-        };
+        let abi = self.abi()?;
         self.expect(
             |kind| matches!(kind, TokenKind::Colon),
             "expected ':' after the ABI name",
@@ -318,7 +420,10 @@ impl Parser {
             {
                 continue;
             }
-            items.push(item(self)?);
+            // `@link_name`, then `pub`: other modules of the program may name it too.
+            let symbol = self.link_name()?;
+            let public = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
+            items.push(Foreign { public, symbol, item: item(self)? });
         }
         self.expect(
             |kind| matches!(kind, TokenKind::Dedent),
@@ -411,7 +516,9 @@ impl Parser {
             })?;
         self.line_end()?;
         let declaration = u16::try_from(self.fixed_types.len())
-            .map_err(|_| Diagnostic::new(span, "too many fixed-point types"))?;
+            .ok()
+            .and_then(|own| own.checked_add(self.fixed_before))
+            .ok_or_else(|| Diagnostic::new(span, "too many fixed-point types"))?;
         let type_name = TypeName::Fixed {
             storage,
             fraction,
@@ -464,15 +571,19 @@ impl Parser {
                 |kind| matches!(kind, TokenKind::Colon),
                 "expected ':' after field name",
             )?;
-            let type_spec = self.field_type()?;
+            let (type_spec, dims) = self.field_type()?;
             if type_spec == TypeSpec::Primitive(TypeName::Void) {
                 return Err(Diagnostic::new(field_span, "a struct field cannot be void"));
+            }
+            if packed && !dims.is_empty() {
+                return Err(Diagnostic::new(field_span, "a bits struct field cannot be an array"));
             }
             self.line_end()?;
             fields.push(StructField {
                 name: field_name,
                 mutable,
                 type_spec,
+                dims,
                 span: field_span,
             });
         }
@@ -499,10 +610,11 @@ impl Parser {
         Ok(function)
     }
 
-    /// `protocol Name:` and the method headers a type must match.
+    /// `protocol Name[T, ...]:` and the method headers a type must match.
     fn protocol(&mut self) -> Result<Protocol, Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected protocol name")?;
+        let generics = self.generics()?;
         self.expect(
             |kind| matches!(kind, TokenKind::Colon),
             "expected ':' after protocol name",
@@ -517,9 +629,8 @@ impl Parser {
         )?;
         let mut methods = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
-            let header = self.function_header()?;
+            methods.push(self.function_header()?);
             self.line_end()?;
-            methods.push((header.name, header.parameters.len()));
         }
         self.expect(
             |kind| matches!(kind, TokenKind::Dedent),
@@ -527,6 +638,7 @@ impl Parser {
         )?;
         Ok(Protocol {
             name,
+            generics,
             methods,
             span,
         })
@@ -544,7 +656,11 @@ impl Parser {
         loop {
             let (name, _) = self.identifier("expected a type parameter")?;
             let bound = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
-                Some(self.identifier("expected a protocol after ':'")?.0)
+                let span = self.peek().span;
+                match self.type_annotation()? {
+                    TypeAnnotation::Value(spec @ (TypeSpec::Named(_) | TypeSpec::Applied { .. })) => Some(spec),
+                    _ => return Err(Diagnostic::new(span, "expected a protocol after ':'")),
+                }
             } else {
                 None
             };
@@ -645,17 +761,17 @@ impl Parser {
         if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_none() {
             return self.type_annotation();
         }
-        // A borrowed result is a view: `&[T]`, `&T[N]` or `&string`;
-        // any other is a reference, `&T` or `&mut T`.
+        // A borrowed result is a view: `&[T]` or `&string`; any other is a
+        // reference, `&T`, `&T[N]` or `&mut T`.
         let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
         Ok(match self.borrowed_annotation()? {
             slice @ TypeAnnotation::Slice { .. } if !mutable => slice,
             TypeAnnotation::Value(TypeSpec::Primitive(TypeName::String)) if !mutable => {
                 TypeAnnotation::Slice { element: TypeSpec::Primitive(TypeName::Char), rank: 1 }
             }
-            TypeAnnotation::Value(target) => TypeAnnotation::Value(TypeSpec::Applied {
+            target @ (TypeAnnotation::Value(_) | TypeAnnotation::Array { .. }) => TypeAnnotation::Value(TypeSpec::Applied {
                 name: if mutable { "&mut" } else { "&" }.into(),
-                args: vec![TypeAnnotation::Value(target)],
+                args: vec![target],
             }),
             _ => return Err(Diagnostic::new(start, "a view result is shared: '&[T]' or '&string'")),
         })
@@ -707,6 +823,7 @@ impl Parser {
                 Ok(Statement::Unsafe { body, span })
             }
             TokenKind::Let => self.binding(),
+            TokenKind::Asm => self.asm(),
             TokenKind::Loop => {
                 let span = self.bump().span;
                 let body = self.suite()?;
@@ -791,6 +908,69 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// `asm(reg=value, ..., out=(reg=place | let [mut] name, ...), clobbers=[reg, ...]):`
+    /// and its lines.
+    fn asm(&mut self) -> Result<Statement, Diagnostic> {
+        let span = self.bump().span;
+        let mut asm = Asm { inputs: Vec::new(), outputs: Vec::new(), clobbers: Vec::new(), lines: Vec::new(), span };
+        self.expect(|kind| matches!(kind, TokenKind::LeftParen), "expected '(' after 'asm'")?;
+        while self.take(|kind| matches!(kind, TokenKind::RightParen)).is_none() {
+            let (name, at) = self.identifier("expected a register, 'out' or 'clobbers'")?;
+            self.expect(|kind| matches!(kind, TokenKind::Equal), "expected '=' after the name")?;
+            match name.as_str() {
+                "out" => {
+                    self.expect(|kind| matches!(kind, TokenKind::LeftParen), "expected '(' after 'out='")?;
+                    while self.take(|kind| matches!(kind, TokenKind::RightParen)).is_none() {
+                        let (register, at) = self.identifier("expected an output register")?;
+                        self.expect(|kind| matches!(kind, TokenKind::Equal), "expected '=' after the register")?;
+                        let target = if self.take(|kind| matches!(kind, TokenKind::Let)).is_some() {
+                            let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
+                            AsmTarget::Bind { mutable, name: self.identifier("expected a name after 'let'")?.0 }
+                        } else {
+                            let place = self.expression(0)?;
+                            let where_ = place.span();
+                            AsmTarget::Place(AssignTarget::of(place).map_err(|message| Diagnostic::new(where_, message))?)
+                        };
+                        asm.outputs.push((register, target, at));
+                        if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                            self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ',' or ')'")?;
+                            break;
+                        }
+                    }
+                }
+                "clobbers" => {
+                    self.expect(|kind| matches!(kind, TokenKind::LeftBracket), "expected '[' after 'clobbers='")?;
+                    while self.take(|kind| matches!(kind, TokenKind::RightBracket)).is_none() {
+                        asm.clobbers.push(self.identifier("expected a register, 'flags' or 'memory'")?);
+                        if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                            self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ',' or ']'")?;
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    let value = self.expression(0)?;
+                    asm.inputs.push((name, value, at));
+                }
+            }
+            if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
+                self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ',' or ')'")?;
+                break;
+            }
+        }
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' before the assembly")?;
+        let token = self.bump().clone();
+        let TokenKind::AsmBody(lines) = token.kind else {
+            return Err(Diagnostic::new(token.span, "expected indented lines of assembly"));
+        };
+        if lines.is_empty() {
+            return Err(Diagnostic::new(span, "an asm block needs at least one line"));
+        }
+        asm.lines = lines;
+        self.line_end()?;
+        Ok(Statement::Asm(Box::new(asm)))
     }
 
     fn binding(&mut self) -> Result<Statement, Diagnostic> {
@@ -923,7 +1103,7 @@ impl Parser {
     fn for_clause(&mut self) -> Result<Clause, Diagnostic> {
         let span = self.bump().span;
         let refutable = self.take(|kind| matches!(kind, TokenKind::Case)).is_some();
-        let pattern = self.pattern()?;
+        let mut pattern = self.pattern()?;
         self.expect(
             |kind| matches!(kind, TokenKind::In),
             "expected 'in' after the loop pattern",
@@ -944,6 +1124,9 @@ impl Parser {
         let end = if mode == IterationMode::Value
             && self.take(|kind| matches!(kind, TokenKind::Range)).is_some()
         {
+            if let Pattern::Wildcard(at) = pattern {
+                pattern = Pattern::Binding(format!("$ignored{}_{}", at.line, at.column), at);
+            }
             if !matches!(pattern, Pattern::Binding(..)) || refutable {
                 return Err(Diagnostic::new(pattern.span(), "a range binds one name"));
             }
@@ -995,7 +1178,7 @@ impl Parser {
                 let start = left.span();
                 left = Expr::Try {
                     operand: Box::new(left),
-                    span: Span::new(start.line, start.column, at.end_column),
+                    span: start.to(at.end_column),
                 };
                 continue;
             }
@@ -1039,7 +1222,7 @@ impl Parser {
             let right = self.expression(right_binding)?;
             let left_span = left.span();
             let right_span = right.span();
-            let span = Span::new(left_span.line, left_span.column, right_span.end_column);
+            let span = left_span.to(right_span.end_column);
             left = if left_binding == COMPARE && compared {
                 chained(left, operation, right, span, at)?
             } else {
@@ -1088,7 +1271,7 @@ impl Parser {
                     enum_name: None,
                     name,
                     arguments,
-                    span: Span::new(token.span.line, token.span.column, end),
+                    span: token.span.to(end),
                 })
             }
             TokenKind::True => Ok(Expr::Boolean(true, token.span)),
@@ -1122,7 +1305,7 @@ impl Parser {
                     key: Box::new(key),
                     value: Box::new(value),
                     clauses,
-                    span: Span::new(token.span.line, token.span.column, close.span.end_column),
+                    span: token.span.to(close.span.end_column),
                 })
             }
             TokenKind::LeftBrace => {
@@ -1142,7 +1325,7 @@ impl Parser {
                     |kind| matches!(kind, TokenKind::RightBrace),
                     "expected '}' after dictionary entries",
                 )?;
-                Ok(Expr::Dict(entries, Span::new(token.span.line, token.span.column, close.span.end_column)))
+                Ok(Expr::Dict(entries, token.span.to(close.span.end_column)))
             }
             TokenKind::Ampersand => {
                 let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
@@ -1151,7 +1334,7 @@ impl Parser {
                 Ok(Expr::Borrow {
                     mutable,
                     operand: Box::new(operand),
-                    span: Span::new(token.span.line, token.span.column, end),
+                    span: token.span.to(end),
                 })
             }
             TokenKind::LeftBracket => {
@@ -1167,11 +1350,7 @@ impl Parser {
                         return Ok(Expr::Comprehension {
                             element: Box::new(first),
                             clauses,
-                            span: Span::new(
-                                token.span.line,
-                                token.span.column,
-                                close.span.end_column,
-                            ),
+                            span: token.span.to(close.span.end_column),
                         });
                     }
                     values.push(first);
@@ -1191,7 +1370,7 @@ impl Parser {
                 )?;
                 Ok(Expr::Array(
                     values,
-                    Span::new(token.span.line, token.span.column, close.span.end_column),
+                    token.span.to(close.span.end_column),
                 ))
             }
             TokenKind::Minus | TokenKind::Tilde | TokenKind::Bang | TokenKind::Star => {
@@ -1206,7 +1385,7 @@ impl Parser {
                 Ok(Expr::Unary {
                     op: operation,
                     operand: Box::new(operand),
-                    span: Span::new(token.span.line, token.span.column, end),
+                    span: token.span.to(end),
                 })
             }
             kind if primitive(&kind).is_some() => {
@@ -1239,7 +1418,7 @@ impl Parser {
                 Ok(Expr::Lambda {
                     parameters,
                     body: Box::new(body),
-                    span: Span::new(token.span.line, token.span.column, end),
+                    span: token.span.to(end),
                 })
             }
             TokenKind::LeftParen => {
@@ -1253,7 +1432,7 @@ impl Parser {
                     return Ok(Expr::Generator {
                         element: Box::new(expression),
                         clauses,
-                        span: Span::new(token.span.line, token.span.column, close.span.end_column),
+                        span: token.span.to(close.span.end_column),
                     });
                 }
                 if self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
@@ -1270,7 +1449,7 @@ impl Parser {
                     )?;
                     return Ok(Expr::Tuple(
                         items,
-                        Span::new(token.span.line, token.span.column, close.span.end_column),
+                        token.span.to(close.span.end_column),
                     ));
                 }
                 self.expect(
@@ -1297,7 +1476,7 @@ impl Parser {
         Ok(Expr::Conversion {
             target,
             value: Box::new(value),
-            span: Span::new(start.line, start.column, close.span.end_column),
+            span: start.to(close.span.end_column),
         })
     }
 
@@ -1358,7 +1537,7 @@ impl Parser {
             |kind| matches!(kind, TokenKind::RightParen),
             "expected ')' after arguments",
         )?;
-        let span = Span::new(start.line, start.column, close.span.end_column);
+        let span = start.to(close.span.end_column);
         match callee {
             Expr::Name(name, _) => Ok(Expr::Call {
                 name,
@@ -1402,7 +1581,7 @@ impl Parser {
                 base: Box::new(base),
                 start: first.map(Box::new),
                 end,
-                span: Span::new(start.line, start.column, close.span.end_column),
+                span: start.to(close.span.end_column),
             });
         }
         let mut indices = vec![first.expect("an index with no start is a slice")];
@@ -1422,7 +1601,7 @@ impl Parser {
         Ok(Expr::Index {
             base: Box::new(base),
             indices,
-            span: Span::new(start.line, start.column, close.span.end_column),
+            span: start.to(close.span.end_column),
         })
     }
 
@@ -1433,7 +1612,7 @@ impl Parser {
         Ok(Expr::Member {
             base: Box::new(base),
             field,
-            span: Span::new(start.line, start.column, field_span.end_column),
+            span: start.to(field_span.end_column),
         })
     }
 
@@ -1542,6 +1721,17 @@ impl Parser {
             self.bump();
             let mut args = vec![self.type_annotation()?];
             while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
+                // `Name[T, N]`: an element type and its rank, as in `[T, N]`.
+                if let (TokenKind::Integer(_), Some(TypeAnnotation::Value(element))) = (&self.peek().kind, args.last()) {
+                    let element = element.clone();
+                    let span = self.peek().span;
+                    let rank = self.dimension("rank")?;
+                    if rank as usize > MAX_RANK {
+                        return Err(Diagnostic::new(span, format!("a rank is at most {MAX_RANK}")));
+                    }
+                    *args.last_mut().expect("an argument") = TypeAnnotation::Slice { element, rank: rank as u8 };
+                    continue;
+                }
                 args.push(self.type_annotation()?);
             }
             self.expect(
@@ -1585,15 +1775,8 @@ impl Parser {
             .take(|kind| matches!(kind, TokenKind::LeftBracket))
             .is_none()
         {
-            let target = self.type_annotation()?;
-            if let TypeAnnotation::Array { element, dims } = target {
-                // A borrowed fixed array is a view whose rank the type fixes.
-                return Ok(TypeAnnotation::Slice {
-                    element,
-                    rank: dims.len() as u8,
-                });
-            }
-            return Ok(target);
+            // A borrowed fixed array keeps its dimensions: a far pointer (section 13).
+            return self.type_annotation();
         }
         let element = self.type_spec()?;
         if element == TypeSpec::Primitive(TypeName::Void) {
@@ -1657,7 +1840,7 @@ impl Parser {
         Ok(Expr::NamedArgument {
             name,
             value: Box::new(value),
-            span: Span::new(span.line, span.column, end),
+            span: span.to(end),
         })
     }
 
@@ -1689,7 +1872,8 @@ impl Parser {
 
     fn conditional(&mut self, condition: Expr) -> Result<Expr, Diagnostic> {
         self.bump();
-        let then = self.expression(TERNARY + 1)?;
+        // `?` and `:` bracket the middle, so it may be any expression.
+        let then = self.expression(0)?;
         self.expect(
             |kind| matches!(kind, TokenKind::Colon),
             "expected ':' in a conditional expression",
@@ -1701,7 +1885,7 @@ impl Parser {
             condition: Box::new(condition),
             then: Box::new(then),
             otherwise: Box::new(otherwise),
-            span: Span::new(start.line, start.column, end),
+            span: start.to(end),
         })
     }
 
@@ -1710,16 +1894,35 @@ impl Parser {
     fn dimension_next(&self) -> bool {
         match self.tokens.get(self.at + 1).map(|one| &one.kind) {
             Some(TokenKind::Integer(_)) => true,
-            Some(TokenKind::Identifier(name)) => self.consts.contains_key(name),
-            _ => false,
+            _ => self.path_at(self.at + 1).is_some_and(|(path, _)| self.consts.contains_key(&path)),
         }
     }
 
+    /// The names from `at` joined by dots, `alias.NAME`, and how many tokens spell it.
+    fn path_at(&self, at: usize) -> Option<(String, usize)> {
+        let name = |at: usize| match self.tokens.get(at).map(|one| &one.kind) {
+            Some(TokenKind::Identifier(name)) => Some(name.clone()),
+            _ => None,
+        };
+        let mut path = name(at)?;
+        let mut length = 1;
+        while matches!(self.tokens.get(at + length).map(|one| &one.kind), Some(TokenKind::Dot)) {
+            let Some(part) = name(at + length + 1) else { break };
+            path = format!("{path}.{part}");
+            length += 2;
+        }
+        Some((path, length))
+    }
+
     fn dimension(&mut self, what: &str) -> Result<u32, Diagnostic> {
+        let path = self.path_at(self.at);
         let token = self.bump().clone();
-        let value = match &token.kind {
-            TokenKind::Integer(value) => Some(*value),
-            TokenKind::Identifier(name) => self.consts.get(name).and_then(consts::integer),
+        let value = match (&token.kind, path) {
+            (TokenKind::Integer(value), _) => Some(*value),
+            (_, Some((path, length))) => {
+                self.at += length - 1;
+                self.consts.get(&path).and_then(consts::integer)
+            }
             _ => None,
         };
         let Some(value) = value else {
@@ -1749,12 +1952,13 @@ impl Parser {
         }
     }
 
-    /// A struct or variant field's type: a scalar or a named, possibly generic, type.
-    fn field_type(&mut self) -> Result<TypeSpec, Diagnostic> {
-        let span = self.peek().span;
+    /// A struct or variant field's type: a scalar or a named, possibly
+    /// generic, type, and its dimensions when it is a fixed array of one.
+    fn field_type(&mut self) -> Result<(TypeSpec, Vec<u32>), Diagnostic> {
         match self.type_annotation()? {
-            TypeAnnotation::Value(spec) => Ok(spec),
-            _ => Err(Diagnostic::new(span, "a field cannot be an array yet")),
+            TypeAnnotation::Value(spec) => Ok((spec, Vec::new())),
+            TypeAnnotation::Array { element, dims } => Ok((element, dims)),
+            TypeAnnotation::Slice { .. } => unreachable!("a view is borrowed"),
         }
     }
 
@@ -1780,13 +1984,26 @@ impl Parser {
             args.push(self.result_type(start)?);
             return Ok(TypeSpec::Applied { name: FUNCTION.into(), args });
         }
+        // `extern "abi" fn(T) -> R`: the far address of a function of that ABI.
+        if self.take(|kind| matches!(kind, TokenKind::Extern)).is_some() {
+            let abi = self.abi()?;
+            if !matches!(self.peek().kind, TokenKind::Fn) {
+                return Err(Diagnostic::new(self.peek().span, "expected 'fn' after the ABI name"));
+            }
+            let function = self.type_spec()?;
+            return Ok(TypeSpec::Applied {
+                name: format!("{FOREIGN} \"{}\"", abi.name()),
+                args: vec![TypeAnnotation::Value(function)],
+            });
+        }
         // `&T`, `&mut T`: a reference, as a tuple element or type argument.
+        // `&T[N]` refers to the array, as a parameter's does.
         if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_some() {
             let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
-            let target = self.type_spec()?;
+            let target = self.type_annotation()?;
             return Ok(TypeSpec::Applied {
                 name: if mutable { "&mut" } else { "&" }.into(),
-                args: vec![TypeAnnotation::Value(target)],
+                args: vec![target],
             });
         }
         // `*far T`, `*near mut T`: a raw pointer.
@@ -1872,8 +2089,7 @@ impl Parser {
     }
 }
 
-/// `a < b < c` is `(a < b) && (b < c)`. The middle operand is written twice,
-/// so it must be free of effects: a name, a literal, or a field of one.
+/// `a < b < c`: one more comparison on the chain `left` is or starts.
 fn chained(
     left: Expr,
     operation: BinaryOp,
@@ -1881,52 +2097,21 @@ fn chained(
     span: Span,
     at: Span,
 ) -> Result<Expr, Diagnostic> {
-    let previous = match &left {
-        Expr::Binary {
-            op: BinaryOp::And,
-            right: last,
-            ..
-        } => last.as_ref(),
-        other => other,
+    let (mut operands, mut operations) = match left {
+        Expr::Chain { operands, operations, .. } => (operands, operations),
+        Expr::Binary { op, left, right, .. } => (vec![*left, *right], vec![op]),
+        _ => {
+            return Err(Diagnostic::new(
+                at,
+                "a chained comparison needs a comparison before it",
+            ))
+        }
     };
-    let Expr::Binary { right: middle, .. } = previous else {
-        return Err(Diagnostic::new(
-            at,
-            "a chained comparison needs a comparison before it",
-        ));
-    };
-    if !is_pure(middle) {
-        return Err(Diagnostic::new(
-            middle.span(),
-            "a chained comparison's middle operand must be a name, literal, or field",
-        ));
-    }
-    let next = Expr::Binary {
-        op: operation,
-        left: middle.clone(),
-        right: Box::new(right),
-        span,
-    };
-    Ok(Expr::Binary {
-        op: BinaryOp::And,
-        left: Box::new(left),
-        right: Box::new(next),
-        span,
-    })
+    operands.push(right);
+    operations.push(operation);
+    Ok(Expr::Chain { operands, operations, span })
 }
 
-fn is_pure(expression: &Expr) -> bool {
-    match expression {
-        Expr::Integer(..)
-        | Expr::Float(..)
-        | Expr::Character(..)
-        | Expr::Boolean(..)
-        | Expr::Name(..) => true,
-        Expr::Member { base, .. } => is_pure(base),
-        Expr::Unary { operand, .. } => is_pure(operand),
-        _ => false,
-    }
-}
 
 impl Parser {
     /// `value` or `value:code`. A colon splits off a code only when what
@@ -1952,10 +2137,15 @@ fn parse_inline_expression(
     outer: Span,
     fixed_types: &BTreeMap<String, TypeName>,
 ) -> Result<Expr, Diagnostic> {
+    let mut tokens = lex(source).map_err(|error| Diagnostic::new(outer, error.message))?;
+    for token in &mut tokens {
+        token.span.module = outer.module;
+    }
     let mut parser = Parser {
-        tokens: lex(source).map_err(|error| Diagnostic::new(outer, error.message))?,
+        tokens,
         at: 0,
         fixed_types: fixed_types.clone(),
+        fixed_before: 0,
         consts: BTreeMap::new(),
     };
     let expression = parser
@@ -1987,10 +2177,10 @@ pub(crate) fn primitive(kind: &TokenKind) -> Option<TypeName> {
 }
 
 /// Binding powers, loosest first; a binary operator's right side binds one tighter.
-const TERNARY: u8 = 1;
 const OR: u8 = 2;
 const AND: u8 = 4;
 const NOT: u8 = 6;
+const TERNARY: u8 = 7;
 const COMPARE: u8 = 8;
 const UNARY: u8 = 25;
 const POSTFIX: u8 = 30;
@@ -2026,6 +2216,28 @@ mod tests {
     use super::super::lexer::lex;
 
     use super::*;
+
+    #[test]
+    fn parses_an_asm_block_and_keeps_its_lines_as_written() {
+        let source = "fn f() -> u16:\n    unsafe:\n        asm(al=1, out=(dx=let low, cx=total), clobbers=[flags, memory]):\n            mov ah, 0   ; sub-function\n\n          again: int 1Ah\n        return low\n";
+        let module = parse(lex(source).unwrap()).unwrap();
+        let Statement::Unsafe { body, .. } = &module.functions[0].body[0] else { panic!("an unsafe block") };
+        let Statement::Asm(asm) = &body[0] else { panic!("an asm block: {:?}", body[0]) };
+        assert_eq!(asm.inputs.iter().map(|(name, value, _)| (name.as_str(), value)).collect::<Vec<_>>(), [("al", &Expr::Integer(1, Span::new(3, 16, 17)))]);
+        assert_eq!(
+            asm.outputs.iter().map(|(name, target, _)| (name.as_str(), target.clone())).collect::<Vec<_>>(),
+            [
+                ("dx", AsmTarget::Bind { mutable: false, name: "low".into() }),
+                ("cx", AsmTarget::Place(AssignTarget::Name("total".into()))),
+            ]
+        );
+        assert_eq!(asm.clobbers.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["flags", "memory"]);
+        assert_eq!(
+            asm.lines,
+            [("mov ah, 0   ; sub-function".to_owned(), Span::new(4, 13, 39)), ("again: int 1Ah".to_owned(), Span::new(6, 11, 25))]
+        );
+        assert!(matches!(&body[1], Statement::Return { .. }));
+    }
 
     #[test]
     fn parses_precedence_and_nested_blocks() {

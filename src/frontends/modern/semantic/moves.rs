@@ -64,12 +64,13 @@ impl FunctionCompiler<'_> {
 
     /// The moved set flows from the current block along `targets`. A block
     /// already started is a loop's head: nothing it can still see may have
-    /// moved since.
+    /// moved since. The scopes a jump there leaves are not seen.
     pub(super) fn flow_moves(&mut self, targets: &[u32]) {
         let moved = self.moved().clone();
         for target in targets {
             if let Some(before) = self.moves.state.get(target) {
-                let visible = self.scopes.iter().flat_map(|scope| scope.iter());
+                let depth = self.loops.iter().rev().find(|one| one.next == *target).map_or(self.scopes.len(), |one| one.next_depth);
+                let visible = self.scopes[..depth.min(self.scopes.len())].iter().flat_map(|scope| scope.iter());
                 let fresh = visible.filter(|(_, one)| {
                     owner(&one.storage)
                         .is_some_and(|key| moved.contains(&key) && !before.contains(&key))

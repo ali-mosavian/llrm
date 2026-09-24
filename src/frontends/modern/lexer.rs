@@ -17,6 +17,7 @@ pub enum TokenKind {
     Let,
     Mut,
     Const,
+    Var,
     Loop,
     Match,
     Enum,
@@ -31,6 +32,9 @@ pub enum TokenKind {
     Protocol,
     Yield,
     Unsafe,
+    Asm,
+    /// An `asm(...):` block's lines, as written: it is another language.
+    AsmBody(Vec<(String, Span)>),
     Case,
     Return,
     If,
@@ -180,6 +184,7 @@ pub(crate) fn keyword(word: &str) -> Option<TokenKind> {
         "struct" => TokenKind::Struct,
         "let" => TokenKind::Let,
         "const" => TokenKind::Const,
+        "var" => TokenKind::Var,
         "loop" => TokenKind::Loop,
         "match" => TokenKind::Match,
         "enum" => TokenKind::Enum,
@@ -194,6 +199,7 @@ pub(crate) fn keyword(word: &str) -> Option<TokenKind> {
         "protocol" => TokenKind::Protocol,
         "yield" => TokenKind::Yield,
         "unsafe" => TokenKind::Unsafe,
+        "asm" => TokenKind::Asm,
         "case" => TokenKind::Case,
         "mut" => TokenKind::Mut,
         "return" => TokenKind::Return,
@@ -250,6 +256,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut indents = vec![0usize];
     let mut nesting = 0usize;
     let mut last_line = 1usize;
+    // Where the logical line began, and an asm body being read: the
+    // indentation of its header and the lines deeper than it.
+    let mut logical = 0usize;
+    let mut body: Option<(usize, Vec<(String, Span)>)> = None;
 
     for (zero_line, raw_line) in source.split_inclusive('\n').enumerate() {
         let line_number = zero_line + 1;
@@ -261,6 +271,21 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             .unwrap_or_else(|| raw_line.strip_suffix('\n').unwrap_or(raw_line));
         let bytes = line.as_bytes();
         let mut index = 0usize;
+
+        if let Some((header, lines)) = &mut body {
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            let text = line[indent..].trim_end();
+            if text.is_empty() || text.starts_with('#') {
+                continue;
+            }
+            if indent > *header {
+                lines.push((text.to_owned(), Span::new(line_number, indent + 1, indent + text.len() + 1)));
+                continue;
+            }
+            let (_, lines) = body.take().expect("an asm body");
+            tokens.push(token(TokenKind::AsmBody(lines), line_number - 1, 0, 0));
+            tokens.push(token(TokenKind::Newline, line_number - 1, 0, 0));
+        }
 
         if nesting == 0 {
             while index < bytes.len() && bytes[index] == b' ' {
@@ -295,6 +320,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 std::cmp::Ordering::Equal => {}
             }
+            logical = tokens.len();
         }
 
         while index < bytes.len() {
@@ -569,7 +595,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             }
         }
 
-        if nesting == 0 {
+        let header = tokens.get(logical).is_some_and(|one| one.kind == TokenKind::Asm)
+            && tokens.last().is_some_and(|one| one.kind == TokenKind::Colon);
+        if nesting == 0 && header {
+            body = Some((*indents.last().expect("indentation stack"), Vec::new()));
+        } else if nesting == 0 {
             tokens.push(token(
                 TokenKind::Newline,
                 line_number,
@@ -577,6 +607,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 bytes.len(),
             ));
         }
+    }
+    if let Some((_, lines)) = body {
+        tokens.push(token(TokenKind::AsmBody(lines), last_line, 0, 0));
+        tokens.push(token(TokenKind::Newline, last_line, 0, 0));
     }
 
     if nesting != 0 {

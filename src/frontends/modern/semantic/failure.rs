@@ -183,27 +183,27 @@ impl FunctionCompiler<'_> {
             ));
         };
         let own = own.expect("checked");
-        if own_failure.name != failure.name
-            || own_failure
-                .fields
-                .iter()
-                .map(|(_, one)| one.type_)
-                .ne(failure.fields.iter().map(|(_, one)| one.type_))
-        {
-            return Err(Diagnostic::new(
-                span,
-                format!(
-                    "'?' cannot return this failure from a function returning {}",
-                    own.name
-                ),
-            ));
-        }
         let destination = self.struct_view(&Expr::Name(RESULT.into(), span), span)?;
-        let mut stores = vec![(
+        let mut stores = vec![Store::One(
             self.projected_place(&destination, 0, own.tag),
             hir::Operand::Constant(type_id(own.tag), own_failure.tag),
         )];
-        for ((_, to), (_, from)) in own_failure.fields.iter().zip(&failure.fields) {
+        let (target, fields) = if own_failure.name == failure.name && same_types(&own_failure, failure) {
+            (destination, own_failure.fields.clone())
+        } else if let Some((wrapper, wrapping)) = (own_failure.name == failure.name).then(|| self.wrapping(&own_failure, failure)).flatten() {
+            // `?` of `.err(e)` returns `.err(.wrapping(e))`.
+            let (_, field) = &own_failure.fields[0];
+            let target = StructView { struct_id: wrapper, offset: destination.offset + field.offset, ..destination };
+            let tag = self.types.enum_of(ElementType::Struct(wrapper)).expect("an enum").tag;
+            stores.push(Store::One(self.projected_place(&target, 0, tag), hir::Operand::Constant(type_id(tag), wrapping.tag)));
+            (target, wrapping.fields)
+        } else {
+            return Err(Diagnostic::new(
+                span,
+                format!("'?' cannot return this failure from a function returning {}", own.name),
+            ));
+        };
+        for ((_, to), (_, from)) in fields.iter().zip(&failure.fields) {
             let at = |view: &StructView, field: &FieldLayout| StructView {
                 offset: view.offset + field.offset,
                 ..view.clone()
@@ -213,8 +213,8 @@ impl FunctionCompiler<'_> {
                     let value = self.value(type_name);
                     let place = self.projected_place(source, from.offset, type_name);
                     self.emit("load", vec![value], vec![place], None);
-                    stores.push((
-                        self.projected_place(&destination, to.offset, type_name),
+                    stores.push(Store::One(
+                        self.projected_place(&target, to.offset, type_name),
                         hir::Operand::Value(value),
                     ));
                 }
@@ -222,7 +222,7 @@ impl FunctionCompiler<'_> {
                     let (to, from) = (
                         StructView {
                             struct_id,
-                            ..at(&destination, to)
+                            ..at(&target, to)
                         },
                         StructView {
                             struct_id,
@@ -233,11 +233,30 @@ impl FunctionCompiler<'_> {
                 }
             }
         }
-        for (place, value) in stores {
-            self.emit("store", Vec::new(), vec![place, value], None);
-        }
+        self.emit_stores(stores, span)?;
         self.drop_pending();
         self.drop_scopes(0);
         self.return_aggregate(span)
     }
+
+    /// When `own` holds one enum with exactly one variant whose fields have
+    /// `failure`'s types: that enum and variant.
+    fn wrapping(&self, own: &VariantLayout, failure: &VariantLayout) -> Option<(u32, VariantLayout)> {
+        let [(_, field)] = own.fields.as_slice() else {
+            return None;
+        };
+        let ElementType::Struct(wrapper) = field.type_ else {
+            return None;
+        };
+        let layout = self.types.enum_of(field.type_)?;
+        let mut holding = layout.variants.iter().filter(|one| same_types(one, failure));
+        match (holding.next(), holding.next()) {
+            (Some(one), None) => Some((wrapper, one.clone())),
+            _ => None,
+        }
+    }
+}
+
+fn same_types(one: &VariantLayout, other: &VariantLayout) -> bool {
+    one.fields.iter().map(|(_, field)| field.type_).eq(other.fields.iter().map(|(_, field)| field.type_))
 }

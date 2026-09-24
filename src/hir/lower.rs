@@ -18,6 +18,9 @@ use crate::model::mir::{self, Arg, Cell, Const, Held, MemRef, OpCode};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr;
 
+/// The callee name of an inline block's call: it names no routine.
+pub const ASM: &str = "$asm";
+
 #[allow(non_snake_case)]
 fn _KINDS(value: &str) -> mir::Kind {
     *mir::Kind::ALL.iter().find(|one| one.as_str() == value).expect("a HIR op names a MIR kind")
@@ -464,6 +467,78 @@ impl<'a> _Scope<'a> {
             ..MemoryObject::new(MemoryKind::Frame)
         };
         (object_, self.next_frame_offset)
+    }
+
+    /// `argument`, an integer of `source`, stored to a new frame cell of
+    /// `width` bytes, widened as its sign says: the cell.
+    fn integer_cell(
+        &mut self,
+        argument: &Arg,
+        source: &model::Type,
+        id: i64,
+        width: i64,
+        before: &mut Vec<mir::Op>,
+    ) -> Result<MemRef, InvalidHIR> {
+        let (object_, offset) = self.frame_cell(id, width);
+        let word = width.min(4) as u32;
+        let mut step = |this: &mut Self, kind: mir::Kind, operation: Operation, name: &str, arg: Arg, result: Arg, loads: Vec<MemRef>, stores: Vec<MemRef>| {
+            let uses: Vec<mir::Value> = match &arg {
+                Arg::Held(held) => vec![held.value],
+                Arg::Cell(cell) => [cell.r#ref.base, cell.r#ref.segment].into_iter().flatten().collect(),
+                _ => Vec::new(),
+            };
+            let made = match &result {
+                Arg::Held(held) => vec![held.value],
+                _ => Vec::new(),
+            };
+            this.at += 1;
+            before.push(mir::Op {
+                loads,
+                stores,
+                kind,
+                args: vec![arg],
+                results: vec![result],
+                id: Some(this.at as u32),
+                reads_complete: true,
+                memory_complete: true,
+                ..mir::Op::new(this.at, OpCode::Operation(operation), name, made, uses)
+            });
+        };
+        let fresh = |this: &mut Self, width: u32| {
+            let value = _value(this.next_value, this.at + 1);
+            this.next_value += 1;
+            Held { value, width }
+        };
+        let value = match argument {
+            Arg::Const(constant) => Arg::Const(Const { n: constant.n.clone(), width: word }),
+            Arg::Held(_) | Arg::Cell(_) => {
+                let mut value = argument.clone();
+                if let Arg::Cell(cell) = argument {
+                    let loaded = fresh(self, source.width as u32);
+                    let loads = vec![cell.r#ref.clone()];
+                    step(self, mir::Kind::Load, Operation::Move, "mov", value, Arg::Held(loaded), loads, Vec::new());
+                    value = Arg::Held(loaded);
+                }
+                if (source.width as u32) < word {
+                    let signed = source.signed != Some(false);
+                    let widened = fresh(self, word);
+                    let kind = if signed { mir::Kind::SignExtend } else { mir::Kind::ZeroExtend };
+                    let name = if signed { "movsx" } else { "movzx" };
+                    step(self, kind, Operation::Extend, name, value, Arg::Held(widened), Vec::new(), Vec::new());
+                    value = Arg::Held(widened);
+                }
+                value
+            }
+            _ => return Err(InvalidHIR(format!("{}.{}: no integer to convert", self.module, self.function.name))),
+        };
+        // An unsigned dword is loaded as a qword: its high half is zero.
+        let halves = [(value, 0)].into_iter().chain((width == 8).then(|| (_const(0, 4), 4)));
+        for (half, at) in halves {
+            let cell = _frame_ref(object_.clone(), offset + at, i64::from(word))?;
+            let cell = MemRef { provenance: Some(_one(object_.clone(), at, at + i64::from(word))?), ..cell };
+            step(self, mir::Kind::Store, Operation::Move, "mov", half, Arg::Cell(Cell { r#ref: cell.clone() }), Vec::new(), vec![cell]);
+        }
+        _frame_ref(object_, offset, width)
     }
 
     /// `args`' float stored to `reference` as `stored` says.
@@ -1267,7 +1342,7 @@ impl<'a> _Scope<'a> {
         // is the existing unary-float carrier and ``name`` retains the exact
         // operation for the QB-owned physical boundary. No sqrt facts are
         // claimed because these operations have no ``floating`` rule below.
-        let mut kind = if _STRING_COMPARISONS.contains(&instruction.op) {
+        let mut kind = if _STRING_COMPARISONS.contains(&instruction.op) || instruction.op == model::Op::Asm {
             mir::Kind::Call
         } else if _X87_INTRINSICS(instruction.op).is_some() {
             mir::Kind::Fsqrt
@@ -1381,6 +1456,7 @@ impl<'a> _Scope<'a> {
         };
         let mut operation_name: String = _X87_INTRINSICS(instruction.op)
             .map(str::to_owned)
+            .or_else(|| instruction.asm.as_ref().map(|_| ASM.to_owned()))
             .unwrap_or_else(|| instruction.callee.clone().unwrap_or_default());
         if instruction.op == model::Op::PtrOffset {
             let target_pointer = self.value_types[&instruction.results[0]];
@@ -1422,19 +1498,32 @@ impl<'a> _Scope<'a> {
             } else if matches!(source_id.kind, model::TypeKind::Integer | model::TypeKind::Boolean)
                 && target_type.kind == model::TypeKind::Float
             {
-                if !matches!(args[0], Arg::Cell(_)) {
-                    return Err(InvalidHIR(format!(
-                        "{}.{}: integer-to-float conversion needs a place", self.module, self.function.name
-                    )));
-                }
-                kind = mir::Kind::Fload;
-                (operation_kind, operation_name) = (Operation::FloatLoad, "fild".to_owned());
-                semantics = Some(floating::Semantics::new(
-                    vec![_stored_format(source_id)?],
-                    _FORMATS(target_type.evaluation),
-                    floating::Precision::Exact,
-                    floating::Rounding::None,
-                ));
+                // The x87 loads only a signed integer, from memory: the
+                // narrowest format holding every value of the source.
+                let (format, width) = _integer_format(source_id);
+                let reference = match &args[0] {
+                    Arg::Cell(cell) if width == source_id.width => cell.r#ref.clone(),
+                    argument => self.integer_cell(argument, source_id, instruction.id, width, &mut before)?,
+                };
+                let uses = [reference.base, reference.segment].into_iter().flatten().collect();
+                let load = mir::Op {
+                    floating: Some(floating::Semantics::new(
+                        vec![format],
+                        _FORMATS(target_type.evaluation),
+                        floating::Precision::Exact,
+                        floating::Rounding::None,
+                    )),
+                    loads: vec![reference.clone()],
+                    kind: mir::Kind::Fload,
+                    args: vec![Arg::Cell(Cell { r#ref: reference })],
+                    results,
+                    id: Some(instruction.id as u32),
+                    reads_complete: true,
+                    memory_complete: true,
+                    ..mir::Op::new(self.at, OpCode::Operation(Operation::FloatLoad), "fild", made, uses)
+                };
+                before.push(load);
+                return Ok(before);
             } else if source_id.kind == model::TypeKind::Float
                 && matches!(target_type.kind, model::TypeKind::Integer | model::TypeKind::Boolean)
             {
@@ -1564,12 +1653,15 @@ impl<'a> _Scope<'a> {
                 }
             }
         }
-        let complete = instruction.op != model::Op::Call && !_STRING_COMPARISONS.contains(&instruction.op);
+        // An inline block touches memory only where it says so.
+        let complete = instruction.op != model::Op::Call
+            && !_STRING_COMPARISONS.contains(&instruction.op)
+            && instruction.asm.as_ref().is_none_or(|asm| !asm.memory);
         let port = matches!(instruction.op, model::Op::PortIn | model::Op::PortOut);
         // A device with no path to memory leaves every cell alone; any other
         // port may start a transfer, so its memory effect stays unknown.
         let silent_port = port && matches!(args.first(), Some(Arg::Const(one)) if one.n.to_i64().is_some_and(|port| machine::current().silent_port(port)));
-        let volatile = port || loads.iter().chain(&stores).any(|reference| reference.volatile);
+        let volatile = port || instruction.op == model::Op::Asm || loads.iter().chain(&stores).any(|reference| reference.volatile);
         let final_ = mir::Op {
             floating: semantics,
             loads,

@@ -1,38 +1,13 @@
 //! Foreign interoperability: functions an `extern "cdecl16":` block imports,
-//! functions an `export` block exposes, raw pointers, and the `unsafe`
-//! blocks that call and take them. Modern functions already follow cdecl16
+//! functions an `export` block exposes, and the `unsafe` blocks that call
+//! them. Modern functions already follow cdecl16
 //! -- far calls, arguments pushed right to left, the caller cleaning up --
 //! so a foreign call differs only in its symbol and what may cross it.
+//! An `interrupt16` function is not called at all: its far address is a
+//! value, which the program installs as an interrupt vector.
 
 use super::*;
-use crate::frontends::modern::syntax::Extern;
-
-impl TypeRegistry {
-    /// `*far T`, `*near mut T` and the like. A huge pointer is a far one
-    /// whose foreign user keeps it normalized.
-    pub(super) fn raw_pointer(&mut self, target: ElementType, distance: &str, mutable: bool) -> TypeName {
-        let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
-        let far = distance != "near";
-        let type_id = match self.raw_pointers.get(&name) {
-            Some(id) => *id,
-            None => {
-                let id = self.pointer_type(name.clone(), target.id(), 0, far);
-                self.raw_pointers.insert(name, id);
-                self.raw_targets.insert(id, target);
-                id
-            }
-        };
-        TypeName::Pointer { type_id, width: if far { 4 } else { 2 }, mutable }
-    }
-
-    /// What a raw pointer type points to; `None` for any other type.
-    pub(super) fn raw_target(&self, type_name: TypeName) -> Option<ElementType> {
-        let TypeName::Pointer { type_id, .. } = type_name else {
-            return None;
-        };
-        self.raw_targets.get(&type_id).copied()
-    }
-}
+use crate::frontends::modern::syntax::{Extern, FOREIGN};
 
 /// Whether a value of `type_name` may cross a foreign ABI: a scalar, or a
 /// raw pointer to one or to a represented struct; never a buffer's owner.
@@ -50,16 +25,21 @@ fn crosses(types: &TypeRegistry, type_name: TypeName) -> bool {
     }
 }
 
-/// Checks that `signature`, of the function `name`, may cross a foreign ABI.
+/// Checks that `signature`, of the function `name`, may cross its foreign
+/// ABI; a BASIC float result gets its hidden pointer.
 pub(super) fn check_foreign(
-    types: &TypeRegistry,
-    signature: &Signature,
+    types: &mut TypeRegistry,
+    signature: &mut Signature,
     name: &str,
     span: Span,
 ) -> Result<(), Diagnostic> {
+    let basic = signature.abi.basic();
+    interrupt_shape(signature.abi, signature.parameters.is_empty() && signature.returned(types) == TypeName::Void, span)?;
     for (parameter, (formal, _)) in signature.parameters.iter().zip(&signature.formals) {
         match parameter {
             SignatureParameter::Scalar(type_name) if crosses(types, *type_name) => {}
+            SignatureParameter::Adapter { basic: own, .. } if Some(*own) == basic => {}
+            SignatureParameter::Adapter { basic: own, adapter, .. } => return Err(misplaced(name, *own, *adapter, span)),
             _ => {
                 return Err(Diagnostic::new(
                     span,
@@ -69,6 +49,9 @@ pub(super) fn check_foreign(
                 ));
             }
         }
+    }
+    if let Some(basic) = basic {
+        return basic_result(types, signature, basic, name, span);
     }
     // A represented struct of 4 bytes or less comes back in registers, as C's does.
     let result_crosses = match signature.slot {
@@ -84,6 +67,58 @@ pub(super) fn check_foreign(
     Ok(())
 }
 
+/// BASIC reads an INTEGER from `ax` and a LONG from `dx:ax`, and gives a
+/// SINGLE or DOUBLE function a near pointer to store it through, pushed
+/// last, which it returns in `ax`.
+fn basic_result(
+    types: &mut TypeRegistry,
+    signature: &mut Signature,
+    basic: super::super::syntax::Basic,
+    name: &str,
+    span: Span,
+) -> Result<(), Diagnostic> {
+    let refused = |what: &str| Diagnostic::new(span, format!("{name}'s result cannot cross to {}: {what}", basic.name()));
+    const RESULTS: &str = "return an INTEGER, LONG, SINGLE, DOUBLE or a &string";
+    // A string result is a view BASIC copies before the function returns.
+    if signature.view == Some((ElementType::Scalar(TypeName::Char), 1)) && !signature.foreign {
+        let descriptor = format!("{}.StringDescriptor", basic.module());
+        let Some(layout) = types.structs.get(&descriptor) else {
+            return Err(refused(&format!("import {} to return a string", basic.module())));
+        };
+        let descriptor = ElementType::Struct(layout.id);
+        signature.string_result = Some(types.raw_pointer(descriptor, "near", false));
+        return Ok(());
+    }
+    if signature.slot.is_some() || signature.view.is_some() {
+        return Err(refused(RESULTS));
+    }
+    match signature.result {
+        TypeName::Void | TypeName::I16 | TypeName::U16 | TypeName::I32 | TypeName::U32 => Ok(()),
+        result @ (TypeName::F32 | TypeName::F64) => {
+            signature.result_pointer = Some(types.raw_pointer(ElementType::Scalar(result), "near", true));
+            Ok(())
+        }
+        _ => Err(refused(RESULTS)),
+    }
+}
+
+fn misplaced(name: &str, basic: super::super::syntax::Basic, adapter: super::super::syntax::Adapter, span: Span) -> Diagnostic {
+    Diagnostic::new(
+        span,
+        format!("{name} takes a {}.{}, which only a {} export or extern takes", basic.name(), adapter.name(), basic.name()),
+    )
+}
+
+/// Refuses a BASIC adapter in a function no BASIC calls.
+pub(super) fn check_adapters(signature: &Signature, name: &str, span: Span) -> Result<(), Diagnostic> {
+    for parameter in &signature.parameters {
+        if let SignatureParameter::Adapter { basic, adapter, .. } = parameter {
+            return Err(misplaced(name, *basic, *adapter, span));
+        }
+    }
+    Ok(())
+}
+
 /// The signature an `extern` function is called by: its object symbol, defined elsewhere.
 pub(super) fn foreign_signature(
     types: &mut TypeRegistry,
@@ -91,19 +126,80 @@ pub(super) fn foreign_signature(
     id: u32,
 ) -> Result<Signature, Diagnostic> {
     let mut signature = signature(types, &declared.function, id)?;
+    signature.foreign = true;
+    signature.abi = declared.abi;
     check_foreign(
         types,
-        &signature,
+        &mut signature,
         &declared.function.name,
         declared.function.span,
     )?;
     signature.name = declared.symbol.clone();
-    signature.foreign = true;
-    signature.abi = declared.abi;
     Ok(signature)
 }
 
+/// An interrupt passes nothing and takes nothing back.
+fn interrupt_shape(abi: Abi, takes_nothing_returns_void: bool, span: Span) -> Result<(), Diagnostic> {
+    if abi.interrupt() && !takes_nothing_returns_void {
+        return Err(Diagnostic::new(span, "an interrupt16 function takes nothing and returns void"));
+    }
+    Ok(())
+}
+
+impl TypeRegistry {
+    /// `extern "abi" fn(A) -> R`: the far address of a function of that ABI
+    /// whose type is `function`. Nothing reads or calls through it here; a
+    /// foreign function does.
+    pub(super) fn foreign_function(&mut self, abi: Abi, function: TypeName, span: Span) -> Result<TypeName, Diagnostic> {
+        interrupt_shape(abi, self.types[(type_id(function) - 1) as usize].name == "fn() -> void", span)?;
+        if let Some(found) = self.foreign_function_of(abi, function) {
+            return Ok(found);
+        }
+        let name = self.foreign_name(abi, function);
+        let id = self.pointer_type(name.clone(), type_id(function), 0, true);
+        self.foreign_functions.insert(name, id);
+        Ok(TypeName::Pointer { type_id: id, width: 4, mutable: false })
+    }
+
+    /// `extern "abi" fn(A) -> R`, when it is registered.
+    pub(super) fn foreign_function_of(&self, abi: Abi, function: TypeName) -> Option<TypeName> {
+        let type_id = *self.foreign_functions.get(&self.foreign_name(abi, function))?;
+        Some(TypeName::Pointer { type_id, width: 4, mutable: false })
+    }
+
+    fn foreign_name(&self, abi: Abi, function: TypeName) -> String {
+        format!("{FOREIGN} \"{}\" {}", abi.name(), self.types[(type_id(function) - 1) as usize].name)
+    }
+}
+
 impl FunctionCompiler<'_> {
+    /// The far address of `signature`'s function, typed by its ABI: data
+    /// the linker writes, since only it knows where the code lands.
+    pub(super) fn foreign_address(&mut self, signature: &Signature, expected: Option<TypeName>, span: Span) -> Result<TypedOperand, Diagnostic> {
+        let function = self.types.function_type(signature);
+        let type_name = self.types.foreign_function(signature.abi, function, span)?;
+        if let Some(wanted) = expected.filter(|one| *one != type_name) {
+            return Err(type_mismatch(span, wanted, type_name));
+        }
+        let symbol = self.literals.address(signature.id, &signature.name);
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id: place,
+            name: format!("$address_{}", signature.name),
+            type_id: type_id(type_name),
+            mutable: false,
+            offset: 0,
+            extent: 4,
+            storage: "module",
+            symbol,
+            volatile: false,
+        });
+        let value = self.value(type_name);
+        self.emit("load", vec![value], vec![hir::Operand::Place(place)], None);
+        Ok(TypedOperand { operand: Some(hir::Operand::Value(value)), type_name })
+    }
+
     /// `unsafe: body`.
     pub(super) fn unsafe_block(&mut self, body: &[Statement]) -> Result<(), Diagnostic> {
         self.unsafe_depth += 1;
@@ -120,147 +216,5 @@ impl FunctionCompiler<'_> {
             ));
         }
         Ok(())
-    }
-
-    /// `*pointer`: a hidden name for the place a raw pointer points to,
-    /// which reads and writes through it as a reference's name does.
-    pub(super) fn dereferenced(&mut self, pointer: &Expr, span: Span) -> Result<String, Diagnostic> {
-        self.require_unsafe("reading or writing through a raw pointer", span)?;
-        let value = self.expression(pointer, None)?;
-        let Some(target) = self.types.raw_target(value.type_name) else {
-            return Err(Diagnostic::new(span, "only a raw pointer is read with '*'"));
-        };
-        let TypeName::Pointer { mutable, .. } = value.type_name else {
-            unreachable!("a raw pointer")
-        };
-        let pointer_type = type_id(value.type_name);
-        let address = self.materialized(required(value, span)?, pointer_type);
-        let binding = Binding {
-            type_: match target {
-                ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
-                ElementType::Struct(id) => BindingType::Struct(id),
-            },
-            mutable,
-            storage: Storage::Reference(address),
-        };
-        // Named as written, so that a diagnostic reads as the source does.
-        let name = match pointer {
-            Expr::Name(written, _) => format!("*{written}"),
-            _ => self.hidden("pointee"),
-        };
-        self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
-        Ok(name)
-    }
-
-    /// `&place` as the raw pointer `pointer`.
-    pub(super) fn raw_address(
-        &mut self,
-        operand: &Expr,
-        mutable: bool,
-        pointer: TypeName,
-        span: Span,
-    ) -> Result<TypedOperand, Diagnostic> {
-        self.require_unsafe("taking a raw pointer", span)?;
-        let TypeName::Pointer {
-            type_id: pointer_id,
-            width,
-            mutable: writes,
-        } = pointer
-        else {
-            unreachable!("a raw pointer type")
-        };
-        if writes && !mutable {
-            return Err(Diagnostic::new(span, "a *mut pointer is taken with '&mut'"));
-        }
-        if width == 2 {
-            return Err(Diagnostic::new(
-                span,
-                "a near pointer reaches only static data; take a *far one",
-            ));
-        }
-        let pointee = self.types.types[(pointer_id - 1) as usize]
-            .element
-            .expect("a pointer has a target");
-        let borrow = Expr::Borrow {
-            mutable,
-            operand: Box::new(operand.clone()),
-            span,
-        };
-        let (target, address) = if let Some(struct_id) =
-            self.struct_expression_type(operand, span)?
-        {
-            (
-                struct_id,
-                self.borrow_argument(&borrow, mutable, BindingType::Struct(struct_id), pointer_id)?
-                    .0,
-            )
-        } else {
-            let Expr::Name(name, name_span) = operand else {
-                return Err(Diagnostic::new(
-                    span,
-                    "only a named place or a struct has a raw address",
-                ));
-            };
-            match self.binding(name, *name_span)?.clone() {
-                // An array's address is its first element's.
-                Binding {
-                    type_: BindingType::Array { element, .. },
-                    storage: Storage::Place(place),
-                    mutable: owned,
-                } => {
-                    if mutable && !owned {
-                        return Err(Diagnostic::new(
-                            span,
-                            format!("cannot mutably borrow immutable binding {name:?}"),
-                        ));
-                    }
-                    let result = self.value_type(pointer_id);
-                    self.emit(
-                        "address",
-                        vec![result],
-                        vec![hir::Operand::Place(place)],
-                        None,
-                    );
-                    (element.id(), hir::Operand::Value(result))
-                }
-                Binding { type_: BindingType::Slice { element, rank }, storage: Storage::Slice(descriptor), .. } if !mutable => {
-                    (element.id(), hir::Operand::Value(self.slice_data_pointer(descriptor, element, rank)))
-                }
-                // A string's or vec's, too: a string's bytes end in a NUL.
-                binding @ Binding { type_: BindingType::Scalar(sequence), .. }
-                    if !mutable && self.types.sequence_element(sequence).is_some() =>
-                {
-                    let element = self.types.sequence_element(sequence).expect("a sequence");
-                    let data = self.string_pointer(&binding, *name_span)?;
-                    let result = self.value_type(pointer_id);
-                    let first = hir::Operand::IndirectPlace { base: data, offset: 0, type_id: element.id(), inbounds: false };
-                    self.emit("address", vec![result], vec![first], None);
-                    (element.id(), hir::Operand::Value(result))
-                }
-                Binding {
-                    type_: type_ @ BindingType::Scalar(type_name),
-                    ..
-                } => (
-                    type_id(type_name),
-                    self.borrow_argument(&borrow, mutable, type_, pointer_id)?.0,
-                ),
-                _ => {
-                    return Err(Diagnostic::new(
-                        span,
-                        "only a scalar, struct, or sequence has a raw address",
-                    ));
-                }
-            }
-        };
-        if target != pointee {
-            return Err(Diagnostic::new(
-                span,
-                "the raw pointer's target type differs from the place's",
-            ));
-        }
-        Ok(TypedOperand {
-            operand: Some(address),
-            type_name: pointer,
-        })
     }
 }

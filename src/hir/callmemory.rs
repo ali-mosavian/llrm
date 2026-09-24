@@ -50,6 +50,29 @@ pub fn annotated(
             .collect();
         let value_types: IndexMap<i64, &model::Type> =
             function.values.iter().map(|one| (one.id, types[&one.r#type])).collect();
+        let actuals = |instruction: &model::Instruction| -> Vec<Actual> {
+            instruction
+                .operands
+                .iter()
+                .map(|operand| match operand {
+                    model::Operand::ValueRef(one) if value_types[&one.value].kind == model::TypeKind::Pointer => {
+                        Actual::Pointer(lowered.values[&one.value], 0)
+                    }
+                    _ => Actual::Absent,
+                })
+                .collect()
+        };
+        // An inline block that declares memory reaches what an unknown
+        // routine would, its pointer inputs' objects among it; one that does
+        // not declares none.
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            if let (Some(asm), Some(operation)) = (&instruction.asm, call_ops.get(&Some(instruction.id as u32))) {
+                if !asm.memory {
+                    calls.insert(operation.at, crate::hir::lower::ASM.to_owned());
+                }
+                arguments.insert(operation.at, actuals(instruction));
+            }
+        }
         for site in &function.calls {
             let operation = call_ops.get(&Some(site.instruction as u32));
             let instruction = instructions.get(&site.instruction);
@@ -61,26 +84,15 @@ pub fn annotated(
                 None => operation.name.as_str(),
             };
             calls.insert(operation.at, object_name(target));
-            arguments.insert(
-                operation.at,
-                instruction
-                    .operands
-                    .iter()
-                    .map(|operand| match operand {
-                        model::Operand::ValueRef(one) if value_types[&one.value].kind == model::TypeKind::Pointer => {
-                            Actual::Pointer(lowered.values[&one.value], 0)
-                        }
-                        _ => Actual::Absent,
-                    })
-                    .collect(),
-            );
+            arguments.insert(operation.at, actuals(instruction));
         }
         let name = object_name(&function.name);
         let procedure = alias::Procedure { body: body.clone(), calls, arguments, named: named.clone() };
         procedures.insert(name.clone(), procedure);
         lowered_by_name.insert(name, Lowered { body, ..lowered.clone() });
     }
-    let summaries = alias::summaries(&procedures, None)?;
+    let known = IndexMap::from_iter([(crate::hir::lower::ASM.to_owned(), alias::Summary::default())]);
+    let summaries = alias::summaries(&procedures, Some(&known))?;
     functions
         .iter()
         .map(|function| {

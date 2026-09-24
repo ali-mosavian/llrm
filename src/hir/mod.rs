@@ -17,7 +17,7 @@ pub use model::{
     AddressKind, ArrayElement, ArrayOrder, Block, CallAbi, CallDistance, Constant, DataLinkage, DataObject,
     DataRelocation, DescriptorField, DescriptorPlace, Dialect, FloatEvaluation, FloatMode, Function,
     FunctionLinkage, IndirectPlace, Instruction, Module, Op, Place, PlaceRef, ProcedureAbi, Program,
-    ProjectedPlace, RuntimeProfile, StackCleanup, Storage, TargetProfile, Terminator, TerminatorKind, Type,
+    ProjectedPlace, RuntimeProfile, StackCleanup, FloatReturn, Storage, TargetProfile, Terminator, TerminatorKind, Type,
     TypeKind, Value, ValueRef,
 };
 pub use verify::{InvalidHIR, verify};

@@ -110,18 +110,27 @@ impl Repr for f64 {
 /// `repr(float)`: the shortest round-trip digits, in exponent form below
 /// 1e-4 and from 1e16, as Python spells it.
 pub fn float(value: f64) -> String {
-    if value.is_nan() {
+    repr(value.is_nan(), value.is_infinite(), value > 0.0, &format!("{value:e}"), &format!("{value:?}"))
+}
+
+/// `float`'s form for an f32: the shortest text that reads back as the f32,
+/// not as the f64 it widens to.
+pub fn float32(value: f32) -> String {
+    repr(value.is_nan(), value.is_infinite(), value > 0.0, &format!("{value:e}"), &format!("{value:?}"))
+}
+
+/// Python's repr from a float's shortest exponent and positional forms.
+fn repr(nan: bool, infinite: bool, positive: bool, shortest: &str, positional: &str) -> String {
+    if nan {
         return "nan".to_owned();
     }
-    if value.is_infinite() {
-        return if value > 0.0 { "inf" } else { "-inf" }.to_owned();
+    if infinite {
+        return if positive { "inf" } else { "-inf" }.to_owned();
     }
-    let shortest = format!("{value:e}");
     let (mantissa, exponent) = shortest.split_once('e').expect("exponent form");
     let exponent: i32 = exponent.parse().expect("an integer exponent");
     if (-4..16).contains(&exponent) {
-        let text = format!("{value:?}");
-        return if text.contains('.') { text } else { format!("{text}.0") };
+        return if positional.contains('.') { positional.to_owned() } else { format!("{positional}.0") };
     }
     let sign = if exponent < 0 { '-' } else { '+' };
     format!("{mantissa}e{sign}{:02}", exponent.abs())

@@ -80,8 +80,9 @@ pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf
         }
     }
 
-    // The emitted code, when the program has an entry to assemble from.
-    if program.modules[0].functions.iter().any(|function| function.name == "main") {
+    // The emitted code, of a program with its entry or a library with exports.
+    let functions = &program.modules[0].functions;
+    if functions.iter().any(|function| function.name == "main" || function.linkage == hir::model::FunctionLinkage::External) {
         let module = modern::assembled(&program, "main", ProfileOrName::Name(modern::CPU), options)?;
         let filename = format!("{number:02}-listing.asm");
         write(&output.join(&filename), &masm::text(&module).map_err(|error| error.0)?)?;
@@ -161,8 +162,19 @@ mod tests {
         let physical_mir = read("06-nbody-nbody-physical-mir.txt");
         let optimized_physical_mir = read("07-nbody-nbody-optimized-physical-mir.txt");
         assert!(source_mir.contains("function nbody.nbody"));
-        assert!(optimized_mir.contains("call _pf4"));
+        assert!(optimized_mir.contains(&format!("call {}", crate::abi::modern::PRINT_Q4)));
         assert!(source_mir.contains("mul"));
         assert_ne!(physical_mir, optimized_physical_mir);
+    }
+
+    #[test]
+    fn test_a_library_without_main_dumps_its_listing() {
+        // A library had no listing, so the runtime's code could not be read.
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = directory.path().join("lib.mod");
+        std::fs::write(&source, "export \"cdecl16\":\n    fn twice(value: i16) -> i16:\n        return value * 2\n").expect("writes");
+        let output = dumped(&source, &directory.path().join("dump"), &O2()).expect("dumps");
+        let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");
+        assert!(listing.contains("_twice"), "{listing}");
     }
 }

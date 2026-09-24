@@ -57,7 +57,9 @@ const screen_width: u16 = 320
 
 A `const` may be declared at module level or in a function. Its value must
 fold at compile time, from literals, operators, and other constants, and it
-may size an array: `let row: u8[screen_width] = [0] * screen_width`.
+may size an array: `let row: u8[screen_width] = [0] * screen_width`. A
+module's constants may name each other in any order; one that depends on
+itself is an error.
 
 A binding's type is inferred from its initializer unless written explicitly.
 Assignment uses `=` and requires a mutable binding.
@@ -89,9 +91,14 @@ arithmetic is two's-complement and wraps to the operand width. Checked and
 saturating operations are library methods of each integer type:
 `checked_add`, `checked_sub` and `checked_mul` return `Option[T]`, `none` on
 overflow; `saturating_add`, `saturating_sub` and `saturating_mul` clamp to the
-type's bounds. There are no alternate arithmetic operators. Division by
-zero and the unrepresentable signed division `min / -1` invoke the panic
+type's bounds. There are no alternate arithmetic operators. Integer division
+by zero and the unrepresentable signed division `min // -1` invoke the panic
 handler. Panic terminates; it never unwinds.
+
+A float operation that overflows gives `inf`, and one with no defined
+result, such as `inf - inf` or `0.0 / 0.0`, gives `nan`; float division by
+zero gives `inf` or `-inf`. Nothing checks it: this is the x87 with its
+exceptions masked, as the BIOS leaves it.
 
 The compound built-in types are:
 
@@ -107,18 +114,22 @@ dict[K, V]      # owned hash table
 string          # owned text
 &string         # borrowed string view
 fn(T) -> U      # noncapturing function value
+extern "abi" fn(T) -> U   # foreign function pointer (section 15)
 ```
 
 There is no `null`. Absence is represented by `Option[T]`.
+
+A tuple element may be a fixed array: `(u8[3], i16)`. `t[k]`, with a literal
+`k`, names element `k`, so `t[0][i]` indexes the array in it.
 
 ### Protocol requirements for built-in types
 
 `dict[K, V]` requires K to satisfy the `Hashable` protocol:
 
 ```text
-protocol Hashable[T]:
-    fn hash(self: &T) -> u16
-    fn eq(self: &T, other: &T) -> bool
+protocol Hashable:
+    fn hash(self: &Self) -> u16
+    fn eq(self: &Self, other: &Self) -> bool
 ```
 
 Scalar types and `string` implement `Hashable`. User-defined structs and enums implement `Hashable` if all their
@@ -127,34 +138,40 @@ fields do.
 Scalar types and `string` implement the `Ordered` protocol:
 
 ```text
-protocol Ordered[T]:
-    fn cmp(self: &T, other: &T) -> i8  # -1, 0, or 1
+protocol Ordered:
+    fn cmp(self: &Self, other: &Self) -> i8  # -1, 0, or 1
 ```
 
 A type is printed, and formatted by `{value}` in an f-string, through the
 `Display` protocol; scalars and `string` print without it:
 
 ```text
-protocol Display[T]:
-    fn display(self: &T) -> string
+protocol Display:
+    fn display(self: &Self) -> string
 ```
 
-Collections implement the `Iterable` protocol:
+`string`, arrays, and vectors implement `Iterable[T]`, and their iterators
+`Iterator[T]` (section 12). Their iterators are ordinary generators, compiled
+to plain loops by section 12's rule.
+
+### Fixed-point types
+
+A fixed-point type is declared by its storage and fraction bits, and is its
+own type: two declarations of the same shape do not mix.
 
 ```text
-protocol Iterable[T]:
-    fn iter(self: &Self) -> Iterator[T]
+pub type Real = fixed i32, fraction=12     # 20.12: steps of 1/4096
+type Angle = fixed i16, fraction=8
 ```
 
-Iterators implement the `Iterator` protocol:
-
-```text
-protocol Iterator[T]:
-    fn next(self: &mut Self) -> Option[T]
-```
-
-`string`, arrays, and vectors implement `Iterable`. Their iterators are
-ordinary generators, compiled to plain loops by section 12's rule.
+The storage is `i16` or `i32`, and the fraction 1 to one less than its
+bits. `+`, `-` and comparisons work on the stored integers. `*` takes the
+full-width product and shifts it right by the fraction, rounding toward
+negative infinity; `/` shifts the dividend left first and truncates toward
+zero. `%` is not defined. A literal or constant converts at compile time:
+`Real(2.5)` is the stored integer 10240. Printing shows the exact decimal
+value. [docs/examples/mandel.mod](examples/mandel.mod) draws the Mandelbrot
+set with one, without an FPU.
 
 ### Conversions
 
@@ -201,10 +218,13 @@ Between integer and float types, conversions are also implicit, as in C.
   picks the unsigned one; here it is a compile-time error, unless the signed
   operand was promoted from an unsigned type. So `i8 + u8` is `i16`,
   `u8 + u16` is `u16`, and `i8 < u16` is rejected.
-- A range's bounds meet at their common type, as operands do.
 
 An integer literal takes the type of the other operand when it fits, and its
-own type otherwise: `int`, or `i32` if it does not fit `int`.
+own type otherwise: `int`, or `i32` if it does not fit `int`. A constant
+declared without a type is a literal, and arithmetic on literals folds to a
+literal: with `const LIMIT = 300`, `LIMIT - 1` meets a `u16` as a `u16`, and
+`300 + 0` does not fit a `u8`. A constant declared with a type has that type,
+as a binding does: with `const LIMIT: i16 = 5`, `u16 + LIMIT` is an error.
 
 ### Operators
 
@@ -214,7 +234,7 @@ From tightest to loosest binding:
 |---|---|
 | `f(x)` `a[i]` `a.b` `x?` | call, index or slice, field or method, propagate failure |
 | `-x` `~x` `&x` `&mut x` | negate, bitwise not, borrow |
-| `*` `/` `%` | multiply, divide, remainder |
+| `*` `/` `//` `%` | multiply, divide, floor divide, remainder |
 | `+` `-` | add, subtract |
 | `<<` `>>` | shift |
 | `&` | bitwise and |
@@ -227,7 +247,7 @@ From tightest to loosest binding:
 | `\|\|` | logical or |
 
 Binary operators group left to right. Comparisons chain: `a < b < c` evaluates
-as `(a < b) && (b < c)`. Bitwise operators bind tighter than comparisons,
+as `(a < b) && (b < c)`, with `b` evaluated once. Bitwise operators bind tighter than comparisons,
 so `flags & mask == 0` means `(flags & mask) == 0`.
 
 The operands of an arithmetic, bitwise, or comparison operator convert to
@@ -238,15 +258,20 @@ and the count may be any integer type. `&&`, `||`, and `!` take and give `bool`;
 `a is b` is true when `a` and `b` name the same struct: one variable, or one
 element of one array. A scalar has no identity; compare it with `==`.
 
-Integer `/` is an error; use `//` for integer division (floor division on
-signed operands). `%` takes the sign of the dividend. `>>` is arithmetic on
+Integer `/` is an error. `a // b` is the quotient rounded toward negative
+infinity. `a % b` is the remainder of the quotient truncated toward zero, so
+it takes the dividend's sign. When the signs differ and `b` does not divide
+`a`, `(a // b) * b + a % b` is not `a`: `-7 // 2` is `-4` and `-7 % 2` is
+`-1`.
+
+`>>` is arithmetic on
 a signed operand and logical on an unsigned one. A shift count that is
 negative, or not less than the operand's width, is a compile-time error when
 constant and invokes the panic handler otherwise.
 
 Every binary arithmetic and bitwise operator has a compound assignment:
-`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`. There is
-no `++`, `--`, or `**`.
+`+=`, `-=`, `*=`, `/=`, `//=`, `%=`, `&=`, `|=`, `^=`, `<<=`, and `>>=`. As
+`/` is, `/=` is for floats and fixed-point. There is no `++`, `--`, or `**`.
 
 ## 4. Functions, methods, and lambdas
 
@@ -272,7 +297,7 @@ Named arguments improve readability when many parameters exist and are especiall
 valuable for FFI calls.
 
 A method is a function declared in a type's namespace. Its first parameter is
-`self`, and may be immutable `&self`, mutable `&mut self`, or owned `self`.
+`self`, with its type written out: `self: &T`, `self: &mut T`, or `self: T`.
 Methods follow the same parameter rules as functions: defaults and named arguments.
 
 ```text
@@ -338,8 +363,10 @@ those functions and a direct call of each. The language has no
 implicit heap allocation for closures and no special currying; partial
 application is written with a lambda.
 
-Functions are not overloaded. Variadic native functions do not exist. APIs with
-many optional parameters use defaults and named arguments.
+Functions are not overloaded or variadic; APIs with many optional parameters
+use defaults and named arguments. The exception is the built-in `print`,
+which prints its arguments one after another, with no separator, then a
+newline.
 
 ## 5. User-defined data
 
@@ -368,6 +395,37 @@ Variants are constructed by name:
 
 ```text
 let s: Shape = Shape.circle(center=Point(0, 0), radius=5)
+```
+
+A variant's tag is its position, from 0, unless the variant declares one. A
+declared tag sets the count, and the variants after it continue from there:
+
+```text
+enum Status:
+    pending = 1
+    active = 10     # the next variant, if any, would be 11
+```
+
+Tags are distinct, not negative, and fit the enum's declared width, or else
+`u8` or `u16`, whichever holds the largest. A variant that carries values
+may declare one too: `packet(bytes: u8[4]) = 7`.
+
+A field may be a fixed array, `T[N]` or `T[X, Y]`, stored in place. It is
+aligned as its element is, also under `@repr`. It is used as a local array
+is: indexed with bounds checks, iterated, borrowed as `&T[N]`, and assigned
+whole from a literal, a repeat, or another array of its type. Writing it or
+an element needs the field declared `mut`. An array of owned elements drops
+each one and moves whole, as a struct holding them does: from an owning
+local or a temporary, never from a borrow or a field. A `bits` struct cannot
+hold an array. An enum variant's field may be one, `.packet(bytes: u8[4])`,
+under the same rules.
+
+```text
+struct Face:
+    mut bound: u8[6]
+
+let mut f = Face(bound=[0] * 6)
+f.bound[2] = 7
 ```
 
 There are no classes, base types, constructors, properties, or implementation
@@ -466,6 +524,11 @@ let [head, *tail] = values else:
     return .err(.empty)
 ```
 
+A `match` or `let` on a temporary, such as a call's result, consumes it:
+each binding owns its part, and the parts no binding takes are dropped as
+the arm starts. On a named value, bindings borrow. A struct with a `drop`
+method moves only whole.
+
 Sequence patterns accept at most one starred binding:
 
 ```text
@@ -485,6 +548,16 @@ automatically copies it. Creating an owned remainder is explicit:
 let owned_tail = [item for item in tail]
 ```
 
+A pattern may bind an array field, `Frame(id, body)`, or take it apart with a
+sequence pattern, `Frame(_, [a, b, c])`. Behind a pointer the binding
+borrows the array; otherwise it is a copy.
+
+On a fixed array a call returns, a sequence pattern consumes it: each
+element moves to its binding, and those `_` or `*_` take drop. A named
+starred binding there borrows only elements that own nothing; owned ones
+would drop as the arm starts. A sequence pattern of a fixed array's length
+always matches, so its `let` needs no `else:`.
+
 Sequence patterns require a sized, sliceable sequence. They do not consume an
 arbitrary iterator or generator.
 
@@ -496,6 +569,7 @@ The control forms are:
 if / else
 match
 while
+loop
 for
 break
 continue
@@ -506,7 +580,14 @@ with
 
 There are no `switch`, `do`, `goto`, exceptions, or labeled loop variants.
 `else if` is an `else` whose block is one `if`.
-Conditions may chain: `a < b < c` is valid and evaluates as `(a < b) && (b < c)`.
+
+`loop:` repeats its block until a `break` or `return` leaves it.
+
+`for i in a..b` counts `i` from `a` up to, not including, `b`. The bounds are
+integers, evaluated once, and meet at their common type, as operands do;
+that is the counter's type. `for _ in a..b` repeats without a counter. A
+comprehension's clause may be a range too. A range binds one name, and
+`a..b` is not an expression anywhere else.
 
 `with` creates a nested ownership scope:
 
@@ -525,6 +606,10 @@ Every value has one owner. Passing, returning, or assigning an owned value
 moves it. The source cannot be used after the move. Compound types move by
 default; primitives copy, and so does a struct or enum whose fields all copy.
 
+A field does not move out of a named struct, even an owned one: with `h` an
+owned parameter, `return h.name` is an error, and `return h.name.copy()`
+returns a copy.
+
 ```text
 T           # owned (move)
 &T          # shared borrow (read-only)
@@ -533,8 +618,9 @@ T           # owned (move)
 
 A parameter's type says how it is passed: `fn f(x: Point)` takes ownership,
 `fn f(x: &Point)` borrows, and `fn f(x: &mut Point)` borrows exclusively.
-Call sites write the argument alone, without `&`. A borrow cannot outlive its
-owner. While an exclusive borrow exists, no other borrow may access the same
+Call sites write the argument alone, without `&`. A borrow held in a field
+reads and writes what it refers to wherever a value is expected; assigning it
+a borrow reseats it. A borrow cannot outlive its owner. While an exclusive borrow exists, no other borrow may access the same
 value. While shared borrows exist, the value may not be mutated or moved.
 
 A returned borrow is conservatively tied to every borrowed input from which it
@@ -574,7 +660,46 @@ Raw memory is available only through `unsafe`:
 *huge mut T
 ```
 
-Raw pointers carry no lifetime, validity, or aliasing guarantee.
+Raw pointers carry no lifetime, validity, or aliasing guarantee. `*p` is the
+place `p` points to, read and written as a name is, and only in `unsafe`; a
+pointer without `mut` only reads, and a `*mut` one converts to it implicitly.
+A `*huge` pointer is a far one that foreign code keeps normalized. A `*near`
+pointer reaches only DGROUP: the program takes one to a module variable or to
+a string's or vec's data. A raw pointer to a field is the field's place; to a
+string, vec or array field, its first element.
+
+`p.offset(n)` is `n` elements on, and `p[i]` is `*p.offset(i)`.
+`p.cast[U]()` is the same address as a `*U`, `p.far()` a near pointer's
+place with DGROUP's segment, and `p.near()`, in `unsafe`, a far pointer's
+offset alone, for a place the program vouches is in DGROUP. `0` is the null pointer of any type, which
+`p.is_null()` tests. Raw pointers compare with `==` and `!=`; near ones,
+offsets in one segment, are also ordered.
+
+`size_of[T]()` is the bytes a `T` takes as laid out, packing and `@repr`
+included, as a `u16` folded at compile time. `T` may be a type parameter. It
+cannot initialize a `const`.
+
+```text
+var bytes: u8[8] = [1, 2, 3, 4, 5, 6, 7, 8]
+
+unsafe:
+    let base: *near mut u8 = &mut bytes
+    let third = base.offset(2)
+    third[1] = 40                       # bytes[3]
+    let words = base.cast[u16]()
+    words[3] = 0x0102                   # bytes[6] and bytes[7]
+    let whole: *far u8 = base.far()
+```
+
+```text
+let mut count: i16 = 5
+let mut corner = Point(x=0, y=0)
+unsafe:
+    let p: *far mut i16 = &mut count
+    *p = *p + 1
+    let q: *far mut Point = &mut corner
+    (*q).x = 3          # a struct's field, through a pointer to it
+```
 
 ## 9. Calls, results, and ownership at the boundary
 
@@ -607,7 +732,7 @@ returns as any other enum does.
 | `void` | nothing |
 | `bool`, `char`, 8-bit integer | `al` (`bool`: `0` or `0FFh`) |
 | 16-bit integer, owned `string`, owned `vec` | `ax` (a `string` or `vec` is its near pointer) |
-| 32-bit integer, `&T`, `&T[N]` | `dx:ax` (a borrow is `segment:offset`) |
+| 32-bit integer, `&T`, `&T[N]`, far pointer | `dx:ax` (a pointer is `segment:offset`) |
 | `f32`, `f64` | `st(0)` |
 | struct, enum, `T[N]`, proposed `string[N]`, of 4 bytes or less and holding no pointer | `al`, `ax` or `dx:ax`, as the integer its bytes spell |
 | the same, larger or holding a pointer | the slot |
@@ -694,8 +819,7 @@ with 0 for `ok` and 1 for `err`.
 
 ### 9.6 Machine code
 
-Rows refer to 9.3. `_salloc`, `_sfree`, and `_sown` are the runtime's
-allocate, free, and copy-to-heap routines.
+Rows refer to 9.3. The runtime's routines are named in section 13.
 
 **Row 1: scalar** (current compiler output).
 
@@ -714,11 +838,11 @@ _add proc far                      ; caller:
     retf
 ```
 
-**Row 2: a tuple in registers.** `idiv` leaves the quotient in `ax` and the
-remainder in `dx`, which is where `(i16, i16)` is returned.
+**Row 2: a tuple in registers.** `div` leaves the quotient in `ax` and the
+remainder in `dx`, which is where `(u16, u16)` is returned.
 
 ```text
-fn divmod(a: i16, b: i16) -> (i16, i16):
+fn divmod(a: u16, b: u16) -> (u16, u16):
     return (a // b, a % b)
 
 let (q, r) = divmod(17, 5)
@@ -729,8 +853,8 @@ _divmod proc far
     push bp
     mov bp, sp
     mov ax, word ptr [bp+6]
-    cwd
-    idiv word ptr [bp+8]           ; ax = quotient, dx = remainder
+    xor dx, dx
+    div word ptr [bp+8]            ; ax = quotient, dx = remainder
     pop bp
     retf
 ```
@@ -800,11 +924,10 @@ _greeting proc far
 **Row 9: built on the heap.**
 
 ```asm
-    push cx                        ; bytes needed
-    call far ptr _salloc           ; ax = new string: heap, length 0
-    add sp, 2
-    ; copy the pieces to [ax], set length at [ax-4], write the NUL
-    retf                           ; ax = the string, owned by the caller
+    call far ptr M$PBEG            ; print into a new heap string
+    ; print each piece: M$PS, M$PI2, ...
+    call far ptr M$PEND            ; ax = the string
+    retf                           ; owned by the caller
 ```
 
 **Row 10: an owned parameter moved out.**
@@ -906,7 +1029,7 @@ L_fail:                            ; al = the error
     test byte ptr [bx-6], 1        ; heap?
     jz L_kept
     push bx
-    call far ptr _sfree
+    call far ptr M$BDRP
     add sp, 2
 L_kept:
 ```
@@ -938,9 +1061,11 @@ L_kept:
     mov bx, word ptr [bp-2]
     test byte ptr [bx-6], 8        ; readonly?
     jz L_writable
+    push 1                         ; element size
+    push word ptr [bx-4]           ; room for its length
     push bx
-    call far ptr _sown             ; heap copy
-    add sp, 2
+    call far ptr M$BRES            ; heap copy
+    add sp, 6
     mov word ptr [bp-2], ax
     mov bx, ax
 L_writable:
@@ -957,6 +1082,19 @@ Result[T, E]    # .ok(T) or .err(E)
 ```
 
 `?` unwraps success or returns the failure from the enclosing function.
+When the function's own failure type is an enum and exactly one of its
+variants, `v`, holds just the failure's type, `?` returns failure `e` as
+`.v(e)`. This is how a program's error enum carries a `std.io` error:
+
+```text
+enum AppError:
+    io(io.IoError)
+    empty
+
+fn first_line(path: &string) -> Result[Option[string], AppError]:
+    let mut file = io.File.open(path)?     # an IoError returns as .io(e)
+    return .ok(file.read_line()?)
+```
 
 ```text
 fn load(path: &string) -> Result[Image, LoadError]:
@@ -982,7 +1120,9 @@ fn first[T](values: &[T]) -> Option[&T]:
 
 A call infers its type arguments from its arguments; those it cannot infer are
 given in brackets, first to last: `parse[u16](text)`. Inside the body, `T(x)`
-converts to what `T` is bound to.
+converts to what `T` is bound to. A type argument may be a fixed array,
+`Option[u8[4]]` or `Pair[i16[2]]`; a field of that type becomes an array
+field. It cannot be an array of arrays; that is one ranked array.
 
 A protocol is a structural compile-time requirement:
 
@@ -995,8 +1135,20 @@ fn emit[W: Writer](out: &mut W, text: &string) -> Result[void, IoError]:
     return Result.ok()
 ```
 
-A type satisfies a protocol when it has matching methods. There is no `impl`
-declaration. Protocol calls are statically resolved. Version 0.1 has no dynamic
+`Self` in a protocol is the type that satisfies it. A protocol's own type
+parameters are the other types its methods name, and a bound supplies them:
+
+```text
+protocol Source[T]:
+    fn get(self: &Self) -> T
+
+fn read[S: Source[i16]](s: &S) -> i16:
+    return s.get() + 1
+```
+
+A type satisfies a protocol when it has each of its methods, taking and giving
+the same types; a parameter taken by value matches one borrowed. There is no
+`impl` declaration. Protocol calls are statically resolved. Version 0.1 has no dynamic
 protocol objects or vtables.
 
 Operators cannot be overloaded. Standard protocols such as `Iterable`,
@@ -1071,12 +1223,12 @@ L_loop:
     call far ptr _pu2              ; {i}
     add sp, 2
     push offset L_colon            ; ": "
-    call far ptr _pt
+    call far ptr M$PS
     add sp, 2
     push word ptr ss:[di]          ; {x}
-    call far ptr _pi2
+    call far ptr M$PI2
     add sp, 2
-    call far ptr _pn
+    call far ptr M$PN
     add di, 2
     inc si
     cmp si, 8                      ; the view's length folded to 8
@@ -1092,6 +1244,69 @@ A generator that escapes, by being stored, passed on, or returned, becomes a
 state struct holding its locals and a resume point. It has a fixed size, so it
 is placed as section 9 places any such value. Each `next()` is a far call that
 jumps to the saved resume point and returns its `Option` by section 9.4.
+The state holds only the locals that live across a `yield`; `next` is one loop
+over a `match` of the resume point, so no loop is entered at its middle.
+
+The state keeps its parameters and those locals whatever their type: strings,
+arrays, structs, resources, other generators. It owns them as the body would.
+A local's value is dropped where its scope ends, on every path, and an
+iterator dropped part-way drops what is live in it then, a `with` resource
+included. The body resumes inside `unsafe`, `with` and destructuring `let`
+blocks as anywhere else. A `for` in the body evaluates what it iterates once.
+A local takes its type from its value, as anywhere; a borrow of a place is a
+reference to it. The body's moves and borrows are checked as they are where a
+`for` consumes it in place, whichever way it is compiled.
+
+A borrowed parameter is kept as the borrow, so the iterator borrows the
+argument: it cannot outlive it, and the argument cannot change while it lives.
+A borrow kept across a `yield` must be of what the caller lent, such as a
+view of a borrowed parameter. A borrow of the generator's own local is
+refused, since the state moves between calls. A lambda argument cannot be
+kept: a lambda is compiled where it is called.
+
+A generator expression that escapes is a generator of its own. It takes each
+name it reads: a scalar by value, anything else borrowed.
+
+In a function returning `iter[T]`, `return items` hands `items` over: its
+items are yielded, then the function ends. So a function that returns a
+generator's iterator, a generator expression or an `iter[T]` parameter is a
+generator itself, and escapes or is consumed in place as any is.
+
+```text
+fn evens(values: &vec[i16]) -> iter[i16]:
+    return (x for x in values if x % 2 == 0)
+```
+
+```text
+let v: vec[u16] = [1, 2, 3]
+let doubled = (x * 2 for x in v)    # borrows v
+print(total(doubled))               # 12
+```
+
+```text
+fn countdown(start: u16) -> iter[u16]:
+    let mut n = start
+    while n > 0:
+        yield n
+        n -= 1
+
+fn total(values: iter[u16]) -> u16:    # instantiated per generator passed
+    let mut sum: u16 = 0
+    for v in values:
+        sum += v
+    return sum
+
+let mut c = countdown(3)
+c.next()          # .some(3)
+total(c)          # 3
+```
+
+A parameter of type `iter[T]` is a type parameter of its own, so each
+generator passed to it gets its own instance and no call is indirect.
+`range(start, end)` counts from `start` up to, not including, `end`; with no
+overloading there is no one-argument form. `zip[A, B](left: &[A], right: &[B])
+-> iter[(&A, &B)]` pairs two sequences' elements until the shorter ends; a
+generator is not a sequence, so it cannot be zipped.
 
 List comprehensions, dictionary comprehensions, and generator expressions use
 one clause grammar:
@@ -1123,8 +1338,8 @@ let pairs = [
 ```
 
 Clauses evaluate left to right. Comprehension bindings are local. Duplicate
-dictionary keys retain the last value. Dictionary iteration order is not part
-of the language contract.
+dictionary keys retain the last value. A `dict` is not iterable: neither
+`for` nor a comprehension reads one.
 
 A refutable loop or comprehension pattern uses `case`; nonmatching items are
 skipped.
@@ -1195,7 +1410,7 @@ The pad byte keeps the data word-aligned. `length`/`dimensions` and
 `capacity` keep fixed offsets from the data pointer, so only allocation,
 growth, `free`, and writes to possibly read-only data read the flags.
 
-Rank is part of the static type, so `vec[T]` does not store a runtime rank.
+Rank is part of an array's static type, so no descriptor stores it.
 A borrowed view carries a data pointer plus the dimensions. Slicing aliases
 storage and never copies implicitly.
 
@@ -1229,7 +1444,8 @@ values[:]       # everything
 ```
 
 `&values[a:b]` borrows the selection. There are no negative indices and no
-step.
+step. Only a rank-1 sequence slices: an array, `vec`, view, or string, but
+not a ranked array.
 
 An index at or past its dimension invokes the panic handler. A constant index
 into a fixed dimension is checked at compile time. Inside `unsafe`, the
@@ -1244,12 +1460,8 @@ let d0 = a.dim[0]       # first dimension
 let d1 = a.dim[1]       # second dimension
 ```
 
-Nested vectors and ranked vectors are distinct:
-
-```text
-vec[vec[T]]    # potentially jagged
-vec[T]         # always one contiguous allocation (rank determined at compile time)
-```
+A `vec` has rank one; there is no syntax for a ranked `vec`. A
+`vec[vec[T]]` is a vector of vectors, each its own allocation.
 
 A `vec` grows and shrinks at its end:
 
@@ -1260,7 +1472,7 @@ let top = stack.pop()  # panics when empty
 let other = stack.copy()
 ```
 
-`push` and `pop` need a mutable place: a mutable local, a field of one, or
+`pop` of a struct element moves the struct out. `push` and `pop` need a mutable place: a mutable local, a field of one, or
 a `&mut vec[T]`. `copy` copies the elements and everything they own. The
 empty literal shares one static descriptor, so it allocates nothing until
 the first `push`. A `vec` and a `string` share the runtime: grow, shrink,
@@ -1302,14 +1514,15 @@ are read-only; there is no `&mut` string view. A view is not NUL-terminated:
 a foreign function that needs a terminator takes an owned string, and a view
 passed there is copied explicitly first.
 
+A view compares as a string does, but is not an operand of `+` or
+`append`; `v.copy()` makes an owned string of it.
+
 Returning an owned string moves its pointer. Returning a view copies its
 descriptor to the caller's slot. Neither copies bytes; only `+`, `append`
 past capacity, and an explicit copy do.
 
 `s.len` is the length, `s[i]` a `char`, and `for c in s` iterates over the
-chars. The compiler emits these inline, with no iterator object. Strings
-implement `Hashable`, `Ordered`, `Iterable[char]`, `Display`, and
-`Formattable`.
+chars. `s.push(c)` and `s.pop()` work as a vec's do, keeping the NUL. The compiler emits these inline, with no iterator object.
 
 #### F-strings
 
@@ -1320,8 +1533,9 @@ print(f"{name}: {score:04x}")
 let label = f"{name}: {score}"
 ```
 
-`{expr}` uses the value's `Display` method and `{expr:code}` its
-`Formattable` method with that code; `{{` and `}}` are literal braces. As a
+`{expr}` prints the value as `print` does (section 3), and `{expr:code}`
+pads that text to the code's field; only an integer takes a base. `{{` and
+`}}` are literal braces. As a
 direct `print` argument, an f-string streams each piece to output and
 allocates nothing. Anywhere else it builds a new owned string.
 
@@ -1331,22 +1545,38 @@ allocates nothing. Anywhere else it builds a new owned string.
 | `04x` | zero-padded to 4 |
 | `5` / `-5` | padded to 5, right- / left-aligned |
 
+A float prints as the shortest decimal that reads back as the same `f32` or
+`f64`, positional from 0.0001 up to 1e16 and in exponent form outside:
+`0.1`, `2.0`, `1.5e-05`, `1e+16`, `nan`, `inf`.
+[docs/examples/planets.mod](examples/planets.mod) prints both kinds.
+
 #### Runtime
 
 The compiler emits length, indexing, slicing, and iteration inline. The
-runtime supplies:
+runtime is written in the language itself (`runtime/modern/*.mod`); only
+startup and the DOS calls are assembly. Each routine is a code segment of
+its own, so a program links only the routines it reaches. As BC's are, its
+routines are named
+`M$`, a letter for the group, then the operation:
 
-| Routine | Used for |
-|---|---|
-| Near-heap `alloc`, `grow`, `free` | Owned strings. A string is a near pointer, so it lives in DGROUP; DOS allocates only whole segments. |
-| Copy (`rep movsb`) | `append`, `+`, copying a literal or view |
-| Compare (`rep cmpsb`) | `==` and ordering |
-| Hash | `dict` keys |
-| Formatters writing to a sink | `print` and f-strings; one set of digit routines serves both output and string buffers |
-| Panic | Bounds violation and out of memory |
+| Group | Routines | Used for |
+|---|---|---|
+| P print | `M$PI1` to `M$PU4`, `M$PR4`, `M$PR8`, `M$PQ2`, `M$PQ4`, `M$PB`, `M$PC`, `M$PS`, `M$PV`, `M$PN`; `M$PFLD` sets the field; `M$PBEG` and `M$PEND` print into a new string | `print` and f-strings: one set of formatters writing to a sink |
+| B buffer | `M$BRES` reserve, `M$BGRW` grow, `M$BSHR` shrink, `M$BCLN` copy, `M$BDRP` free | strings and vecs |
+| T text | `M$TCAT` join, `M$TAPP` append, `M$TCMP` compare | owned strings |
+| V view | `M$VCPY` copy, `M$VCMP` compare | `&string` views |
+| D dict | `M$DRES` room for one more entry | dicts |
+| E error | `M$EBND` bounds, `M$ESHF` shift, `M$ECNV` conversion, `M$EKEY` key, `M$EDIV` divide fault | panics |
+| O system | `M$OOPN` open, `M$OCRE` create, `M$OREA` read, `M$OWRI` write, `M$OCLO` close, `M$OEXT` exit, `M$OMEM` more memory, `M$OGIV` get and `M$OSIV` set an interrupt vector, `M$OVEC` put them back, `M$OCHN` enter a handler | DOS, in assembly |
 
-The allocator is linked only when a program builds an owned string on the
-heap.
+The heap is DGROUP after the stack, taken from DOS (`INT 21h` function
+`4Ah`) a kilobyte or more at a time, up to DGROUP's 64 KB. Free blocks wait
+in thirteen lists, one per power-of-two size class. An allocation takes the
+first block that fits in its own class, else the first of the next class a
+bitmap shows is occupied. A freed block merges at once with free neighbours,
+which boundary tags find, so the heap does not fragment into slivers. A
+buffer grows in place when the block after it is free. A block's overhead is
+a 2-byte header, and sizes round up to 4 bytes.
 
 ## 14. Modules
 
@@ -1407,6 +1637,21 @@ executable module bodies and no import-time side effects. A module-level `var`
 must have a compile-time initializer; resource construction occurs explicitly
 inside a function.
 
+A `var` is a place in DGROUP that every function of its module names, its
+initial value stored in the executable. A local of the same name hides it. It
+is a scalar, an array or a struct holding no heap value, and starts as a
+literal of constants.
+
+```text
+var count: u16 = 0
+var table: i16[8] = [0] * 8
+var origin: Point = Point(x=0, y=0)
+
+fn record(value: i16) -> void:
+    table[count] = value
+    count += 1
+```
+
 The import graph must be acyclic. A cycle is a compile-time error and is
 reported as the complete chain of module names. Shared types belong in a lower
 module imported by both participants.
@@ -1419,6 +1664,41 @@ root and ABI support through the `abi` root:
 import std.io
 import abi.qb45 as qb
 ```
+
+The compiler supplies the modules under both roots. `abi` holds `abi.qb45`,
+`abi.pds71` and `abi.vbdos`, and `abi.basic`, which they share. `std` holds:
+
+- `std.io`: files. A `File` owns a DOS handle, closes it when dropped, and
+  reads through a 128-byte buffer of its own. A failure is an `IoError`,
+  never a panic.
+- `std.dos`: interrupt vectors (section 15).
+- `std.os`: the runtime's DOS calls, which the others wrap.
+
+`std.io` declares:
+
+```text
+pub enum IoError:
+    not_found
+    denied
+    failed(code: u16)
+
+pub const READ: u8 = 0          # the modes of open
+pub const WRITE: u8 = 1
+pub const READ_WRITE: u8 = 2
+
+pub fn File.open(path: &string, mode: u8 = READ) -> Result[File, IoError]
+pub fn File.create(path: &string) -> Result[File, IoError]   # empty, replacing any
+pub fn File.write(self: &mut File, text: &string) -> Result[u16, IoError]
+pub fn File.write_raw(self: &mut File, data: *far u8, count: u16) -> Result[u16, IoError]
+pub fn File.read_line(self: &mut File) -> Result[Option[string], IoError]
+pub fn File.read_raw(self: &mut File, data: *far mut u8, count: u16) -> Result[u16, IoError]
+pub fn File.lines(self: &mut File) -> iter[string]
+```
+
+`read_line` returns the next line without its end, or `none` at the end of
+the file, and `lines` yields each until the end or a failure. `read_raw`
+returns what `read_line` buffered first, and is short only at the end of the
+file.
 
 Only scalar types, `Option`, `Result`, and the minimum protocols required by
 the language are implicitly available. I/O, allocation policies, containers
@@ -1462,13 +1742,33 @@ fn main() -> i16:
 `extern` imports a symbol; `export` exposes one under its own name, never
 qualified by its module. Foreign calls and taking a raw pointer are unsafe:
 they appear only in an `unsafe:` block. A `*mut` pointer is taken with `&mut`.
-A `*near` pointer reaches only DGROUP's static data, so the program takes
-`*far` ones; a `*near` one comes from foreign code.
+`@link_name` gives a function's object symbol, and `pub` on an `extern`
+lets other modules call it.
 [docs/examples/interop](examples/interop) links a C library both ways.
 `pascal16` is the convention of QuickBASIC and Turbo Pascal libraries: its
 symbols are upper case, arguments are pushed first to last, and the callee
 removes them with `retf n`. [docs/examples/pascal](examples/pascal) calls an
-assembly library that calls back into the program. Exported and imported signatures may contain only ABI-safe scalars,
+assembly library that calls back into the program.
+
+`interrupt16` defines an interrupt handler: a far procedure that INT or an
+IRQ enters, with any DS. It takes nothing, returns void, and nothing calls
+it. It saves every general register with `pushad`, and DS, ES, FS and GS;
+loads DS and ES with DGROUP; clears the direction flag; and leaves by
+`iret`. It does not save the x87 state, so it must not use floating point.
+It must not call anything that re-enters DOS or the BIOS, nor allocate or
+free, which is not checked; the runtime's other routines, such as
+arithmetic and comparison, are safe. A module variable a handler names is
+volatile: every function reads and writes it in memory.
+
+A foreign function pointer, `extern "interrupt16" fn() -> void`, is a far
+code address. A handler's name is its value. `std.dos` reads a vector with
+`vector(n)`, sets one with `set_vector(n, handler)`, and enters a handler as
+its interrupt would with `chain(handler)`, so that a hook passes the
+interrupt on. The runtime puts back every vector the program set when it
+ends, by return, panic or Ctrl-C; at most 16 are kept.
+[docs/examples/ticker.mod](examples/ticker.mod) hooks the timer tick.
+
+Exported and imported signatures may contain only ABI-safe scalars,
 represented structs and enums, raw pointers, foreign function pointers, and
 compiler-provided foreign descriptor views.
 
@@ -1488,19 +1788,74 @@ vbdos
 
 Assembly is not an ABI. An external assembly routine implements one of these
 ABIs. Inline assembly declares all inputs, outputs, and clobbers and may appear
-only in `unsafe` code.
-
-Compiler-supplied BASIC ABI modules expose scoped views such as:
+only in `unsafe` code:
 
 ```text
-qb.Ref[T]
-qb.StringRef
-qb.ArrayRef[T, N]
+fn now() -> u32:
+    unsafe:
+        asm(ah=0, out=(cx=let high, dx=let low), clobbers=[al, flags]):
+            int 1Ah
+        return (u32(high) << 16) | u32(low)
 ```
 
-These adapt BASIC descriptors to native borrows without transferring ownership.
-Retaining, resizing, or taking ownership requires an explicit copy or
-ABI-specific owning operation.
+- `reg=value` is an input: the register holds the value when the block
+  starts. A byte register is part of its word; `ah=0` alone zeroes `ax`.
+  A word takes a 16-bit integer or a near pointer.
+- `out=(reg=place, reg=let name)` assigns the register's final value to a
+  place or binds it, as `u16` or `u8`.
+- `clobbers=[...]` lists every other register the block changes, an input
+  among them, `flags` if it changes any, and `memory` if it reads or writes
+  memory. `memory` reaches what an unknown routine would: memory whose
+  address has escaped, and what a pointer input points to.
+- Inputs and outputs are `ax`, `bx`, `cx`, `dx`, their bytes, `si` and `di`;
+  a block may also clobber `es`. It restores `sp`, `bp`, `ds` and `ss`.
+- The body is Intel syntax, one instruction a line, `;` comments, and labels
+  ending in `:` that jumps inside the block target. The compiler assembles it
+  and refuses anything but `mov`, `xchg`, `in`, `out`, `int`, `push`, `pop`,
+  `pushf`, `popf`, `cli`, `sti`, `cld`, `std`, `add`, `sub`, `and`, `or`,
+  `xor`, `cmp`, `test`, `inc`, `dec`, `shl`, `shr`, the string instructions
+  with `rep`, `jmp`, the conditional jumps, and `loop`.
+- The block is one operation the optimizer keeps in order; it moves only what
+  the declarations allow across it. The host interpreter refuses to run it.
+
+[docs/examples/speaker.mod](examples/speaker.mod) plays a tune on the PC
+speaker.
+
+`qb45`, `pds71` and `vbdos` are those BASIC compilers' conventions:
+pascal16's symbols, order and cleanup, but BASIC passes an argument by
+reference, as a near pointer into DGROUP, unless it is `BYVAL`. A scalar
+parameter is `BYVAL`. A by-reference one is an adapter from the profile's
+module, a scoped borrow of what the pointer points to:
+
+| Adapter | BASIC parameter | Borrowed as |
+|---|---|---|
+| `qb.Ref[T]` | `name AS T` | `&mut T` |
+| `qb.StringRef` | `name$` | `&mut [char]`, its characters |
+| `qb.ArrayRef[T, N]` | `name() AS T` | `&mut [T, N]`, the last subscript first |
+
+Retaining, resizing, or taking ownership requires an explicit copy. An
+`extern` passes an adapter as the near pointer it is: `&mut total` is a
+`qb.Ref[i16]`. A library for BASIC runs on BASIC's stack, in DGROUP, so a
+near pointer reaches its locals as well as its module variables.
+
+A BASIC function returns an INTEGER in `ax` and a LONG in `dx:ax`. A SINGLE or
+DOUBLE goes through a near pointer the caller pushes last: the callee stores
+the result there and returns the pointer in `ax`, both ways. A `&string`
+export is a string FUNCTION: before it returns, its module's `string_result`
+copies the view to BASIC's string temporaries with the runtime's `B$SCPY`,
+and BASIC takes that descriptor from `ax`. The view may be of a local.
+
+The profiles differ in their strings, as their modules say: a QB45
+descriptor is a length and a near data pointer, while PDS 7.1's and VB-DOS's
+far strings are read through their runtimes' `STRINGADDRESS` and
+`STRINGLENGTH` and made with `STRINGASSIGN`.
+
+A library for BASIC links without the modern runtime, since BASIC owns
+start-up, DGROUP and the heap, and every runtime routine needs the modern
+start-up or heap. In a program with a BASIC export or extern, the compiler
+refuses a statement that calls the runtime: printing, a heap string, vec or
+dict, or a check whose failure panics. Index in `unsafe:`, or iterate.
+[docs/examples/basic](examples/basic) sorts a QuickBASIC program's array.
 
 The compiler can generate `.H`, `.BI`, and assembler `.INC` declarations from
 exports: `modernfront --declare h|bi|inc SOURCE`. The generated files are
@@ -1578,44 +1933,58 @@ sum(map(filter(values, |x| x > 0), |x| x * 2))
 Syntactic sugar for nested function calls. Deferred because current nesting is
 sufficient and `|>` adds a new operator with parsing complexity.
 
-### Enum tag remapping and sparse jump tables
-
-For enums with non-contiguous tag values, the compiler remaps tags to dense
-`[0, N)` internally and uses a dense jump table for `match` statements.
-
-```text
-enum Status:
-    pending = 1
-    active = 10
-    done = 100
-```
-
-Internally becomes `[0, 1, 2]` for jump table generation. On FFI boundaries,
-tags are translated back to original values.
-
-**Machine cost on 486/P5:** Dense jump table = ~5-7 cycles per match.
-Sparse jump tables with secondary lookups add 3-5 cycles. Tag remapping is
-compile-time only, zero runtime overhead.
-
-This is an implementation detail; users write sparse tag values and the compiler
-optimizes transparently.
-
 ## 18. Complete example
 
+`docs/examples/entries.mod` reads `name=value` lines through `std.io`; a
+failure ends the program with exit code 1.
+
 ```text
-import io
+import std.io as io
 
 enum LoadError:
     not_found
+    unreadable
     invalid(line: u16)
 
 struct Entry:
     name: string
     value: i16
 
+# `line` as `name=value`, the value a decimal integer.
+fn parse(line: &string, number: u16) -> Result[Entry, LoadError]:
+    let mut at: u16 = 0
+    while at < line.len && line[at] != '=':
+        at += 1
+    let negative = at + 1 < line.len && line[at + 1] == '-'
+    let mut digit = negative ? at + 2 : at + 1
+    if at == 0 || digit >= line.len:
+        return .err(.invalid(number))
+    let mut value: i16 = 0
+    while digit < line.len:
+        let letter = line[digit]
+        if letter < '0' || letter > '9':
+            return .err(.invalid(number))
+        value = value * 10 + i16(u8(letter) - u8('0'))
+        digit += 1
+    let name = &line[0:at]
+    return .ok(Entry(name=name.copy(), value=negative ? -value : value))
+
 fn load_entries(path: &string) -> Result[vec[Entry], LoadError]:
-    with file = io.File.open(path, mode=0)?:
-        return [parse(line)? for line in file.lines() if !line.empty()]
+    match io.File.open(path):
+        .ok(opened):
+            let mut file = opened
+            let mut entries: vec[Entry] = []
+            let mut number: u16 = 0
+            for line in file.lines():
+                number += 1
+                if !line.empty():
+                    let entry = parse(&line, number)?
+                    entries.push(entry)
+            return .ok(entries)
+        .err(.not_found):
+            return .err(.not_found)
+        .err(_):
+            return .err(.unreadable)
 
 fn main() -> Result[void, LoadError]:
     let entries = load_entries("VALUES.DAT")?
@@ -1628,9 +1997,9 @@ fn main() -> Result[void, LoadError]:
 
     match entries:
         []:
-            io.print("no entries")
+            print("no entries")
         [first, *rest]:
-            io.print(f"first={first.name}, remaining={rest.len}")
-
+            print(f"first={first.name}, remaining={rest.len}")
+    print(f"{positive.len} positive, width={positive["width"]}")
     return .ok()
 ```

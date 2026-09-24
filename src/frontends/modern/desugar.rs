@@ -8,6 +8,13 @@ use super::error::Diagnostic;
 use super::syntax::BinaryOp;
 use super::syntax::Expr;
 use super::syntax::Function;
+use super::syntax::GenericParameter;
+use super::syntax::IterationMode;
+use super::syntax::ParameterType;
+use super::syntax::TypeAnnotation;
+use super::syntax::TypeSpec;
+use super::syntax::UnaryOp;
+use super::scopes;
 use super::syntax::Module;
 use super::syntax::Statement;
 use super::syntax::Struct;
@@ -20,10 +27,32 @@ pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
         .iter()
         .map(|one| (one.name.as_str(), &one.value))
         .collect();
+    for one in &mut module.statics {
+        one.value.walk_mut(&mut |expression| {
+            constant(expression, &consts, &[]);
+            repeat(expression);
+            constructor(expression, &structs)
+        })?;
+    }
     for function in &mut module.functions {
+        iterator_parameters(function);
+        if matches!(&function.result, TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "iter") {
+            hand_over_returned(&mut function.body);
+        }
+        for default in function.parameters.iter_mut().filter_map(|one| one.default.as_mut()) {
+            default.walk_mut(&mut |expression| {
+                constant(expression, &consts, &[]);
+                Ok::<(), Diagnostic>(())
+            })?;
+        }
+        let mut locals = function.parameters.iter().map(|one| one.name.clone()).collect();
+        scopes::walk_mut(&mut function.body, &mut locals, &mut |expression, locals| {
+            constant(expression, &consts, locals);
+            Ok::<(), Diagnostic>(())
+        })?;
         for statement in &mut function.body {
             statement.walk_mut(&mut |expression| {
-                constant(expression, &consts);
+                untyped_arithmetic(expression);
                 repeat(expression);
                 qualified_variant(expression, &enums);
                 constructor(expression, &structs)
@@ -31,6 +60,45 @@ pub fn desugar(module: &mut Module) -> Result<(), Diagnostic> {
         }
     }
     Ok(())
+}
+
+/// Each `iter[T]` parameter as a type parameter of its own: a function
+/// taking a generator is instantiated for the state of each passed to it
+/// (section 12).
+fn iterator_parameters(function: &mut Function) {
+    for parameter in &mut function.parameters {
+        let spec = match &mut parameter.type_ {
+            ParameterType::Owned(TypeAnnotation::Value(spec)) | ParameterType::Borrowed { target: TypeAnnotation::Value(spec), .. } => spec,
+            _ => continue,
+        };
+        if matches!(spec, TypeSpec::Applied { name, .. } if name == "iter") {
+            let name = format!("$Iterator{}", function.generics.len());
+            function.generics.push(GenericParameter { name: name.clone(), bound: None });
+            *spec = TypeSpec::Named(name);
+        }
+    }
+}
+
+/// In a function returning `iter[T]`, `return items` hands `items` over: its
+/// items are yielded, then the function ends (section 12). So a function
+/// that returns an iterator is a generator, and escapes or is consumed in
+/// place as any is.
+fn hand_over_returned(body: &mut Vec<Statement>) {
+    let mut at = 0;
+    while at < body.len() {
+        for block in body[at].blocks_mut() {
+            hand_over_returned(block);
+        }
+        if let Statement::Return { value: value @ Some(_), span } = &mut body[at] {
+            let (iterable, span) = (value.take().expect("matched"), *span);
+            let name = format!("$returned{}_{}", span.line, span.column);
+            let each = Statement::Yield { value: Expr::Name(name.clone(), span), span };
+            let items = Statement::For { mode: IterationMode::Value, name, iterable, body: vec![each], span };
+            body.insert(at, items);
+            at += 1;
+        }
+        at += 1;
+    }
 }
 
 /// A declaration in a block, seen from there to the block's end.
@@ -90,6 +158,13 @@ fn locals(owner: &str, body: &mut Vec<Statement>, outer: &BTreeMap<String, Local
         if let Statement::Bind { name, .. } = statement {
             scope.remove(name);
         }
+        if let Statement::Asm(asm) = statement {
+            for (_, target, _) in &asm.outputs {
+                if let crate::frontends::modern::syntax::AsmTarget::Bind { name, .. } = target {
+                    scope.remove(name);
+                }
+            }
+        }
         true
     });
 }
@@ -111,10 +186,30 @@ fn local(expression: &mut Expr, scope: &BTreeMap<String, Local>) {
     }
 }
 
-/// A constant's name stands for its literal.
-fn constant(expression: &mut Expr, consts: &BTreeMap<&str, &Expr>) {
+/// A constant's name stands for its literal, where no local hides it.
+/// Arithmetic on untyped integer literals is one, so it takes its type
+/// from context as they do (section 3).
+fn untyped_arithmetic(expression: &mut Expr) {
+    let untyped = |one: &Expr| match one {
+        Expr::Integer(..) => true,
+        Expr::Unary { op: UnaryOp::Negative, operand, .. } => matches!(operand.as_ref(), Expr::Integer(..)),
+        _ => false,
+    };
+    let operands_untyped = match expression {
+        Expr::Binary { left, right, .. } => untyped(left) && untyped(right),
+        Expr::Unary { operand, .. } => untyped(operand),
+        _ => false,
+    };
+    if operands_untyped {
+        if let Some(value @ Expr::Integer(..)) = super::consts::folded(expression, &BTreeMap::new()) {
+            *expression = value;
+        }
+    }
+}
+
+fn constant(expression: &mut Expr, consts: &BTreeMap<&str, &Expr>, locals: &[String]) {
     if let Expr::Name(name, _) = expression {
-        if let Some(value) = consts.get(name.as_str()) {
+        if let Some(value) = consts.get(name.as_str()).filter(|_| !locals.contains(name)) {
             *expression = (*value).clone();
         }
     }

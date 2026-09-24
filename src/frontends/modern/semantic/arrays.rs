@@ -64,6 +64,11 @@ impl<'a> FunctionCompiler<'a> {
                     );
                     result
                 }
+                Storage::Reference(pointer) => {
+                    let result = self.value(TypeName::Addr);
+                    self.emit("copy", vec![result], vec![hir::Operand::Value(pointer)], None);
+                    result
+                }
                 Storage::Slice(descriptor) => {
                     let BindingType::Slice { element, rank } = binding.type_ else {
                         unreachable!("slice storage has slice type")

@@ -1,7 +1,8 @@
 //! The modern-language runtime's heap and string routines, modelled on the
-//! host (runtime/modern/heap.c and text.c). A dropped buffer is marked, so a
+//! host (runtime/modern/buffers.mod and strings.mod). A dropped buffer is marked, so a
 //! second drop or a leak is an execution error, not silent.
 
+use crate::abi::modern as rt;
 use super::*;
 
 const HEAP: u8 = 0x01;
@@ -120,7 +121,7 @@ impl Machine<'_> {
         Ok(copy)
     }
 
-    /// runtime/modern/dict.c's `rt_dict_reserve`: room for one more entry.
+    /// runtime/modern/dicts.mod's `M$DRES`: room for one more entry.
     fn dict_reserve(&mut self, table: &Address, size: usize) -> Outcome<Address> {
         flags(table)?;
         let slots = word(table, -4)? as usize;
@@ -180,30 +181,30 @@ impl Machine<'_> {
         arguments: &[Scalar],
     ) -> Outcome<Option<Option<Scalar>>> {
         let result = match name {
-            "_rt_drop" => {
+            rt::BUFFER_DROP => {
                 if let Some(address) = pointer(&arguments[0])? {
                     self.drop_buffer(&address)?;
                 }
                 None
             }
-            "_rt_reserve" | "_rt_grow" | "_rt_shrink" | "_rt_clone" => {
+            rt::BUFFER_RESERVE | rt::BUFFER_GROW | rt::BUFFER_SHRINK | rt::BUFFER_CLONE => {
                 let Some(address) = pointer(&arguments[0])? else {
                     return fail(format!("{name} of null"));
                 };
                 let length = word(&address, -4)? as usize;
                 match name {
-                    "_rt_reserve" => Some(Scalar::Address(self.reserve(
+                    rt::BUFFER_RESERVE => Some(Scalar::Address(self.reserve(
                         &address,
                         size(&arguments[1])?,
                         size(&arguments[2])?,
                     )?)),
-                    "_rt_grow" => {
+                    rt::BUFFER_GROW => {
                         let count = size(&arguments[1])?;
                         let grown = self.reserve(&address, length + count, size(&arguments[2])?)?;
                         set_length(&grown, length + count);
                         Some(Scalar::Address(grown))
                     }
-                    "_rt_shrink" => {
+                    rt::BUFFER_SHRINK => {
                         let Some(rest) = length.checked_sub(size(&arguments[1])?) else {
                             return fail("pop from an empty vec");
                         };
@@ -219,13 +220,13 @@ impl Machine<'_> {
                     }
                 }
             }
-            "_rt_concat" | "_rt_append" => {
+            rt::TEXT_CONCAT | rt::TEXT_APPEND => {
                 let (Some(left), Some(right)) = (pointer(&arguments[0])?, pointer(&arguments[1])?)
                 else {
                     return fail(format!("{name} of null"));
                 };
                 let more = text(&right)?;
-                let target = if name == "_rt_concat" {
+                let target = if name == rt::TEXT_CONCAT {
                     let bytes = text(&left)?;
                     self.allocate(&bytes, bytes.len(), bytes.len() + more.len(), 1)
                 } else {
@@ -233,31 +234,31 @@ impl Machine<'_> {
                 };
                 Some(Scalar::Address(self.append(&target, &more)?))
             }
-            "_rt_compare" => {
+            rt::TEXT_COMPARE => {
                 let (Some(left), Some(right)) = (pointer(&arguments[0])?, pointer(&arguments[1])?)
                 else {
-                    return fail("_rt_compare of null");
+                    return fail(format!("{} of null", rt::TEXT_COMPARE));
                 };
                 Some(Scalar::Int(text(&left)?.cmp(&text(&right)?) as i128))
             }
-            "_rt_dict_reserve" => {
+            rt::DICT_RESERVE => {
                 let Some(table) = pointer(&arguments[0])? else {
-                    return fail("_rt_dict_reserve of null");
+                    return fail(format!("{} of null", rt::DICT_RESERVE));
                 };
                 Some(Scalar::Address(self.dict_reserve(&table, size(&arguments[1])?)?))
             }
-            "_rt_panic_key" => return self.panic("key not found"),
-            "_rt_panic_bounds" => return self.panic("index out of bounds"),
-            "_rt_panic_shift" => return self.panic("shift count out of range"),
-            "_rt_panic_convert" => return self.panic("float outside the integer type"),
-            "_rt_view_compare" => {
+            rt::ERROR_KEY => return self.panic("key not found"),
+            rt::ERROR_BOUNDS => return self.panic("index out of bounds"),
+            rt::ERROR_SHIFT => return self.panic("shift count out of range"),
+            rt::ERROR_CONVERT => return self.panic("float outside the integer type"),
+            rt::VIEW_COMPARE => {
                 let (left, right) = (
                     view_bytes(&arguments[0], &arguments[1])?,
                     view_bytes(&arguments[2], &arguments[3])?,
                 );
                 Some(Scalar::Int(left.cmp(&right) as i128))
             }
-            "_rt_view_copy" => {
+            rt::VIEW_COPY => {
                 let bytes = view_bytes(&arguments[0], &arguments[1])?;
                 Some(Scalar::Address(self.allocate(
                     &bytes,
@@ -266,18 +267,99 @@ impl Machine<'_> {
                     1,
                 )))
             }
-            "_rt_begin" => {
+            rt::PRINT_BEGIN => {
                 let sink = self.allocate(&[], 0, 16, 1);
                 self.sink = Some(sink);
                 None
             }
-            "_rt_end" => match self.sink.take() {
+            rt::PRINT_END => match self.sink.take() {
                 Some(sink) => Some(Scalar::Address(sink)),
-                None => return fail("_rt_end without _rt_begin"),
+                None => return fail(format!("{} without {}", rt::PRINT_END, rt::PRINT_BEGIN)),
             },
+            rt::FILE_OPEN | rt::FILE_CREATE | rt::FILE_READ | rt::FILE_WRITE | rt::FILE_CLOSE => {
+                Some(Scalar::Int(i128::from(self.file(name, arguments)?)))
+            }
             _ => return Ok(None),
         };
         Ok(Some(result))
+    }
+
+    /// The DOS file calls on host files: a handle or count, or DOS's error
+    /// code negated, as runtime/modern/dos.asm returns them.
+    fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
+        use std::io::{Read, Write};
+        const FIRST: usize = 5;
+        const STANDARD_OUTPUT: usize = 1;
+        let failed = |error: std::io::Error| -> i16 {
+            match error.kind() {
+                std::io::ErrorKind::NotFound => -2,
+                std::io::ErrorKind::PermissionDenied => -5,
+                _ => -31,
+            }
+        };
+        if name == rt::FILE_OPEN || name == rt::FILE_CREATE {
+            let Some(path) = pointer(&arguments[0])? else {
+                return fail(format!("{name} of null"));
+            };
+            let bytes = path.memory.borrow().bytes[path.offset as usize..].to_vec();
+            let path: String = bytes.iter().take_while(|one| **one != 0).map(|one| *one as char).collect();
+            let mut options = std::fs::OpenOptions::new();
+            match name == rt::FILE_CREATE {
+                true => options.write(true).create(true).truncate(true),
+                false => match size(&arguments[1])? {
+                    0 => options.read(true),
+                    1 => options.write(true),
+                    _ => options.read(true).write(true),
+                },
+            };
+            return Ok(match options.open(&path) {
+                Ok(file) => {
+                    self.files.push(Some(file));
+                    (FIRST + self.files.len() - 1) as i16
+                }
+                Err(error) => failed(error),
+            });
+        }
+        let handle = size(&arguments[0])?;
+        if name == rt::FILE_WRITE && handle == STANDARD_OUTPUT {
+            let bytes = view_bytes(&arguments[1], &arguments[2])?;
+            self.emit(&cp437(&bytes))?;
+            return Ok(bytes.len() as i16);
+        }
+        let Some(Some(file)) = handle.checked_sub(FIRST).and_then(|at| self.files.get_mut(at)) else {
+            return Ok(-6);
+        };
+        Ok(match name {
+            rt::FILE_READ => {
+                let Some(data) = pointer(&arguments[1])? else {
+                    return fail(format!("{name} of null"));
+                };
+                let mut bytes = vec![0; size(&arguments[2])?];
+                match file.read(&mut bytes) {
+                    Ok(count) => {
+                        let start = data.offset as usize;
+                        let mut cells = data.memory.borrow_mut();
+                        let Some(target) = cells.bytes.get_mut(start..start + count) else {
+                            return fail(format!("{name} outside its buffer"));
+                        };
+                        target.copy_from_slice(&bytes[..count]);
+                        count as i16
+                    }
+                    Err(error) => failed(error),
+                }
+            }
+            rt::FILE_WRITE => {
+                let bytes = view_bytes(&arguments[1], &arguments[2])?;
+                match file.write_all(&bytes) {
+                    Ok(()) => bytes.len() as i16,
+                    Err(error) => failed(error),
+                }
+            }
+            _ => {
+                self.files[handle - FIRST] = None;
+                0
+            }
+        })
     }
 
     /// Formatted text goes to the console, or while an f-string builds, into it.
@@ -292,7 +374,7 @@ impl Machine<'_> {
         Ok(())
     }
 
-    /// Ends the program the way the DOS runtime's `rt_panic` does.
+    /// Ends the program the way the DOS runtime's panics do.
     pub(super) fn panic<T>(&mut self, message: &str) -> Outcome<T> {
         self.panicked = Some(message.to_owned());
         fail(format!("panic: {message}"))
@@ -321,10 +403,10 @@ pub(super) fn view_bytes(data: &Scalar, length: &Scalar) -> Outcome<Vec<u8>> {
         .ok_or_else(|| ExecutionError("view outside its buffer".into()))
 }
 
-/// `_pt`'s bytes: a string's, by its descriptor.
+/// `M$PS`'s bytes: a string's, by its descriptor.
 pub(super) fn string_bytes(argument: &Scalar) -> Outcome<Vec<u8>> {
     match pointer(argument)? {
         Some(address) => text(&address),
-        None => fail("_pt of null"),
+        None => fail(format!("{} of null", rt::PRINT_STRING)),
     }
 }

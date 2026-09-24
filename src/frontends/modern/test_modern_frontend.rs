@@ -4,6 +4,7 @@
 //! and the tests made of nothing else; test_dos_bootstrap_enters_the_runtime_before_language_main
 //! (reads runtime sources, no compiler).
 
+use crate::abi::modern as rt;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -220,7 +221,7 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
     assert!(constants.contains(&&model::Operand::constant(types["fixed16"].id, 147_456)));
 
     let decimal_prints: Vec<&model::Instruction> =
-        instructions(fixed_literals).filter(|one| one.callee.as_deref() == Some("_pf4")).collect();
+        instructions(fixed_literals).filter(|one| one.callee.as_deref() == Some(rt::PRINT_Q4)).collect();
     assert_eq!(decimal_prints.len(), 2);
     for decimal_print in decimal_prints {
         let [raw, fraction] = decimal_print.operands.as_slice() else { panic!("two operands") };
@@ -310,12 +311,12 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
 
     let callables: std::collections::BTreeMap<&str, &model::Callable> =
         module.callables.iter().map(|one| (one.name.as_str(), one)).collect();
-    assert!(!callables["_pt"].defined);
-    assert!(!callables["_pf4"].defined);
-    assert_eq!(callables["_pf4"].parameter_types, [types["i32"].id, types["u8"].id]);
-    assert!(!callables["_pn"].defined);
+    assert!(!callables[rt::PRINT_STRING].defined);
+    assert!(!callables[rt::PRINT_Q4].defined);
+    assert_eq!(callables[rt::PRINT_Q4].parameter_types, [types["i32"].id, types["u8"].id]);
+    assert!(!callables[rt::PRINT_NEWLINE].defined);
     assert!(module.functions[0].calls.iter().all(|call| call.distance == model::CallDistance::Far));
-    let fixed_id = callables["_pf4"].id;
+    let fixed_id = callables[rt::PRINT_Q4].id;
     assert!(module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0]));
 
     let lowered = lowered_named(&program, "nbody.nbody");
@@ -879,6 +880,26 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
 }
 
 #[test]
+fn test_an_array_field_fills_and_copies_as_one_run_each() {
+    // A 128-byte field's `[0] * 128` was 128 byte stores, and each copy of its struct 128 loads and stores.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "field_runs.mod",
+        "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let opened = between(&assembly, "_opened proc", "_opened endp");
+    let relay = between(&assembly, "_relay proc", "_relay endp");
+
+    assert!(opened.contains("rep stos"), "{opened}");
+    assert!(relay.contains("rep movs") || Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
+    for body in [opened, relay] {
+        assert!(body.matches("byte ptr").count() < 8, "{body}");
+    }
+}
+
+#[test]
 fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
     // `[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged.
     let directory = tempfile::tempdir().expect("a directory");
@@ -946,7 +967,7 @@ fn test_a_negative_index_is_out_of_bounds() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = "fn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    if i < 0:\n        return a[i]\n    return 0\n";
     let body = _settled(&directory, text, &O2());
-    let panics = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.name == "_rt_panic_bounds").count();
+    let panics = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.name == rt::ERROR_BOUNDS).count();
 
     assert_eq!(panics, 1);
 }
@@ -1026,9 +1047,9 @@ fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     let source = written(
         &directory,
         "unrolled_fill.mod",
-        "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
+        "fn value(k: i16, j: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, j]\nfn main() -> i16:\n    return i16(value(3, 2) + value(4, 1))\n",
     );
-    // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n.
+    // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n. Two calls keep `value` unspecialized.
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
     let zeroes: Vec<String> =
@@ -1133,11 +1154,12 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
 #[test]
 fn test_a_byte_argument_is_pushed_as_a_word() {
     // A u8 or char argument reached the push as `push al`, which the assembler rejects.
+    // digit is exported so that the call is not inlined.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "byte_argument.mod",
-        "fn digit(c: char) -> u8:\n    return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
+        "export \"cdecl16\":\n    fn digit(c: char) -> u8:\n        return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
     assert!(assembly.contains("call far ptr _digit"));
@@ -1272,6 +1294,54 @@ fn test_a_pascal_float_result_returns_in_st0_whatever_its_last_parameter() {
 }
 
 #[test]
+/// A pascal16 extern returns a float in st(0), as its ABI says. The call
+/// read it BASIC's way: the result's address from ax, then `fld [bx]`.
+fn test_a_pascal_float_result_is_read_from_st0() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "scaled.mod",
+        "extern \"pascal16\":\n    fn scale(value: f32) -> f32\n\nexport \"pascal16\":\n    fn twice(value: f32) -> f32:\n        unsafe:\n            return scale(value) * 2.0\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let twice = between(&text, "TWICE proc far", "TWICE endp");
+    assert!(twice.contains("call far ptr SCALE") && !twice.contains("[bx]"), "{twice}");
+}
+
+#[test]
+/// A near raw pointer to a module struct is its offset. It was taken as the
+/// far address and copied to the near type, which the HIR refused.
+fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "near.mod",
+        "@repr(\"c16\", pack=1)\nstruct Pair:\n    low: u16\n    high: u16\n\nvar pair: Pair = Pair(low=1, high=2)\n\n\
+         extern \"pascal16\":\n    fn take(pair: *near Pair) -> u16\n\nexport \"pascal16\":\n    fn give() -> u16:\n        unsafe:\n            return take(&pair)\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    assert!(between(&text, "GIVE proc far", "GIVE endp").contains("push offset"), "{text}");
+}
+
+#[test]
+/// Any integer converts to a float: a parameter, a temporary, a constant, of
+/// any width or sign. Only one already in memory in an x87 format did;
+/// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a place".
+fn test_any_integer_operand_converts_to_a_float() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "floats.mod",
+        "export \"pascal16\":\n    fn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n        \
+         return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let mixed = between(&text, "MIXED proc far", "MIXED endp");
+    // u32 is loaded as a signed qword, u16 widened to a signed dword.
+    assert!(mixed.contains("fild qword ptr") && mixed.contains("movzx eax, cx"), "{mixed}");
+}
+
+#[test]
 /// Section 9.2: an aggregate of 4 bytes or less comes back in registers,
 /// with no hidden slot pointer; a larger one still takes the slot.
 fn test_small_aggregates_return_in_registers() {
@@ -1372,4 +1442,337 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
     for value in [", 7", ", 8", ", 9"] {
         assert!(text.contains(value), "{value} is never stored:\n{text}");
     }
+}
+
+const HELPERS: &str = "\
+fn twice(value: i16) -> i16:
+    return value + value
+
+fn scaled(value: i16) -> i16:
+    return twice(value) + 1
+
+fn main() -> i16:
+    let mut total: i16 = 0
+    for i in 0..10:
+        total += scaled(i)
+    return total
+";
+
+#[test]
+fn a_private_one_line_helper_is_inlined_into_its_caller() {
+    // Each function was optimized alone, so scaled kept
+    // `push [bp+6] / call far ptr _twice` for a one-line add.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = listing(&parsed(&written(&directory, "helper.mod", HELPERS)), "main", &O2());
+    assert!(!text.lines().any(|line| line.contains("call") && line.contains("_twice")), "{text}");
+}
+
+#[test]
+fn a_call_inlined_away_leaves_no_extern() {
+    // The call table outlived the inlined call: main declared
+    // `extern _scaled:far` for a procedure the module no longer has.
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = listing(&parsed(&written(&directory, "helper.mod", HELPERS)), "main", &O2());
+    assert!(!text.contains("_scaled"), "{text}");
+}
+
+#[test]
+fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
+    // One segment held every procedure, so a program linked all of the
+    // runtime even when it called one routine.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "two.mod", "export \"cdecl16\":\n    fn unused(x: i16) -> i16:\n        return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let object = modern_compile::written_as(&parsed(&source), "main", &source, &level("O2"), crate::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    let records = crate::objectfile::omf::parse(&object).expect("parses");
+    let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
+    // Two procedures, and _DATA.
+    assert_eq!(segments, 3);
+}
+
+#[test]
+fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure() {
+    // A segment per procedure, all of one name, was the default: Microsoft
+    // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "two.mod", "export \"cdecl16\":\n    fn unused(x: i16) -> i16:\n        return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let object = modern_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes");
+    let records = crate::objectfile::omf::parse(&object).expect("parses");
+    let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
+    // The code, and _DATA.
+    assert_eq!(segments, 2);
+}
+
+#[test]
+fn test_a_computed_float_argument_is_passed_through_memory() {
+    // x87 cannot push: "floating instruction has no allocation rule".
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "pushed.mod", "fn half(x: f64) -> f64:\n    return x / 2.0\n\nexport \"cdecl16\":\n    fn quarter(x: f32, y: f64) -> f64:\n        print(x * 2.0)\n        return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
+    modern_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+}
+
+#[test]
+/// Section 9.2: a far pointer comes back in dx:ax, where C and BASIC read
+/// it. It came back in eax, so PDS's STRINGADDRESS result was misread.
+fn test_a_far_pointer_result_travels_in_dx_ax() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "far.mod",
+        "extern \"pascal16\":\n    fn address(of: *near u8) -> *far u8\n\nexport \"pascal16\":\n    fn first(bytes: *far u8) -> *far u8:\n        return bytes\n\n    \
+         fn through(of: *near u8) -> u8:\n        unsafe:\n            let p = address(of)\n            return *p\n",
+    );
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let first = between(&text, "FIRST proc far", "FIRST endp");
+    assert!(!first.contains("eax") && first.contains("mov dx,"), "{first}");
+    let through = between(&text, "THROUGH proc far", "THROUGH endp");
+    assert!(!through.contains("eax") && through.contains("es, dx"), "{through}");
+}
+
+#[test]
+/// Section 15: a qb45 export takes BASIC's arguments first to last, each a
+/// near pointer, and removes them; it links without the modern runtime.
+fn test_a_qb45_library_takes_basic_arguments_by_reference() {
+    let source = root().join("docs/examples/basic/sortlib.mod");
+    let module = modern_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    assert_eq!(module.publics, ["SORTSCORES", "UPPER", "AVERAGE", "ROWTOTAL", "INITIALS"]);
+    let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(externs, ["B$SCPY", "MEAN"]);
+    let text = masm::text(&module).expect("prints");
+    let sort = between(&text, "SORTSCORES proc far", "SORTSCORES endp");
+    // scores() is pushed first, so it is further from the return address than count.
+    assert!(sort.contains("retf 4") && sort.contains("word ptr [bp+8]"), "{sort}");
+    let upper = between(&text, "UPPER proc far", "UPPER endp");
+    assert!(upper.contains("retf 2"), "{upper}");
+    // Mean# takes two locals by reference and the DOUBLE's pointer, and returns that pointer.
+    let average = between(&text, "AVERAGE proc far", "AVERAGE endp");
+    assert!(average.matches("lea ").count() >= 3 && average.contains("call far ptr MEAN\n    mov bx, ax\n    fld qword ptr [bx]"), "{average}");
+    // A rank-2 view asks for both dimensions' counts.
+    let rows = between(&text, "ROWTOTAL proc far", "ROWTOTAL endp");
+    assert!(rows.contains("pushw 1") && rows.contains("imul"), "{rows}");
+    let initials = between(&text, "INITIALS proc far", "INITIALS endp");
+    assert!(initials.contains("call far ptr _abi.qb45.string_result") && initials.contains("retf 2"), "{initials}");
+}
+
+#[test]
+/// Section 15: BASIC gives a SINGLE or DOUBLE function a near pointer, pushed
+/// last, to store its result through, and reads the pointer back from ax.
+fn test_a_basic_float_result_goes_through_its_hidden_pointer() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "half.mod", "export \"qb45\":\n    fn half(value: f64) -> f64:\n        return value / 2.0\n");
+    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let half = between(&text, "HALF proc far", "HALF endp");
+    assert!(half.contains("mov bx, word ptr [bp+6]") && half.contains("fstp qword ptr [bx]"), "{half}");
+    assert!(half.contains("mov ax, bx") && half.contains("retf 10"), "{half}");
+}
+
+#[test]
+/// Section 15: a PDS or VB-DOS string is far, and only its runtime's
+/// STRINGADDRESS and STRINGLENGTH read the descriptor.
+fn test_a_far_basic_string_is_read_through_its_runtime() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "count.mod",
+        "import abi.pds71 as pds\n\nexport \"pds71\":\n    fn Spaces(text: pds.StringRef) -> i16:\n        let mut count: i16 = 0\n        for letter in text:\n            if letter == ' ':\n                count += 1\n        return count\n",
+    );
+    let module = modern_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(externs, ["STRINGADDRESS", "STRINGLENGTH"]);
+    let text = masm::text(&module).expect("prints");
+    assert!(between(&text, "SPACES proc far", "SPACES endp").contains("retf 2"), "{text}");
+}
+
+#[test]
+/// An interrupt16 handler may interrupt anything: it saves every register,
+/// runs with DGROUP in DS and ES and the direction flag clear, and leaves
+/// by `iret`. Its name is its far address, a `dd` the linker fills.
+fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
+    let source = root().join("docs/examples/ticker.mod");
+    let program = parsed(&source);
+    let text = listing_on(&program, "main", &level("O2"), "486");
+    let lines: Vec<&str> = between(&text, "_tick proc far", "_tick endp").lines().map(str::trim).collect();
+    assert_eq!(
+        lines[1..11],
+        ["pushad", "push ds", "push es", "push fs", "push gs", "pushw DGROUP", "pop ds", "push ds", "pop es", "cld"],
+        "{text}"
+    );
+    assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
+    assert!(text.contains("dd _tick"), "{text}");
+    modern_compile::written(&program, "main", &source, &level("O2")).expect("encodes");
+}
+
+#[test]
+/// A variable a handler names changes under the program. The busy wait
+/// read it once, before the loop, and spun forever.
+fn test_a_variable_a_handler_names_is_read_on_every_pass() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "wait.mod",
+        "var ticks: u16 = 0\n\nexport \"interrupt16\":\n    fn tick() -> void:\n        ticks += 1\n\n\
+         fn main() -> i16:\n    while ticks < 36:\n        continue\n    return 0\n",
+    );
+    let text = listing(&parsed(&source), "main", &O2());
+    assert!(between(&text, "_main proc", "_main endp").contains("cmp word ptr wait$D1, 36"), "{text}");
+}
+
+#[test]
+/// Nothing calls a handler, and an interrupt passes it nothing.
+fn test_an_interrupt_handler_takes_nothing_and_is_not_called() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let taking = written(&directory, "taking.mod", "export \"interrupt16\":\n    fn tick(n: i16) -> void:\n        return\n\nfn main() -> i16:\n    return 0\n");
+    assert!(refused(&taking).contains("takes nothing and returns void"));
+    let called = written(&directory, "called.mod", "export \"interrupt16\":\n    fn tick() -> void:\n        return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
+    assert!(refused(&called).contains("only an interrupt enters it"));
+}
+
+#[test]
+/// A byte parameter passed on to a call took a fresh value numbered as the
+/// parameter was: "value#1 is defined 2 times".
+fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "byte.mod",
+        "extern \"cdecl16\":\n    fn put(number: u8) -> void\n\nfn set(number: u8) -> void:\n    unsafe:\n        put(number)\n\n\
+         fn main() -> i16:\n    set(28)\n    set(29)\n    return 0\n",
+    );
+    let text = listing(&parsed(&source), "main", &O2());
+    assert!(between(&text, "_set proc", "_set endp").contains("movzx"), "{text}");
+}
+
+#[test]
+/// Section 9.2: a far pointer comes back in dx:ax. The caller read eax,
+/// so a DOS vector the runtime returned lost its segment.
+fn test_a_far_pointer_result_comes_back_in_dx_ax() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "far.mod",
+        "extern \"cdecl16\":\n    fn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\n\
+         fn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
+    );
+    let text = listing(&parsed(&source), "main", &O2());
+    assert!(text.contains("mov word ptr far$D1+2, dx"), "{text}");
+}
+
+/// An inline block is its bytes in place of a call, fed and read in the
+/// registers it names: `a` goes to both cx and dx, `b` and 7 are packed into
+/// ax, and `sum` and `high` come out of bx and ch.
+#[test]
+fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "blocks.mod",
+        "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
+         asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
+         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
+         fn five() -> u16:\n    return 5\n\n\
+         fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let mix = between(&assembly, "_mix proc far", "_mix endp");
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
+    assert_eq!(found[1], found[2], "{mix}");
+    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+}
+
+/// A block that declares `memory` reaches what its pointer inputs point to:
+/// `bytes[3]` is read again after it, and only then.
+#[test]
+fn test_inline_assembly_declaring_memory_is_read_again_after() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "var bytes: u8[4] = [1, 2, 3, 4]\n\n\
+        fn poke() -> u16:\n    let before = u16(bytes[3])\n    unsafe:\n        \
+        let base: *near mut u8 = &mut bytes\n        asm(si=base, clobbers=[memory]):\n            \
+        mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
+        fn main() -> i16:\n    return i16(poke())\n";
+    let reads = |text: &str| {
+        let assembly = listing(&parsed(&written(&directory, "poke.mod", text)), "main", &O2());
+        between(&assembly, "db 0c6h,044h,003h,007h", "_poke endp").contains("byte ptr poke$D1+3")
+    };
+    assert!(reads(text));
+    assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
+}
+
+/// Inputs were ordered by `Reg`'s name, not by its slots: `si=1, di=2`
+/// loaded 2 into si and 1 into di.
+#[test]
+fn test_inline_assembly_inputs_reach_the_registers_they_name() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "pair.mod",
+        "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let before = between(&assembly, "_main proc far", "db 0fah");
+    for set in ["mov si, 1", "mov di, 2", "mov ax, 3"] {
+        assert!(before.contains(set), "{set}: {before}");
+    }
+}
+
+/// Outputs were pinned by value, and a loop unrolled after physicalization
+/// gave each copy new values: spin(3) read its `cx` output from ax.
+#[test]
+fn test_inline_assembly_outputs_survive_unrolling() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "spin.mod",
+        "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
+         unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
+         total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n",
+    );
+    let assembly = listing(&parsed(&source), "main", &O2());
+    let after: Vec<&str> = assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+    assert_eq!(after.len(), 3, "{assembly}");
+    assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
+}
+
+#[test]
+fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
+    // jwlink's `option eliminate` keeps a segment any other references, even
+    // one it drops: every program carried the unused float printer, 2.8 KB.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "lib.mod", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in range(0, x):\n        total += i * x\n    return total\n\nexport \"cdecl16\":\n    @link_name(\"M$ZA\")\n    fn a(x: u16) -> u16:\n        return helper(x) + 1\n\n    @link_name(\"M$ZB\")\n    fn b(x: u16) -> u16:\n        return x * 2\n");
+    let mut program = parsed(&source);
+    modern_compile::keep_exports(&mut program, &["M$ZB".to_owned()].into_iter().collect());
+    let module = modern_compile::assembled(&program, "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    assert_eq!(module.publics, ["M$ZB"]);
+    assert_eq!(module.procedures.len(), 1, "{:?}", module.procedures.iter().map(|one| &one.name).collect::<Vec<_>>());
+}
+
+#[test]
+fn test_an_error_in_an_imported_module_names_that_module() {
+    // Semantic errors carried no module: one in shapes.mod was reported at main.mod's line.
+    let directory = tempfile::tempdir().expect("a directory");
+    written(&directory, "shapes.mod", "pub fn area(w: i16, h: u16) -> i16:\n    return w * h\n");
+    let main = written(&directory, "main.mod", "import shapes\n\nfn main() -> i16:\n    return shapes.area(2, 3)\n");
+    let (path, error) = super::compile_file(&main).expect_err("refused");
+    assert!(path.ends_with("shapes.mod"), "{} {}", path.display(), error.message);
+    assert_eq!(error.span.line, 2);
+}
+
+#[test]
+fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
+    // `&i16[4]` was passed as a view: a descriptor pointer, its length loaded at run time.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "fixed_borrow.mod",
+        "fn last(values: &i16[4]) -> i16:\n    return values[values.len - 1]\n\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return last(&v)\n",
+    );
+    let program = parsed(&source);
+    let module = &program.modules[0];
+    let function = function(&program, "last");
+    let by_id = |id: i64| module.types.iter().find(|one| one.id == id).unwrap();
+    let pointer = by_id(function.values[0].r#type);
+    let target = by_id(pointer.element.unwrap());
+
+    assert_eq!((pointer.kind, pointer.width), (model::TypeKind::Pointer, 4));
+    assert_eq!((target.kind, target.rank, target.width), (model::TypeKind::Array, 1, 8));
+    assert!(!instructions(function).any(|one| one.operands.iter().any(|operand| matches!(operand, model::Operand::DescriptorPlace(_)))));
 }

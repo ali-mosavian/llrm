@@ -7,7 +7,7 @@ use super::*;
 impl Signature {
     /// The hidden first parameter's type: a far pointer to the slot.
     pub(super) fn slot_pointer(&self, types: &mut TypeRegistry) -> Option<u32> {
-        if self.in_registers(types).is_some() {
+        if self.in_registers(types).is_some() || self.string_result.is_some() {
             return None;
         }
         match (self.slot, self.view) {
@@ -37,6 +37,10 @@ impl FunctionCompiler<'_> {
                 _ => None,
             },
             _ if self.string_bytes(expression).is_some() => Some((ElementType::Scalar(TypeName::U8), 1)),
+            Expr::Member { span, .. } => {
+                let id = self.struct_expression_type(expression, *span).ok()??;
+                self.types.kept_views.get(&id).copied()
+            }
             _ => self.view_call(expression).and_then(|(_, signature)| signature.view),
         }
     }
@@ -79,6 +83,13 @@ impl FunctionCompiler<'_> {
             };
             return Ok(Some((descriptor, element, 1)));
         }
+        if let Expr::Member { span, .. } = expression {
+            let kept = self.struct_expression_type(expression, *span)?.and_then(|id| self.types.kept_views.get(&id).copied());
+            if let Some((element, rank)) = kept {
+                let view = self.struct_view(expression, *span)?;
+                return Ok(Some((self.kept_view_pointer(&view, element, rank), element, rank)));
+            }
+        }
         let Some((arguments, signature)) = self.view_call(expression) else {
             return Ok(None);
         };
@@ -95,6 +106,15 @@ impl FunctionCompiler<'_> {
         let pointer_type = self.types.slice_pointer(element, rank);
         let pointer = self.value_type(pointer_type);
         self.emit("address", vec![pointer], vec![hir::Operand::Place(place)], None);
+        pointer
+    }
+
+    /// The descriptor pointer of the kept view `view`, which is its address.
+    pub(super) fn kept_view_pointer(&mut self, view: &StructView, element: ElementType, rank: u8) -> u32 {
+        let address = self.address_of(view);
+        let pointer_type = self.types.slice_pointer(element, rank);
+        let pointer = self.value_type(pointer_type);
+        self.emit("copy", vec![pointer], vec![address], None);
         pointer
     }
 
@@ -116,8 +136,9 @@ impl FunctionCompiler<'_> {
         match base {
             Expr::Name(name, span) => self.indexed_element(self.binding(name, *span).ok()?),
             _ => self
-                .view_type_of(base)
+                .fixed_array_hint(base)
                 .map(|(element, _)| element)
+                .or_else(|| self.view_type_of(base).map(|(element, _)| element))
                 .or_else(|| self.types.indexed(self.expression_type_hint(base)?)),
         }
     }
@@ -128,6 +149,9 @@ impl FunctionCompiler<'_> {
     pub(super) fn sequence_of(&mut self, expression: &Expr) -> Result<(Binding, String), Diagnostic> {
         if let Expr::Name(name, span) = expression {
             return Ok((self.binding(name, *span)?.clone(), name.clone()));
+        }
+        if let Some(field) = self.unnamed_array_binding(expression, expression.span())? {
+            return Ok(field);
         }
         if let Some((descriptor, element, rank)) = self.view_of(expression)? {
             let binding = Binding { type_: BindingType::Slice { element, rank }, mutable: false, storage: Storage::Slice(descriptor) };

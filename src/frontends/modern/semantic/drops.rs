@@ -37,6 +37,9 @@ impl FunctionCompiler<'_> {
             ElementType::Scalar(type_name) => {
                 self.types.sequence_element(type_name).is_some_and(|inner| self.holds_user_drop(inner))
             }
+            ElementType::Struct(id) if self.types.array_of(id).is_some() => {
+                self.holds_user_drop(self.types.array_of(id).expect("an array").0)
+            }
             ElementType::Struct(id) => {
                 self.types.dropped.contains_key(&id)
                     || self.types.structure(id).expect("registered layout").fields.values().any(|field| self.holds_user_drop(field.type_))
@@ -105,15 +108,19 @@ impl FunctionCompiler<'_> {
     /// Drops what `view` owns, if its owner is still live.
     pub(super) fn drop_owner(&mut self, view: &StructView) {
         let flag = Self::whole_owner(view).and_then(|key| self.drop_flags.get(&key).copied());
+        self.when_live(flag.map(hir::Operand::Place), |this| this.drop_view(view));
+    }
+
+    /// Emits `then` to run only while `flag`, when there is one, is set.
+    pub(super) fn when_live(&mut self, flag: Option<hir::Operand>, then: impl FnOnce(&mut Self)) {
         let Some(flag) = flag else {
-            self.drop_view(view);
-            return;
+            return then(self);
         };
         let live = self.value(TypeName::Bool);
-        self.emit("load", vec![live], vec![hir::Operand::Place(flag)], None);
+        self.emit("load", vec![live], vec![flag], None);
         let done = self.block();
         self.branch_unless("ne", hir::Operand::Value(live), hir::Operand::Constant(BOOL, 0), done);
-        self.drop_view(view);
+        then(self);
         self.terminate(jump(done));
         self.current = done;
     }

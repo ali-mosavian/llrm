@@ -3,24 +3,28 @@
 .dosseg
 .stack 512
 
-extrn _start:far
-extrn _rt_panic_divide:far
+extrn _main:far
+extrn M$EDIV:far
 ; Under DOSSEG the linker defines these around the uninitialized data.
 extrn _edata:byte
 extrn _end:byte
-
-public _rt_restore_vectors
+extrn M$OTOP:word
+extrn M$OPSP:word
+extrn M$OSIV:far
+extrn M$OVEC:far
 
 .data
-; The divide fault's vector before the program took it.
-old_divide dd 0
+; DOSSEG's _edata and _end mark this segment's class, so it must exist
+; even when no program object has uninitialized data.
+.data?
 
 .code
 start:
+    mov bx, es                     ; the PSP, before DS leaves it
     mov ax, DGROUP
     mov ds, ax
     mov es, ax
-    ; C statics without an initializer are in _BSS, which the EXE does not
+    ; Statics without an initializer are in _BSS, which the EXE does not
     ; store: they hold whatever the last program left there until zeroed.
     mov di, offset DGROUP:_edata
     mov cx, offset DGROUP:_end
@@ -28,24 +32,40 @@ start:
     xor al, al
     cld
     rep stosb
-    ; Division by zero, and a quotient too wide, fault to INT 0: the panic
-    ; handler takes it until the program exits.
-    mov ax, 3500h
+    mov M$OPSP, bx
+    ; The near heap starts where the stack ends, the image's last byte in
+    ; DGROUP. The program keeps only its image; the heap grows the block.
+    mov ax, ss
+    sub ax, DGROUP
+    shl ax, 4
+    add ax, sp
+    mov M$OTOP, ax
+    add ax, 15
+    shr ax, 4
+    mov dx, DGROUP
+    sub dx, bx
+    add ax, dx
+    mov es, bx
+    mov bx, ax
+    mov ah, 4ah
     int 21h
-    mov word ptr old_divide, bx
-    mov word ptr old_divide+2, es
-    push ds
-    push cs
-    pop ds
-    mov dx, offset divide_fault
-    mov ax, 2500h
-    int 21h
-    pop ds
     push ds
     pop es
-    call far ptr _start
+    ; Division by zero, and a quotient too wide, fault to INT 0: the panic
+    ; handler takes it until the program exits. Ctrl-C ends the program
+    ; through INT 23h, which puts the vectors back first.
+    push cs
+    push offset divide_fault
+    push 0
+    call far ptr M$OSIV
+    push cs
+    push offset break_handler
+    push 23h
+    call far ptr M$OSIV
+    add sp, 12
+    call far ptr _main
     push ax
-    call far ptr _rt_restore_vectors
+    call far ptr M$OVEC
     pop ax
     mov ah, 4ch
     int 21h
@@ -54,18 +74,18 @@ divide_fault:
     mov ax, DGROUP
     mov ds, ax
     mov es, ax
-    call far ptr _rt_panic_divide
+    call far ptr M$EDIV
 
-; Gives INT 0 back to DOS; every exit path calls it.
-_rt_restore_vectors proc far
+; DOS ends the program when this returns by retf with carry set.
+break_handler:
     push ds
+    push ax
     mov ax, DGROUP
     mov ds, ax
-    lds dx, old_divide
-    mov ax, 2500h
-    int 21h
+    call far ptr M$OVEC
+    pop ax
     pop ds
-    retf
-_rt_restore_vectors endp
+    stc
+    retf 2
 
 end start

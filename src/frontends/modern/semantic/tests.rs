@@ -1,4 +1,5 @@
 use super::super::lexer::lex;
+use crate::abi::modern as rt;
 use super::super::parser::parse;
 
 use super::*;
@@ -103,9 +104,9 @@ fn arrays_and_f_strings_lower_to_structural_hir_and_streaming_calls() {
     .unwrap();
     assert!(json.contains("\"kind\":\"array\""));
     assert!(json.contains("\"tag\":\"array_element\""));
-    assert!(json.contains("\"callee\":\"_pt\""));
-    assert!(json.contains("\"callee\":\"_pi4\""));
-    assert!(json.contains("\"callee\":\"_pn\""));
+    for callee in [rt::PRINT_STRING, rt::PRINT_I4, rt::PRINT_NEWLINE] {
+        assert!(json.contains(&format!("\"callee\":\"{callee}\"")), "{callee}");
+    }
     assert!(json.contains("\"bytes\":[8,0,6,0,6,0,118,97,108,117,101,61,0]"));
 }
 
@@ -326,8 +327,8 @@ fn print_runtime_variants_use_short_byte_width_names() {
     assert_eq!(
         names,
         [
-            "_pn", "_pt", "_pb", "_pc", "_pi1", "_pu1", "_pi2", "_pu2", "_pi4", "_pu4", "_pr4",
-            "_pr8", "_pf2", "_pf4", "_pv",
+            rt::PRINT_NEWLINE, rt::PRINT_STRING, rt::PRINT_BOOL, rt::PRINT_CHAR, rt::PRINT_I1, rt::PRINT_U1, rt::PRINT_I2, rt::PRINT_U2, rt::PRINT_I4, rt::PRINT_U4, rt::PRINT_R4,
+            rt::PRINT_R8, rt::PRINT_Q2, rt::PRINT_Q4, rt::PRINT_VIEW,
         ]
     );
 }

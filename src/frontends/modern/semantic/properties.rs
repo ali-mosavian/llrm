@@ -26,7 +26,8 @@ impl FunctionCompiler<'_> {
 
     fn is_sequence(&self, expression: &Expr) -> bool {
         let Expr::Name(name, span) = expression else {
-            return self.view_type_of(expression).is_some()
+            return self.fixed_array_hint(expression).is_some()
+                || self.view_type_of(expression).is_some()
                 || self.expression_type_hint(expression).is_some_and(|one| self.types.owned_element(one).is_some());
         };
         self.binding(name, *span).is_ok_and(|one| {

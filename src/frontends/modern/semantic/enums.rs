@@ -172,29 +172,36 @@ impl TypeRegistry {
                 FieldLayout {
                     type_: ElementType::Scalar(tag),
                     offset: 0,
+                    shape: None,
                 },
             )]);
             let mut size = base;
+            // The bytes a payload's arrays take, as (start, end).
+            let mut arrays = Vec::new();
             for (variant, layout) in declaration.variants.iter().zip(&mut variants) {
                 let mut offset = align_up(base, 2);
                 for field in &variant.fields {
-                    let field_type = self.resolve_element(&field.type_spec, field.span)?;
-                    let field_width = self.width(field_type.id());
-                    offset = align_up(offset, field_width.clamp(1, 2));
-                    let field_layout = FieldLayout {
-                        type_: field_type,
-                        offset,
-                    };
+                    let (field_layout, _, units) = self.place_field(field, offset, 2)?;
                     fields.insert(format!("${}.{}", variant.name, field.name), field_layout);
                     layout.fields.push((field.name.clone(), field_layout));
-                    offset += field_width;
+                    arrays.extend(units.into_iter().filter(|(_, _, count)| *count > 1).map(|(start, type_name, count)| (start, start + width(type_name) * count)));
+                    offset = field_layout.offset + self.field_width(field_layout);
                 }
                 size = size.max(offset);
             }
             let size = align_up(size, 2);
-            let copy = (0..size / 2)
-                .map(|word| (2 * word, TypeName::U16))
-                .collect();
+            // Whole words, since the variants overlap; the words inside a
+            // payload's array are one run, as the array's copy is.
+            let mut copy: Vec<(u32, TypeName, u32)> = Vec::new();
+            let mut previous = None;
+            for word in (0..size).step_by(2) {
+                let within = arrays.iter().copied().find(|(start, end)| *start <= word && word + 2 <= *end);
+                match copy.last_mut() {
+                    Some((_, _, count)) if within.is_some() && within == previous => *count += 1,
+                    _ => copy.push((word, TypeName::U16, 1)),
+                }
+                previous = within;
+            }
             ElementType::Struct(self.aggregate(
                 &declaration.name,
                 size,
@@ -308,7 +315,7 @@ impl FunctionCompiler<'_> {
         name: &str,
         arguments: &[Expr],
         span: Span,
-        stores: &mut Vec<(hir::Operand, hir::Operand)>,
+        stores: &mut Vec<Store>,
     ) -> Result<(), Diagnostic> {
         let layout = self.variant_enum(
             enum_name,
@@ -327,7 +334,7 @@ impl FunctionCompiler<'_> {
             ));
         }
         let variant = layout.variant(name, span)?.clone();
-        stores.push((
+        stores.push(Store::One(
             self.projected_place(destination, 0, layout.tag),
             hir::Operand::Constant(type_id(layout.tag), variant.tag),
         ));

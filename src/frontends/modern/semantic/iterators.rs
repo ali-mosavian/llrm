@@ -13,10 +13,10 @@ impl FunctionCompiler<'_> {
         let Some(type_name) = self.receiver_type(iterable) else {
             return Ok(false);
         };
-        let iterator = if self.known_signature(&format!("{type_name}.iter")).is_some() {
-            Expr::MethodCall { receiver: Box::new(iterable.clone()), name: "iter".into(), type_arguments: Vec::new(), arguments: Vec::new(), span }
-        } else if self.known_signature(&format!("{type_name}.next")).is_some() {
+        let iterator = if self.loop_consumes(iterable) {
             iterable.clone()
+        } else if self.known_signature(&format!("{type_name}.iter")).is_some() {
+            Expr::MethodCall { receiver: Box::new(iterable.clone()), name: "iter".into(), type_arguments: Vec::new(), arguments: Vec::new(), span }
         } else {
             return Ok(false);
         };
@@ -36,5 +36,13 @@ impl FunctionCompiler<'_> {
         ];
         self.scoped(&expansion)?;
         Ok(true)
+    }
+
+    /// Whether a `for` over `iterable` takes it by value: an iterator, which
+    /// has `next` and no `iter`, rather than an iterable it borrows.
+    pub(super) fn loop_consumes(&self, iterable: &Expr) -> bool {
+        self.receiver_type(iterable).is_some_and(|type_name| {
+            self.known_signature(&format!("{type_name}.iter")).is_none() && self.known_signature(&format!("{type_name}.next")).is_some()
+        })
     }
 }

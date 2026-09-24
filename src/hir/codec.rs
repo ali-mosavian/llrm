@@ -103,6 +103,7 @@ plain_enums!(
     AddressKind,
     FloatEvaluation,
     StackCleanup,
+    FloatReturn,
     CallDistance,
     Storage,
     DataLinkage,
@@ -142,22 +143,78 @@ plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
     volatile => "volatile", inbounds => "inbounds");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
-plain_record!(Instruction, None, id => "id", op => "op", results => "results", operands => "operands",
-    callee => "callee", pure => "pure");
+plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
+    memory => "memory");
+
+/// Only an inline block names `asm`: every other instruction is written as before it existed.
+impl _Plain for model::Instruction {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("op".to_owned(), self.op._plain());
+        out.insert("results".to_owned(), self.results._plain());
+        out.insert("operands".to_owned(), self.operands._plain());
+        out.insert("callee".to_owned(), self.callee._plain());
+        out.insert("pure".to_owned(), self.pure._plain());
+        if let Some(asm) = &self.asm {
+            out.insert("asm".to_owned(), asm._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(Terminator, None, kind => "kind", operands => "operands", targets => "targets", cases => "cases");
 plain_record!(Block, None, id => "id", instructions => "instructions", terminator => "terminator", cold => "cold");
-plain_record!(CallAbi, None, instruction => "instruction", order => "order", cleanup => "cleanup",
-    distance => "distance", callee => "callee");
+/// A float result's return is written only when it is not BASIC's, as
+/// before any other existed.
+fn float_return(out: &mut IndexMap<String, JSON>, float_return: model::FloatReturn) {
+    if float_return != model::FloatReturn::Pointer {
+        out.insert("float_return".to_owned(), float_return._plain());
+    }
+}
+
+impl _Plain for model::CallAbi {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("instruction".to_owned(), self.instruction._plain());
+        out.insert("order".to_owned(), self.order._plain());
+        out.insert("cleanup".to_owned(), self.cleanup._plain());
+        out.insert("distance".to_owned(), self.distance._plain());
+        out.insert("callee".to_owned(), self.callee._plain());
+        float_return(&mut out, self.float_return);
+        Json::Dict(out)
+    }
+}
 plain_record!(Callable, None, id => "id", name => "name", result_type => "result_type",
     parameter_types => "parameter_types", by_value => "by_value", segmented => "segmented", arrays => "arrays",
     defined => "defined");
-plain_record!(ProcedureAbi, None, cleanup => "cleanup", distance => "distance",
-    parameter_bytes => "parameter_bytes");
+impl _Plain for model::ProcedureAbi {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("cleanup".to_owned(), self.cleanup._plain());
+        out.insert("distance".to_owned(), self.distance._plain());
+        out.insert("parameter_bytes".to_owned(), self.parameter_bytes._plain());
+        float_return(&mut out, self.float_return);
+        Json::Dict(out)
+    }
+}
 plain_record!(Function, None, id => "id", name => "name", result_type => "result_type", values => "values",
     places => "places", blocks => "blocks", entry => "entry", parameters => "parameters", abi => "abi",
     calls => "calls", error_handler => "error_handler", error_handler_local => "error_handler_local",
     external_entries => "external_entries", linkage => "linkage");
-plain_record!(DataRelocation, None, at => "at", target => "target", addend => "addend", address => "address");
+// `code` only when set, so that data relocations read as they always have.
+impl _Plain for model::DataRelocation {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("at".to_owned(), self.at._plain());
+        out.insert("target".to_owned(), self.target._plain());
+        out.insert("addend".to_owned(), self.addend._plain());
+        out.insert("address".to_owned(), self.address._plain());
+        if self.code {
+            out.insert("code".to_owned(), self.code._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", readonly => "readonly",
     relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
@@ -452,6 +509,7 @@ made_enums!(
     AddressKind,
     FloatEvaluation,
     StackCleanup,
+    FloatReturn,
     CallDistance,
     Storage,
     DataLinkage,
@@ -480,6 +538,7 @@ made_records!(
     Type,
     Place,
     Value,
+    Asm,
     Instruction,
     Terminator,
     Block,
@@ -708,6 +767,7 @@ static INSTRUCTION: _Record = _Record {
         ("operands", OPERANDS, false),
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
+        ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Instruction {
@@ -717,6 +777,27 @@ static INSTRUCTION: _Record = _Record {
             operands: _default(args, "operands", Vec::new())?,
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
+            asm: _default(args, "asm", None)?,
+        })
+    },
+};
+
+static ASM: _Record = _Record {
+    name: "Asm",
+    fields: &[
+        ("code", INTS, true),
+        ("inputs", _Hint::Tuple(&_Hint::Str), true),
+        ("outputs", _Hint::Tuple(&_Hint::Str), true),
+        ("clobbers", _Hint::Tuple(&_Hint::Str), true),
+        ("memory", _Hint::Bool, true),
+    ],
+    build: |args| {
+        _object(model::Asm {
+            code: _required(args, "code")?,
+            inputs: _required(args, "inputs")?,
+            outputs: _required(args, "outputs")?,
+            clobbers: _required(args, "clobbers")?,
+            memory: _required(args, "memory")?,
         })
     },
 };
@@ -765,6 +846,7 @@ static CALL_ABI: _Record = _Record {
         ("cleanup", enum_hint!(StackCleanup), true),
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
+        ("float_return", enum_hint!(FloatReturn), false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -773,6 +855,7 @@ static CALL_ABI: _Record = _Record {
             cleanup: _required(args, "cleanup")?,
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
+            float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
         })
     },
 };
@@ -809,12 +892,14 @@ static PROCEDURE_ABI: _Record = _Record {
         ("cleanup", enum_hint!(StackCleanup), true),
         ("distance", enum_hint!(CallDistance), true),
         ("parameter_bytes", _Hint::Int, true),
+        ("float_return", enum_hint!(FloatReturn), false),
     ],
     build: |args| {
         _object(model::ProcedureAbi {
             cleanup: _required(args, "cleanup")?,
             distance: _required(args, "distance")?,
             parameter_bytes: _required(args, "parameter_bytes")?,
+            float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
         })
     },
 };
@@ -864,6 +949,7 @@ static DATA_RELOCATION: _Record = _Record {
         ("target", _Hint::Int, true),
         ("addend", _Hint::Int, true),
         ("address", enum_hint!(AddressKind), true),
+        ("code", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::DataRelocation {
@@ -871,6 +957,7 @@ static DATA_RELOCATION: _Record = _Record {
             target: _required(args, "target")?,
             addend: _required(args, "addend")?,
             address: _required(args, "address")?,
+            code: _default(args, "code", false)?,
         })
     },
 };

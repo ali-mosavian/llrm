@@ -13,6 +13,7 @@ impl TypeRegistry {
                 type_name,
                 TypeName::String | TypeName::Addr | TypeName::Vector { .. } | TypeName::Pointer { .. }
             ),
+            ElementType::Struct(id) if self.array_of(id).is_some() => self.holds_address(self.array_of(id).expect("an array").0),
             ElementType::Struct(id) => {
                 let fields = self.structure(id).into_iter().flat_map(|layout| layout.fields.values());
                 let payloads = self
@@ -43,7 +44,7 @@ impl Signature {
 
     /// The result the object code returns.
     pub(super) fn returned(&self, types: &TypeRegistry) -> TypeName {
-        self.in_registers(types).unwrap_or(self.result)
+        self.string_result.or(self.in_registers(types)).unwrap_or(self.result)
     }
 }
 
@@ -60,6 +61,7 @@ fn pieces(width: u32) -> &'static [(u32, TypeName)] {
 impl FunctionCompiler<'_> {
     /// `view`'s bytes as the integer `image`.
     fn register_image(&mut self, view: &StructView, image: TypeName) -> hir::Operand {
+        let view = &self.byte_view(view);
         let mut combined: Option<hir::Operand> = None;
         for &(offset, piece) in pieces(self.types.width(view.struct_id)) {
             let value = self.value(piece);
@@ -77,6 +79,7 @@ impl FunctionCompiler<'_> {
 
     /// Stores the integer `image` into `view`'s bytes.
     fn store_image(&mut self, view: &StructView, image: hir::Operand, type_name: TypeName) {
+        let view = &self.byte_view(view);
         for &(offset, piece) in pieces(self.types.width(view.struct_id)) {
             let shifted = self.bit_shift("shr", image.clone(), 8 * offset, type_name);
             let value = self.resized(shifted, type_name, piece);
@@ -89,13 +92,20 @@ impl FunctionCompiler<'_> {
     pub(super) fn return_aggregate(&mut self, span: Span) -> Result<(), Diagnostic> {
         let operands = match self.signature.in_registers(self.types) {
             Some(image) => {
-                let result = self.struct_view(&Expr::Name(RESULT.into(), span), span)?;
+                let result = self.result_view(span)?;
                 vec![self.register_image(&result, image)]
             }
             None => Vec::new(),
         };
         self.terminate(hir::Terminator { kind: "return", operands, targets: Vec::new() });
         Ok(())
+    }
+
+    /// Where `return` builds the result: a local image, or the caller's slot.
+    pub(super) fn result_view(&self, span: Span) -> Result<StructView, Diagnostic> {
+        let aggregate = self.signature.slot.expect("an aggregate result");
+        let binding = self.binding(RESULT, span)?;
+        Ok(binding_view(aggregate, &binding.storage, true, RESULT).expect("a result has storage"))
     }
 
     /// Calls `signature`, whose aggregate result lands in `view`.

@@ -4,6 +4,9 @@
 use super::*;
 use crate::frontends::modern::syntax::{Pattern, StructField};
 
+/// A tuple element's type, and its shape when it is a fixed array.
+pub(super) type Member = (ElementType, Option<Shape>);
+
 impl TypeRegistry {
     /// How to spell a resolved type in source.
     pub(super) fn spec_of(&self, element: ElementType) -> TypeSpec {
@@ -15,15 +18,23 @@ impl TypeRegistry {
         }
     }
 
-    fn tuple_name(&self, elements: &[ElementType]) -> String {
-        let names: Vec<&str> = elements
+    fn tuple_name(&self, elements: &[Member]) -> String {
+        let names: Vec<String> = elements
             .iter()
-            .map(|one| self.types[(one.id() - 1) as usize].name.as_str())
+            .map(|(element, shape)| match shape {
+                Some(shape) => self.array_name(*element, *shape),
+                None => self.types[(element.id() - 1) as usize].name.clone(),
+            })
             .collect();
         format!("({})", names.join(", "))
     }
 
-    pub(super) fn tuple_id(&self, elements: &[ElementType]) -> Option<u32> {
+    /// Whether the struct `id` is a tuple, whose elements `t[k]` names.
+    pub(super) fn is_tuple(&self, id: u32) -> bool {
+        self.structure(id).is_some_and(|one| one.name.starts_with('('))
+    }
+
+    pub(super) fn tuple_id(&self, elements: &[Member]) -> Option<u32> {
         self.structs
             .get(&self.tuple_name(elements))
             .map(|one| one.id)
@@ -32,7 +43,7 @@ impl TypeRegistry {
     /// The tuple of `elements`, registered on first use.
     pub(super) fn tuple(
         &mut self,
-        elements: &[ElementType],
+        elements: &[Member],
         span: Span,
     ) -> Result<u32, Diagnostic> {
         if let Some(id) = self.tuple_id(elements) {
@@ -41,10 +52,11 @@ impl TypeRegistry {
         let fields = elements
             .iter()
             .enumerate()
-            .map(|(index, element)| StructField {
+            .map(|(index, (element, shape))| StructField {
                 name: index.to_string(),
                 mutable: true,
                 type_spec: self.spec_of(*element),
+                dims: shape.map_or_else(Vec::new, |one| one.dims().to_vec()),
                 span,
             })
             .collect();
@@ -63,17 +75,29 @@ impl TypeRegistry {
 
 impl FunctionCompiler<'_> {
     /// What each element of a tuple literal is, when all are known.
-    pub(super) fn tuple_elements(&self, items: &[Expr], span: Span) -> Option<Vec<ElementType>> {
+    pub(super) fn tuple_elements(&self, items: &[Expr], span: Span) -> Option<Vec<Member>> {
         items
             .iter()
             .map(|item| match self.struct_expression_type(item, span) {
-                Ok(Some(id)) => Some(ElementType::Struct(id)),
+                _ if self.fixed_array_hint(item).is_some() => self.fixed_array_hint(item).map(|(element, shape)| (element, Some(shape))),
+                Ok(Some(id)) => Some((ElementType::Struct(id), None)),
                 _ => self
                     .expression_type_hint(item)
                     .or_else(|| matches!(item, Expr::Integer(..)).then_some(TypeName::I16))
-                    .map(ElementType::Scalar),
+                    .map(|one| (ElementType::Scalar(one), None)),
             })
             .collect()
+    }
+
+    /// `t[k]` of a tuple `t` and a literal `k`: the element's field.
+    pub(super) fn tuple_element(&self, base: &Expr, indices: &[Expr], span: Span) -> Option<Expr> {
+        let [Expr::Integer(index, _)] = indices else {
+            return None;
+        };
+        let id = self.struct_expression_type(base, span).ok().flatten().or_else(|| self.struct_type_hint(base, span))?;
+        let field = index.to_string();
+        (self.types.is_tuple(id) && self.types.structure(id)?.fields.contains_key(&field))
+            .then(|| Expr::Member { base: Box::new(base.clone()), field, span })
     }
 
     /// Registers a tuple literal's type, its elements' already registered,
@@ -113,9 +137,9 @@ impl FunctionCompiler<'_> {
         })
     }
 
-    /// `let (q, r) = value`: a hidden owner holds the value, and the
-    /// pattern's names are views of its parts. A sequence is borrowed, not
-    /// owned. A pattern that may not match runs `otherwise` when it does not.
+    /// `let (q, r) = value`: bound as a `match` arm binds it, so a named
+    /// value is borrowed and a temporary taken apart. A pattern that may not
+    /// match runs `otherwise` when it does not.
     pub(super) fn destructure(
         &mut self,
         pattern: &Pattern,
@@ -123,7 +147,8 @@ impl FunctionCompiler<'_> {
         otherwise: Option<&[Statement]>,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        if otherwise.is_none() && !irrefutable(pattern) {
+        let length = self.fixed_array_hint(value).filter(|(_, shape)| shape.rank == 1).map(|(_, shape)| shape.len());
+        if otherwise.is_none() && !irrefutable_over(pattern, length) {
             return Err(Diagnostic::new(
                 pattern.span(),
                 "a 'let' pattern that may not match needs 'else:'",
@@ -132,39 +157,36 @@ impl FunctionCompiler<'_> {
         let subject = if matches!(pattern, Pattern::Sequence { .. }) {
             self.sequence_subject(value, span)?
         } else {
-            self.destructured(value, span)?
+            self.subject(value, span)?
         };
+        let consumed = self.consumed_temporary(&subject);
         if let Some(otherwise) = otherwise {
             let (fail, pass) = (self.block(), self.block());
             self.test(pattern, &subject, fail)?;
             self.terminate(jump(pass));
             self.current = fail;
+            if consumed {
+                self.drop_subject(&subject);
+            }
             self.scoped(otherwise)?;
             if self.open() {
                 return Err(Diagnostic::new(span, "a 'let ... else:' block must leave: return, break or continue"));
             }
             self.current = pass;
         }
-        self.bind(pattern, &subject)
+        self.bind_subject(pattern, &subject, consumed, value)
     }
+}
 
-    /// `value` held by a hidden owner, to take apart.
-    fn destructured(&mut self, value: &Expr, span: Span) -> Result<matching::Subject, Diagnostic> {
-        let owner = format!("$destructured{}", self.next_place);
-        self.statement(&Statement::Bind {
-            mutable: false,
-            name: owner.clone(),
-            annotation: None,
-            value: value.clone(),
-            span,
-        })?;
-        let binding = self.binding(&owner, span)?.clone();
-        match binding.type_ {
-            BindingType::Struct(struct_id) => Ok(matching::Subject::Aggregate(
-                binding_view(struct_id, &binding.storage, false, &owner).expect("a local"),
-            )),
-            _ => Err(Diagnostic::new(span, "only a struct, tuple or sequence can be taken apart")),
+/// Whether `pattern` matches every value; a fixed array's `length` settles
+/// a sequence pattern.
+fn irrefutable_over(pattern: &Pattern, length: Option<u32>) -> bool {
+    match (pattern, length) {
+        (Pattern::Sequence { before, rest, after, .. }, Some(length)) => {
+            let named = (before.len() + after.len()) as u32;
+            before.iter().chain(after).all(irrefutable) && if rest.is_some() { named <= length } else { named == length }
         }
+        _ => irrefutable(pattern),
     }
 }
 

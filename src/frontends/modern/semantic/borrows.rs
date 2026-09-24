@@ -4,11 +4,21 @@
 //! binding in scope borrows it.
 
 use super::*;
+use crate::frontends::modern::syntax::Pattern;
 
 /// The value a reference or view binding is known by.
-fn borrow_key(storage: &Storage) -> Option<u32> {
+/// What holds a borrow: a reference's or view's value, or a struct's place
+/// that keeps a view.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum BorrowKey {
+    Value(u32),
+    Place(u32),
+}
+
+fn borrow_key(storage: &Storage) -> Option<BorrowKey> {
     match storage {
-        Storage::Reference(value) | Storage::Slice(value) => Some(*value),
+        Storage::Reference(value) | Storage::Slice(value) => Some(BorrowKey::Value(*value)),
+        Storage::Place(place) => Some(BorrowKey::Place(*place)),
         _ => None,
     }
 }
@@ -24,6 +34,8 @@ impl FunctionCompiler<'_> {
                 },
                 None => BTreeSet::new(),
             },
+            // What a caller lent outlives the struct that keeps it.
+            Expr::Member { base, span, .. } if self.kept_borrow(base, expression, *span) => BTreeSet::new(),
             Expr::Borrow { operand: base, .. }
             | Expr::Slice { base, .. }
             | Expr::Member { base, .. }
@@ -33,8 +45,35 @@ impl FunctionCompiler<'_> {
             }
             Expr::MethodCall { receiver, name, .. } if name == "bytes" => self.roots(receiver),
             Expr::Call { .. } | Expr::MethodCall { .. } => self.call_roots(expression),
+            // A struct borrows what the views and references it keeps borrow.
+            Expr::StructLiteral { name, fields, .. } => {
+                let Some(layout) = self.types.structs.get(name) else {
+                    return BTreeSet::new();
+                };
+                fields
+                    .iter()
+                    .filter_map(|(field, value, _)| match layout.fields.get(field)?.type_ {
+                        ElementType::Struct(id) if self.types.kept_views.contains_key(&id) => Some(self.roots(value)),
+                        kept => Some(self.value_roots(value, kept)),
+                    })
+                    .flatten()
+                    .collect()
+            }
             _ => BTreeSet::new(),
         }
+    }
+
+    /// Whether `member`, a field of `base`, borrows only what a caller lent:
+    /// a kept view, or a frame's field that holds a borrow, which the frame
+    /// keeps only of what its caller lent it (escaping.rs).
+    fn kept_borrow(&self, base: &Expr, member: &Expr, span: Span) -> bool {
+        let element = match self.struct_expression_type(member, span).ok().flatten() {
+            Some(id) => Some(ElementType::Struct(id)),
+            None => self.expression_type_hint(member).map(ElementType::Scalar),
+        };
+        let kept_view = matches!(element, Some(ElementType::Struct(id)) if self.types.kept_views.contains_key(&id));
+        let in_frame = self.struct_expression_type(base, span).ok().flatten().is_some_and(|id| self.types.frames.contains_key(&id));
+        kept_view || in_frame && element.is_some_and(|one| self.frame_of(one).is_some() || self.holds_reference(one))
     }
 
     /// A call's result borrows from every argument it borrowed (section 8).
@@ -95,7 +134,7 @@ impl FunctionCompiler<'_> {
     }
 
     /// Whether a value of `element` holds a reference.
-    fn holds_reference(&self, element: ElementType) -> bool {
+    pub(super) fn holds_reference(&self, element: ElementType) -> bool {
         match element {
             ElementType::Scalar(type_name) => self.types.referent(type_name).is_some(),
             ElementType::Struct(id) => self
@@ -110,6 +149,22 @@ impl FunctionCompiler<'_> {
         if let Some(key) = borrow_key(&binding.storage) {
             let roots = self.roots(source);
             self.borrowed_from.insert(key, roots);
+        }
+    }
+
+    /// Records that the struct at `place` borrows what the views `value`
+    /// keeps borrow, if it keeps any.
+    pub(super) fn keep_borrows(&mut self, place: u32, value: &Expr) {
+        let roots = match value {
+            Expr::StructLiteral { .. } => self.roots(value),
+            Expr::Name(name, _) => match self.visible(name).map(|one| one.storage.clone()) {
+                Some(Storage::Place(source)) => self.borrowed_from.get(&BorrowKey::Place(source)).cloned().unwrap_or_default(),
+                _ => BTreeSet::new(),
+            },
+            _ => BTreeSet::new(),
+        };
+        if !roots.is_empty() {
+            self.borrowed_from.insert(BorrowKey::Place(place), roots);
         }
     }
 
@@ -152,16 +207,34 @@ impl FunctionCompiler<'_> {
         };
         self.copy_view(source, own, element, rank);
         let roots = self.roots(value);
-        self.borrowed_from.insert(own, roots);
+        self.borrowed_from.insert(BorrowKey::Value(own), roots);
         Ok(true)
     }
 
-    /// Records the borrows the pattern just bound in this scope take from `subject`.
-    pub(super) fn record_pattern_borrows(&mut self, subject: &Expr) {
-        let keys: Vec<u32> = self.scopes.last().expect("scope").values().filter_map(|one| borrow_key(&one.storage)).collect();
+    /// Records that the names `pattern` just bound borrow from `subject`:
+    /// its views and references, and the copies that share what it owns.
+    pub(super) fn record_pattern_borrows(&mut self, pattern: &Pattern, subject: &Expr) {
         let roots = self.roots(subject);
-        for key in keys {
-            self.borrowed_from.entry(key).or_insert_with(|| roots.clone());
+        for name in pattern.names() {
+            let Some(binding) = self.visible(name).cloned() else {
+                continue;
+            };
+            let shares = match binding.type_ {
+                BindingType::Scalar(type_name) => ownership::needs_drop(type_name),
+                BindingType::Struct(id) => self.element_needs_drop(ElementType::Struct(id)),
+                _ => false,
+            };
+            // A copied struct borrows by the references it holds.
+            let refers = matches!(binding.type_, BindingType::Struct(id) if self.holds_reference(ElementType::Struct(id)));
+            match borrow_key(&binding.storage) {
+                Some(key @ BorrowKey::Value(_)) => {
+                    self.borrowed_from.entry(key).or_insert_with(|| roots.clone());
+                }
+                Some(key @ BorrowKey::Place(_)) if refers || (shares && !self.owns(&binding.storage)) => {
+                    self.borrowed_from.entry(key).or_insert_with(|| roots.clone());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -182,16 +255,31 @@ impl FunctionCompiler<'_> {
 
     /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
     pub(super) fn check_unborrowed(&self, owner: &str, span: Span) -> Result<(), Diagnostic> {
+        if self.is_borrowed(owner) {
+            return Err(Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed")));
+        }
+        Ok(())
+    }
+
+    /// Errs when the binding that is `owner`, about to move, is borrowed.
+    pub(super) fn check_movable(&self, owner: moves::Owner, span: Span) -> Result<(), Diagnostic> {
+        let name = self.scopes.iter().rev().flat_map(|scope| scope.iter()).find(|(_, one)| moves::owner(&one.storage) == Some(owner));
+        match name {
+            Some((name, _)) if self.is_borrowed(name) => {
+                Err(Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved")))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn is_borrowed(&self, owner: &str) -> bool {
         let borrowed = self.scopes.iter().flat_map(|scope| scope.iter()).any(|(name, binding)| {
             name != owner
                 && borrow_key(&binding.storage)
                     .and_then(|key| self.borrowed_from.get(&key))
                     .is_some_and(|roots| roots.contains(owner))
         });
-        if borrowed || self.iterated.iter().any(|one| one == owner) {
-            return Err(Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed")));
-        }
-        Ok(())
+        borrowed || self.iterated.iter().any(|one| one == owner)
     }
 
     /// Errs unless each field `place` writes through was declared `mut`
@@ -227,12 +315,17 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// How deeply `name`'s owner is scoped: a parameter outlives the body's
-    /// locals, though both are in the first scope.
+    /// How deeply `name`'s owner is scoped: a module variable outlives
+    /// everything, and a parameter the body's locals, though both are in its
+    /// first scope.
     fn lifetime_depth(&self, name: &str) -> Option<i64> {
         let depth = self.scopes.iter().rposition(|scope| scope.contains_key(name))?;
-        let parameter = depth == 0 && self.signature.formals.iter().any(|(one, _)| one == name);
-        Some(if parameter { -1 } else { depth as i64 })
+        let parameter = depth == BODY && self.signature.formals.iter().any(|(one, _)| one == name);
+        Some(match depth {
+            0 => -2,
+            _ if parameter => -1,
+            _ => depth as i64,
+        })
     }
 
     /// Errs when assigning `value`, of `element`, through `target` would
@@ -249,8 +342,7 @@ impl FunctionCompiler<'_> {
 pub(super) fn written_owner(target: &AssignTarget) -> Option<&str> {
     match target {
         AssignTarget::Name(name) => Some(name),
-        AssignTarget::Index { base, .. } => Some(base),
-        AssignTarget::Member { base, .. } => expression_owner(base),
+        AssignTarget::Index { base, .. } | AssignTarget::Member { base, .. } => expression_owner(base),
         AssignTarget::Deref(_) => None,
     }
 }

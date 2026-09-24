@@ -10,6 +10,10 @@ use crate::frontends::modern::syntax::Pattern;
 impl FunctionCompiler<'_> {
     /// `expression`, borrowed as a one-dimensional view to match against.
     pub(super) fn sequence_subject(&mut self, expression: &Expr, span: Span) -> Result<Subject, Diagnostic> {
+        // A fixed array stays one, so a temporary one can be consumed.
+        if let Some((view, element, shape)) = self.array_view(expression, span)? {
+            return Ok(Subject::Array(view, element, shape));
+        }
         let element = self
             .iterated_item(expression)
             .ok_or_else(|| Diagnostic::new(span, "a sequence pattern needs a vec, array or view"))?;

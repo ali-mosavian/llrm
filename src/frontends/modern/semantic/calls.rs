@@ -2,7 +2,20 @@
 
 use super::*;
 
+/// `size_of[T]()`: the bytes a `T` takes as laid out, a `u16` known when
+/// compiled.
+pub(super) const SIZE_OF: &str = "size_of";
+
 impl<'a> FunctionCompiler<'a> {
+    pub(super) fn size_of(&mut self, types: &[TypeSpec], arguments: &[Expr], span: Span) -> Result<TypedOperand, Diagnostic> {
+        let ([spec], []) = (types, arguments) else {
+            return Err(Diagnostic::new(span, "size_of takes one type and no values: size_of[T]()"));
+        };
+        let element = self.types.resolve_element(spec, span)?;
+        let bytes = self.types.width(element.id());
+        Ok(TypedOperand { operand: Some(hir::Operand::Constant(U16, i64::from(bytes))), type_name: TypeName::U16 })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn call(
         &mut self,
@@ -45,7 +58,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         if signature.slot.is_some() {
             // Called for its effect: the result lands in a temporary.
-            self.call_into(name, arguments, span)?;
+            let result = self.call_into(name, arguments, span)?;
+            self.statement_temporary(result);
             return Ok(TypedOperand {
                 operand: None,
                 type_name: TypeName::Void,
@@ -108,11 +122,22 @@ impl<'a> FunctionCompiler<'a> {
 
     pub(super) fn address_of(&mut self, view: &StructView) -> hir::Operand {
         let pointer_type = self.types.pointer(view.struct_id, 0);
-        // A far pointer to the whole struct is its address; any other, such
-        // as a vec element's near one, is taken again as a far address.
+        self.address_as(view, pointer_type)
+    }
+
+    /// `view`'s address as a `pointer_type`, near or far.
+    pub(super) fn address_as(&mut self, view: &StructView, pointer_type: u32) -> hir::Operand {
+        // A pointer to the whole struct of the same width is its address;
+        // any other, such as a vec element's near one, is taken again.
         if let (Some(pointer), 0) = (view.pointer, view.offset) {
-            if self.types.width(self.type_of(pointer)) == self.types.width(pointer_type) {
+            let found = self.type_of(pointer);
+            if found == pointer_type {
                 return hir::Operand::Value(pointer);
+            }
+            if self.types.width(found) == self.types.width(pointer_type) {
+                let result = self.value_type(pointer_type);
+                self.emit("copy", vec![result], vec![hir::Operand::Value(pointer)], None);
+                return hir::Operand::Value(result);
             }
         }
         let result = self.value_type(pointer_type);
@@ -149,6 +174,9 @@ impl<'a> FunctionCompiler<'a> {
         if self.is_drop_method(&signature.name) {
             return Err(Diagnostic::new(span, "drop runs when its owner ends; it cannot be called"));
         }
+        if signature.abi.interrupt() {
+            return Err(Diagnostic::new(span, format!("{} is an interrupt16 function: only an interrupt enters it", signature.name)));
+        }
         if signature.foreign {
             self.require_unsafe(
                 &format!("calling the foreign function {}", signature.name),
@@ -162,6 +190,7 @@ impl<'a> FunctionCompiler<'a> {
             let operand = self.argument_operand(argument, parameter, &mut borrowed)?;
             operands.push(operand);
         }
+        operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };
         let count = operands.len() as u32;
@@ -188,6 +217,11 @@ impl<'a> FunctionCompiler<'a> {
         borrowed: &mut BTreeMap<String, bool>,
     ) -> Result<hir::Operand, Diagnostic> {
         match parameter {
+            // A BASIC procedure takes the near pointer the adapter is.
+            SignatureParameter::Adapter { pointer, .. } => {
+                let value = self.coerced(argument, *pointer)?;
+                required(value, argument.span())
+            }
             SignatureParameter::Scalar(type_name) => {
                 let value = self.coerced(argument, *type_name)?;
                 self.consume(&value, argument.span())?;
@@ -270,14 +304,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             let owner = view.owner.clone();
-            let address = self.address_of(&view);
-            // A raw pointer is the same far address under its own type.
-            if pointer_type == self.types.pointer(struct_id, 0) {
-                return Ok((address, owner));
-            }
-            let raw = self.value_type(pointer_type);
-            self.emit("copy", vec![raw], vec![address], None);
-            return Ok((hir::Operand::Value(raw), owner));
+            return Ok((self.address_as(&view, pointer_type), owner));
         }
         let (binding, name, range) = match operand.as_ref() {
             Expr::Name(name, name_span) => (self.binding(name, *name_span)?.clone(), name.clone(), None),
@@ -289,6 +316,11 @@ impl<'a> FunctionCompiler<'a> {
             } => {
                 let (binding, name) = self.sequence_of(base)?;
                 (binding, name, Some((start.as_deref(), end.as_deref(), *range_span)))
+            }
+            // An array field, or a call's result.
+            other if self.fixed_array_hint(other).is_some() => {
+                let (binding, name) = self.sequence_of(operand)?;
+                (binding, name, None)
             }
             _ => {
                 if let (Some((element, rank)), BindingType::Slice { element: wanted, rank: wanted_rank }) = (self.view_type_of(operand), target) {
@@ -387,38 +419,14 @@ impl<'a> FunctionCompiler<'a> {
                     "only a one-dimensional array can be sliced",
                 ));
             }
-            let (start, end) = self.slice_bounds(range, shape.len(), operand.span())?;
-            let Storage::Place(place) = binding.storage else {
-                return Err(Diagnostic::new(
-                    operand.span(),
-                    "array has no owned payload",
-                ));
-            };
-            let data_type = self.types.pointer(element.id(), 0);
-            let data = self.value_type(data_type);
-            self.emit(
-                "address",
-                vec![data],
-                vec![hir::Operand::Place(place)],
-                None,
-            );
-            let data = if start == 0 {
-                data
-            } else {
-                self.indexed_pointer(
-                    data,
-                    hir::Operand::Constant(U16, i64::from(start)),
-                    self.types.width(element.id()),
-                    operand.span(),
-                )?
-            };
-            // A one-dimensional view describes its range; a ranked one, the whole array.
-            let viewed = if rank == 1 {
-                Shape::new(&[end - start])
-            } else {
-                shape
-            };
-            let words = viewed
+            let data = self.array_data(&binding, element, operand.span())?;
+            if rank == 1 {
+                let length = hir::Operand::Constant(U16, i64::from(shape.len()));
+                let view = self.ranged_view(&name, data, length, element, range, pointer_type, operand.span())?;
+                return Ok((view, name.clone()));
+            }
+            // A ranked view describes the whole array.
+            let words = shape
                 .descriptor()
                 .into_iter()
                 .map(|(_, value)| hir::Operand::Constant(U16, i64::from(value)))
@@ -494,38 +502,5 @@ impl<'a> FunctionCompiler<'a> {
             None,
         );
         hir::Operand::Value(result)
-    }
-
-    pub(super) fn slice_bounds(
-        &self,
-        range: Option<(Option<&Expr>, Option<&Expr>, Span)>,
-        length: u32,
-        _span: Span,
-    ) -> Result<(u32, u32), Diagnostic> {
-        let Some((start, end, range_span)) = range else {
-            return Ok((0, length));
-        };
-        let endpoint = |value: Option<&Expr>, default: u32| -> Result<u32, Diagnostic> {
-            let Some(value) = value else {
-                return Ok(default);
-            };
-            match value {
-                Expr::Integer(value, at) => u32::try_from(*value)
-                    .map_err(|_| Diagnostic::new(*at, "slice bounds must be non-negative")),
-                _ => Err(Diagnostic::new(
-                    value.span(),
-                    "this slice requires compile-time integer bounds",
-                )),
-            }
-        };
-        let start = endpoint(start, 0)?;
-        let end = endpoint(end, length)?;
-        if start > end || end > length {
-            return Err(Diagnostic::new(
-                range_span,
-                format!("slice {start}..{end} is outside 0..{length}"),
-            ));
-        }
-        Ok((start, end))
     }
 }

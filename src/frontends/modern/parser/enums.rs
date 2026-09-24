@@ -99,10 +99,12 @@ impl Parser {
                 } else {
                     format!("_{}", fields.len())
                 };
+                let (type_spec, dims) = self.field_type()?;
                 fields.push(StructField {
                     name: field_name,
                     mutable: false,
-                    type_spec: self.field_type()?,
+                    type_spec,
+                    dims,
                     span: field_span,
                 });
                 if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {

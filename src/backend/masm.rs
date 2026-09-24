@@ -78,6 +78,9 @@ pub struct Procedure {
     /// bytes below bp: locals and spill slots
     pub reserve: i64,
     pub callees: IndexMap<i64, Callee>,
+    /// An interrupt handler's data group, whose selector it loads into DS
+    /// and ES; `None` for a procedure entered by a call.
+    pub interrupt: Option<Addr>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,8 +239,12 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
-    let saved: Vec<Register> =
-        SAVED.iter().filter(|(whole, _)| roots.contains(whole)).map(|(_, low)| *low).collect();
+    // An interrupt handler has saved everything before its frame.
+    let saved: Vec<Register> = SAVED
+        .iter()
+        .filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole))
+        .map(|(_, low)| *low)
+        .collect();
     let reserve = procedure.reserve + (procedure.reserve & 1);
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = reserve != 0
@@ -267,6 +274,33 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
         ));
     }
     enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
+    if let Some(group) = procedure.interrupt {
+        let (before, after) = _interrupt_parts(group);
+        enter.splice(0..0, before);
+        leave.extend(after);
+    }
+    (enter, leave)
+}
+
+/// What an interrupt handler wraps its frame in. It may interrupt anything,
+/// so it saves every register it or a callee may change, and gives compiled
+/// code what it assumes: DGROUP in DS and ES, the direction flag clear.
+/// The x87 state is not saved.
+fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
+    let segments = [Register::DS, Register::ES, Register::FS, Register::GS];
+    let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
+    let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
+    let mut enter = vec![semantics(Operation::Nothing, "pushad", vec![], vec![])];
+    enter.extend(segments.iter().map(|one| push(reg(*one))));
+    enter.extend([
+        push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
+        pop(Register::DS),
+        push(reg(Register::DS)),
+        pop(Register::ES),
+        semantics(Operation::Nothing, "cld", vec![], vec![]),
+    ]);
+    let mut leave: Vec<Semantics> = segments.iter().rev().map(|one| pop(*one)).collect();
+    leave.push(semantics(Operation::Nothing, "popad", vec![], vec![]));
     (enter, leave)
 }
 
@@ -325,6 +359,7 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                 Operation::Return => {
                     out.extend(leave.iter().cloned().map(Item::Semantics));
                     let name = match what.name.as_deref() {
+                        _ if procedure.interrupt.is_some() => "iret".to_owned(),
                         Some(name) if !name.is_empty() => name.to_owned(),
                         _ => (if procedure.far { "retf" } else { "ret" }).to_owned(),
                     };
@@ -712,7 +747,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default() };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -758,6 +793,7 @@ mod tests {
             body: body.clone(),
             reserve,
             callees: IndexMap::default(),
+            interrupt: None,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);

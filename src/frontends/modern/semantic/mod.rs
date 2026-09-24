@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use crate::abi::modern as rt;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -26,15 +27,20 @@ use super::syntax::ParameterType;
 use super::syntax::Span;
 use super::syntax::Statement;
 use super::syntax::Struct;
+use super::syntax::StructField;
 use super::syntax::TUPLE;
 use super::syntax::FUNCTION;
+use super::syntax::FOREIGN;
 use super::syntax::TypeAnnotation;
 use super::syntax::TypeName;
 use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
 use super::syntax::{FStringPart, Format};
 
+mod array_places;
+mod basic;
 mod statements;
+mod assembly;
 mod loops;
 mod places;
 mod expressions;
@@ -55,7 +61,10 @@ mod exhaustive;
 mod failure;
 mod drops;
 mod foreign;
+mod pointers;
 mod generators;
+mod escaping;
+mod statics;
 mod generics;
 mod borrows;
 mod dictionaries;
@@ -121,7 +130,14 @@ impl LiteralPool {
             _ => unreachable!("only floats enter the constant pool"),
         };
         self.floats.insert((type_name, bits), id);
-        self.data.push(hir::DataObject { id, name, bytes });
+        self.data.push(hir::DataObject { id, name, bytes, readonly: true, code: None });
+        id
+    }
+
+    /// Data of its own: a module variable's.
+    fn object(&mut self, name: &str, bytes: Vec<u8>, readonly: bool) -> u32 {
+        let id = self.data.len() as u32 + 1;
+        self.data.push(hir::DataObject { id, name: name.into(), bytes, readonly, code: None });
         id
     }
 
@@ -144,7 +160,20 @@ impl LiteralPool {
             id,
             name: format!("$str{id}"),
             bytes,
+            readonly: true,
+            code: None,
         });
+        id
+    }
+
+    /// Data holding the far address of the callable `callable`, whose
+    /// symbol is `name`; the linker writes it.
+    fn address(&mut self, callable: u32, name: &str) -> u32 {
+        if let Some(found) = self.data.iter().find(|one| one.code == Some(callable)) {
+            return found.id;
+        }
+        let id = self.data.len() as u32 + 1;
+        self.data.push(hir::DataObject { id, name: format!("$address_{name}"), bytes: vec![0; 4], readonly: true, code: Some(callable) });
         id
     }
 }
@@ -152,6 +181,8 @@ impl LiteralPool {
 struct TypeRegistry {
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, Shape), u32>,
+    /// Each fixed array type, by id: its element and shape.
+    array_types: BTreeMap<u32, (ElementType, Shape)>,
     structs: BTreeMap<String, StructLayout>,
     enums: BTreeMap<String, enums::EnumLayout>,
     templates: BTreeMap<String, generics::Template>,
@@ -164,6 +195,19 @@ struct TypeRegistry {
     /// Raw pointers, by name, and what each points to.
     raw_pointers: BTreeMap<String, u32>,
     raw_targets: BTreeMap<u32, ElementType>,
+    /// Foreign function pointers, `extern "abi" fn(A) -> R`, by name.
+    foreign_functions: BTreeMap<String, u32>,
+    /// Each generator instance that escapes, by its name and type arguments.
+    generator_states: BTreeMap<String, escaping::GeneratorState>,
+    /// Each escaping generator's state, by its struct's id.
+    frames: BTreeMap<u32, escaping::Frame>,
+    /// Structs laid out as a view's descriptor, as a generator's state keeps
+    /// a borrowed `&[T]`: by id, the view's element and rank.
+    kept_views: BTreeMap<u32, (ElementType, u8)>,
+    /// The kept views a `&mut [T]` makes, which write their elements.
+    writable_views: BTreeSet<u32>,
+    /// Each module variable, by name.
+    statics: BTreeMap<String, statics::StaticLayout>,
     /// Structs whose `@repr` fixes their layout for a foreign ABI.
     represented: BTreeSet<u32>,
     /// Structs with a `drop` method, and its name.
@@ -187,15 +231,19 @@ struct StructLayout {
     fields: BTreeMap<String, FieldLayout>,
     /// The source fields in declaration order, for positional patterns.
     order: Vec<String>,
-    /// What a copy moves, as (offset, type): a struct's scalar leaves, an
-    /// enum's whole words, since its variants' fields overlap.
-    copy: Vec<(u32, TypeName)>,
+    /// What a copy moves, as runs of (offset, type, count) cells: a
+    /// struct's scalar leaves and arrays, an enum's whole words, since its
+    /// variants' fields overlap.
+    copy: Vec<(u32, TypeName, u32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct FieldLayout {
+    /// The field's type; an array field's element type.
     type_: ElementType,
     offset: u32,
+    /// An array field's dimensions.
+    shape: Option<Shape>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,6 +302,7 @@ impl TypeRegistry {
                 },
             ],
             arrays: BTreeMap::new(),
+            array_types: BTreeMap::new(),
             structs: BTreeMap::new(),
             enums: BTreeMap::new(),
             templates: BTreeMap::new(),
@@ -263,6 +312,12 @@ impl TypeRegistry {
             pointers: BTreeMap::new(),
             raw_pointers: BTreeMap::new(),
             raw_targets: BTreeMap::new(),
+            foreign_functions: BTreeMap::new(),
+            generator_states: BTreeMap::new(),
+            frames: BTreeMap::new(),
+            kept_views: BTreeMap::new(),
+            writable_views: BTreeSet::new(),
+            statics: BTreeMap::new(),
             represented: BTreeSet::new(),
             dropped: BTreeMap::new(),
             slice_descriptors: BTreeMap::new(),
@@ -340,23 +395,10 @@ impl TypeRegistry {
                     format!("field {:?} is declared more than once", field.name),
                 ));
             }
-            let field_type = self.resolve_element(&field.type_spec, field.span)?;
-            let field_width = self.width(field_type.id());
-            let field_alignment = field_width.clamp(1, declaration.pack.unwrap_or(2));
-            offset = align_up(offset, field_alignment);
-            fields.insert(
-                field.name.clone(),
-                FieldLayout {
-                    type_: field_type,
-                    offset,
-                },
-            );
-            copy.extend(
-                self.copy_units(field_type)
-                    .into_iter()
-                    .map(|(at, one)| (offset + at, one)),
-            );
-            offset += field_width;
+            let (layout, field_alignment, units) = self.place_field(field, offset, declaration.pack.unwrap_or(2))?;
+            fields.insert(field.name.clone(), layout);
+            copy.extend(units);
+            offset = layout.offset + self.field_width(layout);
             alignment = alignment.max(field_alignment);
         }
         let width = align_up(offset, alignment);
@@ -372,6 +414,31 @@ impl TypeRegistry {
         Ok(())
     }
 
+    /// `field` placed at the first offset from `offset` its alignment
+    /// allows, no field aligned to more than `pack`: its layout, its
+    /// alignment, and the runs a copy of it moves. An array field is
+    /// aligned as its element is.
+    pub(super) fn place_field(&mut self, field: &StructField, offset: u32, pack: u32) -> Result<(FieldLayout, u32, Vec<(u32, TypeName, u32)>), Diagnostic> {
+        let type_ = self.resolve_element(&field.type_spec, field.span)?;
+        let shape = (!field.dims.is_empty()).then(|| Shape::new(&field.dims));
+        let alignment = self.width(type_.id()).clamp(1, pack);
+        let offset = align_up(offset, alignment);
+        let units = match shape {
+            Some(shape) => {
+                self.array(type_, shape);
+                let (type_name, count) = self.array_run(type_, shape);
+                vec![(offset, type_name, count)]
+            }
+            None => self.copy_units(type_).into_iter().map(|(at, one, count)| (offset + at, one, count)).collect(),
+        };
+        Ok((FieldLayout { type_, offset, shape }, alignment, units))
+    }
+
+    /// The bytes `field` takes.
+    pub(super) fn field_width(&self, field: FieldLayout) -> u32 {
+        self.width(field.type_.id()) * field.shape.map_or(1, |one| one.len())
+    }
+
     /// Registers a struct-like layout and returns its type.
     fn aggregate(
         &mut self,
@@ -379,7 +446,7 @@ impl TypeRegistry {
         width: u32,
         fields: BTreeMap<String, FieldLayout>,
         order: Vec<String>,
-        copy: Vec<(u32, TypeName)>,
+        copy: Vec<(u32, TypeName, u32)>,
     ) -> u32 {
         let id = self.types.len() as u32 + 1;
         self.types.push(hir::Type {
@@ -407,10 +474,32 @@ impl TypeRegistry {
         id
     }
 
-    fn copy_units(&self, element: ElementType) -> Vec<(u32, TypeName)> {
+    fn copy_units(&self, element: ElementType) -> Vec<(u32, TypeName, u32)> {
         match element {
-            ElementType::Scalar(type_name) => vec![(0, type_name)],
-            ElementType::Struct(id) => self.structure(id).expect("registered layout").copy.clone(),
+            ElementType::Scalar(type_name) => vec![(0, type_name, 1)],
+            ElementType::Struct(id) => match self.array_of(id) {
+                Some((element, shape)) => {
+                    let (type_name, count) = self.array_run(element, shape);
+                    vec![(0, type_name, count)]
+                }
+                None => self.structure(id).expect("registered layout").copy.clone(),
+            },
+        }
+    }
+
+    /// The run of cells a copy of an array of `element` and `shape` moves:
+    /// its numbers, or any other element's bytes, as words where they pair,
+    /// so the copy is of bits and never of ownership.
+    fn array_run(&self, element: ElementType, shape: Shape) -> (TypeName, u32) {
+        let bytes = self.width(element.id()) * shape.len();
+        match element {
+            ElementType::Scalar(type_name)
+                if is_integer(type_name) || is_float(type_name) || matches!(type_name, TypeName::Bool | TypeName::Char) =>
+            {
+                (type_name, shape.len())
+            }
+            _ if bytes % 2 == 0 => (TypeName::U16, bytes / 2),
+            _ => (TypeName::U8, bytes),
         }
     }
 
@@ -442,20 +531,32 @@ impl TypeRegistry {
                 let elements = args
                     .iter()
                     .map(|arg| match arg {
-                        TypeAnnotation::Value(element) => self.resolve_element(element, span),
-                        _ => Err(Diagnostic::new(
-                            span,
-                            "a tuple element cannot be an array yet",
-                        )),
+                        TypeAnnotation::Value(element) => Ok((self.resolve_element(element, span)?, None)),
+                        TypeAnnotation::Array { element, dims } => Ok((self.resolve_element(element, span)?, Some(Shape::new(dims)))),
+                        TypeAnnotation::Slice { .. } => Err(Diagnostic::new(span, "a tuple element cannot be a view")),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ElementType::Struct(self.tuple(&elements, span)?))
             }
             TypeSpec::Applied { name, args } if name == FUNCTION => Ok(ElementType::Scalar(self.function_type_spelled(args, span)?)),
+            TypeSpec::Applied { name, args } if name.starts_with(FOREIGN) => match args.as_slice() {
+                [TypeAnnotation::Value(TypeSpec::Applied { name: function, args })] if function == FUNCTION => {
+                    let abi = Abi::named(name[FOREIGN.len()..].trim_matches([' ', '"'])).expect("the parser names an ABI");
+                    let function = self.function_type_spelled(args, span)?;
+                    Ok(ElementType::Scalar(self.foreign_function(abi, function, span)?))
+                }
+                _ => Err(Diagnostic::new(span, "a foreign function pointer is 'extern \"abi\" fn(A) -> R'")),
+            },
             TypeSpec::Applied { name, args } if name.starts_with('&') => match args.as_slice() {
                 [TypeAnnotation::Value(target)] => {
                     let target = self.resolve_element(target, span)?;
                     Ok(ElementType::Scalar(self.reference(target, name == "&mut")))
+                }
+                // `&T[N]`: its referent is the array, an aggregate as a struct is.
+                [TypeAnnotation::Array { element, dims }] => {
+                    let element = self.resolve_element(element, span)?;
+                    let array = self.array(element, Shape::new(dims));
+                    Ok(ElementType::Scalar(self.reference(ElementType::Struct(array), name == "&mut")))
                 }
                 _ => Err(Diagnostic::new(span, "a reference takes one target type")),
             },
@@ -493,19 +594,12 @@ impl TypeRegistry {
         if let Some(id) = self.arrays.get(&(element_id, shape)) {
             return *id;
         }
-        let element_type = &self.types[(element_id - 1) as usize];
-        let element_name = element_type.name.clone();
-        let element_width = element_type.width;
+        let element_width = self.types[(element_id - 1) as usize].width;
         let id = self.types.len() as u32 + 1;
-        let dims = shape
-            .dims()
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let name = self.array_name(element, shape);
         self.types.push(hir::Type {
             id,
-            name: format!("[{element_name}; {dims}]"),
+            name,
             kind: "array",
             width: element_width * shape.len(),
             signed: None,
@@ -520,7 +614,28 @@ impl TypeRegistry {
             address: "near",
         });
         self.arrays.insert((element_id, shape), id);
+        self.array_types.insert(id, (element, shape));
         id
+    }
+
+    /// The element and shape of the fixed array type `id`, when it is one.
+    /// A view's `struct_id` may name one: an array is an aggregate too.
+    pub(super) fn array_of(&self, id: u32) -> Option<(ElementType, Shape)> {
+        self.array_types.get(&id).copied()
+    }
+
+    /// How a value of the aggregate `id` is bound: a struct or a fixed array.
+    pub(super) fn aggregate_binding(&self, id: u32) -> BindingType {
+        match self.array_of(id) {
+            Some((element, shape)) => BindingType::Array { element, shape },
+            None => BindingType::Struct(id),
+        }
+    }
+
+    /// How a fixed array type is named: `[u8; 2, 3]`.
+    fn array_name(&self, element: ElementType, shape: Shape) -> String {
+        let dims: Vec<String> = shape.dims().iter().map(u32::to_string).collect();
+        format!("[{}; {}]", self.types[(element.id() - 1) as usize].name, dims.join(", "))
     }
 
     fn width(&self, id: u32) -> u32 {
@@ -581,6 +696,37 @@ impl TypeRegistry {
         });
         self.slice_descriptors.insert((element_id, rank), id);
         id
+    }
+
+    /// A struct laid out as the descriptor of a view of `element` at `rank`:
+    /// its dimensions, capacity and far data pointer.
+    pub(super) fn kept_view(&mut self, element: ElementType, rank: u8, mutable: bool, span: Span) -> Result<u32, Diagnostic> {
+        let found = self.kept_views.iter().find(|(id, kept)| **kept == (element, rank) && self.writable_views.contains(*id) == mutable);
+        if let Some((&id, _)) = found {
+            return Ok(id);
+        }
+        let word = TypeSpec::Primitive(TypeName::U16);
+        let data = TypeSpec::Applied { name: "&".into(), args: vec![TypeAnnotation::Value(self.spec_of(element))] };
+        let field = |name: String, type_spec: TypeSpec| StructField { name, mutable: false, type_spec, dims: Vec::new(), span };
+        let declared = Struct {
+            name: format!("$view{}[{}, {rank}]", if mutable { "_mut" } else { "" }, self.types[(element.id() - 1) as usize].name),
+            generics: Vec::new(),
+            bits: None,
+            pack: None,
+            fields: (0..rank)
+                .map(|axis| field(format!("$dim{axis}"), word.clone()))
+                .chain([field("$capacity".into(), word.clone()), field("$data".into(), data)])
+                .collect(),
+            span,
+        };
+        self.register_struct(&declared)?;
+        let id = self.structs[&declared.name].id;
+        debug_assert_eq!(self.width(id), descriptor::size(rank) + 4);
+        self.kept_views.insert(id, (element, rank));
+        if mutable {
+            self.writable_views.insert(id);
+        }
+        Ok(id)
     }
 
     fn slice_pointer(&mut self, element: ElementType, rank: u8) -> u32 {
@@ -657,7 +803,18 @@ fn plain_type(
 impl Signature {
     /// The bytes its arguments take on the stack, each at least a word.
     fn argument_bytes(&self, types: &TypeRegistry) -> u32 {
-        self.parameters.iter().map(|one| types.width(one.hir_type()).max(2)).sum()
+        let hidden = self.result_pointer.map_or(0, |one| types.width(type_id(one)));
+        self.parameters.iter().map(|one| types.width(one.hir_type()).max(2)).sum::<u32>() + hidden
+    }
+
+    /// Whether it takes and gives what `other` does, a value matching a
+    /// borrow of it (section 11).
+    fn matches(&self, other: &Signature) -> bool {
+        self.result == other.result
+            && self.slot == other.slot
+            && self.view == other.view
+            && self.parameters.len() == other.parameters.len()
+            && self.parameters.iter().zip(&other.parameters).all(|(one, another)| one.passed() == another.passed())
     }
 
     fn callable(&self, types: &mut TypeRegistry) -> hir::Callable {
@@ -669,6 +826,7 @@ impl Signature {
                 .slot_pointer(types)
                 .into_iter()
                 .chain(self.parameters.iter().map(|one| one.hir_type()))
+                .chain(self.result_pointer.map(type_id))
                 .collect(),
             defined: !self.foreign,
         }
@@ -695,6 +853,12 @@ struct Signature {
     /// A view result's element and rank: its descriptor goes to the slot.
     view: Option<(ElementType, u8)>,
     method: bool,
+    /// A BASIC float result's near pointer, a hidden last parameter the
+    /// result is stored through and which comes back in `ax`.
+    result_pointer: Option<TypeName>,
+    /// A BASIC string function's result: the near descriptor pointer it
+    /// returns, of the copy BASIC takes.
+    string_result: Option<TypeName>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -710,12 +874,29 @@ enum SignatureParameter {
         target: BindingType,
         pointer: u32,
     },
+    /// A BASIC argument passed by reference: the near pointer `pointer`,
+    /// through which the callee borrows `target`.
+    Adapter {
+        basic: super::syntax::Basic,
+        adapter: super::syntax::Adapter,
+        target: BindingType,
+        pointer: TypeName,
+    },
 }
 
 impl SignatureParameter {
+    /// What it passes, by value or by borrow.
+    fn passed(self) -> BindingType {
+        match self {
+            Self::Scalar(type_name) => BindingType::Scalar(type_name),
+            Self::Owned { struct_id, .. } => BindingType::Struct(struct_id),
+            Self::Borrowed { target, .. } | Self::Adapter { target, .. } => target,
+        }
+    }
+
     fn hir_type(self) -> u32 {
         match self {
-            Self::Scalar(type_name) => type_id(type_name),
+            Self::Scalar(type_name) | Self::Adapter { pointer: type_name, .. } => type_id(type_name),
             Self::Owned { pointer, .. } | Self::Borrowed { pointer, .. } => pointer,
         }
     }
@@ -791,6 +972,7 @@ struct Binding {
 
 #[derive(Clone, Debug)]
 struct StructView {
+    /// The struct's type; in a fixed array's view, the array's.
     struct_id: u32,
     place: u32,
     pointer: Option<u32>,
@@ -800,10 +982,37 @@ struct StructView {
     owner: String,
 }
 
+/// A store prepared before any is made, so every value is read first: one
+/// value to one place, or a run of `count` cells of `element` from
+/// `destination` on, stored as one counted loop the optimizer prices.
+#[derive(Clone, Debug)]
+enum Store {
+    One(hir::Operand, hir::Operand),
+    Run {
+        destination: StructView,
+        element: ElementType,
+        count: u32,
+        source: RunSource,
+    },
+}
+
+/// What a run of cells gets.
+#[derive(Clone, Debug)]
+enum RunSource {
+    /// This value in every cell.
+    Value(hir::Operand),
+    /// This struct in every cell.
+    Struct(StructView),
+    /// The cells of another run, read as the run is stored.
+    Cells(StructView),
+}
+
 #[derive(Clone, Debug)]
 enum AssignmentPlace {
     Scalar(hir::Operand, TypeName),
     Struct(StructView),
+    /// A whole fixed array: its view, element and shape.
+    Array(StructView, ElementType, Shape),
     /// A field of the bits value of type `packed` kept at `place`.
     Bits {
         place: hir::Operand,
@@ -969,7 +1178,7 @@ fn signature(
             ));
         }
         // A default is evaluated at each call site, in the caller's scope.
-        if let Some(default) = parameter.default.as_ref().filter(|one| !is_literal(one)) {
+        if let Some(default) = parameter.default.as_ref().filter(|one| !is_constant(one)) {
             return Err(Diagnostic::new(
                 default.span(),
                 "a default must be a literal",
@@ -989,12 +1198,7 @@ fn signature(
             view = Some((element, rank));
             (TypeName::Void, None)
         }
-        _ => {
-            return Err(Diagnostic::new(
-                function.span,
-                "a function cannot return an array",
-            ));
-        }
+        (BindingType::Array { .. }, array) => (TypeName::Void, Some(array)),
     };
     Ok(Signature {
         id,
@@ -1012,6 +1216,8 @@ fn signature(
         abi: Abi::Cdecl16,
         view,
         method: function.is_method(),
+        result_pointer: None,
+        string_result: None,
     })
 }
 
@@ -1020,6 +1226,9 @@ fn parameter_kind(
     parameter: &Parameter,
 ) -> Result<SignatureParameter, Diagnostic> {
     match &parameter.type_ {
+        ParameterType::Owned(TypeAnnotation::Value(spec)) if super::syntax::Adapter::of(spec).is_some() => {
+            Ok(types.adapter_parameter(spec, parameter.span)?.expect("an adapter"))
+        }
         ParameterType::Owned(annotation) => {
             match types.parameter_target(annotation, parameter.span)? {
                 (BindingType::Scalar(type_name), _) => Ok(SignatureParameter::Scalar(type_name)),
@@ -1061,6 +1270,8 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
+    let mut literals = LiteralPool::default();
+    types.register_statics(&module.statics, &statics::shared(module), &mut literals)?;
     let declared: Vec<Function> = module.functions.iter().map(|one| types.with_owner_generics(one)).collect();
     let (generators, functions): (Vec<&Function>, Vec<&Function>) = declared
         .iter()
@@ -1086,11 +1297,13 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
             ));
         }
         let mut signature = signature(&mut types, function, index as u32 + 1)?;
-        if let Some(abi) = module.exports.get(&function.name) {
-            foreign::check_foreign(&types, &signature, &function.name, function.span)?;
+        if let Some(export) = module.exports.get(&function.name) {
+            signature.abi = export.abi;
+            foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
             signature.exported = true;
-            signature.abi = *abi;
-            signature.name = abi.symbol(&function.name);
+            signature.name = export.symbol.clone();
+        } else {
+            foreign::check_adapters(&signature, &function.name, function.span)?;
         }
         signatures.insert(function.name.clone(), signature);
     }
@@ -1115,7 +1328,13 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
         .into_iter()
         .map(|(name, parameters)| (name, parameters, TypeName::Void))
         .chain(runtime::routines());
+    // The runtime defines the routines it exports, and its own code calls those.
+    let defined: BTreeMap<String, u32> = signatures.values().map(|one| (one.name.clone(), one.id)).collect();
     for (name, parameters, result) in routines {
+        if let Some(&id) = defined.get(name) {
+            builtin_ids.insert(name, (id, result));
+            continue;
+        }
         let id = callables.len() as u32 + 1;
         builtin_ids.insert(name, (id, result));
         callables.push(hir::Callable {
@@ -1134,7 +1353,6 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
         callables.len() as u32 + 1,
     ));
     let mut functions = Vec::new();
-    let mut literals = LiteralPool::default();
     for function in concrete {
         let signature = signatures.get(&function.name).expect("collected function");
         functions.push(
@@ -1144,6 +1362,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 &signatures,
                 &templates,
                 &builtin_ids,
+                &module.private_methods,
                 &mut literals,
                 &mut types,
             )?
@@ -1157,7 +1376,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
     loop {
         let pending = templates.borrow_mut().next_pending();
         if pending.is_none() && dispatchers.is_empty() {
-            dispatchers = types.dispatcher_bodies(Span { line: 0, column: 0, end_column: 0 });
+            dispatchers = types.dispatcher_bodies(Span::new(0, 0, 0));
         }
         let Some((function, signature)) = pending.or_else(|| {
             let dispatcher = dispatchers.pop()?;
@@ -1173,6 +1392,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 &signatures,
                 &templates,
                 &builtin_ids,
+                &module.private_methods,
                 &mut literals,
                 &mut types,
             )?
@@ -1192,7 +1412,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
 
 fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
     let mut out = vec![
-        ("_pn", Vec::new()),
+        (rt::PRINT_NEWLINE, Vec::new()),
         (print_name(TypeName::String), vec![TypeName::String]),
     ];
     for type_name in [
@@ -1213,16 +1433,16 @@ fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
     // the signed raw storage value followed by its fractional-bit count and
     // write canonical base-10 integer.fraction text. The formatter keeps one
     // digit after the point and trims any further trailing zeroes.
-    out.push(("_pf2", vec![TypeName::I16, TypeName::U8]));
-    out.push(("_pf4", vec![TypeName::I32, TypeName::U8]));
+    out.push((rt::PRINT_Q2, vec![TypeName::I16, TypeName::U8]));
+    out.push((rt::PRINT_Q4, vec![TypeName::I32, TypeName::U8]));
     // A `&string` view: its far data and length.
-    out.push(("_pv", vec![TypeName::Addr, TypeName::U16]));
+    out.push((rt::PRINT_VIEW, vec![TypeName::Addr, TypeName::U16]));
     out
 }
 
 fn print_name(type_name: TypeName) -> &'static str {
     match type_name {
-        TypeName::String => "_pt",
+        TypeName::String => rt::PRINT_STRING,
         TypeName::Addr => unreachable!("addresses have no default formatter"),
         TypeName::Enum { .. }
         | TypeName::Vector { .. }
@@ -1232,24 +1452,24 @@ fn print_name(type_name: TypeName) -> &'static str {
         | TypeName::Pointer { .. } => {
             unreachable!("no default formatter")
         }
-        TypeName::Bool => "_pb",
-        TypeName::Char => "_pc",
-        TypeName::I8 => "_pi1",
-        TypeName::U8 => "_pu1",
-        TypeName::I16 => "_pi2",
-        TypeName::U16 => "_pu2",
-        TypeName::I32 => "_pi4",
-        TypeName::U32 => "_pu4",
-        TypeName::F32 => "_pr4",
-        TypeName::F64 => "_pr8",
+        TypeName::Bool => rt::PRINT_BOOL,
+        TypeName::Char => rt::PRINT_CHAR,
+        TypeName::I8 => rt::PRINT_I1,
+        TypeName::U8 => rt::PRINT_U1,
+        TypeName::I16 => rt::PRINT_I2,
+        TypeName::U16 => rt::PRINT_U2,
+        TypeName::I32 => rt::PRINT_I4,
+        TypeName::U32 => rt::PRINT_U4,
+        TypeName::F32 => rt::PRINT_R4,
+        TypeName::F64 => rt::PRINT_R8,
         TypeName::Fixed {
             storage: FixedStorage::I16,
             ..
-        } => "_pf2",
+        } => rt::PRINT_Q2,
         TypeName::Fixed {
             storage: FixedStorage::I32,
             ..
-        } => "_pf4",
+        } => rt::PRINT_Q4,
         TypeName::Void | TypeName::I64 => unreachable!(),
     }
 }
@@ -1260,6 +1480,8 @@ struct FunctionCompiler<'a> {
     templates: &'a RefCell<instances::Templates>,
     /// Each runtime routine's callable and result.
     builtin_ids: &'a BTreeMap<&'static str, (u32, TypeName)>,
+    /// The linker's methods without `pub`, each with its module (section 14).
+    private_methods: &'a BTreeMap<String, u16>,
     values: Vec<hir::Value>,
     places: Vec<hir::Place>,
     blocks: Vec<BlockBuilder>,
@@ -1278,14 +1500,14 @@ struct FunctionCompiler<'a> {
     next_place: u32,
     /// Numbers the hidden names the compiler binds.
     next_hidden: u32,
+    /// The generator calls in the statement being compiled that a loop consumes.
+    consumed: Vec<Span>,
     next_instruction: u32,
     next_frame_offset: i32,
     literals: &'a mut LiteralPool,
     types: &'a mut TypeRegistry,
     constant_places: BTreeMap<u32, u32>,
     rules: &'static Rules,
-    /// Each entry-zeroed array binding's descriptor offset.
-    zeroed: Vec<(Span, i32)>,
     /// Places whose bindings own and drop what they hold.
     owned_places: BTreeSet<u32>,
     /// Owned aggregate parameters, by their pointer value.
@@ -1301,7 +1523,7 @@ struct FunctionCompiler<'a> {
     aggregate_temporaries: Vec<StructView>,
     lambdas: Vec<lambdas::Lambda>,
     /// The owners each reference or view binding borrows, by its value.
-    borrowed_from: BTreeMap<u32, BTreeSet<String>>,
+    borrowed_from: BTreeMap<borrows::BorrowKey, BTreeSet<String>>,
     /// Views bound with `let mut`, which an assignment reseats.
     reseatable: BTreeSet<u32>,
     /// The named sequences `for` loops are walking, outermost first.
@@ -1315,6 +1537,7 @@ impl<'a> FunctionCompiler<'a> {
         signatures: &'a BTreeMap<String, Signature>,
         templates: &'a RefCell<instances::Templates>,
         builtin_ids: &'a BTreeMap<&'static str, (u32, TypeName)>,
+        private_methods: &'a BTreeMap<String, u16>,
         literals: &'a mut LiteralPool,
         types: &'a mut TypeRegistry,
     ) -> Result<Self, Diagnostic> {
@@ -1323,6 +1546,7 @@ impl<'a> FunctionCompiler<'a> {
             signatures,
             templates,
             builtin_ids,
+            private_methods,
             values: Vec::new(),
             places: Vec::new(),
             blocks: vec![BlockBuilder {
@@ -1341,13 +1565,13 @@ impl<'a> FunctionCompiler<'a> {
             next_value: 1,
             next_place: 1,
             next_hidden: 1,
+            consumed: Vec::new(),
             next_instruction: 1,
             next_frame_offset: 0,
             literals,
             types,
             constant_places: BTreeMap::new(),
             rules: &conversions::I386_REAL_MODE,
-            zeroed: Vec::new(),
             owned_places: BTreeSet::new(),
             owned_references: BTreeSet::new(),
             moves: moves::Moves::default(),
@@ -1360,26 +1584,45 @@ impl<'a> FunctionCompiler<'a> {
             reseatable: BTreeSet::new(),
             iterated: Vec::new(),
         };
+        // Module variables are the outermost scope; parameters and the body
+        // share the next, and hide them.
+        compiler.bind_statics();
+        compiler.scopes.push(BTreeMap::new());
         if let (Some(struct_id), Some(_)) = (signature.slot, signature.in_registers(compiler.types)) {
             let width = compiler.types.width(struct_id);
             let place = compiler.local_place(RESULT, struct_id, width, true);
-            let binding = Binding { type_: BindingType::Struct(struct_id), mutable: true, storage: Storage::Place(place) };
-            compiler.scopes[0].insert(RESULT.into(), binding);
+            let binding = Binding { type_: compiler.types.aggregate_binding(struct_id), mutable: true, storage: Storage::Place(place) };
+            compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), binding);
+        } else if signature.string_result.is_some() {
+            // The view is returned here, in this frame, and copied before the return.
+            let view = compiler.view_slot(ElementType::Scalar(TypeName::Char), 1);
+            let binding = Binding { type_: BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 }, mutable: true, storage: Storage::Slice(view) };
+            compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), binding);
         } else if let Some(pointer) = signature.slot_pointer(compiler.types) {
             let value = compiler.value_type(pointer);
             compiler.parameters.push(value);
             let (type_, storage) = match (signature.slot, signature.view) {
-                (Some(struct_id), _) => (BindingType::Struct(struct_id), Storage::Reference(value)),
+                (Some(struct_id), _) => (compiler.types.aggregate_binding(struct_id), Storage::Reference(value)),
                 (None, Some((element, rank))) => (BindingType::Slice { element, rank }, Storage::Slice(value)),
                 (None, None) => unreachable!("a slot holds an aggregate or a view"),
             };
-            compiler.scopes[0].insert(RESULT.into(), Binding { type_, mutable: true, storage });
+            compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), Binding { type_, mutable: true, storage });
         }
         for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
-            let binding = compiler.parameter_binding(&parameter.name, resolved, value);
-            compiler.scopes[0].insert(parameter.name.clone(), binding);
+            let binding = match *resolved {
+                SignatureParameter::Adapter { basic, adapter, target, pointer } => {
+                    compiler.adapter_binding(basic, adapter, target, pointer, value, parameter.span)?
+                }
+                _ => compiler.parameter_binding(&parameter.name, resolved, value),
+            };
+            compiler.scopes.last_mut().expect("scope").insert(parameter.name.clone(), binding);
+        }
+        // physicalize stores the result through it, as the ABI says.
+        if let Some(pointer) = signature.result_pointer {
+            let value = compiler.value(pointer);
+            compiler.parameters.push(value);
         }
         Ok(compiler)
     }
@@ -1392,6 +1635,7 @@ impl<'a> FunctionCompiler<'a> {
         value: u32,
     ) -> Binding {
         let (type_, mutable, storage) = match resolved {
+            SignatureParameter::Adapter { .. } => unreachable!("an adapter binds through adapter_binding"),
             SignatureParameter::Scalar(type_name) => (
                 BindingType::Scalar(*type_name),
                 false,
@@ -1446,10 +1690,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile(mut self, function: &Function) -> Result<hir::Function, Diagnostic> {
-        self.zero_fill(&function.body, function.span)?;
         self.statements(&function.body)?;
+        // After a loop only `break` leaves, the end is reached only if one does.
+        if self.open() && self.current != 1 && !self.reached(self.current) {
+            self.terminate(hir::Terminator { kind: "unreachable", operands: Vec::new(), targets: Vec::new() });
+        }
         if self.open() {
+            let since = self.calls.len();
             self.drop_scopes(0);
+            self.refuse_runtime(since, function.span)?;
             if self.signature.result == TypeName::Void && self.signature.slot.is_none() {
                 self.terminate(hir::Terminator {
                     kind: "return",
@@ -1489,54 +1738,8 @@ impl<'a> FunctionCompiler<'a> {
             parameters: self.parameters,
             calls: self.calls,
             exported: self.signature.exported,
-            cleans: self.signature.abi.callee_cleans().then(|| self.signature.argument_bytes(&self.types)),
+            abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),
         })
-    }
-
-    /// Lays the zero-filled arrays a call binds at most once side by side, descriptors
-    /// included, and zeroes them with one fill on entry. Each binding then stores only its
-    /// descriptor.
-    fn zero_fill(&mut self, body: &[Statement], span: Span) -> Result<(), Diagnostic> {
-        let mut extent = 0;
-        for (bind, element, dims, value) in repeated_bindings(body) {
-            let Ok(ElementType::Scalar(type_name)) = self.types.resolve_element(element, bind)
-            else {
-                continue;
-            };
-            if !is_zero(&value, type_name) {
-                continue;
-            }
-            let shape = Shape::new(dims);
-            self.zeroed.push((bind, extent as i32));
-            extent += width(type_name) * shape.len() + descriptor::size(shape.rank);
-        }
-        if extent == 0 {
-            return Ok(());
-        }
-        let shape = Shape::new(&[extent.div_ceil(2)]);
-        let element = ElementType::Scalar(TypeName::U16);
-        let type_id = self.types.array(element, shape);
-        let region = self.local_place("$zero", type_id, 2 * shape.len(), true);
-        let base = self.next_frame_offset;
-        for (_, offset) in &mut self.zeroed {
-            *offset += base;
-        }
-        self.statement(&Statement::Bind {
-            mutable: false,
-            name: "$$zero_fill".into(),
-            annotation: Some(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::U16))),
-            value: Expr::Integer(0, span),
-            span,
-        })?;
-        self.scopes.last_mut().expect("scope").insert(
-            "$zero".into(),
-            Binding {
-                type_: BindingType::Array { element, shape },
-                mutable: true,
-                storage: Storage::Place(region),
-            },
-        );
-        self.fill("$zero", shape, span)
     }
 
     fn prune_unreachable(&mut self) {
@@ -1689,6 +1892,10 @@ fn is_ordered(type_name: TypeName) -> bool {
 }
 
 /// A repeat literal's counts, which are compile-time integers.
+/// The scope a function's parameters and its body's top level share; the
+/// one before holds the module variables.
+const BODY: usize = 1;
+
 fn repeat_counts(counts: &[Expr]) -> Result<Vec<u32>, Diagnostic> {
     counts
         .iter()
@@ -1738,53 +1945,6 @@ fn literal_elements<'e>(
     Ok(out)
 }
 
-/// The fixed-array bindings of a repeated literal that run at most once per call, with
-/// their element, dimensions and repeated value.
-fn repeated_bindings(statements: &[Statement]) -> Vec<(Span, &TypeSpec, &[u32], Expr)> {
-    let mut found = Vec::new();
-    for statement in statements {
-        match statement {
-            Statement::Bind {
-                annotation: Some(TypeAnnotation::Array { element, dims }),
-                value,
-                span,
-                ..
-            } => {
-                let repeated = repeated_literal(value, dims);
-                if let Expr::Repeat { value, counts, .. } = repeated.as_ref().unwrap_or(value) {
-                    if repeat_counts(counts).is_ok_and(|counts| counts == *dims) {
-                        found.push((*span, element, dims.as_slice(), value.as_ref().clone()));
-                    }
-                }
-            }
-            Statement::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                found.extend(repeated_bindings(then_branch));
-                found.extend(repeated_bindings(else_branch));
-            }
-            _ => {}
-        }
-    }
-    found
-}
-
-/// Whether `literal`, as a `type_name`, is all zero bytes.
-fn is_zero(literal: &Expr, type_name: TypeName) -> bool {
-    use TypeName::*;
-    match (literal, type_name) {
-        (Expr::Integer(0, _), I8 | U8 | I16 | U16 | I32 | U32 | I64) => true,
-        (Expr::Float(text, _), F32 | F64) => text
-            .parse::<f64>()
-            .is_ok_and(|value| value == 0.0 && value.is_sign_positive()),
-        (Expr::Character(0, _), Char) => true,
-        (Expr::Boolean(false, _), Bool) => true,
-        _ => false,
-    }
-}
-
 /// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills rather than storing each element.
 fn repeated_literal(literal: &Expr, dims: &[u32]) -> Option<Expr> {
     let items = literal_elements(literal, dims, literal.span()).ok()?;
@@ -1832,8 +1992,16 @@ fn is_literal(expression: &Expr) -> bool {
         || is_float_literal(expression)
         || matches!(
             expression,
-            Expr::Character(..) | Expr::Boolean(..) | Expr::String(..)
+            Expr::Character(..) | Expr::Boolean(..) | Expr::String(..) | Expr::Zero(..)
         )
+}
+
+/// A literal, or a constant's typed one.
+fn is_constant(expression: &Expr) -> bool {
+    match expression {
+        Expr::Conversion { value, .. } => is_literal(value),
+        _ => is_literal(expression),
+    }
 }
 
 fn storage_type(storage: FixedStorage) -> TypeName {

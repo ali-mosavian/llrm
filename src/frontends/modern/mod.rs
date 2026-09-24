@@ -18,6 +18,9 @@ pub mod main;
 pub mod modernstages;
 pub mod modules;
 pub mod parser;
+pub mod resumable;
+pub mod scopes;
+pub mod standard;
 pub mod semantic;
 pub mod syntax;
 
@@ -49,7 +52,8 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 /// files under the same directory, `a.b` at `a/b.mod`.
 pub fn compile_file(path: &std::path::Path) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path)?;
-    compile_module(module, module_name(path)).map_err(|error| (path.to_path_buf(), error))
+    let sources = module.sources.clone();
+    compile_module(module, module_name(path)).map_err(|error| located(path, &sources, error))
 }
 
 /// The `.H`, `.BI` or `.INC` declarations of the program at `path`'s exports.
@@ -58,7 +62,7 @@ pub fn declare_file(
     language: declarations::Language,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path)?;
-    declarations::declarations(&module, module_name(path), language).map_err(|error| (path.to_path_buf(), error))
+    declarations::declarations(&module, module_name(path), language).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {
@@ -66,16 +70,26 @@ fn module_name(path: &std::path::Path) -> &str {
 }
 
 /// The module at `path`, linked with every module it imports.
+/// `error` with the file of the module its span is in.
+fn located(path: &std::path::Path, sources: &[String], error: Diagnostic) -> (std::path::PathBuf, Diagnostic) {
+    let name = sources.get(usize::from(error.span.module)).map_or("", String::as_str);
+    (module_path(path, name), error)
+}
+
+/// Where the module `name`, which the program at `path` imports, is read
+/// from: `<std.io>` for one the compiler supplies.
+fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
+    if name.is_empty() {
+        path.to_path_buf()
+    } else if standard::supplied(name) {
+        std::path::PathBuf::from(format!("<{name}>"))
+    } else {
+        let root = path.parent().unwrap_or(std::path::Path::new("."));
+        root.join(format!("{}.mod", name.replace('.', "/")))
+    }
+}
+
 fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
-    let root = path.parent().unwrap_or(std::path::Path::new("."));
-    let module_path = |name: &str| root.join(format!("{}.mod", name.replace('.', "/")));
-    let at = |name: &str| {
-        if name.is_empty() {
-            path.to_path_buf()
-        } else {
-            module_path(name)
-        }
-    };
     let source = std::fs::read_to_string(path).map_err(|error| {
         (
             path.to_path_buf(),
@@ -83,18 +97,20 @@ fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathB
         )
     })?;
     modules::load(&source, &mut |name| {
-        std::fs::read_to_string(module_path(name)).map_err(|error| error.to_string())
+        std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
     })
-    .map_err(|(name, error)| (at(&name), error))
+    .map_err(|(name, error)| (module_path(path, &name), error))
 }
 
 /// Type-checks a parsed module and lowers it to HIR.
 pub fn compile_module(mut module: syntax::Module, module_name: &str) -> Result<String, Diagnostic> {
     let prelude = parse(lex(include_str!("prelude.mod"))?)?;
     module.enums.extend(prelude.enums);
-    // A module's own function of a prelude name is the one it calls.
+    // A module's own function or protocol of a prelude name is the one it names.
     let own: std::collections::BTreeSet<String> = module.functions.iter().map(|one| one.name.clone()).collect();
     module.functions.extend(prelude.functions.into_iter().filter(|one| !own.contains(&one.name)));
+    let own: std::collections::BTreeSet<String> = module.protocols.iter().map(|one| one.name.clone()).collect();
+    module.protocols.extend(prelude.protocols.into_iter().filter(|one| !own.contains(&one.name)));
     module.library = library::functions()?;
     module.library.extend(library::derived(&module)?);
     library::entry(&mut module)?;

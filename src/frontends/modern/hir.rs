@@ -40,6 +40,9 @@ pub struct DataObject {
     pub id: u32,
     pub name: String,
     pub bytes: Vec<u8>,
+    pub readonly: bool,
+    /// The callable whose far address its bytes hold, when they hold one.
+    pub code: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +78,17 @@ pub struct Instruction {
     pub results: Vec<u32>,
     pub operands: Vec<Operand>,
     pub callee: Option<String>,
+    pub asm: Option<Asm>,
+}
+
+/// An `asm` instruction's code and the 16-bit registers it reads and writes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Asm {
+    pub code: Vec<u8>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub clobbers: Vec<String>,
+    pub memory: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,6 +111,7 @@ pub struct CallSite {
     pub order: Vec<u32>,
     pub callee: u32,
     pub callee_cleans: bool,
+    pub float_return: &'static str,
 }
 
 impl CallSite {
@@ -107,6 +122,7 @@ impl CallSite {
             order: if abi.callee_cleans() { (0..count).collect() } else { (0..count).rev().collect() },
             callee,
             callee_cleans: abi.callee_cleans(),
+            float_return: abi.float_return(),
         }
     }
 }
@@ -124,8 +140,28 @@ pub struct Function {
     pub calls: Vec<CallSite>,
     /// Callable from other objects by its symbol.
     pub exported: bool,
-    /// The argument bytes it removes on return, when its ABI makes it the one.
-    pub cleans: Option<u32>,
+    /// How it is entered and left, when not as a native function is.
+    pub abi: Option<ProcedureAbi>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcedureAbi {
+    pub distance: &'static str,
+    /// The argument bytes it removes on return.
+    pub parameter_bytes: u32,
+    pub float_return: &'static str,
+}
+
+impl ProcedureAbi {
+    /// A function of `abi`, taking `argument_bytes`, when it differs from a
+    /// native one: it removes its arguments, or it returns with `iret`.
+    pub fn of(abi: Abi, argument_bytes: u32) -> Option<Self> {
+        match abi {
+            Abi::Cdecl16 => None,
+            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance: "far", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
+            Abi::Interrupt16 => Some(Self { distance: "interrupt", parameter_bytes: 0, float_return: abi.float_return() }),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,7 +222,11 @@ impl Program {
             )
             .unwrap();
             string(&mut out, &object.name);
-            out.push_str(",\"readonly\":true,\"relocations\":[]}");
+            write!(out, ",\"readonly\":{},\"relocations\":[", object.readonly).unwrap();
+            if let Some(callable) = object.code {
+                write!(out, "{{\"addend\":0,\"address\":\"far\",\"at\":0,\"code\":true,\"target\":{callable}}}").unwrap();
+            }
+            out.push_str("]}");
         }
         out.push_str("],\"functions\":[");
         for (index, function) in self.functions.iter().enumerate() {
@@ -227,10 +267,10 @@ impl Program {
 }
 
 fn function_json(out: &mut String, function: &Function) {
-    match function.cleans {
-        Some(bytes) => write!(
+    match &function.abi {
+        Some(ProcedureAbi { distance, parameter_bytes, float_return }) => write!(
             out,
-            "{{\"abi\":{{\"cleanup\":\"callee\",\"distance\":\"far\",\"parameter_bytes\":{bytes}}},\"blocks\":["
+            "{{\"abi\":{{\"cleanup\":\"callee\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
         )
         .unwrap(),
         None => out.push_str("{\"abi\":null,\"blocks\":["),
@@ -240,7 +280,19 @@ fn function_json(out: &mut String, function: &Function) {
         write!(out, "{{\"id\":{},\"instructions\":[", block.id).unwrap();
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
             comma(out, instruction_index);
-            out.push_str("{\"callee\":");
+            out.push('{');
+            if let Some(asm) = &instruction.asm {
+                out.push_str("\"asm\":{\"clobbers\":[");
+                strings(out, &asm.clobbers);
+                out.push_str("],\"code\":[");
+                bytes(out, &asm.code);
+                out.push_str("],\"inputs\":[");
+                strings(out, &asm.inputs);
+                write!(out, "],\"memory\":{},\"outputs\":[", asm.memory).unwrap();
+                strings(out, &asm.outputs);
+                out.push_str("]},");
+            }
+            out.push_str("\"callee\":");
             if let Some(callee) = &instruction.callee {
                 string(out, callee);
             } else {
@@ -270,9 +322,10 @@ fn function_json(out: &mut String, function: &Function) {
         comma(out, index);
         write!(
             out,
-            "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\",\"instruction\":{},\"order\":[",
+            "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\",\"float_return\":\"{}\",\"instruction\":{},\"order\":[",
             call.callee,
             if call.callee_cleans { "callee" } else { "caller" },
+            call.float_return,
             call.instruction
         )
         .unwrap();
@@ -381,6 +434,13 @@ fn numbers(out: &mut String, values: &[u32]) {
     for (index, value) in values.iter().enumerate() {
         comma(out, index);
         write!(out, "{value}").unwrap();
+    }
+}
+
+fn strings(out: &mut String, values: &[String]) {
+    for (index, value) in values.iter().enumerate() {
+        comma(out, index);
+        string(out, value);
     }
 }
 

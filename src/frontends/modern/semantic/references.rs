@@ -32,7 +32,7 @@ impl FunctionCompiler<'_> {
         Some(Binding {
             type_: match target {
                 ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
-                ElementType::Struct(id) => BindingType::Struct(id),
+                ElementType::Struct(id) => self.types.aggregate_binding(id),
             },
             mutable,
             storage: Storage::Reference(pointer),
@@ -48,7 +48,7 @@ impl FunctionCompiler<'_> {
         };
         let target_type = match target {
             ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
-            ElementType::Struct(id) => BindingType::Struct(id),
+            ElementType::Struct(id) => self.types.aggregate_binding(id),
         };
         let operand = match expression {
             Expr::Name(name, name_span) => match self.binding(name, *name_span)?.clone() {
@@ -66,6 +66,29 @@ impl FunctionCompiler<'_> {
             _ => return Err(Diagnostic::new(span, "a reference is taken with '&'")),
         };
         Ok(TypedOperand { operand: Some(operand), type_name: reference })
+    }
+
+    /// `place`, a field holding a reference, as what it refers to, when
+    /// `value` is written there rather than another reference seated.
+    pub(super) fn written_through(&mut self, place: AssignmentPlace, operation: Option<BinaryOp>, value: &Expr) -> AssignmentPlace {
+        let AssignmentPlace::Scalar(field, type_name) = &place else {
+            return place;
+        };
+        let Some(ElementType::Scalar(target)) = self.types.referent(*type_name) else {
+            return place;
+        };
+        let reference = match value {
+            Expr::Borrow { .. } => true,
+            Expr::Name(name, _) => self.visible(name).is_some_and(|one| matches!(one.storage, Storage::Reference(_)) && !self.owns(&one.storage)),
+            _ => self.expression_type_hint(value) == Some(*type_name),
+        };
+        let seated = operation.is_none() && reference;
+        if seated {
+            return place;
+        }
+        let pointer = self.value(*type_name);
+        self.emit("load", vec![pointer], vec![field.clone()], None);
+        AssignmentPlace::Scalar(hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false }, target)
     }
 
     /// The scalar place `expression` names -- a field or an element -- with
@@ -116,7 +139,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The view `&operand` makes, when `operand` is a sequence.
-    fn borrowed_view_type(&self, operand: &Expr, exclusive: bool) -> Option<(ElementType, u8)> {
+    pub(super) fn borrowed_view_type(&self, operand: &Expr, exclusive: bool) -> Option<(ElementType, u8)> {
+        if let (Expr::Member { .. }, Some((element, shape))) = (operand, self.fixed_array_hint(operand)) {
+            return Some((element, shape.rank));
+        }
         match operand {
             Expr::Slice { base, .. } => self.indexed_hint(base).map(|element| (element, 1)),
             Expr::Name(name, span) => match self.binding(name, *span).ok()?.type_ {

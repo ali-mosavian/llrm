@@ -1,5 +1,6 @@
 //! Operators and conversions (section 3).
 
+use crate::abi::modern as rt;
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -71,7 +72,8 @@ impl<'a> FunctionCompiler<'a> {
             }
             return self.expression(expression, None);
         }
-        if is_float(other) || is_fixed(other) {
+        // `0` is also the null pointer of any type.
+        if is_float(other) || is_fixed(other) || (is_integer_literal(expression) && self.types.raw_target(other).is_some()) {
             return self.coerced(expression, other);
         }
         self.expression(expression, None)
@@ -119,6 +121,11 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<TypedOperand, Diagnostic> {
         if value.type_name == target {
             return Ok(value);
+        }
+        if self.types.reads_through(value.type_name, target) {
+            let read_only = self.value(target);
+            self.emit("copy", vec![read_only], vec![required(value, span)?], None);
+            return Ok(TypedOperand { operand: Some(hir::Operand::Value(read_only)), type_name: target });
         }
         if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
             return Err(type_mismatch(span, target, value.type_name));
@@ -179,6 +186,80 @@ impl<'a> FunctionCompiler<'a> {
             operand: Some(hir::Operand::Value(value)),
             type_name: TypeName::Bool,
         })
+    }
+
+    /// `a < b < c`: `(a < b) && (b < c)`, each operand evaluated once, in order.
+    pub(super) fn chain(
+        &mut self,
+        operands: &[Expr],
+        operations: &[BinaryOp],
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
+        if expected.is_some_and(|one| one != TypeName::Bool) {
+            return Err(type_mismatch(
+                span,
+                expected.expect("checked"),
+                TypeName::Bool,
+            ));
+        }
+        let name = self.hidden("chain");
+        let result = self.place(&name, TypeName::Bool, true);
+        let join = self.block();
+        self.in_scope(|this| {
+            let mut left = this.evaluated_once(&operands[0])?;
+            for (index, operation) in operations.iter().enumerate() {
+                let right = this.evaluated_once(&operands[index + 1])?;
+                let holds = this.binary(*operation, &left, &right, Some(TypeName::Bool), span)?;
+                let holds = required(holds, span)?;
+                this.emit(
+                    "store",
+                    Vec::new(),
+                    vec![hir::Operand::Place(result), holds.clone()],
+                    None,
+                );
+                if index + 1 < operations.len() {
+                    let next = this.block();
+                    this.terminate(hir::Terminator {
+                        kind: "branch",
+                        operands: vec![holds],
+                        targets: vec![next, join],
+                    });
+                    this.current = next;
+                }
+                left = right;
+            }
+            Ok(())
+        })?;
+        self.terminate(jump(join));
+        self.current = join;
+        let value = self.value(TypeName::Bool);
+        self.emit("load", vec![value], vec![hir::Operand::Place(result)], None);
+        Ok(TypedOperand {
+            operand: Some(hir::Operand::Value(value)),
+            type_name: TypeName::Bool,
+        })
+    }
+
+    /// `operand`, evaluated now, as an expression that reads it again without
+    /// evaluating it again. A literal stays one, typed by what it meets, and a
+    /// struct stays the place it names.
+    fn evaluated_once(&mut self, operand: &Expr) -> Result<Expr, Diagnostic> {
+        let span = operand.span();
+        if is_literal(operand) || self.struct_type_hint(operand, span).is_some() {
+            return Ok(operand.clone());
+        }
+        let binding = if self.is_char_view(operand) {
+            self.sequence_of(operand)?.0
+        } else {
+            let value = self.expression(operand, None)?;
+            let type_name = value.type_name;
+            let value = self.materialized(required(value, span)?, type_id(type_name));
+            Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Parameter(value) }
+        };
+        let name = self.hidden("operand");
+        self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
+        Ok(Expr::Name(name, span))
     }
 
     pub(super) fn conversion(
@@ -439,6 +520,9 @@ impl<'a> FunctionCompiler<'a> {
         if left.type_name == TypeName::String {
             return self.string_binary(operation, left, right, span);
         }
+        if let Some(result) = self.pointer_comparison(operation, &left, &right, span) {
+            return result;
+        }
         let comparison = is_comparison(operation);
         let (left, right) = if is_shift(operation) {
             if !is_integer(left.type_name) || !is_integer(right.type_name) {
@@ -454,7 +538,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             } else {
                 let count = required(right.clone(), span)?;
-                self.check_below(&count, hir::Operand::Constant(U16, i64::from(bits)), "_rt_panic_shift", span)?;
+                self.check_below(&count, hir::Operand::Constant(U16, i64::from(bits)), rt::ERROR_SHIFT, span)?;
             }
             let (left_type, right_type) = (
                 self.rules.promoted(left.type_name),

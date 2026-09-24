@@ -6,13 +6,17 @@
 //! type with a `drop` method has no null, so its owners carry a flag
 //! (drops.rs).
 
+use crate::abi::modern as rt;
 use super::*;
 
 /// Where a value of an owning type was read from.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Origin {
     /// An owning local's place: moving the value nulls it.
     Local(u32),
+    /// A field of a generator's frame, which is one of its body's locals:
+    /// moving the value nulls it too.
+    Frame(hir::Operand),
     /// A borrow, field, or element: it cannot move.
     Borrowed,
     /// A literal: static, so a move copies it and nothing drops it.
@@ -96,8 +100,10 @@ impl FunctionCompiler<'_> {
         let hir::Operand::Value(id) = operand else {
             return Ok(());
         };
-        match self.origins.get(id).copied() {
+        let null = hir::Operand::Constant(type_id(value.type_name), 0);
+        match self.origins.get(id).cloned() {
             Some(Origin::Local(place)) => {
+                self.check_movable((false, place), span)?;
                 let null = hir::Operand::Constant(type_id(value.type_name), 0);
                 self.emit(
                     "store",
@@ -106,6 +112,10 @@ impl FunctionCompiler<'_> {
                     None,
                 );
                 self.moved().insert((false, place));
+                Ok(())
+            }
+            Some(Origin::Frame(place)) => {
+                self.emit("store", Vec::new(), vec![place, null], None);
                 Ok(())
             }
             Some(Origin::Static) => Ok(()),
@@ -159,6 +169,11 @@ impl FunctionCompiler<'_> {
                         .expect("an owned aggregate has storage");
                     self.drop_owner(&view);
                 }
+                (BindingType::Array { element, shape }, storage) => {
+                    let array = self.types.array(element, shape);
+                    let view = binding_view(array, storage, true, &name).expect("an owned array has storage");
+                    self.drop_owner(&view);
+                }
                 _ => unreachable!("only strings and aggregates are owned"),
             }
         }
@@ -186,7 +201,7 @@ impl FunctionCompiler<'_> {
             self.terminate(jump(done));
             self.current = done;
         }
-        self.emit_builtin("_rt_drop", vec![operand]);
+        self.emit_builtin(rt::BUFFER_DROP, vec![operand]);
     }
 }
 
@@ -195,6 +210,9 @@ impl FunctionCompiler<'_> {
     pub(super) fn element_needs_drop(&self, element: ElementType) -> bool {
         match element {
             ElementType::Scalar(type_name) => needs_drop(type_name),
+            ElementType::Struct(id) if self.types.array_of(id).is_some() => {
+                self.element_needs_drop(self.types.array_of(id).expect("an array").0)
+            }
             ElementType::Struct(id) => {
                 let layout = self.types.structure(id).expect("registered layout");
                 self.types.dropped.contains_key(&id)
@@ -213,6 +231,9 @@ impl FunctionCompiler<'_> {
     /// Applies `action` to what an aggregate owns; an enum, only what its
     /// current variant does.
     pub(super) fn each_owned(&mut self, view: &StructView, action: Owned) {
+        if let Some((element, shape)) = self.types.array_of(view.struct_id) {
+            return self.owned_array(view, element, shape, action);
+        }
         if let Owned::Drop = action {
             self.call_drop(view);
         }
@@ -248,12 +269,21 @@ impl FunctionCompiler<'_> {
             .structure(view.struct_id)
             .expect("registered layout")
             .clone();
-        for field in layout.fields.values() {
-            self.owned_field(view, *field, action);
+        for (name, field) in &layout.fields {
+            let flag = match action {
+                Owned::Drop => self.frame_flag(view, name),
+                Owned::Duplicate => None,
+            };
+            self.when_live(flag, |this| this.owned_field(view, *field, action));
         }
     }
 
     fn owned_field(&mut self, view: &StructView, field: FieldLayout, action: Owned) {
+        if let Some(shape) = field.shape {
+            let struct_id = self.types.array(field.type_, shape);
+            let array = StructView { struct_id, offset: view.offset + field.offset, ..view.clone() };
+            return self.owned_array(&array, field.type_, shape, action);
+        }
         match field.type_ {
             ElementType::Scalar(type_name) if needs_drop(type_name) => {
                 let place = self.projected_place(view, field.offset, type_name);
@@ -271,6 +301,19 @@ impl FunctionCompiler<'_> {
         }
     }
 
+    /// Applies `action` to what each element owns of the array of `element`
+    /// and `shape` at `array`.
+    pub(super) fn owned_array(&mut self, array: &StructView, element: ElementType, shape: Shape, action: Owned) {
+        if !self.element_needs_drop(element) {
+            return;
+        }
+        let slot = FieldLayout { type_: element, offset: 0, shape: None };
+        for index in 0..shape.len() {
+            let one = self.element_view(array, element, shape, index);
+            self.owned_field(&one, slot, action);
+        }
+    }
+
     /// Drops the owning value at `place`, or replaces it with its own copy.
     pub(super) fn owned_leaf(&mut self, place: hir::Operand, type_name: TypeName, action: Owned) {
         let value = self.value(type_name);
@@ -285,12 +328,14 @@ impl FunctionCompiler<'_> {
     }
 
     /// Takes an aggregate's contents from `expression` for a new owner:
-    /// a local is left empty, which its drop skips.
+    /// a local is left empty, which its drop skips, by `stores` made after
+    /// the copy's.
     pub(super) fn consume_aggregate(
         &mut self,
         expression: &Expr,
         source: &StructView,
         span: Span,
+        stores: &mut Vec<Store>,
     ) -> Result<(), Diagnostic> {
         if !self.element_needs_drop(ElementType::Struct(source.struct_id)) {
             return Ok(());
@@ -303,6 +348,15 @@ impl FunctionCompiler<'_> {
         if let (Some(index), None) = (temporary, source.pointer) {
             self.aggregate_temporaries.remove(index);
             return Ok(());
+        }
+        if let Expr::Member { base, field, .. } = expression {
+            if let Some(flag) = self.frame_field(base, field, span)? {
+                stores.extend(self.zero_stores(source, self.types.copy_units(ElementType::Struct(source.struct_id))));
+                if let Some(flag) = flag {
+                    stores.push(Store::One(flag, hir::Operand::Constant(BOOL, 0)));
+                }
+                return Ok(());
+            }
         }
         let owned_local = match expression {
             Expr::Name(name, _) => {
@@ -318,18 +372,32 @@ impl FunctionCompiler<'_> {
             ));
         };
         if let Some(owner) = moves::owner(&storage) {
+            self.check_movable(owner, span)?;
             self.moved().insert(owner);
             self.set_live(owner, false);
         }
-        for (offset, type_name) in self.types.copy_units(ElementType::Struct(source.struct_id)) {
-            let place = self.projected_place(source, offset, type_name);
-            self.emit(
-                "store",
-                Vec::new(),
-                vec![place, hir::Operand::Constant(type_id(type_name), 0)],
-                None,
-            );
-        }
+        stores.extend(self.zero_stores(source, self.types.copy_units(ElementType::Struct(source.struct_id))));
         Ok(())
+    }
+
+    /// Stores of zero to each of `units`, (offset, type, count) runs of cells at `view`.
+    pub(super) fn zero_stores(&self, view: &StructView, units: Vec<(u32, TypeName, u32)>) -> Vec<Store> {
+        // An array's cells are a run even when one: its place is projected by element.
+        let array = self.types.array_of(view.struct_id).is_some();
+        units
+            .into_iter()
+            .map(|(offset, type_name, count)| {
+                let zero = hir::Operand::Constant(type_id(type_name), 0);
+                match count {
+                    1 if !array => Store::One(self.projected_place(view, offset, type_name), zero),
+                    _ => Store::Run {
+                        destination: StructView { offset: view.offset + offset, ..view.clone() },
+                        element: ElementType::Scalar(type_name),
+                        count,
+                        source: RunSource::Value(zero),
+                    },
+                }
+            })
+            .collect()
     }
 }

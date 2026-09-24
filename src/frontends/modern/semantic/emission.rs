@@ -235,6 +235,7 @@ impl<'a> FunctionCompiler<'a> {
                 results,
                 operands,
                 callee,
+                asm: None,
             });
         id
     }
@@ -257,6 +258,11 @@ impl<'a> FunctionCompiler<'a> {
             "semantic block terminated twice"
         );
         block.terminator = Some(terminator);
+    }
+
+    /// Whether any block jumps to `block`.
+    pub(super) fn reached(&self, block: u32) -> bool {
+        self.blocks.iter().any(|one| one.terminator.as_ref().is_some_and(|end| end.targets.contains(&block)))
     }
 
     pub(super) fn open(&self) -> bool {

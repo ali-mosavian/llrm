@@ -53,7 +53,7 @@ impl Parser {
                     enum_name: None,
                     name,
                     fields,
-                    span: Span::new(token.span.line, token.span.column, name_span.end_column),
+                    span: token.span.to(name_span.end_column),
                 })
             }
             TokenKind::LeftParen => {
@@ -90,11 +90,7 @@ impl Parser {
                         enum_name: Some(enum_name),
                         name: variant,
                         fields,
-                        span: Span::new(
-                            token.span.line,
-                            token.span.column,
-                            variant_span.end_column,
-                        ),
+                        span: token.span.to(variant_span.end_column),
                     });
                 }
                 if matches!(self.peek().kind, TokenKind::LeftParen) {

@@ -12,6 +12,7 @@ pub(crate) mod gvn;
 pub(crate) mod floatfold;
 pub(crate) mod indvars;
 pub(crate) mod inline;
+pub(crate) mod interprocedural;
 pub(crate) mod ivshare;
 pub(crate) mod lcssa;
 pub(crate) mod lcssamerges;

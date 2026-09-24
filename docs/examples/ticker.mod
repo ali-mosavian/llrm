@@ -1,0 +1,32 @@
+# A timer hook. The BIOS raises INT 1Ch on every tick, 18.2 times a second;
+# `tick` counts them and passes each on to the handler it replaced. The
+# program spins for two seconds' worth, reporting every half second.
+
+import std.dos as dos
+
+const TIMER: u8 = 0x1C
+const STEP: u16 = 9
+const WAIT: u16 = 36
+
+var ticks: u16 = 0
+var previous: extern "interrupt16" fn() -> void = 0
+
+export "interrupt16":
+    fn tick() -> void:
+        ticks += 1
+        dos.chain(previous)
+
+fn main() -> i16:
+    previous = dos.vector(TIMER)
+    dos.set_vector(TIMER, tick)
+    let mut shown: u16 = 0
+    let mut spins: u32 = 0
+    while shown < WAIT:
+        spins += 1
+        let now = ticks
+        if now >= shown + STEP:
+            shown = now
+            print(f"tick {now}: {spins} spins")
+    dos.set_vector(TIMER, previous)
+    print(f"{ticks} ticks")
+    return 0

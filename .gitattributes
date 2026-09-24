@@ -1,0 +1,3 @@
+# QuickBASIC reads only CRLF lines.
+docs/examples/basic/*.bas text eol=crlf
+docs/examples/basic/*.BI text eol=crlf

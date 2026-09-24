@@ -139,7 +139,7 @@ impl<'a> FunctionCompiler<'a> {
         let body = vec![
             Statement::Assign {
                 target: AssignTarget::Index {
-                    base: name.into(),
+                    base: Expr::Name(name.into(), span),
                     indices: vec![Expr::Name(counter_name.clone(), span)],
                 },
                 operation: None,
@@ -172,8 +172,8 @@ impl<'a> FunctionCompiler<'a> {
         body: &[Statement],
         span: Span,
     ) -> Result<(), Diagnostic> {
-        // The sequence a loop walks is borrowed until the loop ends.
-        let walked = borrows::expression_owner(iterable).map(str::to_owned);
+        // The sequence a loop walks is borrowed until the loop ends; an iterator it consumes is not.
+        let walked = borrows::expression_owner(iterable).filter(|_| !self.loop_consumes(iterable)).map(str::to_owned);
         self.iterated.extend(walked.clone());
         let result = self.for_walk(mode, name, iterable, body, span);
         if walked.is_some() {
@@ -190,27 +190,16 @@ impl<'a> FunctionCompiler<'a> {
         body: &[Statement],
         span: Span,
     ) -> Result<(), Diagnostic> {
+        if let Some(call) = self.method_as_call(iterable) {
+            return self.for_walk(mode, name, &call, body, span);
+        }
         if self.for_generated(mode, name, iterable, body, span)? || self.for_protocol(mode, name, iterable, body, span)? {
             return Ok(());
         }
-        let (array_name, range) = match iterable {
-            Expr::Name(name, _) => (name.as_str(), None),
-            Expr::Slice {
-                base,
-                start,
-                end,
-                span: range_span,
-            } if matches!(base.as_ref(), Expr::Name(..)) => {
-                let Expr::Name(name, _) = base.as_ref() else {
-                    unreachable!("checked")
-                };
-                (
-                    name.as_str(),
-                    Some((start.as_deref(), end.as_deref(), *range_span)),
-                )
-            }
+        let array_name = match iterable {
+            Expr::Name(name, _) => name.as_str(),
             // Any other sequence is held by a hidden local while the loop
-            // runs: a view of a place, or the value anything else makes.
+            // runs: a view of a place or a range, or the value anything else makes.
             _ => {
                 let held = self.hidden("sequence");
                 let value = match iterable {
@@ -238,7 +227,7 @@ impl<'a> FunctionCompiler<'a> {
         let array = self.binding(array_name, iterable.span())?.clone();
         let heap = self.heap_sequence(&array);
         let string = array.type_ == BindingType::Scalar(TypeName::String);
-        let (element, mut length) = if let Some(element) = heap {
+        let (element, length) = if let Some(element) = heap {
             (element, None)
         } else {
             array.type_.array().ok_or_else(|| {
@@ -253,47 +242,6 @@ impl<'a> FunctionCompiler<'a> {
                 )
             })?
         };
-        if heap.is_some() && range.is_some() {
-            return Err(Diagnostic::new(
-                span,
-                "string and vec ranges are not in this slice",
-            ));
-        }
-        let mut range_data = None;
-        if let Some(range) = range {
-            let Some(owner_length) = length else {
-                return Err(Diagnostic::new(
-                    span,
-                    "nested slice ranges are not in this slice",
-                ));
-            };
-            let (start, end) = self.slice_bounds(Some(range), owner_length, span)?;
-            let Storage::Place(place) = &array.storage else {
-                return Err(Diagnostic::new(
-                    span,
-                    "slice range needs an owned fixed array",
-                ));
-            };
-            let pointer_type = self.types.pointer(element.id(), 0);
-            let pointer = self.value_type(pointer_type);
-            self.emit(
-                "address",
-                vec![pointer],
-                vec![hir::Operand::Place(*place)],
-                None,
-            );
-            range_data = Some(if start == 0 {
-                pointer
-            } else {
-                self.indexed_pointer(
-                    pointer,
-                    hir::Operand::Constant(U16, i64::from(start)),
-                    self.types.width(element.id()),
-                    span,
-                )?
-            });
-            length = Some(end - start);
-        }
         if string && mode == IterationMode::Mutable {
             return Err(Diagnostic::new(
                 span,
@@ -383,7 +331,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = body_block;
         let element_width = self.types.width(element.id());
-        let view_storage = if let Some(pointer) = string_pointer.or(range_data) {
+        let view_storage = if let Some(pointer) = string_pointer {
             Storage::Reference(self.indexed_pointer(
                 pointer,
                 hir::Operand::Value(index),
@@ -403,7 +351,14 @@ impl<'a> FunctionCompiler<'a> {
                     vec![hir::Operand::Value(index)],
                     span,
                 )?),
-                Storage::Parameter(_) | Storage::Reference(_) | Storage::ArrayView { .. } => {
+                // A fixed array reached through its address.
+                Storage::Reference(pointer) => Storage::Reference(self.indexed_pointer(
+                    pointer,
+                    hir::Operand::Value(index),
+                    element_width,
+                    span,
+                )?),
+                Storage::Parameter(_) | Storage::ArrayView { .. } => {
                     unreachable!("checked above")
                 }
                 Storage::Lambda(_) => {

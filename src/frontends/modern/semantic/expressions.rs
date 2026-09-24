@@ -1,5 +1,6 @@
 //! Expressions and literals.
 
+use crate::abi::modern as rt;
 use super::*;
 
 impl<'a> FunctionCompiler<'a> {
@@ -9,6 +10,10 @@ impl<'a> FunctionCompiler<'a> {
         expected: Option<TypeName>,
     ) -> Result<TypedOperand, Diagnostic> {
         match expression {
+            Expr::Zero(span) => {
+                let type_name = expected.ok_or_else(|| Diagnostic::new(*span, "a zero value has the type expected of it"))?;
+                Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(type_name), 0)), type_name })
+            }
             // A place where a reference goes is borrowed; a conditional or a
             // call that already makes the reference is compiled as it is.
             _ if expected.is_some_and(|one| self.types.referent(one).is_some())
@@ -51,9 +56,9 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // The formatters write into a new string instead of the console.
                 let parts = self.settled_parts(parts, false)?;
-                self.emit_builtin("_rt_begin", Vec::new());
+                self.emit_builtin(rt::PRINT_BEGIN, Vec::new());
                 self.print_parts(&parts, *span)?;
-                let built = self.emit_builtin("_rt_end", Vec::new()).expect("a string");
+                let built = self.emit_builtin(rt::PRINT_END, Vec::new()).expect("a string");
                 Ok(TypedOperand {
                     operand: Some(self.temporary_owned(built, TypeName::String)),
                     type_name: TypeName::String,
@@ -197,11 +202,26 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Member { base, field, span } => {
                 let (place, type_name, _, _) = self.member_place(base, field, *span)?;
+                // A reference read where no reference is expected reads what it refers to.
+                if let (Some(ElementType::Scalar(target)), false) = (self.types.referent(type_name), expected == Some(type_name)) {
+                    let pointer = self.value(type_name);
+                    self.emit("load", vec![pointer], vec![place], None);
+                    if expected.is_some_and(|one| one != target) {
+                        return Err(type_mismatch(*span, expected.expect("checked"), target));
+                    }
+                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false };
+                    let result = self.value(target);
+                    self.emit("load", vec![result], vec![through], None);
+                    return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });
+                }
                 if expected.is_some_and(|one| one != type_name) {
                     return Err(type_mismatch(*span, expected.expect("checked"), type_name));
                 }
                 let result = self.value(type_name);
-                self.emit("load", vec![result], vec![place], None);
+                self.emit("load", vec![result], vec![place.clone()], None);
+                if ownership::needs_drop(type_name) && self.frame_field(base, field, *span)?.is_some() {
+                    self.origins.insert(result, ownership::Origin::Frame(place));
+                }
                 Ok(TypedOperand {
                     operand: Some(hir::Operand::Value(result)),
                     type_name,
@@ -280,6 +300,13 @@ impl<'a> FunctionCompiler<'a> {
                 right,
                 span,
             } => self.binary(*op, left, right, expected, *span),
+            Expr::Chain { operands, operations, span } => self.chain(operands, operations, expected, *span),
+            Expr::Call {
+                name,
+                type_arguments,
+                arguments,
+                span,
+            } if name == calls::SIZE_OF => self.size_of(type_arguments, arguments, *span),
             Expr::Call {
                 name,
                 arguments,
@@ -289,12 +316,15 @@ impl<'a> FunctionCompiler<'a> {
             Expr::MethodCall {
                 receiver,
                 name,
+                type_arguments,
                 arguments,
                 span,
-                ..
             } => {
                 if let Some(call) = self.method_as_call(expression) {
                     return self.expression(&call, expected);
+                }
+                if let Some(result) = self.pointer_method(receiver, name, type_arguments, arguments, *span)? {
+                    return Ok(result);
                 }
                 if let Expr::Name(owner, _) = receiver.as_ref() {
                     if self.visible(owner).is_none() && self.known_signature(&format!("{owner}.{name}")).is_some() {
@@ -345,6 +375,10 @@ impl<'a> FunctionCompiler<'a> {
                 operand: Some(hir::Operand::Constant(type_id(type_name), value)),
                 type_name,
             });
+        }
+        // `0` is a raw pointer that points nowhere.
+        if let Some(pointer) = expected.filter(|one| value == 0 && self.types.raw_target(*one).is_some()) {
+            return Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(pointer), 0)), type_name: pointer });
         }
         let type_name = match expected {
             Some(type_name) if is_integer(type_name) || type_name == TypeName::Char => type_name,
