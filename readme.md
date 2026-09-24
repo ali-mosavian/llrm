@@ -25,6 +25,15 @@ coprocessor is required.
 
 ## Use
 
+`cargo build --release` builds everything from a fresh checkout, including `jwasm`, `jwlink`
+and the headless DOSBox-X the e2e tests run on, in `target/release`. Their sources are cloned
+under `~/.cache/llrm`. Open Watcom's first bootstrap takes about three minutes; set `$OWROOT`
+to use an existing tree. On Debian or Ubuntu the build needs:
+
+```sh
+sudo apt install build-essential git autoconf automake libtool libpng-dev libpcap-dev libncurses-dev
+```
+
 ```sh
 cargo build --release
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
