@@ -526,6 +526,25 @@ fn test_a_frame_slots_displacement_is_not_a_relocatable_field() {
     assert!(!made(emitted(&indexed)).places().is_empty(), "an array reached through si still carries its own address");
 }
 
+/// Lowering folds `base + index` into a global array's cell, and nothing
+/// could encode it: "emits" failed on `[seg_x+v91+v117]`.
+#[test]
+fn test_a_global_cell_reached_through_base_and_index_keeps_its_relocation() {
+    let cell = ir::Mem {
+        through: Register::BX,
+        base: Some(ir::Held { value: 1, width: 2 }),
+        index: Some(ir::Held { value: 2, width: 2 }),
+        index_through: Register::DI,
+        scale: 1,
+        ..ir::Mem::new(Some(at(Space::Segment, 0x6, Register::None, Register::None)), 2)
+    };
+    let load = sem(Operation::Move, Some("mov"), vec![rg(Register::DX, 2)], vec![Loc::Mem(cell)], None, false);
+    let load = made(emitted(&load));
+    let decoded = decoded(&load.code, 0);
+    assert_eq!((decoded.memory_base(), decoded.memory_index()), (Register::BX, Register::DI));
+    assert!(!load.places().is_empty(), "the relocation lost its field");
+}
+
 // tests/test_arithmetic_immediates.py
 #[test]
 fn test_arithmetic_encodes_the_same_32_bit_pattern_in_either_signed_notation() {

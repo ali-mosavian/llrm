@@ -1184,3 +1184,26 @@ def test_a_shift_counts_from_cl_whatever_width_holds_the_count(count: Register_,
 def test_a_count_in_ch_is_not_one_in_cl() -> None:
     eax = ir.Reg(Register.EAX, 4)
     assert select.emit(ir.Semantics(ir.Operation.BINARY, "sar", (eax,), (eax, ir.Reg(Register.CH, 1)))) is None
+
+
+def test_a_global_cell_reached_through_base_and_index_keeps_its_relocation() -> None:
+    """Lowering folds `base + index` into a global array's cell; nothing encoded it."""
+    from iced_x86 import Register
+
+    from qbopt.backend import select
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
+
+    cell = ir.Mem(
+        Addr(Space.SEGMENT, 6),
+        2,
+        through=Register.BX,
+        base=ir.Held(1, 2),
+        index=ir.Held(2, 2),
+        index_through=Register.DI,
+    )
+    load = select.emit(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.DX, 2),), (cell,)))
+    assert load is not None
+    back = next(iter(Decoder(BITNESS, load.code, ip=0)))
+    assert (back.memory_base, back.memory_index) == (Register.BX, Register.DI)
+    assert load.places, "the relocation lost its field"

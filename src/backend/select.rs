@@ -270,10 +270,20 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
 pub const _WORD_BASES: [Register; 2] = [Register::BX, Register::BP];
 pub const _WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
 
-/// `[base+index*scale+disp]`, for a cell no fixup names.
+/// `[base+index*scale+disp]`. A relocated cell takes only the word form,
+/// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
 pub fn _scaled_operand(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
     let addr = what.addr?;
-    if !matches!(addr.space, Space::Far | Space::Literal) || what.index_through == Register::None {
+    if what.index_through == Register::None {
+        return None;
+    }
+    if matches!(addr.space, Space::Segment | Space::External) {
+        let word = what.scale == 1
+            && _WORD_BASES.contains(&what.through)
+            && _WORD_INDEXES.contains(&what.index_through);
+        return word.then(|| (memory_operand(what.through, what.index_through, 1, 0, 2, addr.segment), true));
+    }
+    if !matches!(addr.space, Space::Far | Space::Literal) {
         return None;
     }
     if addr.space == Space::Far && addr.segment == Register::None {
