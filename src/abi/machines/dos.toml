@@ -3,6 +3,15 @@
 # A far address is selector * 16 + offset.
 addressing = "real"
 
+# The segment registers the program model reserves: the data group every
+# unprefixed access reads, the stack and the code. The rest hold selectors.
+# The stack lives in the data group, so ss: reaches the data too.
+[segments]
+data = "ds"
+stack = "ss"
+code = "cs"
+stack_is_data = true
+
 # Linear [low, high) ranges no program's own data occupies. A write there
 # reaches no variable, array or runtime cell.
 [[foreign]]

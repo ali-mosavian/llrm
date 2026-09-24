@@ -356,7 +356,8 @@ pub fn order(r#where: Option<&BTreeSet<Register>>) -> Vec<Register> {
     let wanted: BTreeSet<Register> = r#where.iter().map(|one| ir::root(*one)).collect();
     if !wanted.is_empty() && wanted.is_subset(&SEGMENTS) {
         return SELECTORS
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|one| wanted.contains(one))
             .collect();
     }
@@ -378,9 +379,16 @@ pub static SEGMENTS: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
     ])
 });
 
-// The ones a selector value may be placed in. DS is DGROUP, SS the stack and
-// CS the code; ES is BC's, and FS and GS are the 386's.
-pub const SELECTORS: [Register; 3] = [Register::ES, Register::FS, Register::GS];
+/// The ones a selector value may be placed in: every one the machine's
+/// program model does not reserve.
+pub static SELECTORS: LazyLock<Vec<Register>> = LazyLock::new(|| {
+    let segments = &crate::abi::machine::current().segments;
+    let reserved = [&segments.data, &segments.stack, &segments.code];
+    [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
+        .into_iter()
+        .filter(|one| !reserved.iter().any(|name| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one])))
+        .collect()
+});
 // One far load per selector: its selector result is in the class, not pinned,
 // and the rewriter spells the instruction for the register it was given.
 pub static FAR_LOADS: LazyLock<IndexMap<Register, &'static str>> = LazyLock::new(|| {
@@ -582,7 +590,7 @@ mod tests {
         assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
             crate::backend::allocate::classes(&body, &BTreeSet::new())[&2],
-            BTreeSet::from(SELECTORS)
+            SELECTORS.iter().copied().collect::<BTreeSet<_>>()
         );
     }
 

@@ -419,7 +419,7 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
             }
         }
     }
-    let selectors: BTreeSet<Register> = target::SELECTORS.into_iter().collect();
+    let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
     for value in selecting.difference(&numeric) {
         _restrict(&mut out, *value, &selectors);
     }
@@ -567,7 +567,7 @@ pub fn _unread_move(one: &Insn) -> bool {
 /// general register, reached through ES.
 pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBody {
     let confined = classes(body, &BTreeSet::new());
-    let selectors: BTreeSet<Register> = target::SELECTORS.into_iter().collect();
+    let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
     let mut conflicted: BTreeSet<u32> = BTreeSet::new();
@@ -1168,7 +1168,7 @@ impl RegAlloc {
             }
             self.pinned.retain(|value, _register| !incompatible.contains(value));
         }
-        let selectors: BTreeSet<Register> = target::SELECTORS.into_iter().collect();
+        let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });

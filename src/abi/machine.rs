@@ -1,6 +1,7 @@
 //! What the machine promises, whatever the source language or runtime: how a
-//! far address becomes a linear one, which memory holds no program data, and
-//! which ports touch no memory. One description per target, read from TOML;
+//! far address becomes a linear one, which segment registers the program
+//! model reserves, which memory holds no program data, and which ports touch
+//! no memory. One description per target, read from TOML;
 //! real-mode DOS is the default.
 
 use std::sync::OnceLock;
@@ -15,9 +16,21 @@ pub enum Addressing {
     Protected,
 }
 
+/// The segment registers the program model reserves, by name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Segments {
+    /// The data group every access without a prefix reads.
+    pub data: String,
+    pub stack: String,
+    pub code: String,
+    /// The stack lives in the data group: `stack` reaches the data too.
+    pub stack_is_data: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Machine {
     pub addressing: Addressing,
+    pub segments: Segments,
     /// Linear [low, high) ranges no program data occupies.
     pub foreign: Vec<(i64, i64)>,
     /// [low, high) port ranges whose writes change no memory.
@@ -31,6 +44,19 @@ impl Machine {
             Some("real") => Addressing::Real,
             Some("protected") => Addressing::Protected,
             other => return Err(format!("addressing must be \"real\" or \"protected\", not {other:?}")),
+        };
+        let segments = table.get("segments").and_then(toml::Value::as_table).ok_or("segments is not a table")?;
+        let name = |key: &str| {
+            segments.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("segments needs a {key}"))
+        };
+        let segments = Segments {
+            data: name("data")?,
+            stack: name("stack")?,
+            code: name("code")?,
+            stack_is_data: segments
+                .get("stack_is_data")
+                .and_then(toml::Value::as_bool)
+                .ok_or("segments needs a boolean stack_is_data")?,
         };
         let ranges = |key: &str| -> Result<Vec<(i64, i64)>, String> {
             let Some(rows) = table.get(key) else { return Ok(Vec::new()) };
@@ -48,7 +74,7 @@ impl Machine {
                 })
                 .collect()
         };
-        Ok(Self { addressing, foreign: ranges("foreign")?, silent_ports: ranges("silent_ports")? })
+        Ok(Self { addressing, segments, foreign: ranges("foreign")?, silent_ports: ranges("silent_ports")? })
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, String> {

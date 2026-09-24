@@ -1594,7 +1594,7 @@ fn _clobbers(
     // A contract is about the 8086 and names no FS or GS; one reaching user
     // code, or written for the 386, runs code that may use them.
     let mut out: BTreeSet<Register> = if disturbed == *runtime::EVERY || contract.i386 {
-        target::SELECTORS.into_iter().filter(|register| !names.contains_key(register)).collect()
+        target::SELECTORS.iter().copied().filter(|register| !names.contains_key(register)).collect()
     } else {
         BTreeSet::new()
     };
