@@ -1,8 +1,9 @@
 # Architecture
 
-`qbopt` is a post-compiler: it reads the OMF `.OBJ` produced by BC, raises
-the program to SSA-based MIR, optimizes whole bodies, lowers to x86 LIR,
-allocates physical resources, and writes a new linkable `.OBJ`.
+llrm, the Low Level Real Machine, is a compiler suite for 16-bit real-mode DOS.
+Four frontends raise their input to SSA-based MIR; one optimizer improves whole
+bodies, lowers them to x86 LIR, allocates physical resources and writes a
+linkable OMF `.OBJ`.
 
 The architectural rule is simple:
 
@@ -17,46 +18,53 @@ targets and their evidence belong in `docs/targets.md`.
 
 ```mermaid
 flowchart LR
-    BC["BC.EXE<br/>QuickBASIC / PDS / VBDOS"] -->|"OMF .OBJ"| Parse
+    QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>frontends/qb/"]
+    Modern["llrm language source"] --> ModernFront["lexer, parser, semantics<br/>src/frontends/modern/"]
+    QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>src/hir/"]
+    ModernFront -->|"common HIR"| Hir
+    C["C source"] --> Wcc["Open Watcom front end<br/>owshim/ capture"]
+    Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>src/frontends/c/"]
+    BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>src/frontends/bc/"]
 
-    subgraph Frontend["Frontend: recover the program from BC's machine code"]
-        direction LR
-        Parse["OMF parse<br/>objectfile/omf.py"] --> Module["Module facts<br/>objectfile/module.py"]
-        Module --> Map["Code map and CFG<br/>frontend/blocks.py"]
-        Map --> Raise["Raise and recognize<br/>model/mir.py + frontend/raising_*.py"]
-    end
-
-    Raise -->|"MirBody: SSA values, phis, memory facts"| Opt
+    Hir -->|"MirBody"| Opt
+    CRaise -->|"MirBody"| Opt
+    Parse -->|"MirBody"| Opt
 
     subgraph Middle["Machine-independent middle end"]
         direction LR
-        Opt["MIR fixed point<br/>optimize/transform.py"] --> MirOut["Optimized MirBody"]
+        Opt["MIR fixed point<br/>src/optimize/transform.rs"] --> MirOut["Optimized MirBody"]
     end
 
     MirOut -->|"the lowering boundary"| Lower
 
     subgraph Backend["Machine backend"]
         direction LR
-        Lower["Instruction selection<br/>backend/lower.py"] --> LIR["LirBody<br/>virtual values + constraints"]
-        LIR --> Machine["Machine phases<br/>flow.machine()"]
+        Lower["Instruction selection<br/>src/backend/lower.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
+        LIR --> Machine["Machine phases<br/>src/flow.rs"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Select, layout, fresh OMF<br/>backend/omfwrite.py"]
+        Physical --> Write["Select, layout, fresh OMF<br/>src/backend/omfwrite.rs"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
 
     Refuse["Any unsupported contract or encoding"] -.->|"strict default"| Error["Exit nonzero; write no output"]
     Refuse -.->|"explicit --allow-unchanged"| Original["Retain original .OBJ"]
-    Raise -.-> Refuse
+    Parse -.-> Refuse
     Lower -.-> Refuse
     Machine -.-> Refuse
     Write -.-> Refuse
 ```
 
-There is one production optimizer and one production backend. The former
-machine-code rewrite arm has been removed. `qbopt/legacy/` remains only where
-raising or encoding still shares old recognition data; it is not a second
-optimization route.
+| Tool | Frontend | Raise |
+| --- | --- | --- |
+| `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, lowered by `src/hir/lower.rs` with the QB runtime ABI |
+| `llrm-modern` | `src/frontends/modern/` | the same HIR path |
+| `llrm-c` | a patched Open Watcom front end records its code-generator calls | `src/frontends/c/raise_hir.rs`, Borland's medium-model ABI |
+| `llrm-omf` | OMF decode of BC's machine code | `src/frontends/bc/raising_*.rs` recognition |
+
+There is one production optimizer and one production backend. `src/legacy/`
+remains only where raising or encoding still shares old recognition data; it is
+not a second optimization route.
 
 ## The two boundaries
 
@@ -115,7 +123,7 @@ The rules at these doors are stricter than ordinary module ownership:
 `tests/test_rule5.py` enforces the MIR side of the boundary by inspecting the
 pass source for machine vocabulary.
 
-## Frontend: from OMF to MIR
+## The BC frontend: from OMF to MIR
 
 The frontend does more than disassemble. An OMF object contains the information
 needed to distinguish code, data, relocatable operands, runtime calls and
@@ -156,13 +164,13 @@ The main ownership split is:
 
 | Concern | Owner |
 | --- | --- |
-| OMF parsing and record fidelity | `qbopt/objectfile/omf.py` |
-| Segment, group, symbol, call and object-bound facts | `qbopt/objectfile/module.py` |
-| Instruction lengths and BC emulator forms | `qbopt/frontend/declen.py` |
-| Reachability, inline tables and basic blocks | `qbopt/frontend/blocks.py` |
-| BC calling and runtime contracts | `qbopt/abi/runtime.py`, `runtime.toml` |
-| Idiom recognition | `qbopt/frontend/raising_*.py`, coordinated by `model/mir.py` |
-| Pure analyses used by passes | `qbopt/analysis/` |
+| OMF parsing and record fidelity | `src/objectfile/omf.rs` |
+| Segment, group, symbol, call and object-bound facts | `src/objectfile/module.rs` |
+| Instruction lengths and BC emulator forms | `src/frontends/bc/declen.rs` |
+| Reachability, inline tables and basic blocks | `src/frontends/bc/blocks.rs` |
+| BC calling and runtime contracts | `src/abi/runtime.rs`, `runtime.toml` |
+| Idiom recognition | `src/frontends/bc/raising_*.rs`, coordinated by `src/model/mir.rs` |
+| Pure analyses used by passes | `src/analysis/` |
 
 Established terminal calls lose their false return edges before body ownership
 and SSA construction. Registered `B$OEGA` error handlers are independent entries,
@@ -296,7 +304,7 @@ Pass responsibilities are intentionally narrow:
 | Placement in program order | `place` | Where may a surviving definition execute without changing meaning? |
 | Division reuse | `gvn` | Can an existing quotient/remainder serve another use? |
 
-`qbopt/analysis/` contains analyses, not phases. Liveness, intervals, loops,
+`src/analysis/` contains analyses, not phases. Liveness, intervals, loops,
 induction, ranges, float facts and available values answer questions without
 mutating a body.
 
@@ -320,7 +328,7 @@ flowchart LR
 
 Cost belongs at the correct level. Whether `x * 8` equals `x << 3` is a MIR
 fact; whether a shift/add sequence beats `imul` on 386, 486, P5 or P6 is a
-lowering decision informed by `backend/timing.py` and `cycles/`. MIR never
+lowering decision informed by `src/backend/timing.rs` and `cycles/`. MIR never
 names a CPU.
 
 ## Lowering and LIR
@@ -358,7 +366,7 @@ The principal constraints are:
 
 ## Machine pipeline and allocation
 
-The phase order lives in `qbopt/flow.py`, analogous to LLVM's target pass
+The phase order lives in `src/flow.rs`, analogous to LLVM's target pass
 configuration. Analyses such as live intervals are invoked by these phases but
 are not themselves listed as transformations.
 
@@ -415,14 +423,14 @@ The local reference sources are `~/work/other/llvm-project` and the GCC tree
 under `~/work/other`. They guide structure and algorithms, not vocabulary above
 the MIR boundary.
 
-| qbopt | LLVM analogue | GCC analogue |
+| llrm | LLVM analogue | GCC analogue |
 | --- | --- | --- |
 | `MirBody`, MIR passes | LLVM IR / scalar and loop passes | GIMPLE / tree passes |
 | `LirBody` | `MachineFunction` / `MachineInstr` | RTL |
 | `phielim.py` | `PHIElimination` | SSA-to-RTL edge moves |
 | `twoaddr.py` | `TwoAddressInstructionPass` | target constraints during RTL expansion/reload |
 | `coalesce.py` | `RegisterCoalescer` | IRA copy coalescing |
-| `analysis/intervals.py` | `LiveIntervals` / spill weights | IRA live ranges and costs |
+| `src/analysis/intervals.rs` | `LiveIntervals` / spill weights | IRA live ranges and costs |
 | `allocate.py` | `RegAllocGreedy` + `VirtRegRewriter` | IRA + LRA |
 | `spiller.py` | `InlineSpiller` | LRA spill/reload insertion |
 | `prologue.py` | `PrologEpilogInserter` | prologue/epilogue RTL passes |
@@ -508,13 +516,13 @@ buffers every object in a link unit before writing any of them.
 
 ```mermaid
 flowchart TD
-    Rewrite["rewrite.py<br/>CLI, policy and finalization"] --> Whole["wholeseg.py<br/>module orchestration"]
+    Rewrite["src/rewrite.rs<br/>CLI, policy and finalization"] --> Whole["src/wholeseg.rs<br/>module orchestration"]
     Whole --> Obj["objectfile/<br/>OMF model, module facts, writing, relocation"]
     Whole --> Front["frontend/<br/>decode, CFG and recognition helpers"]
     Whole --> ABI["abi/<br/>runtime and event contracts"]
     Whole --> Model["model/<br/>IR, MIR, LIR and pass interfaces"]
     Whole --> Opt["optimize/<br/>MIR transformations"]
-    Whole --> Flow["flow.py<br/>machine pass order"]
+    Whole --> Flow["src/flow.rs<br/>machine pass order"]
     Flow --> Back["backend/<br/>lowering, allocation, peephole, encoding"]
 
     Front --> Model
@@ -744,7 +752,7 @@ one documented target without materially regressing another.
   answers pass through fresh OMF emission, LINK and DOSBox. A separate
   boundary test rejects widening the sequence 65535,0 as 65535,65536.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
-  `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
+  `src/analysis/memoryssa.rs` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Pure calls have no memory access, complete read-only calls
   are uses, and complete write footprints are definitions.
 - [x] Refine alias, object-identity, escape and per-argument mod/ref facts used
@@ -950,7 +958,7 @@ one documented target without materially regressing another.
   elimination. Dead-store elimination remains its own ordered transform.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
-  `analysis/constant_cycles.py` combines its sparse value worklist with
+  `src/analysis/constant_cycles.rs` combines its sparse value worklist with
   executable-edge discovery, feeding feasible phi inputs back into branch
   evaluation. New backedges invalidate optimistic constants; pending reachable
   values become overdefined before completion, and unresolved conditions keep
@@ -1102,7 +1110,7 @@ one documented target without materially regressing another.
   accepted for 386 and rejected for P5. Matmul's real eight-trip loop remains
   expanded; moving candidate discovery after convergence made its emitted
   branch regression fail and was corrected at the pass boundary.
-  `optimize/loopclone.py` now supplies CFG-preserving peeling candidates:
+  `src/optimize/loopclone.rs` now supplies CFG-preserving peeling candidates:
   fresh SSA values, cloned branch joins and early-exit phis, followed by the
   residual loop. It requires loop-closed live-outs and rejects opaque dispatch
   terminators. Two peeled iterations of real IVARM produce valid SSA/phi edges
@@ -1217,7 +1225,7 @@ one documented target without materially regressing another.
 ### Machine backend
 
 - [x] Add global machine copy propagation after allocation.
-  `backend/copyprop.py` eliminates equal-register copies and forwards explicit
+  `src/backend/copyprop.rs` eliminates equal-register copies and forwards explicit
   uses to their reaching copy source using byte-level agreement over every
   reachable incoming edge. Source and destination clobbers invalidate the
   direction lane by lane; fixed, implicit and unencodable operands are refused

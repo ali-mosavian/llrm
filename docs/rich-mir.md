@@ -2,8 +2,8 @@
 
 Status: proposed design, not yet implemented.
 
-This document defines a replacement for qbopt's public MIR.  It is closely
-modelled on LLVM IR while remaining faithful to qbopt's measured semantics and
+This document defines a replacement for llrm's public MIR.  It is closely
+modelled on LLVM IR while remaining faithful to llrm's measured semantics and
 object-rewriting requirements.
 
 The design is based on qbopt revision
@@ -17,7 +17,7 @@ LLVM GlobalISel.
 
 ## Decision
 
-qbopt MIR becomes a self-contained, typed, portable SSA representation of the
+llrm MIR becomes a self-contained, typed, portable SSA representation of the
 program:
 
 - a module owns declarations, globals, functions, semantic runtime intrinsics,
@@ -105,24 +105,24 @@ replacement needs a type and instruction system, not a larger record.
 
 ## LLVM mechanisms to use
 
-| LLVM mechanism | qbopt decision |
+| LLVM mechanism | llrm decision |
 | --- | --- |
-| `LLVMContext`, `Module`, `Function`, `BasicBlock` | Adopt the ownership hierarchy with immutable qbopt objects. |
+| `LLVMContext`, `Module`, `Function`, `BasicBlock` | Adopt the ownership hierarchy with immutable llrm objects. |
 | Every `Value` has a `Type` | Adopt.  Types belong to definitions, never independently to uses. |
 | Signless integers and signed/unsigned opcodes | Adopt. |
 | Opaque pointers distinguished by address space | Adopt.  Physical pointer representation is chosen below MIR. |
-| Typed constants, globals, function declarations, and attributes | Adopt with qbopt semantic contracts. |
+| Typed constants, globals, function declarations, and attributes | Adopt with llrm semantic contracts. |
 | Uniform instruction operand traversal | Adopt.  One ordered operand list and typed result list are authoritative. |
 | SSA, phi nodes, explicit terminators, dominance verification | Adopt. |
 | Intrinsics with semantic declarations | Adopt for recognized BASIC runtime behaviour. |
 | Alias analysis, MemorySSA, dominators, loops, SCEV, known bits | Adopt as analyses over MIR, not fields copied into every instruction. |
 | Function/call attributes such as readonly, nocapture, noreturn | Adopt only as proved or conservatively imported facts with evidence. |
-| Metadata and debug lineage | Adapt.  LLVM metadata is not sufficient for qbopt's byte-conservation ledger. |
+| Metadata and debug lineage | Adapt.  LLVM metadata is not sufficient for llrm's byte-conservation ledger. |
 | Intrusive mutable `Value`/`User`/`Use` lists and RAUW | Reject.  Bodies stay immutable; def-use is a rebuilt analysis. |
-| Poison, general `undef`, and UB-producing `nsw`/`nuw` | Reject.  qbopt uses explicit behaviour and proved optimization facts. |
+| Poison, general `undef`, and UB-producing `nsw`/`nuw` | Reject.  llrm uses explicit behaviour and proved optimization facts. |
 | Target triple and `DataLayout` embedded in semantic MIR | Reject.  The lowering request owns target layout. |
 | `ConstantExpr` as a second hidden instruction language | Reject.  Nonliteral computation is an ordinary instruction. |
-| LLVM's single-result restriction | Adapt.  qbopt keeps first-class multiple results where they express the operation directly. |
+| LLVM's single-result restriction | Adapt.  llrm keeps first-class multiple results where they express the operation directly. |
 | LLVM exception-handling personalities and landing pads | Adapt to explicit BASIC error, event, resume, and normal edges. |
 
 ## Ownership hierarchy
@@ -682,7 +682,7 @@ operation consumes and produces an `FP_ENV` resource token.  Calls which can
 inspect or change it have explicit token inputs/results; `fp_check` consumes
 the state it observes.  No token is created where order is unobservable.
 
-Resource joins use a dedicated `resource_phi`.  This is a qbopt extension,
+Resource joins use a dedicated `resource_phi`.  This is a llrm extension,
 not a claim that LLVM permits token phi nodes.  Normal, error, event, resume,
 loop-back, call, and return edges carry their resource state explicitly.
 Resource tokens cannot be stored, spilled, converted to integers, or returned
@@ -1210,6 +1210,6 @@ Every migration step must pass all applicable gates:
 
 The result is an LLVM-like MIR in the sense that matters: a typed module of
 values, instructions, memory, effects, calls, globals, and control flow with
-strong verification and reusable analyses.  It remains qbopt's IR because its
+strong verification and reusable analyses.  It remains llrm's IR because its
 integer, floating, runtime, event, provenance, and object-rewriting contracts
 come from measured program behaviour rather than LLVM's language assumptions.

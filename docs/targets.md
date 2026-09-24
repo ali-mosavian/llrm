@@ -576,7 +576,7 @@ omitted synchronization and numeric stores. The complete reference retains
 those observations and has been assembled with JWasm, linked and executed.
 QB/VBDOS, event-enabled and resumable-error builds remain provisional; their
 checkpoint placement needs separate verification. This target correction
-does not change qbopt's emitted code.
+does not change llrm's emitted code.
 
 For ordinary unchecked, event-free builds, the three array elements are
 12, 28 and 60, `k=4`, and `d=12`; no numeric address escapes. Expand the
@@ -638,7 +638,7 @@ Fresh per-pass dumps of QB `/O` and PDS `/G2` distinguish the source-level
 constant from what the raise actually knows. PDS initializes `d=12` using four
 `MOVSW` instructions at original offsets 0x154–0x157. All four remain OPAQUE
 in the initial MIR; its subsequent binary64 load at 0x158 has no constant fact.
-This is not a missed arithmetic identity in CSE. `frontend/raising_copies.py`
+This is not a missed arithmetic identity in CSE. `src/frontends/bc/raising_copies.rs`
 already scalarizes explicit-direction, proven-selector copies, but its dataflow
 forgets traversal direction across calls. No local CLD establishes it here.
 
@@ -716,9 +716,9 @@ This does not validate the old numerical-only denominator.
 
 ### Complete PDS reference — 2026-09-11
 
-`tools/references/fpdeep.asm` is hand-written JWasm, not qbopt output. The
+`tools/references/fpdeep.asm` is hand-written JWasm, not llrm output. The
 wrapper preserves the hash-pinned BC object's data and runtime relocations;
-it uses neither MIR optimization nor qbopt instruction selection.
+it uses neither MIR optimization nor llrm instruction selection.
 
 Keep p(1..3)=12,28,60 and k=4, and store i=1,2,3,4 at the source iteration
 boundaries. For each of nine indexed rows, check pending exceptions before
@@ -785,7 +785,7 @@ These ordinary, unchecked, event-free programs initialize two unescaped
 LONG scalars, then print expressions over them. Their sources contain no
 READ, user callback, assignment to either input after initialization, or
 runtime-dependent arithmetic. A source-level compiler can evaluate every
-expression modulo 32 bits. This reference does not grant qbopt permission
+expression modulo 32 bits. This reference does not grant llrm permission
 to assume arbitrary machine-level runtime calls preserve arbitrary memory;
 recovering that source-level fact is part of the remaining work.
 

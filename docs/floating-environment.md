@@ -44,7 +44,7 @@ These files were inspected in `/Users/alim/work/other/llvm-project` (the
 EarlyCSE file through `git show HEAD:...`, since its working-tree copy is
 absent).
 
-## Consequences for qbopt
+## Consequences for llrm
 
 The all-strict default is not an arbitrary blocker to remove. The available
 runtime evidence contradicts a blanket masked-exception assumption, and error
@@ -98,7 +98,7 @@ FP sequence establishes the same scalar entry values as PDS's integer stores.
 
 ## Bounded runtime integers
 
-`analysis/floatbounds.py` now proves numerical exactness without proving a
+`src/analysis/floatbounds.rs` now proves numerical exactness without proving a
 specific value. Signed integer loads fit extended precision; integer sums,
 differences and products qualify only when the entire resulting interval
 fits the minimum dynamic precision. Destination conversions must fit too.

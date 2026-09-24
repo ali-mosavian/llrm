@@ -55,7 +55,7 @@ external definition, while `DEF FN` and compiler-outlined module GOSUB bodies
 are internal definitions. Internal procedures retain callable code labels and
 the same BASIC frame ABI but do not produce PUBDEF records. This matters for
 interoperability: BC's Gorillas object defines `FNRAN%` in its listing but does
-not export `FNRAN`; qbopt now does the same.
+not export `FNRAN`; llrm now does the same.
 
 These rules are shared by QB 4.5, PDS 7.1, and VBDOS. Dialect selection may
 change available syntax and runtime entries, never the spelling of a symbol

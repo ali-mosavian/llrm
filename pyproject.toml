@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "qbopt"
 version = "0.1.0"
-description = "A post-compilation pass over the .OBJ QuickBASIC's BC emits, between BC and LINK"
+description = "Python predecessor of llrm (Low Level Real Machine), kept as the port's reference"
 readme = "readme.md"
 requires-python = ">=3.13"
 authors = [{ name = "Ali Mosavian", email = "ali@42labs.ai" }]

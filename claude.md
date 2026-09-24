@@ -1,4 +1,4 @@
-# qbopt
+# llrm -- Low Level Real Machine
 
 See [agents.md](agents.md). It carries the goal, the architecture and the
 seven rules, and this file exists only so that either name finds them.

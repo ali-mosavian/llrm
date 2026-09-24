@@ -1,4 +1,4 @@
-# llrm
+# llrm -- Low Level Real Machine
 
 `llrm` is a compiler suite for 16-bit real-mode DOS that aims at GCC/LLVM-quality
 code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86

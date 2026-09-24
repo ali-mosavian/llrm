@@ -1,7 +1,7 @@
 # cfront --opt against bcc -Ox
 
 Measured 2026-09-15 on pal, qglsurf and ls, from `_TEXT` LEDATA of both
-objects (qbopt's OMF reader, iced decode). bcc flags: `-3 -f87 -mm -Ox -B`.
+objects (llrm's OMF reader, iced decode). bcc flags: `-3 -f87 -mm -Ox -B`.
 
 | module  | bcc bytes | ours | bcc insns | ours |
 |---------|----------:|-----:|----------:|-----:|

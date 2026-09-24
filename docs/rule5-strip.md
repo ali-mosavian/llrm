@@ -53,7 +53,7 @@ E. `origin`.
 
 ## Measuring it
 
-`wholeseg.rebuilt` is not the shipped optimiser. `rewrite.py` is, and it
+`wholeseg.rebuilt` is not the shipped optimiser. `src/rewrite.rs` is, and it
 runs the machine arm and the whole-segment arm into each other to a fixed
 point -- so a corpus byte total taken through `rebuilt` can be identical
 while the program prints the wrong number. It did: five commits measured

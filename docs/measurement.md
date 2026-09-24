@@ -17,7 +17,7 @@ Published latencies for 486, P5, P6, K5, K6, K7 and Core.
     uv run python -m qbopt.price FILE.OBJ
 
 **A ranking, not a measurement.** The costs are approximate and are the part of
-the tool most worth arguing with; `qbopt/cycles/timings.py` says so itself.
+the tool most worth arguing with; `src/cycles/timings.rs` says so itself.
 Never quote one of these as a speedup.
 
 **And it prices only what is in the object.** BC's side of an absorbed call is
@@ -79,7 +79,7 @@ suggest.
 
 Every row in `docs/numbers.md` carries: the dosbox-x version string, the sha256
 of the conf, the sha256 of BC.EXE, LINK.EXE and the runtime library, the
-configuration tag, the qbopt git revision, the host, and the date. **A number
+configuration tag, the llrm git revision, the host, and the date. **A number
 without that stamp is not quotable.** That rule is the successor to "treat any
 parity figure older than fb9331c as unreliable", which is what the absence of
 one cost last time.

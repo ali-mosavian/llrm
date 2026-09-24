@@ -1,6 +1,6 @@
 # Strong alias analysis
 
-`qbopt/model/memory.py` is the one machine-independent vocabulary for memory.
+`src/model/memory.rs` is the one machine-independent vocabulary for memory.
 The C frontend attaches it while raising HIR; every MemorySSA consumer reaches
 it through `mir.overlapping`, so GVN, promotion, DSE and loop motion ask the
 same question.
@@ -21,7 +21,7 @@ intersection uses the modular byte lanes, not merely their overlapping hull.
 
 ## 2. Flow-sensitive points-to and escape
 
-`analysis/alias.py::points_to` propagates provenance through SSA copies,
+`src/analysis/alias.rs::points_to` propagates provenance through SSA copies,
 pointer arithmetic and phis. A missing phi arm produces `UNKNOWN`; one known
 arm can never erase it. Exact pointer spill slots are tracked as memory state:
 an exact store is a strong update, an overlapping or unresolved store kills the

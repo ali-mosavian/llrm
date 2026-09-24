@@ -140,7 +140,7 @@ The existing backend combines adjacent redundant waits.
 This follows the distinction in local LLVM
 `llvm/lib/Analysis/ConstantFolding.cpp:mayFoldConstrained`: exact evaluation
 with `opOK` permits folding; a strict operation that changes exception status
-must stay. qbopt additionally retains the observation point explicitly.
+must stay. llrm additionally retains the observation point explicitly.
 The MIR transformation does not name a register or machine instruction.
 
 Actual PDS emitted before/after at the first square print:

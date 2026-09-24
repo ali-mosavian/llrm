@@ -22,7 +22,7 @@ estimate; ties retain multiply. A signed-digit chain can implement seven
 as `(x << 3) - x`, not three additions. Observed multiply flags still
 prevent replacement.
 
-486/P5/P6 and the other existing timing profiles use `cycles/timings.py`.
+486/P5/P6 and the other existing timing profiles use `src/cycles/timings.rs`.
 386 uses the existing opportunity scoreboard's representative arithmetic
 ranking. These are approximate instruction-cost estimates, not benchmark
 measurements, and do not yet model allocation spills, prefix penalties or
@@ -51,12 +51,12 @@ for these 16-bit-mode encodings. The default 386 selection is unchanged.
 
 Signed positive constant division now compares a reciprocal sequence,
 including remainder reconstruction, against IDIV during lowering.
-`backend/division.py` derives the multiplier with LLVM's
+`src/backend/division.rs` derives the multiplier with LLVM's
 `SignedDivisionByConstantInfo` algorithm. Zero, negative divisors and word
 division retain the existing path. Its source-preserving moves and both
 multiply results are explicit, so allocation sees every clobber.
 
-The old midpoint comparisons have been withdrawn. `backend/timing.py`
+The old midpoint comparisons have been withdrawn. `src/backend/timing.rs`
 records audited form/width-specific core-clock ranges independently of the
 scoreboard. Selection compares the multiply's maximum with the divide's
 minimum; an unknown timing profile retains IDIV. For division by seven,

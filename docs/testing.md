@@ -1,5 +1,15 @@
 # Running the tests
 
+## Rust
+
+    cargo test --release <filter>                  the narrowest tests that answer the question
+
+Unit tests sit beside their module (`*_tests.rs`); frontend tests are
+`src/frontends/*/test_*.rs`. Release builds are incremental, so a rebuild after
+an edit takes about 30 seconds.
+
+## Python reference and end-to-end
+
     uv run pytest                                  Tier 1: fast development suite
     uv run pytest --full -n 4 --dist worksteal     Tier 1 + Tier 2: everything
     uv run pytest --full -n 4 -m "not e2e"         full host suite, no emulator

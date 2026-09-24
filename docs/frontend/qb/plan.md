@@ -15,7 +15,7 @@ inputs rather than being reimplemented.
 
 ## Implemented foundation
 
-The first Phase 1 slice is present under `qbopt/hir/`:
+The first Phase 1 slice is present under `src/hir/`:
 
 - typed modules, functions, values, places, blocks, terminators, dialect,
   runtime, and fixed 386-real-mode target profile;
@@ -29,7 +29,7 @@ The first Phase 1 slice is present under `qbopt/hir/`:
   array access through existing LIR lowering.
 
 The first source-compiler slice now also exists under `frontends/qb/` and
-`qbopt/frontend/qb/`: a dialect lexer and typed parser, direct semantic HIR
+`src/frontends/qb/`: a dialect lexer and typed parser, direct semantic HIR
 construction, a replayable process boundary, whole integer/LONG and floating
 expressions, fixed numeric arrays, and CFG construction for IF, FOR, DO,
 WHILE, labels, and GOTO. All 17 qb-qrender BASIC files pass the VBDOS syntax
@@ -134,7 +134,7 @@ current object frontend still passes its full suite.
 
 - Implement the entities in [the HIR model](../../hir/model.md).
 - Add the versioned JSON decoder, verifier, and deterministic stage dump under
-  `qbopt/hir/`.
+  `src/hir/`.
 - Implement values, places, blocks, calls, integer/floating operations, and
   numeric array access only.
 - Add program-side tables for source maps, ABI selection, and link needs.
@@ -332,7 +332,7 @@ without the fix. The smallest applicable ladder is:
 3. verified HIR-to-MIR unit test;
 4. canonical diff with object-raised MIR;
 5. linked runtime output or exact bytes where semantics require it; and
-6. full existing qbopt regression and real-program matrix.
+6. full existing llrm regression and real-program matrix.
 
 FreeBASIC contributes only `.bas` scenarios to this ladder. Its ABI, runtime,
 lowering, emitted code, diagnostics, harness behavior, and expected outputs are

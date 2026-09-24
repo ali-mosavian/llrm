@@ -241,7 +241,7 @@ library convention, not a lexical restriction; interop and generated code may
 retain another system's spelling when needed.
 
 The frontend performs name resolution and strict type checking, constructs an
-explicit control-flow graph, and writes qbopt's versioned common-HIR JSON. It
+explicit control-flow graph, and writes llrm's versioned common-HIR JSON. It
 does not emit bytecode, p-code, machine instructions, or target registers.
 
 Run it with:
@@ -266,8 +266,8 @@ code-generation: it emits no OMF or executable and supplies no real-mode ABI.
 Its captured output is the known answer that the freestanding real-mode backend
 must reproduce exactly.
 
-The frontend document is accepted by `qbopt.hir.decode`, `qbopt.hir.verify`,
-and `qbopt.hir.lower`, then follows qbopt's shared optimization, lowering,
+The frontend document is accepted by `src/hir/codec.rs`, `src/hir/verify.rs`
+and `src/hir/lower.rs`, then follows llrm's shared optimization, lowering,
 allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 

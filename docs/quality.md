@@ -61,12 +61,12 @@ that fails to return without mistaking a timeout for a wrong answer.
   all other natural loops use the allocator's ten-iteration convention. The
   same basic-block construction, natural-loop analysis and frequency solver run
   over GCC/Clang assembly, so an unrolled reference is compared with the work a
-  qbopt loop executes rather than with qbopt's much smaller static body. Calls,
+  llrm loop executes rather than with llrm's much smaller static body. Calls,
   interrupts, repeated instructions, unresolved or indirect branch targets,
   irreducible control flow, and nonterminating estimates remain explicitly
   unmeasured because their hidden work is unbounded. A `null` here is not zero.
 
-The report always writes raw qbopt assembly.  With `--references`, it also asks
+The report always writes raw llrm assembly.  With `--references`, it also asks
 LLVM/Clang and `i686-elf-gcc` for freestanding i386 `-O3` assembly with SSE and
 vectorization disabled.  Those listings are the **best-case structural
 reference**: they show the loop shape, expression count and memory traffic a
@@ -76,7 +76,7 @@ backend is reported as failed or unavailable; output from the host architecture
 is not substituted.
 
 They are deliberately not ABI-equivalent targets.  The references use flat
-32-bit i386 addressing; qbopt emits a 16-bit medium-model ABI with far calls,
+32-bit i386 addressing; llrm emits a 16-bit medium-model ABI with far calls,
 segmented data, restricted address forms and different frame layout.  A lower
 count in a reference therefore cannot erase required segment, far-pointer or
 ABI work in our output.  Every JSON report and structural comparison now carries

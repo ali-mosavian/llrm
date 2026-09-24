@@ -142,7 +142,7 @@ Use the existing architectural checks and add semantic invariance checks:
 changing only diagnostic provenance or original register assignments must
 not change a MIR pass's decisions. Study LLVM/GCC mechanisms in
 `~/work/other` where useful, but adapt their principles rather than copying
-a machine-optimization tier across qbopt's boundary.
+a machine-optimization tier across llrm's boundary.
 
 For each bounded change: capture before assembly and all stage dumps, locate
 the first defect or expansion, fix its owning mechanism, run a fail-first

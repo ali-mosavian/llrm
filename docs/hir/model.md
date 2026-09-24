@@ -186,16 +186,16 @@ without changing its model:
 The adapter should reuse the policies already implemented by the object
 raiser, notably:
 
-- [`raising_calls.py`](../../qbopt/frontend/raising_calls.py) for recognized
+- [`raising_calls.rs`](../../src/frontends/bc/raising_calls.rs) for recognized
   long arithmetic calls;
-- [`raising_longs.py`](../../qbopt/frontend/raising_longs.py) for whole LONG
+- [`raising_longs.rs`](../../src/frontends/bc/raising_longs.rs) for whole LONG
   values;
-- [`raising_floats.py`](../../qbopt/frontend/raising_floats.py),
-  [`raising_float_calls.py`](../../qbopt/frontend/raising_float_calls.py), and
-  [`raising_float_values.py`](../../qbopt/frontend/raising_float_values.py)
+- [`raising_floats.rs`](../../src/frontends/bc/raising_floats.rs),
+  [`raising_float_calls.rs`](../../src/frontends/bc/raising_float_calls.rs), and
+  [`raising_float_values.rs`](../../src/frontends/bc/raising_float_values.rs)
   for floating semantics; and
-- [`raising_arrays.py`](../../qbopt/frontend/raising_arrays.py) and
-  [`raising_array_access.py`](../../qbopt/frontend/raising_array_access.py)
+- [`raising_arrays.rs`](../../src/frontends/bc/raising_arrays.rs) and
+  [`raising_array_access.rs`](../../src/frontends/bc/raising_array_access.rs)
   for array identity and access.
 
 “Reuse” first means factor or call the same semantic policy, not copy it into

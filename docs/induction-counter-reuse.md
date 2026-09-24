@@ -1,6 +1,6 @@
 # Reuse a recurrence for loop termination
 
-`optimize/indvars.py` removes a controlling induction variable when it is
+`src/optimize/indvars.rs` removes a controlling induction variable when it is
 otherwise used only by its own update and constant exit uses. An existing
 recurrence already needed by the body supplies the termination test.
 

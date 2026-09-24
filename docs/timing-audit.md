@@ -145,7 +145,7 @@ No emitted code changed during this primary-table inspection.
 
 ## Bounds integrated into division selection
 
-`backend/timing.py` now separates audited multiplication ranges and division
+`src/backend/timing.rs` now separates audited multiplication ranges and division
 widths from the old scoreboard's midpoint guesses. Reciprocal selection
 uses the maximum multiply cost and minimum divide cost. Missing exact-form
 evidence (currently P6 and later profiles) retains IDIV. This is not a
@@ -194,7 +194,7 @@ by the C frontend. Integer register/memory transfer costs are cross-checked
 against Open Watcom's `bld/cg/intel/c/x86regsv.c`: for 386 it uses 4 for a
 load, 2 for a store, 2 for a push and 4 for a pop. Its `x86mul.c` independently
 uses 2 for integer add and 3 for a constant shift. Memory arithmetic in the
-qbopt profile composes those units rather than treating a memory operand as a
+llrm profile composes those units rather than treating a memory operand as a
 register operand.
 
 POP to memory is not that register POP form. Intel's 80386 instruction table

@@ -1,4 +1,9 @@
-# Working on qbopt
+# Working on llrm
+
+llrm, the Low Level Real Machine, is a compiler suite for 16-bit real-mode
+DOS aiming at GCC/LLVM-quality code. Its frontends are QuickBASIC-family
+source, C, its own language and BC-produced OMF objects; all share one MIR,
+optimizer, x86 backend and OMF writer. `qbopt/` is its Python predecessor.
 
 ## The Rust port -- read this first
 
@@ -169,9 +174,8 @@ of concerns:
 - **New cases extend the analysis, not its callers.** When a pass needs a
   fact the analysis cannot give, the analysis grows; the pass does not.
 
-A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
-Most of what is here was established the hard way by a runtime version of the
-same idea that still lives in uGL. What survived the move is below.
+It began as a post-compilation pass over the `.OBJ` BC produces, between BC
+and LINK, and much of what is here was learned there.
 
 ## The goal
 
@@ -187,7 +191,7 @@ program and `tools/opportunity.py --targets` scores against it. Done means
 **every program within 1.5x**. Today the spread is 1.3x to 8.8x with a
 median above 4x, so most of the distance is still ahead.
 
-One fact underlies every symptom: **BC compiles a statement at a time, so
+For BC's objects, one fact underlies every symptom: **BC compiles a statement at a time, so
 no value outlives a statement.** Every reload, every recomputed address,
 every invariant left inside a loop, two of eight x87 slots and two of six
 registers -- all of it follows from that. A pass that fixes one instance
@@ -417,7 +421,7 @@ they fault. So BC's error 11 on a zero divisor does not survive, and neither
 does its silent return from the second. That is deliberate, and it is the one
 place a rewritten program can behave worse than the one BC built.
 
-## A BC compiler behavior, not a qbopt one
+## A BC compiler behavior, not an llrm one
 
 Found by `tools/fuzzcheck.py`'s generated corpus, not by hand: on VBDOS under
 `/O`, `IF <expr> THEN ... ELSE ...` where `NOT` appears anywhere in `<expr>`
@@ -433,8 +437,8 @@ is not that `NOT` computes wrong: printed directly, it is exactly `~v`. Only
 the branch BC's optimizer takes is wrong for a `NOT` of anything other than a
 canonical `-1`/`0` value, which is why ordinary code never surfaces it --
 `NOT` on a genuine boolean gives the same branch either way `<expr>` is read.
-qbopt does not touch INTEGER control flow at all, so this is not something a
-rewritten object could fix or break; `tools/fuzzgen.py` keeps `NOT` out of
+The object rewriter did not touch INTEGER control flow when this was found,
+so a rewritten object could neither fix nor break it; `tools/fuzzgen.py` keeps `NOT` out of
 every generated `IF` condition instead of chasing PDS 7.1 and QB 4.5 for the
 same rule.
 
@@ -587,7 +591,7 @@ is what the fix rests on -- it does not attempt the general case.
 region crossing from record A into record B extends A's own span to the
 edit's own end and shrinks B's to start there; neither is removed. That
 matters because a FIXUPP's offset is relative to whichever LEDATA precedes it
-in the file -- `qbopt/objectfile/omf.py`'s `fixups()` tracks `base` exactly that way, and
+in the file -- `src/objectfile/omf.rs`'s `fixups()` tracks `base` exactly that way, and
 `relocate()` mirrors it with `covered`, reset on every LEDATA it passes. An
 earlier design that dropped the fully-absorbed record instead re-parented
 every FIXUPP that used to follow it: measured, 72 of 73 corpus crossings have
@@ -608,7 +612,7 @@ all -- correct by its own rule, wrong in fact, and caught because a run-twice
 idempotence check found the region on the second pass that the first had
 refused for nothing. Only two edits wanting to move the *same* boundary
 actually conflict, and that needs every taken edit at once to see, which a
-single region's own check cannot -- `qbopt/rewrite.py`'s
+single region's own check cannot -- `src/rewrite.rs`'s
 `drop_chained_crossings` runs after every region has been decided
 independently, refusing the later of the two rather
 than the runtime pass's blunter option of costing the whole module.

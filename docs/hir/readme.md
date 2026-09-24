@@ -1,6 +1,6 @@
 # HIR architecture
 
-Status: initial implementation. `qbopt/hir/` contains the typed model, strict
+Status: initial implementation. `src/hir/` contains the typed model, strict
 versioned JSON codec, verifier, canonical MIR projection, and adapter to
 existing MIR. `frontends/qb/` is now a real producer for numeric, control-flow,
 string, file, array, and procedure slices; source reaches existing MIR without
@@ -15,13 +15,13 @@ Nothing here replaces MIR or changes the backend.
 ## Purpose
 
 HIR is the narrow semantic boundary between a source-language frontend and
-qbopt's existing MIR. It exists to keep parsing, name resolution, source type
+llrm's MIR. It exists to keep parsing, name resolution, source type
 rules, and runtime ABI selection out of MIR while retaining enough information
 for the existing optimization passes to see whole computations.
 
-The first producer is the QB frontend. A later C frontend may use the same
-model, but that future reuse is a constraint on names and boundaries rather
-than a reason to build a universal compiler framework now.
+Its producers are the QB frontend and the llrm language frontend. The C
+frontend raises the Open Watcom code generator's trees to MIR directly, and
+the BC frontend raises machine code.
 
 ```text
 QB/PDS/VBDOS source
@@ -112,7 +112,7 @@ several proven separations:
   selected instruction; the HIR native allowlist uses the same principle.
   Operations without a current MIR semantic form remain runtime calls.
 - LLVM call memory effects and alias scopes show why effects must be explicit;
-  HIR calls carry the existing qbopt runtime contracts and logical storage
+  HIR calls carry the existing llrm runtime contracts and logical storage
   provenance.
 - LLVM's `alloca`-then-promotion architecture separates mutable source places
   from SSA values. HIR keeps source places, while the existing MIR builder
@@ -122,7 +122,7 @@ The useful references are `llvm/docs/LangRef.md` (data layout, address spaces,
 `getelementptr`, intrinsics, and `memory(...)`) and
 `llvm/docs/GetElementPtr.rst`. LLVM IR itself is not introduced into the
 pipeline: it has no native description of the BASIC runtime ABI or this
-project's segmented 16:16 pointer semantics, and qbopt already has the MIR and
+project's segmented 16:16 pointer semantics, and llrm already has the MIR and
 backend that must remain fixed.
 
 ## Deliberately small common core
@@ -156,7 +156,7 @@ capture into HIR. We do not make the unproved C adapter a prerequisite for QB.
 
 ### Relationship to the current WCC path
 
-[`cfront/hir.py`](../../qbopt/cfront/hir.py) is accurately named within that
+[`src/frontends/c/hir.rs`](../../src/frontends/c/hir.rs) is accurately named within that
 frontend, but it is a capture of WCC code-generator calls: nodes retain names
 such as `CGBinary`, WCC type codes, target flags, handles, and call classes.
 Those are excellent evidence for the C adapter and should not become the

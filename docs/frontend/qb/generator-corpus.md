@@ -35,7 +35,7 @@ allow-list, so underscore and local-error gates cannot accidentally turn a
 negative test into an accepted one.  Upstream negative assignment cases are
 explicit semantic errors.  An upstream known failure, if present, is retained
 as a `upstream-known-failure:` classification rather than silently becoming an
-accepted qbopt case.
+accepted llrm case.
 
 `uv run python -m tools.qbgen OUTPUT` writes every `.BAS` source in ASCII with
 CRLF lines, an 8.3 name, and a `MANIFEST.JSN` (also 8.3).  The manifest carries
@@ -45,7 +45,7 @@ test environment.
 
 The imported `generate_scan_pcode_cases.py` is handled specially: it supplies
 only source scanner/lexer shapes and expected BASIC output.  Its p-code opcode
-and type fields are intentionally not read by qbopt and cannot become HIR or
+and type fields are intentionally not read by llrm and cannot become HIR or
 MIR assertions.
 
 The dedicated `uv run pytest --full tests/test_qbgen.py` gate runs generator
