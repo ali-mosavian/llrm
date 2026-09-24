@@ -23,7 +23,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::support::hash::{HashMap, IndexMap};
 
@@ -297,10 +297,15 @@ pub fn holders(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, calls: Option<
     let mut into: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect();
     let mut outof: IndexMap<i64, Holders> = body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect();
 
+    // A block whose parents' exits are unchanged would recompute its own.
+    let mut stale: HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     let mut changing = true;
     while changing {
         changing = false;
         for block in &body.blocks {
+            if !stale.remove(&block.at) {
+                continue;
+            }
             let arriving = if block.at == body.entry {
                 IndexMap::default()
             } else {
@@ -309,6 +314,9 @@ pub fn holders(body: &Rc<MirBody>, dgroup: Option<&RegionLayout>, calls: Option<
             let mut leaving = arriving.clone();
             for op in &block.ops {
                 leaving = _after(op, leaving, dgroup, &calls, Some(&known));
+            }
+            if leaving != outof[&block.at] {
+                stale.extend(&block.succ);
             }
             if arriving != into[&block.at] || leaving != outof[&block.at] {
                 into.insert(block.at, arriving);
