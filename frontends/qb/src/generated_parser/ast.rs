@@ -53,6 +53,13 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                         .push(Statement::OptionExplicit(keyword_span));
                     ParseResult::GoodSyntax
                 }
+                ExtensionAction::DefByte { .. } => def_type_list(
+                    &mut state,
+                    TypeName::Integral {
+                        width: 1,
+                        signed: false,
+                    },
+                ),
                 ExtensionAction::OnLocalError { label, .. } => {
                     state.statements.push(Statement::OnError {
                         label,
@@ -535,6 +542,9 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
 }
 
 fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
+    if let Some(integral) = signed_type(state) {
+        return Some(integral);
+    }
     let token = state.token()?.clone();
     let type_name = match token.kind {
         TokenKind::Reserved(id) if id == named("tkINTEGER") => TypeName::Integer,
@@ -551,6 +561,27 @@ fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
     };
     state.at += 1;
     Some(type_name)
+}
+
+/// `SIGNED`/`UNSIGNED` followed by `BYTE`, `INTEGER` or `LONG`.  Both words
+/// stay identifiers elsewhere, so a TYPE may still be named `SIGNED`.
+fn signed_type(state: &mut ParseState) -> Option<TypeName> {
+    let TokenKind::Identifier(modifier) = &state.token()?.kind else {
+        return None;
+    };
+    let signed = match modifier.as_str() {
+        "SIGNED" => true,
+        "UNSIGNED" => false,
+        _ => return None,
+    };
+    let width = match &state.tokens.get(state.at + 1)?.kind {
+        TokenKind::Identifier(name) if name == "BYTE" => 1,
+        TokenKind::Reserved(id) if *id == named("tkINTEGER") => 2,
+        TokenKind::Reserved(id) if *id == named("tkLONG") => 4,
+        _ => return None,
+    };
+    state.at += 2;
+    Some(TypeName::Integral { width, signed })
 }
 
 fn suffix_type(name: &str) -> Option<TypeName> {

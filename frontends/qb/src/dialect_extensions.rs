@@ -28,6 +28,9 @@ pub enum ExtensionAction {
     OptionExplicit {
         span: Span,
     },
+    DefByte {
+        span: Span,
+    },
     OnLocalError {
         label: String,
         span: Span,
@@ -78,6 +81,7 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
         let span = statement_span(&tokens[..spec.pattern.len()]);
         let action = match spec.action {
             GeneratedExtensionAction::OptionExplicit => ExtensionAction::OptionExplicit { span },
+            GeneratedExtensionAction::DefByte => ExtensionAction::DefByte { span },
             GeneratedExtensionAction::OnLocalError => ExtensionAction::OnLocalError {
                 label: captured_label(spec.pattern, &tokens[..spec.pattern.len()])
                     .expect("validated label capture matched a source label"),

@@ -136,8 +136,15 @@ Arithmetic follows C. An operand narrower than `INTEGER` widens to `INTEGER`.
 Otherwise the result has the wider width, and it is unsigned when either
 operand of that width is unsigned. Comparison, `\`, `MOD` and conversion to
 floating point use the unsigned form for unsigned operands. A store narrows
-modulo the destination width. Constants outside the destination's range are a
-compile-time "Overflow".
+modulo the destination width. A constant outside the destination's range is
+a compile-time overflow, except that a signed constant becomes the bit pattern
+it spells in an unsigned type of its width: `&HFFFF` fills an
+`UNSIGNED INTEGER`. A `FOR` loop over an unsigned counter keeps a signed
+`STEP`.
+
+`PRINT`, `INPUT`, `READ`, `STR$` and the numeric intrinsics see a sized integer
+as the Microsoft type that holds its values: `INTEGER` for the bytes, `LONG`
+for `UNSIGNED INTEGER` and `DOUBLE` for `UNSIGNED LONG`.
 
 ### Declarations
 

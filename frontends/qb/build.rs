@@ -335,7 +335,7 @@ fn validate_dialect_extensions(
                 _ => {}
             }
         }
-        if !matches!(extension.tail.as_str(), "none" | "function_signature") {
+        if !matches!(extension.tail.as_str(), "none" | "function_signature" | "letter_ranges") {
             return Err(format!(
                 "extension {} has unknown tail {}",
                 extension.identity, extension.tail
@@ -624,7 +624,7 @@ fn render_dialect_extensions(
     out.push_str(
         "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ExtensionPatternToken {\n    Grammar(u16),\n    Keyword(&'static str),\n    Label,\n    Identifier,\n    StringLiteral,\n}\n\n",
     );
-    out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ExtensionTail {\n    None,\n    FunctionSignature,\n}\n\n");
+    out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ExtensionTail {\n    None,\n    FunctionSignature,\n    LetterRanges,\n}\n\n");
     out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ExtensionSpec {\n    pub identity: &'static str,\n    pub action: GeneratedExtensionAction,\n    pub pattern: &'static [ExtensionPatternToken],\n    pub tail: ExtensionTail,\n}\n\n");
     for (index, extension) in extensions.iter().enumerate() {
         writeln!(
@@ -665,6 +665,7 @@ fn render_dialect_extensions(
             match extension.tail.as_str() {
                 "none" => "None",
                 "function_signature" => "FunctionSignature",
+                "letter_ranges" => "LetterRanges",
                 _ => unreachable!("validated tail"),
             }
         )

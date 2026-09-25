@@ -16,6 +16,8 @@ pub enum TypeName {
     Double,
     String,
     Named(String),
+    /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
+    Integral { width: u8, signed: bool },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

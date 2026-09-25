@@ -49,3 +49,9 @@ identity = "vbdos.cdecl_sub"
 action = "CdeclSub"
 pattern = "token:tkDECLARE, token:tkSUB, capture:identifier, token:tkCDECL"
 tail = "function_signature"
+
+[[extension]]
+identity = "quickr.defbyte"
+action = "DefByte"
+pattern = "keyword:DEFBYTE"
+tail = "letter_ranges"
