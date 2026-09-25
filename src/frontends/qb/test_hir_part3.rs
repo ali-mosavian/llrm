@@ -2007,3 +2007,14 @@ fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
         .expect("the multiplying loop");
     assert!(!body.contains("or ax, ax") && !body.contains("cmp "), "{body}");
 }
+
+#[test]
+fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
+    // `cdq` and `idiv` each took their own copy of i \ 5's dividend in EAX,
+    // so the extended value sat in EDI across both and one of stride's three
+    // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/stride.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let body = backward_loop(&listing(&program));
+    assert!(!body.contains("[bp") && body.contains("movsx eax"), "{body}");
+}

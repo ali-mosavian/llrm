@@ -86,6 +86,9 @@ pub fn constrained(
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
+        // A value already copied into a register some instruction required,
+        // by its root: the next that requires it there reads that copy.
+        let mut carried: IndexMap<(u32, Register), Held> = IndexMap::default();
         for one in &block.insns {
             let mut one = Arc::clone(one);
             // CSE may feed several ABI slots from one value.
@@ -129,6 +132,7 @@ pub fn constrained(
                 .filter(|(value, register)| !_already_there(&pinned, *value, *register, _declared(&widths, &one, *value)))
                 .collect();
             if wanted.is_empty() && given.is_empty() {
+                carried.retain(|(value, root), kept| !_disturbs(&one, *value, kept, *root, &pins));
                 insns.push(one);
                 continue;
             }
@@ -146,6 +150,20 @@ pub fn constrained(
             ordered.sort_by_key(|(value, _got)| *value);
             for (value, (register, places)) in ordered {
                 let held = Held { value: fresh, width: _declared(&widths, &one, value) };
+                let read_only = places.iter().all(|(side, _)| *side == "source");
+                let key = (value, ir::root(register));
+                if let Some(kept) = carried.get(&key).copied().filter(|kept| read_only && kept.width == held.width) {
+                    for (_side, index) in &places {
+                        sources[*index] = Loc::Held(kept);
+                    }
+                    uses = uses.iter().map(|v| if *v == value { kept.value } else { *v }).collect();
+                    swap.insert(value, kept.value);
+                    input_values.insert(value, kept.value);
+                    continue;
+                }
+                if read_only {
+                    carried.insert(key, held);
+                }
                 if places.is_empty() {
                     // No occurrence to rewrite: the instruction reads this in a
                     // register it names nowhere.
@@ -233,12 +251,26 @@ pub fn constrained(
                     )
                 })
                 .collect();
+            for one in std::iter::once(&made).chain(after.iter().map(|one| &**one)) {
+                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+            }
             insns.push(Arc::new(made));
             insns.extend(after);
         }
         blocks.push(block.with_insns(insns));
     }
     Ok((body.with_blocks(blocks), pins))
+}
+
+/// Whether `one` redefines `value` or its copy `kept` in `root`, or puts
+/// anything else in `root`.
+fn _disturbs(one: &Insn, value: u32, kept: &Held, root: Register, pins: &IndexMap<u32, Register>) -> bool {
+    let in_root = |register: &Register| ir::root(*register) == root;
+    one.defines.iter().any(|defined| {
+        *defined == value || *defined == kept.value || pins.get(defined).is_some_and(|register| in_root(register))
+    }) || one.clobbers.iter().any(in_root)
+        || one.delivers.iter().any(|(_held, register)| in_root(register))
+        || one.requires.iter().any(|(held, register)| held.value != kept.value && in_root(register))
 }
 
 /// Where each value the body's instructions require has to live.
