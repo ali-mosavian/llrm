@@ -15,10 +15,29 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 
 | Tool | Input |
 | --- | --- |
-| `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
+| `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS, and QuickrBASIC |
 | `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`) |
 | `llrm-nib` | llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
+
+QuickrBASIC (`--dialect quickr`) is VBDOS BASIC extended, linked against the VBDOS
+runtime. It adds sized and unsigned integers, mandatory declarations, f-strings,
+PRIVATE procedures, `+=`, BREAK/CONTINUE, FOR EACH, `a IF c ELSE b`, IN, chained
+comparisons, `RETURN value`, tuples, and record and array results. See
+[the dialects](docs/frontends/qb/dialects.md).
+
+```basic
+DIM q AS INTEGER, r AS INTEGER, parity AS STRING
+q, r = divmod(17, 5)
+FOR EACH i AS INTEGER IN RANGE(q)
+    parity = "even" IF i MOD 2 = 0 ELSE "odd"
+    PRINT f"{i}: {parity}"
+NEXT
+
+FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
+    RETURN a \ b, a MOD b
+END FUNCTION
+```
 
 `llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
 coprocessor is required.
