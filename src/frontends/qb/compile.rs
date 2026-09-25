@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
@@ -1149,23 +1149,6 @@ pub fn optimized_physical(
     _optimized(program, function, body, options)
 }
 
-static LOWERING_TARGET: LazyLock<targets::Profile> = LazyLock::new(|| {
-    let target = targets::profile(ProfileOrName::Name("386")).expect("the 386 profile exists").clone();
-    let address_forms = target.address_forms.iter().filter(|form| !form.secondary).cloned().collect();
-    targets::Profile { address_forms, ..target }
-});
-
-/// The 386 profile with only address forms valid for QB far-array HIR.
-///
-/// A dynamic BASIC array explicitly loads both words of its far data pointer.
-/// The generic secondary SIB folder widens those word definitions before the
-/// far-load selector combines them into LES, leaving the folder's promoted
-/// values without definitions. Keep native 16-bit forms; only the conflicting
-/// secondary form is outside this frontend's lowering contract.
-pub fn lowering_target() -> &'static targets::Profile {
-    &LOWERING_TARGET
-}
-
 /// Give the one-entry machine pipeline a temporary external-entry switch.
 ///
 /// An empty block with several successors is sufficient for graph analyses,
@@ -1469,7 +1452,7 @@ pub fn assembled(
             Some(&physical.calls),
             BTreeSet::new(),
             Some(&physical.contracts),
-            ProfileOrName::Profile(lowering_target()),
+            ProfileOrName::Name("386"),
             lower::Lowered {
                 occurrences: Some(&empty_occurrences),
                 hints: Some(&physical.hints),

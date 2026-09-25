@@ -560,7 +560,7 @@ pub fn indexed(
                 }
             }
         }
-        let scoped = ranges::dominated_edges(body)?;
+        let scoped = ranges::scoped(body)?;
         for product in made.values() {
             if !plain(product, product.kind) || !matches!(product.kind, Kind::Mul | Kind::Shl) {
                 continue;
@@ -675,9 +675,10 @@ pub fn indexed(
                             // pointer that designates its object.  Any execution
                             // whose scaled offset exceeds the 16-bit segment is
                             // already undefined, so the wider address need agree
-                            // only on the defined range.  Untyped/BASIC accesses
-                            // retain their explicit 16-bit wrapping semantics.
-                            || &fact.high * scale > BigInt::from(0xFFFF) && !typed_access
+                            // only on the defined range.  Any other access
+                            // wraps at 16 bits, so its wider sum must be exact.
+                            || !typed_access
+                                && !cells.iter().all(|cell| ranges::unwrapped(cell, base_args[0].value, fact, scale))
                     }) {
                         safe = false;
                         break;
@@ -696,7 +697,13 @@ pub fn indexed(
                 }
                 candidates.push((addition, base_args[0], address));
             }
-            if !safe {
+            // `promote` widens a value by rewriting its definition, which it
+            // can do for a load or a copy only: a phi or an arithmetic result
+            // keeps its word form.
+            let promotable = |value: &mir::Value| {
+                made.get(&value.id).is_some_and(|op| matches!(op.kind, Kind::Load | Kind::Copy))
+            };
+            if !safe || !promotable(&source.value) || !candidates.iter().all(|(_, base, _)| promotable(&base.value)) {
                 continue;
             }
             // The word definitions themselves are promoted below after far

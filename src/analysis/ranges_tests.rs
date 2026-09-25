@@ -9,7 +9,8 @@ use std::rc::Rc;
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge};
+use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge, unwrapped};
+use crate::analysis::induction::counted_loops_tests::{_loop, shaped};
 use crate::model::passes::{O2, Options};
 use crate::support::testing;
 use crate::wholeseg::Emission;
@@ -204,6 +205,46 @@ fn test_signed_widening_keeps_the_numeric_range() {
         let known = IndexMap::from_iter([(source, interval(low, high, 2))]);
         assert_eq!(_computed(&made, &known, &IndexMap::default()), Some(interval(low, high, 4)));
     }
+}
+
+/// `x AND 511` had no interval unless `x` had one, so a masked subscript was
+/// never known to fit.
+#[test]
+fn test_a_nonnegative_mask_bounds_an_unknown_operand() {
+    let (made, _) = unary(Kind::And, Operation::Binary, 2, Some(Arg::Const(Const::new(511, 2))));
+    assert_eq!(_computed(&made, &IndexMap::default(), &IndexMap::default()), Some(interval(0, 511, 2)));
+    let (made, _) = unary(Kind::And, Operation::Binary, 2, Some(Arg::Const(Const::new(-2, 2))));
+    assert_eq!(_computed(&made, &IndexMap::default(), &IndexMap::default()), None);
+}
+
+/// A loop tested after its trip had no facts in its header, which in a
+/// rotated loop is the whole trip, so no access there had a bounded index.
+#[test]
+fn test_a_posttested_header_knows_its_counter() {
+    let mut rotated = shaped("post");
+    rotated.split = true;
+    let body = _loop(Some(0), 9, Kind::Lt, 1, rotated);
+    let counter = body.blocks[1].phis[0].result;
+    let known = bounded(&Rc::new(body)).unwrap();
+    assert_eq!(known.get(&1).and_then(|facts| facts.get(&counter)), Some(&interval(0, 9, 1)));
+}
+
+/// A 32-bit sum of a 16-bit address is exact only from the object's origin
+/// and while the scaled index stays inside the address width.
+#[test]
+fn test_an_address_is_unwrapped_only_from_its_origin_and_in_range() {
+    let (origin, other) = (value(1, 0), value(2, 0));
+    let reference = MemRef {
+        base_width: 2,
+        inbounds: true,
+        origin: Some(origin),
+        ..MemRef::new(Some(Addr::new(Space::Far, 0)), 2)
+    };
+    assert!(unwrapped(&reference, origin, &interval(0, 511, 2), 2));
+    assert!(!unwrapped(&reference, other, &interval(0, 511, 2), 2));
+    assert!(!unwrapped(&reference, origin, &interval(0, 32768, 2), 2));
+    assert!(!unwrapped(&reference, origin, &interval(-1, 511, 2), 2));
+    assert!(!unwrapped(&MemRef { inbounds: false, ..reference.clone() }, origin, &interval(0, 511, 2), 2));
 }
 
 #[test]

@@ -314,6 +314,21 @@ fn test_string_fre_emits_the_measured_vbdos_runtime_call() {
     assert!(externals(&source, "FRESTR.BAS").iter().any(|one| one == "B$FRSD"));
 }
 
+/// A masked subscript of a zero-based far array was folded into a scaled
+/// 32-bit address whose index `promote` cannot widen: "secondary address
+/// values have no definition".
+#[test]
+fn test_a_masked_far_subscript_compiles() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "MASKED.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s((x + f) AND 511)\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = parsed_as(&basic, "qb45", "qb45");
+    object_bytes(&program, "MASKED.BAS").expect("compiles");
+}
+
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
 #[test]
 fn test_dynamic_array_walk_keeps_far_pointer_halves_defined() {

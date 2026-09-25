@@ -70,6 +70,22 @@ pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interv
     Cow::Owned(covered)
 }
 
+/// Whether `reference`, based at `base` plus `index * scale`, names the same
+/// byte when its address is summed wider than its address width.
+///
+/// It does when `base` is the reference's origin and `index * scale` plus the
+/// displacement cannot leave the address width: the wrapped in-object offset
+/// then equals the unwrapped one, and origin plus an in-object offset cannot
+/// pass the segment's end.
+pub(crate) fn unwrapped(reference: &MemRef, base: Value, index: &Interval, scale: i64) -> bool {
+    if !reference.inbounds || reference.origin != Some(base) || index.width != reference.base_width {
+        return false;
+    }
+    let disp = BigInt::from(reference.addr.map_or(0, |address| address.disp));
+    let limit = BigInt::from(1_u8) << (8 * reference.base_width);
+    &index.low * scale + &disp >= BigInt::from(0_u8) && &index.high * scale + &disp < limit
+}
+
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
 ///
 /// Direct port of `qbopt.analysis.ranges:on_edge`.
@@ -270,7 +286,15 @@ pub(crate) fn _computed(
     // Every other kind answers None below, whatever its operands.
     if !matches!(
         op.kind,
-        Kind::SignExtend | Kind::Copy | Kind::Increment | Kind::Decrement | Kind::Shl | Kind::Add | Kind::Sub | Kind::Mul
+        Kind::SignExtend
+            | Kind::Copy
+            | Kind::Increment
+            | Kind::Decrement
+            | Kind::Shl
+            | Kind::Add
+            | Kind::Sub
+            | Kind::Mul
+            | Kind::And
     ) {
         return None;
     }
@@ -281,6 +305,17 @@ pub(crate) fn _computed(
         },
         _ => _operand(arg, known, facts).map(Cow::Owned),
     };
+    if op.kind == Kind::And {
+        // A non-negative mask bounds the result whatever the other operand holds.
+        let high = op
+            .args
+            .iter()
+            .filter_map(operand)
+            .filter(|mask| mask.width == result.width && mask.low >= BigInt::from(0_u8))
+            .map(|mask| mask.high.clone())
+            .min()?;
+        return Some(Interval { low: BigInt::from(0_u8), high, width: result.width });
+    }
     let args = op.args.iter().map(operand).collect::<Option<Vec<_>>>()?;
     if args.is_empty() {
         return None;
@@ -379,8 +414,13 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
     let predecessors = loops::predecessors(&body.blocks);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
+        let proofs = induction::counted_unless_stopped(body, &loop_, Some(&facts), false);
+        // A header that tests before the trip also sees the exit value; one
+        // tested after it sees only the trip's.
         let mut inside = loop_.body.iter().copied().collect::<PySet<i64>>();
-        inside.discard(&loop_.header);
+        if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
+            inside.discard(&loop_.header);
+        }
         let mut known: IndexMap<Value, Interval> = IndexMap::default();
         let header = body
             .blocks
@@ -394,7 +434,7 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
             .collect::<IndexMap<_, _>>();
         let counters = induction::basics(body, &loop_).values().cloned().collect::<Vec<_>>();
         let mut trips = BTreeSet::new();
-        for proof in induction::counted_unless_stopped(body, &loop_, Some(&facts), false) {
+        for proof in proofs {
             if let Some((low, high)) = proof.span() {
                 known.insert(proof.phi_in(body).result, Interval { low, high, width: proof.counter.start.width() });
                 trips.insert(proof.count.expect("a span has a count") - 1_u8);
@@ -562,6 +602,30 @@ pub(crate) fn dominated_edges(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexM
         .iter()
         .filter_map(|block| known.get(&block.at).filter(|scoped| !scoped.is_empty()).map(|scoped| (block.at, scoped.clone())))
         .collect())
+}
+
+/// Every interval known at each block: a loop's counters and what they
+/// compute, narrowed by the branch edges that dominate it.
+pub(crate) fn scoped(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
+    let mut result = bounded(body)?;
+    for (at, edges) in dominated_edges(body)? {
+        let known = result.entry(at).or_default();
+        for (value, interval) in edges {
+            match known.get(&value) {
+                Some(loop_) if loop_.width == interval.width => {
+                    let low = loop_.low.clone().max(interval.low.clone());
+                    let high = loop_.high.clone().min(interval.high.clone());
+                    if low <= high {
+                        known.insert(value, Interval { low, high, width: interval.width });
+                    }
+                }
+                _ => {
+                    known.insert(value, interval);
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Every value `consts` knows, as the singleton interval an alias query reads.
