@@ -56,6 +56,7 @@ fn jump_to(target: i64) -> Semantics {
 
 /// `body` with every phi it can lower replaced by copies.
 pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
+    let body = &_exits_copied(body);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
     let widths = _widths(body);
@@ -168,6 +169,55 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
         block.phis = kept[&block.at].iter().map(|phi| _renamed_phi(phi, &rename)).collect::<Result<_, _>>()?;
     }
     Ok(out)
+}
+
+/// `body` with a loop exit's one-input phis as copies opening the exit.
+///
+/// Renamed away, the value computed in the loop would be the one read after
+/// it, and a call there would confine the loop's register to one the call
+/// preserves. The copy splits the range where the loop ends.
+fn _exits_copied(body: &LirBody) -> LirBody {
+    let depths = crate::analysis::intervals::depths(body);
+    let mut entering = IndexMap::<i64, usize>::default();
+    for block in &body.blocks {
+        for to in &block.succ {
+            *entering.entry(*to).or_default() += 1;
+        }
+    }
+    let leaves = |block: &LirBlock, phi: &Phi| match phi.incoming.as_slice() {
+        [(from, _value)] => entering.get(&block.at) == Some(&1) && depths.get(from) > depths.get(&block.at),
+        _ => false,
+    };
+    if !body.blocks.iter().any(|block| block.phis.iter().any(|phi| leaves(block, phi))) {
+        return body.clone();
+    }
+    let widths = _widths(body);
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| {
+                let (copied, phis): (Vec<&Phi>, Vec<&Phi>) = block.phis.iter().partition(|phi| leaves(block, phi));
+                let at = block.insns.first().map_or(block.at, |first| first.at);
+                let head = copied.iter().map(|phi| {
+                    let (result, value) = (phi.result, phi.incoming[0].1);
+                    let width = widths.get(&result).copied().unwrap_or(0).max(widths.get(&value).copied().unwrap_or(0));
+                    let mut one = Insn::new(
+                        at,
+                        Some((at, at)),
+                        Some(move_of(Held { value: result, width }, Held { value, width })),
+                        vec![result],
+                        vec![value],
+                    );
+                    one.op = block.insns.first().and_then(|first| first.op.clone());
+                    Arc::new(one)
+                });
+                LirBlock {
+                    phis: phis.into_iter().cloned().collect(),
+                    ..block.with_insns(head.chain(block.insns.iter().cloned()).collect())
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Whether `value` can be read after leaving `where` other than into `into`.

@@ -2018,3 +2018,15 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     let body = backward_loop(&listing(&program));
     assert!(!body.contains("[bp") && body.contains("movsx eax"), "{body}");
 }
+
+#[test]
+fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
+    // segld's sum is printed after both loops, across a runtime call, so as
+    // one value with the loop's it could only live in SI: the loop added into
+    // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/segld.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let body = backward_loop(&listing(&program));
+    let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();
+    assert!(!body.contains("jmp") && !copies.is_match(&body), "{body}");
+}
