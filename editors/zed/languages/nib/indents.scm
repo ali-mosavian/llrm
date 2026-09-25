@@ -6,8 +6,6 @@
 (struct_declaration) @start.struct
 (enum_declaration) @start.enum
 (protocol_declaration) @start.protocol
-(extern_block) @start.extern
-(export_block) @start.export
 (if_statement) @start.if
 (else_clause) @start.else
 (while_statement) @start.while

@@ -16,24 +16,23 @@ pub fn say(text: &string) -> void:
         let data: *far char = &text
         os.write(data.cast[u8](), text.len)
 
-export "cdecl16":
-    # INT 0: division by zero, or a quotient too wide for its register.
-    @link_name("N$EDIV")
-    fn divide() -> void:
-        panic("division by zero or overflow")
+# INT 0: division by zero, or a quotient too wide for its register.
+@export(name="N$EDIV")
+fn divide() -> void:
+    panic("division by zero or overflow")
 
-    @link_name("N$ECNV")
-    fn convert() -> void:
-        panic("float outside the integer type")
+@export(name="N$ECNV")
+fn convert() -> void:
+    panic("float outside the integer type")
 
-    @link_name("N$ESHF")
-    fn shift() -> void:
-        panic("shift count out of range")
+@export(name="N$ESHF")
+fn shift() -> void:
+    panic("shift count out of range")
 
-    @link_name("N$EBND")
-    fn bounds() -> void:
-        panic("index out of bounds")
+@export(name="N$EBND")
+fn bounds() -> void:
+    panic("index out of bounds")
 
-    @link_name("N$EKEY")
-    fn key() -> void:
-        panic("key not found")
+@export(name="N$EKEY")
+fn key() -> void:
+    panic("key not found")

@@ -1,4 +1,4 @@
-# QuickBASIC 4.5's side of `export "qb45":` and `extern "qb45":` (section
+# QuickBASIC 4.5's side of `@export("qb45")` and `@extern("qb45")` (section
 # 15). BASIC passes an argument by reference: a near pointer to the
 # variable, or to its string or array descriptor. Each adapter is that
 # pointer, and borrows what it points to.
@@ -32,10 +32,9 @@ pub fn string_length(text: *near StringDescriptor) -> u16:
     unsafe:
         return (*text).length
 
-extern "pascal16":
-    # A copy of a string on BASIC's temporaries (runtime string.asm).
-    @link_name("B$SCPY")
-    fn copied(text: *near StringDescriptor) -> *near StringDescriptor
+# A copy of a string on BASIC's temporaries (runtime string.asm).
+@extern("pascal16", name="B$SCPY")
+fn copied(text: *near StringDescriptor) -> *near StringDescriptor
 
 var result: StringDescriptor = StringDescriptor(length=0, data=0)
 

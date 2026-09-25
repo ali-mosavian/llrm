@@ -19,7 +19,7 @@ pub(super) struct StaticLayout {
 /// only a function it calls names is not among them.
 pub(super) fn shared(module: &Module) -> BTreeSet<String> {
     let mut named = BTreeSet::new();
-    let handlers = module.functions.iter().filter(|one| module.exports.get(&one.name).is_some_and(|export| export.abi.interrupt()));
+    let handlers = module.functions.iter().filter(|one| module.exports.get(&one.name).is_some_and(|export| export.abi.is_some_and(Abi::interrupt)));
     for handler in handlers {
         for statement in &mut handler.body.clone() {
             let mut name_in = |expression: &mut Expr| {

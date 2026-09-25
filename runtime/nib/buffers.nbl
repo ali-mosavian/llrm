@@ -41,61 +41,60 @@ pub fn allocate(capacity: u16, size: u16) -> *near mut u8:
         *data = 0
     return data
 
-export "cdecl16":
-    # `data` on the heap and writable, with room for `capacity` elements:
-    # the same buffer when it already is, else a copy, and the old one
-    # dropped. Room at least doubles, so appending one at a time is linear.
-    @link_name("N$BRES")
-    pub fn reserve(data: *near mut u8, capacity: u16, size: u16) -> *near mut u8:
-        unsafe:
-            let length = *length(data)
-            let room = *capacity(data)
-            let wanted = capacity < length ? length : capacity
-            let owned = *flags(data) & (HEAP | READONLY) == HEAP
-            if owned && room >= wanted:
-                return data
-            let doubled = room < 0x8000 ? room * 2 : room
-            let target = (wanted < doubled && fits(doubled, size)) ? doubled : wanted
-            if owned && fits(target, size) && heap.resize(data.offset(-6), target * size + DESCRIPTOR + 1):
-                *capacity(data) = target
-                return data
-            let moved = allocate(target, size)
-            copy(moved, data.far(), length * size + 1)
-            *length(moved) = length
-            drop(data)
-            return moved
+# `data` on the heap and writable, with room for `capacity` elements:
+# the same buffer when it already is, else a copy, and the old one
+# dropped. Room at least doubles, so appending one at a time is linear.
+@export(name="N$BRES")
+pub fn reserve(data: *near mut u8, capacity: u16, size: u16) -> *near mut u8:
+    unsafe:
+        let length = *length(data)
+        let room = *capacity(data)
+        let wanted = capacity < length ? length : capacity
+        let owned = *flags(data) & (HEAP | READONLY) == HEAP
+        if owned && room >= wanted:
+            return data
+        let doubled = room < 0x8000 ? room * 2 : room
+        let target = (wanted < doubled && fits(doubled, size)) ? doubled : wanted
+        if owned && fits(target, size) && heap.resize(data.offset(-6), target * size + DESCRIPTOR + 1):
+            *capacity(data) = target
+            return data
+        let moved = allocate(target, size)
+        copy(moved, data.far(), length * size + 1)
+        *length(moved) = length
+        drop(data)
+        return moved
 
-    @link_name("N$BDRP")
-    pub fn drop(data: *near mut u8) -> void:
-        unsafe:
-            if !data.is_null() && *flags(data) & HEAP != 0:
-                heap.release(data.offset(-6))
+@export(name="N$BDRP")
+pub fn drop(data: *near mut u8) -> void:
+    unsafe:
+        if !data.is_null() && *flags(data) & HEAP != 0:
+            heap.release(data.offset(-6))
 
-    # `data` with `count` more elements counted in its length; it may move.
-    @link_name("N$BGRW")
-    fn grow(data: *near mut u8, count: u16, size: u16) -> *near mut u8:
-        unsafe:
-            let length = *length(data)
-            let grown = reserve(data, length + count, size)
-            *length(grown) = length + count
-            return grown
+# `data` with `count` more elements counted in its length; it may move.
+@export(name="N$BGRW")
+fn grow(data: *near mut u8, count: u16, size: u16) -> *near mut u8:
+    unsafe:
+        let length = *length(data)
+        let grown = reserve(data, length + count, size)
+        *length(grown) = length + count
+        return grown
 
-    # `data` without its last `count` elements; the new length.
-    @link_name("N$BSHR")
-    fn shrink(data: *near mut u8, count: u16) -> u16:
-        unsafe:
-            let length = *length(data)
-            if length < count:
-                errors.panic("pop from an empty vec")
-            *length(data) = length - count
-            return length - count
+# `data` without its last `count` elements; the new length.
+@export(name="N$BSHR")
+fn shrink(data: *near mut u8, count: u16) -> u16:
+    unsafe:
+        let length = *length(data)
+        if length < count:
+            errors.panic("pop from an empty vec")
+        *length(data) = length - count
+        return length - count
 
-    # A heap copy of `data`.
-    @link_name("N$BCLN")
-    fn clone(data: *near mut u8, size: u16) -> *near mut u8:
-        unsafe:
-            let length = *length(data)
-            let copied = allocate(length, size)
-            copy(copied, data.far(), length * size + 1)
-            *length(copied) = length
-            return copied
+# A heap copy of `data`.
+@export(name="N$BCLN")
+fn clone(data: *near mut u8, size: u16) -> *near mut u8:
+    unsafe:
+        let length = *length(data)
+        let copied = allocate(length, size)
+        copy(copied, data.far(), length * size + 1)
+        *length(copied) = length
+        return copied

@@ -6,18 +6,20 @@ struct Range:
     low: i16
     high: i16
 
-extern "pascal16":
-    fn span(values: *far i16, count: u16) -> Range
-    fn scale(value: i16, numerator: i16, denominator: i16) -> i16
-    fn clamp_all(values: *far mut i16, count: u16, low: i16, high: i16) -> void
+@extern("pascal16")
+fn span(values: *far i16, count: u16) -> Range
+@extern("pascal16")
+fn scale(value: i16, numerator: i16, denominator: i16) -> i16
+@extern("pascal16")
+fn clamp_all(values: *far mut i16, count: u16, low: i16, high: i16) -> void
 
-export "pascal16":
-    fn clamp(value: i16, low: i16, high: i16) -> i16:
-        if value < low:
-            return low
-        if value > high:
-            return high
-        return value
+@export("pascal16")
+fn clamp(value: i16, low: i16, high: i16) -> i16:
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
 
 fn main() -> i16:
     let mut levels: i16[6] = [-40, 15, 70, 99, 140, 260]

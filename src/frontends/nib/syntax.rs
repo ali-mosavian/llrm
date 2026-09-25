@@ -165,7 +165,7 @@ pub struct Module {
     pub functions: Vec<Function>,
     /// Functions another object defines, called through a foreign ABI.
     pub externs: Vec<Extern>,
-    /// The functions `export` exposes, each with its foreign ABI.
+    /// The functions `@export` exposes, each with its symbol and foreign ABI, if any.
     pub exports: BTreeMap<String, Export>,
     /// The language's library methods, compiled only where called.
     pub library: Vec<Function>,
@@ -300,21 +300,22 @@ impl Abi {
     }
 }
 
-/// A function declared in an `extern "abi":` block.
+/// A function header `@extern("abi")` imports.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Extern {
     pub abi: Abi,
-    /// The object symbol: `@link_name`, else the one its ABI gives the name.
+    /// The object symbol: `name=`, else the one its ABI gives the name.
     pub symbol: String,
     /// Its header; the body is empty.
     pub function: Function,
 }
 
-/// How an `export` block exposes a function: its ABI and object symbol,
-/// `@link_name` or the one its ABI gives the name.
+/// How `@export` exposes a function: its object symbol, `name=` or the one
+/// its ABI gives the name, and the foreign ABI it is called by, if any. Without
+/// one, Nib code calls it by its own convention, as the runtime's routines are.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Export {
-    pub abi: Abi,
+    pub abi: Option<Abi>,
     pub symbol: String,
 }
 

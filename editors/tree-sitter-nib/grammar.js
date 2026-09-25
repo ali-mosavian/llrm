@@ -79,15 +79,14 @@ module.exports = grammar({
       $.const_declaration,
       $.var_declaration,
       $.type_declaration,
-      $.extern_block,
-      $.export_block,
+      $.function_signature,
     ),
 
     comment: _ => token(seq('#', /.*/)),
 
     // Declarations
 
-    attribute: $ => seq('@', field('name', $.identifier), optional(field('arguments', $.arguments)), $._newline),
+    attribute: $ => seq('@', field('name', choice($.identifier, alias('extern', $.identifier))), optional(field('arguments', $.arguments)), $._newline),
 
     visibility: _ => 'pub',
 
@@ -247,28 +246,6 @@ module.exports = grammar({
       '=',
       field('fraction', $.integer),
     ),
-
-    extern_block: $ => seq(
-      'extern',
-      field('abi', $.string),
-      ':',
-      $._newline,
-      $._indent,
-      field('body', $.extern_list),
-    ),
-
-    extern_list: $ => seq(repeat1($.function_signature), $._dedent),
-
-    export_block: $ => seq(
-      'export',
-      field('abi', $.string),
-      ':',
-      $._newline,
-      $._indent,
-      field('body', $.export_list),
-    ),
-
-    export_list: $ => seq(repeat1($.function_definition), $._dedent),
 
     // Statements
 

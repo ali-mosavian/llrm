@@ -334,6 +334,17 @@ impl FunctionCompiler<'_> {
     ) -> Result<(hir::Operand, String), Diagnostic> {
         let span = operand.span();
         let value = self.expression(operand, None)?;
+        self.operand_view(value, element, pointer_type, span)
+    }
+
+    /// A view of the sequence `value`, through a binding named for it.
+    pub(super) fn operand_view(
+        &mut self,
+        value: TypedOperand,
+        element: ElementType,
+        pointer_type: u32,
+        span: Span,
+    ) -> Result<(hir::Operand, String), Diagnostic> {
         if self.types.sequence_element(value.type_name) != Some(element) {
             return Err(Diagnostic::new(
                 span,

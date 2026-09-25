@@ -171,7 +171,8 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
     let names: BTreeSet<&str> = types.keys().copied().collect();
     assert_eq!(
         names,
-        BTreeSet::from(["void", "bool", "char", "i8", "u8", "i16", "u16", "i32", "u32", "f32", "f64", "string", "addr"])
+        // The runtime's routines take a `&string` as the far pointer to its descriptor.
+        BTreeSet::from(["void", "bool", "char", "i8", "u8", "i16", "u16", "i32", "u32", "f32", "f64", "string", "addr", "$slice[char]", "&$slice[char]"])
     );
     let integral: Vec<(i64, Option<bool>)> =
         ["char", "i8", "u8", "i16", "u16", "i32", "u32"].iter().map(|name| (types[name].width, types[name].signed)).collect();
@@ -1238,7 +1239,7 @@ fn test_a_byte_argument_is_pushed_as_a_word() {
     let source = written(
         &directory,
         "byte_argument.nbl",
-        "export \"cdecl16\":\n    fn digit(c: char) -> u8:\n        return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
+        "@export(\"cdecl16\")\nfn digit(c: char) -> u8:\n    return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
     assert!(assembly.contains("call far ptr _digit"));
@@ -1305,9 +1306,7 @@ fn test_foreign_functions_link_by_their_c_symbols() {
     let source = written(
         &directory,
         "interop.nbl",
-        "extern \"cdecl16\":\n    @link_name(\"_sum_all\")\n    fn total(values: *far i16, count: u16) -> i32\n\n\
-         export \"cdecl16\":\n    fn weight(value: i16) -> i16:\n        return value * 2\n\n\
-         fn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
+        "@extern(\"cdecl16\", name=\"_sum_all\")\nfn total(values: *far i16, count: u16) -> i32\n\n@export(\"cdecl16\")\nfn weight(value: i16) -> i16:\n    return value * 2\n\nfn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
     );
     let module = nib_compile::assembled(
         &parsed(&source),
@@ -1365,7 +1364,7 @@ fn test_a_pascal_float_result_returns_in_st0_whatever_its_last_parameter() {
     let source = written(
         &directory,
         "half.nbl",
-        "export \"pascal16\":\n    fn half(value: f32, out: *near f32) -> f32:\n        return value / 2.0\n\nfn main() -> i16:\n    return 0\n",
+        "@export(\"pascal16\")\nfn half(value: f32, out: *near f32) -> f32:\n    return value / 2.0\n\nfn main() -> i16:\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let half = between(&text, "HALF proc far", "HALF endp");
@@ -1380,7 +1379,7 @@ fn test_a_pascal_float_result_is_read_from_st0() {
     let source = written(
         &directory,
         "scaled.nbl",
-        "extern \"pascal16\":\n    fn scale(value: f32) -> f32\n\nexport \"pascal16\":\n    fn twice(value: f32) -> f32:\n        unsafe:\n            return scale(value) * 2.0\n",
+        "@extern(\"pascal16\")\nfn scale(value: f32) -> f32\n\n@export(\"pascal16\")\nfn twice(value: f32) -> f32:\n    unsafe:\n        return scale(value) * 2.0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let twice = between(&text, "TWICE proc far", "TWICE endp");
@@ -1395,8 +1394,7 @@ fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
     let source = written(
         &directory,
         "near.nbl",
-        "@repr(\"c16\", pack=1)\nstruct Pair:\n    low: u16\n    high: u16\n\nvar pair: Pair = Pair(low=1, high=2)\n\n\
-         extern \"pascal16\":\n    fn take(pair: *near Pair) -> u16\n\nexport \"pascal16\":\n    fn give() -> u16:\n        unsafe:\n            return take(&pair)\n",
+        "@repr(\"c16\", pack=1)\nstruct Pair:\n    low: u16\n    high: u16\n\nvar pair: Pair = Pair(low=1, high=2)\n\n@extern(\"pascal16\")\nfn take(pair: *near Pair) -> u16\n\n@export(\"pascal16\")\nfn give() -> u16:\n    unsafe:\n        return take(&pair)\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     assert!(between(&text, "GIVE proc far", "GIVE endp").contains("push offset"), "{text}");
@@ -1411,8 +1409,7 @@ fn test_any_integer_operand_converts_to_a_float() {
     let source = written(
         &directory,
         "floats.nbl",
-        "export \"pascal16\":\n    fn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n        \
-         return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
+        "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
@@ -1560,7 +1557,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // One segment held every procedure, so a program linked all of the
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nbl", "export \"cdecl16\":\n    fn unused(x: i16) -> i16:\n        return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let source = written(&directory, "two.nbl", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
     let object = nib_compile::written_as(&parsed(&source), "main", &source, &level("O2"), crate::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
     let records = crate::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
@@ -1573,7 +1570,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // A segment per procedure, all of one name, was the default: Microsoft
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nbl", "export \"cdecl16\":\n    fn unused(x: i16) -> i16:\n        return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let source = written(&directory, "two.nbl", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
     let object = nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes");
     let records = crate::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
@@ -1585,7 +1582,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
 fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "pushed.nbl", "fn half(x: f64) -> f64:\n    return x / 2.0\n\nexport \"cdecl16\":\n    fn quarter(x: f32, y: f64) -> f64:\n        print(x * 2.0)\n        return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
+    let source = written(&directory, "pushed.nbl", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
     nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
 }
 
@@ -1597,8 +1594,7 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
     let source = written(
         &directory,
         "far.nbl",
-        "extern \"pascal16\":\n    fn address(of: *near u8) -> *far u8\n\nexport \"pascal16\":\n    fn first(bytes: *far u8) -> *far u8:\n        return bytes\n\n    \
-         fn through(of: *near u8) -> u8:\n        unsafe:\n            let p = address(of)\n            return *p\n",
+        "@extern(\"pascal16\")\nfn address(of: *near u8) -> *far u8\n\n@export(\"pascal16\")\nfn first(bytes: *far u8) -> *far u8:\n    return bytes\n\n@export(\"pascal16\")\nfn through(of: *near u8) -> u8:\n    unsafe:\n        let p = address(of)\n        return *p\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let first = between(&text, "FIRST proc far", "FIRST endp");
@@ -1637,7 +1633,7 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
 /// last, to store its result through, and reads the pointer back from ax.
 fn test_a_basic_float_result_goes_through_its_hidden_pointer() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "half.nbl", "export \"qb45\":\n    fn half(value: f64) -> f64:\n        return value / 2.0\n");
+    let source = written(&directory, "half.nbl", "@export(\"qb45\")\nfn half(value: f64) -> f64:\n    return value / 2.0\n");
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let half = between(&text, "HALF proc far", "HALF endp");
     assert!(half.contains("mov bx, word ptr [bp+6]") && half.contains("fstp qword ptr [bx]"), "{half}");
@@ -1652,7 +1648,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
     let source = written(
         &directory,
         "count.nbl",
-        "import abi.pds71 as pds\n\nexport \"pds71\":\n    fn Spaces(text: pds.StringRef) -> i16:\n        let mut count: i16 = 0\n        for letter in text:\n            if letter == ' ':\n                count += 1\n        return count\n",
+        "import abi.pds71 as pds\n\n@export(\"pds71\")\nfn Spaces(text: pds.StringRef) -> i16:\n    let mut count: i16 = 0\n    for letter in text:\n        if letter == ' ':\n            count += 1\n    return count\n",
     );
     let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
@@ -1688,8 +1684,7 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
     let source = written(
         &directory,
         "wait.nbl",
-        "var ticks: u16 = 0\n\nexport \"interrupt16\":\n    fn tick() -> void:\n        ticks += 1\n\n\
-         fn main() -> i16:\n    while ticks < 36:\n        continue\n    return 0\n",
+        "var ticks: u16 = 0\n\n@export(\"interrupt16\")\nfn tick() -> void:\n    ticks += 1\n\nfn main() -> i16:\n    while ticks < 36:\n        continue\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
     assert!(between(&text, "_main proc", "_main endp").contains("cmp word ptr wait$D1, 36"), "{text}");
@@ -1699,9 +1694,9 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
 /// Nothing calls a handler, and an interrupt passes it nothing.
 fn test_an_interrupt_handler_takes_nothing_and_is_not_called() {
     let directory = tempfile::tempdir().expect("a directory");
-    let taking = written(&directory, "taking.nbl", "export \"interrupt16\":\n    fn tick(n: i16) -> void:\n        return\n\nfn main() -> i16:\n    return 0\n");
+    let taking = written(&directory, "taking.nbl", "@export(\"interrupt16\")\nfn tick(n: i16) -> void:\n    return\n\nfn main() -> i16:\n    return 0\n");
     assert!(refused(&taking).contains("takes nothing and returns void"));
-    let called = written(&directory, "called.nbl", "export \"interrupt16\":\n    fn tick() -> void:\n        return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
+    let called = written(&directory, "called.nbl", "@export(\"interrupt16\")\nfn tick() -> void:\n    return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
     assert!(refused(&called).contains("only an interrupt enters it"));
 }
 
@@ -1713,8 +1708,7 @@ fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
     let source = written(
         &directory,
         "byte.nbl",
-        "extern \"cdecl16\":\n    fn put(number: u8) -> void\n\nfn set(number: u8) -> void:\n    unsafe:\n        put(number)\n\n\
-         fn main() -> i16:\n    set(28)\n    set(29)\n    return 0\n",
+        "@extern(\"cdecl16\")\nfn put(number: u8) -> void\n\nfn set(number: u8) -> void:\n    unsafe:\n        put(number)\n\nfn main() -> i16:\n    set(28)\n    set(29)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
     assert!(between(&text, "_set proc", "_set endp").contains("movzx"), "{text}");
@@ -1728,8 +1722,7 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
     let source = written(
         &directory,
         "far.nbl",
-        "extern \"cdecl16\":\n    fn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\n\
-         fn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
+        "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
     assert!(text.contains("mov word ptr far$D1+2, dx"), "{text}");
@@ -1816,7 +1809,7 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
     // one it drops: every program carried the unused float printer, 2.8 KB.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "lib.nbl", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in range(0, x):\n        total += i * x\n    return total\n\nexport \"cdecl16\":\n    @link_name(\"N$ZA\")\n    fn a(x: u16) -> u16:\n        return helper(x) + 1\n\n    @link_name(\"N$ZB\")\n    fn b(x: u16) -> u16:\n        return x * 2\n");
+    let source = written(&directory, "lib.nbl", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in range(0, x):\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n");
     let mut program = parsed(&source);
     nib_compile::keep_exports(&mut program, &["N$ZB".to_owned()].into_iter().collect());
     let module = nib_compile::assembled(&program, "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
@@ -1854,4 +1847,16 @@ fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
     assert_eq!((pointer.kind, pointer.width), (model::TypeKind::Pointer, 4));
     assert_eq!((target.kind, target.rank, target.width), (model::TypeKind::Array, 1, 8));
     assert!(!instructions(function).any(|one| one.operands.iter().any(|operand| matches!(operand, model::Operand::DescriptorPlace(_)))));
+}
+
+/// An `@export` without an ABI is Nib's own convention, as the runtime's
+/// routines are: a `&string` crosses it, where cdecl16 refuses one.
+#[test]
+fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = |decorator: &str| format!("{decorator}\nfn size(text: &string) -> u16:\n    return text.len\n\nfn main() -> i16:\n    return 0\n");
+    let foreign = written(&directory, "foreign.nbl", &text("@export(\"cdecl16\")"));
+    assert!(refused(&foreign).contains("cannot cross a foreign ABI"), "{}", refused(&foreign));
+    let native = written(&directory, "native.nbl", &text("@export(name=\"N$SIZE\")"));
+    driver::parsed(&native, None).expect("a native export takes a view");
 }

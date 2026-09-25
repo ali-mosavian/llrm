@@ -225,17 +225,16 @@ fn decimal(text: *near mut u8, start: u16, digits: *near mut u8, length: u16, po
         at = put(text, at, ZERO + u8(magnitude // 10 % 10))
         return put(text, at, ZERO + u8(magnitude % 10))
 
-export "cdecl16":
-    @link_name("N$PR8")
-    fn print_r8(value: f64) -> void:
-        let mut stored = value
-        unsafe:
-            let data: *far f64 = &stored
-            print_float(data.cast[u16](), 4, 4, 0x7FF, 1075)
+@export(name="N$PR8")
+fn print_r8(value: f64) -> void:
+    let mut stored = value
+    unsafe:
+        let data: *far f64 = &stored
+        print_float(data.cast[u16](), 4, 4, 0x7FF, 1075)
 
-    @link_name("N$PR4")
-    fn print_r4(value: f32) -> void:
-        let mut stored = value
-        unsafe:
-            let data: *far f32 = &stored
-            print_float(data.cast[u16](), 2, 7, 0xFF, 150)
+@export(name="N$PR4")
+fn print_r4(value: f32) -> void:
+    let mut stored = value
+    unsafe:
+        let data: *far f32 = &stored
+        print_float(data.cast[u16](), 2, 7, 0xFF, 150)

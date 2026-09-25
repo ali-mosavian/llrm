@@ -923,7 +923,7 @@ impl<'p> Machine<'p> {
         let text = match name {
             rt::PRINT_NEWLINE => "\n".to_owned(),
             rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0])?),
-            rt::PRINT_VIEW => cp437(&runtime::view_bytes(&arguments[0], &arguments[1])?),
+            rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0])?),
             rt::PRINT_Q2 | rt::PRINT_Q4 => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
             rt::PRINT_BOOL => if arguments[0].truthy() {
                 "true"

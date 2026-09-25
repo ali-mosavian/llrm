@@ -108,109 +108,110 @@ fn integer(magnitude: u32, negative: bool) -> void:
 fn signed(value: i32) -> void:
     integer(value < 0 ? u32(0) - u32(value) : u32(value), value < 0)
 
-export "cdecl16":
-    @link_name("N$PI1")
-    fn print_i1(value: i8) -> void:
-        signed(value)
+@export(name="N$PI1")
+fn print_i1(value: i8) -> void:
+    signed(value)
 
-    @link_name("N$PU1")
-    fn print_u1(value: u8) -> void:
-        integer(value, false)
+@export(name="N$PU1")
+fn print_u1(value: u8) -> void:
+    integer(value, false)
 
-    @link_name("N$PI2")
-    fn print_i2(value: i16) -> void:
-        signed(value)
+@export(name="N$PI2")
+fn print_i2(value: i16) -> void:
+    signed(value)
 
-    @link_name("N$PU2")
-    fn print_u2(value: u16) -> void:
-        integer(value, false)
+@export(name="N$PU2")
+fn print_u2(value: u16) -> void:
+    integer(value, false)
 
-    @link_name("N$PI4")
-    fn print_i4(value: i32) -> void:
-        signed(value)
+@export(name="N$PI4")
+fn print_i4(value: i32) -> void:
+    signed(value)
 
-    @link_name("N$PU4")
-    fn print_u4(value: u32) -> void:
-        integer(value, false)
+@export(name="N$PU4")
+fn print_u4(value: u32) -> void:
+    integer(value, false)
 
-    # A fixed-point value, `stored` with `places` binary places: its
-    # integer, a point, and as many digits as the fraction needs.
-    @link_name("N$PQ4")
-    fn print_q4(stored: i32, places: u8) -> void:
-        let mut out: u16 = 0
-        let mut magnitude = u32(stored)
-        unsafe:
-            if stored < 0:
-                *scratch_at(0) = MINUS
-                out = 1
-                magnitude = u32(0) - u32(stored)
-            let after = scratch_at(DIGITS)
-            let count = written(after, magnitude >> places, 10)
-            buffers.copy(scratch_at(out), after.offset(-i16(count)).far(), count)
-            out += count
-            *scratch_at(out) = POINT
+# A fixed-point value, `stored` with `places` binary places: its
+# integer, a point, and as many digits as the fraction needs.
+@export(name="N$PQ4")
+fn print_q4(stored: i32, places: u8) -> void:
+    let mut out: u16 = 0
+    let mut magnitude = u32(stored)
+    unsafe:
+        if stored < 0:
+            *scratch_at(0) = MINUS
+            out = 1
+            magnitude = u32(0) - u32(stored)
+        let after = scratch_at(DIGITS)
+        let count = written(after, magnitude >> places, 10)
+        buffers.copy(scratch_at(out), after.offset(-i16(count)).far(), count)
+        out += count
+        *scratch_at(out) = POINT
+        out += 1
+        let scale = u32(1) << places
+        let mut remainder = magnitude & (scale - 1)
+        if remainder == 0:
+            *scratch_at(out) = ZERO
             out += 1
-            let scale = u32(1) << places
-            let mut remainder = magnitude & (scale - 1)
-            if remainder == 0:
-                *scratch_at(out) = ZERO
-                out += 1
-            # floor(remainder * 10 / scale) in u32: scale, at most 2^31, is
-            # q * 10 + s, which keeps every product in range even for Q1.31.
-            let q = scale // 10
-            let s = u16(scale % 10)
-            while remainder != 0:
-                let mut digit: u16 = 0
-                let mut candidate: u16 = 1
-                while candidate <= 9 && remainder >= u32(candidate) * q + (candidate * s + 9) // 10:
-                    digit = candidate
-                    candidate += 1
-                remainder = (remainder - u32(digit) * q) * 10 - digit * s
-                *scratch_at(out) = ZERO + u8(digit)
-                out += 1
-        number(scratch_at(0), out)
+        # floor(remainder * 10 / scale) in u32: scale, at most 2^31, is
+        # q * 10 + s, which keeps every product in range even for Q1.31.
+        let q = scale // 10
+        let s = u16(scale % 10)
+        while remainder != 0:
+            let mut digit: u16 = 0
+            let mut candidate: u16 = 1
+            while candidate <= 9 && remainder >= u32(candidate) * q + (candidate * s + 9) // 10:
+                digit = candidate
+                candidate += 1
+            remainder = (remainder - u32(digit) * q) * 10 - digit * s
+            *scratch_at(out) = ZERO + u8(digit)
+            out += 1
+    number(scratch_at(0), out)
 
-    @link_name("N$PQ2")
-    fn print_q2(stored: i16, places: u8) -> void:
-        print_q4(stored, places)
+@export(name="N$PQ2")
+fn print_q2(stored: i16, places: u8) -> void:
+    print_q4(stored, places)
 
-    @link_name("N$PB")
-    fn print_bool(value: bool) -> void:
-        word(value ? "true" : "false")
+@export(name="N$PB")
+fn print_bool(value: bool) -> void:
+    word(value ? "true" : "false")
 
-    @link_name("N$PC")
-    fn print_char(value: char) -> void:
-        unsafe:
-            *scratch_at(0) = u8(value)
-        field(scratch_at(0).far(), 1)
+@export(name="N$PC")
+fn print_char(value: char) -> void:
+    unsafe:
+        *scratch_at(0) = u8(value)
+    field(scratch_at(0).far(), 1)
 
-    @link_name("N$PS")
-    fn print_string(data: *near mut u8) -> void:
-        unsafe:
-            field(data.far(), *buffers.length(data))
+@export(name="N$PS")
+fn print_string(data: *near mut u8) -> void:
+    unsafe:
+        field(data.far(), *buffers.length(data))
 
-    # A `&string` view: its far data and length.
-    @link_name("N$PV")
-    fn print_view(data: *far u8, length: u16) -> void:
-        field(data, length)
+# A `&string` view.
+@export(name="N$PV")
+fn print_view(text: &string) -> void:
+    unsafe:
+        let data: *far char = &text
+        field(data.cast[u8](), text.len)
 
-    @link_name("N$PN")
-    fn print_newline() -> void:
-        put_text("\r\n")
+@export(name="N$PN")
+fn print_newline() -> void:
+    put_text("\r\n")
 
-    @link_name("N$PFLD")
-    fn print_field(new_width: u8, new_radix: u8, filler: u8, aligned_left: u8) -> void:
-        width = new_width
-        radix = new_radix
-        fill = filler
-        left = aligned_left != 0
+@export(name="N$PFLD")
+fn print_field(new_width: u8, new_radix: u8, filler: u8, aligned_left: u8) -> void:
+    width = new_width
+    radix = new_radix
+    fill = filler
+    left = aligned_left != 0
 
-    @link_name("N$PBEG")
-    fn print_begin() -> void:
-        sink = buffers.allocate(16, 1)
+@export(name="N$PBEG")
+fn print_begin() -> void:
+    sink = buffers.allocate(16, 1)
 
-    @link_name("N$PEND")
-    fn print_end() -> *near mut u8:
-        let built = sink
-        sink = 0
-        return built
+@export(name="N$PEND")
+fn print_end() -> *near mut u8:
+    let built = sink
+    sink = 0
+    return built

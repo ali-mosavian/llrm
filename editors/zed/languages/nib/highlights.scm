@@ -93,7 +93,6 @@
   "import"
   "as"
   "extern"
-  "export"
   "asm"
   "unsafe"
   "with"
