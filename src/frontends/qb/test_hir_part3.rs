@@ -1986,3 +1986,24 @@ fn test_a_masked_use_moves_with_a_counter_to_zero() {
     let body = backward_loop(&text[start..end]);
     assert!(!body.contains("cmp ") && body.contains("and "), "{body}");
 }
+
+#[test]
+fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
+    // rcflip's third RAMP loop stepped `inc ax` before `add bx, 2`, which
+    // overwrote its flags, so the header kept `or ax, ax` every trip.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/rcflip.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("RAMP proc").expect("RAMP proc");
+    let end = text.find("RAMP endp").expect("RAMP endp");
+    let procedure = &text[start..end];
+    let body = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| {
+            let at = procedure.find(&format!("{label}:\n")).filter(|at| *at < start)?;
+            Some(procedure[at..end].to_owned())
+        })
+        .find(|body| body.contains("imul"))
+        .expect("the multiplying loop");
+    assert!(!body.contains("or ax, ax") && !body.contains("cmp "), "{body}");
+}
