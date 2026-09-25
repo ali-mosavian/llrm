@@ -238,3 +238,9 @@ element of array `a` equals `x`. `NOT IN` is the negation. Each is `-1` or `0`.
 all when `a < b` is false. Any run of `=`, `<>`, `<`, `<=`, `>`, `>=` chains
 this way. A parenthesized comparison is a value again, so `(a < b) < c` keeps
 QB's meaning.
+
+### RETURN value
+
+In a FUNCTION, `RETURN value` sets the result and leaves, as
+`name = (value): EXIT FUNCTION` does. A bare `RETURN` still ends a GOSUB, and
+`RETURN label` is not available in a FUNCTION.

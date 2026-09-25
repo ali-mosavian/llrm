@@ -26,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(for_each(augmented(lex(source, dialect).map_err(ParseError::from)?)));
+    let (tokens, private_at) = without_private(for_each(augmented(returned(lex(source, dialect).map_err(ParseError::from)?, dialect))));
     let mut state = ParseState::new(tokens);
     state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
@@ -231,6 +231,60 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
         out.extend(tokens[at + 2..end].iter().cloned());
         out.push(at_token(TokenKind::Reserved(named("tkRParen"))));
         at = end;
+    }
+    out
+}
+
+/// QuickrBASIC's `RETURN value` in a FUNCTION, rewritten into QB's own way
+/// to return: `name = (value): EXIT FUNCTION`. A bare RETURN still ends a
+/// GOSUB, and QB's `RETURN label` has no place left in a FUNCTION.
+fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+    if !dialect.return_values() {
+        return tokens;
+    }
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let mut function: Option<Token> = None;
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let previous = at.checked_sub(1).and_then(|before| tokens.get(before));
+        if is(Some(token), "tkFUNCTION") {
+            match tokens.get(at + 1) {
+                _ if is(previous, "tkEND") => function = None,
+                Some(name @ Token { kind: TokenKind::Identifier(_), .. })
+                    if !is(previous, "tkDECLARE") && !is(previous, "tkEXIT") =>
+                {
+                    function = Some(name.clone())
+                }
+                _ => {}
+            }
+        }
+        let value_end = || token_statement_end(&tokens, at + 1);
+        match &function {
+            Some(name) if is(Some(token), "tkRETURN") && value_end() > at + 1 => {
+                let end = value_end();
+                let reserved = |name: &str| Token {
+                    kind: TokenKind::Reserved(named(name)),
+                    span: token.span,
+                };
+                out.push(Token { span: token.span, ..name.clone() });
+                out.push(reserved("tkEQ"));
+                out.push(reserved("tkLParen"));
+                out.extend(tokens[at + 1..end].iter().cloned());
+                out.push(reserved("tkRParen"));
+                out.push(reserved("tkColon"));
+                out.push(reserved("tkEXIT"));
+                out.push(reserved("tkFUNCTION"));
+                at = end;
+            }
+            _ => {
+                out.push(token.clone());
+                at += 1;
+            }
+        }
     }
     out
 }

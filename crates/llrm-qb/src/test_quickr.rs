@@ -778,3 +778,29 @@ fn microsoft_profiles_keep_qb_expressions() {
     qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS has no conditional expression");
 }
+
+#[test]
+fn return_gives_a_function_its_value() {
+    let source = "PRINT fib&(10); greet$(\"ann\"); find%(49); find%(50); sign%(-4); pick%(0)\n\
+        FUNCTION fib&(n AS INTEGER)\nIF n < 2 THEN RETURN n\nRETURN fib&(n - 1) + fib&(n - 2)\nEND FUNCTION\n\
+        FUNCTION greet$(who AS STRING)\nRETURN \"hi \" + who\nEND FUNCTION\n\
+        FUNCTION find%(x AS INTEGER)\nFOR EACH i AS INTEGER IN RANGE(10)\nIF i * i = x THEN RETURN i\nNEXT\nRETURN -1\nEND FUNCTION\n\
+        FUNCTION sign%(n AS INTEGER)\nRETURN 1 IF n > 0 ELSE -1 IF n < 0 ELSE 0\nEND FUNCTION\n\
+        FUNCTION pick%(n AS INTEGER)\nIF n THEN RETURN 1 ELSE RETURN 2\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 55 hi ann 7 -1 -1  2 \n");
+}
+
+#[test]
+fn a_bare_return_still_ends_a_gosub() {
+    let source = "GOSUB inner\nPRINT g%\nEND\ninner:\nPRINT \"in\";\nRETURN\n\
+        FUNCTION g%\nRETURN 5\nEND FUNCTION\n";
+    assert_eq!(printed(source), "in 5 \n");
+}
+
+#[test]
+fn microsoft_profiles_return_only_from_gosub() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"FUNCTION f%\nRETURN 1 + 2\nEND FUNCTION\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS returns no value");
+}

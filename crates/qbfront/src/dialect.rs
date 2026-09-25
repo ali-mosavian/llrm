@@ -68,6 +68,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `RETURN value` in a FUNCTION.
+    pub fn return_values(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr
