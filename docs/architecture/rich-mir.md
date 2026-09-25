@@ -1104,8 +1104,15 @@ shares: the raise-time operation whose relocations, node and site it
 re-emits. `mir::transformed` identifies a pass's output and diffs it against
 its input into `TransformChange` records (rewritten, cloned, deleted,
 inserted); `transform::recorded` returns them per stage with the body, the
-unroll, peel and unswitch drivers included. Next, the ledger consumes them
-in place of tombstones.
+unroll, peel and unswitch drivers included.
+
+No pass sees a tombstone. At each pass boundary `mir::transformed` strips
+them and records where their bytes land: before the next operation still in
+the block, chained as that operation is deleted or moves, or where a vanished
+block's control or last operation went (`mir::Ledger`). `transform::applied`
+puts them back before the backend runs. Tombstones are still made, and the
+backend still carries byte markers as LIR instructions, which its allocator
+counts as code. Next, LIR anchors replace those markers.
 
 ### 3. Add modules, declarations, globals, and intrinsics
 

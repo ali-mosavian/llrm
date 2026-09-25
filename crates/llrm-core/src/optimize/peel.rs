@@ -124,8 +124,8 @@ pub fn optimized(
     }
     let mut peeled = BTreeSet::<i64>::new();
     while let Some((candidate, latch, _)) = _candidate(&body, r#where, &peeled)? {
-        let (candidate, changes) = crate::model::mir::transformed(&body, candidate);
-        stages.push(crate::model::mir::Stage { name: "peel-accepted".to_owned(), changes });
+        let (candidate, stage) = crate::model::mir::transformed(&body, candidate);
+        stages.push(crate::model::mir::Stage { name: "peel-accepted".to_owned(), ..stage });
         if let Some(watch) = watch.as_deref_mut() {
             watch("peel-accepted", &candidate);
         }

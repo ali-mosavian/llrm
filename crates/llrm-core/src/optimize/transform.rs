@@ -3906,10 +3906,12 @@ pub fn applied(
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
 ) -> Result<Rc<MirBody>, String> {
-    recorded(body, dgroup, calls, options).map(|done| done.body)
+    let done = recorded(body, dgroup, calls, options)?;
+    mir::Ledger::from_stages(&done.stages).materialized(&done.body).map(Rc::new)
 }
 
-/// `applied`, with what each stage did to each operation.
+/// `applied`, with what each stage did to each operation, and with no
+/// tombstones: the stages record where their bytes land.
 pub fn recorded(
     body: &Rc<MirBody>,
     dgroup: &BTreeSet<i64>,
@@ -3950,16 +3952,16 @@ impl _Transaction<'_, '_> {
     }
 
     /// Keeps a stage's record; a stage that changed nothing has none.
-    fn record(&self, name: String, changes: Vec<mir::TransformChange>) {
-        if !changes.is_empty() {
-            self.records.borrow_mut().push(mir::Stage { name, changes });
+    fn record(&self, name: String, stage: mir::Stage) {
+        if !stage.is_empty() {
+            self.records.borrow_mut().push(mir::Stage { name, ..stage });
         }
     }
 
     /// `after`, one step's result from `before`, identified and recorded.
     fn step(&self, name: String, before: &MirBody, after: Rc<MirBody>) -> Rc<MirBody> {
-        let (after, changes) = mir::transformed(before, after);
-        self.record(name, changes);
+        let (after, stage) = mir::transformed(before, after);
+        self.record(name, stage);
         after
     }
 
@@ -4011,13 +4013,13 @@ impl _Transaction<'_, '_> {
                         let name = one.name().to_owned();
                         let input = Rc::clone(&state);
                         let output = crate::support::debug::timed(&name, || one.transform(state))?;
-                        let (output, changes) = mir::transformed(&input, output);
+                        let (output, stage) = mir::transformed(&input, output);
                         if Rc::ptr_eq(&input, &output) || *input == *output {
                             state = Rc::clone(&input);
                             *settled = Some(input);
                         } else {
                             state = output;
-                            self.record(format!("{prefix}r{:02}-{}", iteration + 1, one.name()), changes);
+                            self.record(format!("{prefix}r{:02}-{}", iteration + 1, one.name()), stage);
                             *settled = None;
                             changed.push(name);
                         }
@@ -4167,7 +4169,9 @@ fn _transacted(
     mut unrollers: Vec<Box<dyn crate::model::passes::MIRTransform>>,
     mut peelers: Vec<Box<dyn crate::model::passes::MIRTransform>>,
 ) -> Result<Rc<MirBody>, String> {
-    let mut body = transaction.scalarized(Rc::clone(body), "r01")?;
+    // The raise leaves tombstones too; no pass sees one.
+    let body = transaction.step("entry".to_owned(), body, Rc::clone(body));
+    let mut body = transaction.scalarized(body, "r01")?;
     if only && has_boundary {
         return Ok(transaction.settled(&body));
     }
