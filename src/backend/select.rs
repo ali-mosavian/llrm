@@ -235,9 +235,11 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
     match addr.space {
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
-            // allocation put it.
+            // allocation put it. The relocation fills the displacement, which
+            // a 32-bit base carries in four bytes.
             let base = if what.base.is_some() { what.through } else { addr.base };
-            Some((memory_operand(base, Register::None, 1, 0, 2, addr.segment), true))
+            let wide = if width_of(base) == Some(4) { 4 } else { 2 };
+            Some((memory_operand(base, Register::None, 1, 0, wide, addr.segment), true))
         }
         Space::Frame if addr.base == Register::None => {
             let index = what.index_through;
@@ -292,7 +294,13 @@ pub fn _scaled_operand(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
         let word = what.scale == 1
             && _WORD_BASES.contains(&what.through)
             && _WORD_INDEXES.contains(&what.index_through);
-        return word.then(|| (memory_operand(what.through, what.index_through, 1, 0, 2, addr.segment), true));
+        if word {
+            return Some((memory_operand(what.through, what.index_through, 1, 0, 2, addr.segment), true));
+        }
+        // The 67h form: any 32-bit base, a scaled index, a relocated disp32.
+        let wide = width_of(what.index_through) == Some(4)
+            && (what.through == Register::None || width_of(what.through) == Some(4));
+        return wide.then(|| (memory_operand(what.through, what.index_through, what.scale, 0, 4, addr.segment), true));
     }
     if !matches!(addr.space, Space::Far | Space::Literal) {
         return None;
