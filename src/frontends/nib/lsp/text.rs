@@ -93,6 +93,12 @@ pub fn path_at(text: &str, number: usize, column: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes[start..end]).into_owned())
 }
 
+/// The byte offset in `text` of `line` and `column`, both from 1.
+pub fn offset(text: &str, line: usize, column: usize) -> usize {
+    let start: usize = text.split_inclusive('\n').take(line.saturating_sub(1)).map(str::len).sum();
+    start + column - 1
+}
+
 /// The text before `position` on its line.
 pub fn before(text: &str, position: Position) -> &str {
     let (number, column) = at(text, position);

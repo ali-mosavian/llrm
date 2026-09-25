@@ -192,3 +192,23 @@ fn completion_offers_keywords_own_names_and_a_modules_public_ones() {
     }
     assert_eq!(labels(2), ["Point", "origin"]);
 }
+
+/// Only `alias.` was completed: `p.` and `ps[1].le` offered nothing.
+#[test]
+fn completion_after_a_value_offers_its_types_fields_and_methods() {
+    let program = Program::new();
+    let typing = |member: &str| {
+        let text = MAIN.replace("    print(total)\n", &format!("    print(total)\n    let ps: geo.Point[2] = [p, p]\n    {member}\n"));
+        json!({"textDocument": {"uri": program.uri("main")}, "contentChanges": [{"text": text}]})
+    };
+    let sent = session(&[
+        program.opened("main", MAIN),
+        notification("textDocument/didChange", typing("p.")),
+        request(1, "textDocument/completion", program.at(13, 6)),
+        notification("textDocument/didChange", typing("ps[1].le")),
+        request(2, "textDocument/completion", program.at(13, 12)),
+    ]);
+    let labels = |id| result(&sent, id).as_array().expect("items").iter().map(|one| one["label"].as_str().expect("a label").to_owned()).collect::<Vec<_>>();
+    assert_eq!(labels(1), ["x", "y", "length2"]);
+    assert_eq!(labels(2), ["x", "y", "length2"]);
+}
