@@ -81,6 +81,7 @@ pub fn run_limited(
         })
         .collect();
     let value = match machine.invoke(entry, arguments) {
+        Err(_) if machine.ended => None,
         Err(_) if machine.panicked.is_some() => {
             return Ok(Executed {
                 output: machine.output,
@@ -327,6 +328,10 @@ struct Machine<'p> {
     panicked: Option<String>,
     /// Open files by DOS handle, less the five DOS opens for every program.
     files: Vec<Option<std::fs::File>>,
+    /// The QB console's cursor column, for PRINT's comma and TAB.
+    column: usize,
+    /// A QB END stopped the program.
+    ended: bool,
 }
 
 impl<'p> Machine<'p> {
@@ -349,7 +354,22 @@ impl<'p> Machine<'p> {
                     })),
                 )
             })
-            .collect();
+            .collect::<HashMap<i64, Memory>>();
+        // A near or far relocation stores its target's address in the cell.
+        for object in &module.data {
+            for relocation in object.relocations.iter().filter(|one| !one.code) {
+                let width = match relocation.address {
+                    model::AddressKind::Near => 2,
+                    model::AddressKind::Far => 4,
+                    _ => continue,
+                };
+                let Some(target) = data.get(&relocation.target).cloned() else {
+                    continue;
+                };
+                let address = Address { memory: target, offset: relocation.addend, length: None, capacity: None };
+                data[&object.id].borrow_mut().pointers.insert((relocation.at, width), address);
+            }
+        }
         Ok(Self {
             program,
             types: module.types.iter().map(|one| (one.id, one)).collect(),
@@ -367,6 +387,8 @@ impl<'p> Machine<'p> {
             sink: None,
             field: None,
             files: Vec::new(),
+            column: 0,
+            ended: false,
         })
     }
 
@@ -864,6 +886,22 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(equal == (op == Op::Eq))]
             }
+            Op::StringEq | Op::StringNe | Op::StringLt | Op::StringLe | Op::StringGt | Op::StringGe => {
+                let order = Self::qb_string_order(&args[0], &args[1])?;
+                let op = match op {
+                    Op::StringEq => Op::Eq,
+                    Op::StringNe => Op::Ne,
+                    Op::StringLt => Op::Lt,
+                    Op::StringLe => Op::Le,
+                    Op::StringGt => Op::Gt,
+                    _ => Op::Ge,
+                };
+                vec![truth(match op {
+                    Op::Eq => order.is_eq(),
+                    Op::Ne => order.is_ne(),
+                    _ => ordered(op, order),
+                })]
+            }
             Op::Lt | Op::Le | Op::Gt | Op::Ge => {
                 let order = compare(&args)?;
                 vec![truth(order.is_some_and(|one| ordered(op, one)))]
@@ -916,6 +954,9 @@ impl<'p> Machine<'p> {
             return self.invoke(name, arguments);
         }
         if let Some(result) = self.runtime(name, &arguments)? {
+            return Ok(result);
+        }
+        if let Some(result) = self.qb_runtime(name, &arguments)? {
             return Ok(result);
         }
         if name == rt::PRINT_FIELD {
@@ -1084,6 +1125,9 @@ fn store(where_: &Location<'_>, value: Scalar) -> Outcome<()> {
 
 #[path = "execute_runtime.rs"]
 mod runtime;
+
+#[path = "execute_qb.rs"]
+mod qb;
 
 #[cfg(test)]
 #[path = "execute_tests.rs"]

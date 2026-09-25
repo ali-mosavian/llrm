@@ -256,3 +256,14 @@ fn microsoft_profiles_have_no_sized_conversions() {
     qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
         .expect("CUINT is an ordinary name in VBDOS");
 }
+
+#[test]
+fn print_and_str_show_sized_integers_by_value() {
+    // Printed as their Microsoft bit patterns these would be -25536, -56 and -294967296.
+    let source = "DIM u AS UNSIGNED INTEGER, b AS UNSIGNED BYTE, l AS UNSIGNED LONG, s AS BYTE\n\
+        u = 40000: b = 200: l = 2000000000: l = l + l: s = -5\n\
+        PRINT u; b; l; s\n\
+        PRINT STR$(u); STR$(l)\n";
+    let printed = super::test_runtime_model::printed_on(source, "quickr", "vbdos");
+    assert_eq!(printed, " 40000  200  4000000000 -5 \n 40000 4000000000\n");
+}
