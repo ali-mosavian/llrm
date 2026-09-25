@@ -1,27 +1,26 @@
-# llrm crates
+# llrm packages
 
-A crate is a compiled module that other modules import without recompiling
-it: object code for the linker and an interface for the compiler, in one OMF
-object. Importing one costs reading its interface and linking; only the
-importing program's own functions, and the generic instances it makes, go
-through the optimizer.
+A package is a library of compiled modules that programs import without
+recompiling: an OMF `.LIB` whose objects each carry a module's code for the
+linker and its interface for the compiler. Importing costs reading interfaces
+and linking; only the importing program's own functions, and the generic
+instances it makes, go through the optimizer. Versions, a registry and
+dependency resolution come later, on top of this format.
 
-## What a crate holds
+## What a module holds
 
 - **Object code**, one segment per function, so the linker takes only what a
   program reaches.
 - **The interface**: the public declarations and the types they reach. An
-  importer checks against it and never parses the crate's source.
+  importer checks against it and never parses the module's source.
 - **Summaries** of each public function: what it does to its arguments and to
   memory, whether it returns. The optimizer reads a callee's summary where it
-  would read its body, so a call into a crate is no less known than a local
-  one. The analysis that proves each fact writes it once, when the crate is
+  would read its body, so a call into a package is no less known than a local
+  one. The analysis that proves each fact writes it once, when the module is
   built.
 - **Templates**: generic functions, generators and protocol defaults, as their
   checked source. They are instantiated with the importer's types, so they are
   compiled in the importer.
-
-A library is an OMF `.LIB` of crate objects.
 
 ## Envelope
 
@@ -59,7 +58,7 @@ The blob starts with a 64-byte header:
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | 4 | magic `"CRAT"` |
+| 0 | 4 | magic `"INTF"` |
 | 4 | 2 | format version |
 | 6 | 2 | section count |
 | 8 | 16 | compiler fingerprint |
@@ -190,7 +189,7 @@ nothing.
 
 ## Trade-off
 
-A non-generic function in a crate is not inlined into its callers. The
+A non-generic function in a package is not inlined into its callers. The
 summaries keep what the optimizer learns from a callee besides its body:
 memory effects, purity, whether it returns. Optimized MIR of small functions
 may be added later as a section of its own, for inlining; readers that do not
