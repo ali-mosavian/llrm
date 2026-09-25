@@ -56,3 +56,18 @@ fn vbdos_does_not_warn() {
             .expect("compiles");
     assert!(found.is_empty(), "{found:?}");
 }
+
+fn select(arms: &str) -> Vec<String> {
+    warnings(&format!(
+        "SUB s (c AS INTEGER)\nDIM a AS INTEGER\nSELECT CASE c\n{arms}END SELECT\nPRINT a\nEND SUB\n"
+    ))
+}
+
+#[test]
+fn one_unassigning_path_among_many_warns() {
+    let warned = ["line 10: warning: A is read before it is assigned"];
+    assert_eq!(select("CASE 1\na = 1\nCASE 2\nCASE ELSE\na = 3\n"), warned);
+    // Without CASE ELSE, falling through every CASE is the path with no def.
+    assert_eq!(select("CASE 1\na = 1\nCASE 2\na = 2\n\n"), warned);
+    assert_eq!(select("CASE 1\na = 1\nCASE 2\na = 2\nCASE ELSE\na = 3\n"), Vec::<String>::new());
+}
