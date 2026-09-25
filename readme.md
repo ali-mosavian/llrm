@@ -119,15 +119,8 @@ _dot endp
 
 ```sh
 cargo test --release <name>
-uv run python tools/port_diff.py FIXTURE
 ```
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
 [docs/testing.md](docs/testing.md).
-
-## Python reference
-
-`qbopt/` is the Python compiler the Rust crate was ported from. It is legacy
-and kept only as the reference `tools/port_diff.py` diffs stage dumps against;
-[the port map](docs/history/port-map.md) tracks every module.

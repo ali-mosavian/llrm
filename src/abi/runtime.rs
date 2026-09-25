@@ -1976,7 +1976,7 @@ fn _read(name: &str) -> Contract {
 // literal. `tools/runtime_writes.py` regenerates the measured columns from
 // a linked image, so re-measuring is a diff against this file rather than a
 // rewrite of one.
-pub const TABLE: &str = include_str!("../../qbopt/abi/runtime.toml");
+pub const TABLE: &str = include_str!("runtime.toml");
 
 /// One entry per runtime name the corpus calls, read from the table.
 ///

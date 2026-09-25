@@ -1,6 +1,6 @@
 //! Builds wccq, the Open Watcom front end llrm-c records C through, into
 //! OUT_DIR. The first build also clones and bootstraps Open Watcom (see
-//! owshim/build.sh). owshim/bin/wccq links to it for the Python reference.
+//! owshim/build.sh).
 //! Also builds jwasm and jwlink (tools/jwbuild.sh). All of it only with the
 //! `toolchain` feature, whose scripts need a Unix host.
 
@@ -29,11 +29,6 @@ fn toolchain() {
     assert!(status.success(), "owshim/build.sh failed: {status}");
     let wccq = out.join("wccq");
     println!("cargo:rustc-env=LLRM_WCCQ={}", wccq.display());
-
-    let link = PathBuf::from("owshim/bin/wccq");
-    std::fs::create_dir_all("owshim/bin").unwrap();
-    let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(&wccq, &link).unwrap();
 
     // jwasm and jwlink beside llrm's own binaries, in target/<profile>.
     println!("cargo:rerun-if-changed=tools/jwbuild.sh");

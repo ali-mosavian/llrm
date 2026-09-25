@@ -819,7 +819,7 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
     // Borland's medium model: far code, near data, cdecl, byte-packed structs,
     // 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
     // inline assembly: qcport's own uses 387 instructions.
-    let borland = format!("-fi={}", root.join("qbopt/cfront/borland.h").display());
+    let borland = format!("-fi={}", root.join("src/frontends/c/borland.h").display());
     let flags = ["-mm", "-3", "-fpi87", "-fp3", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;

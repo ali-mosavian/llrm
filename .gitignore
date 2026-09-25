@@ -1,10 +1,5 @@
-__pycache__/
-*.pyc
-.venv/
 build/
 /target/
-/tools/buildprs/target/
 /frontends/qb/target/
 /frontends/*/target/
-owshim/bin/
 .DS_Store

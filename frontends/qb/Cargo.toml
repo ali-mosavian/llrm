@@ -2,7 +2,7 @@
 name = "qbfront"
 version = "0.1.0"
 edition = "2021"
-description = "QB/QBasic/PDS/VBDOS source frontend for qbopt"
+description = "QB/QBasic/PDS/VBDOS source frontend for llrm"
 default-run = "qbfront"
 
 [lib]
