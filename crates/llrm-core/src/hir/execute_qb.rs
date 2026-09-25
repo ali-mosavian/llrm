@@ -83,6 +83,68 @@ fn assign(address: &Address, bytes: &[u8]) -> Outcome<()> {
     Ok(())
 }
 
+/// B$DDIM and B$RDIM: `(lower, upper)` per dimension, the last record's
+/// first, then the element width, the rank and allocation flags, and the
+/// descriptor, which gets fresh zeroed storage in ARRAY.INC's layout: the
+/// data at +0, the rank at +8, the offset adjusted for the lower bounds at
+/// +0Ah, the width at +0Ch and a (count, lower) record per dimension at +0Eh.
+fn dimension(name: &str, arguments: &[Scalar]) -> Outcome<()> {
+    let [pairs @ .., width, flags, Scalar::Address(descriptor)] = arguments else {
+        return fail(format!("{name} has no descriptor"));
+    };
+    let (width, rank) = (width.whole()? as i64, (flags.whole()? & 0xff) as usize);
+    if pairs.len() != 2 * rank {
+        return fail(format!("{name} has {} bounds for rank {rank}", pairs.len()));
+    }
+    let mut records = Vec::new();
+    for pair in pairs.chunks(2).rev() {
+        records.push((pair[0].whole()? as i64, pair[1].whole()? as i64));
+    }
+    let at = descriptor.offset;
+    let mut cells = descriptor.memory.borrow_mut();
+    if name == "B$DDIM" && cells.pointers.contains_key(&(at, 4)) {
+        return fail("Array already dimensioned");
+    }
+    let mut elements = 1;
+    let mut lower_linear = None;
+    for (lower, upper) in &records {
+        if upper < lower {
+            return fail("Subscript out of range");
+        }
+        elements *= upper - lower + 1;
+        lower_linear = Some(lower_linear.map_or(*lower, |previous: i64| previous * (upper - lower + 1) + lower));
+    }
+    let end = usize::try_from(at + 14 + 4 * rank as i64).unwrap_or(usize::MAX);
+    if end > cells.bytes.len() {
+        return fail("array descriptor outside its object");
+    }
+    let data = memory(elements * width);
+    let bias = lower_linear.unwrap_or(0) * width;
+    cells.pointers.insert((at, 4), Address { memory: data.clone(), offset: 0, length: None, capacity: None });
+    cells.pointers.insert((at + 10, 2), Address { memory: data, offset: -bias, length: None, capacity: None });
+    let base = at as usize;
+    cells.bytes[base + 8] = rank as u8;
+    cells.bytes[base + 12..base + 14].copy_from_slice(&(width as u16).to_le_bytes());
+    for (record, (lower, upper)) in records.iter().enumerate() {
+        let field = base + 14 + 4 * record;
+        cells.bytes[field..field + 2].copy_from_slice(&((upper - lower + 1) as u16).to_le_bytes());
+        cells.bytes[field + 2..field + 4].copy_from_slice(&(*lower as u16).to_le_bytes());
+    }
+    Ok(())
+}
+
+/// B$ERAS: the descriptor no longer holds storage.
+fn erase(argument: &Scalar) -> Outcome<()> {
+    let Scalar::Address(descriptor) = argument else {
+        return fail("B$ERAS argument is not a descriptor address");
+    };
+    let at = descriptor.offset;
+    let mut cells = descriptor.memory.borrow_mut();
+    cells.pointers.remove(&(at, 4));
+    cells.pointers.remove(&(at + 10, 2));
+    Ok(())
+}
+
 /// A new temporary string, as the runtime's string functions return one.
 fn temporary(bytes: &[u8]) -> Outcome<Scalar> {
     let descriptor = Address { memory: memory(4), offset: 0, length: None, capacity: None };
@@ -176,6 +238,14 @@ impl Machine<'_> {
                 None
             }
             "B$STDL" => None,
+            "B$DDIM" | "B$RDIM" => {
+                dimension(name, arguments)?;
+                None
+            }
+            "B$ERAS" | "B$ERS1" => {
+                erase(&arguments[0])?;
+                None
+            }
             "B$CEND" => {
                 self.ended = true;
                 return fail("END");

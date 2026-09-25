@@ -129,3 +129,13 @@ fn len_of_a_concatenation_is_its_length() {
     let source = "a$ = \"ab\"\nPRINT LEN(a$ + \"cde\")\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), " 5 \n");
 }
+
+#[test]
+fn dynamic_arrays_run_in_the_model() {
+    // The model had no B$DDIM, B$RDIM or B$ERAS, nor the selector:offset
+    // arithmetic their elements use: any dynamic array stopped the run.
+    let source = "DIM a() AS INTEGER, b() AS LONG\nREDIM a(1 TO 3) AS INTEGER\na(3) = 7\n\
+        PRINT a(3); LBOUND(a); UBOUND(a)\nERASE a\nREDIM a(5) AS INTEGER\nPRINT a(3)\n\
+        REDIM b(1 TO 2, 3 TO 4) AS LONG\nb(2, 4) = 5: b(1, 3) = 9\nPRINT b(2, 4) + b(1, 3); UBOUND(b, 2)\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 7  1  3 \n 0 \n 14  4 \n");
+}
