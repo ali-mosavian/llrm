@@ -93,8 +93,8 @@ impl crate::model::passes::MIRTransform for Strength {
         "strength"
     }
 
-    fn after_settling(&self) -> bool {
-        true
+    fn settles_after(&self) -> u8 {
+        1
     }
 
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
@@ -119,8 +119,7 @@ impl crate::model::passes::MIRTransform for Strength {
         let body = exitsink::sunk(&transform::dead(&ivshare::shared(&body))?).map_err(|error| error.to_string())?;
         let body = loopexit::evaluated(&body)?;
         let body = indvars::rewound(&body, self.r#where.registers, Some(&self.r#where.costs));
-        let body = indvars::simplified(&body).map_err(|error| error.to_string())?;
-        indvars::zeroed(&body).map_err(|error| error.to_string())
+        indvars::simplified(&body).map_err(|error| error.to_string())
     }
 }
 
@@ -931,13 +930,33 @@ fn _control_credits(
                 .iter()
                 .any(|arg| matches!(arg, Arg::Held(held) if results.contains(&held.value)))
         });
-        for (order, root) in roots.enumerate() {
-            let descendants = if _bare(root) {
-                _stride_cover(body, loop_, root, &candidates)
-            } else {
-                _formula_descendants(body, root, &candidates)
-            };
-            if induction::control_replacement(body, loop_, proof, &descendants).is_none() {
+        let covers = roots
+            .map(|root| {
+                let descendants = if _bare(root) {
+                    _stride_cover(body, loop_, root, &candidates)
+                } else {
+                    _formula_descendants(body, root, &candidates)
+                };
+                (root, descendants)
+            })
+            .collect::<Vec<_>>();
+        // Roots that together cover `i` free it one per round: each reduced
+        // one leaves the rest a smaller cover, until the last covers alone.
+        // Worth it only when one of them can take control at a constant
+        // bias; a symbolic one costs a register in every address it bases.
+        let constant = |root: &Derived| {
+            proof.count.is_some()
+                && proof.first.is_some()
+                && matches!(root.by, Arg::Const(_))
+                && root.offsets.iter().all(|(arg, _)| matches!(arg, Arg::Const(_)))
+                && root.pointer.is_none()
+        };
+        let together = covers.iter().flat_map(|(_, descendants)| descendants.iter().copied()).collect();
+        let whole = covers.len() > 1
+            && covers.iter().any(|(root, _)| constant(root))
+            && induction::control_replacement(body, loop_, proof, &together).is_some();
+        for (order, (root, descendants)) in covers.iter().enumerate() {
+            if !whole && induction::control_replacement(body, loop_, proof, descendants).is_none() {
                 continue;
             }
             let rank = (
@@ -947,7 +966,7 @@ fn _control_credits(
             );
             let previous = selected.get(&proof.counter.value);
             if previous.is_none_or(|previous| rank > previous.0) {
-                selected.insert(proof.counter.value, (rank, root.clone()));
+                selected.insert(proof.counter.value, (rank, (*root).clone()));
             }
         }
     }

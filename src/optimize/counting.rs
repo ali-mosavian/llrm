@@ -98,13 +98,15 @@ pub(crate) fn skip_guard(body: &MirBody, proof: &CountedLoop, at: i64, flags: Va
     (compare, branch)
 }
 
-/// Exit phis of a replaced counter, reading its exit value after a trip and its start after none.
+/// Exit phis of a replaced counter, reading its exit value after a trip and,
+/// where a guard may skip the loop, its start after none.
 ///
 /// Keyed by the phi's occurrence in `body`, Python's `id(phi)`.
 pub(crate) fn leaving(
     body: &MirBody,
     replacement: &ControlReplacement<'_>,
     seeds: &mut Seeds,
+    guarded: bool,
 ) -> BTreeMap<PhiOccurrence, Phi> {
     let proof = replacement.counted;
     if replacement.exits.is_empty() {
@@ -121,7 +123,9 @@ pub(crate) fn leaving(
         .map(|&at| {
             let phi = phi_at(at);
             let mut incoming = phi.incoming.keys().map(|&key| (key, value.value)).collect::<OrderedMap<_, _>>();
-            incoming.insert(preheader, start);
+            if guarded {
+                incoming.insert(preheader, start);
+            }
             (at, Phi { incoming, ..phi.clone() })
         })
         .collect()

@@ -262,6 +262,15 @@ fn backward_loop(procedure: &str) -> String {
 }
 
 #[test]
+fn test_a_counter_whose_start_seeds_pointers_still_counts_to_zero() {
+    // Its start, `LBOUND`, also seeded the three pointers, so the counter was
+    // refused and a pointer took control at a symbolic bias: `[bx+di]` with
+    // `di` and another pointer reloaded from [bp] every trip.
+    let loop_ = backward_loop(&sum_three(false));
+    assert!(!loop_.contains("[bp") && !regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&loop_), "{loop_}");
+}
+
+#[test]
 fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
     // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and `jmp` back.
     let loop_ = backward_loop(&sum_three(false));
@@ -2029,4 +2038,70 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     let body = backward_loop(&listing(&program));
     let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();
     assert!(!body.contains("jmp") && !copies.is_match(&body), "{body}");
+}
+
+#[test]
+fn test_loops_count_to_zero_once_their_other_counters_are_settled() {
+    // qbdemo's PLASMA: counting to zero inside strength reduction rotated the
+    // first loop before its pointer was made, leaving `test bx, bx`; run
+    // last, it kept the second loop's `x` because `x * 2` and `x * 8` each
+    // covered only part of it, so `lea si, [eax+eax]` addressed both stores.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "PAIR.BAS", b"DEFINT A-Z
+DECLARE SUB plasma (totalframes%)
+plasma 2
+SUB plasma (totalframes)
+DIM unf(320), unfunf(320)
+DIM sine(512)
+DIM fuh(128, 128)
+DEF SEG = &HA000
+FOR x = 0 TO 512
+sine(x) = SIN(x * 3.14 / 256) * 32 + 32
+NEXT
+FOR f = 1 TO totalframes
+ FOR x = 0 TO 320
+  unf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)
+ NEXT
+ FOR x = 0 TO 320
+  unf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)
+  unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)
+ NEXT
+NEXT
+PRINT unf(5)
+END SUB
+");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"\bPLASMA\S* proc").unwrap().find(&text).expect("PLASMA proc").start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("PLASMA endp")];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .collect::<Vec<_>>();
+    let innermost = loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other)));
+    let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
+    let [first, second] = masked.as_slice() else { panic!("{procedure}") };
+    assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
+    assert!(!second.contains("lea ") && !second.contains("[e"), "{second}");
+}
+
+#[test]
+fn test_a_pointer_from_a_symbolic_start_leaves_control_to_the_counter() {
+    // deedlines' MOV3DPOS: the array pointer took control from the counter, so
+    // each address became `[bx+si]`, and with both taken one more by-reference
+    // pointer was reloaded from [bp] every trip.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "MOVE.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB m (xp!, yp!, zp!)\r\n'$DYNAMIC\r\nDIM SHARED x(4096) AS SINGLE, y(4096) AS SINGLE, z(4096) AS SINGLE, n\r\n\
+n = 64: a! = 1: b! = 2: c! = 3\r\nm a!, b!, c!\r\n\
+SUB m (xp!, yp!, zp!)\r\nFOR i = 0 TO n - 1\r\nx(i) = x(i) + xp\r\ny(i) = y(i) + yp\r\nz(i) = z(i) + zp\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^M proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let end = start + text[start..].find(" endp").expect("M endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&body), "{body}");
 }

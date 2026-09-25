@@ -3874,6 +3874,7 @@ pub(crate) fn pipeline(
         Box::new(unroll::Unroll::new(r#where.clone())),
         Box::new(peel::Peel::new(r#where.clone())),
         Box::new(fill::Fill),
+        Box::new(crate::optimize::indvars::CountToZero),
     ];
     every.into_iter().filter(|one| wanted.get(one.name()).copied().unwrap_or(true)).collect()
 }
@@ -3979,7 +3980,9 @@ impl _Transaction<'_, '_> {
         // last change skips every pass that already saw it.
         let mut settled: Vec<Option<Rc<MirBody>>> = vec![None; self.passes.borrow().len()];
         let mut unroll_settled: Option<Rc<MirBody>> = None;
-        let mut holding = !self.only && self.passes.borrow().iter().any(|one| one.after_settling());
+        // Passes wait by stage; each settled round admits the next.
+        let last = if self.only { 0 } else { self.passes.borrow().iter().map(|one| one.settles_after()).max().unwrap_or(0) };
+        let mut stage = 0;
         for iteration in 0..limit {
             let before = Rc::clone(&state);
             let started = std::time::Instant::now();
@@ -3987,7 +3990,7 @@ impl _Transaction<'_, '_> {
             {
                 let mut passes = self.passes.borrow_mut();
                 for (one, settled) in passes.iter_mut().zip(&mut settled) {
-                    if holding && one.after_settling() {
+                    if one.settles_after() > stage {
                         continue;
                     }
                     if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
@@ -4030,8 +4033,8 @@ impl _Transaction<'_, '_> {
                 started.elapsed().as_secs_f64() * 1e3,
                 if changed.is_empty() { "nothing".to_owned() } else { changed.join(" ") }
             );
-            if holding && state == before {
-                holding = false;
+            if stage < last && state == before {
+                stage += 1;
                 continue;
             }
             if self.only || state == before {
@@ -4083,6 +4086,7 @@ fn _applied(
         ("unroll", options.unroll),
         ("peel", options.peel),
         ("fill", options.fill),
+        ("zeroed", options.strength),
     ]);
     let r#where = crate::model::passes::Where {
         dgroup: dgroup.clone(),

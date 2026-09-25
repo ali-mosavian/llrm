@@ -100,7 +100,7 @@ pub(crate) fn _counted_down(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Substitut
         let Some(induction::AffineOperand::Held(count)) = count else {
             continue;
         };
-        let exits = counting::leaving(body, &replacement, &mut seeds);
+        let exits = counting::leaving(body, &replacement, &mut seeds, true);
 
         let step_flags = Value {
             id: seeds.serial,

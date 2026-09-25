@@ -629,14 +629,37 @@ fn _before_leaving(ops: &mut Vec<Op>, inserted: Vec<Op>) {
     ops.splice(cut..cut, inserted);
 }
 
+/// Counting to zero, once every other pass, strength reduction included, has
+/// settled: a loop's control is chosen last, once what it computes is known.
+pub(crate) struct CountToZero;
+
+impl crate::model::passes::MIRTransform for CountToZero {
+    fn class_name(&self) -> &'static str {
+        "CountToZero"
+    }
+
+    fn name(&self) -> &str {
+        "zeroed"
+    }
+
+    fn settles_after(&self) -> u8 {
+        2
+    }
+
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
+        zeroed(&body).map_err(|error| error.to_string())
+    }
+}
+
 /// A counted loop's control moved onto a recurrence counted up to zero.
 ///
 /// For `n` trips and a recurrence from `r0` by `s`, every read of the
 /// recurrence takes its final value `r0 + n*s` (see `Use`), and it starts at
 /// `-n*s` instead, reaching zero on exactly the last trip. When a recurrence
 /// other than the counter takes control, the counter's step dies with its
-/// compare. A loop that may run no trip is guarded and rotated, ending on the
-/// step's flags; one proven to run tests the recurrence at its header.
+/// compare. The loop is rotated to end on the step's flags, behind a guard
+/// where it may run no trip; one rotation cannot take, proven to run, tests
+/// the recurrence at its header.
 /// `induction.counted` supplies `n` and `AffineMap.period` the modular
 /// condition that zero is not reached early.
 pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
@@ -685,9 +708,8 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
         let Some(preheader) = proof.preheader.filter(|_| !proof.posttested) else {
             continue;
         };
-        if proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne {
-            continue; // counts to zero already
-        }
+        // Counting to zero at its header already, it may still be rotated.
+        let tested = proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne;
         let header_index = blocks[&loop_.header];
         let header = &body.blocks[header_index];
         let inside = loop_.body.clone();
@@ -695,7 +717,29 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
         let branch_at = (proof.branch.block_index(), proof.branch.operation_index());
         let compare = operation(compare_at);
         let width = proof.width();
-        for candidate in induction::basics(body, &loop_).values() {
+        // What a candidate adds to the loop: another recurrence taking control
+        // lets the counter's step die, and a symbolic bias moves each address
+        // it bases by an in-loop add. A constant one is a displacement.
+        let added = |candidate: &Affine| -> i64 {
+            let itself = candidate == &proof.counter;
+            let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
+                return i64::MAX;
+            };
+            let Some(stepping_at) = phi.incoming.get(&proof.latch).and_then(|update| made.get(update).copied()) else {
+                return i64::MAX;
+            };
+            let own = if itself { BTreeSet::from([stepping_at, compare_at]) } else { BTreeSet::from([stepping_at]) };
+            let Some((uses, _)) = _uses(phi.result, &readers, &placed, &home, &inside, &own, body) else {
+                return i64::MAX;
+            };
+            let symbolic = proof.count.is_none() || induction::_signed(&candidate.start.as_arg(), &facts, width).is_none();
+            let moved = if symbolic { uses.iter().filter(|one| matches!(one, Use::Address { .. })).count() } else { 0 };
+            i64::try_from(moved).expect("few uses") - i64::from(!itself)
+        };
+        let basics = induction::basics(body, &loop_);
+        let mut ordered = basics.values().collect::<Vec<_>>();
+        ordered.sort_by_key(|candidate| (added(candidate), **candidate != proof.counter));
+        for candidate in ordered {
             let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
                 continue;
             };
@@ -717,7 +761,6 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                 || !stepping.stores.is_empty()
                 || stepping.barrier()
                 || !stepping.merges.is_empty()
-                || read.contains(&initial)
                 || read.contains(&update)
                 || stepping.defines.iter().any(|value| value.flags && (read.contains(value) || in_phis.contains(value)))
             {
@@ -727,7 +770,7 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
             // control, and every other read must then be a `Use`.
             let itself = candidate == &proof.counter;
             let own = if itself { BTreeSet::from([stepping_at, compare_at]) } else { BTreeSet::from([stepping_at]) };
-            let Some(uses) = _uses(phi.result, &readers, &placed, &home, &inside, &own, body) else {
+            let Some((uses, through)) = _uses(phi.result, &readers, &placed, &home, &inside, &own, body) else {
                 continue;
             };
             if uses.is_empty() && !itself {
@@ -760,7 +803,7 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
             let begun = seeds.computed(Kind::Sub, vec![Arg::Const(Const::new(0, width)), distance.as_arg()]);
             let begun = seeds.held(begun);
             let covered = if itself {
-                let rebased = uses.iter().map(Use::at).collect::<BTreeSet<_>>();
+                let rebased = uses.iter().map(Use::at).chain(through.iter().copied()).collect::<BTreeSet<_>>();
                 crate::analysis::occurrence::operations(body)
                     .map(|(at, ..)| at)
                     .filter(|at| rebased.contains(&(at.block_index(), at.operation_index())))
@@ -769,15 +812,147 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                 BTreeSet::new()
             };
 
-            // Proven to run, the header tests the recurrence; zero first on the
-            // last trip needs fewer trips than the period. A loop that may not
-            // run is guarded and rotated instead.
             // The recurrence now runs elsewhere; a promise was about its old range.
             let unpromised = mir::Op { nowrap: false, ..stepping.clone() };
+            // A loop proven to run enters its body unguarded.
             let runs = proof.count.as_ref().is_some_and(|count| count >= &BigInt::from(1_u8))
                 || induction::nonempty(body, &loop_);
+            if let Some(symbolic) =
+                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
+            {
+                // Guarded and rotated: the step's flags end the loop.
+                let control = &symbolic.replacement;
+                let exits = counting::leaving(body, control, &mut seeds, !runs);
+                let step_flags = Value { id: seeds.serial, at: stepping.at, flags: true, variable: seeds.variable, version: 1 };
+                let guard_flags =
+                    Value { id: seeds.serial + 1, at: ending.at, flags: true, variable: seeds.variable + 1, version: 1 };
+                let mut decrement = unpromised;
+                decrement.name.clear();
+                decrement.defines =
+                    stepping.defines.iter().copied().filter(|value| !value.flags).chain([step_flags]).collect();
+                decrement.source_backed = false;
+                decrement.raised = None;
+                decrement.symbol = Some(false);
+                let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
+                let proof_phi = proof.phi_in(body);
+                let preheader_input = *proof_phi.incoming.get(&preheader).expect("a preheader input");
+                let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| {
+                        let definition = made.get(&value).copied()?;
+                        (!read.contains(&value)
+                            && !seeds.ops.iter().chain([&guard_compare]).any(|op| op.uses.contains(&value))
+                            && !body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
+                                other.incoming.values().any(|incoming| *incoming == value)
+                                    && !std::ptr::eq(other, phi)
+                                    && !std::ptr::eq(other, proof_phi)
+                            }))
+                        .then_some(definition)
+                    })
+                    .collect::<Vec<_>>();
+                let preheader_index = blocks[&preheader];
+                let mut entry_ops = body.blocks[preheader_index]
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .map(|(index, op)| if private.contains(&(preheader_index, index)) { mir::cleared(op) } else { op.clone() })
+                    .collect::<Vec<_>>();
+                match entry_ops.last().map(|op| op.kind) {
+                    Some(Kind::Jump) => {
+                        let last = entry_ops.len() - 1;
+                        entry_ops[last] = if runs {
+                            mir::Op { target: Some(proof.latch), ..entry_ops[last].clone() }
+                        } else {
+                            mir::cleared(&entry_ops[last])
+                        };
+                    }
+                    Some(Kind::Branch) => continue,
+                    _ if runs => continue,
+                    _ => {}
+                }
+                _before_leaving(&mut entry_ops, seeds.ops);
+                if !runs {
+                    entry_ops.extend([guard_compare, guard_branch]);
+                }
+
+                let control_stepping = (control.stepping.block_index(), control.stepping.operation_index());
+                let mut rewritten = Vec::new();
+                for (block_index, block) in body.blocks.iter().enumerate() {
+                    let mut ops = Vec::new();
+                    for (operation_index, op) in block.ops.iter().enumerate() {
+                        let at = (block_index, operation_index);
+                        if at == stepping_at || at == control_stepping {
+                            continue;
+                        }
+                        let op = if at == compare_at || private.contains(&at) {
+                            mir::cleared(op)
+                        } else if at == branch_at {
+                            let mut op = op.clone();
+                            op.name.clear();
+                            op.uses = vec![step_flags];
+                            op.source_backed = false;
+                            op.test = Some(Kind::Ne);
+                            op.target = Some(proof.latch);
+                            op.raised = None;
+                            op.symbol = Some(false);
+                            op
+                        } else {
+                            rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
+                        };
+                        ops.extend(inserted.get(&at).cloned());
+                        ops.push(op);
+                    }
+                    if block.at == proof.latch {
+                        let cut = ops.len() - usize::from(ops.last().is_some_and(|op| op.kind == Kind::Jump));
+                        ops.insert(cut, decrement.clone());
+                    }
+                    let exit_phi = |phi_index: usize, other: &Phi| {
+                        exits
+                            .iter()
+                            .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
+                            .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
+                    };
+                    let phis = if block.at == loop_.header {
+                        block
+                            .phis
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
+                            .map(|(phi_index, other)| {
+                                if std::ptr::eq(other, phi) {
+                                    Phi {
+                                        result: other.result,
+                                        incoming: OrderedMap::from_iter([(preheader, begun.value), (proof.latch, update)]),
+                                    }
+                                } else {
+                                    exit_phi(phi_index, other)
+                                }
+                            })
+                            .collect()
+                    } else {
+                        block.phis.iter().enumerate().map(|(phi_index, other)| exit_phi(phi_index, other)).collect()
+                    };
+                    rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
+                }
+                let changed = body.with_blocks(rewritten);
+                let entered = if runs { vec![proof.latch] } else { vec![proof.latch, proof.exit] };
+                let rotated = rotate::at_body(
+                    &changed,
+                    &loop_,
+                    preheader,
+                    changed.block(loop_.header).expect("the header remains"),
+                    changed.block(proof.latch).expect("the latch remains"),
+                    &entry_ops,
+                    Some(&entered),
+                    induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
+                )?;
+                return zeroed(&Rc::new(rotated));
+            }
+            // A loop rotation cannot take tests the recurrence at its header;
+            // zero first on the last trip needs fewer trips than the period.
             'header: {
-                if !runs || proof.maximum.as_ref().is_none_or(|maximum| maximum >= &period) || compare_at.0 != header_index {
+                if tested || !runs || proof.maximum.as_ref().is_none_or(|maximum| maximum >= &period) || compare_at.0 != header_index {
                     break 'header;
                 }
                 let branch = operation(branch_at);
@@ -892,131 +1067,6 @@ pub(crate) fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionErro
                 }
                 return zeroed(&Rc::new(MirBody { blocks: out, ..changed }));
             }
-            if let Some(symbolic) =
-                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
-            {
-                // Guarded and rotated: the step's flags end the loop.
-                let control = &symbolic.replacement;
-                let exits = counting::leaving(body, control, &mut seeds);
-                let step_flags = Value { id: seeds.serial, at: stepping.at, flags: true, variable: seeds.variable, version: 1 };
-                let guard_flags =
-                    Value { id: seeds.serial + 1, at: ending.at, flags: true, variable: seeds.variable + 1, version: 1 };
-                let mut decrement = unpromised;
-                decrement.name.clear();
-                decrement.defines =
-                    stepping.defines.iter().copied().filter(|value| !value.flags).chain([step_flags]).collect();
-                decrement.source_backed = false;
-                decrement.raised = None;
-                decrement.symbol = Some(false);
-                let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
-                let proof_phi = proof.phi_in(body);
-                let preheader_input = *proof_phi.incoming.get(&preheader).expect("a preheader input");
-                let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|value| {
-                        let definition = made.get(&value).copied()?;
-                        (!read.contains(&value)
-                            && !seeds.ops.iter().chain([&guard_compare]).any(|op| op.uses.contains(&value))
-                            && !body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
-                                other.incoming.values().any(|incoming| *incoming == value)
-                                    && !std::ptr::eq(other, phi)
-                                    && !std::ptr::eq(other, proof_phi)
-                            }))
-                        .then_some(definition)
-                    })
-                    .collect::<Vec<_>>();
-                let preheader_index = blocks[&preheader];
-                let mut entry_ops = body.blocks[preheader_index]
-                    .ops
-                    .iter()
-                    .enumerate()
-                    .map(|(index, op)| if private.contains(&(preheader_index, index)) { mir::cleared(op) } else { op.clone() })
-                    .collect::<Vec<_>>();
-                match entry_ops.last().map(|op| op.kind) {
-                    Some(Kind::Jump) => {
-                        let last = entry_ops.len() - 1;
-                        entry_ops[last] = mir::cleared(&entry_ops[last]);
-                    }
-                    Some(Kind::Branch) => continue,
-                    _ => {}
-                }
-                _before_leaving(&mut entry_ops, seeds.ops);
-                entry_ops.extend([guard_compare, guard_branch]);
-
-                let control_stepping = (control.stepping.block_index(), control.stepping.operation_index());
-                let mut rewritten = Vec::new();
-                for (block_index, block) in body.blocks.iter().enumerate() {
-                    let mut ops = Vec::new();
-                    for (operation_index, op) in block.ops.iter().enumerate() {
-                        let at = (block_index, operation_index);
-                        if at == stepping_at || at == control_stepping {
-                            continue;
-                        }
-                        let op = if at == compare_at || private.contains(&at) {
-                            mir::cleared(op)
-                        } else if at == branch_at {
-                            let mut op = op.clone();
-                            op.name.clear();
-                            op.uses = vec![step_flags];
-                            op.source_backed = false;
-                            op.test = Some(Kind::Ne);
-                            op.target = Some(proof.latch);
-                            op.raised = None;
-                            op.symbol = Some(false);
-                            op
-                        } else {
-                            rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
-                        };
-                        ops.extend(inserted.get(&at).cloned());
-                        ops.push(op);
-                    }
-                    if block.at == proof.latch {
-                        let cut = ops.len() - usize::from(ops.last().is_some_and(|op| op.kind == Kind::Jump));
-                        ops.insert(cut, decrement.clone());
-                    }
-                    let exit_phi = |phi_index: usize, other: &Phi| {
-                        exits
-                            .iter()
-                            .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
-                            .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
-                    };
-                    let phis = if block.at == loop_.header {
-                        block
-                            .phis
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
-                            .map(|(phi_index, other)| {
-                                if std::ptr::eq(other, phi) {
-                                    Phi {
-                                        result: other.result,
-                                        incoming: OrderedMap::from_iter([(preheader, begun.value), (proof.latch, update)]),
-                                    }
-                                } else {
-                                    exit_phi(phi_index, other)
-                                }
-                            })
-                            .collect()
-                    } else {
-                        block.phis.iter().enumerate().map(|(phi_index, other)| exit_phi(phi_index, other)).collect()
-                    };
-                    rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
-                }
-                let changed = body.with_blocks(rewritten);
-                let rotated = rotate::at_body(
-                    &changed,
-                    &loop_,
-                    preheader,
-                    changed.block(loop_.header).expect("the header remains"),
-                    changed.block(proof.latch).expect("the latch remains"),
-                    &entry_ops,
-                    Some(&[proof.latch, proof.exit]),
-                    induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
-                )?;
-                return zeroed(&Rc::new(rotated));
-            }
-
             continue;
         }
     }
@@ -1131,8 +1181,9 @@ impl Use {
 }
 
 /// Every read of `counter` inside the loop as a `Use`, also through a shift
-/// or constant multiple of it read only by such uses. None where it is read
-/// any other way, or a flag one of them sets is read.
+/// or constant multiple of it read only by such uses, and the reads looked
+/// through. None where it is read any other way, or a flag one of them sets
+/// is read.
 fn _uses(
     counter: Value,
     readers: &BTreeMap<Value, Vec<(usize, usize)>>,
@@ -1141,7 +1192,7 @@ fn _uses(
     inside: &BTreeSet<i64>,
     own: &BTreeSet<(usize, usize)>,
     body: &MirBody,
-) -> Option<Vec<Use>> {
+) -> Option<(Vec<Use>, Vec<(usize, usize)>)> {
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
     let flagless = |op: &Op| !op.defines.iter().any(|value| value.flags && readers.contains_key(value));
     let plain = |op: &Op, kind: Kind| {
@@ -1275,7 +1326,7 @@ fn _uses(
         Some(Use::Operand { at, position, multiplier: BigInt::from(-1_i8) })
     };
 
-    let mut out = Vec::new();
+    let (mut out, mut through) = (Vec::new(), Vec::new());
     for at in readers.get(&counter).into_iter().flatten().copied() {
         if own.contains(&at) || !inside.contains(&placed[&at]) {
             continue;
@@ -1298,6 +1349,7 @@ fn _uses(
                     .collect::<Vec<_>>();
                 if !forms.is_empty() && forms.iter().all(Option::is_some) {
                     out.extend(forms.into_iter().flatten());
+                    through.push(at);
                     continue;
                 }
             }
@@ -1357,8 +1409,9 @@ fn _uses(
             return None;
         }
         out.extend(forms.into_iter().flatten());
+        through.push(at);
     }
-    Some(out)
+    Some((out, through))
 }
 
 /// Move the fixed part of every address using `base` by displacement.
