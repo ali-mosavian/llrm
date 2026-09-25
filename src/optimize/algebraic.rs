@@ -11,7 +11,7 @@ use num_bigint::BigInt;
 use num_traits::{One, Zero};
 
 use crate::analysis::consts;
-use crate::analysis::{loops, ssa};
+use crate::analysis::{induction, loops, ssa};
 use crate::model::ir::Operation;
 use crate::model::mir::{
     self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Value,
@@ -69,6 +69,10 @@ pub(crate) fn simplified(
     wide: &BTreeSet<Value>,
 ) -> Result<MirBody, String> {
     let body = Rc::new(wholestores::joined(&wholephis::joined(body)));
+    let recurrences = loops::loops(&body.blocks, Some(body.entry))
+        .iter()
+        .flat_map(|loop_| induction::advances(&body, loop_).into_keys().map(|value| value.id))
+        .collect::<BTreeSet<u32>>();
     let body = _halved(&_divisions(&body));
     let body = _reassociated_recurrences(&body);
     let body = _forwarded_zero_tests(&body)?;
@@ -118,8 +122,22 @@ pub(crate) fn simplified(
         *uses.entry(*value).or_default() += 1;
     }
     let seen = wanted | &mentioned;
+    let mut readers = BTreeMap::<Value, &Op>::new();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        let mut read = _operands_read(op);
+        read.extend(op.uses.iter().filter(|value| !op.merges.contains_key(value)).copied());
+        readers.extend(read.into_iter().map(|value| (value, op)));
+    }
 
     let simplify = |op: &Op| {
+        // A pair rewrite changes what its partner's value means, so the rules
+        // below, which read the original definitions, must not see it.
+        if let Some(swapped) = _mask_scaled(op, &definitions, &readers, &recurrences, &seen, &uses) {
+            return swapped;
+        }
+        if let Some(distributed) = _offset_scaled(op, &definitions, &readers, &seen, &uses) {
+            return distributed;
+        }
         let op = _extracted(op, &definitions);
         let op = _recombined(&op, &definitions);
         let op = _redundant_extension(&op, &definitions);
@@ -642,6 +660,135 @@ pub(crate) fn _scale(op: &Op, wanted: &BTreeSet<Value>, tied: bool) -> Option<(H
         return Some((*source, BigInt::one() << shift));
     }
     (factor.width == source.width).then(|| (*source, factor.n.clone()))
+}
+
+/// `(x AND m) * 2^k` as `(x, m, 2^k)`, where the mask is read only by the scale
+/// and `x` advances with a loop, whose step then takes the scale for nothing.
+/// Elsewhere the scale is as free in an address as it would be in the mask.
+fn _masking(
+    mask: &Op,
+    scale: &Op,
+    recurrences: &BTreeSet<u32>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Option<(Held, BigInt, BigInt)> {
+    if mask.kind != Kind::And {
+        return None;
+    }
+    let (source, bits) = _bitwise(mask, wanted, false)?;
+    if !recurrences.contains(&source.value.id) {
+        return None;
+    }
+    let (middle, factor) = _scale(scale, wanted, false)?;
+    let power = factor > BigInt::zero() && (&factor & (&factor - 1_u8)).is_zero();
+    (power && mask.results == [Arg::Held(middle)] && times(uses, &middle.value) == 1).then_some((source, bits, factor))
+}
+
+/// `(x AND m) * 2^k` is `(x * 2^k) AND (m * 2^k)` at every width.
+///
+/// The scale moves to the side induction can step. The mask's op becomes the
+/// scale of `x` and the scale's op the mask of that; both ask `_masking` of
+/// the original ops, so both change or neither.
+fn _mask_scaled(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    readers: &BTreeMap<Value, &Op>,
+    recurrences: &BTreeSet<u32>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Option<Op> {
+    let mask_result = op.results.first().and_then(held_of);
+    if let Some(scale) = mask_result.and_then(|result| readers.get(&result.value)) {
+        if let Some((source, _, _)) = _masking(op, scale, recurrences, wanted, uses) {
+            let result = mask_result.expect("a mask's result");
+            return Some(Op {
+                args: vec![Arg::Held(source), scale.args[1].clone()],
+                results: vec![Arg::Held(result)],
+                defines: vec![result.value],
+                uses: vec![source.value],
+                source_backed: false,
+                raised: None,
+                ..(*scale).clone()
+            });
+        }
+    }
+    let (middle, _) = _scale(op, wanted, false)?;
+    let mask = definitions.get(&middle.value)?;
+    let (_, bits, factor) = _masking(mask, op, recurrences, wanted, uses)?;
+    let result = op.results.first().and_then(held_of).expect("a scale's result");
+    Some(Op {
+        args: vec![Arg::Held(middle), Arg::Const(Const::new(consts::masked(&(bits * factor), middle.width), middle.width))],
+        results: vec![Arg::Held(result)],
+        defines: vec![result.value],
+        uses: vec![middle.value],
+        source_backed: false,
+        raised: None,
+        ..(*mask).clone()
+    })
+}
+
+/// `(x + a) * k + b` as `(x, a * k)`, each op read only by the next.
+///
+/// Refused while `x` is itself such a scale about to change: its partner
+/// offset would then no longer say what `x` is.
+fn _distributing(
+    scale: &Op,
+    outer: &Op,
+    definitions: &Definitions<'_>,
+    readers: &BTreeMap<Value, &Op>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Option<(Held, BigInt)> {
+    let (inner, factor) = _scale(scale, wanted, false)?;
+    let (middle, _) = _offset(outer, wanted)?;
+    let offset = definitions.get(&inner.value)?;
+    let (source, amount) = _offset(offset, wanted)?;
+    if scale.results != [Arg::Held(middle)]
+        || offset.results != [Arg::Held(inner)]
+        || times(uses, &middle.value) != 1
+        || times(uses, &inner.value) != 1
+    {
+        return None;
+    }
+    let moving = definitions.get(&source.value).is_some_and(|below| {
+        below.results.first().and_then(held_of).and_then(|result| readers.get(&result.value)).is_some_and(|after| {
+            _distributing(below, after, definitions, readers, wanted, uses).is_some()
+        })
+    });
+    (!moving).then(|| (source, amount * factor))
+}
+
+/// `(x + a) * k + b` is `x * k + (a * k + b)` at every width: the scale reads
+/// `x` and the outer offset takes `a * k`, so the inner offset dies.
+fn _offset_scaled(
+    op: &Op,
+    definitions: &Definitions<'_>,
+    readers: &BTreeMap<Value, &Op>,
+    wanted: &BTreeSet<Value>,
+    uses: &Counter,
+) -> Option<Op> {
+    let result = op.results.first().and_then(held_of);
+    if let Some(outer) = result.and_then(|result| readers.get(&result.value)) {
+        if let Some((source, _)) = _distributing(op, outer, definitions, readers, wanted, uses) {
+            let mut args = op.args.clone();
+            args[0] = Arg::Held(source);
+            return Some(Op { args, uses: vec![source.value], source_backed: false, raised: None, ..op.clone() });
+        }
+    }
+    let (middle, amount) = _offset(op, wanted)?;
+    let scale = definitions.get(&middle.value)?;
+    let (_, moved) = _distributing(scale, op, definitions, readers, wanted, uses)?;
+    Some(Op {
+        kind: Kind::Add,
+        name: "add".to_owned(),
+        op: Some(OpCode::Operation(Operation::Binary)),
+        args: vec![Arg::Held(middle), Arg::Const(Const::new(consts::masked(&(amount + moved), middle.width), middle.width))],
+        defines: vec![result.expect("an offset's result").value],
+        uses: vec![middle.value],
+        source_backed: false,
+        raised: None,
+        ..op.clone()
+    })
 }
 
 /// Combine single-use integer scales at an unchanged modular width.

@@ -352,7 +352,7 @@ fn main_listing(name: &str, source: &[u8]) -> String {
 fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
     let body = main_listing(
         "STATIC.BAS",
-        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * 3) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
+        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * x) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
     );
     assert!(body.contains("S%[e") && !body.contains("shl"), "{body}");
 }
@@ -1760,9 +1760,9 @@ fn test_a_merged_array_shift_is_a_displacement() {
     let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
     let lines = stripped_lines(&listing(&program));
-    // b's first element is at byte 24 of the group, element 1 of 4 bytes.
-    assert!(lines.iter().any(|line| line.contains("+20]")), "{lines:#?}");
-    assert!(!lines.iter().any(|line| line.starts_with("add") && line.ends_with(", 20")), "{lines:#?}");
+    // b's first element is at byte 24 of the group; `+ 1` cancels its lower bound.
+    assert!(lines.iter().any(|line| line.contains("+24]")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.starts_with("add") && line.ends_with(", 24")), "{lines:#?}");
 }
 
 #[test]
@@ -1917,4 +1917,17 @@ fn test_a_cell_based_on_a_named_objects_address_is_that_object() {
     let start = text.find("SHIFT proc").expect("SHIFT proc");
     let end = text.find("SHIFT endp").expect("SHIFT endp");
     assert!(!text[start..end].contains("offset"), "{}", &text[start..end]);
+}
+
+#[test]
+fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
+    // `buf(((i * 5 + 3) AND 1023) + 1)` shifted the masked index every trip:
+    // `and si, 1023 / inc si / shl si, 2`, 9 instructions for 7.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/general/RING.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
+    let end = start + text[start..].find(" endp").expect("RINGSUM endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("shl") && body.contains(", 20\n") && body.contains(", 4092\n"), "{body}");
 }
