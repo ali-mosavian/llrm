@@ -4,14 +4,12 @@ Highlighting, outline, brackets and indentation come from the grammar in
 `editors/tree-sitter-nib`. Diagnostics, symbols, definitions, hover and
 completion come from `nib-lsp` (see `docs/lsp.md`).
 
-Build the server and put it on `PATH`:
+The extension downloads the server from the GitHub release tagged
+`nib-lsp-v<version>`, where the version is the extension's. Pushing that tag
+builds the release (`.github/workflows/nib-lsp-release.yml`); bump the version
+in `extension.toml` and `Cargo.toml` together.
 
-```text
-cargo build --release --no-default-features --bin nib-lsp
-ln -s "$PWD/target/release/nib-lsp" ~/.cargo/bin/nib-lsp
-```
-
-Or name it in Zed's settings instead:
+To run a local build instead:
 
 ```json
 "lsp": { "nib-lsp": { "binary": { "path": "/path/to/nib-lsp" } } }
