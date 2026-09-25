@@ -938,8 +938,8 @@ fn _runtime_frame(
     ))
 }
 
-/// QuickrBASIC frames a procedure itself, zero-filling its locals inline,
-/// where the runtime needs no frame of its own: no error handler or RESUME
+/// QuickrBASIC frames a procedure itself, its HIR zeroing what locals need
+/// it, where the runtime needs no frame of its own: no error handler or RESUME
 /// target walks the runtime's frame chain to it, and no local STRING asks
 /// B$ENRA for a VBDOS string handle. The runtime's stack check goes with it.
 fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
@@ -1571,9 +1571,7 @@ pub fn assembled(
         let public = !module_body && function.linkage == model::FunctionLinkage::External;
         let mut native_reserve = 0;
         if !module_body && _inline_frame(program, module, function) {
-            let initialize;
-            (final_body, initialize) = _initialize_frame(&final_body, reserve)?;
-            callees.extend(initialize);
+            // The frontend's own stores zero the locals that need it.
             native_reserve = reserve;
         } else if !module_body {
             let (framed, runtime_frame) =

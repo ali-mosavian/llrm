@@ -158,8 +158,10 @@ as zero.
 
 ### Procedure frames
 
-A procedure frames itself: `push bp`, `mov bp,sp`, `sub sp`, and an inline
-`rep stosw` that zero-fills its locals, in place of `B$ENRA` and `B$EXSA`. It
+A procedure frames itself with `push bp`, `mov bp,sp` and `sub sp`, in place
+of `B$ENRA` and `B$EXSA`. Its HIR stores zero at entry to each local some path
+reads before assigning: every aggregate, and each number the use-before-def
+analysis cannot prove written first. The frame is otherwise not cleared. It
 keeps the runtime's frame when the runtime needs one: when it has an error
 handler or RESUME target, which the runtime reaches through its frame chain,
 or a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An

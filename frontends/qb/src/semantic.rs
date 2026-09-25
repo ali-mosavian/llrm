@@ -1074,6 +1074,9 @@ impl Compiler {
         if self.dialect.explicit_declarations() {
             self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
         }
+        if id != 1 && self.dialect.zeroes_locals() {
+            self.zero_locals(&external_entries);
+        }
         let table = self
             .data
             .iter_mut()
@@ -1149,6 +1152,42 @@ impl Compiler {
             })
             .collect();
         self.warnings.extend(warnings);
+    }
+
+    /// Stores zero, at entry, to each local some path could read before
+    /// assigning: every aggregate (descriptors, records, strings), and each
+    /// numeric scalar the assignment analysis cannot prove written first.
+    fn zero_locals(&mut self, entries: &[u32]) {
+        let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
+        let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
+        let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
+        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries)
+            .into_iter()
+            .map(|(place, _)| place)
+            .collect();
+        let mut stores = Vec::new();
+        for place in locals.iter().filter(|place| !scalar(place) || unassigned.contains(&place.id)) {
+            if integral(place.type_id) {
+                stores.push((Operand::Place(place.id), place.type_id));
+                continue;
+            }
+            // By words, which also writes a float's +0.0.
+            for offset in (0..place.extent).step_by(2) {
+                let type_id = if offset + 1 < place.extent { INTEGER } else { BYTE };
+                let target = Operand::Projection { place: place.id, indices: Vec::new(), offset, type_id };
+                stores.push((target, type_id));
+            }
+        }
+        let instructions: Vec<Instruction> = stores
+            .into_iter()
+            .map(|(target, type_id)| {
+                let id = self.next_instruction;
+                self.next_instruction += 1;
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None }
+            })
+            .collect();
+        let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");
+        entry.instructions.splice(0..0, instructions);
     }
 
     fn prune_unreachable(&mut self, parameters: &[u32]) {

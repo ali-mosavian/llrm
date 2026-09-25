@@ -437,8 +437,8 @@ fn quickr_procedures_frame_and_zero_fill_themselves() {
     let source = "SUB s (x AS INTEGER)\nDIM a AS LONG, b AS DOUBLE\na = x\nb = a\nx = b\nEND SUB\n";
     let own = procedure_listing(source, "quickr", "S");
     assert!(!own.contains("B$ENRA") && !own.contains("B$EXSA"), "{own}");
-    // rep stosw over the locals, as the module body's inline frame does.
-    assert!(own.contains("0f3h,0abh"), "{own}");
+    // The HIR's own stores zero the locals; no inline rep stosw.
+    assert!(!own.contains("0f3h,0abh"), "{own}");
     // VBDOS keeps the runtime's frame.
     assert!(procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
 }
@@ -450,4 +450,15 @@ fn quickr_keeps_the_runtime_frame_where_the_runtime_needs_it() {
     for source in [strings, handler] {
         assert!(procedure_listing(source, "quickr", "S").contains("B$ENRA"), "{source}");
     }
+}
+
+#[test]
+fn locals_read_before_assignment_start_at_zero() {
+    // Frames hold garbage under quickr; entry stores must zero these locals.
+    let source = "TYPE P\nx AS INTEGER\ny AS DOUBLE\nEND TYPE\n\
+        s\ns\n\
+        SUB s\nDIM a AS LONG, d AS DOUBLE, u AS UNSIGNED BYTE, p AS P, i AS INTEGER\n\
+        FOR i = 1 TO 2\na = a + 1\nNEXT\n\
+        PRINT a; d; u; p.x; p.y\nd = 5: p.x = 7\nEND SUB\n";
+    assert_eq!(printed(source), " 2  0  0  0  0 \n 2  0  0  0  0 \n");
 }

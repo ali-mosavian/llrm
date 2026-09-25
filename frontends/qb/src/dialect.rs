@@ -32,6 +32,12 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// A procedure's locals start at zero through explicit stores, not
+    /// through the runtime's frame.
+    pub fn zeroes_locals(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr
