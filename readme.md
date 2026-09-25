@@ -26,6 +26,11 @@ PRIVATE procedures, `+=`, BREAK/CONTINUE, FOR EACH, `a IF c ELSE b`, IN, chained
 comparisons, `RETURN value`, tuples, and record and array results. See
 [the dialects](docs/frontends/qb/dialects.md).
 
+`FOR EACH x [AS type] IN …` walks a one-dimensional array (`a()`), `RANGE(stop)` or
+`RANGE(start, stop[, step])`, the characters of a string, or the array a FUNCTION
+`AS t()` returns. `x` is a copy of each element, and BREAK, CONTINUE and EXIT FOR
+work as in any loop.
+
 ```basic
 DIM q AS INTEGER, r AS INTEGER, parity AS STRING
 q, r = divmod(17, 5)

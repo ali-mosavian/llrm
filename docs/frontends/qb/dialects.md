@@ -221,6 +221,7 @@ holding a copy: assigning `x` changes neither the iterable nor the iteration.
 | `a()` or `a` | each element of one-dimensional array `a`, live |
 | `RANGE(stop)`, `RANGE(start, stop[, step])` | Python's `range`; `x` must be an integer |
 | any string expression | each character of a copy taken before the loop |
+| `f(…)`, a FUNCTION `AS t()` | each element of the array it returns |
 
 `RANGE` evaluates its arguments once, in order.
 
