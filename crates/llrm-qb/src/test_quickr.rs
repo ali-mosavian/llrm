@@ -609,6 +609,13 @@ fn augmented_assignment_works_in_a_one_line_if() {
 }
 
 #[test]
+fn augmented_assignment_takes_a_conditional_value() {
+    // The rewrite ended the value at the conditional's ELSE: a syntax error.
+    let source = "DIM t AS INTEGER\nt = 1\nt += 10 IF t > 0 ELSE 20\nIF t > 5 THEN t -= 1 IF t > 9 ELSE 2 ELSE t = 0\nPRINT t\n";
+    assert_eq!(printed(source), " 10 \n");
+}
+
+#[test]
 fn microsoft_profiles_reject_augmented_assignment() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"x = 1\nx += 1\n");

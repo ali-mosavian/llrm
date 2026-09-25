@@ -236,15 +236,24 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
 }
 
 /// Where the statement running from `at` ends: `:`, a new line, or the ELSE
-/// of a one-line IF, outside any parentheses.
+/// of a one-line IF, outside any parentheses. An ELSE answering an IF inside
+/// the statement belongs to a conditional expression.
 fn token_statement_end(tokens: &[Token], mut at: usize) -> usize {
     let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
     let mut depth = 0usize;
+    let mut conditionals = 0usize;
     while let Some(next) = tokens.get(at) {
+        if depth == 0 && is(next, "tkELSE") && conditionals > 0 {
+            conditionals -= 1;
+            at += 1;
+            continue;
+        }
         if depth == 0 && (is(next, "tkColon") || is(next, "tkNewLine") || is(next, "tkELSE")) {
             break;
         }
-        if is(next, "tkLParen") {
+        if is(next, "tkIF") {
+            conditionals += 1;
+        } else if is(next, "tkLParen") {
             depth += 1;
         } else if is(next, "tkRParen") {
             depth = depth.saturating_sub(1);
