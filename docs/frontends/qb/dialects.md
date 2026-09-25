@@ -120,8 +120,8 @@ faithful.
 
 | Spelling | Width | Range |
 |---|---|---|
-| `BYTE`, `UNSIGNED BYTE` | 1 | 0 to 255 |
-| `SIGNED BYTE` | 1 | -128 to 127 |
+| `BYTE`, `SIGNED BYTE` | 1 | -128 to 127 |
+| `UNSIGNED BYTE` | 1 | 0 to 255 |
 | `INTEGER`, `SIGNED INTEGER` | 2 | -32768 to 32767 |
 | `UNSIGNED INTEGER` | 2 | 0 to 65535 |
 | `LONG`, `SIGNED LONG` | 4 | -2147483648 to 2147483647 |
@@ -129,9 +129,10 @@ faithful.
 
 `SIGNED` and `UNSIGNED` modify an integer type wherever `AS` takes one: `DIM`,
 `REDIM`, `COMMON`, `STATIC`, `SHARED`, parameters, `FUNCTION` results and
-`TYPE` fields. `BYTE` is unsigned, as in Visual Basic. `DEFBYTE` (or `DEFUBYTE`), `DEFUINT`
-and `DEFULNG` set the default type of a letter range, as `DEFINT` does. There
-are no new suffixes.
+`TYPE` fields. Every plain type is signed and `UNSIGNED` makes it unsigned.
+`DEF{,U}{BYTE,INT,LNG}` set the default type of a letter range, and
+`C{,U}{BYTE,INT,LNG}` convert to the type they name, as `DEFINT` and `CINT` do.
+There are no new suffixes.
 
 Arithmetic follows C. An operand narrower than `INTEGER` widens to `INTEGER`.
 Otherwise the result has the wider width, and it is unsigned when either

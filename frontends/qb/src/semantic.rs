@@ -24,7 +24,8 @@ const BOOLEAN: u32 = 5;
 const STRING: u32 = 6;
 const ANY: u32 = 7;
 const BYTE: u32 = 8;
-// QuickrBASIC's sized integers; BYTE doubles as its unsigned byte.
+// QuickrBASIC's sized integers. Its signed `BYTE` is SIGNED_BYTE; the
+// PEEK/POKE cell BYTE doubles as its UNSIGNED BYTE.
 const SIGNED_BYTE: u32 = 9;
 const UNSIGNED_INTEGER: u32 = 10;
 const UNSIGNED_LONG: u32 = 11;
@@ -1348,7 +1349,9 @@ impl Compiler {
 
     fn resolve_type(&self, type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         match type_name.unwrap_or(&TypeName::Single) {
-            TypeName::Named(name) if name == "BYTE" && self.dialect.sized_integers() => Ok(BYTE),
+            TypeName::Named(name) if name == "BYTE" && self.dialect.sized_integers() => {
+                Ok(SIGNED_BYTE)
+            }
             TypeName::Integral { .. } if !self.dialect.sized_integers() => {
                 self.fail("SIGNED and UNSIGNED types need the quickr profile")
             }
@@ -5500,6 +5503,14 @@ impl Compiler {
             }
             let converted = self.convert(operand, source, target)?;
             return Ok(Some((converted, target)));
+        }
+        if let Lowering::ToIntegral { width, signed } = intrinsic.lowering {
+            let (operand, source) = self.expression(&arguments[0])?;
+            if !(integral(source) || matches!(source, SINGLE | DOUBLE)) {
+                return self.fail(format!("{name} requires a numeric argument"));
+            }
+            let target = integer_type(width.into(), signed);
+            return Ok(Some((self.convert(operand, source, target)?, target)));
         }
         if matches!(
             intrinsic.lowering,

@@ -11,6 +11,8 @@ pub enum ResultClass {
     DynamicNumeric,
     Integer,
     Long,
+    /// A QuickrBASIC sized integer, named by its lowering.
+    SizedInteger,
     Single,
     Double,
     String,
@@ -37,6 +39,7 @@ pub enum Lowering {
     Random,
     ToInteger,
     ToLong,
+    ToIntegral { width: u8, signed: bool },
     ToSingle,
     ToDouble,
     PointerOffset,
@@ -108,14 +111,16 @@ const QBASIC: u8 = 1 << 0;
 const QB45: u8 = 1 << 1;
 const PDS: u8 = 1 << 2;
 const VBDOS: u8 = 1 << 3;
-const ALL: u8 = QBASIC | QB45 | PDS | VBDOS;
+const QUICKR: u8 = 1 << 4;
+const ALL: u8 = QBASIC | QB45 | PDS | VBDOS | QUICKR;
 
 const fn dialect_bit(dialect: Dialect) -> u8 {
     match dialect {
         Dialect::QBasic11 => QBASIC,
         Dialect::QuickBasic45 => QB45,
         Dialect::Pds71 => PDS,
-        Dialect::VbDos | Dialect::Quickr => VBDOS,
+        Dialect::VbDos => VBDOS,
+        Dialect::Quickr => QUICKR,
     }
 }
 
@@ -133,10 +138,29 @@ macro_rules! intrinsic {
     };
 }
 
+/// A conversion to a QuickrBASIC sized integer.
+macro_rules! sized_conversion {
+    ($name:literal, $width:literal, $signed:literal) => {
+        Intrinsic {
+            name: $name,
+            min_arity: 1,
+            max_arity: 1,
+            result: ResultClass::SizedInteger,
+            effect: Effect::Pure,
+            lowering: Lowering::ToIntegral {
+                width: $width,
+                signed: $signed,
+            },
+            dialects: QUICKR,
+        }
+    };
+}
+
 pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("ABS", 1..=1, DynamicNumeric, Pure, Lowering::Abs),
     intrinsic!("ASC", 1..=1, Integer, Runtime, Lowering::Asc),
     intrinsic!("ATN", 1..=1, DynamicNumeric, Pure, Lowering::Atan),
+    sized_conversion!("CBYTE", 1, true),
     intrinsic!("CDBL", 1..=1, Double, Pure, Lowering::ToDouble),
     intrinsic!("CHR", 1..=1, String, Runtime, Lowering::Character),
     intrinsic!("CINT", 1..=1, Integer, Pure, Lowering::ToInteger),
@@ -144,6 +168,9 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("COMMAND", 0..=0, String, Runtime, Lowering::CommandLine),
     intrinsic!("COS", 1..=1, DynamicNumeric, Pure, Lowering::Cos),
     intrinsic!("CSNG", 1..=1, Single, Pure, Lowering::ToSingle),
+    sized_conversion!("CUBYTE", 1, false),
+    sized_conversion!("CUINT", 2, false),
+    sized_conversion!("CULNG", 4, false),
     intrinsic!("DIR", 1..=1, String, Runtime, Lowering::Directory),
     intrinsic!("ENVIRON", 1..=1, String, Runtime, Lowering::Environ),
     intrinsic!("EOF", 1..=1, Integer, Runtime, Lowering::Eof),

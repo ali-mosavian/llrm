@@ -36,15 +36,22 @@ fn long_function(lines: &str) -> i128 {
 
 
 #[test]
-fn byte_wraps_at_256_and_widens_without_sign() {
-    assert_eq!(long_function("DIM b AS BYTE\nb = 255\nb = b + 1\nf& = b"), 0);
-    assert_eq!(long_function("DIM b AS BYTE\nb = 200\nf& = b"), 200);
+fn unsigned_byte_wraps_at_256_and_widens_without_sign() {
+    assert_eq!(long_function("DIM b AS UNSIGNED BYTE\nb = 255\nb = b + 1\nf& = b"), 0);
+    assert_eq!(long_function("DIM b AS UNSIGNED BYTE\nb = 200\nf& = b"), 200);
+}
+
+#[test]
+fn byte_is_signed() {
+    assert_eq!(long_function("DIM b AS BYTE\nb = 127\nb = b + 1\nf& = b"), -128);
+    let error = compiled("DIM b AS BYTE\nb = 200\n").expect_err("200 is not a signed byte");
+    assert!(error.contains("overflow"), "{error}");
 }
 
 #[test]
 fn byte_arithmetic_promotes_to_integer() {
-    // Done in BYTE, 200 + 200 would be 144.
-    assert_eq!(long_function("DIM b AS BYTE\nb = 200\nf& = b + b"), 400);
+    // Done in BYTE, 100 + 100 would be -56.
+    assert_eq!(long_function("DIM b AS BYTE\nb = 100\nf& = b + b"), 200);
 }
 
 #[test]
@@ -141,7 +148,7 @@ fn hex_constants_fill_unsigned_types_of_their_width() {
     // &HFFFF is INTEGER -1; it used to be an overflow for UNSIGNED INTEGER.
     assert_eq!(long_function("DIM u AS UNSIGNED INTEGER\nu = &HFFFF\nf& = u"), 65535);
     assert_eq!(long_function("DIM u AS UNSIGNED LONG\nu = &HFFFFFFFF\nf& = u \\ 65536"), 65535);
-    let error = compiled("DIM b AS BYTE\nb = &HFFFF\n").expect_err("a word is not a byte");
+    let error = compiled("DIM b AS UNSIGNED BYTE\nb = &HFFFF\n").expect_err("a word is not a byte");
     assert!(error.contains("overflow"), "{error}");
 }
 
@@ -154,8 +161,8 @@ fn input_and_read_accept_sized_integers() {
 
 #[test]
 fn defbyte_types_unsuffixed_names() {
-    // As SINGLE, the default, b + 1 would be 256.
-    assert_eq!(returned("DEFBYTE B\nFUNCTION f&\nDIM b\nb = 255\nb = b + 1\nf& = b\nEND FUNCTION\n"), 0);
+    // As SINGLE, the default, b + 1 would be 128.
+    assert_eq!(returned("DEFBYTE B\nFUNCTION f&\nDIM b\nb = 127\nb = b + 1\nf& = b\nEND FUNCTION\n"), -128);
 }
 
 #[test]
@@ -212,4 +219,40 @@ fn microsoft_profiles_reject_defu_statements() {
     let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
         .expect_err("VBDOS has no DEFUINT");
     assert!(error.to_string().contains("quickr"), "{error}");
+}
+
+#[test]
+fn conversions_give_their_sized_type() {
+    // Each result is observed through a wider variable, so a conversion that
+    // kept its source type would return the unconverted value.
+    let converted = |call: &str| long_function(&format!("DIM l AS LONG\nl = 65535\nf& = {call}"));
+    assert_eq!(converted("CBYTE(l AND 255)"), -1);
+    assert_eq!(converted("CUBYTE(l AND 255)"), 255);
+    assert_eq!(converted("CUINT(l)"), 65535);
+    assert_eq!(converted("CINT(l)"), -1);
+    // As LONG, -1 \ 2 would be 0.
+    assert_eq!(converted("CULNG(l - 65536) \\ 2"), 2_147_483_647);
+}
+
+#[test]
+fn conversion_to_unsigned_selects_unsigned_division() {
+    let code = operation("INTEGER", "r = CUINT(a) \\ CUINT(b)");
+    assert!(code.contains(&"div".into()) && !code.contains(&"idiv".into()), "{code:?}");
+}
+
+#[test]
+fn conversion_constants_keep_the_overflow_rules() {
+    assert_eq!(long_function("f& = CUINT(&HFFFF)"), 65535);
+    for call in ["CBYTE(200)", "CUBYTE(256)", "CUINT(70000)"] {
+        let error = compiled(&format!("DIM b AS LONG\nb = {call}\n")).expect_err(call);
+        assert!(error.contains("overflow"), "{call}: {error}");
+    }
+}
+
+#[test]
+fn microsoft_profiles_have_no_sized_conversions() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"FUNCTION cuint% (x AS INTEGER)\ncuint% = x + 1\nEND FUNCTION\n");
+    qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .expect("CUINT is an ordinary name in VBDOS");
 }
