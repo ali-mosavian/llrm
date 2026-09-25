@@ -40,6 +40,8 @@ pub enum Lowering {
     ToInteger,
     ToLong,
     ToIntegral { width: u8, signed: bool },
+    /// An f-string field's text.
+    FormatField,
     ToSingle,
     ToDouble,
     PointerOffset,
@@ -157,6 +159,15 @@ macro_rules! sized_conversion {
 }
 
 pub static INTRINSICS: &[Intrinsic] = &[
+    Intrinsic {
+        name: crate::generated_parser::FORMAT_FIELD,
+        min_arity: 1,
+        max_arity: 2,
+        result: ResultClass::String,
+        effect: Effect::Runtime,
+        lowering: Lowering::FormatField,
+        dialects: QUICKR,
+    },
     intrinsic!("ABS", 1..=1, DynamicNumeric, Pure, Lowering::Abs),
     intrinsic!("ASC", 1..=1, Integer, Runtime, Lowering::Asc),
     intrinsic!("ATN", 1..=1, DynamicNumeric, Pure, Lowering::Atan),

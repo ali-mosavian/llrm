@@ -364,7 +364,10 @@ fn built(
     runtime: &str,
     options: &Options,
 ) -> Result<Compiler, SemanticError> {
-    let module = outline_module_gosubs(module)?;
+    let mut module = outline_module_gosubs(module)?;
+    if module.format_strings {
+        add_prelude(&mut module)?;
+    }
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
     compiler.record_default_types(module)?;
@@ -559,6 +562,22 @@ fn built(
         );
     }
     Ok(compiler)
+}
+
+/// Procedures every name of which begins this belong to the prelude.
+const PRELUDE_PREFIX: &str = "QUICKR_";
+
+/// Appends QuickrBASIC's prelude, the BASIC that f-strings call.
+fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
+    if let Some(taken) = module.procedures.iter().find(|one| one.name.starts_with(PRELUDE_PREFIX)) {
+        return Err(SemanticError {
+            message: format!("{}: names beginning {PRELUDE_PREFIX} are reserved", taken.name),
+        });
+    }
+    let prelude = crate::parse(include_str!("semantic/prelude.bas"), Dialect::Quickr)
+        .expect("the prelude parses");
+    module.procedures.extend(prelude.procedures);
+    Ok(())
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -4875,6 +4894,9 @@ impl Compiler {
                     ));
                 }
             }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::FormatField) {
+                return self.format_field(arguments);
+            }
             let runtime = intrinsic.and_then(|intrinsic| match intrinsic.lowering {
                 Lowering::RuntimeString(callee) => Some(callee),
                 Lowering::Character => Some("B$FCHR"),
@@ -5291,6 +5313,29 @@ impl Compiler {
                 op, left, right, ..
             } => self.binary(*op, left, right),
         }
+    }
+
+    /// An f-string field's text: a string as it is, a number as Python's
+    /// `str()` writes it.
+    fn format_field(&mut self, arguments: &[Expr]) -> Result<Operand, SemanticError> {
+        if arguments.len() == 2 {
+            return self.fail("f-string format specs are not supported yet");
+        }
+        let value = &arguments[0];
+        if self.string_syntax(value) {
+            return self.string_descriptor(value);
+        }
+        let span = value.span();
+        let text = Expr::Apply {
+            name: "STR$".into(),
+            arguments: vec![value.clone()],
+            span,
+        };
+        self.string_descriptor(&Expr::Apply {
+            name: format!("{PRELUDE_PREFIX}NUMBER$"),
+            arguments: vec![text],
+            span,
+        })
     }
 
     /// A numeric value for a runtime routine or intrinsic, which knows only

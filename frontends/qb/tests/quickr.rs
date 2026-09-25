@@ -1,6 +1,7 @@
 //! QuickrBASIC's use-before-definition warning.
 
 use qbfront::semantic::compile_with_warnings;
+use qbfront::generated_parser::{lex, TokenKind};
 use qbfront::{parse, Dialect};
 
 fn warnings(source: &str) -> Vec<String> {
@@ -70,4 +71,12 @@ fn one_unassigning_path_among_many_warns() {
     // Without CASE ELSE, falling through every CASE is the path with no def.
     assert_eq!(select("CASE 1\na = 1\nCASE 2\na = 2\n\n"), warned);
     assert_eq!(select("CASE 1\na = 1\nCASE 2\na = 2\nCASE ELSE\na = 3\n"), Vec::<String>::new());
+}
+
+#[test]
+fn microsoft_profiles_read_f_before_a_string_as_the_name_f() {
+    // PRINT f"x" is PRINT f; "x" in Microsoft BASIC.
+    let kinds = |dialect| lex("f\"x\"", dialect).expect("lexes").into_iter().map(|token| token.kind).collect::<Vec<_>>();
+    assert!(matches!(kinds(Dialect::VbDos).as_slice(), [TokenKind::Identifier(f), TokenKind::String(x), _] if f == "F" && x == "x"));
+    assert!(matches!(kinds(Dialect::Quickr).as_slice(), [TokenKind::FormatString(_), _]));
 }

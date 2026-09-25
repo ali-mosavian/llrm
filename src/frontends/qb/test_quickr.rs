@@ -267,3 +267,36 @@ fn print_and_str_show_sized_integers_by_value() {
     let printed = super::test_runtime_model::printed_on(source, "quickr", "vbdos");
     assert_eq!(printed, " 40000  200  4000000000 -5 \n 40000 4000000000\n");
 }
+
+fn printed(source: &str) -> String {
+    super::test_runtime_model::printed_on(source, "quickr", "vbdos")
+}
+
+#[test]
+fn f_strings_interpolate_strings_and_numbers() {
+    let source = "DIM who AS STRING, n AS INTEGER, d AS DOUBLE, u AS UNSIGNED INTEGER\n\
+        who = \"Ada\": n = -3: d = 0.25: u = 40000\n\
+        PRINT f\"{who} has {n} and {d}, {u}{{}}\"\n\
+        PRINT F\"{n + 5}\"; f\"\"; f\"plain\"\n";
+    assert_eq!(printed(source), "Ada has -3 and 0.25, 40000{}\n2plain\n");
+}
+
+#[test]
+fn f_strings_are_string_values() {
+    let source = "DIM s AS STRING, i AS INTEGER\ni = 7\ns = f\"<{i}>\" + \"!\"\nPRINT s; LEN(s)\n";
+    assert_eq!(printed(source), "<7>! 4 \n");
+}
+
+
+#[test]
+fn f_string_errors() {
+    for (source, message) in [
+        ("PRINT f\"{\"\n", "unterminated f-string field"),
+        ("PRINT f\"}\"\n", "single '}'"),
+        ("PRINT f\"{}\"\n", "empty f-string field"),
+        ("SUB quickr_x\nEND SUB\nPRINT f\"a\"\n", "reserved"),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}

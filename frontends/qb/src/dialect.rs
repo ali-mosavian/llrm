@@ -27,6 +27,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `f"…"` is a format string, not the name `f` before a string.
+    pub fn format_strings(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

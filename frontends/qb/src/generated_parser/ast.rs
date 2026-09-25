@@ -7,7 +7,7 @@ use crate::syntax::{
 };
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
-use super::lexer::{lex, Token, TokenKind};
+use super::lexer::{lex, FormatSegment, Token, TokenKind};
 use super::tables::{self, AstAction, ExternalAction, StatementShape};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,10 +176,15 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
     if state.open_procedure.is_some() {
         return error(&state, "procedure has no matching END");
     }
+    let format_strings = state
+        .tokens
+        .iter()
+        .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
     Ok(ParseOutput {
         module: Module {
             statements: state.statements,
             procedures: state.procedures,
+            format_strings,
         },
         actions: state.sink.actions,
     })
@@ -448,14 +453,54 @@ fn literal_string(state: &mut ParseState) -> ParseResult {
     let Some(token) = state.token().cloned() else {
         return ParseResult::NotFound;
     };
-    let TokenKind::String(value) = token.kind else {
-        return ParseResult::NotFound;
+    let expression = match token.kind {
+        TokenKind::String(value) => Expr::Literal(Literal::String(value), token.span),
+        TokenKind::FormatString(segments) => match format_string(&segments, token.span) {
+            Ok(expression) => expression,
+            Err(result) => return result,
+        },
+        _ => return ParseResult::NotFound,
     };
     state.at += 1;
-    state
-        .expressions
-        .push(Expr::Literal(Literal::String(value), token.span));
+    state.expressions.push(expression);
     ParseResult::GoodSyntax
+}
+
+/// The name of the conversion an f-string field makes. No source name can
+/// spell it, so no program can call or shadow it.
+pub const FORMAT_FIELD: &str = "$FSTRING";
+
+/// `f"…"` as the concatenation of its text and its converted fields, a
+/// field's spec passed to the conversion as a string.
+fn format_string(segments: &[FormatSegment], span: Span) -> Result<Expr, ParseResult> {
+    let mut parts = Vec::new();
+    for segment in segments {
+        parts.push(match segment {
+            FormatSegment::Text(text) => Expr::Literal(Literal::String(text.clone()), span),
+            FormatSegment::Field { tokens, spec, span } => {
+                let mut field = ParseState::new(tokens.clone());
+                let value = expression(&mut field, 0)?;
+                if field.at != tokens.len() {
+                    return Err(ParseResult::BadSyntax);
+                }
+                let mut arguments = vec![value];
+                arguments.extend(spec.iter().map(|spec| Expr::Literal(Literal::String(spec.clone()), *span)));
+                Expr::Apply {
+                    name: FORMAT_FIELD.into(),
+                    arguments,
+                    span: *span,
+                }
+            }
+        });
+    }
+    let mut parts = parts.into_iter();
+    let first = parts.next().unwrap_or(Expr::Literal(Literal::String(String::new()), span));
+    Ok(parts.fold(first, |left, right| Expr::Binary {
+        op: Binary::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+        span,
+    }))
 }
 
 fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: bool) -> ParseResult {
@@ -2242,6 +2287,7 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             token.span,
         )),
         TokenKind::String(value) => Ok(Expr::Literal(Literal::String(value), token.span)),
+        TokenKind::FormatString(segments) => format_string(&segments, token.span),
         TokenKind::Identifier(name) => name_or_apply(state, name, token.span),
         TokenKind::Reserved(id) if id == named("tkLParen") => {
             let value = expression(state, 0)?;

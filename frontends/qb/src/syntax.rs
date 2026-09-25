@@ -399,4 +399,6 @@ pub enum CaseItem {
 pub struct Module {
     pub statements: Vec<Statement>,
     pub procedures: Vec<Procedure>,
+    /// Some expression is an f-string, which needs the QuickrBASIC prelude.
+    pub format_strings: bool,
 }
