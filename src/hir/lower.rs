@@ -1807,7 +1807,14 @@ fn _function(
         let mut ops: Vec<mir::Op> = Vec::new();
         let mut pending_source: Vec<i64> = Vec::new();
         for instruction in &source.instructions {
-            let made = scope.operation(instruction)?;
+            let mut made = scope.operation(instruction)?;
+            if instruction.nowrap {
+                // The promise is the add's own, the last op; what materialized
+                // its operands comes before.
+                if let Some(op) = made.last_mut().filter(|op| op.kind == mir::Kind::Add) {
+                    op.nowrap = true;
+                }
+            }
             if made.is_empty() {
                 // A semantic no-op (for example an identity conversion) owns
                 // no machine address. Its statement begins at the next real

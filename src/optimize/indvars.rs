@@ -708,8 +708,11 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             let Some(offsets) = offsets else {
                 continue;
             };
-            if offsets.is_empty() || offsets.iter().any(|(_op, position, _multiplier, _address, _extra)| position.is_none())
-            {
+            // A counter read by nothing but its own compare has nothing to rebase.
+            // An address read with a constant count is `zeroed`'s: its bias
+            // is a displacement there, not a register here.
+            let addressed = offsets.iter().any(|(_op, position, ..)| position.is_none());
+            if (offsets.is_empty() && !itself) || (addressed && proof.count.is_some()) {
                 continue;
             }
             let covered = if itself {
@@ -749,7 +752,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 Arg::Const(constant) => constant.width,
                 _ => width,
             };
-            if offsets.iter().any(|(at, position, ..)| reading(*at, position.expect("checked above")) > width) {
+            if offsets.iter().any(|(at, position, ..)| position.is_some_and(|position| reading(*at, position) > width)) {
                 continue;
             }
             let compare = &body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()];
@@ -771,9 +774,26 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             );
             let final_ = builder.computed(Kind::Add, vec![Arg::Held(Held { value: initial, width }), distance.as_arg()]);
             let mut rebased = BTreeMap::<(usize, usize), Op>::new();
-            for (at, position, multiplier, _address, _extra) in &offsets {
-                let position = position.expect("offsets were checked for a position");
+            // An address based on the recurrence takes the symbolic bias as a
+            // register beside it, added where the cell is read.
+            let mut inserted = BTreeMap::<(usize, usize), Op>::new();
+            for (at, position, multiplier, address, extra) in &offsets {
                 let op = operation(*at);
+                let Some(position) = *position else {
+                    let (source, replacement) = address.expect("an address offset");
+                    let delta = builder.computed(
+                        Kind::Mul,
+                        vec![final_.as_arg(), Arg::Const(Const::new(consts::masked(multiplier, width), width))],
+                    );
+                    let moved =
+                        Value { id: builder.serial, at: op.at, flags: false, variable: builder.variable, version: 0 };
+                    builder.serial += 1;
+                    builder.variable += 1;
+                    let bias = vec![Arg::Held(Held { value: replacement, width }), delta.as_arg()];
+                    inserted.insert(*at, mir::computed(op.at, Kind::Add, moved, bias, width));
+                    rebased.insert(*at, _rebased_cells(op, source, extra, moved));
+                    continue;
+                };
                 let base = op.args[position].clone();
                 let delta = builder.computed(
                     Kind::Mul,
@@ -827,6 +847,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
             let guard_flags =
                 Value { id: builder.serial + 1, at: ending.at, flags: true, variable: builder.variable + 1, version: 1 };
             let mut decrement = stepping.clone();
+            decrement.nowrap = false;
             decrement.name.clear();
             decrement.defines =
                 stepping.defines.iter().copied().filter(|value| !value.flags).chain([step_flags]).collect();
@@ -897,6 +918,7 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                     } else {
                         rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
                     };
+                    ops.extend(inserted.get(&at).cloned());
                     ops.push(op);
                 }
                 if block.at == proof.latch {
@@ -1219,6 +1241,9 @@ pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<Mir
                         op.source_backed = false;
                         op.raised = Some((Vec::new(), Vec::new()));
                         op
+                    } else if kept && at == stepping_at {
+                        // The counter now runs elsewhere; the source's promise was about its old range.
+                        mir::Op { nowrap: false, ..op.clone() }
                     } else if kept {
                         rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
                     } else {

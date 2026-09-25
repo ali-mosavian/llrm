@@ -1284,7 +1284,19 @@ pub(crate) fn counted_unless_stopped(
         } else if shape.posttested || abs(&step) != BigInt::from(1_u8) {
             continue;
         } else {
-            maximum = _unit_maximum(body, loop_, &start, &bound, begin.as_ref(), limit.as_ref(), &step, test, inbounds);
+            let promised = made.get(&update.id).is_some_and(|op| op.nowrap);
+            maximum = _unit_maximum(
+                body,
+                loop_,
+                &start,
+                &bound,
+                begin.as_ref(),
+                limit.as_ref(),
+                &step,
+                test,
+                inbounds,
+                promised,
+            );
             if maximum.is_none() && _INCLUSIVE(test) {
                 continue;
             }
@@ -1600,6 +1612,7 @@ fn _unit_maximum(
     step: &BigInt,
     test: Kind,
     inbounds: bool,
+    promised: bool,
 ) -> Option<BigInt> {
     let width = bound.width();
     if test == Kind::Ne {
@@ -1613,24 +1626,35 @@ fn _unit_maximum(
     let begin = begin.map(signed);
     let limit = limit.map(signed);
     let end = if ascending { &high } else { &low };
-    if inclusive && limit.as_ref() == Some(end) {
+    // Stepping past the width's end wraps back inside an inclusive bound,
+    // unless the step promised it never wraps: then the program stops first.
+    let endless = inclusive && !(promised && !unsigned);
+    if endless && limit.as_ref() == Some(end) {
         return None;
     }
     let ends = (
         _range(body, start, usize::from(!ascending), &high),
         _range(body, bound, usize::from(ascending), &high),
     );
-    let origin = begin.or(ends.0);
+    let mut origin = begin.or(ends.0);
     let mut target = limit.clone().or(ends.1);
-    if target.is_some() && limit.is_none() && inclusive && target.as_ref() == Some(end) {
+    if target.is_some() && limit.is_none() && endless && target.as_ref() == Some(end) {
         target = None;
     }
-    if let (Some(origin), Some(target)) = (&origin, &target) {
-        if low <= *origin.min(target) && *origin.max(target) <= high {
-            return Some(max(BigInt::from(0_u8), (target - origin) * step + u8::from(inclusive)));
-        }
+    if !endless && inclusive {
+        // Promised: the counter runs between the width's ends whatever it is given.
+        target = target.or_else(|| Some(end.clone()));
+        origin = origin.or_else(|| Some(if ascending { low.clone() } else { high.clone() }));
     }
-    if inbounds { _inbounds_trips(body, loop_, *loop_.latches.first().expect("one latch")) } else { None }
+    let ranged = match (&origin, &target) {
+        (Some(origin), Some(target)) if low <= *origin.min(target) && *origin.max(target) <= high => {
+            Some(max(BigInt::from(0_u8), (target - origin) * step + u8::from(inclusive)))
+        }
+        _ => None,
+    };
+    // Both bound the trips; the promise's is the whole width, so keep the tighter.
+    let bounded = if inbounds { _inbounds_trips(body, loop_, *loop_.latches.first().expect("one latch")) } else { None };
+    ranged.into_iter().chain(bounded).min()
 }
 
 /// How far each counter and each value affine in one advances per iteration.

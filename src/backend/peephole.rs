@@ -144,10 +144,13 @@ impl LIRTransform for Peephole {
         let body = spillforward::forwarded(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(&body);
-        let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
-            &transferred(&commuted(&constants(&pushes(&body)))),
+        // Fusion before high extracts: SHLD reads the register it funnels
+        // into, a false dependency that keeps a dead load's register live.
+        let body = high_extracts(
+            &fused(&overwritten(&shuttles(&restored_copies(&transferred(&commuted(&constants(&pushes(&body)))))))),
             &self.cpu,
-        )?)))));
+        )?;
+        let body = far_loads(&body);
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;

@@ -147,7 +147,8 @@ plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "fie
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
     memory => "memory");
 
-/// Only an inline block names `asm`: every other instruction is written as before it existed.
+/// Only an inline block names `asm`, and only a promised op `nowrap`: every
+/// other instruction is written as before they existed.
 impl _Plain for model::Instruction {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -159,6 +160,9 @@ impl _Plain for model::Instruction {
         out.insert("pure".to_owned(), self.pure._plain());
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
+        }
+        if self.nowrap {
+            out.insert("nowrap".to_owned(), self.nowrap._plain());
         }
         Json::Dict(out)
     }
@@ -775,6 +779,7 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
+        ("nowrap", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::Instruction {
@@ -785,6 +790,7 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
+            nowrap: _default(args, "nowrap", false)?,
         })
     },
 };

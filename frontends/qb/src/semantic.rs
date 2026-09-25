@@ -104,6 +104,8 @@ struct Instruction {
     operands: Vec<Operand>,
     callee: Option<String>,
     tag: Option<Tag>,
+    /// The signed result fits its width: FOR raises Overflow, never wraps.
+    nowrap: bool,
 }
 
 struct CallAbi {
@@ -3527,15 +3529,15 @@ impl Compiler {
             let step_value = self.value(counter_type);
             self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
             let advanced = self.value(counter_type);
+            let floating = matches!(counter_type, SINGLE | DOUBLE);
             self.emit(
-                if matches!(counter_type, SINGLE | DOUBLE) {
-                    "fadd"
-                } else {
-                    "add"
-                },
+                if floating { "fadd" } else { "add" },
                 vec![advanced],
                 vec![counter_value, Operand::Value(step_value)],
             );
+            if !floating {
+                self.blocks[self.current_block].instructions.last_mut().expect("the add").nowrap = true;
+            }
             self.emit(
                 "store",
                 Vec::new(),
@@ -7253,6 +7255,7 @@ impl Compiler {
                 operands,
                 callee: None,
                 tag: None,
+                nowrap: false,
             });
     }
 
@@ -7304,6 +7307,7 @@ impl Compiler {
                 operands: vec![left, right],
                 callee: Some("B$SCMP".into()),
                 tag: None,
+                nowrap: false,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7345,6 +7349,7 @@ impl Compiler {
                 operands,
                 callee: Some(callee.into()),
                 tag: None,
+                nowrap: false,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7641,7 +7646,11 @@ impl Compiler {
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
-                    out.push_str("]}");
+                    out.push(']');
+                    if instruction.nowrap {
+                        out.push_str(",\"nowrap\":true");
+                    }
+                    out.push('}');
                 }
                 let terminator = block.terminator.as_ref().expect("compiler finishes blocks");
                 out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");

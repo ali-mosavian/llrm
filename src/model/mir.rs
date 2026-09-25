@@ -1138,6 +1138,10 @@ pub struct Op {
     pub absorbed: Vec<u32>,
     pub indirect: bool,
     pub exits: Vec<Value>,
+    /// The language promises the signed result fits its width: QBasic's FOR
+    /// raises Overflow rather than wrap its counter. A pass that changes what
+    /// the operation computes clears it.
+    pub nowrap: bool,
     /// Python's `_RaisedOp` subclass: `Some` is an occurrence still inside the
     /// raise, carrying its decoded node and byte ranges.  `_externalized`
     /// clears it, so no completed body has one.
@@ -1195,6 +1199,7 @@ impl Op {
             absorbed: Vec::new(),
             indirect: false,
             exits: Vec::new(),
+            nowrap: false,
             raising: None,
         }
     }

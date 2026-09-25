@@ -542,6 +542,7 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
                 operands: vec![Operand::Value(sum), Operand::Constant(INTEGER, Number::Integer(shift))],
                 callee: None,
                 tag,
+                nowrap: false,
             });
         }
         for block in &mut function.blocks {

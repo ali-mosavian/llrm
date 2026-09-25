@@ -468,13 +468,15 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
+    /// The signed result fits its width, as the language promises.
+    pub nowrap: bool,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false }
     }
 }
 

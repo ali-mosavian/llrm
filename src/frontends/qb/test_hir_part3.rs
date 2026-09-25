@@ -1919,6 +1919,33 @@ fn test_a_cell_based_on_a_named_objects_address_is_that_object() {
     assert!(!text[start..end].contains("offset"), "{}", &text[start..end]);
 }
 
+/// RING.BAS's RingSum loop, from its backward jump.
+fn ring_loop() -> String {
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/general/RING.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
+    let end = start + text[start..].find(" endp").expect("RINGSUM endp");
+    backward_loop(&text[start..end])
+}
+
+#[test]
+fn test_a_for_counter_to_a_symbolic_bound_counts_to_zero() {
+    // `FOR i = 0 TO n - 1` could reach 32767 and wrap for all the analysis
+    // knew, so the count was unproven and `cmp bx, cx` stayed in the loop.
+    // FOR raises Overflow instead of wrapping: the frontend's promise.
+    let body = ring_loop();
+    assert!(!body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_loaded_addend_fuses_though_the_exit_splits_a_long() {
+    // The exit's `shld edx, eax, 16` reads edx, so a load into edx inside the
+    // loop looked live and stayed `mov edx, [..] / add eax, edx`.
+    let body = ring_loop();
+    assert!(body.contains("add eax, dword ptr"), "{body}");
+}
+
 #[test]
 fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
     // `buf(((i * 5 + 3) AND 1023) + 1)` shifted the masked index every trip:
@@ -1930,4 +1957,18 @@ fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
     let end = start + text[start..].find(" endp").expect("RINGSUM endp");
     let body = backward_loop(&text[start..end]);
     assert!(!body.contains("shl") && body.contains(", 20\n") && body.contains(", 4092\n"), "{body}");
+}
+
+#[test]
+fn test_a_pointer_takes_control_of_a_loop_to_a_symbolic_bound() {
+    // With the FOR promise, `-n TO n` was bounded by the whole width, too
+    // many trips for a step-2 pointer, so the counter kept its own `dec`
+    // beside the pointer's `add`: 12 instructions for 11.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/general/PARTICLE.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("ADVANCE proc").expect("ADVANCE proc");
+    let end = text.find("ADVANCE endp").expect("ADVANCE endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("dec ") && !body.contains("cmp "), "{body}");
 }
