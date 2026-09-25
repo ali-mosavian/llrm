@@ -3,12 +3,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod tags;
+
 use crate::dialect::Dialect;
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
+use tags::{Passing, Shape, Slot, Tag};
 
 const VOID: u32 = 0;
 const INTEGER: u32 = 1;
@@ -96,6 +99,7 @@ struct Instruction {
     results: Vec<u32>,
     operands: Vec<Operand>,
     callee: Option<String>,
+    tag: Option<Tag>,
 }
 
 struct CallAbi {
@@ -321,6 +325,35 @@ pub fn compile_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
+    Ok(built(
+        module,
+        module_name,
+        dialect,
+        runtime,
+        row_major,
+        huge_arrays,
+        checked_arrays,
+        unchecked_bounds,
+        mbf,
+        alternate_math,
+    )?
+    .json())
+}
+
+/// Every procedure of `module` as HIR, before emission.
+#[allow(clippy::too_many_arguments)]
+fn built(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    row_major: bool,
+    huge_arrays: bool,
+    checked_arrays: bool,
+    unchecked_bounds: bool,
+    mbf: bool,
+    alternate_math: bool,
+) -> Result<Compiler, SemanticError> {
     let module = outline_module_gosubs(module)?;
     let module = &module;
     let mut compiler = Compiler::new(
@@ -525,7 +558,7 @@ pub fn compile_with_options(
             },
         );
     }
-    Ok(compiler.json())
+    Ok(compiler)
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -1556,19 +1589,9 @@ impl Compiler {
             vec![descriptor],
             vec![Operand::Place(descriptor_place)],
         );
-        let mut operands = Vec::new();
-        for bound in &declaration.bounds {
-            let lower = if let Some(lower) = &bound.lower {
-                let (lower, type_id) = self.expression(lower)?;
-                self.convert(lower, type_id, INTEGER)?
-            } else {
-                Operand::Constant(INTEGER, Number::Integer(self.option_base))
-            };
-            let (upper, type_id) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, type_id, INTEGER)?;
-            operands.push(lower);
-            operands.push(upper);
-        }
+        let bounds = self.bounds(declaration)?;
+        let mut operands: Vec<Operand> =
+            bounds.iter().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
         operands.extend([
             Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
             Operand::Constant(
@@ -1592,6 +1615,7 @@ impl Compiler {
         }
         order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
         self.emit_call("B$DDIM", Vec::new(), operands, order, false);
+        self.tag_last(Tag::Allocate(Shape { descriptor, bounds, element }));
         Ok(())
     }
 
@@ -2194,6 +2218,7 @@ impl Compiler {
                             Vec::new(),
                             vec![Operand::Value(descriptor)],
                         );
+                        self.tag_last(Tag::Release { descriptor });
                     }
                 }
                 Statement::Assign { target, value, .. } => {
@@ -2332,12 +2357,14 @@ impl Compiler {
                         // directly instead of hiding it behind a runtime call.
                         let place = self.def_segment_place();
                         self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+                        self.tag_last(Tag::SetSegment);
                     } else {
                         // rt/rtinit.asm's B$DSG0 is the distinct bare-DEF-SEG
                         // operation: copy DS into b$seg. HIR has no machine
                         // segment-register value, so retain the audited runtime
                         // call rather than inventing an ordinary integer load.
                         self.emit_runtime_call("B$DSG0", Vec::new(), Vec::new());
+                        self.tag_last(Tag::SetSegment);
                     }
                 }
                 Statement::Open {
@@ -3013,6 +3040,7 @@ impl Compiler {
                         let segment_place = self.def_segment_place();
                         let segment = self.value(INTEGER);
                         self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+                        self.tag_last(Tag::ReadSegment);
                         let pointer_type = self.far_pointer_type(BYTE);
                         let pointer = self.value(pointer_type);
                         self.emit(
@@ -4040,6 +4068,7 @@ impl Compiler {
             let offset = self.value(INTEGER);
             let selector = self.value(INTEGER);
             self.emit_call("B$HARY", vec![offset, selector], operands, order, false);
+            self.tag_last(Tag::ElementOffset { descriptor });
             let pointer_type = self.whole_pointer_type(element);
             let pointer = self.value(pointer_type);
             self.emit(
@@ -4118,6 +4147,7 @@ impl Compiler {
                 vec![offset],
                 vec![Operand::Value(adjusted), Operand::Value(bytes)],
             );
+            self.tag_last(Tag::ElementOffset { descriptor });
             let pointer = self.value(pointer_type);
             self.emit(
                 "concat",
@@ -4133,6 +4163,7 @@ impl Compiler {
                 vec![pointer],
                 vec![Operand::Value(data), Operand::Value(bytes)],
             );
+            self.tag_last(Tag::ElementOffset { descriptor });
             pointer
         };
         Ok(pointer)
@@ -4336,6 +4367,9 @@ impl Compiler {
                 inbounds: false,
             }],
         );
+        if let Some(field) = Slot::at(offset) {
+            self.tag_last(Tag::DescriptorField { descriptor, field });
+        }
         self.descriptor_fields.insert(key, value);
         value
     }
@@ -4929,7 +4963,7 @@ impl Compiler {
     fn byref_string_argument(
         &mut self,
         expression: &Expr,
-    ) -> Result<(Operand, bool), SemanticError> {
+    ) -> Result<(Operand, Passing), SemanticError> {
         // A genuine dynamic STRING lvalue already owns a stable descriptor,
         // so ordinary BYREF aliasing passes that descriptor directly. A
         // literal, fixed string, concatenation, or string-function result is
@@ -4958,7 +4992,8 @@ impl Compiler {
         };
         if let Some((place, type_id)) = lvalue {
             if self.string_width(type_id) == Some(0) {
-                return Ok((self.near_string_address(place), false));
+                let passing = self.passed(&place);
+                return Ok((self.near_string_address(place), passing));
             }
         }
 
@@ -4966,7 +5001,26 @@ impl Compiler {
         let temporary = self.owned_string_temporary()?;
         let destination = self.near_string_address(Operand::Place(temporary));
         self.emit_runtime_call("B$SASS", Vec::new(), vec![source, destination.clone()]);
-        Ok((destination, true))
+        Ok((destination, Passing::Temporary))
+    }
+
+    /// Each dimension's lower and upper bound, evaluated where the DIM or
+    /// REDIM runs.
+    fn bounds(&mut self, declaration: &Declaration) -> Result<Vec<(Operand, Operand)>, SemanticError> {
+        let mut bounds = Vec::new();
+        for bound in &declaration.bounds {
+            let lower = match &bound.lower {
+                Some(lower) => {
+                    let (value, type_id) = self.expression(lower)?;
+                    self.convert(value, type_id, INTEGER)?
+                }
+                None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
+            };
+            let (upper, upper_type) = self.expression(&bound.upper)?;
+            let upper = self.convert(upper, upper_type, INTEGER)?;
+            bounds.push((lower, upper));
+        }
+        Ok(bounds)
     }
 
     fn redim(&mut self, declaration: &Declaration) -> Result<(), SemanticError> {
@@ -4994,20 +5048,9 @@ impl Compiler {
                 declaration.name
             ));
         }
-        let mut operands = Vec::new();
-        for bound in &declaration.bounds {
-            let lower = match &bound.lower {
-                Some(lower) => {
-                    let (value, type_id) = self.expression(lower)?;
-                    self.convert(value, type_id, INTEGER)?
-                }
-                None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
-            };
-            let (upper, upper_type) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, upper_type, INTEGER)?;
-            operands.push(lower);
-            operands.push(upper);
-        }
+        let bounds = self.bounds(declaration)?;
+        let mut operands: Vec<Operand> =
+            bounds.iter().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
         operands.push(Operand::Constant(
             INTEGER,
             Number::Integer(self.width(element) as i64),
@@ -5016,8 +5059,10 @@ impl Compiler {
             INTEGER,
             Number::Integer((declaration.bounds.len() | (1 << 8)) as i64),
         ));
-        operands.push(Operand::Value(self.descriptor_pointer(&variable)?));
+        let descriptor = self.descriptor_pointer(&variable)?;
+        operands.push(Operand::Value(descriptor));
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
+        self.tag_last(Tag::Reallocate(Shape { descriptor, bounds, element }));
         Ok(())
     }
 
@@ -5639,6 +5684,7 @@ impl Compiler {
             let offset = self.unsigned_word(&arguments[0])?;
             let segment = self.value(INTEGER);
             self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+            self.tag_last(Tag::ReadSegment);
             let pointer_type = self.far_pointer_type(BYTE);
             let pointer = self.value(pointer_type);
             self.emit(
@@ -5953,6 +5999,7 @@ impl Compiler {
             let offset = self.unsigned_word(offset)?;
             let length = self.unsigned_word(length)?;
             self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
+            self.tag_last(Tag::ReadSegment);
             return Ok(());
         }
 
@@ -5971,6 +6018,7 @@ impl Compiler {
                 Operand::Constant(INTEGER, Number::Integer(supplied)),
             ],
         );
+        self.tag_last(Tag::ReadSegment);
         Ok(())
     }
 
@@ -5997,6 +6045,7 @@ impl Compiler {
             ));
         }
         let mut operands = Vec::new();
+        let mut passing = Vec::new();
         let mut string_cleanups = Vec::new();
         let mut byref_copybacks = Vec::new();
         for (argument, (parameter_type, by_value, segmented, array)) in
@@ -6010,6 +6059,7 @@ impl Compiler {
                 if *parameter_type != ANY && argument_type != *parameter_type {
                     return self.fail(format!("SEG argument type does not match {name}"));
                 }
+                passing.push(self.passed(&place));
                 if let Operand::Indirect {
                     base, offset: 0, ..
                 } = &place
@@ -6051,21 +6101,26 @@ impl Compiler {
                 }
                 let descriptor = self.descriptor_pointer(&variable)?;
                 operands.push(Operand::Value(descriptor));
+                passing.push(Passing::Array(descriptor));
             } else if *parameter_type == STRING && self.string_syntax(argument) {
                 // A source STRING formal receives a near descriptor address.
                 // A BYREF formal must outlive any consuming string operation
                 // inside the callee, so non-lvalues are first copied to an
                 // owned descriptor. BYVAL retains the expression descriptor.
                 operands.push(if *by_value {
+                    passing.push(Passing::Value);
                     self.string_descriptor(argument)?
                 } else {
-                    let (operand, cleanup) = self.byref_string_argument(argument)?;
+                    let (operand, passed) = self.byref_string_argument(argument)?;
+                    let cleanup = passed == Passing::Temporary;
+                    passing.push(passed);
                     if cleanup {
                         string_cleanups.push(operand.clone());
                     }
                     operand
                 });
             } else if *by_value {
+                passing.push(Passing::Value);
                 let (operand, argument_type) = self.expression(argument)?;
                 let operand = self.convert(operand, argument_type, *parameter_type)?;
                 if matches!(*parameter_type, SINGLE | DOUBLE) {
@@ -6081,8 +6136,12 @@ impl Compiler {
                 }
             } else {
                 let (place, argument_type) = match self.destination(argument) {
-                    Ok(place) => place,
+                    Ok(place) => {
+                        passing.push(self.passed(&place.0));
+                        place
+                    }
                     Err(_) => {
+                        passing.push(Passing::Temporary);
                         // BASIC materializes an addressable temporary when a
                         // BYREF actual is an expression rather than a place.
                         let (value, type_id) = self.expression(argument)?;
@@ -6151,6 +6210,7 @@ impl Compiler {
                             self.emit("address", vec![address], vec![Operand::Place(temporary)]);
                             operands.push(Operand::Value(address));
                             byref_copybacks.push((original, temporary, *parameter_type));
+                            *passing.last_mut().expect("this argument's passing") = Passing::Copied(base);
                         } else if offset == 0 {
                             operands.push(Operand::Value(base));
                         } else {
@@ -6225,6 +6285,7 @@ impl Compiler {
             signature.cdecl,
             Some(signature.symbol),
         );
+        self.tag_last(Tag::Invoke { arguments: passing });
         // Pascal evaluates actuals left-to-right but BC copies aliased far
         // fields back from the last formal to the first.
         for (destination, temporary, type_id) in byref_copybacks.into_iter().rev() {
@@ -7182,7 +7243,27 @@ impl Compiler {
                 results,
                 operands,
                 callee: None,
+                tag: None,
             });
+    }
+
+    /// Record what the instruction just emitted meant.
+    fn tag_last(&mut self, tag: Tag) {
+        let last = self.blocks[self.current_block]
+            .instructions
+            .last_mut()
+            .expect("an instruction was just emitted");
+        last.tag = Some(tag);
+    }
+
+    /// What passing `place` by reference hands the callee.
+    fn passed(&self, place: &Operand) -> Passing {
+        match place {
+            Operand::Place(place) => Passing::Variable(*place),
+            Operand::Element(place, _) | Operand::Projection { place, .. } => Passing::Element(*place),
+            Operand::Indirect { base, .. } => Passing::Pointer(*base),
+            Operand::Value(_) | Operand::Constant(..) => Passing::Value,
+        }
     }
 
     fn emit_runtime_call(&mut self, callee: &str, results: Vec<u32>, operands: Vec<Operand>) {
@@ -7213,6 +7294,7 @@ impl Compiler {
                 results: vec![result],
                 operands: vec![left, right],
                 callee: Some("B$SCMP".into()),
+                tag: None,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7253,6 +7335,7 @@ impl Compiler {
                 results,
                 operands,
                 callee: Some(callee.into()),
+                tag: None,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7449,6 +7532,7 @@ impl Compiler {
                 let pointer = self.value(pointer_type);
                 self.emit("address", vec![pointer], vec![Operand::Place(*place)]);
                 self.emit_runtime_call(callee, Vec::new(), vec![Operand::Value(pointer)]);
+                self.tag_last(Tag::Release { descriptor: pointer });
             }
         }
         Ok(())
