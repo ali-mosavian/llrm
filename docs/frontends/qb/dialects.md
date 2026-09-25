@@ -198,3 +198,9 @@ expansion, so `f`, `e`, `g` and `%` match Python digit for digit.
 
 `x op= value` means `x = x op (value)` for `+ - * / \ ^ MOD AND OR XOR`.
 The target's subscripts are evaluated once, so `a(f()) += 1` calls `f` once.
+
+### BREAK and CONTINUE
+
+`BREAK` leaves the innermost `FOR`, `WHILE` or `DO` loop. `CONTINUE` starts its
+next iteration: a `FOR` steps its counter first, and a `DO … LOOP WHILE` runs
+its test. Both names are reserved.

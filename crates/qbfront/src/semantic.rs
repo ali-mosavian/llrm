@@ -254,6 +254,10 @@ struct Compiler {
     data_labels: BTreeMap<String, usize>,
     next_read_data_row: usize,
     exits: Vec<(ExitTarget, u32)>,
+    /// The innermost loop last, as its BREAK and CONTINUE targets. A FOR's
+    /// CONTINUE target is made when first needed, so a loop without one
+    /// steps its counter at the end of the body as before.
+    loops: Vec<(u32, Option<u32>)>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
     /// The FUNCTION being compiled, without its suffix.
@@ -368,6 +372,11 @@ fn built(
     options: &Options,
 ) -> Result<Compiler, SemanticError> {
     check_private(module, dialect)?;
+    if let Some(procedure) = module.procedures.iter().find(|one| loop_keyword(dialect, &one.name)) {
+        return Err(SemanticError {
+            message: format!("{} is reserved", procedure.name),
+        });
+    }
     let mut module = outline_module_gosubs(module)?;
     if module.format_strings {
         add_prelude(&mut module)?;
@@ -593,6 +602,11 @@ fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
         .expect("the prelude parses");
     module.procedures.extend(prelude.procedures);
     Ok(())
+}
+
+/// QuickrBASIC reserves `BREAK` and `CONTINUE`; QB lets them name anything.
+fn loop_keyword(dialect: Dialect, name: &str) -> bool {
+    dialect.loop_control() && matches!(canonical(name), "BREAK" | "CONTINUE")
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -983,6 +997,7 @@ impl Compiler {
             data_labels: BTreeMap::new(),
             next_read_data_row: 0,
             exits: Vec::new(),
+            loops: Vec::new(),
             return_block: None,
             result_place: None,
             result_name: None,
@@ -1043,6 +1058,7 @@ impl Compiler {
         self.descriptor_fields.clear();
         self.labels.clear();
         self.exits.clear();
+        self.loops.clear();
         self.return_block = None;
         self.result_place = None;
         self.result_name = None;
@@ -1783,6 +1799,9 @@ impl Compiler {
         declaration: &Declaration,
         storage: &'static str,
     ) -> Result<u32, SemanticError> {
+        if loop_keyword(self.dialect, &declaration.name) {
+            return self.fail(format!("{} is reserved", declaration.name));
+        }
         let key = self.declaration_key(declaration)?;
         if storage == "module" && declaration.shared {
             self.shared_keys.insert(key.clone());
@@ -2500,6 +2519,26 @@ impl Compiler {
                 Statement::Call {
                     name, arguments, ..
                 } => match name.as_str() {
+                    "BREAK" | "CONTINUE" if self.dialect.loop_control() => {
+                        if !arguments.is_empty() {
+                            return self.fail(format!("{name} takes no arguments"));
+                        }
+                        let Some(&(exit, next)) = self.loops.last() else {
+                            return self.fail(format!("{name} appears outside a loop"));
+                        };
+                        let target = match (name.as_str(), next) {
+                            ("BREAK", _) => exit,
+                            (_, Some(next)) => next,
+                            (_, None) => {
+                                let step = self.new_block();
+                                self.loops.last_mut().expect("in a loop").1 = Some(step);
+                                step
+                            }
+                        };
+                        self.terminate("jump", Vec::new(), vec![target])?;
+                        let continuation = self.new_block();
+                        self.select_block(continuation);
+                    }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
                     "RANDOMIZE" => {
                         let [seed] = arguments.as_slice() else {
@@ -3712,8 +3751,14 @@ impl Compiler {
 
         self.select_block(body_block);
         self.exits.push((ExitTarget::For, done_block));
+        self.loops.push((done_block, None));
         self.statement_list(body)?;
+        let (_, step_block) = self.loops.pop().expect("pushed above");
         self.exits.pop();
+        if let Some(step_block) = step_block {
+            self.jump_if_open(step_block);
+            self.select_block(step_block);
+        }
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
             let step_value = self.value(step_type);
@@ -3752,7 +3797,9 @@ impl Compiler {
         self.select_block(test_block);
         self.condition(condition, body_block, done_block, true)?;
         self.select_block(body_block);
+        self.loops.push((done_block, Some(test_block)));
         self.statement_list(body)?;
+        self.loops.pop();
         self.jump_if_open(test_block);
         self.select_block(done_block);
         Ok(())
@@ -3775,19 +3822,20 @@ impl Compiler {
             self.terminate("jump", Vec::new(), vec![body_block])?;
         }
         self.select_block(body_block);
+        let next = if pre.is_some() || post.is_some() {
+            test_block
+        } else {
+            body_block
+        };
         self.exits.push((ExitTarget::Do, done_block));
+        self.loops.push((done_block, Some(next)));
         self.statement_list(body)?;
+        self.loops.pop();
         self.exits.pop();
-        if self.block_open() {
-            if let Some((while_true, condition)) = post {
-                self.terminate("jump", Vec::new(), vec![test_block])?;
-                self.select_block(test_block);
-                self.condition(condition, body_block, done_block, *while_true)?;
-            } else if pre.is_some() {
-                self.terminate("jump", Vec::new(), vec![test_block])?;
-            } else {
-                self.terminate("jump", Vec::new(), vec![body_block])?;
-            }
+        self.jump_if_open(next);
+        if let Some((while_true, condition)) = post {
+            self.select_block(test_block);
+            self.condition(condition, body_block, done_block, *while_true)?;
         }
         self.select_block(done_block);
         Ok(())

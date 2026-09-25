@@ -616,3 +616,37 @@ fn microsoft_profiles_reject_augmented_assignment() {
         .expect_err("VBDOS has no +=");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
+
+#[test]
+fn break_and_continue_act_on_the_innermost_loop() {
+    // CONTINUE in a FOR must still step the counter, or the loop never ends.
+    let source = "DIM i AS INTEGER, j AS INTEGER, n AS INTEGER\n\
+        FOR i = 1 TO 6\nIF i MOD 2 = 0 THEN CONTINUE\nIF i = 5 THEN BREAK\n\
+        FOR j = 1 TO 9\nIF j = 2 THEN BREAK\nn += 1\nNEXT\nPRINT i;\nNEXT\nPRINT n; i\n";
+    assert_eq!(printed(source), " 1  3  2  5 \n");
+}
+
+#[test]
+fn continue_reaches_each_kind_of_loop_test() {
+    let source = "DIM i AS INTEGER, s AS INTEGER\n\
+        WHILE i < 5\ni += 1\nIF i = 2 THEN CONTINUE\ns += i\nWEND\n\
+        i = 0\nDO\ni += 1\nIF i = 4 THEN CONTINUE\ns += 10\nLOOP UNTIL i >= 4\n\
+        i = 0\nDO WHILE i < 3\ni += 1\nIF i = 1 THEN CONTINUE\ns += 100\nLOOP\n\
+        i = 0\nDO\ni += 1\nIF i < 3 THEN CONTINUE\nIF i = 4 THEN BREAK\ns += 1000\nLOOP\n\
+        PRINT s\n";
+    assert_eq!(printed(source), " 1243 \n");
+}
+
+#[test]
+fn break_outside_a_loop_is_an_error() {
+    let error = compiled("BREAK\n").expect_err("no loop");
+    assert!(error.to_string().contains("outside a loop"), "{error}");
+}
+
+#[test]
+fn quickr_reserves_break_and_continue() {
+    for source in ["DIM break AS INTEGER\n", "SUB continue\nEND SUB\n"] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.to_string().contains("reserved"), "{error}");
+    }
+}

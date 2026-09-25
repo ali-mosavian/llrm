@@ -48,6 +48,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `BREAK` and `CONTINUE` act on the innermost loop.
+    pub fn loop_control(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr
