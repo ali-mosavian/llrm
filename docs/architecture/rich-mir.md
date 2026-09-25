@@ -1059,6 +1059,12 @@ gets a fail-first symptom regression in the same commit as its fix.
   reconstruction.
 - Record linked answers, final assembly, structural metrics, and per-CPU costs.
 
+`tools/baseline.sh` records every MIR, LIR and assembly stage of the OMF
+corpus and the Nib examples; while final assembly is unchanged, so are costs.
+The round trip is `test_round_trip_is_byte_identical` and
+`test_every_mapped_fixture_round_trips_byte_identical`; answers are
+`tools/e2e/e2e.py`.
+
 ### 1. Land the typed shell and its instruments
 
 - Introduce `MirContext`, the first scalar types, typed constants/values,
