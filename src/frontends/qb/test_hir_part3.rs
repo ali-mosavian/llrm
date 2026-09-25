@@ -327,6 +327,11 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
+    // The proven-exact `s(i)` addresses through `[e..+e..*2]`, its shift gone
+    // and the upper halves zeroed once before the loop.
+    let text = listing(&program);
+    let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
+    assert!(body.contains("*2]") && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.

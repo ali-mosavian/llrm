@@ -148,6 +148,7 @@ impl LIRTransform for Peephole {
             &transferred(&commuted(&constants(&pushes(&body)))),
             &self.cpu,
         )?)))));
+        let body = crate::backend::scaledindex::scaled_indexes(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
         let body = increments(&body);

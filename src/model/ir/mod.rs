@@ -110,6 +110,11 @@ pub struct Mem {
     pub index: Option<Held>,
     pub scale: i64,
     pub index_through: iced_x86::Register,
+    /// Set when lowering proved the base is the object's origin and the
+    /// index is its source times this scale, a source whose zero extension
+    /// times the scale plus the base cannot leave the address width: the
+    /// parts summed wider name the same byte.
+    pub exact_scale: Option<i64>,
 }
 
 impl Mem {
@@ -126,6 +131,7 @@ impl Mem {
             index: None,
             scale: 1,
             index_through: iced_x86::Register::None,
+            exact_scale: None,
         }
     }
 }

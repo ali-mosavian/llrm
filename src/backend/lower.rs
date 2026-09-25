@@ -1779,6 +1779,7 @@ pub struct Lowering<'a> {
     _sites: IndexMap<u32, Object>,
     _address_forms: IndexMap<u32, (ir::Held, num_bigint::BigInt)>,
     _indexed: IndexMap<u32, addressforms::FoldedForm>,
+    _exact: IndexMap<u32, i64>,
     _folded: BTreeSet<u32>,
     _address_promoted: BTreeSet<u32>,
     _next: u32,
@@ -1834,7 +1835,7 @@ impl<'a> Lowering<'a> {
         let dividends = dividends.into_iter().filter(|(high, _)| count(&readers, *high) == 1).collect();
         let exposed: BTreeSet<u32> = crate::model::mir::exposed(body).into_iter().map(|value| value.id).collect();
         let address_forms = addressforms::offsets(body);
-        let (indexed, folded, address_promoted) =
+        let (indexed, folded, address_promoted, exact) =
             addressforms::indexed(body, &exposed, &cpu.address_forms, Some(&cpu.operations)).map_err(Unlowered)?;
         let mut every: Vec<u32> = ops().flat_map(|op| op.defines.iter().chain(&op.uses)).map(|one| one.id).collect();
         every.extend(body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result.id));
@@ -1855,6 +1856,7 @@ impl<'a> Lowering<'a> {
             _sites: options.sites,
             _address_forms: address_forms,
             _indexed: indexed,
+            _exact: exact,
             _folded: folded,
             _address_promoted: address_promoted,
             _next: every.into_iter().max().unwrap_or(0) + 1,
@@ -2329,7 +2331,7 @@ impl<'a> Lowering<'a> {
             let node = self.node(op).cloned();
             let folded = op.id.is_some_and(|id| self._absorbed.contains(&id)) && node.is_some();
             let what = if folded { None } else { current(op, Place::AsAValue, node.as_deref())? };
-            let what = addressforms::scaled(addressforms::selected(what.as_ref(), &self._address_forms).as_ref(), &self._indexed);
+            let what = addressforms::scaled(addressforms::selected(what.as_ref(), &self._address_forms).as_ref(), &self._indexed, &self._exact);
             let speaks = what.as_ref().is_some_and(|what| !what.dests.is_empty() || !what.sources.is_empty());
             let made = if speaks { _written(&what.as_ref().unwrap().dests) } else { vec![] };
             let read = if speaks { _read(what.as_ref().unwrap()) } else { vec![] };
@@ -2421,7 +2423,7 @@ impl<'a> Lowering<'a> {
         };
         // The leader keeps the operation's identity and nothing else.
         let parts: Vec<ir::Semantics> =
-            parts.iter().map(|one| addressforms::scaled(Some(one), &self._indexed).unwrap()).collect();
+            parts.iter().map(|one| addressforms::scaled(Some(one), &self._indexed, &self._exact).unwrap()).collect();
         let mut leader = Insn::new(op.at, Some(covers), Some(parts[0].clone()), _written(&parts[0].dests), _read(&parts[0]));
         leader.spread = spread;
         leader.op = Some(Arc::new(op.clone()));
