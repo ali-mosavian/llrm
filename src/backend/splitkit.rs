@@ -800,6 +800,32 @@ mod tests {
         assert!(!loop_cells.is_empty() && bases == BTreeSet::from([fresh]));
     }
 
+    /// Only bases were carved: FRACTALEFFECT reloaded a spilled selector every trip.
+    #[test]
+    fn test_a_spilled_index_or_selector_is_carved_into_the_loop_like_a_base() {
+        for role in ["index", "selector"] {
+            let mut moved = _pointer_across_a_loop();
+            for insn in moved.blocks.iter_mut().flat_map(|one| &mut one.insns) {
+                let mut changed = (**insn).clone();
+                if let Some(what) = changed.what.as_mut() {
+                    for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                        if let Loc::Mem(cell) = place {
+                            let operand = cell.base.take();
+                            if role == "index" {
+                                cell.index = operand;
+                            } else {
+                                cell.selector = operand;
+                            }
+                        }
+                    }
+                }
+                *insn = std::sync::Arc::new(changed);
+            }
+            let (_cut, kept) = loop_bases(&moved, &BTreeSet::from([3]));
+            assert_eq!(kept.len(), 1, "{role}");
+        }
+    }
+
     #[test]
     fn test_a_loop_piece_restores_only_on_its_exiting_edge() {
         let cut = _carved(&_pointer_across_a_loop(), 3, 9, 2, &region(&[0x10], None)).expect("cut");
