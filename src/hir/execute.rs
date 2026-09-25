@@ -596,6 +596,11 @@ impl<'p> Machine<'p> {
                 activation.frame.clone(),
                 place.offset - activation.layout.base,
             ),
+            // A static backed by a data object, such as a float literal,
+            // holds that object's bytes and keeps them across calls.
+            Storage::Static if self.data.contains_key(&place.symbol) => {
+                (self.data[&place.symbol].clone(), place.offset)
+            }
             _ => (activation.locals[&place.id].clone(), 0),
         };
         let array = self.types[&place.r#type];
