@@ -1909,6 +1909,23 @@ impl Compiler {
                         return self.fail(format!("duplicate declaration {name}"));
                     }
                 }
+                Statement::For {
+                    counter: Expr::Name(name, span),
+                    start: Expr::Apply {
+                        name: each,
+                        arguments,
+                        ..
+                    },
+                    body,
+                    ..
+                } if each == EACH && self.dialect.for_each() => {
+                    if let ([iterable], false) =
+                        (arguments.as_slice(), self.variables.contains_key(&self.variable_key(name)))
+                    {
+                        self.declare_each_item(name, iterable, *span, storage)?;
+                    }
+                    self.declarations_in(body, storage)?;
+                }
                 nested => {
                     for body in nested.bodies() {
                         self.declarations_in(body, storage)?;
@@ -1917,6 +1934,77 @@ impl Compiler {
             }
         }
         Ok(())
+    }
+
+    /// `FOR EACH x IN iterable` with `x` undeclared declares it with the
+    /// type of the iterable's elements.
+    fn declare_each_item(
+        &mut self,
+        name: &str,
+        iterable: &Expr,
+        span: Span,
+        storage: &'static str,
+    ) -> Result<(), SemanticError> {
+        let (type_name, fixed_length) = if suffix(name).is_some() {
+            (None, None)
+        } else if let Some(array) = self.array_name(iterable) {
+            let element = self.array(array)?.element.expect("an array has an element type");
+            let (type_name, fixed_length) = self.element_type_name(element);
+            (Some(type_name), fixed_length)
+        } else if let Some((function, _)) = self.array_call(iterable) {
+            let TypeName::Array(element) = &self.detached_results[canonical(function)] else {
+                unreachable!("an array call")
+            };
+            (Some(element.as_ref().clone()), None)
+        } else if let Some(arguments) = self.range_arguments(iterable) {
+            // A LONG, unsigned or floating bound needs a LONG to count in.
+            let wide = arguments.iter().any(|argument| {
+                matches!(
+                    self.static_type(argument),
+                    Some(LONG | UNSIGNED_INTEGER | UNSIGNED_LONG | SINGLE | DOUBLE)
+                )
+            });
+            (Some(if wide { TypeName::Long } else { TypeName::Integer }), None)
+        } else if self.string_syntax(iterable) {
+            (Some(TypeName::String), None)
+        } else {
+            return self.fail(format!("FOR EACH {name}: nothing here to iterate"));
+        };
+        self.each_declared.insert(self.variable_key(name));
+        self.declare_as(
+            &Declaration {
+                name: name.into(),
+                type_name,
+                array: false,
+                bounds: Vec::new(),
+                fixed_length,
+                shared: false,
+                dynamic: false,
+                span,
+            },
+            storage,
+        )?;
+        Ok(())
+    }
+
+    /// The type `expression` has, where it shows without evaluating it.
+    fn static_type(&self, expression: &Expr) -> Option<u32> {
+        match expression {
+            Expr::Literal(Literal::Integer(_, type_name) | Literal::Real(_, type_name), _) => {
+                type_id(Some(type_name)).ok()
+            }
+            Expr::Name(name, _) | Expr::Apply { name, .. }
+                if self.place_syntax_type(expression).is_none() =>
+            {
+                let signature = self.signatures.get(canonical(name))?;
+                signature.result
+            }
+            Expr::Unary { operand, .. } => self.static_type(operand),
+            Expr::Binary { op, left, right, .. } => {
+                common_type(self.static_type(left)?, self.static_type(right)?, *op).ok()
+            }
+            other => self.place_syntax_type(other),
+        }
     }
 
     /// A variable only procedures' SHARED statements name is still the

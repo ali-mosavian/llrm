@@ -215,6 +215,9 @@ its test. Both names are reserved.
 `FOR EACH x IN iterable … NEXT` runs its body once per element, with `x`
 holding a copy: assigning `x` changes neither the iterable nor the iteration.
 `AS type` declares `x`, and several loops may declare it with the same type.
+Without it, an undeclared `x` takes the type of the elements: an array's
+element type, STRING for a string, and INTEGER for `RANGE`, or LONG when a
+bound is LONG, unsigned or floating.
 
 | Iterable | Elements |
 |---|---|

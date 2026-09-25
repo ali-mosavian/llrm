@@ -698,7 +698,6 @@ fn for_each_errors() {
     for (source, message) in [
         ("FOR EACH i AS INTEGER IN RANGE(2)\nNEXT\nFOR EACH i AS LONG IN RANGE(2)\nNEXT\n", "another type"),
         ("FOR EACH d AS DOUBLE IN RANGE(2)\nNEXT\n", "integer variable"),
-        ("FOR EACH i IN RANGE(2)\nNEXT\n", "not defined"),
     ] {
         let error = compiled(source).expect_err(source);
         assert!(error.contains(message), "{source}: {error}");
@@ -884,4 +883,29 @@ fn array_assignment_errors() {
         let error = compiled(source).expect_err(source);
         assert!(error.contains(message), "{source}: {error}");
     }
+}
+
+#[test]
+fn for_each_infers_its_variable_type() {
+    // LONG elements and bounds must not be squeezed into an INTEGER.
+    let source = "TYPE P\nx AS INTEGER\nEND TYPE\n\
+        DIM a(1) AS LONG, pts(1) AS P, big AS LONG\na(0) = 100000: pts(1).x = 7: big = 70000\n\
+        FOR EACH v IN a()\nPRINT v;\nNEXT\nPRINT\n\
+        FOR EACH p IN pts()\nPRINT p.x;\nNEXT\nPRINT\n\
+        FOR EACH c IN \"ab\"\nPRINT c + \"!\";\nNEXT\nPRINT\n\
+        FOR EACH i IN RANGE(big - 2, big)\nPRINT i;\nNEXT\nPRINT\n\
+        FOR EACH j IN RANGE(2)\nPRINT j;\nNEXT\nFOR EACH j IN RANGE(1)\nPRINT j;\nNEXT\nPRINT j\n\
+        FOR EACH s IN squares(2)\nPRINT s;\nNEXT\nPRINT\n\
+        FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
+        r(n) = 99999\nRETURN r()\nEND FUNCTION\n";
+    assert_eq!(
+        printed(source),
+        " 100000  0 \n 0  7 \na!b!\n 69998  69999 \n 0  1  0  0 \n 0  0  99999 \n"
+    );
+}
+
+#[test]
+fn for_each_inference_needs_something_to_iterate() {
+    let error = compiled("FOR EACH x IN 5\nNEXT\n").expect_err("5 is not iterable");
+    assert!(error.contains("nothing here to iterate"), "{error}");
 }
