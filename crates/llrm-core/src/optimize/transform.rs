@@ -3906,9 +3906,18 @@ pub fn applied(
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
 ) -> Result<Rc<MirBody>, String> {
+    recorded(body, dgroup, calls, options).map(|done| done.body)
+}
+
+/// `applied`, with what each stage did to each operation.
+pub fn recorded(
+    body: &Rc<MirBody>,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    options: Applied<'_>,
+) -> Result<mir::Transformed, String> {
     let body = &mir::identified(Rc::clone(body));
     crate::analysis::consts::reusing(|| crate::analysis::manager::scoped(|| _reusing_halves(|| _applied(body, dgroup, calls, options))))
-        .map(mir::identified)
 }
 
 /// The closure state `applied`'s nested `scalarized`, `fixed` and
@@ -3920,9 +3929,16 @@ struct _Transaction<'w, 'a> {
     unrollers: std::cell::RefCell<Vec<Box<dyn crate::model::passes::MIRTransform>>>,
     only: bool,
     watch: std::cell::RefCell<Option<&'a mut dyn FnMut(&str, &MirBody)>>,
+    records: std::cell::RefCell<Vec<mir::Stage>>,
 }
 
 impl _Transaction<'_, '_> {
+    /// A driver's records, named as its watched stages are.
+    fn extend(&self, prefix: &str, stages: Vec<mir::Stage>) {
+        let named = stages.into_iter().map(|one| mir::Stage { name: format!("{prefix}{}", one.name), ..one });
+        self.records.borrow_mut().extend(named);
+    }
+
     fn watching(&self) -> bool {
         self.watch.borrow().is_some()
     }
@@ -3933,13 +3949,35 @@ impl _Transaction<'_, '_> {
         }
     }
 
+    /// Keeps a stage's record; a stage that changed nothing has none.
+    fn record(&self, name: String, changes: Vec<mir::TransformChange>) {
+        if !changes.is_empty() {
+            self.records.borrow_mut().push(mir::Stage { name, changes });
+        }
+    }
+
+    /// `after`, one step's result from `before`, identified and recorded.
+    fn step(&self, name: String, before: &MirBody, after: Rc<MirBody>) -> Rc<MirBody> {
+        let (after, changes) = mir::transformed(before, after);
+        self.record(name, changes);
+        after
+    }
+
+    /// The body a pipeline hands out, with its unreachable blocks settled.
+    fn settled(&self, state: &MirBody) -> Rc<MirBody> {
+        self.step("unreachable".to_owned(), state, Rc::new(_unreachable(state)))
+    }
+
     fn scalarized(&self, state: Rc<MirBody>, stage: &str) -> Result<Rc<MirBody>, String> {
         let mut state = state;
         let mut boundary = self.boundary.borrow_mut();
         for one in boundary.iter_mut() {
             let name = one.name().to_owned();
-            state = mir::identified(crate::support::debug::timed(&name, || one.transform(state))?);
-            self.watch(&format!("{stage}-{}", one.name()), &state);
+            let input = Rc::clone(&state);
+            let output = crate::support::debug::timed(&name, || one.transform(state))?;
+            let stage = format!("{stage}-{}", one.name());
+            state = self.step(stage.clone(), &input, output);
+            self.watch(&stage, &state);
         }
         Ok(state)
     }
@@ -3972,11 +4010,14 @@ impl _Transaction<'_, '_> {
                     if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
                         let name = one.name().to_owned();
                         let input = Rc::clone(&state);
-                        state = mir::identified(crate::support::debug::timed(&name, || one.transform(state))?);
-                        if Rc::ptr_eq(&input, &state) || *input == *state {
+                        let output = crate::support::debug::timed(&name, || one.transform(state))?;
+                        let (output, changes) = mir::transformed(&input, output);
+                        if Rc::ptr_eq(&input, &output) || *input == *output {
                             state = Rc::clone(&input);
                             *settled = Some(input);
                         } else {
+                            state = output;
+                            self.record(format!("{prefix}r{:02}-{}", iteration + 1, one.name()), changes);
                             *settled = None;
                             changed.push(name);
                         }
@@ -3989,9 +4030,11 @@ impl _Transaction<'_, '_> {
             if consider_unroll && !self.unrollers.borrow().is_empty() && !unroll_settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
                 let mut watch = |stage: &str, candidate: &MirBody| self.watch(&format!("{prefix}{stage}"), candidate);
                 let watching = self.watching();
-                let unrolled = crate::support::debug::timed("unroll", || {
+                let done = crate::support::debug::timed("unroll", || {
                     crate::optimize::unroll::optimized(&state, self.r#where, if watching { Some(&mut watch) } else { None })
                 })?;
+                self.extend(prefix, done.stages);
+                let unrolled = done.body;
                 // A copy's constant indices are new exact leaves, so it crosses the
                 // structural boundary before the scalar passes settle it.
                 if Rc::ptr_eq(&unrolled, &state) {
@@ -4017,7 +4060,7 @@ impl _Transaction<'_, '_> {
                 // A structural candidate can make its last cloned region
                 // unreachable on the same round that reaches the scalar fixed
                 // point, so normalize the public boundary itself.
-                return Ok(Rc::new(_unreachable(&state)));
+                return Ok(self.settled(&state));
             }
             if history.iter().any(|previous| state == *previous) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
@@ -4033,7 +4076,7 @@ fn _applied(
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
-) -> Result<Rc<MirBody>, String> {
+) -> Result<mir::Transformed, String> {
     let Applied {
         blocks,
         found,
@@ -4091,9 +4134,9 @@ fn _applied(
     let structural = ["PointerProvenance", "SplitPointers", "Sroa"];
     let (boundary, passes): (Vec<_>, Vec<_>) =
         passes.into_iter().partition(|one| structural.contains(&one.class_name()));
-    let (mut unrollers, passes): (Vec<_>, Vec<_>) =
+    let (unrollers, passes): (Vec<_>, Vec<_>) =
         passes.into_iter().partition(|one| one.class_name() == "Unroll");
-    let (mut peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.class_name() == "Peel");
+    let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.class_name() == "Peel");
 
     let has_unrollers = !unrollers.is_empty();
     let has_boundary = !boundary.is_empty();
@@ -4104,21 +4147,41 @@ fn _applied(
         unrollers: std::cell::RefCell::new(Vec::new()),
         only: only.is_some(),
         watch: std::cell::RefCell::new(watch),
+        records: std::cell::RefCell::new(Vec::new()),
     };
+    let body = _transacted(&transaction, body, &r#where, dgroup, calls, &options, only.is_some(), has_boundary, has_unrollers, unrollers, peelers)?;
+    Ok(mir::Transformed { body, stages: transaction.records.into_inner() })
+}
 
+#[allow(clippy::too_many_arguments)]
+fn _transacted(
+    transaction: &_Transaction<'_, '_>,
+    body: &Rc<MirBody>,
+    r#where: &crate::model::passes::Where,
+    dgroup: &BTreeSet<i64>,
+    calls: &IndexMap<i64, String>,
+    options: &crate::model::passes::Options,
+    only: bool,
+    has_boundary: bool,
+    has_unrollers: bool,
+    mut unrollers: Vec<Box<dyn crate::model::passes::MIRTransform>>,
+    mut peelers: Vec<Box<dyn crate::model::passes::MIRTransform>>,
+) -> Result<Rc<MirBody>, String> {
     let mut body = transaction.scalarized(Rc::clone(body), "r01")?;
-    if only.is_some() && has_boundary {
-        return Ok(Rc::new(_unreachable(&body)));
+    if only && has_boundary {
+        return Ok(transaction.settled(&body));
     }
-    if only.is_some() && has_unrollers {
-        body = unrollers[0].transform(body)?;
+    if only && has_unrollers {
+        let before = Rc::clone(&body);
+        body = transaction.step("r01-unroll".to_owned(), &before, unrollers[0].transform(body)?);
         transaction.watch("r01-unroll", &body);
-        return Ok(Rc::new(_unreachable(&body)));
+        return Ok(transaction.settled(&body));
     }
-    if only.is_some() && !peelers.is_empty() {
-        body = peelers[0].transform(body)?;
+    if only && !peelers.is_empty() {
+        let before = Rc::clone(&body);
+        body = transaction.step("r01-peel".to_owned(), &before, peelers[0].transform(body)?);
         transaction.watch("r01-peel", &body);
-        return Ok(Rc::new(_unreachable(&body)));
+        return Ok(transaction.settled(&body));
     }
     *transaction.unrollers.borrow_mut() = std::mem::take(&mut unrollers);
 
@@ -4126,11 +4189,13 @@ fn _applied(
     if !peelers.is_empty() {
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
-        let peeled = crate::support::debug::timed("peel", || crate::optimize::peel::optimized(
+        let done = crate::support::debug::timed("peel", || crate::optimize::peel::optimized(
             &body,
-            &r#where,
+            r#where,
             if watching { Some(&mut watch) } else { None },
         ))?;
+        transaction.extend("", done.stages);
+        let peeled = done.body;
         if !Rc::ptr_eq(&peeled, &body) {
             body = transaction.fixed(transaction.scalarized(peeled, "peeled")?, has_unrollers, "peeled-")?;
         }
@@ -4138,7 +4203,7 @@ fn _applied(
     if options.unswitch {
         let mut watch = |stage: &str, candidate: &MirBody| transaction.watch(stage, candidate);
         let watching = transaction.watching();
-        body = crate::optimize::unswitch::optimized(
+        let done = crate::optimize::unswitch::optimized(
             &body,
             dgroup,
             calls,
@@ -4152,8 +4217,10 @@ fn _applied(
                 watch: if watching { Some(&mut watch) } else { None },
             },
         )?;
+        transaction.extend("", done.stages);
+        body = done.body;
     }
-    Ok(Rc::new(_unreachable(&body)))
+    Ok(transaction.settled(&body))
 }
 #[cfg(test)]
 #[path = "transform_tests.rs"]

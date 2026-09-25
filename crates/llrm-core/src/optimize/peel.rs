@@ -116,14 +116,16 @@ pub fn optimized(
     body: &Rc<MirBody>,
     r#where: &Where,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<Rc<MirBody>, String> {
-    if !unroll::priced(body, r#where) {
-        return Ok(body.clone());
-    }
+) -> Result<crate::model::mir::Transformed, String> {
     let mut body = body.clone();
+    let mut stages = Vec::new();
+    if !unroll::priced(&body, r#where) {
+        return Ok(crate::model::mir::Transformed { body, stages });
+    }
     let mut peeled = BTreeSet::<i64>::new();
     while let Some((candidate, latch, _)) = _candidate(&body, r#where, &peeled)? {
-        let candidate = crate::model::mir::identified(candidate);
+        let (candidate, changes) = crate::model::mir::transformed(&body, candidate);
+        stages.push(crate::model::mir::Stage { name: "peel-accepted".to_owned(), changes });
         if let Some(watch) = watch.as_deref_mut() {
             watch("peel-accepted", &candidate);
         }
@@ -131,5 +133,5 @@ pub fn optimized(
         peeled.insert(latch);
         body = candidate;
     }
-    Ok(body)
+    Ok(crate::model::mir::Transformed { body, stages })
 }

@@ -28,6 +28,8 @@ mod raise;
 pub use raise::*;
 mod sites;
 pub use sites::*;
+mod changes;
+pub use changes::*;
 
 /// The registers that become values, rooted.
 pub const TRACKED: [Register; 6] =
@@ -2404,63 +2406,6 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         integer_ranges,
         loop_trip_counts: body.loop_trip_counts.clone(),
     })
-}
-
-/// Operations without an id of their own: unassigned, or shared with another.
-pub fn identity(body: &MirBody) -> Vec<String> {
-    let mut problems = Vec::new();
-    let mut seen = BTreeMap::<u32, i64>::new();
-    for op in body.blocks.iter().flat_map(|block| &block.ops) {
-        if op.id.0 == 0 {
-            problems.push(format!("{} {} has no id", python_padded_hex(op.at), op.name));
-        } else if let Some(first) = seen.insert(op.id.0, op.at) {
-            problems.push(format!("{} {} repeats id {} of {}", python_padded_hex(op.at), op.name, op.id.0, python_padded_hex(first)));
-        }
-    }
-    problems
-}
-
-/// `body` with every operation named by an id of its own. Identity is the
-/// pass manager's to keep, not each pass's: an operation a pass made has none
-/// yet, and one it copied repeats the original's. Both get a fresh id; of the
-/// copies, the one owning source bytes keeps the old one, else the first.
-pub fn identified(body: Rc<MirBody>) -> Rc<MirBody> {
-    let mut keeper = BTreeMap::<u32, (usize, usize, bool)>::new();
-    let mut unassigned = false;
-    let mut repeated = false;
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        for (op_index, op) in block.ops.iter().enumerate() {
-            if op.id.0 == 0 {
-                unassigned = true;
-                continue;
-            }
-            let owns = !op.absorbed.is_empty();
-            match keeper.get_mut(&op.id.0) {
-                None => {
-                    keeper.insert(op.id.0, (block_index, op_index, owns));
-                }
-                Some(kept) => {
-                    repeated = true;
-                    if owns && !kept.2 {
-                        *kept = (block_index, op_index, owns);
-                    }
-                }
-            }
-        }
-    }
-    if !unassigned && !repeated {
-        return body;
-    }
-    let mut body = (*body).clone();
-    for (block_index, block) in body.blocks.iter_mut().enumerate() {
-        for (op_index, op) in block.ops.iter_mut().enumerate() {
-            let kept = keeper.get(&op.id.0).is_some_and(|kept| (kept.0, kept.1) == (block_index, op_index));
-            if !kept {
-                op.id = OpId(next_id());
-            }
-        }
-    }
-    Rc::new(body)
 }
 
 /// Direct port of `qbopt.model.mir:verify`.
