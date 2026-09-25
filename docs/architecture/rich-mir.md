@@ -1,6 +1,7 @@
 # Rich portable MIR
 
-Status: proposed design, not yet implemented.
+Status: steps 0 and 1 landed (`tools/baseline.sh`, `crates/llrm-mir`); the
+compiler still runs on the old MIR.
 
 This document defines a replacement for llrm's public MIR.  It is closely
 modelled on LLVM IR while remaining faithful to llrm's measured semantics and
@@ -1079,6 +1080,11 @@ The round trip is `test_round_trip_is_byte_identical` and
   consumer's guessed width.
 
 No old field is deleted in this step.
+
+Landed as `crates/llrm-mir`, which has no dependencies: MIR cannot name a
+decoder, object file or target, and a test keeps it that way. The adapter and
+compatibility widths wait for the first producer in step 3, since nothing
+emits the new MIR yet. The `full` view waits for lineage in step 2.
 
 ### 2. Separate lineage from byte ownership
 
