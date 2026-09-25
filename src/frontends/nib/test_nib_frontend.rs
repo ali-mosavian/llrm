@@ -33,12 +33,12 @@ pub(crate) fn fixture(name: &str) -> PathBuf {
 
 /// `driver.parsed(source)`.
 pub(crate) fn parsed(source: &Path) -> model::Program {
-    driver::parsed(source, None).unwrap_or_else(|error| panic!("{}: {error}", source.display()))
+    driver::parsed(source, &Default::default(), None).unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
 /// The `FrontendError` `driver.parsed(source)` raises.
 fn refused(source: &Path) -> String {
-    driver::parsed(source, None).expect_err("the frontend refuses").0
+    driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
 /// `tmp_path / name` holding `text`.
@@ -143,8 +143,8 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let directory = tempfile::tempdir().expect("a directory");
     let first = directory.path().join("first.json");
     let second = directory.path().join("second.json");
-    driver::parsed(&fixture("control.nib"), Some(&first)).expect("parses");
-    driver::parsed(&fixture("control.nib"), Some(&second)).expect("parses");
+    driver::parsed(&fixture("control.nib"), &Default::default(), Some(&first)).expect("parses");
+    driver::parsed(&fixture("control.nib"), &Default::default(), Some(&second)).expect("parses");
     let first = std::fs::read(first).expect("dumped");
     assert_eq!(first, std::fs::read(second).expect("dumped"));
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
@@ -1823,7 +1823,7 @@ fn test_an_error_in_an_imported_module_names_that_module() {
     let directory = tempfile::tempdir().expect("a directory");
     written(&directory, "shapes.nib", "pub fn area(w: i16, h: u16) -> i16:\n    return w * h\n");
     let main = written(&directory, "main.nib", "import shapes\n\nfn main() -> i16:\n    return shapes.area(2, 3)\n");
-    let (path, error) = super::compile_file(&main).expect_err("refused");
+    let (path, error) = super::compile_file(&main, &Default::default()).expect_err("refused");
     assert!(path.ends_with("shapes.nib"), "{} {}", path.display(), error.message);
     assert_eq!(error.span.line, 2);
 }
@@ -1858,5 +1858,5 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
     let foreign = written(&directory, "foreign.nib", &text("@export(\"cdecl16\")"));
     assert!(refused(&foreign).contains("cannot cross a foreign ABI"), "{}", refused(&foreign));
     let native = written(&directory, "native.nib", &text("@export(name=\"N$SIZE\")"));
-    driver::parsed(&native, None).expect("a native export takes a view");
+    driver::parsed(&native, &Default::default(), None).expect("a native export takes a view");
 }

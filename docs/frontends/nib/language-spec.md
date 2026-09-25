@@ -1449,7 +1449,8 @@ not a ranked array.
 An index at or past its dimension invokes the panic handler. A constant index
 into a fixed dimension is checked at compile time. Inside `unsafe`, the
 programmer vouches for every index and none is checked; iteration never
-needs a check.
+needs a check. `llrm-nib --unchecked-bounds` checks no index or slice at
+run time, as `unsafe` does; a constant index is still checked at compile time.
 
 Dimensions and length are accessed with bracket notation:
 
@@ -1673,6 +1674,8 @@ The compiler supplies the modules under both roots. `abi` holds `abi.qb45`,
   reads through a 128-byte buffer of its own. A failure is an `IoError`,
   never a panic.
 - `std.dos`: interrupt vectors (section 15).
+- `std.sort`: `sort(items: &mut [T])` sorts ascending by `<`, in place. An
+  element is copied as it moves, so `T` must be a type that copies.
 - `std.os`: the runtime's DOS calls, which the others wrap.
 
 `std.io` declares:

@@ -113,6 +113,62 @@ fn main() -> i16:
 }
 
 #[test]
+fn unchecked_bounds_drops_index_and_slice_checks_but_still_refuses_constant_ones() {
+    // Before the switch, `--unchecked-bounds` could not be asked of the
+    // frontend, and every index and slice of a sort's inner loop was checked.
+    let source = "\
+fn pick(items: &[i16], at: u16) -> i16:
+    let part = &items[1:at]
+    return items[at] + i16(part.len)
+
+fn main() -> i16:
+    return pick([4, 5, 6], 2)
+";
+    // The runtime routine stays declared either way; only its calls go.
+    let checks = |unchecked_bounds| {
+        let module = super::parse(super::lex(source).unwrap()).unwrap();
+        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds }).unwrap();
+        hir.replace([' ', '\n'], "").matches("\"callee\":\"N$EBND\"").count()
+    };
+    assert_eq!(checks(false), 3);
+    assert_eq!(checks(true), 0);
+    let constant = "fn main() -> i16:\n    let values: i16[3] = [1, 2, 3]\n    return values[3]\n";
+    let module = super::parse(super::lex(constant).unwrap()).unwrap();
+    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true }).expect_err("refused");
+    assert!(refused.message.contains("3 is outside 0..3"), "{}", refused.message);
+}
+
+#[test]
+fn std_sort_orders_runs_duplicates_and_arrays() {
+    let source = "\
+import std.sort as sort
+
+fn main() -> i16:
+    let mut xs: vec[i16] = []
+    let mut seed: u16 = 7
+    for _ in 0..300:
+        seed = seed * 25173 + 13849
+        xs.push(i16(seed % 50) - 25)
+    sort.sort(xs)
+    let mut bad: u16 = 0
+    for at in 1..xs.len:
+        if xs[at] < xs[at - 1]:
+            bad += 1
+    let mut few: u8[5] = [3, 3, 1, 3, 1]
+    sort.sort(few)
+    print(f\"{xs[0]} {xs[299]} {bad} {few[0]}{few[1]}{few[2]}{few[3]}{few[4]}\")
+    return 0
+";
+    let directory = tempfile::tempdir().expect("a directory");
+    let main = directory.path().join("main.nib");
+    std::fs::write(&main, source).expect("written");
+    let hir = super::compile_file(&main, &Default::default()).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+    let program = codec::decode(&hir).expect("decodes");
+    let executed = execute::run(&program, "main", &[]).expect("runs");
+    assert_eq!(executed.output, "-24 24 0 11333\n");
+}
+
+#[test]
 fn enums_match_exhaustively_on_tags_and_payloads() {
     let source = include_str!("../../../docs/examples/shapes.nib");
     assert_eq!(
@@ -843,7 +899,7 @@ fn linked_output(main: &str, files: &[(&str, &str)]) -> Result<String, String> {
     };
     let module = super::modules::load(main, &mut read)
         .map_err(|(module, error)| format!("{module}: {}", error.message))?;
-    let hir = super::compile_module(module, "t").map_err(|error| error.message)?;
+    let hir = super::compile_module(module, "t", &Default::default()).map_err(|error| error.message)?;
     let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.leaked, 0, "heap buffers leaked");
     Ok(executed.output)
@@ -2011,7 +2067,7 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
 /// `source`'s refusal, its imports supplied by the compiler.
 fn refused_with_imports(source: &str) -> String {
     let module = super::modules::load(source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
-    super::compile_module(module, "t").expect_err("refused").message
+    super::compile_module(module, "t", &Default::default()).expect_err("refused").message
 }
 
 #[test]

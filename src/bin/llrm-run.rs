@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
     };
-    let hir = match llrm::frontends::nib::compile_file(std::path::Path::new(input)) {
+    let hir = match llrm::frontends::nib::compile_file(std::path::Path::new(input), &Default::default()) {
         Ok(hir) => hir,
         Err((path, error)) => {
             eprintln!(

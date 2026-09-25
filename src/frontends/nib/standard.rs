@@ -12,6 +12,7 @@ pub fn source(module: &str) -> Option<&'static str> {
     match module {
         "std.io" => Some(include_str!("std/io.nib")),
         "std.dos" => Some(include_str!("std/dos.nib")),
+        "std.sort" => Some(include_str!("std/sort.nib")),
         "std.os" => Some(include_str!("../../../runtime/nib/os.nib")),
         "abi.basic" => Some(include_str!("abi/basic.nib")),
         "abi.qb45" => Some(include_str!("abi/qb45.nib")),

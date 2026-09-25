@@ -41,9 +41,9 @@ fn passes<T>(
 }
 
 /// Write source, lexical, syntax, HIR, and semantic-MIR snapshots.
-pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf, String> {
+pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options: &Options) -> Result<PathBuf, String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
-    let program = driver::parsed(source, None).map_err(|error| error.0)?;
+    let program = driver::parsed(source, frontend, None).map_err(|error| error.0)?;
     let lowered = nib::semantic_lowered(&program)?;
     let target = targets::profile(nib::CPU)?;
 
@@ -122,7 +122,7 @@ mod tests {
         // nbody used to expose HIR and MIR only through separate ad-hoc commands.
         let directory = tempfile::tempdir().expect("a directory");
         let nbody = fixture("nbody.nib");
-        let output = dumped(&nbody, &directory.path().join("nbody"), &O2()).expect("dumps");
+        let output = dumped(&nbody, &directory.path().join("nbody"), &super::super::Frontend::default(), &O2()).expect("dumps");
 
         let mut names: Vec<String> = std::fs::read_dir(&output)
             .expect("lists")
@@ -173,7 +173,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("lib.nib");
         std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
-        let output = dumped(&source, &directory.path().join("dump"), &O2()).expect("dumps");
+        let output = dumped(&source, &directory.path().join("dump"), &super::super::Frontend::default(), &O2()).expect("dumps");
         let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");
         assert!(listing.contains("_twice"), "{listing}");
     }

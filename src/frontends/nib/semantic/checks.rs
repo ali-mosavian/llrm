@@ -2,7 +2,7 @@
 //! dimension, a slice past its sequence or reversed (section 13), a shift
 //! count at or past its operand's width, and a float outside the integer type it converts to (section 3). A constant index into a known dimension is checked
 //! here instead, and `unsafe` code, which vouches for its indices, is not
-//! checked; a check a loop's range already proves is the optimizer's to
+//! checked, nor any index or slice under `--unchecked-bounds`; a check a loop's range already proves is the optimizer's to
 //! fold.
 
 use crate::abi::nib as rt;
@@ -11,7 +11,7 @@ use super::*;
 impl FunctionCompiler<'_> {
     /// Checks each of `indices` against the view `descriptor`'s dimensions.
     pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], span: Span) -> Result<(), Diagnostic> {
-        if self.unsafe_depth > 0 {
+        if self.unsafe_depth > 0 || self.unchecked_bounds {
             return Ok(());
         }
         for (axis, index) in indices.iter().enumerate() {
@@ -51,7 +51,7 @@ impl FunctionCompiler<'_> {
             }
             return Ok(());
         }
-        if self.unsafe_depth > 0 {
+        if self.unsafe_depth > 0 || (self.unchecked_bounds && panic == rt::ERROR_BOUNDS) {
             return Ok(());
         }
         let wide = [value, &limit].iter().any(|one| matches!(one, hir::Operand::Value(id) if self.types.width(self.type_of(*id)) == 4));
