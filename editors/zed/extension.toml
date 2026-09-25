@@ -1,6 +1,6 @@
 id = "nib"
 name = "Nib"
-version = "0.1.2"
+version = "0.1.3"
 schema_version = 1
 authors = ["Ali Mosavian <ali@42labs.ai>"]
 description = "Nib: highlighting, outline and the nib-lsp language server."
