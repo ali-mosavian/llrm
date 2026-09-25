@@ -26,7 +26,10 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(for_each(augmented(returned(lex(source, dialect).map_err(ParseError::from)?, dialect))));
+    let (tokens, private_at) = without_private(for_each(augmented(tuple_assignment(
+        returned(lex(source, dialect).map_err(ParseError::from)?, dialect),
+        dialect,
+    ))));
     let mut state = ParseState::new(tokens);
     state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
@@ -272,6 +275,12 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
                 };
                 out.push(Token { span: token.span, ..name.clone() });
                 out.push(reserved("tkEQ"));
+                if depth_zero_comma(&tokens[at + 1..end]).is_some() {
+                    out.push(Token {
+                        kind: TokenKind::Identifier(TUPLE.into()),
+                        span: token.span,
+                    });
+                }
                 out.push(reserved("tkLParen"));
                 out.extend(tokens[at + 1..end].iter().cloned());
                 out.push(reserved("tkRParen"));
@@ -285,6 +294,78 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
                 at += 1;
             }
         }
+    }
+    out
+}
+
+/// The function a tuple calls, on either side of `=`: `a, b = b, a`
+/// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
+pub const TUPLE: &str = "$TUPLE";
+
+/// Where the first comma outside parentheses stands in `tokens`.
+fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::Reserved(id) if id == named("tkLParen") => depth += 1,
+            TokenKind::Reserved(id) if id == named("tkRParen") => depth = depth.saturating_sub(1),
+            TokenKind::Reserved(id) if id == named("tkComma") && depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// QuickrBASIC's tuple assignment, `a, b = x, y`, rewritten into one the
+/// grammar parses: `$TUPLE(a, b) = $TUPLE(x, y)`. A statement that starts
+/// with a name and has a comma before its `=` is one.
+fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+    if !dialect.tuples() {
+        return tokens;
+    }
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let starts = out.last().is_none_or(|last: &Token| {
+            ["tkNewLine", "tkColon", "tkTHEN", "tkELSE"].iter().any(|name| is(Some(last), name))
+        });
+        let end = if starts && matches!(token.kind, TokenKind::Identifier(_)) {
+            token_statement_end(&tokens, at)
+        } else {
+            at
+        };
+        let statement = &tokens[at..end];
+        let equals = statement.iter().position(|one| is(Some(one), "tkEQ"));
+        let (Some(equals), Some(comma)) = (equals, depth_zero_comma(statement)) else {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        };
+        if comma > equals {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        }
+        let wrapped = |out: &mut Vec<Token>, part: &[Token]| {
+            let span = part[0].span;
+            out.push(Token { kind: TokenKind::Identifier(TUPLE.into()), span });
+            out.push(Token { kind: TokenKind::Reserved(named("tkLParen")), span });
+            out.extend(part.iter().cloned());
+            out.push(Token { kind: TokenKind::Reserved(named("tkRParen")), span });
+        };
+        wrapped(&mut out, &statement[..equals]);
+        out.push(statement[equals].clone());
+        let value = &statement[equals + 1..];
+        if value.is_empty() || depth_zero_comma(value).is_none() {
+            out.extend(value.iter().cloned());
+        } else {
+            wrapped(&mut out, value);
+        }
+        at = end;
     }
     out
 }
@@ -806,6 +887,13 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
 fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
     if let Some(integral) = signed_type(state) {
         return Some(integral);
+    }
+    if state.python_expressions && consume_named(state, "tkLParen") {
+        let mut types = vec![declaration_type(state)?];
+        while consume_named(state, "tkComma") {
+            types.push(declaration_type(state)?);
+        }
+        return (consume_named(state, "tkRParen") && types.len() > 1).then_some(TypeName::Tuple(types));
     }
     let token = state.token()?.clone();
     let type_name = match token.kind {

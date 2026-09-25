@@ -73,6 +73,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `a, b = b, a` and FUNCTIONs `AS (t1, t2)`.
+    pub fn tuples(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

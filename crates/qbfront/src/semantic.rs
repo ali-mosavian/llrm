@@ -9,10 +9,10 @@ mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
-use crate::generated_parser::EACH;
+use crate::generated_parser::{EACH, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter,
     PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
@@ -263,6 +263,8 @@ struct Compiler {
     /// Variables a FOR EACH `AS` declared in this scope, which a later
     /// FOR EACH may declare again with the same type.
     each_declared: BTreeSet<String>,
+    /// Each FUNCTION `AS (…)`, now a SUB, by name: its result types.
+    tuple_results: BTreeMap<String, Vec<TypeName>>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
     /// The FUNCTION being compiled, without its suffix.
@@ -392,8 +394,10 @@ fn built(
     if module.format_strings {
         add_prelude(&mut module)?;
     }
+    let tuple_results = untupled(&mut module);
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
+    compiler.tuple_results = tuple_results;
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -614,6 +618,76 @@ fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
         .expect("the prelude parses");
     module.procedures.extend(prelude.procedures);
     Ok(())
+}
+
+fn tuple_misplaced() -> SemanticError {
+    SemanticError {
+        message: "a tuple type is only a FUNCTION's result".into(),
+    }
+}
+
+/// The prefix of the hidden parameters a FUNCTION `AS (…)` returns through.
+const RESULT: &str = "$RESULT";
+
+/// A FUNCTION `AS (t1, t2, …)` becomes a SUB with a hidden BYREF parameter
+/// per result: assigning the FUNCTION's name assigns them, as a tuple, and
+/// EXIT FUNCTION leaves the SUB. Returns each one's result types.
+fn untupled(module: &mut Module) -> BTreeMap<String, Vec<TypeName>> {
+    let mut results = BTreeMap::new();
+    for procedure in &mut module.procedures {
+        let Some(TypeName::Tuple(types)) = procedure.result.take_if(|one| matches!(one, TypeName::Tuple(_)))
+        else {
+            continue;
+        };
+        let span = procedure.span;
+        procedure.kind = ProcedureKind::Sub;
+        for (index, type_name) in types.iter().enumerate() {
+            procedure.parameters.push(Parameter {
+                declaration: Declaration {
+                    name: format!("{RESULT}{index}"),
+                    type_name: Some(type_name.clone()),
+                    array: false,
+                    bounds: Vec::new(),
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span,
+                },
+                by_value: false,
+                segmented: false,
+            });
+        }
+        let targets = Expr::Apply {
+            name: TUPLE.into(),
+            arguments: (0..types.len())
+                .map(|index| Expr::Name(format!("{RESULT}{index}"), span))
+                .collect(),
+            span,
+        };
+        let name = canonical(&procedure.name).to_owned();
+        retarget(&mut procedure.body, &name, &targets);
+        results.insert(name, types);
+    }
+    results
+}
+
+/// `name = …` assigns `targets`, and EXIT FUNCTION leaves a SUB.
+fn retarget(statements: &mut [Statement], name: &str, targets: &Expr) {
+    for statement in statements {
+        match statement {
+            Statement::Assign { target, .. }
+                if matches!(&*target, Expr::Name(assigned, _) if canonical(assigned) == name) =>
+            {
+                *target = targets.clone()
+            }
+            Statement::Exit(exit @ ExitTarget::Function, _) => *exit = ExitTarget::Sub,
+            nested => {
+                for body in nested.bodies_mut() {
+                    retarget(body, name, targets);
+                }
+            }
+        }
+    }
 }
 
 /// QuickrBASIC arrays start at 0: no `lower TO upper`, no `OPTION BASE 1`.
@@ -1044,6 +1118,7 @@ impl Compiler {
             exits: Vec::new(),
             loops: Vec::new(),
             each_declared: BTreeSet::new(),
+            tuple_results: BTreeMap::new(),
             return_block: None,
             result_place: None,
             result_name: None,
@@ -2217,7 +2292,7 @@ impl Compiler {
             Some(TypeName::Single) => "!",
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
-            Some(TypeName::Named(_) | TypeName::Integral { .. }) => "",
+            Some(TypeName::Named(_) | TypeName::Integral { .. } | TypeName::Tuple(_)) => "",
             None => type_suffix(type_id),
         };
         format!("{}{suffix}", name.to_ascii_uppercase())
@@ -2460,6 +2535,11 @@ impl Compiler {
                         self.tag_last(Tag::Release { descriptor });
                     }
                 }
+                Statement::Assign {
+                    target: Expr::Apply { name, arguments, .. },
+                    value,
+                    span,
+                } if name == TUPLE => self.tuple_assignment(arguments, value, *span)?,
                 Statement::Assign { target, value, span } if augmented_op(value).is_some() => {
                     let (op, operand) = augmented_op(value).expect("guard matched");
                     if !self.dialect.augmented_assignment() {
@@ -5786,6 +5866,86 @@ impl Compiler {
         Ok(self.binary(op, &position, &zero)?.0)
     }
 
+    /// `a, b = x, y` evaluates every value, then assigns left to right;
+    /// `a, b = f(…)` calls a FUNCTION `AS (…)` for its results.
+    fn tuple_assignment(&mut self, targets: &[Expr], value: &Expr, span: Span) -> Result<(), SemanticError> {
+        // `RETURN f(…)` from a FUNCTION `AS (…)` parenthesizes its value.
+        let value = match value {
+            Expr::Unary {
+                op: Unary::Grouped,
+                operand,
+                ..
+            } => operand,
+            value => value,
+        };
+        let call = match value {
+            Expr::Apply {
+                name, arguments, ..
+            } if name != TUPLE => Some((name, arguments.as_slice())),
+            Expr::Name(name, _) => Some((name, &[][..])),
+            _ => None,
+        };
+        let values = match (value, call) {
+            (Expr::Apply { arguments, .. }, None) => {
+                let mut held = Vec::new();
+                for value in arguments {
+                    held.push(self.snapshot(value)?);
+                }
+                held
+            }
+            (_, Some((name, arguments))) if self.tuple_results.contains_key(canonical(name)) => {
+                let mut results = Vec::new();
+                for type_name in self.tuple_results[canonical(name)].clone() {
+                    let type_id = self.resolve_type(Some(&type_name))?;
+                    results.push(if type_id == STRING {
+                        self.hidden_string(span)?
+                    } else {
+                        // A path that returns nothing leaves zero, as in QB.
+                        let (place, result) = self.hidden(type_id)?;
+                        let zero = if matches!(type_id, SINGLE | DOUBLE) {
+                            self.floating_literal("0.0", type_id)?
+                        } else {
+                            Operand::Constant(type_id, Number::Integer(0))
+                        };
+                        self.emit("store", Vec::new(), vec![Operand::Place(place), zero]);
+                        result
+                    });
+                }
+                let mut passed = arguments.to_vec();
+                passed.extend(results.iter().cloned());
+                self.call(name, &passed, false)?;
+                results
+            }
+            _ => return self.fail("a tuple takes several values or a FUNCTION AS (…)"),
+        };
+        if values.len() != targets.len() {
+            return self.fail(format!("{} targets for {} values", targets.len(), values.len()));
+        }
+        for (target, value) in targets.iter().zip(values) {
+            self.statement_list(&[Statement::Assign {
+                target: target.clone(),
+                value,
+                span,
+            }])?;
+        }
+        Ok(())
+    }
+
+    /// `expression`'s value now, in a name no later assignment changes.
+    fn snapshot(&mut self, expression: &Expr) -> Result<Expr, SemanticError> {
+        if matches!(expression, Expr::Literal(..)) {
+            return Ok(expression.clone());
+        }
+        if self.string_syntax(expression) {
+            let copy = self.hidden_string(expression.span())?;
+            let (place, type_id) = self.destination(&copy)?;
+            self.string_assignment(place, type_id, expression)?;
+            return Ok(copy);
+        }
+        let (value, type_id) = self.expression(expression)?;
+        self.hold_value(value, type_id)
+    }
+
     /// `expression` as one that can be evaluated again with the same value
     /// and no effects: a literal or variable as it is, anything else held.
     fn once(&mut self, expression: &Expr) -> Result<Expr, SemanticError> {
@@ -5796,14 +5956,7 @@ impl Compiler {
             }
             _ => {}
         }
-        if self.string_syntax(expression) {
-            let copy = self.hidden_string(expression.span())?;
-            let (place, type_id) = self.destination(&copy)?;
-            self.string_assignment(place, type_id, expression)?;
-            return Ok(copy);
-        }
-        let (value, type_id) = self.expression(expression)?;
-        self.hold_value(value, type_id)
+        self.snapshot(expression)
     }
 
     /// A STRING variable no source can name.
@@ -8806,6 +8959,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
                 message: format!("user-defined type {name} is not attached yet"),
             })
         }
+        TypeName::Tuple(_) => return Err(tuple_misplaced()),
     })
 }
 

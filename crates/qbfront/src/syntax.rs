@@ -18,6 +18,8 @@ pub enum TypeName {
     Named(String),
     /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
     Integral { width: u8, signed: bool },
+    /// QuickrBASIC's `AS (t1, t2, …)`, a FUNCTION's several results.
+    Tuple(Vec<TypeName>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -368,6 +370,26 @@ pub enum Statement {
 }
 
 impl Statement {
+    /// The statement lists nested directly inside this one, to change.
+    pub fn bodies_mut(&mut self) -> Vec<&mut Vec<Statement>> {
+        match self {
+            Self::If {
+                then_branch,
+                else_branch,
+                ..
+            } => vec![then_branch, else_branch],
+            Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
+            Self::Select {
+                arms, otherwise, ..
+            } => arms
+                .iter_mut()
+                .map(|(_, body)| body)
+                .chain([otherwise])
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The statement lists nested directly inside this one.
     pub fn bodies(&self) -> Vec<&[Statement]> {
         match self {

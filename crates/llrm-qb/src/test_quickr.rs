@@ -804,3 +804,40 @@ fn microsoft_profiles_return_only_from_gosub() {
     qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS returns no value");
 }
+
+#[test]
+fn tuple_assignment_evaluates_every_value_first() {
+    let source = "DIM a AS INTEGER, b AS INTEGER, i AS INTEGER, s AS STRING, t AS STRING, v(2) AS INTEGER\n\
+        a = 1: b = 2: s = \"x\": t = \"y\"\n\
+        a, b = b, a\ns, t = t, s\nv(0), v(1) = a + 10, a\ni, v(i) = 2, 7\n\
+        PRINT a; b; s; t; v(0); v(1); v(2)\n";
+    assert_eq!(printed(source), " 2  1 yx 12  2  7 \n");
+}
+
+#[test]
+fn functions_return_tuples() {
+    let source = "DIM q AS INTEGER, r AS INTEGER, w AS STRING, n AS LONG\n\
+        q, r = divmod(17, 5)\nPRINT q; r\n\
+        w, n = named(3)\nPRINT w; n\nw, n = named(1)\nPRINT w; n\n\
+        q, r = pair\nPRINT q; r\n\
+        FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)\nRETURN a \\ b, a MOD b\nEND FUNCTION\n\
+        FUNCTION named (k AS INTEGER) AS (STRING, LONG)\nIF k > 2 THEN RETURN \"big\", k * 100000\nRETURN \"small\", k\nEND FUNCTION\n\
+        FUNCTION pair AS (INTEGER, INTEGER)\nRETURN divmod(9, 4)\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 3  2 \nbig 300000 \nsmall 1 \n 2  1 \n");
+}
+
+#[test]
+fn tuple_errors() {
+    for (source, message) in [
+        ("DIM a AS INTEGER, b AS INTEGER\na, b = 1, 2, 3\n", "2 targets for 3 values"),
+        ("DIM t AS (INTEGER, INTEGER)\n", "only a FUNCTION's result"),
+        ("DIM a AS INTEGER, b AS INTEGER\na, b = LEN(\"x\")\n", "several values"),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"a = 1: b = 2\na, b = b, a\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no tuples");
+}
