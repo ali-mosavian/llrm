@@ -98,7 +98,7 @@ FP sequence establishes the same scalar entry values as PDS's integer stores.
 
 ## Bounded runtime integers
 
-`src/analysis/floatbounds.rs` now proves numerical exactness without proving a
+`crates/llrm-core/src/analysis/floatbounds.rs` now proves numerical exactness without proving a
 specific value. Signed integer loads fit extended precision; integer sums,
 differences and products qualify only when the entire resulting interval
 fits the minimum dynamic precision. Destination conversions must fit too.

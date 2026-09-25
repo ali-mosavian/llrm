@@ -1,12 +1,14 @@
-[package]
-name = "llrm"
+[workspace]
+members = [".", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+default-members = [".", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.87"
-description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS with GCC/LLVM-quality code generation"
-default-run = "llrm-qb"
 
-[dependencies]
+[workspace.dependencies]
 iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm"] }
 indexmap = "2"
 num-bigint = "0.4"
@@ -17,14 +19,36 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
+regex = "1"
+llrm-core = { path = "crates/llrm-core" }
+llrm-nib = { path = "crates/llrm-nib" }
+llrm-qb = { path = "crates/llrm-qb" }
+llrm-c = { path = "crates/llrm-c" }
+
+[package]
+name = "llrm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS with GCC/LLVM-quality code generation"
+default-run = "llrm-qb"
+
+[dependencies]
+llrm-core = { workspace = true }
+llrm-nib = { workspace = true }
+llrm-qb = { workspace = true }
+llrm-c = { workspace = true }
+iced-x86 = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 default = ["toolchain"]
-# Open Watcom's wccq, jwasm, jwlink and DOSBox-X, which build.rs bootstraps.
-toolchain = []
+# Open Watcom's wccq (llrm-c), jwasm, jwlink and DOSBox-X, which the build scripts bootstrap.
+toolchain = ["llrm-c/toolchain"]
 
 [dev-dependencies]
-regex = "1"
+regex = { workspace = true }
 
 [[bin]]
 name = "llrm-qb"
@@ -53,7 +77,6 @@ path = "src/bin/nibfront.rs"
 [[bin]]
 name = "nib-lsp"
 path = "src/bin/nib-lsp.rs"
-
 
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.
 [profile.release]

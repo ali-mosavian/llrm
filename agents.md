@@ -8,8 +8,9 @@ optimizer, x86 backend and OMF writer.
 ## Layout
 
 - The crate is `llrm`; every command is `llrm-*`.
-- Frontends live under `src/frontends/<lang>` (`c`, `qb`, `nib`, `bc`); all of
-  them share the MIR, optimizer, x86 backend and OMF writer.
+- Source frontends are crates (`crates/llrm-nib`, `llrm-qb`, `llrm-c`) over
+  `crates/llrm-core`, which holds the MIR, optimizer, x86 backend, OMF writer
+  and the BC frontend.
   `docs/architecture/source-layout.md` has the rest.
 
 **Writing rules -- repeat them after every iteration.** Keep it short, to
@@ -334,7 +335,7 @@ the pass; the machine arm is legacy and is retired last.
   touch is disturbed. `omf.rs`'s `test_round_trip_is_byte_identical`
   asserts it.
 - **Measure, do not reason, about what things cost.** DOSBox charges per
-  instruction and models no latency. Use `src/cycles` for 486, P5, P6,
+  instruction and models no latency. Use `crates/llrm-core/src/cycles` for 486, P5, P6,
   K5, K6, K7 and Core, and treat those as a ranking -- they are published
   latencies, not measurements.
 - **BASIC style.** Names are camelCase and
@@ -574,7 +575,7 @@ is what the fix rests on -- it does not attempt the general case.
 region crossing from record A into record B extends A's own span to the
 edit's own end and shrinks B's to start there; neither is removed. That
 matters because a FIXUPP's offset is relative to whichever LEDATA precedes it
-in the file -- `src/objectfile/omf.rs`'s `fixups()` tracks `base` exactly that way, and
+in the file -- `crates/llrm-core/src/objectfile/omf.rs`'s `fixups()` tracks `base` exactly that way, and
 `relocate()` mirrors it with `covered`, reset on every LEDATA it passes. An
 earlier design that dropped the fully-absorbed record instead re-parented
 every FIXUPP that used to follow it: measured, 72 of 73 corpus crossings have
@@ -595,7 +596,7 @@ all -- correct by its own rule, wrong in fact, and caught because a run-twice
 idempotence check found the region on the second pass that the first had
 refused for nothing. Only two edits wanting to move the *same* boundary
 actually conflict, and that needs every taken edit at once to see, which a
-single region's own check cannot -- `src/rewrite.rs`'s
+single region's own check cannot -- `crates/llrm-core/src/rewrite.rs`'s
 `drop_chained_crossings` runs after every region has been decided
 independently, refusing the later of the two rather
 than the runtime pass's blunter option of costing the whole module.

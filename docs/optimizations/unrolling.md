@@ -88,7 +88,7 @@ Bounded unrolling is now a transaction at its original post-placement pass
 boundary. The raw expansion is sent through the ordinary scalar fixed point,
 then accepted only when it removes a loop and its exact-trip dynamic cost falls
 by more than the target-priced charge for added semantic operations. The cost
-model is the shared machine-neutral `src/optimize/profit.rs`; MIR sees arithmetic,
+model is the shared machine-neutral `crates/llrm-core/src/optimize/profit.rs`; MIR sees arithmetic,
 memory, call, branch and x87 prices, never registers or encodings. Unpriced work
 rejects the candidate. A rejected loop is skipped while later candidates are
 considered, and callers can still disable expansion with `unroll_=False`.
@@ -363,7 +363,7 @@ the cause directly: instead of each iteration's `push; call`, emission
 grouped the three pushes, then the three calls. Only the first call carried
 its relocation; following calls were bare `call 0:0`.
 
-`src/backend/layout.rs` sorts operations by original address. Clones deliberately
+`crates/llrm-core/src/backend/layout.rs` sorts operations by original address. Clones deliberately
 share source provenance, but must not share placement identity. The current
 adapter also discarded cloned calls' relocation provenance. These are backend
 requirements, not reasons for MIR to invent machine addresses.

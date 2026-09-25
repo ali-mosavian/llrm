@@ -214,7 +214,7 @@ Do not infer full legality from compiler output alone: the reason its backend
 merges the strict operations still needs tracing. But rejecting the optimization
 based only on EarlyCSE would also be wrong. The immediate engineering gaps
 are cross-block floating allocation (currently explicitly refused by
-`src/backend/floatalloc.rs`) and a justified FP reuse rule. No full-program score
+`crates/llrm-core/src/backend/floatalloc.rs`) and a justified FP reuse rule. No full-program score
 is derived from this kernel, and llrm's own before/after output is unchanged.
 
 ### Trap-enabled limitation found in the source

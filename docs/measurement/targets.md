@@ -638,7 +638,7 @@ Fresh per-pass dumps of QB `/O` and PDS `/G2` distinguish the source-level
 constant from what the raise actually knows. PDS initializes `d=12` using four
 `MOVSW` instructions at original offsets 0x154–0x157. All four remain OPAQUE
 in the initial MIR; its subsequent binary64 load at 0x158 has no constant fact.
-This is not a missed arithmetic identity in CSE. `src/frontends/bc/raising_copies.rs`
+This is not a missed arithmetic identity in CSE. `crates/llrm-core/src/frontends/bc/raising_copies.rs`
 already scalarizes explicit-direction, proven-selector copies, but its dataflow
 forgets traversal direction across calls. No local CLD establishes it here.
 

@@ -3,7 +3,7 @@
     cargo test --release <filter>                  the narrowest tests that answer the question
 
 Unit tests sit beside their module (`*_tests.rs`); frontend tests are
-`src/frontends/*/test_*.rs`. `tests/toolchain.rs` builds programs with the
+`crates/*/src/test_*.rs`. `tests/toolchain.rs` builds programs with the
 bootstrapped DOS toolchain and runs them. Release builds are incremental, so a
 rebuild after an edit takes about 30 seconds.
 

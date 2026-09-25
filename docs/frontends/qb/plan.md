@@ -15,7 +15,7 @@ inputs rather than being reimplemented.
 
 ## Implemented foundation
 
-The first Phase 1 slice is present under `src/hir/`:
+The first Phase 1 slice is present under `crates/llrm-core/src/hir/`:
 
 - typed modules, functions, values, places, blocks, terminators, dialect,
   runtime, and fixed 386-real-mode target profile;
@@ -29,7 +29,7 @@ The first Phase 1 slice is present under `src/hir/`:
   array access through existing LIR lowering.
 
 The first source-compiler slice now also exists under `crates/qbfront/` and
-`src/frontends/qb/`: a dialect lexer and typed parser, direct semantic HIR
+`crates/llrm-qb/src/`: a dialect lexer and typed parser, direct semantic HIR
 construction, a replayable process boundary, whole integer/LONG and floating
 expressions, fixed numeric arrays, and CFG construction for IF, FOR, DO,
 WHILE, labels, and GOTO. All 17 qb-qrender BASIC files pass the VBDOS syntax
@@ -134,7 +134,7 @@ current object frontend still passes its full suite.
 
 - Implement the entities in [the HIR model](../../architecture/hir/model.md).
 - Add the versioned JSON decoder, verifier, and deterministic stage dump under
-  `src/hir/`.
+  `crates/llrm-core/src/hir/`.
 - Implement values, places, blocks, calls, integer/floating operations, and
   numeric array access only.
 - Add program-side tables for source maps, ABI selection, and link needs.

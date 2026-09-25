@@ -61,7 +61,7 @@ An object has stable identity, extent when known, alignment, mutability,
 escape, and an address form. Fields and array elements are slices/accesses of
 that object rather than unrelated numeric addresses. The HIR-to-MIR adapter
 maps these facts into the current canonical memory model in
-[`memory.rs`](../../../src/model/memory.rs).
+[`memory.rs`](../../../crates/llrm-core/src/model/memory.rs).
 
 This is the basis for alias analysis. Near-versus-far by itself does not prove
 two accesses disjoint, and two numerically equal offsets in different objects
@@ -111,8 +111,8 @@ call/return boundary only, frontend ABI physicalization splits or joins two
 anonymous words; lowering assigns the measured `DX:AX` locations. Arithmetic
 helper calls such as the measured long multiply/divide/remainder/compare family
 are created as whole semantic operations when current MIR can express them, matching
-[`raising_calls.rs`](../../../src/frontends/bc/raising_calls.rs) and
-[`raising_longs.rs`](../../../src/frontends/bc/raising_longs.rs).
+[`raising_calls.rs`](../../../crates/llrm-core/src/frontends/bc/raising_calls.rs) and
+[`raising_longs.rs`](../../../crates/llrm-core/src/frontends/bc/raising_longs.rs).
 
 The source frontend supplies the existing overflow and division policies. It
 does not infer semantics from the convenient 386 instruction. Where llrm has
@@ -174,10 +174,10 @@ The native array scope is numeric arrays. The frontend records:
 - whether a bounds proof or runtime check is required.
 
 The adapter produces the same current MIR facts as
-[`raising_arrays.rs`](../../../src/frontends/bc/raising_arrays.rs),
-[`raising_array_bounds.rs`](../../../src/frontends/bc/raising_array_bounds.rs),
+[`raising_arrays.rs`](../../../crates/llrm-core/src/frontends/bc/raising_arrays.rs),
+[`raising_array_bounds.rs`](../../../crates/llrm-core/src/frontends/bc/raising_array_bounds.rs),
 and
-[`raising_array_access.rs`](../../../src/frontends/bc/raising_array_access.rs).
+[`raising_array_access.rs`](../../../crates/llrm-core/src/frontends/bc/raising_array_access.rs).
 Static numeric allocations and established far/huge numeric access patterns
 may be lowered natively. String arrays and unsupported descriptor operations
 remain runtime calls or receive a precise unsupported-lowering diagnostic.

@@ -74,7 +74,7 @@ datatype and every pass module rather than relying on convention.
 
 ## How it is enforced
 
-- `src/model/passes.rs` -- `MIRTransform` has one method, `transform(mir) -> mir`.
+- `crates/llrm-core/src/model/passes.rs` -- `MIRTransform` has one method, `transform(mir) -> mir`.
   Module facts go in at construction, so the signature cannot grow a way to
   ask the machine a question.
 - `tests/test_rule5.py` -- walks the AST of every pass for `Register`,
@@ -158,7 +158,7 @@ Audited 2026-09-05. What was broken, and what it is now:
 | --- | --- |
 | `transform` asked `layout.selectable(op)` | `mir.rewritable(op)` -- what an operation *is* is the raise's answer |
 | `transform` asked `lower.current(op)` | `mir.instruction(op)`, same reason |
-| `transform`, `avail` and `simplify` asked `regalloc.live()` | `src/analysis/liveness.rs`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
+| `transform`, `avail` and `simplify` asked `regalloc.live()` | `crates/llrm-core/src/analysis/liveness.rs`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
 
 `mir.bodies` now returns `RaisedBodies`: the MIR sequence plus an external
 `SourceMap` containing decoded nodes, relocations, floating protocols,

@@ -1,0 +1,35 @@
+//! Ports of `qbopt/optimize`.
+
+pub mod affine;
+pub mod algebraic;
+pub mod canonical;
+pub mod counting;
+pub mod cfg;
+pub mod edges;
+pub mod exitsink;
+pub mod fill;
+pub mod floatloop;
+pub mod gvn;
+pub mod floatfold;
+pub mod indvars;
+pub mod inline;
+pub mod interprocedural;
+pub mod ivshare;
+pub mod lcssa;
+pub mod lcssamerges;
+pub mod loadjoins;
+pub mod loopclone;
+pub mod loopexit;
+pub mod loopmotion;
+pub mod loopsimplify;
+pub mod peel;
+pub mod pointeraccess;
+pub mod profit;
+pub mod promote;
+pub mod rotate;
+pub mod strength;
+pub mod transform;
+pub mod unroll;
+pub mod unswitch;
+pub mod wholephis;
+pub mod wholestores;

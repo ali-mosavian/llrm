@@ -145,7 +145,7 @@ No emitted code changed during this primary-table inspection.
 
 ## Bounds integrated into division selection
 
-`src/backend/timing.rs` now separates audited multiplication ranges and division
+`crates/llrm-core/src/backend/timing.rs` now separates audited multiplication ranges and division
 widths from the old scoreboard's midpoint guesses. Reciprocal selection
 uses the maximum multiply cost and minimum divide cost. Missing exact-form
 evidence (currently P6 and later profiles) retains IDIV. This is not a
