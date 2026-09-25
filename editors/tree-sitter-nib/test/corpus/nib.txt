@@ -1,0 +1,179 @@
+================================================================================
+Ternary binds tighter than not, and, or
+================================================================================
+
+fn f() -> bool:
+    return !a && b ? c : d || e
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (return_statement
+        (binary_expression
+          (binary_expression
+            (not_expression
+              (identifier))
+            (conditional_expression
+              (identifier)
+              (identifier)
+              (identifier)))
+          (identifier))))))
+
+================================================================================
+Question mark: ternary when a colon follows on the line, else propagation
+================================================================================
+
+fn f() -> i16:
+    let x = g()? + h(y ? -1 : .none)
+    with file = open("x")?:
+        use(file)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (let_statement
+        (identifier)
+        (binary_expression
+          (try_expression
+            (call_expression
+              (identifier)
+              (arguments)))
+          (call_expression
+            (identifier)
+            (arguments
+              (conditional_expression
+                (identifier)
+                (unary_expression
+                  (integer))
+                (variant_expression
+                  (identifier)))))))
+      (with_statement
+        (identifier)
+        (try_expression
+          (call_expression
+            (identifier)
+            (arguments
+              (string
+                (string_content)))))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (arguments
+                (identifier)))))))))
+
+================================================================================
+F-string with format, nested literal, comment character and escaped braces
+================================================================================
+
+fn f() -> void:
+    print(f"{n:3} # {m["k"]} {{z}}")
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (expression_statement
+        (call_expression
+          (identifier)
+          (arguments
+            (fstring
+              (interpolation
+                (identifier)
+                (format_specifier))
+              (string_content)
+              (interpolation
+                (index_expression
+                  (identifier)
+                  (string
+                    (string_content))))
+              (string_content)
+              (escape_sequence)
+              (string_content)
+              (escape_sequence))))))))
+
+================================================================================
+Asm body is raw lines deeper than its header
+================================================================================
+
+fn f() -> u16:
+    unsafe:
+        asm(ah=0, out=(cx=let high), clobbers=[flags]):
+            int 1Ah
+
+            mov ax, 0   ; done
+        return high
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (unsafe_statement
+        (block
+          (asm_statement
+            (asm_input
+              (register)
+              (integer))
+            (asm_outputs
+              (asm_output
+                (register)
+                (identifier)))
+            (asm_clobbers
+              (register))
+            (asm_body))
+          (return_statement
+            (identifier)))))))
+
+================================================================================
+An open bracket stays on its line
+================================================================================
+
+fn a() -> i16:
+    let y = foo(
+    return 2
+
+fn b() -> i16:
+    return 4
+
+--------------------------------------------------------------------------------
+
+
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (let_statement
+        (identifier)
+        (call_expression
+          (identifier)
+          (arguments (MISSING ")"))))
+      (return_statement
+        (integer))))
+  (function_definition
+    (identifier)
+    (parameters)
+    (primitive_type)
+    (block
+      (return_statement
+        (integer)))))

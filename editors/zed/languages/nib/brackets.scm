@@ -1,0 +1,6 @@
+("(" @open ")" @close)
+("[" @open "]" @close)
+("{" @open "}" @close)
+(("\"" @open "\"" @close) (#set! rainbow.exclude))
+(("f\"" @open "\"" @close) (#set! rainbow.exclude))
+(lambda_parameters "|" @open "|" @close)
