@@ -644,7 +644,7 @@ version without it would make qb-qrender bigger.
         a two-and-two pair. `layout.py` keys every op by address, so the two
         collided. What an op emits and which of BC's bytes it stands for are
         separate questions, and `layout.py` now measures a restore by the
-        first. `suite/negnot.bas` is that shape, added because no fixture
+        first. `tests/suite/negnot.bas` is that shape, added because no fixture
         had it -- and with it the corpus is 170 objects, which moved every
         measured count in this file
 
@@ -852,7 +852,7 @@ A benchmark found the one they missed. `bench/fpbench.bas` printed
 address looked like a load and a redundant reload, and deleting the second
 slid every x87 slot after it. Nothing in the suite could have caught it --
 every other float program here is one operation deep, and `fuzzgen.py`'s
-floats stay inside the exactly-representable integers. `suite/fpdeep.bas`
+floats stay inside the exactly-representable integers. `tests/suite/fpdeep.bas`
 is the two-deep indexed shape, added so the corpus holds it now.
 
 Widening the generator to cover it found a second one immediately. It made

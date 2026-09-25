@@ -2936,7 +2936,7 @@ mod tests {
     use crate::objectfile::module::{Addr, Space};
 
     fn fixture(path: &str) -> String {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c").join(path)).unwrap()
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c").join(path)).unwrap()
     }
 
     fn unit(text: &str) -> hir::Unit {

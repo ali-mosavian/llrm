@@ -1151,7 +1151,7 @@ mod tests {
 
     fn fixture(name: &str) -> DebugInfo {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/omf")
+            .join("tests/fixtures/omf")
             .join(name);
         parse(&omf::read(path).unwrap())
     }
@@ -1376,7 +1376,7 @@ mod tests {
     fn dump() {
         std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).unwrap();
         let mut paths = Vec::new();
-        objects(Path::new("fixtures"), &mut paths);
+        objects(Path::new("tests/fixtures"), &mut paths);
         paths.sort();
         let text: String = paths
             .iter()

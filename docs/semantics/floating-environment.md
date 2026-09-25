@@ -114,7 +114,7 @@ regression objects in scope) also has no changed outputs. The 61 focused
 analysis/CSE checks pass; disabling the bounds makes both unknown-integer
 reuse regressions fail as intended.
 
-`suite/fpicse.bas` exposes the missing frontend link. On all three primary
+`tests/suite/fpicse.bas` exposes the missing frontend link. On all three primary
 compilers, assigning a runtime LONG to two DOUBLE variables emits two
 `B$FILD` calls, not typed FLOADs. The earlier INTEGER variant emitted
 `B$FIL2`. These conversions must be recognized at the raise, with verified
@@ -134,7 +134,7 @@ fstp qword [secondValue]
 ```
 
 The final LONG fixture passes three runtime cases on each compiler. Its
-committed objects in `fixtures/regressions/fpicse-{p-g2,q-o,v-g3}.obj`
+committed objects in `tests/fixtures/regressions/fpicse-{p-g2,q-o,v-g3}.obj`
 come from `tools/e2e.py` using the matching `tools/configs.py` configurations,
 with zero severe compile errors, in temporary run
 `qbopt-fpicse-implicit-stxjen_l`. Source is DOS CRLF, as required by BC.
@@ -221,7 +221,7 @@ The 151-object audit changes only the three new FPI2CS fixtures; all prior
 outputs remain identical. The new fixture's -32768, 123 and 32767 cases
 pass on all three compilers. Disabling B$FIL2 recognition fails the emitted
 code regression on each compiler; the focused bounds/helper tests total 20.
-Objects in `fixtures/regressions/fpi2cs-*.obj` came from `suite/fpi2cs.bas`
+Objects in `tests/fixtures/regressions/fpi2cs-*.obj` came from `tests/suite/fpi2cs.bas`
 through e2e/configs in run `qbopt-fil2-final-agr4msen`. The first attempted
 name exceeded the harness's six-character limit once its output prefixes
 were added; that run proved nothing. Stage dumps: `/tmp/qbopt-fil2-final-stages`.
@@ -269,7 +269,7 @@ audit changes only those FPEMU variants and the new FPCALC fixtures, all LIR,
 with no new refusals. Focused analysis/allocation tests: 55 pass, including
 2/4-byte temporary slots and fail-first emitted helper checks. Runtime:
 FPCALC on three compilers (9 cases), changed FPEMU on PDS/VBDOS (24 cases).
-All 33 pass. Fixtures were compiled from `suite/fpcalc.bas` with the named
+All 33 pass. Fixtures were compiled from `tests/suite/fpcalc.bas` with the named
 e2e/configs configurations in `qbopt-fpcalc-frame-26gr7dl1`; FPEMU validation
 is in `qbopt-fpvalue-runtime-a6t2iz_t`. Stage dump:
 `/tmp/qbopt-fpcalc-frame-stages`.

@@ -14,7 +14,7 @@ use crate::support::testing;
 
 #[test]
 fn test_nbody_high_byte_clear_defines_the_word_its_consumer_reads() {
-    let raised = testing::raised("fixtures/bench/nbody-v-g3.obj");
+    let raised = testing::raised("tests/fixtures/bench/nbody-v-g3.obj");
     let op = raised
         .values
         .iter()

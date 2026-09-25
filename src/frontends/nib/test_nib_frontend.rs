@@ -28,7 +28,7 @@ pub(crate) fn root() -> PathBuf {
 }
 
 pub(crate) fn fixture(name: &str) -> PathBuf {
-    root().join("fixtures/nib").join(name)
+    root().join("tests/fixtures/nib").join(name)
 }
 
 /// `driver.parsed(source)`.
@@ -1343,7 +1343,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
 /// pascal16 pushes the first argument first, names symbols in upper case, and
 /// the callee removes the arguments with `retf n`.
 fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
-    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nib"));
+    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/pascal/levels.nib"));
     let module =
         nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["CLAMP", "_main"]);
@@ -1607,7 +1607,7 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
 /// Section 15: a qb45 export takes BASIC's arguments first to last, each a
 /// near pointer, and removes them; it links without the Nib runtime.
 fn test_a_qb45_library_takes_basic_arguments_by_reference() {
-    let source = root().join("docs/examples/basic/sortlib.nib");
+    let source = root().join("examples/basic/sortlib.nib");
     let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["SORTSCORES", "UPPER", "AVERAGE", "ROWTOTAL", "INITIALS"]);
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
@@ -1662,7 +1662,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
 /// runs with DGROUP in DS and ES and the direction flag clear, and leaves
 /// by `iret`. Its name is its far address, a `dd` the linker fills.
 fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
-    let source = root().join("docs/examples/ticker.nib");
+    let source = root().join("examples/ticker.nib");
     let program = parsed(&source);
     let text = listing_on(&program, "main", &level("O2"), "486");
     let lines: Vec<&str> = between(&text, "_tick proc far", "_tick endp").lines().map(str::trim).collect();

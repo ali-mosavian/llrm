@@ -95,7 +95,7 @@ fn test_qrender_main_spill_uses_shutdown_control_proof() {
     use crate::support::testing;
 
     for terminal in [true, false] {
-        let path = "fixtures/regressions/qrender-main-v-g3.obj";
+        let path = "tests/fixtures/regressions/qrender-main-v-g3.obj";
         let found = testing::loaded(path).unwrap();
         // These two external BASIC procedures enter B$ENRA before reading flags.
         let inputs = BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di]);

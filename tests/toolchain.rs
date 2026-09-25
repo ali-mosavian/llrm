@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/nib/start.asm");
+    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/frontends/nib/runtime/start.asm");
     let assembled = Command::new(bin.join("jwasm"))
         .args(["-q", "-c", "-Cp", "-Zg", "-omf"])
         .arg(format!("-Fo{}", scratch.path().join("START.OBJ").display()))
@@ -57,7 +57,7 @@ fn test_nib_build_links_the_interop_example_with_its_c_library() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-nib")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let exe = scratch.path().join("INTEROP.EXE");
-    let example = root.join("docs/examples/interop");
+    let example = root.join("examples/interop");
     let status = Command::new(root.join("tools/nib-build.sh"))
         .arg(example.join("main.nib"))
         .arg(&exe)

@@ -25,7 +25,7 @@ rather than a rewrite.
 
 ## The experiment
 
-Build `suite/metal.bas` plus a timing stub into a self-contained `METAL.EXE`
+Build `tests/suite/metal.bas` plus a timing stub into a self-contained `METAL.EXE`
 that needs no toolchain on the target machine. For each shape below, run the BC
 form and the widened form back to back and print both.
 

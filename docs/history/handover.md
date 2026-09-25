@@ -106,10 +106,10 @@ The old search was one byte late on 22 of 110 objects. `U_FLAG`, the header's
 last word, carries the compile switches, which is what identifies the `/V /W`
 event stub -- seeding it maps the 14 objects that could not be mapped before.
 Corpus: 110 of 110 mapped, 1237 of 1332 regions, 24009 -> 15321 bytes.
-`suite/fpemu.bas` is back in `MOVABLE`, and the nop-motion test passes on all
+`tests/suite/fpemu.bas` is back in `MOVABLE`, and the nop-motion test passes on all
 three compilers with it.
 
-**`suite/fpemu.bas` is written, and the FP emulator question is answered: yes,
+**`tests/suite/fpemu.bas` is written, and the FP emulator question is answered: yes,
 moving is safe.** The program does its floating point after a long divide and a
 long remainder, each of which grows its call site under `/G3`, so the pass moves
 all 27 of its `int 34h`..`3Bh` sites itself -- the first from 0x5d to 0x60, the
@@ -124,7 +124,7 @@ was not absorbed at all and carried a pre-absorption census line. Measured:
 eighteen bytes for the divide, twenty-one for the remainder, against fifteen
 under `/G3` and twenty-one elsewhere. `calls.py`'s emitter is `dividing` now.
 
-**A real dynamic number exists.** `bench/nbody.bas` is `suite/nbody.bas`'s
+**A real dynamic number exists.** `bench/nbody.bas` is `tests/suite/nbody.bas`'s
 Q23.9 integrator, and BC alone builds the base half of the comparison.
 `tools/bench.py` reads
 the 8253 the way `docs/measurement/readme.md` prescribes; getting a repeatable
@@ -146,7 +146,7 @@ where the pushes sit; `consume()` in `calls.py` pops every one of them
 unconditionally rather than reloading any -- reloading a classifiable operand
 while its own push stays on the stack would leak four bytes per call,
 forever, which is what an earlier, unreviewed draft of this would have done.
-Verified byte-identical on every site already absorbed; `suite/arrays.bas`
+Verified byte-identical on every site already absorbed; `tests/suite/arrays.bas`
 (added because the corpus has zero indexed or stranded-call examples) goes
 from 1 of 8 call sites absorbed to 8 of 8. `bench/nbody.bas` goes from 3
 regions taken to 26 of 28, and the timing number above moved with it.

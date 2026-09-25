@@ -29,7 +29,7 @@ fn _block(raw: &str, at: usize, successors: &[usize]) -> Block {
 #[test]
 fn test_main_layout_uses_runtime_specific_fixed_prefix() {
     for (tag, floor) in [("q-O", -34), ("p-g2", -42), ("v-g3", -44)] {
-        let found = load(&format!("fixtures/omf/chain-{tag}.obj").to_lowercase());
+        let found = load(&format!("tests/fixtures/omf/chain-{tag}.obj").to_lowercase());
         assert_eq!(_layout(&found), Some((floor, 24)), "{tag}");
     }
 }
@@ -96,7 +96,7 @@ fn test_unbalanced_loop_loses_depth_instead_of_iterating_forever() {
 
 #[test]
 fn test_event_and_error_modules_keep_their_original_alias_facts() {
-    for fixture in ["fixtures/omf/chain-p-evt.obj", "fixtures/omf/divmod-p-g2.obj"] {
+    for fixture in ["tests/fixtures/omf/chain-p-evt.obj", "tests/fixtures/omf/divmod-p-g2.obj"] {
         let found = load(fixture);
         let body = RaisedBody::new(MirBody::new(0x30, Vec::new()));
         let contracts = runtime::for_module(&found, None).unwrap();
@@ -107,7 +107,7 @@ fn test_event_and_error_modules_keep_their_original_alias_facts() {
 /// PUSH [local] / POP [local] must not claim the explicit local access excludes itself.
 #[test]
 fn test_push_pop_frame_operand_is_not_its_implicit_stack_access() {
-    let found = load("fixtures/omf/chain-p-g2.obj");
+    let found = load("tests/fixtures/omf/chain-p-g2.obj");
     for pushing in [true, false] {
         let block = _block(if pushing { "ff76e6" } else { "50 8f46e6" }, 0x30, &[]);
         let at = block.insns.last().unwrap().at as i64;
@@ -140,7 +140,7 @@ fn test_push_pop_frame_operand_is_not_its_implicit_stack_access() {
 /// PL_MOVE refused emission at 2337: PUSH dword [BX] became a read of [SP-8].
 #[test]
 fn test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination() {
-    let path = "fixtures/regressions/qrender-pl-move-v-g3.obj";
+    let path = "tests/fixtures/regressions/qrender-pl-move-v-g3.obj";
     let found = testing::loaded(path).unwrap();
     let mut contracts = runtime::for_module(&found, None).unwrap();
     let raised = crate::model::mir::bodies(&found, &testing::partitioned(path), Some(&mut contracts), false, false).unwrap();
@@ -162,7 +162,7 @@ fn test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination() {
 #[test]
 fn test_chain_constant_divisors_survive_argument_setup() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let data = testing::data(format!("fixtures/omf/chain-{tag}.obj").to_lowercase());
+        let data = testing::data(format!("tests/fixtures/omf/chain-{tag}.obj").to_lowercase());
         let (result, bodies) = testing::emitted_mir(&data, "mir-widen", "");
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}: {}", result.reason);
         assert!(!bodies.is_empty(), "{tag}");

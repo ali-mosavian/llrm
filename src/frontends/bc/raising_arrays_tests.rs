@@ -23,7 +23,7 @@ const TAGS: [&str; 3] = ["p-g2", "q-O", "v-g3"];
 #[test]
 fn test_dim_normal_return_supplies_descriptor_constants() {
     for tag in TAGS {
-        let path = format!("fixtures/omf/harr-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/omf/harr-{tag}.obj").to_lowercase();
         let found = testing::loaded(&path).unwrap();
         let body = nth(&testing::raised(&path), 0);
         let call = ops(&body).into_iter().find(|op| op.array.is_some()).unwrap();
@@ -43,7 +43,7 @@ fn test_dim_normal_return_supplies_descriptor_constants() {
 #[test]
 fn test_descriptor_fields_have_proven_addresses_without_new_relocations() {
     for tag in TAGS {
-        let path = format!("fixtures/omf/harr-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/omf/harr-{tag}.obj").to_lowercase();
         let found = testing::loaded(&path).unwrap();
         let body = nth(&testing::raised(&path), 0);
         let fields: Vec<MemRef> =
@@ -70,7 +70,7 @@ fn test_descriptor_fields_have_proven_addresses_without_new_relocations() {
 fn test_real_array_requests() {
     for tag in TAGS {
         for (name, bounds) in [("harr", vec![(0, 20), (0, 20)]), ("segld", vec![(0, 100)])] {
-            let path = format!("fixtures/omf/{name}-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/omf/{name}-{tag}.obj").to_lowercase();
             let found = testing::loaded(&path).unwrap();
             let requests: Vec<ArrayRequest> =
                 testing::all_ops(&testing::raised(&path)).into_iter().filter_map(|op| op.array).collect();
@@ -88,7 +88,7 @@ fn test_real_array_requests() {
 #[test]
 fn test_nine_dimensional_loop_proves_its_element_store_extent() {
     for tag in TAGS {
-        let body = nth(&testing::raised(format!("fixtures/regressions/ndarr-{tag}.obj").to_lowercase()), 0);
+        let body = nth(&testing::raised(format!("tests/fixtures/regressions/ndarr-{tag}.obj").to_lowercase()), 0);
         let stores: Vec<MemRef> = ops(&body).into_iter().flat_map(|op| op.stores).filter(|one| one.pointer).collect();
         assert!(!stores.is_empty(), "{tag}");
         assert!(stores.iter().all(|one| one.allocation.is_some()), "{tag}");

@@ -10,7 +10,7 @@ use crate::objectfile::module::{self, Module};
 use crate::support::hash::IndexMap;
 
 fn fpcsex() -> Module {
-    module::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/omf/fpcsex-p-g2.obj")).unwrap().unwrap()
+    module::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/omf/fpcsex-p-g2.obj")).unwrap().unwrap()
 }
 
 fn first_call(found: &Module) -> i64 {

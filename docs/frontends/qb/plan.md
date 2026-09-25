@@ -28,7 +28,7 @@ The first Phase 1 slice is present under `src/hir/`:
 - an identity-independent MIR projection plus a test that carries an indexed
   array access through existing LIR lowering.
 
-The first source-compiler slice now also exists under `frontends/qb/` and
+The first source-compiler slice now also exists under `crates/qbfront/` and
 `src/frontends/qb/`: a dialect lexer and typed parser, direct semantic HIR
 construction, a replayable process boundary, whole integer/LONG and floating
 expressions, fixed numeric arrays, and CFG construction for IF, FOR, DO,
@@ -164,7 +164,7 @@ remain to connect.
 ## Phase 2: extract the QBasic parser in tree
 
 - Import the minimal Rust lexer/parser/table generator from
-  `~/work/personal/qbasic-port` into `frontends/qb/`, preserving provenance
+  `~/work/personal/qbasic-port` into `crates/qbfront/`, preserving provenance
   and license notices.
 - Replace p-code `EMIT` actions with named semantic actions and rollback-safe
   builder checkpoints.

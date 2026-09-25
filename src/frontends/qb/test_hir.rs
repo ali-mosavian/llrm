@@ -4,7 +4,7 @@
 //! in `src/hir/test_hir.rs`.
 //!
 //! Sources are parsed by `QBOPT_QBFRONT` when set, else by `cargo run` on
-//! `frontends/qb`, exactly as the driver does.
+//! `crates/qbfront`, exactly as the driver does.
 
 #![allow(dead_code)]
 
@@ -40,7 +40,7 @@ pub(super) fn parsed(source: &Path) -> Program {
 }
 
 pub(super) fn fixture(name: &str) -> PathBuf {
-    root().join("frontends/qb/fixtures").join(name)
+    root().join("crates/qbfront/fixtures").join(name)
 }
 
 /// `qb_compile.assembled(program)`.

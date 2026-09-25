@@ -107,7 +107,7 @@ fn test_sqrt_facts_require_an_exact_rational_square() {
 #[test]
 fn test_a_loop_exit_repeats_its_stores_every_iteration() {
     use crate::objectfile::{module, omf};
-    let data = std::fs::read("fixtures/omf/fpcse-p-g2.obj").unwrap();
+    let data = std::fs::read("tests/fixtures/omf/fpcse-p-g2.obj").unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
     let blocks = crate::frontends::bc::blocks::partition(&found, &crate::frontends::bc::blocks::code_map(&found).unwrap());
     let raised = crate::model::mir::bodies(&found, &blocks, None, false, false).unwrap();
@@ -123,7 +123,7 @@ fn test_a_loop_exit_repeats_its_stores_every_iteration() {
 #[test]
 fn test_fpcse_known_inputs_reach_float_computations() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let path = format!("fixtures/omf/fpcse-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/omf/fpcse-{tag}.obj").to_lowercase();
         let found = testing::module(&path);
         let body = testing::main_body(&found, &testing::blocks_of(&found));
         // Explicit initial contents of this fixture's constant pool, not a
@@ -157,7 +157,7 @@ fn test_fpcse_known_inputs_reach_float_computations() {
 /// A constant-pool seed is an entry fact, not immutable memory after a write.
 #[test]
 fn test_entry_bytes_are_killed_by_a_store() {
-    let found = testing::module("fixtures/omf/fpcse-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/fpcse-p-g2.obj");
     let body = testing::main_body(&found, &testing::blocks_of(&found));
     let store = testing::ops(&body).into_iter().find(|op| op.kind == Kind::Store).unwrap();
     let reference = store.stores[0].clone();

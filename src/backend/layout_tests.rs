@@ -176,7 +176,7 @@ fn test_inverted_fallthrough_branch_targets_the_other_edge() {
     assert_eq!(last, Some(targeted(Operation::Branch, "jle", 40)));
 }
 
-/// suite/arrays' second loop never exited: `jle latch; jmp body`. The empty
+/// tests/suite/arrays' second loop never exited: `jle latch; jmp body`. The empty
 /// latch was given its jump back to the body, and the exit edge fell into it.
 #[test]
 fn test_a_jump_given_to_an_empty_block_does_not_steal_its_predecessors_fallthrough() {
@@ -206,7 +206,7 @@ fn test_a_jump_given_to_an_empty_block_does_not_steal_its_predecessors_fallthrou
 /// PRESSX retained an unconditional jump to its exit immediately after loop elimination.
 #[test]
 fn test_pressx_has_no_jump_to_the_following_instruction() {
-    let result = emitted("fixtures/omf/pressx-p-g2.obj");
+    let result = emitted("tests/fixtures/omf/pressx-p-g2.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
     let found = module::of(&omf::parse(&result.data).unwrap()).unwrap();
     let mapped = split::code_map(&found).unwrap();
@@ -318,7 +318,7 @@ fn test_a_jump_to_the_block_placed_next_emits_nothing() {
 #[test]
 #[ignore = "fails in Python too: 0x0085: 12 bytes between the ops are not instructions"]
 fn test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() {
-    let result = emitted("fixtures/omf/wendgo-q-o.obj");
+    let result = emitted("tests/fixtures/omf/wendgo-q-o.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
     let found = module::of(&omf::parse(&result.data).unwrap()).unwrap();
     let mapped = split::code_map(&found).unwrap();
@@ -343,7 +343,7 @@ fn test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() {
 #[test]
 #[ignore = "fails in Python too: 0x007a: 18 bytes between the ops are not instructions"]
 fn test_a_jump_over_a_block_holding_a_phi_copy_is_kept() {
-    let result = emitted("fixtures/omf/rcflip-q-o.obj");
+    let result = emitted("tests/fixtures/omf/rcflip-q-o.obj");
     assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
     let found = module::of(&omf::parse(&result.data).unwrap()).unwrap();
     let mapped = split::code_map(&found).unwrap();
@@ -392,7 +392,7 @@ fn test_linear_placement_requires_one_complete_acyclic_chain() {
 #[test]
 fn test_removed_floating_loop_is_emitted_in_execution_order() {
     for tag in ["p-g2", "q-o", "v-g3"] {
-        let result = emitted(&format!("fixtures/omf/fpcse-{tag}.obj"));
+        let result = emitted(&format!("tests/fixtures/omf/fpcse-{tag}.obj"));
         assert_eq!(result.outcome, wholeseg::Emission::Lir, "{}", result.reason);
         let found = module::of(&omf::parse(&result.data).unwrap()).unwrap();
         let mapped = split::code_map(&found).unwrap();
@@ -527,7 +527,7 @@ fn test_block_entry_is_not_the_first_clone_of_its_source_address() {
 /// SCREEN's BG_BAND skipped a split exit and incremented x as the next row.
 #[test]
 fn test_split_exit_executes_its_reload_before_the_increment() {
-    let found = module::of(&omf::parse(&std::fs::read("fixtures/omf/harr-v-g3.obj").unwrap()).unwrap()).unwrap();
+    let found = module::of(&omf::parse(&std::fs::read("tests/fixtures/omf/harr-v-g3.obj").unwrap()).unwrap()).unwrap();
     let bridge = 0x1_0000_0001;
     let op = |at: i64, meaning: Semantics| {
         Arc::new(Insn { symbol: Some(false), ..Insn::new(at, Some((at, at)), Some(meaning), vec![], vec![]) })
@@ -586,8 +586,8 @@ fn test_split_exit_executes_its_reload_before_the_increment() {
 /// keyed by `at`, the relocation stays behind and the address comes out a bare zero.
 #[test]
 fn test_a_moved_operation_keeps_its_fixup() {
-    let found = crate::support::testing::loaded("fixtures/omf/hotlop-p-g2.obj").unwrap();
-    let raised = crate::support::testing::raised("fixtures/omf/hotlop-p-g2.obj");
+    let found = crate::support::testing::loaded("tests/fixtures/omf/hotlop-p-g2.obj").unwrap();
+    let raised = crate::support::testing::raised("tests/fixtures/omf/hotlop-p-g2.obj");
     let found = raised.source.applied(&found);
     assert!(!found.refs.is_empty(), "the raise recorded no relocations at all");
     let selected: Vec<Insn> = raised
@@ -611,7 +611,7 @@ fn test_a_moved_operation_keeps_its_fixup() {
 /// Qrender mov at 0941 inherited B$PER4's target and refused with no relocation field.
 #[test]
 fn test_load_hoisted_to_call_does_not_acquire_call_fixup() {
-    let path = "fixtures/regressions/qrender-view-v-g3.obj";
+    let path = "tests/fixtures/regressions/qrender-view-v-g3.obj";
     let found = crate::support::testing::loaded(path).unwrap();
     let raised = crate::support::testing::raised(path);
     let ops = crate::support::testing::all_ops(&raised);
@@ -761,7 +761,7 @@ fn test_a_register_sum_drops_the_fixup_of_the_read_it_replaced() {
 /// Qrender h_frame reported build time zero: layout moved XOR across CMP.
 #[test]
 fn test_zeroing_stays_before_the_comparison_in_emitted_bytes() {
-    let found = module::of(&omf::parse(&std::fs::read("fixtures/omf/harr-v-g3.obj").unwrap()).unwrap()).unwrap();
+    let found = module::of(&omf::parse(&std::fs::read("tests/fixtures/omf/harr-v-g3.obj").unwrap()).unwrap()).unwrap();
     let empty = mir::MirBody::new(0x30, vec![mir::MirBlock::new(0x30, vec![], vec![], vec![])]);
     let lowered = crate::backend::lower::lowered(
         "flags",

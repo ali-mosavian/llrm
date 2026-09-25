@@ -15,7 +15,7 @@ pub fn ROOT() -> PathBuf {
 
 #[allow(non_snake_case)]
 pub fn MANIFEST() -> PathBuf {
-    ROOT().join("frontends").join("qb").join("Cargo.toml")
+    ROOT().join("crates/qbfront/Cargo.toml")
 }
 
 /// `DIALECTS`: the QB-family `hir.Dialect` values.

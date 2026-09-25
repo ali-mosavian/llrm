@@ -240,7 +240,7 @@ fn constant_exit_replaces_an_unobserved_accumulator() {
 /// ADDRM's 1..20 long sum reaches PRINT as 210, with no remaining loop arithmetic.
 #[test]
 fn test_addrm_long_sum_is_computed_outside_the_store_loop() {
-    let found = testing::module("fixtures/omf/addrm-v-g3.obj");
+    let found = testing::module("tests/fixtures/omf/addrm-v-g3.obj");
     let partition = testing::blocks_of(&found);
     let body = transform::applied(
         &testing::main_body(&found, &partition),
@@ -282,7 +282,7 @@ fn test_addrm_long_sum_is_computed_outside_the_store_loop() {
 fn test_accumulation_has_no_backedge() {
     for program in ["lngmxx", "hotlop"] {
         for tag in ["p-g2", "q-o", "v-g3"] {
-            let result = testing::emitted_lir(format!("fixtures/omf/{program}-{tag}.obj"));
+            let result = testing::emitted_lir(format!("tests/fixtures/omf/{program}-{tag}.obj"));
             let partition = testing::graph(&testing::partitioned_bytes(&result.data));
             assert!(loops::loops(&partition, Some(0x30)).is_empty(), "{program}-{tag}");
         }

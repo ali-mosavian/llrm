@@ -16,9 +16,9 @@ use super::*;
 use crate::analysis::regions::{self, RegionLayout};
 use crate::objectfile::omf;
 
-/// conftest's `fixtures`.
+/// conftest's `tests/fixtures`.
 pub(crate) fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/omf")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/omf")
 }
 
 /// conftest's `obj`: every committed OMF object, sorted by name. Python's
@@ -210,7 +210,7 @@ fn test_may_alias_is_conservative_about_the_unknown() {
 
 #[test]
 fn test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/omf/matrix-p-g2.obj");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/omf/matrix-p-g2.obj");
     let found = of(&omf::parse(&std::fs::read(path).unwrap()).unwrap()).unwrap();
     let bounds = landmarks(&found);
     let seen = &bounds[&(Space::Segment, 5)];

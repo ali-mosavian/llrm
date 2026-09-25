@@ -62,7 +62,7 @@ No selector extraction is added to MIR. The frontend also proves that the
 helper's old selector result is dead before removing it. Unproved consumers,
 string indirection, floating accesses and other layouts still refuse explicitly.
 
-`fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
+`tests/fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
 and VBDOS. Its 201-by-201 INTEGER array includes two transposed pairs of
 accesses: `(4,161)/(5,161)` cross byte 65536 under QB/PDS, while
 `(163,2)/(163,3)` do so under VBDOS's reversed dimension order.

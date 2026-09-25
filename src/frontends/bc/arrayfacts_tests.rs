@@ -17,7 +17,7 @@ use crate::support::testing;
 #[test]
 fn test_arrphi_proves_both_unknown_branches_and_the_join() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let ops = testing::all_ops(&testing::raised(format!("fixtures/regressions/arrphi-{tag}.obj").to_lowercase()));
+        let ops = testing::all_ops(&testing::raised(format!("tests/fixtures/regressions/arrphi-{tag}.obj").to_lowercase()));
         let pointers: Vec<&MemRef> =
             ops.iter().flat_map(|op| op.loads.iter().chain(&op.stores)).filter(|one| one.pointer).collect();
         assert_eq!(pointers.len(), 6, "{tag}");

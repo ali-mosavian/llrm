@@ -156,7 +156,7 @@ fn fixtures() -> Vec<String> {
 /// HARR's descriptor at segment 5 + 6 was reported as the constant zero.
 #[test]
 fn test_relocated_descriptor_address_is_not_integer_zero() {
-    let obj = "fixtures/omf/harr-p-g2.obj";
+    let obj = "tests/fixtures/omf/harr-p-g2.obj";
     let found = testing::loaded(obj).unwrap();
     assert_eq!(found.operands[&0x70].disp, 6);
     let body = raised(obj).into_iter().find(|body| testing::ops(body).iter().any(|op| op.at == 0x6F)).unwrap();
@@ -169,7 +169,7 @@ fn test_relocated_descriptor_address_is_not_integer_zero() {
 /// CHAIN printed MODMOD=92344 instead of 13106 after stale DX replaced a folded high word.
 #[test]
 fn test_folded_extraction_has_no_implicit_machine_result() {
-    let found = testing::module("fixtures/regressions/chain-stack-q-o.obj");
+    let found = testing::module("tests/fixtures/regressions/chain-stack-q-o.obj");
     let body = testing::main_body(&found, &testing::blocks_of(&found));
     let folded = transform::folded(&body, &found.dgroup.members, &found.calls).unwrap();
     let folded = transform::folded(&folded, &found.dgroup.members, &found.calls).unwrap();
@@ -308,7 +308,7 @@ fn test_every_known_value_is_defined_by_an_operation_that_computes_it() {
 #[test]
 fn test_a_comparison_result_folds_to_basics_own_true() {
     let mut seen = 0;
-    for body in raised("fixtures/omf/cmpord-p-evt.obj") {
+    for body in raised("tests/fixtures/omf/cmpord-p-evt.obj") {
         let facts = known(&body, None, None, None, None);
         for op in testing::ops(&body) {
             let Some(target) = _defined(&op) else { continue };

@@ -38,7 +38,7 @@ use crate::objectfile::omf;
 // ---- small helpers -------------------------------------------------------
 
 fn compat(path: &str) -> std::path::PathBuf {
-    root().join("frontends/qb/compat").join(path)
+    root().join("crates/qbfront/compat").join(path)
 }
 
 /// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., unchecked_bounds=...)`.

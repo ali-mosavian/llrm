@@ -2,7 +2,7 @@
 
 Status: initial implementation. `src/hir/` contains the typed model, strict
 versioned JSON codec, verifier, canonical MIR projection, and adapter to
-existing MIR. `frontends/qb/` is now a real producer for numeric, control-flow,
+existing MIR. `crates/qbfront/` is now a real producer for numeric, control-flow,
 string, file, array, and procedure slices; source reaches existing MIR without
 p-code or a BC object. The QB adapter emits fresh BASIC-envelope OMF,
 including procedure scaffolding, module headers, BASIC segments, and measured

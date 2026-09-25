@@ -57,7 +57,7 @@ frontend's stated language/runtime target.
 
 ### 1. Numeric frame zeroing
 
-`frontends/qb/fixtures/runtime-frame-basic.bas` has one INTEGER and one LONG
+`crates/qbfront/fixtures/runtime-frame-basic.bas` has one INTEGER and one LONG
 automatic local. VBDOS BC's raw object and the fresh object both set `CX=6`,
 `BX=0`, and call `B$ENRA`. The runtime body executes `sub sp,cx`, selects DS for
 the zeroing destination, shifts the byte count by one and executes `rep stosw`.
@@ -75,7 +75,7 @@ about every compiler mode until QB 4.5 and PDS have the same raw-object probe.
 
 ### 2. Large live automatic extent
 
-`frontends/qb/fixtures/runtime-frame-stack.bas` keeps a 4096-byte fixed STRING
+`crates/qbfront/fixtures/runtime-frame-stack.bas` keeps a 4096-byte fixed STRING
 live by assigning it. BC and the fresh frontend both put `1000h` in `CX`, zero
 `BX`, and call `B$ENRA`; the fresh local begins at `BP-1014h`, immediately below
 VBDOS's 20-byte runtime header. Linked only with `VBDCL10E.LIB`, it prints:

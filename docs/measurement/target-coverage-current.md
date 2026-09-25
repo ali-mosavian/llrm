@@ -2,7 +2,7 @@
 
 ## Coverage completion — 2026-09-16
 
-All **38** source identities currently present in `fixtures/omf` now have an
+All **38** source identities currently present in `tests/fixtures/omf` now have an
 explicit scoreboard classification.  Thirty-two are optimization programs
 with source-derived targets.  Six are explicitly out of scope: BYREF2 and
 NESTUD are CodeView/ABI fixtures, CM and JT are inherited OMF fixtures, and
@@ -144,7 +144,7 @@ store packing and load PRE. This is not a replacement for the full scan below.
 | FPCSEX | 4461 | 4456 | 4446 | Provisional; old reference changes rounding/order |
 | NBODY benchmark | — | — | 352102 | No registered target; outside the 487-object scan |
 
-The first six rows use `fixtures/omf`; NBODY uses `fixtures/bench/nbody-v-g3.obj`.
+The first six rows use `tests/fixtures/omf`; NBODY uses `tests/fixtures/bench/nbody-v-g3.obj`.
 All 19 emitted through LIR and were measurable. No comparable row in this
 selection regressed or exceeds 1.5x. This does not establish whole-corpus
 correctness or validate the remaining references. FPCSEX improves by six model
@@ -165,7 +165,7 @@ and byte ownership, not just redirect the graph.
 
 Measured **2026-09-10**, compiler revision **8e951b5**, with
 `uv run python tools/opportunity.py --targets` over all **487 objects** in
-`fixtures/omf` (**34 source programs**). These are model-weighted instruction
+`tests/fixtures/omf` (**34 source programs**). These are model-weighted instruction
 costs, including configured helper costs—not hardware timings. Default loop
 weighting is ten iterations per nesting level, capped at three levels.
 All rows were rescored in one integration run after the recent raise, loop
@@ -186,7 +186,7 @@ percentage. The architecture checklist remains independently binding.
 Comparability here is the scorer's classification, not a new independent
 audit of every registered reference. The 105 provisional rows comprise
 81 event builds, 12 ordinary FPCSEX builds and 12 ordinary FPDEEP builds.
-Recent regression fixtures in `fixtures/regressions` are outside this
+Recent regression fixtures in `tests/fixtures/regressions` are outside this
 default scan and are not implied covered by these totals.
 
 ## Largest comparable gap

@@ -40,7 +40,7 @@ fn test_what_ends_a_block() {
 #[test]
 fn test_runtime_return_does_not_fall_into_the_next_statement() {
     for tag in ["p-evt", "v-evt"] {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/omf/addrm-{tag}.obj"));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/omf/addrm-{tag}.obj"));
         let mut found = loaded(path).unwrap();
         found.code = hx("9a 00 00 00 00 90 c3");
         found.start = 0;
@@ -97,7 +97,7 @@ fn test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump() {
 #[test]
 fn test_rebuilt_event_code_is_fully_visible() {
     for tag in ["p-evt", "v-evt"] {
-        let result = crate::support::testing::emitted(&crate::support::testing::data(format!("fixtures/omf/addrm-{tag}.obj")));
+        let result = crate::support::testing::emitted(&crate::support::testing::data(format!("tests/fixtures/omf/addrm-{tag}.obj")));
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}");
         let found = crate::support::testing::loaded_bytes(&result.data).unwrap();
         let code = instructions(&found).unwrap();

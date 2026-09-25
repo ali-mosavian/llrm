@@ -13,7 +13,7 @@ use crate::optimize::{loopmotion, transform};
 use crate::support::testing;
 
 fn fpcse(tag: &str) -> (Rc<Module>, Rc<MirBody>) {
-    let found = testing::module(&format!("fixtures/omf/fpcse-{tag}.obj"));
+    let found = testing::module(&format!("tests/fixtures/omf/fpcse-{tag}.obj"));
     let body = testing::main_body(&found, &testing::blocks_of(&found));
     (found, body)
 }
@@ -64,7 +64,7 @@ fn test_emitted_final_answer_has_the_correct_symbol() {
             .unwrap()
             .stores[0]
             .clone();
-        let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/omf/fpcse-{tag}.obj")));
+        let (result, states) = testing::emitted_states(&testing::data(format!("tests/fixtures/omf/fpcse-{tag}.obj")));
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
         let states: Vec<MirBody> =
             states.into_iter().filter(|(stage, _, _)| stage == "mir-r01-floatloop").map(|(_, _, one)| one).collect();

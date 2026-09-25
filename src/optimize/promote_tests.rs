@@ -850,7 +850,7 @@ fn promoted_with_landmarks(body: &MirBody, found: &Module) -> Rc<MirBody> {
 /// flags printed BOTH=nonzero for zero after promotion rebound CSE's constant to an entry phi.
 #[test]
 fn test_promotion_preserves_existing_cse_value_edges() {
-    let (found, blocks, body) = raised_main("fixtures/omf/flags-p-g2.obj");
+    let (found, blocks, body) = raised_main("tests/fixtures/omf/flags-p-g2.obj");
     let body = applied(&found, &blocks, &body, Options { promote: false, ..Default::default() });
     let stored = all_ops(&body).find(|op| op.at == 0x122).unwrap();
     let result = promoted_with_landmarks(&body, &found);
@@ -864,7 +864,7 @@ fn test_promotion_preserves_existing_cse_value_edges() {
 /// so the loop consumed the old memory contents instead of 7.
 #[test]
 fn test_hotlop_keeps_initialization_for_memory_arithmetic() {
-    let (found, _, body) = raised_main("fixtures/omf/hotlop-p-g2.obj");
+    let (found, _, body) = raised_main("tests/fixtures/omf/hotlop-p-g2.obj");
     let multiply = all_ops(&body).find(|op| op.at == 0x4B).unwrap();
     let cell = &multiply.loads[0];
     let stores: Vec<&Op> =
@@ -878,7 +878,7 @@ fn test_hotlop_keeps_initialization_for_memory_arithmetic() {
 /// A load arriving before the first store must not become an undefined SSA input.
 #[test]
 fn test_a_read_before_assignment_keeps_its_memory_value() {
-    let (found, _, body) = raised_main("fixtures/omf/press-p-g2.obj");
+    let (found, _, body) = raised_main("tests/fixtures/omf/press-p-g2.obj");
     let load = all_ops(&body).find(|op| op.at == 0x94).unwrap().clone();
     let store = all_ops(&body).find(|op| op.at == 0x98).unwrap().clone();
     let mut body = (*body).clone();
@@ -891,7 +891,7 @@ fn test_a_read_before_assignment_keeps_its_memory_value() {
 /// A later call cannot invalidate an earlier read; an intervening call must.
 #[test]
 fn test_only_an_intervening_call_invalidates_a_stored_value() {
-    let (found, _, body) = raised_main("fixtures/omf/press-p-g2.obj");
+    let (found, _, body) = raised_main("tests/fixtures/omf/press-p-g2.obj");
     let ops: Vec<&Op> = all_ops(&body).collect();
     let load = ops.iter().find(|op| op.at == 0x94).unwrap();
     let store = ops.iter().find(|op| op.at == 0x98).unwrap();
@@ -922,7 +922,7 @@ fn test_only_an_intervening_call_invalidates_a_stored_value() {
 #[test]
 fn test_spill_accumulator_is_a_loop_carried_value() {
     for tag in ["p-g2", "q-o", "v-g3"] {
-        let (found, blocks, body) = raised_main(&format!("fixtures/omf/spill-{tag}.obj"));
+        let (found, blocks, body) = raised_main(&format!("tests/fixtures/omf/spill-{tag}.obj"));
         let result = applied(&found, &blocks, &body, Options::default());
         let every = loops::loops(&result.blocks, Some(result.entry));
         let inner: BTreeSet<i64> = every
@@ -945,7 +945,7 @@ fn test_spill_accumulator_is_a_loop_carried_value() {
 /// ADDRM reloaded u on all 20 iterations despite initializing both words to zero.
 #[test]
 fn test_addrm_long_accumulator_survives_split_initialization() {
-    let (found, blocks, body) = raised_main("fixtures/omf/addrm-v-g3.obj");
+    let (found, blocks, body) = raised_main("tests/fixtures/omf/addrm-v-g3.obj");
     let cell = all_ops(&body).flat_map(|op| &op.loads).find(|one| one.width == 4 && one.base.is_none()).unwrap();
     let layout = RegionLayout { shared_segments: Some(found.dgroup.shared.clone()), ..Default::default() };
     let output: Vec<Option<u32>> = all_ops(&body)
@@ -974,7 +974,7 @@ fn test_addrm_long_accumulator_survives_split_initialization() {
 #[test]
 fn test_guarded_indexed_accumulators_do_not_reload_in_loop() {
     for tag in ["p-g2", "v-g3"] {
-        let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/regressions/udtrng-{tag}.obj")));
+        let (result, states) = testing::emitted_states(&testing::data(format!("tests/fixtures/regressions/udtrng-{tag}.obj")));
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
         let body = &states.last().unwrap().2;
         let hot: BTreeSet<i64> =
@@ -994,7 +994,7 @@ fn test_guarded_indexed_accumulators_do_not_reload_in_loop() {
 /// press's loop counter is global: forwarding its load cannot delete its stores.
 #[test]
 fn test_promoted_global_remains_visible_outside_the_body() {
-    let found = testing::module("fixtures/omf/press-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/press-p-g2.obj");
     let body = testing::main_body(&found, &testing::blocks_of(&found));
     let bounds = module::landmarks(&found);
     let result = promoted(&body, &found.dgroup.members, Some(&bounds), false, true, false).unwrap();
@@ -1013,7 +1013,7 @@ fn test_promoted_global_remains_visible_outside_the_body() {
 fn test_promotion_is_only_sound_because_the_runtime_was_measured() {
     use crate::abi::runtime::{contract, Memory};
 
-    let found = testing::module("fixtures/omf/arith-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/arith-p-g2.obj");
     assert!(!found.calls.is_empty(), "arith calls the runtime");
     assert!(
         found.calls.values().any(|name| contract(Some(name)).writes == Memory::Own),
@@ -1028,7 +1028,7 @@ fn test_promotion_is_only_sound_because_the_runtime_was_measured() {
 /// press reloaded J each iteration despite having just stored that value.
 #[test]
 fn test_production_press_keeps_the_loop_counter_in_a_value() {
-    let raw = testing::data("fixtures/omf/press-p-g2.obj");
+    let raw = testing::data("tests/fixtures/omf/press-p-g2.obj");
     let found = testing::loaded_bytes(&raw).unwrap();
     let body = testing::main_body(&found, &testing::partitioned_bytes(&raw));
     let cell = testing::ops(&body).into_iter().find(|op| op.at == 0x94).unwrap().loads[0].clone();

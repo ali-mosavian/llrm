@@ -117,7 +117,7 @@ remains refused rather than being described as successfully optimized.
 
 ## Separate handler ownership
 
-The real compiler outputs are preserved as `fixtures/regressions/evtrap-p-evt.obj`
+The real compiler outputs are preserved as `tests/fixtures/regressions/evtrap-p-evt.obj`
 and `evtrap-v-evt.obj`, compiled from the CRLF reference source above. TIMER
 registration hands a relocated code offset to ONTA: PDS emits MOV AX,offset /
 PUSH CS / PUSH AX; VBDOS emits PUSH CS / MOV AX,offset / PUSH AX. Recognition

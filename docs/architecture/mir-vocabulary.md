@@ -1,6 +1,6 @@
 # MIR is x86 with SSA names on it
 
-Counted over `fixtures/omf/*-p-g2.obj`, 2,343 operations:
+Counted over `tests/fixtures/omf/*-p-g2.obj`, 2,343 operations:
 
 ```
   PUSH 740, POP 15      the machine stack as an operation. A call takes

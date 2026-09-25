@@ -8,8 +8,8 @@ already language-complete.
 ## Facts established from the recovered source
 
 The recovered production grammar and opcode catalog are
-`frontends/qb/grammar/qbasbnf.prs` and `peropcod.txt`. The original
-`buildprs` outputs captured under `fixtures/buildprs/qbasic-1.1` are goldens,
+`crates/qbfront/grammar/qbasbnf.prs` and `peropcod.txt`. The original
+`buildprs` outputs captured under `tests/fixtures/buildprs/qbasic-1.1` are goldens,
 not compiler inputs. The vendored host generator parses the production inputs
 deterministically and carries enough
 information to regenerate the parser tables without DOS or a sibling checkout.

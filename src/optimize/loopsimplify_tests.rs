@@ -112,7 +112,7 @@ fn named(path: &str, suffix: &str) -> (Rc<crate::objectfile::module::Module>, Rc
 #[test]
 fn test_adjacent_angle_loops_reach_a_fixed_point() {
     // PL_MOVE aborted after 16 rounds: Decide erased the preheader each round.
-    let (found, body) = named("fixtures/regressions/qrender-pl-move-v-g3.obj", " MDL_ANGLEMOD");
+    let (found, body) = named("tests/fixtures/regressions/qrender-pl-move-v-g3.obj", " MDL_ANGLEMOD");
     let how = crate::optimize::transform::Applied { found: Some(found), ..Default::default() };
     let result = crate::optimize::transform::applied(&body, &BTreeSet::new(), &Default::default(), how).unwrap();
     assert_eq!(loops::loops(&result.blocks, Some(result.entry)).len(), 2);
@@ -121,7 +121,7 @@ fn test_adjacent_angle_loops_reach_a_fixed_point() {
 #[test]
 fn test_real_timer_loop_has_one_backedge() {
     for program in ["nbody", "fpbench"] {
-        let (_, body) = named(&format!("fixtures/bench/{program}-v-g3.obj"), "PITSNAP");
+        let (_, body) = named(&format!("tests/fixtures/bench/{program}-v-g3.obj"), "PITSNAP");
         let [original] = <[loops::Loop; 1]>::try_from(loops::loops(&body.blocks, Some(body.entry))).unwrap();
         assert_eq!(original.latches.len(), 2);
         let result = simplified(&body);

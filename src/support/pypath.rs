@@ -84,10 +84,10 @@ mod tests {
     /// link-unit fingerprint and every label disagreed with Python's.
     #[test]
     fn test_resolve_keeps_the_spelling_it_was_given() {
-        // Python: Path("fixtures/omf/arith-q-O.obj").resolve() ends with the name as typed.
+        // Python: Path("tests/fixtures/omf/arith-q-O.obj").resolve() ends with the name as typed.
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let found = resolve(&root.join("fixtures/omf/./../omf/arith-q-O.obj"));
-        assert!(found.ends_with("fixtures/omf/arith-q-O.obj"), "{}", found.display());
+        let found = resolve(&root.join("tests/fixtures/omf/./../omf/arith-q-O.obj"));
+        assert!(found.ends_with("tests/fixtures/omf/arith-q-O.obj"), "{}", found.display());
         assert!(found.is_absolute());
     }
 }

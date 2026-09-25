@@ -906,7 +906,7 @@ fn test_inserted_counter_operations_own_their_insertion_location() {
 #[test]
 fn test_strength_reduction_replaces_a_loop_multiply_with_an_add() {
     use crate::support::testing;
-    let found = testing::module("fixtures/omf/matrix-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/matrix-p-g2.obj");
     let blocks = testing::blocks_of(&found);
     let landmarks = crate::objectfile::module::landmarks(&found);
     let layout = crate::analysis::regions::RegionLayout {

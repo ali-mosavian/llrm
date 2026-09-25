@@ -661,11 +661,11 @@ mod tests {
     use super::*;
     use crate::objectfile::module;
 
-    const HOTLOP: &str = "fixtures/omf/hotlop-q-evt.obj";
-    const FIXTURE: &str = "fixtures/omf/lngmxx-p-g2.obj";
+    const HOTLOP: &str = "tests/fixtures/omf/hotlop-q-evt.obj";
+    const FIXTURE: &str = "tests/fixtures/omf/lngmxx-p-g2.obj";
 
     fn objects() -> Vec<PathBuf> {
-        let mut found: Vec<PathBuf> = std::fs::read_dir("fixtures/omf")
+        let mut found: Vec<PathBuf> = std::fs::read_dir("tests/fixtures/omf")
             .unwrap()
             .map(|one| one.unwrap().path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
@@ -759,7 +759,7 @@ mod tests {
     /// details differed between the two rewriters on jumps-*-evt.
     #[test]
     fn test_an_escaping_exception_is_named_as_python_names_it() {
-        let raised = once(&std::fs::read("fixtures/omf/jumps-p-evt.obj").unwrap(), true).unwrap_err();
+        let raised = once(&std::fs::read("tests/fixtures/omf/jumps-p-evt.obj").unwrap(), true).unwrap_err();
         let line = raised.traceback();
         assert!(line.starts_with("qbopt.backend.masm.Unprintable: main (main): block 102 leaves for"), "{line}");
     }
@@ -768,8 +768,8 @@ mod tests {
     #[test]
     fn test_stale_dependency_does_not_overwrite_cli_output() {
         let directory = tempfile::tempdir().unwrap();
-        let source = std::fs::read("fixtures/regressions/qrender-main-v-g3.obj").unwrap();
-        let dependency = std::fs::read("fixtures/omf/hotlop-p-g2.obj").unwrap();
+        let source = std::fs::read("tests/fixtures/regressions/qrender-main-v-g3.obj").unwrap();
+        let dependency = std::fs::read("tests/fixtures/omf/hotlop-p-g2.obj").unwrap();
         std::fs::write(directory.path().join("main.obj"), &source).unwrap();
         let digest = sha256;
         let document = format!(
@@ -782,7 +782,7 @@ mod tests {
         std::fs::write(directory.path().join("dependency.obj"), b"changed dependency").unwrap();
         let output = directory.path().join("existing.obj");
         std::fs::write(&output, b"keep this").unwrap();
-        let argv: Vec<String> = ["fixtures/omf/hotlop-p-g2.obj", "--contracts", path.to_str().unwrap(), "-o", output.to_str().unwrap()]
+        let argv: Vec<String> = ["tests/fixtures/omf/hotlop-p-g2.obj", "--contracts", path.to_str().unwrap(), "-o", output.to_str().unwrap()]
             .into_iter()
             .map(str::to_owned)
             .collect();

@@ -2719,7 +2719,7 @@ authority for ABI, segments, address legality, and performance targets.
 
 ### 83. Refreshed compact far-load quality evidence — 2026-09-18
 
-The current 386 quality report for `fixtures/c/farloadloop.c` is pinned to
+The current 386 quality report for `tests/fixtures/c/farloadloop.c` is pinned to
 `b510ab4`, source SHA-256
 `db481a6d48836c17a464a313401e8fe9486a7b370a08c852d331cdf999fd61d8`.
 `_mark` emits 75 bytes / 30 raw instructions / weighted cost 141.  After the
@@ -2999,7 +2999,7 @@ whether the generic splitter keeps the pointer bases.
 
 ### 5. Exact byte RMW selection — 2026-09-18
 
-`fixtures/c/rmwbyte.c` first failed its emitted-assembly regression: its far
+`tests/fixtures/c/rmwbyte.c` first failed its emitted-assembly regression: its far
 byte compound assignment was expanded into a byte load, two zero extensions,
 a word OR, a truncation and a byte store.  `backend/rmw.py` now makes lowering
 select `or byte ptr es:[base+index],reg8` when the load/OR/truncation/store
@@ -3099,7 +3099,7 @@ claimed as a performance change here.
 
 ### 11. Pre-allocation far-pointer load selection — 2026-09-18
 
-The next raw C loop regression, `fixtures/c/farloadloop.c`, reproduces the
+The next raw C loop regression, `tests/fixtures/c/farloadloop.c`, reproduces the
 relevant `r_walk` shape: near `World` and `Renderer` owners, each with a far
 field used in an indexed hot loop.  It failed first with no `les` at all:
 allocation had already rematerialized each owner for its offset word and its

@@ -6,9 +6,9 @@ that cites Python but has not passed the dump diff. Phase numbers follow the
 plan: 2 C unoptimized, 3 optimizer, 4 QB, 5 BC rewrite.
 
 `BC dump` means `port_diff --bc` matched every stage, MIR, LIR and the
-emitted code, of every `fixtures/omf` object. `BC harness` means the Python
+emitted code, of every `tests/fixtures/omf` object. `BC harness` means the Python
 tests are ported and a dump of every pre-raise fact wholeseg computes matched
-on every object under `fixtures/`. Python tests that monkeypatch a stage out
+on every object under `tests/fixtures/`. Python tests that monkeypatch a stage out
 of `mir.bodies` are not ported; each Rust test file's header names them.
 
 `matrix` means `tools/matrix.py --rewriter rust` gave every program in all
@@ -17,7 +17,7 @@ python` did.
 
 `written_bc harness` means Python's own `omfwrite.written_bc` inputs (LIR
 bodies, records, source map) were replayed through the Rust `written_bc` for
-every object under `fixtures/omf` and `fixtures/regressions`, with identical
+every object under `tests/fixtures/omf` and `tests/fixtures/regressions`, with identical
 bytes or refusal.
 
 `llrm-objdump` and `llrm-opt` were built on the deleted `src/old` pipeline.

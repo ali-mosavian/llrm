@@ -36,8 +36,8 @@ after:  offset = ((column - load(lowerColumn)) * load(rowCount)
 Its `/D` builds print the same answer before/after on all three compilers.
 Artifacts and complete PDS stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
-`fixtures/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
-output from `suite/harr.bas` with the named configuration plus `/D`.
+`tests/fixtures/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
+output from `tests/suite/harr.bas` with the named configuration plus `/D`.
 An additional focused expression check uses unequal dimensions and negative
 lower bounds, because HARR's square zero-based allocation cannot detect a
 swapped dimension formula. Unestablished allocation layouts stay refused.
@@ -46,7 +46,7 @@ Runtime-sized DIM no longer loses its known rank/type merely because its
 extents are unknown. Allocation header facts are derived separately from the
 optional constant-bound allocation request. Dynamic address recognition uses
 those header facts; it still loads the actual bounds and base at each access.
-`fixtures/regressions/dynsz.bas` reads unequal upper bounds at runtime and
+`tests/fixtures/regressions/dynsz.bas` reads unequal upper bounds at runtime and
 uses negative/nonzero lower bounds. Its three `dynsz-*.obj` files are real
 compiler output with the named primary flags plus `/D`. All three original
 and optimized executables print `123 456` and `DONE`; the emitted objects
@@ -67,8 +67,8 @@ for relocated operands, not hard-coded addresses. `/D` tracing calls remain
 barriers, so this is exposure of address arithmetic, not yet a claim that every
 address has become a loop-carried induction value.
 
-Regression fixtures `fixtures/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
-are unchanged BC output from `suite/arridx.bas`, using each named configuration
+Regression fixtures `tests/fixtures/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
+are unchanged BC output from `tests/suite/arridx.bas`, using each named configuration
 plus `/D`. All three execute with output 1260, with checks both enabled and
 disabled (six runs). This also exposed an independent INTO normal-path SSA bug:
 invented register results made ARRIDX print 630/0. INTO now observes flags
