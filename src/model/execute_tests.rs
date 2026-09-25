@@ -1,6 +1,6 @@
 //! Ports of `tests/test_mir_execute.py`.
 //!
-//! Skipped, needing the modern frontend:
+//! Skipped, needing the Nib frontend:
 //! `test_frontend_mir_and_its_optimized_form_compute_the_same_sum`,
 //! `test_an_unmodelled_operation_raises_rather_than_guessing`.
 

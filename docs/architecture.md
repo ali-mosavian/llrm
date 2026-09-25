@@ -19,9 +19,9 @@ targets and their evidence belong in `docs/targets.md`.
 ```mermaid
 flowchart LR
     QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>frontends/qb/"]
-    Modern["llrm language source"] --> ModernFront["lexer, parser, semantics<br/>src/frontends/modern/"]
+    Nib["Nib source"] --> NibFront["lexer, parser, semantics<br/>src/frontends/nib/"]
     QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>src/hir/"]
-    ModernFront -->|"common HIR"| Hir
+    NibFront -->|"common HIR"| Hir
     C["C source"] --> Wcc["Open Watcom front end<br/>owshim/ capture"]
     Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>src/frontends/c/"]
     BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>src/frontends/bc/"]
@@ -58,7 +58,7 @@ flowchart LR
 | Tool | Frontend | Raise |
 | --- | --- | --- |
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, lowered by `src/hir/lower.rs` with the QB runtime ABI |
-| `llrm-modern` | `src/frontends/modern/` | the same HIR path |
+| `llrm-nib` | `src/frontends/nib/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls | `src/frontends/c/raise_hir.rs`, Borland's medium-model ABI |
 | `llrm-omf` | OMF decode of BC's machine code | `src/frontends/bc/raising_*.rs` recognition |
 

@@ -11,7 +11,7 @@
 //! Python's `struct` raises; ZERO_EXTEND and SIGN_EXTEND reinterpret the
 //! source at its own width; addresses compare by identity, not content.
 
-use crate::abi::modern as rt;
+use crate::abi::nib as rt;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;

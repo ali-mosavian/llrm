@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(sources(&chosen), reversed(&one));
     }
 
-    /// Modern fixed multiply shifted its multiplier instead of its product.
+    /// Nib fixed multiply shifted its multiplier instead of its product.
     #[test]
     fn test_funnel_shift_copies_its_low_source_into_the_destructive_destination() {
         let what = Semantics {

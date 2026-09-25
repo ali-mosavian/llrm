@@ -1,5 +1,5 @@
 ' Sorts and sums scores and spells a name through SORTLIB.OBJ, a library
-' written in the modern language (sortlib.mod), which calls Mean# back.
+' written in Nib (sortlib.nbl), which calls Mean# back.
 DEFINT A-Z
 '$INCLUDE: 'SORTLIB.BI'
 

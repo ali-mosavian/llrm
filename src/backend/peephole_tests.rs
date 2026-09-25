@@ -2066,7 +2066,7 @@ fn test_sum_lea_preserves_observed_add_flags() {
 
 #[test]
 fn test_sum_lea_preserves_a_copy_result_read_after_the_add() {
-    // Modern nbody lost value 333 and stopped in the LIR verifier.
+    // Nib nbody lost value 333 and stopped in the LIR verifier.
     let (destination, left, right, saved) =
         (rl(Register::EAX, 4), rl(Register::EBP, 4), rl(Register::EDI, 4), rl(Register::EDX, 4));
     let copy =

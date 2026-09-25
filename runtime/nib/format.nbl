@@ -1,0 +1,216 @@
+# Printing (section 13): each value formatted into its field, to the
+# console or, while an f-string builds one, to a string.
+
+import buffers
+import os
+import strings
+
+const SPACE: u8 = 32
+const ZERO: u8 = 48
+const MINUS: u8 = 45
+const POINT: u8 = 46
+# An integer's digits are written backwards, ending here in the scratch.
+const DIGITS: u16 = 16
+
+# The field the next value fills, which N$PFLD sets.
+var width: u8 = 0
+var radix: u8 = 10
+var fill: u8 = SPACE
+var left: bool = false
+# The string an f-string builds, or null for the console.
+var sink: *near mut u8 = 0
+var scratch: u8[48] = [0] * 48
+
+fn scratch_at(at: u16) -> *near mut u8:
+    unsafe:
+        let base: *near mut u8 = &mut scratch
+        return base.offset(at)
+
+fn put(data: *far u8, length: u16) -> void:
+    unsafe:
+        if sink.is_null():
+            os.write(data, length)
+        else:
+            sink = strings.append_bytes(sink, data, length)
+
+fn put_text(text: &string) -> void:
+    unsafe:
+        let data: *far char = &text
+        put(data.cast[u8](), text.len)
+
+fn pad(count: u16) -> void:
+    unsafe:
+        let filler: *near mut u8 = &mut fill
+        for _at in range(0, count):
+            put(filler.far(), 1)
+
+# Fills in front of a value of `length` bytes; what is owed after it.
+fn open(length: u16) -> u16:
+    let missing: u16 = width > length ? width - length : 0
+    width = 0
+    radix = 10
+    if !left:
+        pad(missing)
+    return missing
+
+fn close(missing: u16) -> void:
+    if left:
+        pad(missing)
+    fill = SPACE
+    left = false
+
+# `length` bytes of `data`, filled out to the field.
+fn field(data: *far u8, length: u16) -> void:
+    let missing = open(length)
+    put(data, length)
+    close(missing)
+
+fn word(text: &string) -> void:
+    unsafe:
+        let data: *far char = &text
+        field(data.cast[u8](), text.len)
+
+# A number's text: a zero fill goes after its sign.
+pub fn number(start: *near mut u8, count: u16) -> void:
+    let mut at = start
+    let mut length = count
+    unsafe:
+        if fill == ZERO && !left && length != 0 && *at == MINUS:
+            put(at.far(), 1)
+            at = at.offset(1)
+            length -= 1
+            if width != 0:
+                width -= 1
+    field(at.far(), length)
+
+# `value`'s digits in `base`, written backwards to end at `after`; how many.
+fn written(after: *near mut u8, value: u32, base: u8) -> u16:
+    let mut rest = value
+    let mut count: u16 = 0
+    loop:
+        let digit = u8(rest % base)
+        count += 1
+        unsafe:
+            *after.offset(-i16(count)) = digit < 10 ? ZERO + digit : 87 + digit
+        rest = rest // base
+        if rest == 0:
+            return count
+
+fn integer(magnitude: u32, negative: bool) -> void:
+    let after = scratch_at(DIGITS)
+    let mut count = written(after, magnitude, radix)
+    if negative:
+        count += 1
+        unsafe:
+            *after.offset(-i16(count)) = MINUS
+    number(after.offset(-i16(count)), count)
+
+fn signed(value: i32) -> void:
+    integer(value < 0 ? u32(0) - u32(value) : u32(value), value < 0)
+
+export "cdecl16":
+    @link_name("N$PI1")
+    fn print_i1(value: i8) -> void:
+        signed(value)
+
+    @link_name("N$PU1")
+    fn print_u1(value: u8) -> void:
+        integer(value, false)
+
+    @link_name("N$PI2")
+    fn print_i2(value: i16) -> void:
+        signed(value)
+
+    @link_name("N$PU2")
+    fn print_u2(value: u16) -> void:
+        integer(value, false)
+
+    @link_name("N$PI4")
+    fn print_i4(value: i32) -> void:
+        signed(value)
+
+    @link_name("N$PU4")
+    fn print_u4(value: u32) -> void:
+        integer(value, false)
+
+    # A fixed-point value, `stored` with `places` binary places: its
+    # integer, a point, and as many digits as the fraction needs.
+    @link_name("N$PQ4")
+    fn print_q4(stored: i32, places: u8) -> void:
+        let mut out: u16 = 0
+        let mut magnitude = u32(stored)
+        unsafe:
+            if stored < 0:
+                *scratch_at(0) = MINUS
+                out = 1
+                magnitude = u32(0) - u32(stored)
+            let after = scratch_at(DIGITS)
+            let count = written(after, magnitude >> places, 10)
+            buffers.copy(scratch_at(out), after.offset(-i16(count)).far(), count)
+            out += count
+            *scratch_at(out) = POINT
+            out += 1
+            let scale = u32(1) << places
+            let mut remainder = magnitude & (scale - 1)
+            if remainder == 0:
+                *scratch_at(out) = ZERO
+                out += 1
+            # floor(remainder * 10 / scale) in u32: scale, at most 2^31, is
+            # q * 10 + s, which keeps every product in range even for Q1.31.
+            let q = scale // 10
+            let s = u16(scale % 10)
+            while remainder != 0:
+                let mut digit: u16 = 0
+                let mut candidate: u16 = 1
+                while candidate <= 9 && remainder >= u32(candidate) * q + (candidate * s + 9) // 10:
+                    digit = candidate
+                    candidate += 1
+                remainder = (remainder - u32(digit) * q) * 10 - digit * s
+                *scratch_at(out) = ZERO + u8(digit)
+                out += 1
+        number(scratch_at(0), out)
+
+    @link_name("N$PQ2")
+    fn print_q2(stored: i16, places: u8) -> void:
+        print_q4(stored, places)
+
+    @link_name("N$PB")
+    fn print_bool(value: bool) -> void:
+        word(value ? "true" : "false")
+
+    @link_name("N$PC")
+    fn print_char(value: char) -> void:
+        unsafe:
+            *scratch_at(0) = u8(value)
+        field(scratch_at(0).far(), 1)
+
+    @link_name("N$PS")
+    fn print_string(data: *near mut u8) -> void:
+        unsafe:
+            field(data.far(), *buffers.length(data))
+
+    # A `&string` view: its far data and length.
+    @link_name("N$PV")
+    fn print_view(data: *far u8, length: u16) -> void:
+        field(data, length)
+
+    @link_name("N$PN")
+    fn print_newline() -> void:
+        put_text("\r\n")
+
+    @link_name("N$PFLD")
+    fn print_field(new_width: u8, new_radix: u8, filler: u8, aligned_left: u8) -> void:
+        width = new_width
+        radix = new_radix
+        fill = filler
+        left = aligned_left != 0
+
+    @link_name("N$PBEG")
+    fn print_begin() -> void:
+        sink = buffers.allocate(16, 1)
+
+    @link_name("N$PEND")
+    fn print_end() -> *near mut u8:
+        let built = sink
+        sink = 0
+        return built

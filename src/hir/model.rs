@@ -67,7 +67,7 @@ str_enum!(Dialect {
     Qb45("QB45") = "qb45",
     Pds71("PDS71") = "pds71",
     Vbdos("VBDOS") = "vbdos",
-    Modern("MODERN") = "modern",
+    Nib("NIB") = "nib",
 });
 
 str_enum!(TargetProfile {

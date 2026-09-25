@@ -32,16 +32,16 @@ name = "llrm-omf"
 path = "src/bin/llrm-omf.rs"
 
 [[bin]]
-name = "llrm-modern"
-path = "src/bin/llrm-modern.rs"
+name = "llrm-nib"
+path = "src/bin/llrm-nib.rs"
 
 [[bin]]
 name = "llrm-run"
 path = "src/bin/llrm-run.rs"
 
 [[bin]]
-name = "modernfront"
-path = "src/bin/modernfront.rs"
+name = "nibfront"
+path = "src/bin/nibfront.rs"
 
 
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.

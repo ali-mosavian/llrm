@@ -4,7 +4,7 @@
     uv run python tools/port_diff.py --corpus [--opt]
     uv run python tools/port_diff.py --qb [bench/parity/algebra.bas ...]
     uv run python tools/port_diff.py --bc [fixtures/omf/hotlop-p-g2.obj ...]
-    uv run python tools/port_diff.py --modern [fixtures/modern/sum.mod ...]
+    uv run python tools/port_diff.py --modern [fixtures/nib/sum.nbl ...]
 
 Python writes the reference dump (`python -m qbopt.cfront --dump`); the Rust
 port writes the same tree (`llrm-c --dump`). With `--qb`, Python's is
@@ -15,8 +15,8 @@ the options both compilers get. With `--bc`, Python's is `tools/stages.py
 --dump` and Rust's `llrm-omf --dump`; with no objects it runs every
 `fixtures/omf/*.obj`. With `--modern`, Python's dump is
 `tools/modernstages.py` and its object `compile.written`; Rust's is
-`llrm-modern --dump`. With no sources it runs `fixtures/modern/*.mod` and
-`fixtures/modern/port`, every source the modern tests compile
+`llrm-nib --dump`. With no sources it runs `fixtures/nib/*.nbl` and
+`fixtures/nib/port`, every source the modern tests compile
 (`tools/modern_port_corpus.py`). Stages are
 compared in the order Python wrote them, so the first mismatch is the first
 stage the port gets wrong. `frozenset` elements are sorted on both sides: their order is Python's
@@ -266,9 +266,9 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
 
 
 def modern_corpus() -> list[Path]:
-    """`fixtures/modern/*.mod`, then every source the modern tests compile."""
-    found = sorted(ROOT.glob("fixtures/modern/*.mod"))
-    return found + sorted((ROOT / "fixtures/modern/port").glob("*/*.mod"))
+    """`fixtures/nib/*.nbl`, then every source the modern tests compile."""
+    found = sorted(ROOT.glob("fixtures/nib/*.nbl"))
+    return found + sorted((ROOT / "fixtures/nib/port").glob("*/*.nbl"))
 
 
 def _level(flags: list[str]) -> list[str]:
@@ -306,7 +306,7 @@ def run_modern(source: Path, work: Path, rust: Path, frontend: Path) -> Result:
         text=True,
     )
     if done.returncode:
-        (rust_dir / REFUSAL).write_text(_message(done.stderr, "llrm-modern: ") + "\n")
+        (rust_dir / REFUSAL).write_text(_message(done.stderr, "llrm-nib: ") + "\n")
     matched, total, first = compare(python_dir, rust_dir, flat=True)
     return Result(source, matched, total, first, done.stderr.strip() if done.returncode else "")
 
@@ -391,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qb", action="store_true", help="QB sources through llrm-qb; no sources: the QB corpus")
     parser.add_argument("--bc", action="store_true", help="BC objects through llrm-omf; no objects: fixtures/omf")
     parser.add_argument(
-        "--modern", action="store_true", help="modern sources through llrm-modern; no sources: the modern corpus"
+        "--modern", action="store_true", help="modern sources through llrm-nib; no sources: the modern corpus"
     )
     parser.add_argument("--jobs", type=int, default=1, help="sources compared at once")
     parser.add_argument("--work", type=Path, default=ROOT / "build" / "port_diff")
@@ -407,8 +407,8 @@ def main(argv: list[str] | None = None) -> int:
         sources = modern_corpus()
     if not sources:
         parser.error("no sources")
-    rust = rust_binary("llrm-qb" if args.qb else "llrm-omf" if args.bc else "llrm-modern" if args.modern else "llrm-c")
-    frontend = rust_binary("modernfront") if args.modern else None
+    rust = rust_binary("llrm-qb" if args.qb else "llrm-omf" if args.bc else "llrm-nib" if args.modern else "llrm-c")
+    frontend = rust_binary("nibfront") if args.modern else None
 
     def one(source: Path) -> Result:
         work = _workdir(args.work, source)

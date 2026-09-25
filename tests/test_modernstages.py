@@ -5,7 +5,7 @@ import runpy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.nbl"
 
 
 def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> None:
@@ -14,7 +14,7 @@ def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> N
     output = stages["dumped"](NBODY, tmp_path / "nbody")
 
     assert [one.name for one in sorted(output.iterdir())] == [
-        "00-input.mod",
+        "00-input.nbl",
         "01-tokens.txt",
         "02-syntax.txt",
         "03-hir.json",
@@ -28,7 +28,7 @@ def test_nbody_stage_dumps_cover_every_implemented_boundary(tmp_path: Path) -> N
         "11-nbody-main-optimized-physical-mir.txt",
         "README.txt",
     ]
-    assert output.joinpath("00-input.mod").read_bytes() == NBODY.read_bytes()
+    assert output.joinpath("00-input.nbl").read_bytes() == NBODY.read_bytes()
     assert "Fixed" in output.joinpath("01-tokens.txt").read_text()
     syntax = output.joinpath("02-syntax.txt").read_text()
     assert 'Struct {\n            name: "body"' in syntax

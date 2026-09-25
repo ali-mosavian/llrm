@@ -13,11 +13,11 @@ from qbopt.hir import execute
 from qbopt.frontend.modern import driver
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
-SUM = ROOT / "fixtures" / "modern" / "sum.mod"
-DESCRIPTORS = ROOT / "fixtures" / "modern" / "descriptors.mod"
-COLLECTIONS = ROOT / "fixtures" / "modern" / "collections.mod"
-SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.nbl"
+SUM = ROOT / "fixtures" / "modern" / "sum.nbl"
+DESCRIPTORS = ROOT / "fixtures" / "modern" / "descriptors.nbl"
+COLLECTIONS = ROOT / "fixtures" / "modern" / "collections.nbl"
+SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.nbl"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -47,7 +47,7 @@ def test_native_nbody_matches_hir_through_bootstrap_runtime_and_main(tmp_path: P
 
 def test_native_dynamic_fixed_i32_arithmetic_preserves_wrapping_results(tmp_path: Path) -> None:
     """The helper-free two-DIV path must agree at signs and wrapped overflow."""
-    source = tmp_path / "fixed_i32.mod"
+    source = tmp_path / "fixed_i32.nbl"
     source.write_text(
         "type scalar = fixed i32, fraction=9\n"
         "fn product(left: scalar, right: scalar) -> scalar:\n"
@@ -73,7 +73,7 @@ def test_native_dynamic_fixed_i32_arithmetic_preserves_wrapping_results(tmp_path
 
 def test_native_borrowed_array_uses_a_direct_mutable_payload_pointer(tmp_path: Path) -> None:
     """The real-mode call ABI must not pass or mutate the descriptor address."""
-    source = tmp_path / "array_borrow.mod"
+    source = tmp_path / "array_borrow.nbl"
     source.write_text(
         "fn bump(values: &mut [i16]) -> void:\n"
         "    values[1] += 3\n"
@@ -138,7 +138,7 @@ def test_native_modern_collection_examples_match_hir(
 
 def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -> None:
     """The runtime had no integer formatter: printing an i32 failed to link on `_pi4`."""
-    source = tmp_path / "integers.mod"
+    source = tmp_path / "integers.nbl"
     source.write_text(
         "fn main() -> i16:\n"
         "    let a: i8 = -128\n"
@@ -158,7 +158,7 @@ def test_native_integers_print_as_the_hir_executor_prints_them(tmp_path: Path) -
 
 
 def test_native_matmul_matches_hir(tmp_path: Path) -> None:
-    source = ROOT / "fixtures" / "modern" / "matmul.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul.nbl"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 372432\n"
     assert build(source, tmp_path / "MATMUL.EXE", run=True).output == expected
@@ -166,7 +166,7 @@ def test_native_matmul_matches_hir(tmp_path: Path) -> None:
 
 def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> None:
     """A shift by a u16 count selected `sar eax,cx`, which has no encoding: x86 counts from cl."""
-    source = ROOT / "fixtures" / "modern" / "operators.mod"
+    source = ROOT / "fixtures" / "modern" / "operators.nbl"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "49149 -812500 3203125\n1 0 1 0\n447 254 224 121\n"
     assert build(source, tmp_path / "OPS.EXE", run=True).output == expected
@@ -174,7 +174,7 @@ def test_native_operators_conversions_and_repeats_match_hir(tmp_path: Path) -> N
 
 def test_native_fixed_matmul_matches_hir_and_exact_arithmetic(tmp_path: Path) -> None:
     """Quarter-step inputs keep 24.8 exact; 56974 is the rational checksum."""
-    source = ROOT / "fixtures" / "modern" / "matmul_fixed.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul_fixed.nbl"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 56974.0\n"
     assert build(source, tmp_path / "MMFIX.EXE", run=True).output == expected
@@ -182,7 +182,7 @@ def test_native_fixed_matmul_matches_hir_and_exact_arithmetic(tmp_path: Path) ->
 
 def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
     """Printing an i16-backed fixed value failed to link on `_pf2`."""
-    source = tmp_path / "fixed_conversions.mod"
+    source = tmp_path / "fixed_conversions.nbl"
     source.write_text(
         "type fix = fixed i32, fraction=8\n"
         "type small = fixed i16, fraction=4\n"
@@ -200,7 +200,7 @@ def test_native_fixed_conversions_and_i16_fixed_print(tmp_path: Path) -> None:
 
 
 def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
-    source = ROOT / "fixtures" / "modern" / "ranked.mod"
+    source = ROOT / "fixtures" / "modern" / "ranked.nbl"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "15 106 162 42 9 3 4\n"
     assert build(source, tmp_path / "RANKED.EXE", run=True).output == expected
@@ -208,7 +208,7 @@ def test_native_ranked_arrays_match_hir(tmp_path: Path) -> None:
 
 def test_native_8x8_fixed_matmul_through_rank_2_views(tmp_path: Path) -> None:
     """The flat 24.8 matmul's inputs as 8x8 matrices: the same exact checksum."""
-    source = ROOT / "fixtures" / "modern" / "matmul8.mod"
+    source = ROOT / "fixtures" / "modern" / "matmul8.nbl"
     expected = execute.run(driver.parsed(source), "main").output
     assert expected == "matmul: 56974.0\n"
     assert build(source, tmp_path / "MM8.EXE", run=True).output == expected

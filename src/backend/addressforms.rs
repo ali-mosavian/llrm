@@ -1275,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_named_data_address_is_a_relocatable_immediate() {
-        // Modern nbody's first string address could not be written to OMF.
+        // Nib nbody's first string address could not be written to OMF.
         let result = Value::new(2, 1);
         let address = Addr {
             index: 7,

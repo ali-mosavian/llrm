@@ -1253,7 +1253,7 @@ class RegAlloc(LIRTransform):
             # nothing, which only adds its copies.
             # Every failing value split at once and allocated once, as LLVM's greedy
             # allocator commits a split and requeues its pieces; allocating after
-            # each split priced 68 splits of matmul.mod one full allocation apiece.
+            # each split priced 68 splits of matmul.nbl one full allocation apiece.
             improved = False
             cut = splitkit.split(body, frozenset(got.spilled - already), already, got.where)
             if cut is not body:

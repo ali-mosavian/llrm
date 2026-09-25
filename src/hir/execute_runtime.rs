@@ -1,8 +1,8 @@
-//! The modern-language runtime's heap and string routines, modelled on the
-//! host (runtime/modern/buffers.mod and strings.mod). A dropped buffer is marked, so a
+//! Nib's runtime heap and string routines, modelled on the
+//! host (runtime/nib/buffers.nbl and strings.nbl). A dropped buffer is marked, so a
 //! second drop or a leak is an execution error, not silent.
 
-use crate::abi::modern as rt;
+use crate::abi::nib as rt;
 use super::*;
 
 const HEAP: u8 = 0x01;
@@ -121,7 +121,7 @@ impl Machine<'_> {
         Ok(copy)
     }
 
-    /// runtime/modern/dicts.mod's `M$DRES`: room for one more entry.
+    /// runtime/nib/dicts.nbl's `N$DRES`: room for one more entry.
     fn dict_reserve(&mut self, table: &Address, size: usize) -> Outcome<Address> {
         flags(table)?;
         let slots = word(table, -4)? as usize;
@@ -285,7 +285,7 @@ impl Machine<'_> {
     }
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
-    /// code negated, as runtime/modern/dos.asm returns them.
+    /// code negated, as runtime/nib/dos.asm returns them.
     fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
@@ -403,7 +403,7 @@ pub(super) fn view_bytes(data: &Scalar, length: &Scalar) -> Outcome<Vec<u8>> {
         .ok_or_else(|| ExecutionError("view outside its buffer".into()))
 }
 
-/// `M$PS`'s bytes: a string's, by its descriptor.
+/// `N$PS`'s bytes: a string's, by its descriptor.
 pub(super) fn string_bytes(argument: &Scalar) -> Outcome<Vec<u8>> {
     match pointer(argument)? {
         Some(address) => text(&address),

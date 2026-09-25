@@ -1,6 +1,6 @@
-//! Runs a modern-language module's entry on the host HIR interpreter.
+//! Runs a Nib module's entry on the host HIR interpreter.
 //!
-//!   llrm-run SOURCE.mod [ENTRY] [INTEGER...]
+//!   llrm-run SOURCE.nbl [ENTRY] [INTEGER...]
 
 use std::process::ExitCode;
 
@@ -11,7 +11,7 @@ use llrm::hir::model::Number;
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let Some(input) = arguments.first() else {
-        eprintln!("usage: llrm-run SOURCE.mod [ENTRY] [INTEGER...]");
+        eprintln!("usage: llrm-run SOURCE.nbl [ENTRY] [INTEGER...]");
         return ExitCode::from(2);
     };
     let entry = arguments.get(1).map_or("main", String::as_str);
@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
     };
-    let hir = match llrm::frontends::modern::compile_file(std::path::Path::new(input)) {
+    let hir = match llrm::frontends::nib::compile_file(std::path::Path::new(input)) {
         Ok(hir) => hir,
         Err((path, error)) => {
             eprintln!(

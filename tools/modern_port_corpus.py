@@ -1,4 +1,4 @@
-"""Write every modern source and flag set the modern tests compile to fixtures/modern/port/.
+"""Write every modern source and flag set the modern tests compile to fixtures/nib/port/.
 
     uv run python tools/modern_port_corpus.py
 
@@ -7,7 +7,7 @@ Each lands as `<hash>/<name>.mod` beside `<name>.flags`, which `port_diff
 flags; one compiled is recorded again with its `--entry` and `-O`. Nothing
 runs: an executable build, and the interpreter checking it, are refused once
 the source is recorded.
-`fixtures/modern` sources at default flags are skipped: port_diff runs those
+`fixtures/nib` sources at default flags are skipped: port_diff runs those
 already.
 """
 
@@ -19,7 +19,7 @@ from qb_port_corpus import ROOT
 from qb_port_corpus import Recorder
 from qb_port_corpus import write
 
-PORT = ROOT / "fixtures/modern/port"
+PORT = ROOT / "fixtures/nib/port"
 TESTS = (
     "tests/test_modern_frontend.py",
     "tests/test_modernstages.py",
@@ -42,7 +42,7 @@ def flags(entry: str, options: object, levels: dict) -> tuple[str, ...] | None:
 class ModernRecorder(Recorder):
     """A pytest plugin recording each source the modern driver parses and the flags it compiles at."""
 
-    already = ROOT / "fixtures/modern"
+    already = ROOT / "fixtures/nib"
 
     def pytest_configure(self, config: pytest.Config) -> None:
         from qbopt.model.passes import O2

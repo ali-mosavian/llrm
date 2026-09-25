@@ -1,7 +1,7 @@
-# Language specification — draft 0.1
+# Nib language specification — draft 0.1
 
-This document specifies the small, statically typed systems language discussed
-for 386 real-mode programs. The language has no final name.
+This document specifies Nib, a small, statically typed systems language for
+386 real-mode programs. Its source files end in `.nbl`.
 
 The design rule is:
 
@@ -170,7 +170,7 @@ full-width product and shifts it right by the fraction, rounding toward
 negative infinity; `/` shifts the dividend left first and truncates toward
 zero. `%` is not defined. A literal or constant converts at compile time:
 `Real(2.5)` is the stored integer 10240. Printing shows the exact decimal
-value. [docs/examples/mandel.mod](examples/mandel.mod) draws the Mandelbrot
+value. [docs/examples/mandel.nbl](examples/mandel.nbl) draws the Mandelbrot
 set with one, without an FPU.
 
 ### Conversions
@@ -924,9 +924,9 @@ _greeting proc far
 **Row 9: built on the heap.**
 
 ```asm
-    call far ptr M$PBEG            ; print into a new heap string
-    ; print each piece: M$PS, M$PI2, ...
-    call far ptr M$PEND            ; ax = the string
+    call far ptr N$PBEG            ; print into a new heap string
+    ; print each piece: N$PS, N$PI2, ...
+    call far ptr N$PEND            ; ax = the string
     retf                           ; owned by the caller
 ```
 
@@ -1029,7 +1029,7 @@ L_fail:                            ; al = the error
     test byte ptr [bx-6], 1        ; heap?
     jz L_kept
     push bx
-    call far ptr M$BDRP
+    call far ptr N$BDRP
     add sp, 2
 L_kept:
 ```
@@ -1064,7 +1064,7 @@ L_kept:
     push 1                         ; element size
     push word ptr [bx-4]           ; room for its length
     push bx
-    call far ptr M$BRES            ; heap copy
+    call far ptr N$BRES            ; heap copy
     add sp, 6
     mov word ptr [bp-2], ax
     mov bx, ax
@@ -1223,12 +1223,12 @@ L_loop:
     call far ptr _pu2              ; {i}
     add sp, 2
     push offset L_colon            ; ": "
-    call far ptr M$PS
+    call far ptr N$PS
     add sp, 2
     push word ptr ss:[di]          ; {x}
-    call far ptr M$PI2
+    call far ptr N$PI2
     add sp, 2
-    call far ptr M$PN
+    call far ptr N$PN
     add di, 2
     inc si
     cmp si, 8                      ; the view's length folded to 8
@@ -1548,12 +1548,12 @@ allocates nothing. Anywhere else it builds a new owned string.
 A float prints as the shortest decimal that reads back as the same `f32` or
 `f64`, positional from 0.0001 up to 1e16 and in exponent form outside:
 `0.1`, `2.0`, `1.5e-05`, `1e+16`, `nan`, `inf`.
-[docs/examples/planets.mod](examples/planets.mod) prints both kinds.
+[docs/examples/planets.nbl](examples/planets.nbl) prints both kinds.
 
 #### Runtime
 
 The compiler emits length, indexing, slicing, and iteration inline. The
-runtime is written in the language itself (`runtime/modern/*.mod`); only
+runtime is written in the language itself (`runtime/nib/*.nbl`); only
 startup and the DOS calls are assembly. Each routine is a code segment of
 its own, so a program links only the routines it reaches. As BC's are, its
 routines are named
@@ -1561,13 +1561,13 @@ routines are named
 
 | Group | Routines | Used for |
 |---|---|---|
-| P print | `M$PI1` to `M$PU4`, `M$PR4`, `M$PR8`, `M$PQ2`, `M$PQ4`, `M$PB`, `M$PC`, `M$PS`, `M$PV`, `M$PN`; `M$PFLD` sets the field; `M$PBEG` and `M$PEND` print into a new string | `print` and f-strings: one set of formatters writing to a sink |
-| B buffer | `M$BRES` reserve, `M$BGRW` grow, `M$BSHR` shrink, `M$BCLN` copy, `M$BDRP` free | strings and vecs |
-| T text | `M$TCAT` join, `M$TAPP` append, `M$TCMP` compare | owned strings |
-| V view | `M$VCPY` copy, `M$VCMP` compare | `&string` views |
-| D dict | `M$DRES` room for one more entry | dicts |
-| E error | `M$EBND` bounds, `M$ESHF` shift, `M$ECNV` conversion, `M$EKEY` key, `M$EDIV` divide fault | panics |
-| O system | `M$OOPN` open, `M$OCRE` create, `M$OREA` read, `M$OWRI` write, `M$OCLO` close, `M$OEXT` exit, `M$OMEM` more memory, `M$OGIV` get and `M$OSIV` set an interrupt vector, `M$OVEC` put them back, `M$OCHN` enter a handler | DOS, in assembly |
+| P print | `N$PI1` to `N$PU4`, `N$PR4`, `N$PR8`, `N$PQ2`, `N$PQ4`, `N$PB`, `N$PC`, `N$PS`, `N$PV`, `N$PN`; `N$PFLD` sets the field; `N$PBEG` and `N$PEND` print into a new string | `print` and f-strings: one set of formatters writing to a sink |
+| B buffer | `N$BRES` reserve, `N$BGRW` grow, `N$BSHR` shrink, `N$BCLN` copy, `N$BDRP` free | strings and vecs |
+| T text | `N$TCAT` join, `N$TAPP` append, `N$TCMP` compare | owned strings |
+| V view | `N$VCPY` copy, `N$VCMP` compare | `&string` views |
+| D dict | `N$DRES` room for one more entry | dicts |
+| E error | `N$EBND` bounds, `N$ESHF` shift, `N$ECNV` conversion, `N$EKEY` key, `N$EDIV` divide fault | panics |
+| O system | `N$OOPN` open, `N$OCRE` create, `N$OREA` read, `N$OWRI` write, `N$OCLO` close, `N$OEXT` exit, `N$OMEM` more memory, `N$OGIV` get and `N$OSIV` set an interrupt vector, `N$OVEC` put them back, `N$OCHN` enter a handler | DOS, in assembly |
 
 The heap is DGROUP after the stack, taken from DOS (`INT 21h` function
 `4Ah`) a kilobyte or more at a time, up to DGROUP's 64 KB. Free blocks wait
@@ -1766,7 +1766,7 @@ code address. A handler's name is its value. `std.dos` reads a vector with
 its interrupt would with `chain(handler)`, so that a hook passes the
 interrupt on. The runtime puts back every vector the program set when it
 ends, by return, panic or Ctrl-C; at most 16 are kept.
-[docs/examples/ticker.mod](examples/ticker.mod) hooks the timer tick.
+[docs/examples/ticker.nbl](examples/ticker.nbl) hooks the timer tick.
 
 Exported and imported signatures may contain only ABI-safe scalars,
 represented structs and enums, raw pointers, foreign function pointers, and
@@ -1818,7 +1818,7 @@ fn now() -> u32:
 - The block is one operation the optimizer keeps in order; it moves only what
   the declarations allow across it. The host interpreter refuses to run it.
 
-[docs/examples/speaker.mod](examples/speaker.mod) plays a tune on the PC
+[docs/examples/speaker.nbl](examples/speaker.nbl) plays a tune on the PC
 speaker.
 
 `qb45`, `pds71` and `vbdos` are those BASIC compilers' conventions:
@@ -1850,15 +1850,15 @@ descriptor is a length and a near data pointer, while PDS 7.1's and VB-DOS's
 far strings are read through their runtimes' `STRINGADDRESS` and
 `STRINGLENGTH` and made with `STRINGASSIGN`.
 
-A library for BASIC links without the modern runtime, since BASIC owns
-start-up, DGROUP and the heap, and every runtime routine needs the modern
+A library for BASIC links without the Nib runtime, since BASIC owns
+start-up, DGROUP and the heap, and every runtime routine needs the Nib
 start-up or heap. In a program with a BASIC export or extern, the compiler
 refuses a statement that calls the runtime: printing, a heap string, vec or
 dict, or a check whose failure panics. Index in `unsafe:`, or iterate.
 [docs/examples/basic](examples/basic) sorts a QuickBASIC program's array.
 
 The compiler can generate `.H`, `.BI`, and assembler `.INC` declarations from
-exports: `modernfront --declare h|bi|inc SOURCE`. The generated files are
+exports: `nibfront --declare h|bi|inc SOURCE`. The generated files are
 tooling outputs, not additional language constructs. The interop example's C
 library includes the generated `main.h`.
 
@@ -1935,7 +1935,7 @@ sufficient and `|>` adds a new operator with parsing complexity.
 
 ## 18. Complete example
 
-`docs/examples/entries.mod` reads `name=value` lines through `std.io`; a
+`docs/examples/entries.nbl` reads `name=value` lines through `std.io`; a
 failure ends the program with exit code 1.
 
 ```text

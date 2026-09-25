@@ -1,6 +1,6 @@
-/* A C library the modern program links against: it reads the program's
+/* A C library the Nib program links against: it reads the program's
  * arrays through far pointers and calls back the rule the program exports,
- * declared with CPoint in the header the compiler generates from main.mod. */
+ * declared with CPoint in the header the compiler generates from main.nbl. */
 
 #include "main.h"
 

@@ -1,4 +1,4 @@
-' Declarations of sortlib.mod's exports. Generated; do not edit.
+' Declarations of sortlib.nbl's exports. Generated; do not edit.
 
 DECLARE SUB SortScores (scores() AS INTEGER, count AS INTEGER)
 DECLARE SUB Upper (text AS STRING)

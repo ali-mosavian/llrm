@@ -5,9 +5,9 @@ and `src/wholeseg.rs`. Everything else is grouped by responsibility:
 
 | Module | Responsibility |
 | --- | --- |
-| `src/bin` | The `llrm-*` tools and `modernfront` |
+| `src/bin` | The `llrm-*` tools and `nibfront` |
 | `src/frontends/qb` | QB-family driver, HIR-to-MIR ABI, inline x87 |
-| `src/frontends/modern` | The llrm language: lexer, parser, semantics, HIR |
+| `src/frontends/nib` | The llrm language: lexer, parser, semantics, HIR |
 | `src/frontends/c` | C through Open Watcom's front end (`owshim/`): its code-generator stream, raised to MIR |
 | `src/frontends/bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
 | `src/hir` | The common HIR: model, codec, verifier, lowering to MIR |

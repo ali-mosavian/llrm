@@ -1,0 +1,35 @@
+# The operating system: what only assembly reaches (dos.asm). A file call
+# returns what DOS does, or its error code negated.
+
+extern "cdecl16":
+    @link_name("N$OOPN")
+    pub fn open(name: *far char, mode: u8) -> i16
+    @link_name("N$OCRE")
+    pub fn create(name: *far char) -> i16
+    @link_name("N$OREA")
+    pub fn read(handle: i16, data: *far mut u8, count: u16) -> i16
+    @link_name("N$OWRI")
+    pub fn write_file(handle: i16, data: *far u8, count: u16) -> i16
+    @link_name("N$OCLO")
+    pub fn close(handle: i16) -> i16
+    # Ends the program with `code`.
+    @link_name("N$OEXT")
+    pub fn exit(code: u8) -> void
+    # `bytes` more of DGROUP, right after the last grant, or null.
+    @link_name("N$OMEM")
+    pub fn more(bytes: u16) -> *near mut u8
+    # The handler interrupt `number` enters.
+    @link_name("N$OGIV")
+    pub fn vector(number: u8) -> extern "interrupt16" fn() -> void
+    @link_name("N$OSIV")
+    pub fn set_vector(number: u8, handler: extern "interrupt16" fn() -> void) -> void
+    # Enters `handler` as its interrupt would, and comes back.
+    @link_name("N$OCHN")
+    pub fn chain(handler: extern "interrupt16" fn() -> void) -> void
+
+const STANDARD_OUTPUT: i16 = 1
+
+# `length` bytes of `text` to standard output.
+pub fn write(text: *far u8, length: u16) -> void:
+    unsafe:
+        write_file(STANDARD_OUTPUT, text, length)
