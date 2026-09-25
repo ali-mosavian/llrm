@@ -1825,3 +1825,22 @@ fn test_text_memory_stores_leave_array_descriptors_invariant() {
     let loads = body.lines().map(str::trim).filter(|line| ["mov es,", "mov fs,", "mov gs,", "mov ds,"].iter().any(|one| line.starts_with(one)));
     assert_eq!(loads.count(), 0, "{body}");
 }
+
+#[test]
+fn test_scalars_stored_in_a_loop_are_forwarded_across_its_array_store() {
+    // On the 486 GVN kept `i` from crossing the `a(i)` store, so the index was rebuilt
+    // (`lea bx,[edx+edx]`) and compared with 255 every trip: 18 instructions for 16.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "STEPS.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Steps (n, d)\r\nSteps 7, 3\r\nSUB Steps (n, d)\r\nDIM a(255)\r\nv = n\r\nFOR i = 0 TO 255\r\na(i) = v\r\ne = e + d\r\nIF e > 100 THEN e = e - 100: v = v + 1\r\nv = v + n\r\nNEXT\r\nPRINT a(9)\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("STEPS proc").expect("STEPS proc");
+    let end = text.find("STEPS endp").expect("STEPS endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("lea "), "{body}");
+    assert!(!body.contains("cmp dx, 255"), "{body}");
+}

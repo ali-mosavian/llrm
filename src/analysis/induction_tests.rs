@@ -625,8 +625,17 @@ fn test_harr_descriptor_offset_is_read_before_inner_loop_unless_written() {
         }
     }
     let result = testing::applied(&found, Some(&blocks), &Rc::new(built), O2());
+    // Written in the loop, the offset may be reloaded or forwarded from the
+    // store, but never read once ahead of the loop.
     let inner = result.blocks.iter().find(|block| block.at == 0x58).unwrap();
-    assert_eq!(inner.ops.iter().flat_map(|op| &op.loads).any(|one| mir::same_bytes(one, &field)), changed);
+    let hoisted = result
+        .blocks
+        .iter()
+        .filter(|block| block.at < inner.at)
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| &op.loads)
+        .any(|one| mir::same_bytes(one, &field));
+    assert_eq!(hoisted, !changed);
 }
 
 /// NESTED rebuilt (row * width + column) * 2 on each of 30 inner iterations.
