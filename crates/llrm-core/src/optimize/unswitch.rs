@@ -30,11 +30,13 @@ pub fn optimized(
     dgroup: &BTreeSet<i64>,
     calls: &IndexMap<i64, String>,
     options: Optimized<'_>,
-) -> Result<Rc<MirBody>, String> {
+) -> Result<mir::Transformed, String> {
+    let unchanged = || mir::Transformed { body: body.clone(), stages: Vec::new() };
     let candidate = specialized(body)?;
     if Rc::ptr_eq(&candidate, body) {
-        return Ok(body.clone());
+        return Ok(unchanged());
     }
+    let (candidate, changes) = mir::transformed(body, candidate);
     let Optimized {
         registers,
         call_registers,
@@ -46,9 +48,9 @@ pub fn optimized(
     } = options;
     let mut stages = vec![("unswitch".to_owned(), MirBody::clone(&candidate))];
     let prices = costs.clone().unwrap_or_default();
-    let result = {
+    let done = {
         let mut collect = |name: &str, state: &MirBody| stages.push((name.to_owned(), state.clone()));
-        transform::applied(
+        transform::recorded(
             &candidate,
             dgroup,
             calls,
@@ -68,23 +70,26 @@ pub fn optimized(
     let size = |state: &MirBody| {
         state.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind != Kind::Nothing).count()
     };
-    let (before, after) = (profit::weighted(body, &prices, None), profit::weighted(&result, &prices, None));
+    let result = &done.body;
+    let (before, after) = (profit::weighted(body, &prices, None), profit::weighted(result, &prices, None));
     let worse = match (before, after) {
         (Some(before), Some(after)) => after > before,
         _ => true,
     };
     if loops::loops(&result.blocks, Some(result.entry)).len() >= loops::loops(&body.blocks, Some(body.entry)).len()
-        || size(&result) > size(body)
+        || size(result) > size(body)
         || worse
     {
-        return Ok(body.clone());
+        return Ok(unchanged());
     }
     if let Some(watch) = watch {
         for (name, state) in &stages {
             watch(name, state);
         }
     }
-    Ok(result)
+    let mut records = vec![mir::Stage { name: "unswitch".to_owned(), changes }];
+    records.extend(done.stages);
+    Ok(mir::Transformed { body: done.body, stages: records })
 }
 
 pub fn specialized(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {

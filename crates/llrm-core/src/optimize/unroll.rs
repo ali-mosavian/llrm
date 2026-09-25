@@ -244,16 +244,19 @@ pub fn optimized(
     body: &Rc<MirBody>,
     r#where: &Where,
     mut watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<Rc<MirBody>, String> {
-    if !priced(body, r#where) {
-        return Ok(body.clone());
-    }
+) -> Result<crate::model::mir::Transformed, String> {
     let mut body = body.clone();
+    let mut stages = Vec::new();
+    if !priced(&body, r#where) {
+        return Ok(crate::model::mir::Transformed { body, stages });
+    }
     loop {
-        let candidate = crate::model::mir::identified(expanded(&body, r#where, &r#where.named(), &BTreeSet::new())?);
+        let candidate = expanded(&body, r#where, &r#where.named(), &BTreeSet::new())?;
         if Rc::ptr_eq(&candidate, &body) {
-            return Ok(body);
+            return Ok(crate::model::mir::Transformed { body, stages });
         }
+        let (candidate, changes) = crate::model::mir::transformed(&body, candidate);
+        stages.push(crate::model::mir::Stage { name: "unroll-accepted".to_owned(), changes });
         if let Some(watch) = watch.as_deref_mut() {
             watch("unroll-accepted", &candidate);
         }

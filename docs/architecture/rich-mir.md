@@ -1101,8 +1101,11 @@ In the old MIR, `Op.id` is each operation's own identity: unique in its body,
 assigned by the pass manager (`mir::identified`) after the raise and after
 every pass, and excluded from equality. `Op.source` is the provenance a copy
 shares: the raise-time operation whose relocations, node and site it
-re-emits. Change records diff identities between passes; the ledger replaces
-tombstones.
+re-emits. `mir::transformed` identifies a pass's output and diffs it against
+its input into `TransformChange` records (rewritten, cloned, deleted,
+inserted); `transform::recorded` returns them per stage with the body, the
+unroll, peel and unswitch drivers included. Next, the ledger consumes them
+in place of tombstones.
 
 ### 3. Add modules, declarations, globals, and intrinsics
 
