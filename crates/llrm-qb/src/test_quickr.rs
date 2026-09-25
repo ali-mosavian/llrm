@@ -708,3 +708,17 @@ fn microsoft_profiles_keep_each_a_name() {
         .expect_err("VBDOS has no FOR EACH");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
+
+#[test]
+fn quickr_arrays_start_at_zero() {
+    let source = "DIM a(3) AS INTEGER\nPRINT LBOUND(a); UBOUND(a)\n";
+    assert_eq!(printed(source), " 0  3 \n");
+    for source in [
+        "DIM a(1 TO 3) AS INTEGER\n",
+        "OPTION BASE 1\n",
+        "SUB s\nIF 1 THEN\nREDIM b(2 TO 4) AS INTEGER\nEND IF\nEND SUB\n",
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains("start at 0"), "{source}: {error}");
+    }
+}

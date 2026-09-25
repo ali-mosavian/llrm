@@ -376,6 +376,12 @@ fn built(
     options: &Options,
 ) -> Result<Compiler, SemanticError> {
     check_private(module, dialect)?;
+    if dialect.zero_based_arrays() {
+        check_zero_based(&module.statements)?;
+        for procedure in &module.procedures {
+            check_zero_based(&procedure.body)?;
+        }
+    }
     if let Some(procedure) = module.procedures.iter().find(|one| loop_keyword(dialect, &one.name)) {
         return Err(SemanticError {
             message: format!("{} is reserved", procedure.name),
@@ -606,6 +612,39 @@ fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
     let prelude = crate::parse(include_str!("semantic/prelude.bas"), Dialect::Quickr)
         .expect("the prelude parses");
     module.procedures.extend(prelude.procedures);
+    Ok(())
+}
+
+/// QuickrBASIC arrays start at 0: no `lower TO upper`, no `OPTION BASE 1`.
+fn check_zero_based(statements: &[Statement]) -> Result<(), SemanticError> {
+    for statement in statements {
+        let declarations = match statement {
+            Statement::OptionBase(base, _) if *base != 0 => {
+                return Err(SemanticError {
+                    message: "arrays start at 0: OPTION BASE 1 needs a Microsoft profile".into(),
+                });
+            }
+            Statement::Dim(items)
+            | Statement::Static(items)
+            | Statement::Shared(items)
+            | Statement::Redim(items)
+            | Statement::TypeDecl { fields: items, .. } => items.as_slice(),
+            nested => {
+                for body in nested.bodies() {
+                    check_zero_based(body)?;
+                }
+                continue;
+            }
+        };
+        if let Some(declaration) = declarations
+            .iter()
+            .find(|one| one.bounds.iter().any(|bound| bound.lower.is_some()))
+        {
+            return Err(SemanticError {
+                message: format!("{}: arrays start at 0 and take no lower bound", declaration.name),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -5847,6 +5886,9 @@ impl Compiler {
                 _ => return self.fail(format!("{name} requires a bare array name")),
             };
             let variable = self.array(array_name)?;
+            if intrinsic.lowering == Lowering::LowerBound && self.dialect.zero_based_arrays() {
+                return Ok(Some((Operand::Constant(INTEGER, Number::Integer(0)), INTEGER)));
+            }
             let descriptor = self.descriptor_pointer(&variable)?;
             let dimension = if let Some(dimension) = arguments.get(1) {
                 let (dimension, type_id) = self.expression(dimension)?;

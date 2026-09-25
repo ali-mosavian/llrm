@@ -156,6 +156,11 @@ for `UNSIGNED INTEGER` and `DOUBLE` for `UNSIGNED LONG`.
 assigned it is a warning. The program still compiles, and the variable reads
 as zero.
 
+### Arrays
+
+Every array dimension starts at 0. A bound is only the upper one: `lower TO
+upper` and `OPTION BASE 1` are errors, and `LBOUND` is the constant 0.
+
 ### Procedure frames
 
 A procedure frames itself with `push bp`, `mov bp,sp` and `sub sp`, in place

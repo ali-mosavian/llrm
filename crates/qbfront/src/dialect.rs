@@ -58,6 +58,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// Every array dimension starts at 0.
+    pub fn zero_based_arrays(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr
