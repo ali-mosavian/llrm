@@ -26,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(for_each(augmented(tuple_assignment(
+    let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(
         returned(lex(source, dialect).map_err(ParseError::from)?, dialect),
         dialect,
     ))));
@@ -401,15 +401,15 @@ fn token_statement_end(tokens: &[Token], mut at: usize) -> usize {
     at
 }
 
-/// The function a FOR EACH loop starts from, and the prefix of the name its
-/// `AS` declares: `FOR EACH x AS t IN e` becomes
+/// The function a `FOR … IN` loop starts from, and the prefix of the name
+/// its `AS` declares: `FOR x AS t IN e` becomes
 /// `DIM $EACHx AS t: FOR x = $EACH(e) TO 0`. No source name can spell it.
 pub const EACH: &str = "$EACH";
 
-/// QuickrBASIC's `FOR EACH x [AS type] IN iterable`, rewritten into a FOR
-/// the grammar parses and pairs with its NEXT. `FOR EACH =` stays a counter
-/// named EACH.
-fn for_each(tokens: Vec<Token>) -> Vec<Token> {
+/// QuickrBASIC's `FOR x [AS type] IN iterable`, rewritten into a FOR the
+/// grammar parses and pairs with its NEXT. A QB FOR has `=` after its
+/// counter, never AS or IN.
+fn for_in(tokens: Vec<Token>) -> Vec<Token> {
     let is = |token: Option<&Token>, name: &str| {
         token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
     };
@@ -419,12 +419,8 @@ fn for_each(tokens: Vec<Token>) -> Vec<Token> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut at = 0;
     while at < tokens.len() {
-        let variable = match tokens.get(at + 2).map(|token| &token.kind) {
-            Some(TokenKind::Identifier(name))
-                if is(tokens.get(at), "tkFOR") && word(tokens.get(at + 1), "EACH") =>
-            {
-                name.clone()
-            }
+        let variable = match tokens.get(at + 1).map(|token| &token.kind) {
+            Some(TokenKind::Identifier(name)) if is(tokens.get(at), "tkFOR") => name.clone(),
             _ => {
                 out.push(tokens[at].clone());
                 at += 1;
@@ -432,7 +428,7 @@ fn for_each(tokens: Vec<Token>) -> Vec<Token> {
             }
         };
         let end = token_statement_end(&tokens, at);
-        let Some(within) = (at + 3..end).find(|&index| word(tokens.get(index), "IN")) else {
+        let Some(within) = (at + 2..end).find(|&index| word(tokens.get(index), "IN")) else {
             out.push(tokens[at].clone());
             at += 1;
             continue;
@@ -440,18 +436,18 @@ fn for_each(tokens: Vec<Token>) -> Vec<Token> {
         let span = tokens[at].span;
         let token = |kind: TokenKind| Token { kind, span };
         let reserved = |name: &str| token(TokenKind::Reserved(named(name)));
-        if is(tokens.get(at + 3), "tkAS") {
+        if is(tokens.get(at + 2), "tkAS") {
             out.push(reserved("tkDIM"));
             out.push(token(TokenKind::Identifier(format!("{EACH}{variable}"))));
-            out.extend(tokens[at + 3..within].iter().cloned());
+            out.extend(tokens[at + 2..within].iter().cloned());
             out.push(reserved("tkColon"));
-        } else if within != at + 3 {
+        } else if within != at + 2 {
             out.push(tokens[at].clone());
             at += 1;
             continue;
         }
         out.push(tokens[at].clone());
-        out.push(tokens[at + 2].clone());
+        out.push(tokens[at + 1].clone());
         out.push(reserved("tkEQ"));
         out.push(token(TokenKind::Identifier(EACH.into())));
         out.push(reserved("tkLParen"));
