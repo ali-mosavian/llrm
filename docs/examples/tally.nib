@@ -25,7 +25,7 @@ fn main() -> i16:
         held[card] = true
     print(f"hearts {per_suit[.hearts]}, distinct {held.len}, queen {held.contains(Card(rank=12, suit=.hearts))}")
 
-    let squares = {n: n * n for n in range(0, 40)}
+    let squares = {n: n * n for n in 0..40}
     let n = 37
     print(f"{squares.len} squares, {n} -> {squares[n]}")
     return 0

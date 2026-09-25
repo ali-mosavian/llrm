@@ -21,7 +21,7 @@ pub fn capacity(data: *near mut u8) -> *near mut u16:
 
 pub fn copy(to: *near mut u8, source: *far u8, count: u16) -> void:
     unsafe:
-        for at in range(0, count):
+        for at in 0..count:
             to[at] = source[at]
 
 # Whether `capacity` elements of `size` bytes fit in one buffer.

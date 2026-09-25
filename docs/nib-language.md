@@ -222,7 +222,7 @@ remain value comparisons (struct value equality is not in this slice).
 `for step_no in 0..step_count` runs exactly `step_count` iterations when
 `step_count` is nonnegative.
 Literal indices are checked by the frontend. The
-`fixtures/nib/nbody.nbl` fixed-point integrator—using a named Q23.9 `scalar` and
+`fixtures/nib/nbody.nib` fixed-point integrator—using a named Q23.9 `scalar` and
 an array of six `body` structs—is
 the current end-to-end feature gate for structs, arrays, nested loops,
 strings, f-strings, and printing.
@@ -246,17 +246,17 @@ does not emit bytecode, p-code, machine instructions, or target registers.
 Run it with:
 
 ```text
-cargo run --bin nibfront -- program.nbl
+cargo run --bin nibfront -- program.nib
 ```
 
 `--tokens` and `--syntax` expose the two earlier stages without performing
-semantic analysis. `cargo run --bin llrm-nib -- program.nbl -o program.obj`
+semantic analysis. `cargo run --bin llrm-nib -- program.nib -o program.obj`
 compiles to an OMF object; `--dump DIR` writes `tools/modernstages.py`'s stages.
 
 The common-HIR reference executor provides an executable semantic oracle:
 
 ```text
-uv run python tools/modernrun.py fixtures/nib/nbody.nbl --entry nbody --show-return 1
+uv run python tools/modernrun.py fixtures/nib/nbody.nib --entry nbody --show-return 1
 ```
 
 This runs source through lexing, parsing, strict semantic analysis, common-HIR

@@ -275,7 +275,7 @@ mod tests {
     fn _nib(fixture: &str, name: &str) -> String {
         use crate::frontends::nib::test_nib_frontend as nib;
 
-        let program = nib::parsed(&nib::fixture(&format!("{fixture}.nbl")));
+        let program = nib::parsed(&nib::fixture(&format!("{fixture}.nib")));
         _procedure(&nib::listing(&program, "main", &crate::model::passes::O2()), name)
     }
 

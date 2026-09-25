@@ -39,7 +39,7 @@ fn main() -> i16:
     return p.length2()
 ";
 
-/// `main.nbl` and `geo.nbl` on disk, and the messages opening `main` in an editor.
+/// `main.nib` and `geo.nib` on disk, and the messages opening `main` in an editor.
 struct Program {
     root: tempfile::TempDir,
 }

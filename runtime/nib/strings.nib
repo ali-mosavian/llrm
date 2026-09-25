@@ -46,7 +46,7 @@ fn compare(left: &string, right: &string) -> i8:
     unsafe:
         let first: *far char = &left
         let second: *far char = &right
-        for at in range(0, shorter):
+        for at in 0..shorter:
             if first[at] != second[at]:
                 return first[at] < second[at] ? -1 : 1
     if left.len == right.len:

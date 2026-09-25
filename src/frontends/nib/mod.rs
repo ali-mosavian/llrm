@@ -50,7 +50,7 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 }
 
 /// The program whose main module is the file `path`: its imports are the
-/// files under the same directory, `a.b` at `a/b.nbl`.
+/// files under the same directory, `a.b` at `a/b.nib`.
 pub fn compile_file(path: &std::path::Path) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path)?;
     let sources = module.sources.clone();
@@ -142,7 +142,7 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>)
 
 /// A linked module with the prelude and library it is checked with, desugared.
 fn prepared(mut module: syntax::Module) -> Result<syntax::Module, Diagnostic> {
-    let prelude = parse(lex(include_str!("prelude.nbl"))?)?;
+    let prelude = parse(lex(include_str!("prelude.nib"))?)?;
     module.enums.extend(prelude.enums);
     // A module's own function or protocol of a prelude name is the one it names.
     let own: std::collections::BTreeSet<String> = module.functions.iter().map(|one| one.name.clone()).collect();

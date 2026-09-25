@@ -27,12 +27,6 @@ fn zip[A, B](left: &[A], right: &[B]) -> iter[(&A, &B)]:
         yield (&left[i], &right[i])
         i += 1
 
-fn range[T](start: T, end: T) -> iter[T]:
-    let mut i = start
-    while i < end:
-        yield i
-        i += 1
-
 # The protocols the language names (draft section 3); `Self` is the type
 # that satisfies one.
 

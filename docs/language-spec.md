@@ -1,7 +1,7 @@
 # Nib language specification — draft 0.1
 
 This document specifies Nib, a small, statically typed systems language for
-386 real-mode programs. Its source files end in `.nbl`.
+386 real-mode programs. Its source files end in `.nib`.
 
 The design rule is:
 
@@ -170,7 +170,7 @@ full-width product and shifts it right by the fraction, rounding toward
 negative infinity; `/` shifts the dividend left first and truncates toward
 zero. `%` is not defined. A literal or constant converts at compile time:
 `Real(2.5)` is the stored integer 10240. Printing shows the exact decimal
-value. [docs/examples/mandel.nbl](examples/mandel.nbl) draws the Mandelbrot
+value. [docs/examples/mandel.nib](examples/mandel.nib) draws the Mandelbrot
 set with one, without an FPU.
 
 ### Conversions
@@ -1205,7 +1205,7 @@ When a `for` consumes a generator whose body the compiler can see, the
 compiler substitutes the loop body at each `yield`. No iterator, `Option`,
 tuple, or `next` call remains. A `break` in the loop body leaves the generator
 too, dropping its live locals on the way. The built-in iterators are ordinary
-library generators, so arrays, strings, `enumerate`, `zip`, and `range` all
+library generators, so arrays, strings, `enumerate` and `zip` all
 compile by this one rule; the compiler has no special case for any of them.
 
 ```text
@@ -1303,8 +1303,7 @@ total(c)          # 3
 
 A parameter of type `iter[T]` is a type parameter of its own, so each
 generator passed to it gets its own instance and no call is indirect.
-`range(start, end)` counts from `start` up to, not including, `end`; with no
-overloading there is no one-argument form. `zip[A, B](left: &[A], right: &[B])
+`zip[A, B](left: &[A], right: &[B])
 -> iter[(&A, &B)]` pairs two sequences' elements until the shorter ends; a
 generator is not a sequence, so it cannot be zipped.
 
@@ -1548,12 +1547,12 @@ allocates nothing. Anywhere else it builds a new owned string.
 A float prints as the shortest decimal that reads back as the same `f32` or
 `f64`, positional from 0.0001 up to 1e16 and in exponent form outside:
 `0.1`, `2.0`, `1.5e-05`, `1e+16`, `nan`, `inf`.
-[docs/examples/planets.nbl](examples/planets.nbl) prints both kinds.
+[docs/examples/planets.nib](examples/planets.nib) prints both kinds.
 
 #### Runtime
 
 The compiler emits length, indexing, slicing, and iteration inline. The
-runtime is written in the language itself (`runtime/nib/*.nbl`); only
+runtime is written in the language itself (`runtime/nib/*.nib`); only
 startup and the DOS calls are assembly. Each routine is a code segment of
 its own, so a program links only the routines it reaches. As BC's are, its
 routines are named
@@ -1768,7 +1767,7 @@ code address. A handler's name is its value. `std.dos` reads a vector with
 its interrupt would with `chain(handler)`, so that a hook passes the
 interrupt on. The runtime puts back every vector the program set when it
 ends, by return, panic or Ctrl-C; at most 16 are kept.
-[docs/examples/ticker.nbl](examples/ticker.nbl) hooks the timer tick.
+[docs/examples/ticker.nib](examples/ticker.nib) hooks the timer tick.
 
 Exported and imported signatures may contain only ABI-safe scalars,
 represented structs and enums, raw pointers, foreign function pointers, and
@@ -1820,7 +1819,7 @@ fn now() -> u32:
 - The block is one operation the optimizer keeps in order; it moves only what
   the declarations allow across it. The host interpreter refuses to run it.
 
-[docs/examples/speaker.nbl](examples/speaker.nbl) plays a tune on the PC
+[docs/examples/speaker.nib](examples/speaker.nib) plays a tune on the PC
 speaker.
 
 `qb45`, `pds71` and `vbdos` are those BASIC compilers' conventions:
@@ -1937,7 +1936,7 @@ sufficient and `|>` adds a new operator with parsing complexity.
 
 ## 18. Complete example
 
-`docs/examples/entries.nbl` reads `name=value` lines through `std.io`; a
+`docs/examples/entries.nib` reads `name=value` lines through `std.io`; a
 failure ends the program with exit code 1.
 
 ```text

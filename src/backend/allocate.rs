@@ -1356,7 +1356,7 @@ impl RegAlloc {
             }
             // Every failing value split at once and allocated once, as LLVM's greedy
             // allocator commits a split and requeues its pieces; allocating after each
-            // split priced 68 splits of matmul.nbl one full allocation apiece.
+            // split priced 68 splits of matmul.nib one full allocation apiece.
             let mut improved = false;
             let failing: BTreeSet<u32> = got.spilled.difference(&already).copied().collect();
             if let Some(cut) = splitkit::split(&body, Some(&failing), Some(&mut already), Some(&got.r#where)) {

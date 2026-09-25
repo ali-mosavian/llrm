@@ -1,4 +1,4 @@
-# matmul_fixed.nbl as 8x8 matrices through rank-2 views; same inputs, same checksum.
+# matmul_fixed.nib as 8x8 matrices through rank-2 views; same inputs, same checksum.
 type fix = fixed i32, fraction=8
 
 fn multiply(a: &[fix, 2], b: &[fix, 2], c: &mut [fix, 2]) -> void:

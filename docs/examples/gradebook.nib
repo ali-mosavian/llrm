@@ -6,7 +6,7 @@ struct Student:
     mut marks: vec[i16]
 
 fn curve(marks: &mut vec[i16], by: i16) -> void:
-    for i in range(0, marks.len):
+    for i in 0..marks.len:
         marks[i] += by
     marks.push(by)
 

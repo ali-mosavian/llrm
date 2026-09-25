@@ -16,9 +16,9 @@ fn reserve(table: *near mut u8, size: u16) -> *near mut u8:
         let grown: u16 = slots < 8 ? 8 : slots * 2
         let mask = grown - 1
         let copy = buffers.allocate(grown, size)
-        for at in range(0, grown * size):
+        for at in 0..grown * size:
             copy[at] = 0
-        for slot in range(0, slots):
+        for slot in 0..slots:
             let entry = table.offset(slot * size)
             let hash = *entry.cast[u16]()
             if hash == 0:

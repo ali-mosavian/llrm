@@ -1,5 +1,5 @@
 //! The runtime routines compiled code calls, besides the formatters
-//! (runtime/nib/*.nbl).
+//! (runtime/nib/*.nib).
 
 use crate::abi::nib as rt;
 use super::*;

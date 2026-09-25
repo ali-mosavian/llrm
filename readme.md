@@ -38,7 +38,7 @@ sudo apt install build-essential git autoconf automake libtool libpng-dev libpca
 cargo build --release
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
 target/release/llrm-c program.c --opt -o PROGRAM.OBJ
-target/release/llrm-nib program.nbl -o PROGRAM.OBJ
+target/release/llrm-nib program.nib -o PROGRAM.OBJ
 target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
 ```
 

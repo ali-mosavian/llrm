@@ -39,7 +39,7 @@ def dumped(source: Path, output: Path, options: Options = O2) -> Path:
     lowered = modern.semantic_lowered(program)
     target = targets.profile("386")
 
-    (output / "00-input.nbl").write_text(source.read_text())
+    (output / "00-input.nib").write_text(source.read_text())
     (output / "01-tokens.txt").write_text(_frontend_text(source, "--tokens"))
     (output / "02-syntax.txt").write_text(_frontend_text(source, "--syntax"))
     (output / "03-hir.json").write_text(hir.encode(program, indent=2))
@@ -70,7 +70,7 @@ def dumped(source: Path, output: Path, options: Options = O2) -> Path:
             number += 1
 
     files = [
-        "00-input.nbl       exact source presented to the frontend",
+        "00-input.nib       exact source presented to the frontend",
         "01-tokens.txt      lexer output with source positions",
         "02-syntax.txt      indentation-aware syntax tree",
         "03-hir.json        verified, source-neutral common HIR",

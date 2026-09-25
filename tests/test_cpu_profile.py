@@ -480,7 +480,7 @@ def test_every_frontend_optimizes_with_the_options_it_was_given(
     basic.write_text("DEFINT A-Z\nFOR i = 1 TO 5\n  t = t + i\nNEXT i\nPRINT t\n")
     qb_compile.object_bytes(qb_driver.parsed(basic), basic.name, options=size)
     frontend = "modern"
-    modern = modern_driver.parsed(root / "fixtures/nib/sum_three.nbl")
+    modern = modern_driver.parsed(root / "fixtures/nib/sum_three.nib")
     masm.text(modern_compile.assembled(modern, entry="main", options=size))
 
     assert seen == {"c": {"Os"}, "qb": {"Os"}, "modern": {"Os"}}

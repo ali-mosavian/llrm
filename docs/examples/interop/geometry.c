@@ -1,6 +1,6 @@
 /* A C library the Nib program links against: it reads the program's
  * arrays through far pointers and calls back the rule the program exports,
- * declared with CPoint in the header the compiler generates from main.nbl. */
+ * declared with CPoint in the header the compiler generates from main.nib. */
 
 #include "main.h"
 

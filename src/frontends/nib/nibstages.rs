@@ -48,7 +48,7 @@ pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf
     let target = targets::profile(nib::CPU)?;
 
     let input = std::fs::read(source).map_err(|error| error.to_string())?;
-    write(&output.join("00-input.nbl"), &_text(&input))?;
+    write(&output.join("00-input.nib"), &_text(&input))?;
     let text = String::from_utf8_lossy(&input);
     let refused = |error| driver::refused(source, &error).0;
     write(&output.join("01-tokens.txt"), &super::tokens_text(&text).map_err(refused)?)?;
@@ -90,7 +90,7 @@ pub fn dumped(source: &Path, output: &Path, options: &Options) -> Result<PathBuf
     }
 
     let mut files = vec![
-        "00-input.nbl       exact source presented to the frontend".to_owned(),
+        "00-input.nib       exact source presented to the frontend".to_owned(),
         "01-tokens.txt      lexer output with source positions".to_owned(),
         "02-syntax.txt      indentation-aware syntax tree".to_owned(),
         "03-hir.json        verified, source-neutral common HIR".to_owned(),
@@ -121,7 +121,7 @@ mod tests {
     fn test_nbody_stage_dumps_cover_every_implemented_boundary() {
         // nbody used to expose HIR and MIR only through separate ad-hoc commands.
         let directory = tempfile::tempdir().expect("a directory");
-        let nbody = fixture("nbody.nbl");
+        let nbody = fixture("nbody.nib");
         let output = dumped(&nbody, &directory.path().join("nbody"), &O2()).expect("dumps");
 
         let mut names: Vec<String> = std::fs::read_dir(&output)
@@ -132,7 +132,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "00-input.nbl",
+                "00-input.nib",
                 "01-tokens.txt",
                 "02-syntax.txt",
                 "03-hir.json",
@@ -150,7 +150,7 @@ mod tests {
             ]
         );
         let read = |name: &str| std::fs::read_to_string(output.join(name)).expect("dumped");
-        assert_eq!(std::fs::read(output.join("00-input.nbl")).unwrap(), std::fs::read(&nbody).unwrap());
+        assert_eq!(std::fs::read(output.join("00-input.nib")).unwrap(), std::fs::read(&nbody).unwrap());
         assert!(read("01-tokens.txt").contains("Fixed"));
         let syntax = read("02-syntax.txt");
         assert!(syntax.contains("Struct {\n            name: \"body\""));
@@ -171,7 +171,7 @@ mod tests {
     fn test_a_library_without_main_dumps_its_listing() {
         // A library had no listing, so the runtime's code could not be read.
         let directory = tempfile::tempdir().expect("a directory");
-        let source = directory.path().join("lib.nbl");
+        let source = directory.path().join("lib.nib");
         std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
         let output = dumped(&source, &directory.path().join("dump"), &O2()).expect("dumps");
         let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");

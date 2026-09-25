@@ -85,7 +85,7 @@ fn dead_stores_do_not_test_every_overwritten_cell() {
 
 #[test]
 fn a_direct_store_asks_only_the_cells_it_meets() {
-    // matmul.nbl's array cells name no object, so the object index skipped
+    // matmul.nib's array cells name no object, so the object index skipped
     // none of them: every store into the frame asked may_overlap of every
     // cell there, 60K questions here for 24 elements.
     let directory = tempfile::TempDir::new().unwrap();

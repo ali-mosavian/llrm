@@ -20,6 +20,6 @@ fn main() -> i16:
             print(f"{runner.name} made {target}")
         else:
             print(f"{runner.name} is {target - runner.laps} short")
-    for pace in range(58, 61):
+    for pace in 58..61:
         print(f"{pace}s pace: {pace * 12}s for 12 laps")
     return 0

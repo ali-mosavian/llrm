@@ -14,7 +14,7 @@ struct Planet:
 # Newton's method, from a guess at or above the root.
 fn root(x: f64) -> f64:
     let mut guess = x > 1.0 ? x : 1.0
-    for _step in range(0, 80):
+    for _step in 0..80:
         guess = (guess + x / guess) / 2.0
     return guess
 
