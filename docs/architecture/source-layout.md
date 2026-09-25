@@ -6,6 +6,7 @@
 | `crates/llrm-cycles` | The instruction-cost model |
 | `crates/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
 | `crates/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
+| `crates/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
 | `crates/llrm-core` | HIR lowering and interpreter, MIR, the optimizer, the x86 backend, and BC raising |
 | `crates/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
 | `crates/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |

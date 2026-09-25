@@ -1,6 +1,7 @@
 # Rich portable MIR
 
-Status: proposed design, not yet implemented.
+Status: steps 0 and 1 landed (`tools/baseline.sh`, `crates/llrm-mir`); the
+compiler still runs on the old MIR.
 
 This document defines a replacement for llrm's public MIR.  It is closely
 modelled on LLVM IR while remaining faithful to llrm's measured semantics and
@@ -1059,6 +1060,12 @@ gets a fail-first symptom regression in the same commit as its fix.
   reconstruction.
 - Record linked answers, final assembly, structural metrics, and per-CPU costs.
 
+`tools/baseline.sh` records every MIR, LIR and assembly stage of the OMF
+corpus and the Nib examples; while final assembly is unchanged, so are costs.
+The round trip is `test_round_trip_is_byte_identical` and
+`test_every_mapped_fixture_round_trips_byte_identical`; answers are
+`tools/e2e/e2e.py`.
+
 ### 1. Land the typed shell and its instruments
 
 - Introduce `MirContext`, the first scalar types, typed constants/values,
@@ -1073,6 +1080,11 @@ gets a fail-first symptom regression in the same commit as its fix.
   consumer's guessed width.
 
 No old field is deleted in this step.
+
+Landed as `crates/llrm-mir`, which has no dependencies: MIR cannot name a
+decoder, object file or target, and a test keeps it that way. The adapter and
+compatibility widths wait for the first producer in step 3, since nothing
+emits the new MIR yet. The `full` view waits for lineage in step 2.
 
 ### 2. Separate lineage from byte ownership
 
