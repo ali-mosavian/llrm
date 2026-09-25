@@ -2469,7 +2469,7 @@ pub fn _folded_division(op: &Op, numbers: (num_bigint::BigInt, num_bigint::BigIn
             one.raised = None;
             one.symbol = Some(false);
             one.source_backed = false;
-            one.id = if index == 0 { op.id } else { None };
+            one.source = if index == 0 { op.source } else { None };
             one.absorbed = if index == 0 { op.absorbed.clone() } else { Vec::new() };
             one
         })
@@ -3159,7 +3159,7 @@ pub fn _constant_argument(
     // original fixup, including its frame, onto this argument.  Keeping
     // the argument's id instead emitted `push 0`; inventing a fresh
     // fixup instead mistook DIVMOD's CS-relative handler for DGROUP data.
-    result.id = owner.map_or(op.id, |owner| owner.id);
+    result.source = owner.map_or(op.source, |owner| owner.source);
     result.symbol = Some(owner.is_some());
     result
 }
@@ -3906,7 +3906,9 @@ pub fn applied(
     calls: &IndexMap<i64, String>,
     options: Applied<'_>,
 ) -> Result<Rc<MirBody>, String> {
+    let body = &mir::identified(Rc::clone(body));
     crate::analysis::consts::reusing(|| crate::analysis::manager::scoped(|| _reusing_halves(|| _applied(body, dgroup, calls, options))))
+        .map(mir::identified)
 }
 
 /// The closure state `applied`'s nested `scalarized`, `fixed` and
@@ -3936,7 +3938,7 @@ impl _Transaction<'_, '_> {
         let mut boundary = self.boundary.borrow_mut();
         for one in boundary.iter_mut() {
             let name = one.name().to_owned();
-            state = crate::support::debug::timed(&name, || one.transform(state))?;
+            state = mir::identified(crate::support::debug::timed(&name, || one.transform(state))?);
             self.watch(&format!("{stage}-{}", one.name()), &state);
         }
         Ok(state)
@@ -3970,7 +3972,7 @@ impl _Transaction<'_, '_> {
                     if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
                         let name = one.name().to_owned();
                         let input = Rc::clone(&state);
-                        state = crate::support::debug::timed(&name, || one.transform(state))?;
+                        state = mir::identified(crate::support::debug::timed(&name, || one.transform(state))?);
                         if Rc::ptr_eq(&input, &state) || *input == *state {
                             state = Rc::clone(&input);
                             *settled = Some(input);

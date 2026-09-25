@@ -66,7 +66,7 @@ pub fn loaded(body: RaisedBody) -> RaisedBody {
             load.loads = vec![r#ref];
             load.args = vec![Arg::Cell(cell)];
             load.results = vec![Arg::Held(held)];
-            load.id = Some(mir::next_id());
+            load.source = Some(mir::next_id());
             load.symbol = Some(false);
             ops.push(load);
             let args: Vec<Arg> =

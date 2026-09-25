@@ -138,7 +138,7 @@ pub fn _handing_back(at: i64, _node: &Arc<Node>, now: Value, was: Value, answer:
     made.args = vec![Arg::Held(Held { value: answer, width: 4 }), Arg::Const(Const::new(16, 4))];
     made.results = vec![Arg::Held(Held { value: now, width: 2 })];
     made.merges = OrderedMap::from_iter([(was, now)]);
-    made.id = Some(next_id());
+    made.source = Some(next_id());
     let node = Node::Restore(Restore::new(at as usize, at as usize, 0, RESTORE_EFFECTS[&0].clone()));
     made.raising = Some(Box::new(Raising { node: Some(Arc::new(node)), covers: Some((at, at)), extra_covers: Vec::new() }));
     made
@@ -196,7 +196,7 @@ pub fn _folded(body: &RaisedBody, found: &Module, blocks: &[Block]) -> Folded {
     for block in &body.blocks {
         for op in &block.ops {
             let Some(site) = sites.get(&op.at) else { continue };
-            let Some(id) = op.id else { continue };
+            let Some(id) = op.source else { continue };
             if op.kind == Kind::Call {
                 continue;
             }

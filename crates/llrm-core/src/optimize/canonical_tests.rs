@@ -78,10 +78,10 @@ fn test_a_term_that_is_not_neutral_stays() {
 #[test]
 fn test_a_folded_term_keeps_the_source_bytes_it_owned() {
     let mut body = _body(Kind::Add, 0, Kind::Below);
-    body.blocks[0].ops[0].id = Some(7);
+    body.blocks[0].ops[0].source = Some(7);
     body.blocks[0].ops[0].source_backed = true;
 
     let folded = identities(Rc::new(body));
     let first = &folded.blocks[0].ops[0];
-    assert_eq!((first.kind, first.id), (Kind::Nothing, Some(7)));
+    assert_eq!((first.kind, first.source), (Kind::Nothing, Some(7)));
 }

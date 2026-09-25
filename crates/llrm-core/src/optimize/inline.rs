@@ -479,7 +479,7 @@ fn _at(
                 })
                 .collect();
             made.source_backed = false;
-            made.id = None;
+            made.source = None;
             made.raised = None;
             made.absorbed = Vec::new();
             made.symbol = Some(false);

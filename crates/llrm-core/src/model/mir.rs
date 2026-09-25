@@ -12,6 +12,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use num_bigint::BigInt;
 
@@ -1084,6 +1085,21 @@ pub struct FloatingOrigin {
     pub machine_outputs: Vec<Arg>,
 }
 
+/// An operation's own identity: unique in its body and kept across passes,
+/// so what a pass did reads as which operations it kept, copied and deleted.
+/// `0` is not yet assigned. It is not content: operations differing only here
+/// are equal, as Python's `field(compare=False)`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OpId(pub u32);
+
+impl PartialEq for OpId {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for OpId {}
+
 /// One instruction, as values in and values out.
 ///
 /// Direct port of `qbopt.model.mir:Op`.  Public MIR carries semantic values
@@ -1115,7 +1131,10 @@ pub struct Op {
     pub raised: Option<(Vec<Arg>, Vec<Arg>)>,
     pub target: Option<i64>,
     pub cases: Vec<(i64, i64)>,
-    pub id: Option<u32>,
+    /// The raise-time operation whose relocations, decoded node and folded
+    /// site this one re-emits: a copy shares it.
+    pub source: Option<u32>,
+    pub id: OpId,
     /// `None` is an unchanged operand, `Some(true)` owns a moved relocation,
     /// and `Some(false)` left that relocation on another operation.
     pub symbol: Option<bool>,
@@ -1176,7 +1195,8 @@ impl Op {
             raised: None,
             target: None,
             cases: Vec::new(),
-            id: None,
+            source: None,
+            id: OpId(0),
             symbol: None,
             args_known: true,
             memory_complete: false,
@@ -1563,7 +1583,7 @@ impl AllocationHints {
             .blocks
             .iter()
             .flat_map(|block| block.ops.iter())
-            .filter_map(|op| op.id.map(|id| (id, &op.defines)))
+            .filter_map(|op| op.source.map(|id| (id, &op.defines)))
             .flat_map(|(id, defines)| {
                 defines
                     .iter()
@@ -1602,7 +1622,7 @@ impl AllocationHints {
     /// Python `AllocationHints.pin_of`.
     pub fn pin_of(&self, operation: &Op, result: usize) -> Option<iced_x86::Register> {
         operation
-            .id
+            .source
             .and_then(|id| self.pins.get(&(id, result)).copied())
     }
 }
@@ -1892,7 +1912,7 @@ pub fn with_live_outs(body: RaisedBody) -> RaisedBody {
             let mut marker = Op::new(block.at, OpCode::nothing(), "", Vec::new(), Vec::new());
             marker.kind = Kind::Nothing;
             marker.source_backed = false;
-            marker.id = Some(next_id());
+            marker.source = Some(next_id());
             marker.exits = ordered;
             block.ops = vec![marker];
         }
@@ -2384,6 +2404,63 @@ pub fn resolved(body: &MirBody, _calls: Option<&BTreeMap<i64, String>>) -> Resul
         integer_ranges,
         loop_trip_counts: body.loop_trip_counts.clone(),
     })
+}
+
+/// Operations without an id of their own: unassigned, or shared with another.
+pub fn identity(body: &MirBody) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut seen = BTreeMap::<u32, i64>::new();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        if op.id.0 == 0 {
+            problems.push(format!("{} {} has no id", python_padded_hex(op.at), op.name));
+        } else if let Some(first) = seen.insert(op.id.0, op.at) {
+            problems.push(format!("{} {} repeats id {} of {}", python_padded_hex(op.at), op.name, op.id.0, python_padded_hex(first)));
+        }
+    }
+    problems
+}
+
+/// `body` with every operation named by an id of its own. Identity is the
+/// pass manager's to keep, not each pass's: an operation a pass made has none
+/// yet, and one it copied repeats the original's. Both get a fresh id; of the
+/// copies, the one owning source bytes keeps the old one, else the first.
+pub fn identified(body: Rc<MirBody>) -> Rc<MirBody> {
+    let mut keeper = BTreeMap::<u32, (usize, usize, bool)>::new();
+    let mut unassigned = false;
+    let mut repeated = false;
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        for (op_index, op) in block.ops.iter().enumerate() {
+            if op.id.0 == 0 {
+                unassigned = true;
+                continue;
+            }
+            let owns = !op.absorbed.is_empty();
+            match keeper.get_mut(&op.id.0) {
+                None => {
+                    keeper.insert(op.id.0, (block_index, op_index, owns));
+                }
+                Some(kept) => {
+                    repeated = true;
+                    if owns && !kept.2 {
+                        *kept = (block_index, op_index, owns);
+                    }
+                }
+            }
+        }
+    }
+    if !unassigned && !repeated {
+        return body;
+    }
+    let mut body = (*body).clone();
+    for (block_index, block) in body.blocks.iter_mut().enumerate() {
+        for (op_index, op) in block.ops.iter_mut().enumerate() {
+            let kept = keeper.get(&op.id.0).is_some_and(|kept| (kept.0, kept.1) == (block_index, op_index));
+            if !kept {
+                op.id = OpId(next_id());
+            }
+        }
+    }
+    Rc::new(body)
 }
 
 /// Direct port of `qbopt.model.mir:verify`.
@@ -3413,7 +3490,7 @@ mod tests {
         assert_eq!(op.raised, None);
         assert_eq!(op.target, None);
         assert!(op.cases.is_empty());
-        assert_eq!(op.id, None);
+        assert_eq!(op.source, None);
         assert_eq!(op.symbol, None);
         assert!(op.args_known);
         assert!(!op.memory_complete && !op.reads_complete && !op.volatile);
@@ -3472,7 +3549,7 @@ mod tests {
                 width: 4,
             })]
         );
-        assert_eq!(operation.id, None);
+        assert_eq!(operation.source, None);
         assert_eq!(operation.symbol, Some(false));
         assert!(operation.memory_complete);
         assert!(operation.reads_complete);
@@ -3536,7 +3613,7 @@ mod tests {
         op.raised = Some((op.args.clone(), op.results.clone()));
         op.target = Some(11);
         op.cases = vec![(1, 12)];
-        op.id = Some(13);
+        op.source = Some(13);
         op.symbol = Some(true);
         op.args_known = false;
         op.memory_complete = true;
@@ -3573,7 +3650,7 @@ mod tests {
         assert_eq!(result.floating_origin, op.floating_origin);
         assert_eq!(result.source_backed, op.source_backed);
         assert_eq!(result.cases, op.cases);
-        assert_eq!(result.id, op.id);
+        assert_eq!(result.source, op.source);
         assert_eq!(result.args_known, op.args_known);
         assert_eq!(result.memory_complete, op.memory_complete);
         assert_eq!(result.reads_complete, op.reads_complete);
@@ -3871,7 +3948,7 @@ mod tests {
             vec![first],
             vec![],
         );
-        first_op.id = Some(100);
+        first_op.source = Some(100);
         let mut second_op = Op::new(
             20,
             OpCode::Synth(Synth::ConcatLow),
@@ -3879,7 +3956,7 @@ mod tests {
             vec![second],
             vec![],
         );
-        second_op.id = Some(200);
+        second_op.source = Some(200);
         let mut raised = RaisedBody::new(MirBody::new(
             10,
             vec![MirBlock::new(
@@ -3924,7 +4001,7 @@ mod tests {
             vec![first],
             vec![],
         );
-        first_op.id = Some(100);
+        first_op.source = Some(100);
         let mut second_op = Op::new(
             20,
             OpCode::Synth(Synth::ConcatLow),
@@ -3932,11 +4009,11 @@ mod tests {
             vec![second],
             vec![],
         );
-        second_op.id = Some(200);
+        second_op.source = Some(200);
         let mut hints = AllocationHints::new();
         hints
             .pins
-            .insert((first_op.id.unwrap(), 0), iced_x86::Register::BL);
+            .insert((first_op.source.unwrap(), 0), iced_x86::Register::BL);
 
         assert_eq!(hints.pin_of(&first_op, 0), Some(iced_x86::Register::BL));
         assert_eq!(hints.pin_of(&second_op, 0), None);
@@ -3993,9 +4070,9 @@ mod tests {
         let first = Value::new(1, 0);
         let second = Value::new(2, 1);
         let mut first_op = Op::new(0, OpCode::Synth(Synth::ConcatLow), "", vec![first], vec![]);
-        first_op.id = Some(9);
+        first_op.source = Some(9);
         let mut second_op = Op::new(1, OpCode::Synth(Synth::ConcatLow), "", vec![second], vec![]);
-        second_op.id = Some(9);
+        second_op.source = Some(9);
         let mut raised = RaisedBody::new(MirBody::new(
             0,
             vec![MirBlock::new(0, vec![], vec![first_op, second_op], vec![])],

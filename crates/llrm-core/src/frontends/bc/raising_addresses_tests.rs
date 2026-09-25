@@ -95,7 +95,7 @@ fn test_long_extraction_preserves_the_far_store_selector() {
     store.kind = Kind::Store;
     store.args = vec![Arg::Held(Held { value: whole, width: 4 })];
     store.results = vec![Arg::Cell(Cell { r#ref: element.clone() })];
-    store.id = Some(3);
+    store.source = Some(3);
     // Python's SimpleNamespace node carries only semantics, so the raise sees no node.
     let store = mir::raising_occurrence(&store, (3, 3), Vec::new(), None);
     let body = RaisedBody::new(MirBody::new(0, vec![MirBlock::new(0, vec![], vec![selector, extract, store], vec![])]));

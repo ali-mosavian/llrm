@@ -198,7 +198,7 @@ fn test_same_object_leaf_is_promoted_across_equivalent_pointer_values() {
             ..via_first.clone()
         };
         let first_store = Op {
-            id: Some(100),
+            source: Some(100),
             ..store(
                 4,
                 [Some(stored), Some(first), first_segment]
@@ -210,7 +210,7 @@ fn test_same_object_leaf_is_promoted_across_equivalent_pointer_values() {
             )
         };
         let second_load = Op {
-            id: Some(101),
+            source: Some(101),
             ..load(
                 6,
                 loaded,
@@ -250,7 +250,7 @@ fn test_same_object_leaf_is_promoted_across_equivalent_pointer_values() {
             results: vec![cell(&scalar_ref)],
             loads: vec![scalar_ref.clone()],
             stores: vec![scalar_ref.clone()],
-            id: Some(102),
+            source: Some(102),
             ..op(8, Operation::Unary, "inc", vec![flags], vec![])
         };
         let aggregate_flags = Value {
@@ -263,7 +263,7 @@ fn test_same_object_leaf_is_promoted_across_equivalent_pointer_values() {
             results: vec![cell(&via_second)],
             loads: vec![via_second.clone()],
             stores: vec![via_second.clone()],
-            id: Some(104),
+            source: Some(104),
             ..op(
                 5,
                 Operation::Binary,
@@ -353,7 +353,7 @@ fn test_same_object_leaf_is_promoted_across_equivalent_pointer_values() {
             )
         };
         let overwrite = Op {
-            id: Some(103),
+            source: Some(103),
             ..store(6, vec![], constant(0, 2), &upper_half)
         };
         let early_value = value(7, 5);
@@ -854,7 +854,7 @@ fn test_promotion_preserves_existing_cse_value_edges() {
     let body = applied(&found, &blocks, &body, Options { promote: false, ..Default::default() });
     let stored = all_ops(&body).find(|op| op.at == 0x122).unwrap();
     let result = promoted_with_landmarks(&body, &found);
-    let after = all_ops(&result).find(|op| op.id == stored.id).unwrap();
+    let after = all_ops(&result).find(|op| op.source == stored.source).unwrap();
     assert_eq!(after.args, stored.args);
 }
 
@@ -953,7 +953,7 @@ fn test_addrm_long_accumulator_survives_split_initialization() {
             op.kind == Kind::Arg
                 && op.loads.iter().any(|one| regions::overlapping(one, cell, None, None, Some(&layout)).unwrap())
         })
-        .map(|op| op.id)
+        .map(|op| op.source)
         .collect();
     let result = applied(&found, &blocks, &body, Options::default());
     let inside: BTreeSet<i64> =
@@ -966,7 +966,7 @@ fn test_addrm_long_accumulator_survives_split_initialization() {
         .any(|op| op.loads.contains(cell)));
     assert!(!output.is_empty());
     // PRINT still gets u, from the cell or from the value promoted out of it.
-    let remaining: BTreeSet<Option<u32>> = all_ops(&result).filter(|op| op.kind == Kind::Arg).map(|op| op.id).collect();
+    let remaining: BTreeSet<Option<u32>> = all_ops(&result).filter(|op| op.kind == Kind::Arg).map(|op| op.source).collect();
     assert!(output.iter().all(|id| remaining.contains(id)));
 }
 

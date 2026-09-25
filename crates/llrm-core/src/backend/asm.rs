@@ -141,7 +141,7 @@ fn _insn_ranges_of(op: &Insn, found: &Module, source: Option<&SourceMap>) -> Vec
         // Explicitly inserted; its id names operands, not owned bytes.
         return vec![op.covers.expect("an inserted op covers an empty range")];
     }
-    let full = op.id().and_then(|id| _source(found, source).coverage.get(&id).cloned());
+    let full = op.source_id().and_then(|id| _source(found, source).coverage.get(&id).cloned());
     if let Some(full) = full {
         return full;
     }
@@ -190,7 +190,7 @@ pub fn _length_of(op: &Insn, found: &Module, source: Option<&SourceMap>) -> Opti
     if !op.extra_covers().is_empty() {
         return Some(_insn_ranges_of(op, found, source).iter().map(|(lo, hi)| hi - lo).sum());
     }
-    let full = op.id().and_then(|id| _source(found, source).coverage.get(&id).cloned());
+    let full = op.source_id().and_then(|id| _source(found, source).coverage.get(&id).cloned());
     if let Some(full) = full {
         return Some(full.iter().map(|(lo, hi)| hi - lo).sum());
     }
@@ -276,7 +276,7 @@ pub type FoldedSite = (CallSite, Flag);
 ///
 /// `Ok(None)` is Python's None, `Err` its refusal string.
 pub fn _folded_site(op: &Insn, found: &Module, source: Option<&SourceMap>) -> Result<Option<FoldedSite>, String> {
-    let Some(id) = op.id() else { return Ok(None) };
+    let Some(id) = op.source_id() else { return Ok(None) };
     // An instruction a pass lifted the symbolic operand onto keeps the id
     // because the id is how its fixup is found. It is not the site.
     if op.symbol == Some(true) {
@@ -395,7 +395,7 @@ pub fn _selected_divide(
         return Ok(None);
     }
     // An instruction standing beside the site is not the site.
-    if op.id().is_none() {
+    if op.source_id().is_none() {
         return Ok(None);
     }
     let seats = _seats(op, assignment, origin);
@@ -427,7 +427,7 @@ pub fn _fields_in(found: &Module, op: &Insn, fields: &BTreeSet<i64>, source: Opt
     if op.symbol == Some(false) {
         return Vec::new(); // the operand went to another instruction, and the fixup with it
     }
-    let said = op.id().and_then(|id| _source(found, source).refs.get(&id).cloned());
+    let said = op.source_id().and_then(|id| _source(found, source).refs.get(&id).cloned());
     if let Some(said) = said {
         if said.len() > 1 {
             let wanted: Vec<i64> =
@@ -477,7 +477,7 @@ pub fn _field_in(found: &Module, op: &Insn, fields: &BTreeSet<i64>, source: Opti
     // fixup, or none of them.
     if op.symbol == Some(true) {
         let what = _semantics(op);
-        if op.id().is_some()
+        if op.source_id().is_some()
             && what.is_some_and(|what| what.op == Operation::Call && what.target.is_none())
             && found.calls.contains_key(&op.at)
             && code_at(found, op.at) == Some(0x9A)
@@ -485,7 +485,7 @@ pub fn _field_in(found: &Module, op: &Insn, fields: &BTreeSet<i64>, source: Opti
         {
             return Some(op.at + 1);
         }
-        let said = op.id().and_then(|id| _source(found, source).refs.get(&id).cloned())?;
+        let said = op.source_id().and_then(|id| _source(found, source).refs.get(&id).cloned())?;
         if said.len() != 1 || !_still_has_an_operand_for_it(op) {
             return None;
         }
@@ -501,7 +501,7 @@ pub fn _field_in(found: &Module, op: &Insn, fields: &BTreeSet<i64>, source: Opti
         return None; // the operand went to another instruction, and the fixup with it
     }
     // What the operation says it carries, established at the raise.
-    let said = op.id().and_then(|id| _source(found, source).refs.get(&id).cloned());
+    let said = op.source_id().and_then(|id| _source(found, source).refs.get(&id).cloned());
     let r#ref = said.and_then(|said| said.first().copied());
     if let Some(r#ref) = r#ref {
         if fields.is_empty() || fields.contains(&r#ref) {
@@ -601,7 +601,7 @@ pub fn _placed(
 pub fn _emulator_protocol(op: &Insn, found: &Module, native_fpu: bool, source: Option<&SourceMap>) -> Option<u8> {
     let protocols = &_source(found, source).float_protocols;
     if !native_fpu {
-        if let Some(&protocol) = op.id().and_then(|id| protocols.get(&id)) {
+        if let Some(&protocol) = op.source_id().and_then(|id| protocols.get(&id)) {
             if op.what.as_ref().is_some_and(|what| what.op == Operation::FloatLoad) {
                 return Some(u8::try_from(protocol).expect("a protocol is a byte"));
             }

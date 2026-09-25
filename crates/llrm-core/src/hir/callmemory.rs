@@ -55,7 +55,7 @@ pub fn annotated(
             .iter()
             .flat_map(|block| &block.ops)
             .filter(|operation| operation.kind == mir::Kind::Call)
-            .map(|operation| (operation.id, operation))
+            .map(|operation| (operation.source, operation))
             .collect();
         let value_types: IndexMap<i64, &model::Type> =
             function.values.iter().map(|one| (one.id, types[&one.r#type])).collect();

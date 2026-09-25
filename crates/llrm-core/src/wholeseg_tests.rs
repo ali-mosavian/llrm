@@ -285,3 +285,22 @@ fn test_nbody_port_read_does_not_copy_neighbor_instructions() {
         assert_eq!(instructions[index + 1].mnemonic(), Mnemonic::And);
     }
 }
+
+/// Every MIR stage names each operation by an id of its own. The raise
+/// repeated ids, and clones and new operations copied one or had none.
+#[test]
+fn test_every_mir_stage_gives_each_operation_its_own_id() {
+    let data = std::fs::read(std::path::Path::new(env!("LLRM_ROOT")).join("tests/fixtures/omf/nested-p-g2.obj")).unwrap();
+    let mut problems = Vec::new();
+    let mut stages = 0;
+    let mut watch = |stage: &str, _: Option<&str>, low: Watched<'_>| {
+        if let Watched::Mir(body) = low {
+            stages += 1;
+            problems.extend(crate::model::mir::identity(body).into_iter().map(|one| format!("{stage}: {one}")));
+        }
+    };
+    emitted(&data, true, true, None, Some(&mut watch), ProfileOrName::Name("386"), false, false, None, &O2()).unwrap();
+    assert!(stages > 20, "{stages} stages watched");
+    let stages: BTreeSet<&str> = problems.iter().map(|one| one.split(": ").next().unwrap()).collect();
+    assert!(problems.is_empty(), "{} problems in {stages:?}", problems.len());
+}

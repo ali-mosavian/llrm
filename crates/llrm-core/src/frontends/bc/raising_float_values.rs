@@ -87,7 +87,7 @@ pub fn loaded(body: RaisedBody) -> RaisedBody {
             load.stack = None;
             load.raised = None;
             load.symbol = None;
-            load.id = Some(mir::next_id());
+            load.source = Some(mir::next_id());
             ops.push(mir::source_free(load));
             let mut arithmetic = op.clone();
             if integer {

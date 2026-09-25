@@ -127,7 +127,7 @@ pub fn expanded(body: &MirBody) -> Result<MirBody, String> {
             branch.symbol = Some(false);
             if index == 0 {
                 compare.absorbed = op.absorbed.clone();
-                compare.id = op.id;
+                compare.source = op.source;
                 compare.source_backed = op.source_backed;
             }
             let mut ops = if index == 0 { block.ops[..block.ops.len() - 1].to_vec() } else { vec![] };

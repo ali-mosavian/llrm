@@ -195,7 +195,7 @@ pub fn _specialized(
     guard.source_backed = false;
     guard.raised = None;
     guard.absorbed = Vec::new();
-    guard.id = None;
+    guard.source = None;
     guard.symbol = Some(false);
     let mut dispatch = ssa::substituted(branch, &definitions).map_err(|error| error.to_string())?;
     dispatch.at = anchor;
@@ -203,7 +203,7 @@ pub fn _specialized(
     dispatch.source_backed = false;
     dispatch.raised = None;
     dispatch.name = String::new();
-    dispatch.id = None;
+    dispatch.source = None;
     dispatch.symbol = Some(false);
     dispatch.absorbed = if replaces_jump { last.expect("jump").absorbed.clone() } else { Vec::new() };
     let mut parent = parent.clone();

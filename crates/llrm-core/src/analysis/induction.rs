@@ -71,7 +71,7 @@ type ExtendedForms = OrderedMap<u32, (Affine, BigInt, Vec<(Arg, BigInt)>)>;
 /// Direct port of `qbopt.analysis.induction:Derived`.  Python retains the
 /// exact immutable `mir.Op` object that produced the formula; an
 /// [`OpOccurrence`] is the corresponding identity in one immutable Rust MIR
-/// snapshot.  It is deliberately neither source provenance (`Op.id`) nor a
+/// snapshot.  It is deliberately neither source provenance (`Op.source`) nor a
 /// source address nor structural operation equality.
 ///
 /// `offsets` remains an ordered vector, rather than a map: Python retains
@@ -252,7 +252,7 @@ pub fn exit_value(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<Af
 /// Direct port of `qbopt.analysis.induction:ControlReplacement`.  The
 /// counted-loop proof is borrowed, retaining Python's `is` relationship for
 /// the consumer.  Operations and phis use snapshot-local occurrences rather
-/// than `Op.id` or structural equality.
+/// than `Op.source` or structural equality.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlReplacement<'a> {
     pub counted: &'a CountedLoop,

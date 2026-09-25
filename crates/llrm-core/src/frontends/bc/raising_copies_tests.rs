@@ -43,7 +43,7 @@ fn body(index: i64, offset: i64, pushed: bool) -> RaisedBody {
         op.kind = Kind::Copy;
         op.args = vec![Arg::Symbol(Symbol::new(Space::Segment, index, offset, 2))];
         op.results = vec![Arg::Held(Held { value, width: 2 })];
-        op.id = Some(id);
+        op.source = Some(id);
         op
     };
     let mut ops = vec![
@@ -143,7 +143,7 @@ fn _copy(byte: Option<u8>) -> (Module, RaisedBody) {
     let body = mir::_with_hints(public, &raised.hints[&public.entry]);
     let with_node = |op: &Op| {
         let mut op = op.clone();
-        let node = op.id.and_then(|id| raised.source.nodes.get(&id)).cloned();
+        let node = op.source.and_then(|id| raised.source.nodes.get(&id)).cloned();
         op.raising = Some(Box::new(mir::Raising { node, covers: None, extra_covers: Vec::new() }));
         op
     };

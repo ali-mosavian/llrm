@@ -98,13 +98,14 @@ impl Insn {
         self.op.as_deref()
     }
 
-    /// Python `Insn.id`.
+    /// The source operation whose relocations this instruction re-emits
+    /// (Python `Insn.id`).
     #[must_use]
-    pub fn id(&self) -> Option<u32> {
+    pub fn source_id(&self) -> Option<u32> {
         if self.inserted() && self.symbol != Some(true) {
             return None;
         }
-        self.op.as_ref().and_then(|op| op.id)
+        self.op.as_ref().and_then(|op| op.source)
     }
 
     /// Python `Insn.kind`.
@@ -458,7 +459,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        source.id = Some(44);
+        source.source = Some(44);
         source.kind = Kind::Divmod;
         source.source_backed = true;
         source.raised = Some((Vec::new(), Vec::new()));
@@ -468,8 +469,8 @@ mod tests {
         lowered.op = Some(Arc::new(source));
         lowered.spread = vec![(0x10, 0x12), (0x20, 0x22)];
         assert!(!lowered.inserted());
-        assert_eq!(lowered.source().unwrap().id, Some(44));
-        assert_eq!(lowered.id(), Some(44));
+        assert_eq!(lowered.source().unwrap().source, Some(44));
+        assert_eq!(lowered.source_id(), Some(44));
         assert_eq!(lowered.kind(), Kind::Div);
         assert_eq!(lowered.name(), Some("source-divmod"));
         assert!(lowered.args().is_empty());
@@ -482,9 +483,9 @@ mod tests {
         inserted.covers = Some((0x12, 0x12));
         assert!(inserted.inserted());
         assert!(inserted.source().is_none());
-        assert_eq!(inserted.id(), None);
+        assert_eq!(inserted.source_id(), None);
         inserted.symbol = Some(true);
-        assert_eq!(inserted.id(), Some(44));
+        assert_eq!(inserted.source_id(), Some(44));
 
         inserted.node = Some(Arc::new(Node::Restore(Restore::new(
             0x12,

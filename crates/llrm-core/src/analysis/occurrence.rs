@@ -13,7 +13,8 @@ use crate::model::mir::{MirBlock, MirBody, Op, Phi};
 /// One operation occurrence in an immutable MIR body snapshot.
 ///
 /// This is the direct Rust representation of Python's `id(op)` for analysis
-/// results.  It is not `Op.id`, which names source provenance instead.
+/// results.  It is not `Op.id`, which persists across passes, nor `Op.source`,
+/// which names source provenance.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct OpOccurrence {
     block_index: usize,

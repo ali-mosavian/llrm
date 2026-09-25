@@ -544,7 +544,7 @@ pub fn reduced(
                     preheader,
                     op,
                 );
-                load.id = op.id;
+                load.source = op.source;
                 load.symbol = Some(true);
                 ahead.entry(preheader).or_default().push(load);
                 one.by = Arg::Held(Held {
@@ -664,7 +664,7 @@ pub fn reduced(
                     op,
                 );
                 sum.op = Some(OpCode::Operation(Operation::Binary));
-                sum.id = op.id;
+                sum.source = op.source;
                 replacements.insert(member.op, vec![sum]);
             }
         }

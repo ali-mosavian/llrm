@@ -715,7 +715,7 @@ mod tests {
         op.results = vec![mir::Arg::Held(mir::Held { value: result, width: 2 })];
         op.loads = vec![reference];
         op.source_backed = true;
-        op.id = Some(8);
+        op.source = Some(8);
         op.raised = Some((vec![], vec![]));
         let context = mir::MirBody::new(0, vec![mir::MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
         // Python's `SimpleNamespace(semantics=machine)`: only the semantics is read.

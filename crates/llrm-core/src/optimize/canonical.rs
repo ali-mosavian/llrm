@@ -152,7 +152,7 @@ pub fn identities(body: Rc<MirBody>) -> Rc<MirBody> {
         for (i, op) in block.ops.iter().enumerate() {
             if let Some(Arg::Held(result)) = op.results.first() {
                 if swap.contains_key(&result.value.id) {
-                    if op.id.is_some() || op.source_backed || !op.absorbed.is_empty() {
+                    if op.source.is_some() || op.source_backed || !op.absorbed.is_empty() {
                         ops.push(mir::cleared(op)); // its bytes stay owned
                     }
                     continue;

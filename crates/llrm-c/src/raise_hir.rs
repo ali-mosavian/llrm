@@ -837,7 +837,7 @@ impl<'a> _Raise<'a> {
         made.kind = kind;
         made.args = args;
         made.results = results;
-        made.id = Some(mir::next_id());
+        made.source = Some(mir::next_id());
         made.loads = extra.loads;
         made.stores = extra.stores;
         made.test = extra.test;

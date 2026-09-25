@@ -76,7 +76,7 @@ pub fn raised(body: RaisedBody, found: &Module, contracts: &IndexMap<i64, Contra
             converted.stack = Some(-1);
             converted.symbol = Some(false);
             ops.push(mir::detached(converted));
-            if let Some(id) = op.id {
+            if let Some(id) = op.source {
                 source.float_protocols.insert(id, 0x34);
             }
             for (shift, register) in registers.iter().enumerate() {

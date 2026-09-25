@@ -250,7 +250,7 @@ pub fn optimized(
     }
     let mut body = body.clone();
     loop {
-        let candidate = expanded(&body, r#where, &r#where.named(), &BTreeSet::new())?;
+        let candidate = crate::model::mir::identified(expanded(&body, r#where, &r#where.named(), &BTreeSet::new())?);
         if Rc::ptr_eq(&candidate, &body) {
             return Ok(body);
         }

@@ -168,20 +168,20 @@ pub fn scalar(body: RaisedBody, found: &Module) -> RaisedBody {
                         load.loads = vec![source.clone()];
                         load.args = vec![Arg::Cell(Cell { r#ref: source })];
                         load.results = vec![Arg::Held(held)];
-                        load.id = Some(mir::next_id());
+                        load.source = Some(mir::next_id());
                         ops.push(mir::raising_owned(load, &[op]));
                         let mut store = Op::new(op.at, OpCode::Operation(Operation::Move), "mov", vec![], vec![temporary]);
                         store.kind = Kind::Store;
                         store.stores = vec![dest.clone()];
                         store.args = vec![Arg::Held(held)];
                         store.results = vec![Arg::Cell(Cell { r#ref: dest })];
-                        store.id = Some(mir::next_id());
+                        store.source = Some(mir::next_id());
                         ops.push(store);
                         for (before, after, symbol) in pointers {
                             let advanced = Symbol { offset: symbol.offset + 2 * direction, ..symbol };
                             symbols.insert(after, advanced);
                             if let Some(setup) = definitions.get(&before) {
-                                if let Some(id) = setup.id {
+                                if let Some(id) = setup.source {
                                     if setup.kind == Kind::Copy
                                         && setup.loads.is_empty()
                                         && setup.stores.is_empty()
@@ -204,7 +204,7 @@ pub fn scalar(body: RaisedBody, found: &Module) -> RaisedBody {
                             copy.args = vec![Arg::Symbol(advanced)];
                             copy.results = vec![Arg::Held(Held { value: after, width: 2 })];
                             copy.merges = [(before, after)].into_iter().collect::<OrderedMap<_, _>>();
-                            copy.id = Some(identity);
+                            copy.source = Some(identity);
                             ops.push(copy);
                         }
                         pushed_data = false;
@@ -226,7 +226,7 @@ fn _observed(body: RaisedBody, candidates: &HashSet<u32>) -> RaisedBody {
     if candidates.is_empty() {
         return body;
     }
-    let chosen = |op: &Op| op.id.is_some_and(|id| candidates.contains(&id));
+    let chosen = |op: &Op| op.source.is_some_and(|id| candidates.contains(&id));
     let definitions: HashMap<Value, &Op> = body
         .blocks
         .iter()
@@ -264,7 +264,7 @@ fn _observed(body: RaisedBody, candidates: &HashSet<u32>) -> RaisedBody {
                 if !op.inserted() {
                     let mut nothing = Op::new(op.at, OpCode::Operation(Operation::Nothing), "", vec![], vec![]);
                     nothing.kind = Kind::Nothing;
-                    nothing.id = op.id;
+                    nothing.source = op.source;
                     ops.push(mir::raising_owned(nothing, &[op]));
                 }
             } else {

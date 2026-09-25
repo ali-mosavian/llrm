@@ -550,7 +550,7 @@ pub fn _allocation_leaves(body: &MirBody) -> MirBody {
         let extent = BigInt::from(request.element_width) * &count;
         if count > BigInt::from(0) && BigInt::from(0) < extent && extent < BigInt::from(1_i64 << 31)
         {
-            let generation = op.id.map_or(op.at, i64::from);
+            let generation = op.source.map_or(op.at, i64::from);
             requests
                 .entry(request.descriptor)
                 .or_default()
@@ -753,7 +753,7 @@ pub fn _bounded_leaves(body: &MirBody) -> Result<MirBody, String> {
 pub fn _canonical_leaf_types(body: &Rc<MirBody>) -> Rc<MirBody> {
     let mut types = IndexMap::<(MemoryObject, i64, i64), BTreeSet<String>>::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
-        if op.source_backed || !op.absorbed.is_empty() || op.id.is_none() {
+        if op.source_backed || !op.absorbed.is_empty() || op.source.is_none() {
             continue;
         }
         for r#ref in op.loads.iter().chain(&op.stores) {
@@ -793,7 +793,7 @@ pub fn _canonical_leaf_types(body: &Rc<MirBody>) -> Rc<MirBody> {
         }
     };
     Rc::new(_rewritten_refs(body, reference, |op| {
-        op.source_backed || !op.absorbed.is_empty() || op.id.is_none()
+        op.source_backed || !op.absorbed.is_empty() || op.source.is_none()
     }))
 }
 
@@ -906,7 +906,7 @@ pub fn _split_copies(body: &Rc<MirBody>) -> Rc<MirBody> {
                     results: vec![Arg::Held(held)],
                     source_backed: false,
                     raised: None,
-                    id: None,
+                    source: None,
                     absorbed: vec![],
                     symbol: None,
                     ..load.clone()
@@ -929,7 +929,7 @@ pub fn _split_copies(body: &Rc<MirBody>) -> Rc<MirBody> {
                     })],
                     source_backed: false,
                     raised: None,
-                    id: None,
+                    source: None,
                     absorbed: vec![],
                     symbol: None,
                     ..store.clone()
@@ -959,8 +959,8 @@ pub fn _copy_candidate(
         || store.source_backed
         || !load.absorbed.is_empty()
         || !store.absorbed.is_empty()
-        || load.id.is_none()
-        || store.id.is_none()
+        || load.source.is_none()
+        || store.source.is_none()
         || load.volatile
         || store.volatile
     {
@@ -1339,12 +1339,12 @@ pub fn promoted(
         .iter()
         .flat_map(|block| &block.ops)
         .filter(|op| !op.loads.is_empty() && !op.stores.is_empty())
-        .map(|op| op.id)
+        .map(|op| op.source)
         .collect::<HashSet<_>>();
     if split_updates
         && body.blocks.iter().enumerate().any(|(block_index, block)| {
             block.ops.iter().enumerate().any(|(op_index, op)| {
-                updates.contains(&op.id)
+                updates.contains(&op.source)
                     && !op.loads.is_empty()
                     && op.stores.is_empty()
                     && !usable.contains(&(block_index, op_index))
@@ -1379,7 +1379,7 @@ pub fn promoted(
                     fresh += 1;
                     ops.push(Op {
                         source_backed: false,
-                        id: None,
+                        source: None,
                         absorbed: vec![],
                         symbol: Some(false),
                         ..exact
@@ -1407,7 +1407,7 @@ pub fn promoted(
                         })],
                         source_backed: false,
                         raised: None,
-                        id: None,
+                        source: None,
                         absorbed: vec![],
                         symbol: Some(false),
                         ..op.clone()
@@ -1430,7 +1430,7 @@ pub fn promoted(
                 ops.push(op.clone());
                 made = Op {
                     source_backed: false,
-                    id: None,
+                    source: None,
                     absorbed: vec![],
                     symbol: Some(false),
                     ..made

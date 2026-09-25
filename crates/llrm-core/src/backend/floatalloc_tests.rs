@@ -575,7 +575,7 @@ fn test_a_pinned_conversion_result_survives_lowering_into_floatalloc() {
     store.args = vec![Arg::Held(Named { value: real, width: 10 })];
     store.results = vec![Arg::Held(Named { value: integer, width: 4 })];
     store.floating = Some(Floating::new([Format::Extended80], Format::Signed32, Precision::Destination, Rounding::Dynamic));
-    store.id = Some(200);
+    store.source = Some(200);
     let body = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![load, store], vec![])]);
     let mut hints = AllocationHints::new();
     hints.pins.insert((200, 0), Register::EAX);

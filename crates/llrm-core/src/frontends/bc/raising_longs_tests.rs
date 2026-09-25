@@ -369,7 +369,7 @@ fn test_nbody_whole_position_loads_leave_the_inner_loop() {
             .blocks
             .iter()
             .flat_map(|block| block.ops.iter().map(move |op| (block, op)))
-            .find(|(_, op)| op.id == site.id)
+            .find(|(_, op)| op.source == site.source)
             .unwrap();
         assert_eq!(block.at, 0xF0);
         assert!(load.kind == Kind::Load && width(&load.results[0]) == 4);

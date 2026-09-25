@@ -1194,7 +1194,7 @@ pub fn _halved(body: &MirBody) -> MirBody {
         };
         let later = |op: Op| Op {
             absorbed: vec![],
-            id: None,
+            source: None,
             ..fresh(op)
         };
         let reads = |args: &[&Arg], r#ref: Option<&MemRef>| {
@@ -1457,7 +1457,7 @@ pub fn _divisions(body: &Rc<MirBody>) -> Rc<MirBody> {
                             .collect(),
                         args,
                         results: vec![Arg::Held(result)],
-                        id: if first { op.id } else { None },
+                        source: if first { op.source } else { None },
                         absorbed: if first { op.absorbed.clone() } else { vec![] },
                         ..Op::new(
                             op.at,
