@@ -707,6 +707,13 @@ pub fn ret_far(popped: i64, at: u64) -> Option<Emitted> {
     _assemble(&made, at, true)
 }
 
+/// `ret n`: a near procedure that pops its own arguments.
+pub fn ret_near(popped: i64, at: u64) -> Option<Emitted> {
+    let code = _code(if popped != 0 { "RETNW_IMM16" } else { "RETNW" })?;
+    let made = if popped != 0 { raised(create_i32(code, popped)) } else { Instruction::with(code) };
+    _assemble(&made, at, true)
+}
+
 pub fn test_immediate(dest: &Loc, value: i64, at: u64) -> Option<Emitted> {
     let width = match dest {
         Loc::Reg(one) => one.width,
@@ -1825,8 +1832,9 @@ pub fn emit(
                 _ => ret_far(0, at),
             };
         }
-        return match &sources[0] {
-            Loc::Imm(imm) => ret_far(imm.value, at),
+        return match (&sources[0], what.name.as_deref()) {
+            (Loc::Imm(imm), Some("ret")) => ret_near(imm.value, at),
+            (Loc::Imm(imm), _) => ret_far(imm.value, at),
             _ => None,
         };
     }

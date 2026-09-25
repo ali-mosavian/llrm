@@ -828,3 +828,13 @@ fn test_a_count_in_ch_is_not_one_in_cl() {
     let what = sem(Operation::Binary, Some("sar"), vec![eax.clone()], vec![eax, rg(Register::CH, 1)], None, false);
     assert!(emitted(&what).is_none());
 }
+
+/// A near procedure that pops its arguments returns with `ret n`. The
+/// selector spelled every counted return `retf n`, so a QuickrBASIC PRIVATE
+/// SUB with a parameter returned far and the program hung.
+#[test]
+fn near_counted_return() {
+    use super::sweep_support::*;
+    check(sem(Op::Return, Some("ret"), vec![], vec![im(2, 2, None)], None, false), 0, false, false, None, None, Some(("c20200", None, Some(1), vec![1], true)));
+    check(sem(Op::Return, Some("ret"), vec![], vec![im(0, 2, None)], None, false), 0, false, false, None, None, Some(("c3", None, None, vec![], true)));
+}
