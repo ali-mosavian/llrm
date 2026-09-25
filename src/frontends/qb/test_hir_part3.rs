@@ -1844,3 +1844,30 @@ fn test_scalars_stored_in_a_loop_are_forwarded_across_its_array_store() {
     assert!(!body.contains("lea "), "{body}");
     assert!(!body.contains("cmp dx, 255"), "{body}");
 }
+
+#[test]
+fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
+    // Promotion carried `DEF SEG`'s selector from the entry across `Beat`, so the
+    // POKE loop rebuilt it every trip: `push 0A000h / pop fs`.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "GLOW.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Glow (n)\r\nDECLARE SUB Beat (f)\r\nGlow 3\r\nSUB Glow (n)\r\nDIM w(255)\r\nDEF SEG = &HA000\r\nFOR i = 0 TO 255\r\nw(i) = SQR(i) * 4\r\nNEXT\r\nFOR f = 1 TO n\r\nFOR x = 0 TO 255\r\nPOKE x, w((x + f) AND 255)\r\nNEXT\r\nBeat f\r\nNEXT\r\nEND SUB\r\nSUB Beat (f)\r\nOUT &H3C8, f\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("GLOW proc").expect("GLOW proc");
+    let end = text.find("GLOW endp").expect("GLOW endp");
+    let procedure = &text[start..end];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| {
+            procedure.find(&format!("{label}:\n")).filter(|at| *at < start).map(|at| &procedure[at..end])
+        })
+        .collect::<Vec<_>>();
+    // Call-free loops: the SQR fill and the POKE loop.
+    for one in loops.iter().filter(|one| !one.contains("call")) {
+        assert!(!one.contains("push") && !one.contains("pop"), "{one}");
+    }
+}

@@ -1443,12 +1443,57 @@ pub(crate) fn promoted(
     if !changed {
         return Ok(body.clone());
     }
-    ssa::constructed(
-        &body.with_blocks(blocks),
-        &holds.values().copied().collect(),
+    let variables: BTreeSet<u32> = holds.values().copied().collect();
+    let built = ssa::constructed(&body.with_blocks(blocks), &variables).map_err(|error| error.to_string())?;
+    Ok(Rc::new(_restated(&built, &variables)))
+}
+
+/// A read of a variable whose version is a literal states the literal.
+///
+/// Carried as a register instead, `DEF SEG`'s selector lived from the entry
+/// across every call to the loop that POKEs, and was rebuilt there per pixel.
+pub(crate) fn _restated(body: &MirBody, variables: &BTreeSet<u32>) -> MirBody {
+    let literals: IndexMap<Value, Const> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| op.kind == Kind::Copy && op.loads.is_empty() && op.merges.is_empty())
+        .filter_map(|op| match (op.args.as_slice(), op.defines.as_slice()) {
+            ([Arg::Const(constant)], [value]) if variables.contains(&value.variable) => Some((*value, constant.clone())),
+            _ => None,
+        })
+        .collect();
+    if literals.is_empty() {
+        return body.clone();
+    }
+    body.with_blocks(
+        body.blocks
+            .iter()
+            .map(|block| {
+                block.with_ops(
+                    block
+                        .ops
+                        .iter()
+                        .map(|op| match op.args.as_slice() {
+                            [Arg::Held(held)]
+                                if op.kind == Kind::Copy
+                                    && op.loads.is_empty()
+                                    && op.merges.is_empty()
+                                    && literals.get(&held.value).is_some_and(|one| one.width == held.width) =>
+                            {
+                                Op {
+                                    args: vec![Arg::Const(literals[&held.value].clone())],
+                                    uses: op.uses.iter().filter(|one| one.flags || **one != held.value).copied().collect(),
+                                    ..op.clone()
+                                }
+                            }
+                            _ => op.clone(),
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
     )
-    .map(Rc::new)
-    .map_err(|error| error.to_string())
 }
 
 /// Expose a memory update as a value computation and an observable store.
