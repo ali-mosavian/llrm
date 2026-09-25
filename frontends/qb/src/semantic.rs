@@ -367,6 +367,7 @@ fn built(
     runtime: &str,
     options: &Options,
 ) -> Result<Compiler, SemanticError> {
+    check_private(module, dialect)?;
     let mut module = outline_module_gosubs(module)?;
     if module.format_strings {
         add_prelude(&mut module)?;
@@ -558,7 +559,7 @@ fn built(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported && !compiler.options.whole_program {
+            if procedure.exported && !procedure.private && !compiler.options.whole_program {
                 "external"
             } else {
                 "internal"
@@ -570,6 +571,16 @@ fn built(
 
 /// Procedures every name of which begins this belong to the prelude.
 const PRELUDE_PREFIX: &str = "QUICKR_";
+
+/// PRIVATE is QuickrBASIC's; a Microsoft profile has no such procedure.
+fn check_private(module: &Module, dialect: Dialect) -> Result<(), SemanticError> {
+    match module.procedures.iter().find(|one| one.private) {
+        Some(procedure) if !dialect.private_procedures() => Err(SemanticError {
+            message: format!("{}: PRIVATE needs the quickr profile", procedure.name),
+        }),
+        _ => Ok(()),
+    }
+}
 
 /// Appends QuickrBASIC's prelude, the BASIC that f-strings call.
 fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
@@ -885,6 +896,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             declaration: false,
             is_static: false,
             exported: false,
+            private: false,
             module_scope: true,
             span,
         });

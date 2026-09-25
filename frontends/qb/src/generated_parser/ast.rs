@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
@@ -25,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let tokens = lex(source, dialect).map_err(ParseError::from)?;
+    let (tokens, private_at) = without_private(lex(source, dialect).map_err(ParseError::from)?);
     let mut state = ParseState::new(tokens);
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -38,6 +39,7 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
         let procedures_before = state.procedures.len();
         let open_before = state.open_procedure;
         let action_before = state.sink.actions.len();
+        let private = private_at.contains(&state.at);
         let extension = recognize_statement(&state.tokens[state.at..]);
         let result = if let Some(found) = extension {
             let keyword_span = state.tokens[state.at].span;
@@ -139,6 +141,12 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                 );
             }
         }
+        if private {
+            match state.procedures.get_mut(procedures_before) {
+                Some(procedure) if !procedure.declaration => procedure.private = true,
+                _ => return error(&state, "PRIVATE must begin a SUB or FUNCTION definition"),
+            }
+        }
         let mut body_added = false;
         if let Some(index) = open_before {
             if state.open_procedure == Some(index)
@@ -188,6 +196,34 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
         },
         actions: state.sink.actions,
     })
+}
+
+/// `PRIVATE SUB` and `PRIVATE FUNCTION`: the grammar parses an ordinary
+/// header, so PRIVATE leaves the stream and where its SUB or FUNCTION now
+/// stands marks the procedure that statement creates.
+fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
+    let separator = |token: &Token| {
+        matches!(token.kind, TokenKind::Reserved(id) if id == named("tkNewLine") || id == named("tkColon"))
+    };
+    let header = |token: Option<&Token>| {
+        token.is_some_and(|token| {
+            matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSUB") || id == named("tkFUNCTION"))
+        })
+    };
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut marked = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let starts = kept.last().is_none_or(separator);
+        if starts
+            && matches!(&token.kind, TokenKind::Identifier(word) if word == "PRIVATE")
+            && header(tokens.get(index + 1))
+        {
+            marked.insert(kept.len());
+            continue;
+        }
+        kept.push(token.clone());
+    }
+    (kept, marked)
 }
 
 fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
@@ -995,6 +1031,7 @@ fn extension_procedure(
         declaration: true,
         is_static,
         exported: true,
+        private: false,
         module_scope: false,
         span,
     });
@@ -1097,6 +1134,7 @@ fn synthesize_statement(
             declaration: header.declaration,
             is_static,
             exported: !inline_def_fn,
+            private: false,
             module_scope: def_fn,
             span: header.span,
         };

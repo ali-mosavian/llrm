@@ -170,6 +170,14 @@ or a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An
 inline frame has no runtime stack check, and `B$EXSA` no longer polls events
 when such a procedure returns.
 
+### Private procedures
+
+`PRIVATE SUB` and `PRIVATE FUNCTION` define a procedure only its own module can
+call: it has no public symbol, so a call from another module fails at LINK. One
+that frames itself is near: its callers use `call` and it returns with `ret`,
+its parameters starting at `[bp+4]`. One on the runtime's frame stays far. The
+f-string prelude is private, so modules that each use f-strings link together.
+
 ### F-strings
 
 `f"…"` (or `F"…"`) is a string expression. `{expression}` inserts a value,

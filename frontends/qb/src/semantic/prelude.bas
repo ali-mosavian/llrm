@@ -1,9 +1,10 @@
 ' QuickrBASIC's f-string support, compiled into the programs that use
-' f-strings. Every name here begins QUICKR_, which programs cannot use.
+' f-strings. Every name here begins QUICKR_, which programs cannot use, and
+' each is PRIVATE, so modules that each use f-strings do not collide.
 ' The compiler parses each format spec; these only lay the value out.
 
 ' The digits of a whole, non-negative value below 2 ^ 53 in base 2 to 16.
-FUNCTION QUICKR_RADIX$ (BYVAL value AS DOUBLE, BYVAL radix AS INTEGER, BYVAL upper AS INTEGER)
+PRIVATE FUNCTION QUICKR_RADIX$ (BYVAL value AS DOUBLE, BYVAL radix AS INTEGER, BYVAL upper AS INTEGER)
     DIM digits AS STRING, alphabet AS STRING, rest AS DOUBLE, quotient AS DOUBLE
     alphabet = "0123456789abcdef"
     IF upper THEN alphabet = UCASE$(alphabet)
@@ -18,7 +19,7 @@ FUNCTION QUICKR_RADIX$ (BYVAL value AS DOUBLE, BYVAL radix AS INTEGER, BYVAL upp
 END FUNCTION
 
 ' Decimal `digits` times a small `factor`.
-FUNCTION QUICKR_TIMES$ (digits AS STRING, BYVAL factor AS INTEGER)
+PRIVATE FUNCTION QUICKR_TIMES$ (digits AS STRING, BYVAL factor AS INTEGER)
     DIM product AS STRING, at AS INTEGER, carry AS INTEGER
     product = ""
     carry = 0
@@ -32,7 +33,7 @@ FUNCTION QUICKR_TIMES$ (digits AS STRING, BYVAL factor AS INTEGER)
 END FUNCTION
 
 ' Decimal `digits` plus one.
-FUNCTION QUICKR_INCREMENT$ (digits AS STRING)
+PRIVATE FUNCTION QUICKR_INCREMENT$ (digits AS STRING)
     DIM at AS INTEGER
     at = LEN(digits)
     DO WHILE at > 0
@@ -49,7 +50,7 @@ END FUNCTION
 ' The exact decimal digits of a positive value, with `dot` set to how
 ' many of them come before the decimal point. A double is m * 2 ^ e with
 ' m below 2 ^ 53, and halving or doubling it to find m is exact.
-FUNCTION QUICKR_EXACT$ (BYVAL value AS DOUBLE, dot AS INTEGER)
+PRIVATE FUNCTION QUICKR_EXACT$ (BYVAL value AS DOUBLE, dot AS INTEGER)
     DIM mantissa AS DOUBLE, twos AS INTEGER, digits AS STRING, at AS INTEGER
     mantissa = value
     twos = 0
@@ -76,7 +77,7 @@ END FUNCTION
 
 ' The first `keep` of exact `digits`, rounded half to even on the rest.
 ' A carry adds a digit in front and moves `dot` one right.
-FUNCTION QUICKR_CUT$ (digits AS STRING, dot AS INTEGER, BYVAL keep AS INTEGER)
+PRIVATE FUNCTION QUICKR_CUT$ (digits AS STRING, dot AS INTEGER, BYVAL keep AS INTEGER)
     DIM head AS STRING, rest AS STRING, up AS INTEGER, last AS STRING
     IF keep < 0 THEN
         QUICKR_CUT$ = ""
@@ -107,7 +108,7 @@ FUNCTION QUICKR_CUT$ (digits AS STRING, dot AS INTEGER, BYVAL keep AS INTEGER)
 END FUNCTION
 
 ' A non-negative value times 10 ^ shift, with `precision` decimals.
-FUNCTION QUICKR_FIXED$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL shift AS INTEGER)
+PRIVATE FUNCTION QUICKR_FIXED$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL shift AS INTEGER)
     DIM digits AS STRING, dot AS INTEGER, whole AS STRING, fraction AS STRING
     IF value = 0 THEN
         digits = ""
@@ -131,7 +132,7 @@ END FUNCTION
 
 ' The `count` significant digits of a positive value, rounded, and its
 ' decimal exponent in `power`.
-FUNCTION QUICKR_SIGNIFICANT$ (BYVAL value AS DOUBLE, BYVAL count AS INTEGER, power AS INTEGER)
+PRIVATE FUNCTION QUICKR_SIGNIFICANT$ (BYVAL value AS DOUBLE, BYVAL count AS INTEGER, power AS INTEGER)
     DIM digits AS STRING, dot AS INTEGER
     digits = QUICKR_CUT$(QUICKR_EXACT$(value, dot), dot, count)
     power = dot - 1
@@ -139,7 +140,7 @@ FUNCTION QUICKR_SIGNIFICANT$ (BYVAL value AS DOUBLE, BYVAL count AS INTEGER, pow
 END FUNCTION
 
 ' An exponent as Python writes one: a sign and at least two digits.
-FUNCTION QUICKR_POWER$ (BYVAL power AS INTEGER, BYVAL upper AS INTEGER)
+PRIVATE FUNCTION QUICKR_POWER$ (BYVAL power AS INTEGER, BYVAL upper AS INTEGER)
     DIM text AS STRING
     text = "e"
     IF upper THEN text = "E"
@@ -148,7 +149,7 @@ FUNCTION QUICKR_POWER$ (BYVAL power AS INTEGER, BYVAL upper AS INTEGER)
 END FUNCTION
 
 ' A non-negative value as d.ddd, `precision` decimals, and an exponent.
-FUNCTION QUICKR_EXPONENT$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL upper AS INTEGER)
+PRIVATE FUNCTION QUICKR_EXPONENT$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL upper AS INTEGER)
     DIM digits AS STRING, power AS INTEGER, mantissa AS STRING
     power = 0
     digits = STRING$(precision + 1, "0")
@@ -159,7 +160,7 @@ FUNCTION QUICKR_EXPONENT$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BY
 END FUNCTION
 
 ' Trailing zeros of a decimal fraction, and then a bare point, dropped.
-FUNCTION QUICKR_TRIM$ (digits AS STRING)
+PRIVATE FUNCTION QUICKR_TRIM$ (digits AS STRING)
     DIM mantissa AS STRING, exponent AS STRING, at AS INTEGER
     at = INSTR(UCASE$(digits), "E")
     IF at = 0 THEN at = LEN(digits) + 1
@@ -175,7 +176,7 @@ FUNCTION QUICKR_TRIM$ (digits AS STRING)
 END FUNCTION
 
 ' `digits` with a point before any exponent, if it has none.
-FUNCTION QUICKR_POINTED$ (digits AS STRING)
+PRIVATE FUNCTION QUICKR_POINTED$ (digits AS STRING)
     DIM at AS INTEGER
     at = INSTR(UCASE$(digits), "E")
     IF at = 0 THEN at = LEN(digits) + 1
@@ -189,7 +190,7 @@ END FUNCTION
 ' 'g' and a float's bare precision: `precision` significant digits, fixed
 ' while the exponent is in [-4, limit), else exponent form. `plain` is
 ' the bare form, which keeps a digit after the point.
-FUNCTION QUICKR_GENERAL$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL upper AS INTEGER, BYVAL alternate AS INTEGER, BYVAL plain AS INTEGER)
+PRIVATE FUNCTION QUICKR_GENERAL$ (BYVAL value AS DOUBLE, BYVAL precision AS INTEGER, BYVAL upper AS INTEGER, BYVAL alternate AS INTEGER, BYVAL plain AS INTEGER)
     DIM digits AS STRING, power AS INTEGER, limit AS INTEGER
     IF precision = 0 THEN precision = 1
     power = 0
@@ -213,7 +214,7 @@ END FUNCTION
 ' A float as Python's repr() writes one: the fewest digits that read back
 ' as the same value (a SINGLE's, when `narrow`), fixed while the exponent
 ' is in [-4, 16), always with a point.
-FUNCTION QUICKR_REPR$ (BYVAL value AS DOUBLE, BYVAL narrow AS INTEGER)
+PRIVATE FUNCTION QUICKR_REPR$ (BYVAL value AS DOUBLE, BYVAL narrow AS INTEGER)
     DIM magnitude AS DOUBLE, digits AS STRING, count AS INTEGER, power AS INTEGER, text AS STRING, back AS DOUBLE
     magnitude = ABS(value)
     power = 0
@@ -249,7 +250,7 @@ FUNCTION QUICKR_REPR$ (BYVAL value AS DOUBLE, BYVAL narrow AS INTEGER)
 END FUNCTION
 
 ' `digits` with `separator` between each group of `every`, from the right.
-FUNCTION QUICKR_GROUP$ (digits AS STRING, separator AS STRING, BYVAL every AS INTEGER)
+PRIVATE FUNCTION QUICKR_GROUP$ (digits AS STRING, separator AS STRING, BYVAL every AS INTEGER)
     DIM grouped AS STRING, rest AS STRING
     rest = digits
     grouped = ""
@@ -261,7 +262,7 @@ FUNCTION QUICKR_GROUP$ (digits AS STRING, separator AS STRING, BYVAL every AS IN
 END FUNCTION
 
 ' `lead` (sign and prefix) and `body`, grouped and filled out to `wide`.
-FUNCTION QUICKR_PAD$ (lead AS STRING, body AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING, BYVAL every AS INTEGER)
+PRIVATE FUNCTION QUICKR_PAD$ (lead AS STRING, body AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING, BYVAL every AS INTEGER)
     DIM digits AS STRING, rest AS STRING, grouped AS STRING, at AS INTEGER, missing AS INTEGER, before AS INTEGER
     at = LEN(body) + 1
     IF every = 3 THEN
@@ -299,7 +300,7 @@ FUNCTION QUICKR_PAD$ (lead AS STRING, body AS STRING, fill AS STRING, align AS S
 END FUNCTION
 
 ' The sign a number shows: its minus, or what the spec asks of the others.
-FUNCTION QUICKR_SIGN$ (BYVAL negative AS INTEGER, sign AS STRING)
+PRIVATE FUNCTION QUICKR_SIGN$ (BYVAL negative AS INTEGER, sign AS STRING)
     IF negative THEN
         QUICKR_SIGN$ = "-"
     ELSEIF sign = "-" THEN
@@ -311,7 +312,7 @@ END FUNCTION
 
 ' A number under a spec with a presentation type ("" is a float's bare
 ' precision). Precision is already defaulted.
-FUNCTION QUICKR_FORMAT$ (BYVAL value AS DOUBLE, kind AS STRING, sign AS STRING, BYVAL alternate AS INTEGER, BYVAL zeroless AS INTEGER, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING, BYVAL precision AS INTEGER)
+PRIVATE FUNCTION QUICKR_FORMAT$ (BYVAL value AS DOUBLE, kind AS STRING, sign AS STRING, BYVAL alternate AS INTEGER, BYVAL zeroless AS INTEGER, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING, BYVAL precision AS INTEGER)
     DIM negative AS INTEGER, magnitude AS DOUBLE, body AS STRING, prefix AS STRING, every AS INTEGER
     negative = value < 0
     magnitude = ABS(value)
@@ -360,7 +361,7 @@ FUNCTION QUICKR_FORMAT$ (BYVAL value AS DOUBLE, kind AS STRING, sign AS STRING, 
 END FUNCTION
 
 ' A number's plain text, from QUICKR_REPR$, under a spec without a type.
-FUNCTION QUICKR_NUMERIC$ (text AS STRING, sign AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING)
+PRIVATE FUNCTION QUICKR_NUMERIC$ (text AS STRING, sign AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, separator AS STRING)
     DIM negative AS INTEGER, body AS STRING
     negative = LEFT$(text, 1) = "-"
     body = text
@@ -370,7 +371,7 @@ END FUNCTION
 
 ' A string cut to `precision` characters (none cut when negative) and
 ' filled out to `wide`.
-FUNCTION QUICKR_TEXT$ (text AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, BYVAL precision AS INTEGER)
+PRIVATE FUNCTION QUICKR_TEXT$ (text AS STRING, fill AS STRING, align AS STRING, BYVAL wide AS INTEGER, BYVAL precision AS INTEGER)
     DIM cut AS STRING
     cut = text
     IF precision >= 0 THEN cut = LEFT$(text, precision)

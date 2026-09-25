@@ -949,6 +949,45 @@ pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, fu
         && _temporary_string_slots(module, function) == 0
 }
 
+/// QuickrBASIC calls a module-internal procedure near where it frames
+/// itself, as the C frontend does for a near function: no other module can
+/// call it, and every caller shares its code segment. One on the runtime's
+/// frame stays far, whose chain is only known to hold far returns.
+fn _near_procedures(program: &model::Program) -> model::Program {
+    let mut program = program.clone();
+    if program.dialect != model::Dialect::Quickr {
+        return program;
+    }
+    for index in 0..program.modules.len() {
+        let original = program.modules[index].clone();
+        let near: BTreeSet<&str> = original
+            .functions
+            .iter()
+            .filter(|function| {
+                function.name != "__main"
+                    && function.linkage == model::FunctionLinkage::Internal
+                    && _inline_frame(&program, &original, function)
+            })
+            .map(|function| function.name.as_str())
+            .collect();
+        let callables: BTreeSet<i64> =
+            original.callables.iter().filter(|one| near.contains(one.name.as_str())).map(|one| one.id).collect();
+        for function in &mut program.modules[index].functions {
+            if near.contains(function.name.as_str()) {
+                if let Some(abi) = function.abi.as_mut() {
+                    abi.distance = model::CallDistance::Near;
+                }
+            }
+            for call in &mut function.calls {
+                if call.callee.is_some_and(|callee| callables.contains(&callee)) {
+                    call.distance = model::CallDistance::Near;
+                }
+            }
+        }
+    }
+    program
+}
+
 /// Count frame-owned dynamic STRING descriptors for B$ENRA.
 ///
 /// Runtime-produced descriptors live on the runtime temporary chain and do
@@ -1411,7 +1450,7 @@ pub fn assembled(
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
     let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
-    let program = &laid_out;
+    let program = &_near_procedures(&laid_out);
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
@@ -1673,7 +1712,7 @@ pub fn assembled(
         procedures.push(masm::Procedure {
             name: if module_body { "$QB$MAIN".to_owned() } else { _object_name(&function.name) },
             public,
-            far: true,
+            far: function.abi.as_ref().is_none_or(|abi| abi.distance != model::CallDistance::Near),
             body: final_body,
             // B$ENRA, when present, owns both the ten-byte runtime header
             // and the CX bytes of locals below BP.  Asking masm's native

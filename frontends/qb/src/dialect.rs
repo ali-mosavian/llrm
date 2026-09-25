@@ -38,6 +38,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `PRIVATE SUB` and `PRIVATE FUNCTION`.
+    pub fn private_procedures(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

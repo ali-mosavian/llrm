@@ -529,3 +529,49 @@ fn a_large_zeroed_block_is_one_fill() {
     let small = procedure_listing("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", "quickr", "S");
     assert!(!small.contains("stos"), "{small}");
 }
+
+/// The whole listing of `source`, compiled as `dialect`.
+fn module_listing(source: &str, dialect: &str) -> String {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "module.bas", source.as_bytes());
+    let program = qb_driver::parsed(&path, dialect, "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .unwrap_or_else(|error| panic!("{error}"));
+    super::test_hir::listing(&program)
+}
+
+#[test]
+fn private_procedures_are_near_and_not_public() {
+    let source = "PRINT add&(40, 2); pub&(1)\n\
+        PRIVATE FUNCTION add& (a AS LONG, b AS LONG)\nadd& = a + b\nEND FUNCTION\n\
+        FUNCTION pub& (x AS LONG)\npub& = x + 1\nEND FUNCTION\n";
+    let listing = module_listing(source, "quickr");
+    assert!(listing.contains("ADD proc near") && listing.contains("PUB proc far"), "{listing}");
+    assert!(!listing.contains("public ADD") && listing.contains("public PUB"), "{listing}");
+    assert!(listing.contains("call ADD") && listing.contains("call far ptr PUB"), "{listing}");
+    // A near return address puts the first of two parameters at bp+6, not bp+8.
+    let add = super::test_hir::between(&listing, "ADD proc near", "ADD endp");
+    assert!(add.contains("[bp+6]") && add.contains("[bp+4]") && add.contains("ret 4"), "{add}");
+}
+
+#[test]
+fn a_private_procedure_on_the_runtime_frame_stays_far() {
+    let source = "s\nPRIVATE SUB s\nDIM t AS STRING\nt = \"x\"\nEND SUB\n";
+    let listing = module_listing(source, "quickr");
+    assert!(listing.contains("S proc far") && !listing.contains("public S"), "{listing}");
+}
+
+#[test]
+fn microsoft_profiles_reject_private() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"PRIVATE SUB s\nEND SUB\n");
+    let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .expect_err("VBDOS has no PRIVATE");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}
+
+#[test]
+fn the_prelude_is_private_to_each_module() {
+    // Public, two modules using f-strings both defined QUICKR_REPR$ and so on.
+    let listing = module_listing("DIM d AS DOUBLE\nd = 1\nPRINT f\"{d:.2f}\"\n", "quickr");
+    assert!(!listing.contains("public QUICKR"), "{listing}");
+}

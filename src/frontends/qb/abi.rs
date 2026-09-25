@@ -1067,15 +1067,18 @@ pub fn physicalize(
     // A Pascal BASIC caller evaluates and pushes left-to-right, so the first
     // source formal is furthest from the return address. CDECL pushes
     // right-to-left and therefore retains the ordinary ascending layout.
+    // Above BP: the saved BP and a near or far return address.
+    let near = function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Near);
+    let first = if near { 4 } else { 6 };
     let mut parameter_offsets = Vec::new();
     if callee_cleanup {
-        let mut cursor = 6 + parameter_widths.iter().sum::<i64>();
+        let mut cursor = first + parameter_widths.iter().sum::<i64>();
         for width in &parameter_widths {
             cursor -= width;
             parameter_offsets.push(cursor);
         }
     } else {
-        let mut cursor = 6;
+        let mut cursor = first;
         for width in &parameter_widths {
             parameter_offsets.push(cursor);
             cursor += width;

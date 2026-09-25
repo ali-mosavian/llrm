@@ -92,6 +92,8 @@ pub struct Procedure {
     pub declaration: bool,
     pub is_static: bool,
     pub exported: bool,
+    /// QuickrBASIC's PRIVATE: callable only within its module.
+    pub private: bool,
     /// DEF FN and an outlined module GOSUB run in the module's variable
     /// scope; SUB and FUNCTION see only what is SHARED.
     pub module_scope: bool,
