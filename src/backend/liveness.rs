@@ -10,7 +10,7 @@
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
-use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _register_effects, Lanes};
+use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
 use crate::backend::target;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -42,41 +42,70 @@ pub fn _universe() -> Lanes {
     lanes
 }
 
-/// The lanes live before `block`, given those live after it.
-pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    let (read, written) = _transfer(block, universe);
-    live.minus(&written).or(&read)
+/// What one instruction does to register and flag lanes.
+#[derive(Clone, Debug)]
+pub struct Effect {
+    /// Read whatever is live after it.
+    pub reads: Lanes,
+    pub writes: Lanes,
+    /// A constant shift's bytes, `(written, source)`: a source is read only
+    /// where its written byte, or a flag the shift sets, is live after it.
+    moved: Vec<(Lane, Lane)>,
 }
 
-/// What `block` reads before writing, and what it writes: the lanes live
-/// before it are the first and those live after it less the second.
-/// Decoding an instruction is the cost, so a fixed point asks this once.
-fn _transfer(block: &LirBlock, universe: &Lanes) -> (Lanes, Lanes) {
-    let (mut read, mut written) = (Lanes::new(), Lanes::new());
-    for one in block.insns.iter().rev() {
-        if _terminator(one.what.as_ref()) {
-            // Its flag read is not in `_register_effects`, which answers only
-            // for instructions that fall through. It writes nothing.
-            let what = one.what.as_ref().expect("a terminator has semantics");
-            if what.op == Operation::Branch {
-                read = read.or(&_branch_reads(what));
-            }
-            continue;
-        }
-        let mut effects = _register_effects(one, false, true);
-        if effects.is_none() {
-            effects = _declared(one);
-        }
-        let Some((reads, writes)) = effects else {
-            // It may read anything, but what the block writes before it is still written first.
-            read = universe.clone();
-            written = universe.clone();
-            continue;
-        };
-        read = read.minus(&writes).or(&reads);
-        written = written.or(&writes);
+impl Effect {
+    /// The lanes live before it, given those live after.
+    pub fn live_before(&self, live: &Lanes) -> Lanes {
+        live.minus(&self.writes).or(&self.read(|lane| live.contains(lane)))
     }
-    (read, written)
+
+    /// The lanes dead before it, given those dead after.
+    pub fn dead_before(&self, dead: &Lanes) -> Lanes {
+        dead.or(&self.writes).minus(&self.read(|lane| !dead.contains(lane)))
+    }
+
+    fn read(&self, live: impl Fn(&Lane) -> bool) -> Lanes {
+        let mut reads = self.reads;
+        // A shift's flags come from the bits it moves.
+        let flagged = self.writes.iter().any(|lane| lane.0 == Register::None && live(lane));
+        for (written, source) in &self.moved {
+            if flagged || live(written) {
+                reads.insert(*source);
+            }
+        }
+        reads
+    }
+}
+
+/// `one`'s effect as it decodes, else as its contract declares; None when unknown.
+pub fn effect(one: &Insn) -> Option<Effect> {
+    if _terminator(one.what.as_ref()) {
+        // A jump or branch writes nothing; a branch reads its flags.
+        let what = one.what.as_ref().expect("a terminator has semantics");
+        let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
+        return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
+    }
+    let (reads, writes) = _register_effects(one, false, true).or_else(|| _declared(one))?;
+    Some(match _moved_lanes(one) {
+        Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
+        None => Effect { reads, writes, moved: Vec::new() },
+    })
+}
+
+/// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
+fn _effects(block: &LirBlock) -> Vec<Option<Effect>> {
+    block.insns.iter().map(|one| effect(one)).collect()
+}
+
+/// The lanes live before `effects`, given those live after them. An unknown
+/// instruction may read anything.
+fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
+    effects.iter().rev().fold(live, |live, one| one.as_ref().map_or_else(|| *universe, |one| one.live_before(&live)))
+}
+
+/// The lanes live before `block`, given those live after it.
+pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
+    _before(&_effects(block), live, universe)
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -144,7 +173,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let transfer: IndexMap<i64, (Lanes, Lanes)> = blocks.iter().map(|(at, block)| (*at, _transfer(block, &universe))).collect();
+    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(block))).collect();
     let mut changing = true;
     while changing {
         changing = false;
@@ -154,8 +183,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
             } else {
                 successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
             };
-            let (read, written) = &transfer[at];
-            let before = after.minus(written).or(read);
+            let before = _before(&effects[at], after, &universe);
             if before != into[at] {
                 into.insert(*at, before);
                 changing = true;

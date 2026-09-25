@@ -7,7 +7,7 @@ use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, OpAccess, Register, RflagsBits};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpAccess, OpKind, Register, RflagsBits};
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -144,13 +144,10 @@ impl LIRTransform for Peephole {
         let body = spillforward::forwarded(&body);
         let body = storecombine::combined(&body);
         let body = pushed_constants(&body);
-        // Fusion before high extracts: SHLD reads the register it funnels
-        // into, a false dependency that keeps a dead load's register live.
-        let body = high_extracts(
-            &fused(&overwritten(&shuttles(&restored_copies(&transferred(&commuted(&constants(&pushes(&body)))))))),
+        let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
+            &transferred(&commuted(&constants(&pushes(&body)))),
             &self.cpu,
-        )?;
-        let body = far_loads(&body);
+        )?)))));
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
@@ -1467,6 +1464,67 @@ pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
     }
 }
 
+/// The machine instructions `what` encodes to.
+fn _decoded(what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
+    let encoded = emit(what)?;
+    let mut decoder = Decoder::new(16, &encoded.code, DecoderOptions::NONE);
+    Some((&mut decoder).into_iter().collect())
+}
+
+/// The bytes a constant register shift carries, as `(written, source)`, and
+/// the lanes of its shifted operands.
+///
+/// Each written byte reads only its sources; the rest of the operands are not
+/// read at all. `shld edx, eax, 16` moves DX into the upper half of EDX, so it
+/// reads DX only where that half is live. None for any other instruction.
+pub fn _moved_lanes(one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
+    let instructions = one.what.as_ref().and_then(_decoded)?;
+    let [insn] = instructions.as_slice() else {
+        return None;
+    };
+    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
+    let (left, destination, source, count) = match insn.mnemonic() {
+        Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
+        }
+        Mnemonic::Shld | Mnemonic::Shrd if insn.op_count() == 3 && insn.op2_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shld, register(0), register(1), insn.immediate8())
+        }
+        _ => return None,
+    };
+    let destination = destination.filter(|one| matches!(one.size(), 2 | 4) && !_lanes(*one).is_empty())?;
+    if source.is_some_and(|one| one.size() != destination.size() || _lanes(one).is_empty()) {
+        return None;
+    }
+    let bits = destination.size() * 8;
+    let count = usize::from(count & 31);
+    if count == 0 || count >= bits {
+        return None;
+    }
+    // Result bit `b` comes from the destination shifted by `count`, and what
+    // the shift empties from the source's other end, or zero.
+    let origin = |bit: usize| -> Option<(Register, usize)> {
+        if left {
+            if bit >= count { Some((destination, bit - count)) } else { source.map(|one| (one, bits - count + bit)) }
+        } else if bit + count < bits {
+            Some((destination, bit + count))
+        } else {
+            source.map(|one| (one, bit + count - bits))
+        }
+    };
+    let byte = |register: Register, bit: usize| (full32(register), u32::try_from(bit / 8).expect("a byte"));
+    let mut moved = Vec::new();
+    for bit in 0..bits {
+        if let Some((register, from)) = origin(bit) {
+            let pair = (byte(destination, bit), byte(register, from));
+            if !moved.contains(&pair) {
+                moved.push(pair);
+            }
+        }
+    }
+    Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
+}
+
 pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
@@ -1489,9 +1547,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
-    let encoded = emit(what)?;
-    let mut decoder = Decoder::new(16, &encoded.code, DecoderOptions::NONE);
-    let instructions: Vec<iced_x86::Instruction> = (&mut decoder).into_iter().collect();
+    let instructions = _decoded(what)?;
     // A fixed-register ABI names the conventional register (AX, BX, ...)
     // separately from the value it carries.  The Held width is authoritative:
     // a dword in the BX slot occupies EBX, including its upper lanes.
@@ -1605,14 +1661,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            if liveness::_terminator(one.what.as_ref()) {
-                let what = one.what.as_ref().expect("a terminator has semantics");
-                if what.op == Operation::Branch {
-                    dead = dead.minus(&_branch_reads(what));
-                }
-                continue;
-            }
-            let Some(effects) = _register_effects(one, false, true) else {
+            let Some(effect) = liveness::effect(one) else {
                 dead.clear();
                 continue;
             };
@@ -1648,8 +1697,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                         // Pure, and nothing else it writes. Lowering a divide's
                         // sign word as `cwd` leaves the widening it replaced
                         // behind, with a register and an instruction to its name.
-                        if !effects.1.is_empty()
-                            && effects.1.is_subset(&dead)
+                        if !effect.writes.is_empty()
+                            && effect.writes.is_subset(&dead)
                             && !_lanes(dest.register).is_empty()
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
@@ -1662,8 +1711,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                         }
                     }
                     (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor"), [Loc::Reg(dest)], sources) => {
-                        if !effects.1.is_empty()
-                            && effects.1.is_subset(&dead)
+                        if !effect.writes.is_empty()
+                            && effect.writes.is_subset(&dead)
                             && !_lanes(dest.register).is_empty()
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
@@ -1681,8 +1730,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                     _ => {}
                 }
             }
-            let (reads, writes) = effects;
-            dead = dead.or(&writes).minus(&reads);
+            dead = effect.dead_before(&dead);
         }
         let insns = block
             .insns
