@@ -26,7 +26,7 @@ use crate::model::passes::OperationCosts;
 use crate::objectfile::module::Space;
 use crate::optimize::rotate;
 
-use super::{rewound, simplified, symbolically_zeroed};
+use super::{rewound, simplified, zeroed};
 
 fn value(id: u32, at: i64, variable: u32, version: u32) -> Value {
     Value { id, at, flags: false, variable, version }
@@ -156,7 +156,7 @@ fn test_symbolic_control_rebases_a_nonzero_start_recurrence() {
     let candidate = basics.values().find(|one| **one != proof.counter).expect("a second recurrence");
 
     assert!(induction::zero_terminating_control(&Rc::new(body.clone()), loop_, proof, candidate, &BTreeSet::new(), None).is_some());
-    assert_ne!(*symbolically_zeroed(&Rc::new(body.clone())).unwrap(), body);
+    assert_ne!(*zeroed(&Rc::new(body.clone())).unwrap(), body);
 }
 
 /// The same bounded recurrence is usable when its final update is zero.

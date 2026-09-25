@@ -8,11 +8,14 @@ use std::collections::BTreeMap;
 
 use crate::analysis::induction::{self, AffineOperand, ControlReplacement, CountedLoop};
 use crate::analysis::occurrence::PhiOccurrence;
-use crate::model::mir::{self, Arg, Held, Kind, MirBody, Op, OrderedMap, Phi, Value};
+use crate::analysis::consts;
+use crate::model::mir::{self, Arg, Const, Held, Kind, MirBody, Op, OrderedMap, Phi, Value};
 
 /// Preheader values, placed after the symbolic proof is complete.
 ///
-/// Stated in full: `canonical.identities` folds the neutral terms.
+/// Arithmetic on constants is its constant, so a rewrite whose count and
+/// start are known places nothing; `canonical.identities` folds the neutral
+/// terms of the rest.
 pub(crate) struct Seeds {
     pub serial: u32,
     pub variable: u32,
@@ -23,11 +26,21 @@ pub(crate) struct Seeds {
 
 impl Seeds {
     pub(crate) fn computed(&mut self, kind: Kind, args: Vec<Arg>) -> AffineOperand {
-        let value = Value { id: self.serial, at: self.at, flags: false, variable: self.variable, version: 0 };
-        self.serial += 1;
-        self.variable += 1;
+        let arith = consts::ARITH.iter().find(|(one, _)| *one == kind).map(|(_, arith)| *arith);
+        if let (Some(arith), [Arg::Const(left), Arg::Const(right)]) = (arith, args.as_slice()) {
+            return AffineOperand::Const(Const::new(consts::masked(&arith(&left.n, &right.n), self.width), self.width));
+        }
+        let value = self.fresh(self.at);
         self.ops.push(mir::computed(self.at, kind, value, args, self.width));
         AffineOperand::Held(Held { value, width: self.width })
+    }
+
+    /// A value no other names, defined at `at`.
+    pub(crate) fn fresh(&mut self, at: i64) -> Value {
+        let value = Value { id: self.serial, at, flags: false, variable: self.variable, version: 0 };
+        self.serial += 1;
+        self.variable += 1;
+        value
     }
 
     /// `arg` as a value, for a phi to name.
@@ -35,9 +48,7 @@ impl Seeds {
         if let AffineOperand::Held(held) = arg {
             return held;
         }
-        let value = Value { id: self.serial, at: self.at, flags: false, variable: self.variable, version: 0 };
-        self.serial += 1;
-        self.variable += 1;
+        let value = self.fresh(self.at);
         self.ops.push(mir::computed(self.at, Kind::Copy, value, vec![arg.as_arg()], self.width));
         Held { value, width: self.width }
     }

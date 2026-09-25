@@ -120,8 +120,7 @@ impl crate::model::passes::MIRTransform for Strength {
         let body = loopexit::evaluated(&body)?;
         let body = indvars::rewound(&body, self.r#where.registers, Some(&self.r#where.costs));
         let body = indvars::simplified(&body).map_err(|error| error.to_string())?;
-        let body = indvars::symbolically_zeroed(&body).map_err(|error| error.to_string())?;
-        indvars::zeroed(&body, true).map_err(|error| error.to_string())
+        indvars::zeroed(&body).map_err(|error| error.to_string())
     }
 }
 

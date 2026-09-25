@@ -1972,3 +1972,17 @@ fn test_a_pointer_takes_control_of_a_loop_to_a_symbolic_bound() {
     let body = backward_loop(&text[start..end]);
     assert!(!body.contains("dec ") && !body.contains("cmp "), "{body}");
 }
+
+#[test]
+fn test_a_masked_use_moves_with_a_counter_to_zero() {
+    // `POKE o, ch + (o AND 15)` read the counter through a mask, so FILL kept
+    // `cmp si, 0F9Eh` every trip. The bias 4000 is a multiple of 16: the mask
+    // reads the same bits of the rebased counter.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/general/TEXTFILL.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("FILL proc").expect("FILL proc");
+    let end = text.find("FILL endp").expect("FILL endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("cmp ") && body.contains("and "), "{body}");
+}
