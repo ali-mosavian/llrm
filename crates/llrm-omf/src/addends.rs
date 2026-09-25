@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use crate::objectfile::omf::{self, Record};
-use crate::support::hash::IndexMap;
+use crate::omf::{self, Record};
+use llrm_support::hash::IndexMap;
 
 pub fn canonical(records: &[Rc<Record>], segment: i64, size: i64) -> Result<Vec<Rc<Record>>, String> {
     let image = omf::segment_image(records, segment, size);
@@ -82,6 +82,3 @@ pub fn canonical(records: &[Rc<Record>], segment: i64, size: i64) -> Result<Vec<
     Ok(result)
 }
 
-#[cfg(test)]
-#[path = "addends_tests.rs"]
-mod tests;

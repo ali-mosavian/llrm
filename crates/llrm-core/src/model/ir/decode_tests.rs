@@ -11,7 +11,7 @@ use crate::frontends::bc::declen::decode;
 use crate::frontends::bc::extent::BodyKind;
 use crate::model::ir::nodes::pinned;
 use crate::model::ir::{ANY_MEMORY, Flag, barrier, modelled, root};
-use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};
+use crate::objectfile::testing::{bare, fixtures, loaded, objects};
 
 /// helpers' `hx`.
 fn hx(s: &str) -> Vec<u8> {

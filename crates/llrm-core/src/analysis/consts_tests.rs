@@ -16,7 +16,7 @@ use crate::frontends::bc::blocks::Block;
 use crate::model::ir::nodes::{span, Node};
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Synth, Value};
-use crate::objectfile::module::tests::objects;
+use crate::objectfile::testing::objects;
 use crate::objectfile::module::{Addr, Space};
 use crate::optimize::transform;
 use crate::testing;

@@ -9,7 +9,8 @@ use crate::abi::runtime::{self, Contract, Control, Memory};
 use crate::analysis::ssa;
 use crate::model::ir::{Loc, Operation, St};
 use crate::model::mir::{self, Arg, Const, Held, Kind, OpCode, Opaque, OrderedMap, RaisedBody, Synth, Value};
-use crate::objectfile::module::{self, Module, SourceMap};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 

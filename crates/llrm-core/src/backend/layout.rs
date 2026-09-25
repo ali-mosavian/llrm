@@ -20,7 +20,8 @@ use crate::model::ir::nodes::Node;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::mir;
-use crate::objectfile::module::{Module, SourceMap};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::Module;
 use crate::support::hash::IndexMap;
 
 // The assembler's, re-exported: this module builds them and hands them over.

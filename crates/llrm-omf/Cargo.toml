@@ -1,0 +1,14 @@
+[package]
+name = "llrm-omf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's OMF records, object modules and CodeView debug info"
+
+[dependencies]
+llrm-support = { workspace = true }
+iced-x86 = { workspace = true }
+
+[features]
+# testing, the object corpus helpers for the other crates' tests
+testing = []

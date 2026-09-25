@@ -18,7 +18,8 @@ use crate::abi::runtime;
 use crate::analysis::ssa;
 use crate::model::ir::Operation;
 use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, Op, OpCode, OrderedMap, Phi, RaisedBody, Value};
-use crate::objectfile::module::{self, Addr, Module, SourceMap, Space};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::{self, Addr, Module, Space};
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 

@@ -5,7 +5,7 @@ use std::path::Path;
 use iced_x86::Mnemonic;
 
 use super::*;
-use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};
+use crate::objectfile::testing::{bare, fixtures, loaded, objects};
 
 /// helpers' `hx`.
 fn hx(s: &str) -> Vec<u8> {

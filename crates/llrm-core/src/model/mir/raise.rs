@@ -28,12 +28,48 @@ use crate::frontends::bc::{
 };
 use crate::model::ir::decode;
 use crate::objectfile::cvinfo;
-use crate::objectfile::module::{self, SourceMap};
+use crate::frontends::bc::escaped::escaped;
 use crate::legacy::calls;
 use crate::model::ir::nodes::{Node, span};
 use crate::model::ir::{Loc, Operation, ROOT, Semantics, root};
-use crate::objectfile::module::{Addr, Module, Space};
+use crate::objectfile::module::{self, Addr, Module, Object, Space};
 use crate::support::hash::IndexMap;
+
+/// Machine provenance produced by raising, kept beside rather than in MIR.
+#[derive(Clone, Default)]
+pub struct SourceMap {
+    pub refs: IndexMap<u32, Vec<i64>>,
+    pub nodes: IndexMap<u32, Arc<Node>>,
+    pub float_protocols: IndexMap<u32, i64>,
+    pub absorbed: IndexMap<u32, Object>,
+    pub coverage: IndexMap<u32, Vec<(i64, i64)>>,
+    // Immutable byte ranges of each raw raise-time occurrence.
+    pub occurrences: IndexMap<u32, Vec<(i64, i64)>>,
+}
+
+impl SourceMap {
+    pub fn from_module(found: &Module) -> SourceMap {
+        SourceMap {
+            refs: found.refs.clone(),
+            nodes: IndexMap::default(),
+            float_protocols: found.float_protocols.clone(),
+            absorbed: found.absorbed.clone(),
+            coverage: found.coverage.clone(),
+            occurrences: IndexMap::default(),
+        }
+    }
+
+    /// A legacy test view carrying this provenance, without mutation.
+    pub fn applied(&self, found: &Module) -> Module {
+        Module {
+            refs: self.refs.clone(),
+            float_protocols: self.float_protocols.clone(),
+            absorbed: self.absorbed.clone(),
+            coverage: self.coverage.clone(),
+            ..found.clone()
+        }
+    }
+}
 
 
 /// Python `PHYSICAL`: the frame, the stack and the segment registers.
@@ -1095,7 +1131,7 @@ fn _externalized(body: RaisedBody, source: &mut SourceMap, candidates: &[u32]) -
 
 /// Python `_unreached`: what a runtime call can reach inside the program's data.
 fn _unreached(found: &Module) -> Option<Reach> {
-    found.program_data.map(|data| (data, module::escaped(found)))
+    found.program_data.map(|data| (data, escaped(found)))
 }
 
 /// Python `_frame_bounded` on a `_RaisedBody`: `replace` keeps its private maps.

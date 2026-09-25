@@ -4,6 +4,7 @@ pub mod addressfacts;
 pub mod arrayfacts;
 pub mod blocks;
 pub mod declen;
+pub mod escaped;
 pub mod extent;
 pub mod fppatches;
 pub mod fpstack;
@@ -35,3 +36,6 @@ pub mod raising_numeric_policy;
 pub mod raising_returns;
 pub mod raising_words;
 pub mod stack;
+
+#[cfg(test)]
+mod addends_tests;
