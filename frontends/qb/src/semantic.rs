@@ -232,6 +232,9 @@ struct Compiler {
     udts: BTreeMap<String, Udt>,
     pointer_types: BTreeMap<(u32, &'static str), u32>,
     functions: Vec<Function>,
+    // Each static array's descriptor place and its records' bounds: fixed,
+    // since REDIM refuses a static array.
+    static_shapes: BTreeMap<u32, Vec<(Operand, Operand)>>,
     data: Vec<DataObject>,
     values: Vec<(u32, u32)>,
     places: Vec<Place>,
@@ -884,6 +887,7 @@ impl Compiler {
             udts: BTreeMap::new(),
             pointer_types: BTreeMap::new(),
             functions: Vec::new(),
+            static_shapes: BTreeMap::new(),
             data: vec![
                 DataObject {
                     id: 1,
@@ -1902,6 +1906,11 @@ impl Compiler {
             });
             if local_descriptor {
                 self.data_offset += descriptor_extent;
+            } else {
+                let constant = |value: i64| Operand::Constant(INTEGER, Number::Integer(value));
+                let records = self.descriptor_records(&bounds);
+                self.static_shapes
+                    .insert(descriptor, records.iter().map(|(low, high)| (constant(*low), constant(*high))).collect());
             }
             if self.data_offset > 65536 {
                 return self.fail(format!(
@@ -5015,6 +5024,9 @@ impl Compiler {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
         let variable = self.array(&declaration.name)?;
+        if variable.descriptor_place.is_some_and(|place| self.static_shapes.contains_key(&place)) {
+            return self.fail(format!("{} is static: array already dimensioned", declaration.name));
+        }
         let element = variable.element.expect("an array has an element type");
         let inferred = suffix(&declaration.name);
         let selected = declaration.type_name.as_ref().or(inferred.as_ref());

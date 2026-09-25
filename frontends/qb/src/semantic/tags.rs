@@ -237,6 +237,15 @@ mod tests {
         assert_eq!(flags, [Some(0x8001)]);
     }
 
+    /// REDIM of a static array wrote B$RDIM's bounds into its readonly
+    /// descriptor; BC refuses it.
+    #[test]
+    fn test_a_redim_of_a_static_array_is_refused() {
+        let module = parse("DEFINT A-Z\nDIM a(5)\nREDIM a(10)\n", Dialect::VbDos).expect("parses");
+        let refused = built(&module, "T", Dialect::VbDos, "vbdos", &Options::default()).err().expect("refused");
+        assert!(refused.message.contains("already dimensioned"), "{}", refused.message);
+    }
+
     #[test]
     fn test_def_seg_and_poke_set_and_read_the_segment() {
         let all = tagged("DEF SEG = &HA000\nPOKE 0, 1\n");

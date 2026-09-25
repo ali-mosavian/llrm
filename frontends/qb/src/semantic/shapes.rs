@@ -1,7 +1,8 @@
-//! Dynamic array shapes over the whole module.
+//! Array shapes over the whole module.
 //!
-//! Every DIM and REDIM that can reach a descriptor is known here: its own
-//! procedure's, and through whole-array arguments, its callers' and callees'.
+//! Every DIM, REDIM and static array's fixed bounds that can reach a
+//! descriptor is known here: its own procedure's, and through whole-array
+//! arguments, its callers' and callees'.
 //! Where all of them agree, the shape is a fact: constant dimension counts
 //! replace their descriptor reads, and a zero-based array's descriptor offset
 //! is its first byte, which each element access records as its origin.
@@ -12,8 +13,8 @@
 
 use std::collections::BTreeMap;
 
-use super::tags::{Passing, Shape, Slot, Tag};
-use super::{Compiler, Function, Number, Operand};
+use super::tags::{Passing, Slot, Tag};
+use super::{Compiler, Function, Number, Operand, Place};
 
 /// A descriptor, independently of the value that points to it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -36,14 +37,14 @@ struct Known {
 }
 
 impl Known {
-    fn merged(&mut self, shape: &Shape) {
+    /// Fold in one allocation's per-record bounds.
+    fn merged(&mut self, records: &[(Operand, Operand)]) {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
-        let zero_based = shape.records.iter().all(|(lower, _)| constant(lower) == Some(0));
-        let counts: Option<Vec<i64>> = shape
-            .records
+        let zero_based = records.iter().all(|(lower, _)| constant(lower) == Some(0));
+        let counts: Option<Vec<i64>> = records
             .iter()
             .map(|(lower, upper)| Some(constant(upper)? - constant(lower)? + 1))
             .collect();
@@ -89,6 +90,14 @@ impl Classes {
     }
 }
 
+/// The descriptor `place` of `function` is.
+fn identity(function: &Function, place: &Place) -> Identity {
+    match place.storage {
+        "local" => Identity::Local(function.id, place.id),
+        _ => Identity::Global(place.symbol, place.offset),
+    }
+}
+
 /// Each descriptor pointer value of `function` and the descriptor it names.
 fn pointers(function: &Function) -> BTreeMap<u32, Identity> {
     let mut out: BTreeMap<u32, Identity> = function
@@ -106,11 +115,7 @@ fn pointers(function: &Function) -> BTreeMap<u32, Identity> {
         let Some(place) = function.places.iter().find(|candidate| candidate.id == *place) else {
             continue;
         };
-        let identity = match place.storage {
-            "local" => Identity::Local(function.id, place.id),
-            _ => Identity::Global(place.symbol, place.offset),
-        };
-        out.insert(*result, identity);
+        out.insert(*result, identity(function, place));
     }
     out
 }
@@ -127,7 +132,13 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         .collect();
     let mut classes = Classes::default();
     let mut unknown: Vec<Identity> = Vec::new();
-    let mut shapes: Vec<(Identity, &Shape)> = Vec::new();
+    let statics: BTreeMap<Identity, &[(Operand, Operand)]> = compiler
+        .functions
+        .iter()
+        .flat_map(|function| function.places.iter().map(move |place| (function, place)))
+        .filter_map(|(function, place)| Some((identity(function, place), compiler.static_shapes.get(&place.id)?.as_slice())))
+        .collect();
+    let mut shapes: Vec<(Identity, &[(Operand, Operand)])> = statics.into_iter().collect();
     let mut handed: Vec<Identity> = Vec::new();
     for function in &compiler.functions {
         let pointers = pointers(function);
@@ -142,7 +153,7 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         for one in function.blocks.iter().flat_map(|block| &block.instructions) {
             match &one.tag {
                 Some(Tag::Allocate(shape) | Tag::Reallocate(shape)) => match pointers.get(&shape.descriptor) {
-                    Some(identity) => shapes.push((*identity, shape)),
+                    Some(identity) => shapes.push((*identity, &shape.records)),
                     // An allocation of a descriptor with no identity could be any.
                     None => return (classes, BTreeMap::new()),
                 },
@@ -184,16 +195,16 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
             }
         }
     }
-    // A descriptor handed on that nothing here allocates is a static one:
-    // its shape is in its data, not in the class's allocations.
+    // A descriptor handed on with no DIM, REDIM or static bounds here has
+    // no known shape.
     let allocated: Vec<Identity> = shapes.iter().map(|(identity, _)| *identity).collect();
     unknown.extend(handed.into_iter().filter(|identity| {
         !matches!(identity, Identity::Parameter(..)) && !allocated.contains(identity)
     }));
     let mut out: BTreeMap<Identity, Known> = BTreeMap::new();
-    for (identity, shape) in shapes {
+    for (identity, records) in shapes {
         let root = classes.root(identity);
-        out.entry(root).or_default().merged(shape);
+        out.entry(root).or_default().merged(records);
     }
     for identity in unknown {
         let root = classes.root(identity);
@@ -395,6 +406,26 @@ mod tests {
         let compiler = applied_to(PASSED);
         assert!(counts(function(&compiler, "t")).is_empty());
         assert!(counts(function(&compiler, "__main")).is_empty());
+    }
+
+    const HANDED_STATIC: &str =
+        "DEFINT A-Z\nDECLARE SUB t (q())\nDIM a(1, 4)\nCALL t(a())\nSUB t (q())\nx = q(1, 2)\nEND SUB\n";
+
+    /// A static array handed to a procedure left its parameter with no counts
+    /// or origin.
+    #[test]
+    fn test_a_static_arrays_shape_reaches_its_parameter() {
+        let compiler = applied_with(HANDED_STATIC, &Options { whole_program: true, ..Options::default() });
+        let t = function(&compiler, "t");
+        assert_eq!((counts(t), originated(t)), (vec![2], 1));
+    }
+
+    #[test]
+    fn test_a_static_and_a_dynamic_array_of_other_counts_fold_none() {
+        let source = HANDED_STATIC.replace("CALL t(a())\n", "CALL t(a())\nREDIM b(2, 4)\nCALL t(b())\n");
+        let compiler = applied_with(&source, &Options { whole_program: true, ..Options::default() });
+        let t = function(&compiler, "t");
+        assert_eq!((counts(t), originated(t)), (vec![], 1));
     }
 
     /// Every SUB was public, so no array parameter had a shape even when the
