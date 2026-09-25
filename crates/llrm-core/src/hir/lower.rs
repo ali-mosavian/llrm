@@ -576,7 +576,7 @@ impl<'a> _Scope<'a> {
                 kind,
                 args: vec![arg],
                 results: vec![result],
-                id: Some(this.at as u32),
+                source: Some(this.at as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(this.at, OpCode::Operation(operation), name, made, uses)
@@ -634,7 +634,7 @@ impl<'a> _Scope<'a> {
             kind: mir::Kind::Fstore,
             args: args.to_vec(),
             results: vec![Arg::Cell(Cell { r#ref: reference.clone() })],
-            id: Some(self.at as u32),
+            source: Some(self.at as u32),
             reads_complete: true,
             memory_complete: true,
             ..mir::Op::new(self.at, OpCode::Operation(Operation::FloatStore), name, Vec::new(), uses)
@@ -674,7 +674,7 @@ impl<'a> _Scope<'a> {
             kind,
             args: vec![left, right],
             results: vec![Arg::Held(result)],
-            id: Some(self.at as u32),
+            source: Some(self.at as u32),
             reads_complete: true,
             memory_complete: true,
             ..mir::Op::new(self.at, OpCode::Operation(machine), name, vec![result.value], uses)
@@ -900,7 +900,7 @@ impl<'a> _Scope<'a> {
                             kind: mir::Kind::Extract,
                             args: vec![_held(pointer, 4), _const(bit, 1)],
                             results: vec![_held(half, 2)],
-                            id: Some(self.at as u32),
+                            source: Some(self.at as u32),
                             reads_complete: true,
                             memory_complete: true,
                             ..mir::Op::new(
@@ -922,7 +922,7 @@ impl<'a> _Scope<'a> {
                             kind: mir::Kind::Add,
                             args: vec![_held(offset_value, 2), _const(*offset, 2)],
                             results: vec![_held(adjusted, 2)],
-                            id: Some(self.at as u32),
+                            source: Some(self.at as u32),
                             reads_complete: true,
                             memory_complete: true,
                             ..mir::Op::new(
@@ -969,7 +969,7 @@ impl<'a> _Scope<'a> {
                             kind: mir::Kind::Extract,
                             args: vec![_held(pointer, 4), _const(bit, 1)],
                             results: vec![_held(half, 2)],
-                            id: Some(self.at as u32),
+                            source: Some(self.at as u32),
                             reads_complete: true,
                             memory_complete: true,
                             ..mir::Op::new(
@@ -1075,7 +1075,7 @@ impl<'a> _Scope<'a> {
                         vec![_held(reference_base, reference.base_width), _const(displacement, reference.base_width)]
                     },
                     results: vec![_held(result, 2)],
-                    id: Some(instruction.id as u32),
+                    source: Some(instruction.id as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1096,7 +1096,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Address,
                 args: vec![Arg::Cell(Cell { r#ref: MemRef { base: None, width: 2, ..reference.clone() } })],
                 results: vec![_held(base, 2)],
-                id: Some(self.at as u32),
+                source: Some(self.at as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(self.at, OpCode::Operation(Operation::Address), "lea", vec![base], Vec::new())
@@ -1107,7 +1107,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Add,
                 args: vec![_held(base, 2), _held(reference_base, reference.base_width)],
                 results: vec![_held(result, 2)],
-                id: Some(instruction.id as u32),
+                source: Some(instruction.id as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(
@@ -1151,7 +1151,7 @@ impl<'a> _Scope<'a> {
                         vec![_held(reference_base, reference.base_width), _const(displacement, reference.base_width)]
                     },
                     results: vec![_held(offset, 2)],
-                    id: Some(self.at as u32),
+                    source: Some(self.at as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1167,7 +1167,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Address,
                     args: vec![Arg::Cell(Cell { r#ref: MemRef { base: None, width: 2, ..reference.clone() } })],
                     results: vec![_held(offset, 2)],
-                    id: Some(self.at as u32),
+                    source: Some(self.at as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(self.at, OpCode::Operation(Operation::Address), "lea", vec![offset], Vec::new())
@@ -1187,7 +1187,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Add,
                     args: vec![_held(offset, 2), _held(reference_base, reference.base_width)],
                     results: vec![_held(added, 2)],
-                    id: Some(self.at as u32),
+                    source: Some(self.at as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1214,7 +1214,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Copy,
                 args: vec![selector_source],
                 results: vec![_held(segment, 2)],
-                id: Some(self.at as u32),
+                source: Some(self.at as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(self.at, OpCode::Operation(Operation::Move), "mov", vec![segment], Vec::new())
@@ -1225,7 +1225,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Concat,
                 args: vec![_held(segment, 2), _held(offset, 2)],
                 results: vec![_held(result, 4)],
-                id: Some(instruction.id as u32),
+                source: Some(instruction.id as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(self.at, OpCode::Operation(Operation::Move), "", vec![result], vec![segment, offset])
@@ -1270,7 +1270,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Extract,
                     args: vec![Arg::Held(pointer), _const(bit, 1)],
                     results: vec![_held(half, 2)],
-                    id: Some(self.at as u32),
+                    source: Some(self.at as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1298,7 +1298,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Add,
                 args: vec![_held(offset, 2), displacement],
                 results: vec![_held(adjusted, 2)],
-                id: Some(self.at as u32),
+                source: Some(self.at as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(self.at, OpCode::Operation(Operation::Binary), "add", vec![adjusted], uses)
@@ -1309,7 +1309,7 @@ impl<'a> _Scope<'a> {
                 kind: mir::Kind::Concat,
                 args: vec![_held(segment, 2), _held(adjusted, 2)],
                 results: vec![_held(result, 4)],
-                id: Some(instruction.id as u32),
+                source: Some(instruction.id as u32),
                 reads_complete: true,
                 memory_complete: true,
                 ..mir::Op::new(self.at, OpCode::Operation(Operation::Move), "", vec![result], vec![segment, adjusted])
@@ -1336,7 +1336,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Shr,
                     args: vec![Arg::Held(pointer), _const(16, 1)],
                     results: vec![_held(result, 4)],
-                    id: Some(instruction.id as u32),
+                    source: Some(instruction.id as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1352,7 +1352,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Copy,
                     args: vec![_held(pointer.value, 2)],
                     results: vec![_held(result, 2)],
-                    id: Some(instruction.id as u32),
+                    source: Some(instruction.id as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(
@@ -1599,7 +1599,7 @@ impl<'a> _Scope<'a> {
                     kind: mir::Kind::Fload,
                     args: vec![Arg::Cell(Cell { r#ref: reference })],
                     results,
-                    id: Some(instruction.id as u32),
+                    source: Some(instruction.id as u32),
                     reads_complete: true,
                     memory_complete: true,
                     ..mir::Op::new(self.at, OpCode::Operation(Operation::FloatLoad), "fild", made, uses)
@@ -1638,7 +1638,7 @@ impl<'a> _Scope<'a> {
                         kind: mir::Kind::Load,
                         args: vec![Arg::Cell(Cell { r#ref: narrow })],
                         results,
-                        id: Some(instruction.id as u32),
+                        source: Some(instruction.id as u32),
                         reads_complete: true,
                         memory_complete: true,
                         ..mir::Op::new(self.at, OpCode::Operation(Operation::Move), "mov", made, Vec::new())
@@ -1673,7 +1673,7 @@ impl<'a> _Scope<'a> {
                         kind: mir::Kind::Fload,
                         args: vec![Arg::Cell(Cell { r#ref: reference })],
                         results,
-                        id: Some(instruction.id as u32),
+                        source: Some(instruction.id as u32),
                         reads_complete: true,
                         memory_complete: true,
                         ..mir::Op::new(self.at, OpCode::Operation(Operation::FloatLoad), "fld", made, Vec::new())
@@ -1751,7 +1751,7 @@ impl<'a> _Scope<'a> {
             kind,
             args,
             results,
-            id: Some(instruction.id as u32),
+            source: Some(instruction.id as u32),
             args_known: true,
             memory_complete: (complete && !port) || silent_port,
             reads_complete: complete,
@@ -1881,7 +1881,7 @@ fn _function(
                         kind: mir::Kind::Copy,
                         args: vec![argument],
                         results: vec![Arg::Held(held)],
-                        id: Some(scope.at as u32),
+                        source: Some(scope.at as u32),
                         reads_complete: true,
                         memory_complete: true,
                         ..mir::Op::new(scope.at, OpCode::Operation(Operation::Move), "mov", vec![held.value], Vec::new())
@@ -2001,7 +2001,7 @@ fn _function(
                 ops.push(mir::Op {
                     kind: mir::Kind::Sub,
                     args: vec![Arg::Held(condition), _const(0, condition.width)],
-                    id: Some(scope.at as u32),
+                    source: Some(scope.at as u32),
                     reads_complete: true,
                     ..mir::Op::new(
                         scope.at,
@@ -2030,7 +2030,7 @@ fn _function(
             test,
             target,
             cases: term.cases.iter().map(|(value, label)| (*value, block_at[label])).collect(),
-            id: Some(scope.at as u32),
+            source: Some(scope.at as u32),
             reads_complete: true,
             ..mir::Op::new(scope.at, OpCode::Operation(machine), "", Vec::new(), uses)
         };

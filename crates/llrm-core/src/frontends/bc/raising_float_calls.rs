@@ -142,7 +142,7 @@ pub fn raised(
                 extend.stores = Vec::new();
                 extend.merges = OrderedMap::new();
                 extend.raised = None;
-                extend.id = None;
+                extend.source = None;
                 extend.stack = None;
                 extend.symbol = None;
                 ops.push(mir::source_free(extend));
@@ -158,7 +158,7 @@ pub fn raised(
                 extract.stores = Vec::new();
                 extract.merges = OrderedMap::new();
                 extract.raised = None;
-                extract.id = None;
+                extract.source = None;
                 extract.stack = None;
                 extract.symbol = None;
                 ops.push(mir::source_free(extract));
@@ -192,7 +192,7 @@ pub fn raised(
                     for (id, refs) in mir::_referenced(&alone, found) {
                         source_map.refs.insert(id, refs);
                     }
-                    if let (Some(load_id), Some(id)) = (load.id, op.id) {
+                    if let (Some(load_id), Some(id)) = (load.source, op.source) {
                         if let Some(refs) = source_map.refs.get(&load_id).cloned() {
                             source_map.refs.insert(id, refs);
                         }
@@ -200,7 +200,7 @@ pub fn raised(
                 }
                 // The helper supplied its own emulator dispatch. Its replacement
                 // must retain that protocol, independent of the call's opcode.
-                if let Some(id) = op.id {
+                if let Some(id) = op.source {
                     source_map.float_protocols.insert(id, 0x34);
                 }
             }

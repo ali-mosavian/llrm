@@ -208,7 +208,7 @@ fn test_divide_relocation_survives_index_value_replacement() {
     // Keep exercising the legacy operand-binding guard on that real operand.
     let mut op = ops(&body).into_iter().find(|op| op.at == 0x267 && op.kind == Kind::Load).unwrap();
     op.raised = Some((op.args.clone(), op.results.clone()));
-    let id = op.id.unwrap();
+    let id = op.source.unwrap();
     let node = raised.source.nodes[&id].clone();
     let owned: Vec<(i64, i64)> =
         op.absorbed.iter().flat_map(|identity| raised.source.occurrences[identity].iter().copied()).collect();

@@ -607,7 +607,7 @@ pub fn scalar(body: RaisedBody) -> Result<RaisedBody, Unlowered> {
                 rest.args = vec![args[0].clone(), Arg::Held(loaded)];
                 rest.uses = vec![source.value, loaded.value];
                 rest.loads = Vec::new();
-                rest.id = None;
+                rest.source = None;
                 rest.symbol = Some(false);
                 widened = mir::source_free(rest);
             }

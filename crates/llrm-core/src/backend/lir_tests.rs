@@ -133,7 +133,7 @@ fn test_bcs_own_assignment_satisfies_every_requirement() {
                     if !op.source_backed {
                         continue;
                     }
-                    let node = op.id.and_then(|id| raised.source.nodes.get(&id)).map(|node| &**node);
+                    let node = op.source.and_then(|id| raised.source.nodes.get(&id)).map(|node| &**node);
                     let Some(what) = lower::current(op, lower::Place::Default, node).unwrap() else {
                         continue;
                     };
@@ -233,7 +233,7 @@ fn test_an_increment_is_its_own_operation() {
                 continue;
             }
             assert_eq!(op.args.len(), 1, "the implicit operand was written out");
-            let node = op.id.and_then(|id| raised.source.nodes.get(&id)).map(|node| &**node);
+            let node = op.source.and_then(|id| raised.source.nodes.get(&id)).map(|node| &**node);
             let what = lower::current(op, lower::Place::AsAValue, node).unwrap().unwrap();
             assert!(what.op == Operation::Unary && what.name.as_deref() == Some(want));
             let (Loc::Held(source), Loc::Held(dest)) = (&what.sources[0], &what.dests[0]) else {

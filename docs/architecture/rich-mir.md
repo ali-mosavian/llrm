@@ -1097,6 +1097,13 @@ emits the new MIR yet. The `full` view waits for lineage in step 2.
 This happens before opcode migration changes transformation identity and before
 new DCE/CSE can duplicate the old ownership coupling.
 
+In the old MIR, `Op.id` is each operation's own identity: unique in its body,
+assigned by the pass manager (`mir::identified`) after the raise and after
+every pass, and excluded from equality. `Op.source` is the provenance a copy
+shares: the raise-time operation whose relocations, node and site it
+re-emits. Change records diff identities between passes; the ledger replaces
+tombstones.
+
 ### 3. Add modules, declarations, globals, and intrinsics
 
 - Build `MirModule` for both object and C paths.

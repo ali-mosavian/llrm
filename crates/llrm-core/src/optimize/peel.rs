@@ -123,6 +123,7 @@ pub fn optimized(
     let mut body = body.clone();
     let mut peeled = BTreeSet::<i64>::new();
     while let Some((candidate, latch, _)) = _candidate(&body, r#where, &peeled)? {
+        let candidate = crate::model::mir::identified(candidate);
         if let Some(watch) = watch.as_deref_mut() {
             watch("peel-accepted", &candidate);
         }

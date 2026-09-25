@@ -235,7 +235,7 @@ pub fn raised(
             changed.raised = None;
             changed.symbol = Some(true);
             let op = mir::raising_owned(mir::detached(changed), &[&gone, original]);
-            if let Some(id) = op.id {
+            if let Some(id) = op.source {
                 source.refs.insert(id, vec![field]);
             }
             ops.push(op);

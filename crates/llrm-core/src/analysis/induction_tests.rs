@@ -692,13 +692,13 @@ fn test_cse_replaces_phi_uses_of_a_deleted_initializer() {
                 }];
                 define.results = vec![held(first, 2)];
                 define.source_backed = has_origin;
-                define.id = has_origin.then_some(10);
+                define.source = has_origin.then_some(10);
                 define.absorbed = if has_origin { vec![10] } else { vec![] };
                 let mut duplicate = define.clone();
                 duplicate.at = 2;
                 duplicate.defines = vec![second];
                 duplicate.results = vec![held(second, 2)];
-                duplicate.id = has_origin.then_some(11);
+                duplicate.source = has_origin.then_some(11);
                 duplicate.absorbed = if has_origin { vec![11] } else { vec![] };
                 let mut jump = op(4, Operation::Jump, vec![], vec![], Kind::Jump);
                 jump.target = Some(6);
@@ -753,16 +753,16 @@ fn test_cse_keeps_distinct_linker_addresses() {
 fn test_dead_byte_transfer_cannot_span_a_surviving_jump() {
     let mut first = op(0, Operation::Move, vec![], vec![], Kind::Copy);
     first.source_backed = true;
-    first.id = Some(1);
+    first.source = Some(1);
     first.absorbed = vec![1];
     let mut removed = first.clone();
     removed.at = 8;
-    removed.id = Some(3);
+    removed.source = Some(3);
     removed.absorbed = vec![3];
     let mut jump = first.clone();
     jump.at = 4;
     jump.kind = Kind::Jump;
-    jump.id = Some(2);
+    jump.source = Some(2);
     jump.absorbed = vec![2];
     let result = transform::_without(&[first, removed, jump], |op| op.at == 8);
     let mut owners: Vec<u32> = result.iter().flat_map(|op| op.absorbed.clone()).collect();

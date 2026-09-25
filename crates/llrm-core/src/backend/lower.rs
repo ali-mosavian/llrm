@@ -1865,7 +1865,7 @@ impl<'a> Lowering<'a> {
 
     /// The decoded occurrence for this source-backed operation, if any.
     pub fn node(&self, op: &Op) -> Option<&Arc<Node>> {
-        if op.source_backed { op.id.and_then(|id| self._nodes.get(&id)) } else { None }
+        if op.source_backed { op.source.and_then(|id| self._nodes.get(&id)) } else { None }
     }
 
     /// How wide each value an operand-less operation names is.
@@ -1954,7 +1954,7 @@ impl<'a> Lowering<'a> {
             // A folded site leaves its answers in registers its operands name
             // nowhere: the one the routine returned in and the one calls.py
             // keeps the other in.
-            let Some(folded) = op.id.and_then(|id| self._sites.get(&id)) else {
+            let Some(folded) = op.source.and_then(|id| self._sites.get(&id)) else {
                 return Ok(vec![]);
             };
             if op.results.len() != 2 {
@@ -2058,7 +2058,7 @@ impl<'a> Lowering<'a> {
         if op.kind == Kind::Opaque && !matches!(node, Some(Node::Restore(_))) {
             return self._implicit_values(op, true);
         }
-        if op.id.is_some_and(|id| self._sites.contains_key(&id)) {
+        if op.source.is_some_and(|id| self._sites.contains_key(&id)) {
             // These selected sequences still encode their original addressing
             // registers, so allocation supplies the current address value there.
             return Ok(op
@@ -2234,7 +2234,7 @@ impl<'a> Lowering<'a> {
             let spread = if op.absorbed.is_empty() {
                 vec![]
             } else {
-                op.id.and_then(|id| self._coverage.get(&id).cloned()).unwrap_or_default()
+                op.source.and_then(|id| self._coverage.get(&id).cloned()).unwrap_or_default()
             };
             return Ok(((op.at, op.at), spread));
         };
@@ -2267,7 +2267,7 @@ impl<'a> Lowering<'a> {
         if ranges.is_empty() {
             return Ok(((op.at, op.at), vec![]));
         }
-        let identity_ranges = op.id.and_then(|id| occurrences.get(&id)).cloned().unwrap_or_default();
+        let identity_ranges = op.source.and_then(|id| occurrences.get(&id)).cloned().unwrap_or_default();
         let anchor = identity_ranges.first().map_or(op.at, |span| span.0);
         let primary = ranges.iter().find(|span| span.0 <= anchor && anchor < span.1).copied().unwrap_or(ranges[0]);
         Ok((primary, if ranges.len() > 1 { ranges } else { vec![] }))
@@ -2329,7 +2329,7 @@ impl<'a> Lowering<'a> {
             // The site's own sequence emits it, so there is nothing for this
             // to say -- while it is still that operation.
             let node = self.node(op).cloned();
-            let folded = op.id.is_some_and(|id| self._absorbed.contains(&id)) && node.is_some();
+            let folded = op.source.is_some_and(|id| self._absorbed.contains(&id)) && node.is_some();
             let what = if folded { None } else { current(op, Place::AsAValue, node.as_deref())? };
             let what = addressforms::scaled(addressforms::selected(what.as_ref(), &self._address_forms).as_ref(), &self._indexed, &self._exact);
             let speaks = what.as_ref().is_some_and(|what| !what.dests.is_empty() || !what.sources.is_empty());

@@ -254,7 +254,7 @@ pub fn _referenced(body: &MirBody, found: &Module) -> IndexMap<u32, Vec<i64>> {
     };
     for block in &body.blocks {
         for op in &block.ops {
-            if let (Some(id), Some(at)) = (op.id, owned(op)) {
+            if let (Some(id), Some(at)) = (op.source, owned(op)) {
                 out.insert(id, vec![at]);
             }
         }
@@ -958,7 +958,7 @@ impl Raiser<'_> {
             op.args = args;
             op.results = place.1;
             op.target = semantics.target;
-            op.id = Some(super::next_id());
+            op.source = Some(super::next_id());
             op.args_known = called.1;
             op.memory_complete = memory_complete;
             op.reads_complete = effects.uses.is_some() && called.1;
@@ -1034,7 +1034,7 @@ fn _record_provenance(body: &MirBody, source: &mut SourceMap) -> Vec<u32> {
     let mut recorded = Vec::new();
     for block in &body.blocks {
         for op in &block.ops {
-            let Some(id) = op.id else {
+            let Some(id) = op.source else {
                 continue;
             };
             recorded.push(id);
@@ -1089,7 +1089,7 @@ fn _completed_ownership(
                 block
                     .ops
                     .iter()
-                    .map(|op| match op.id.and_then(|id| coverage.get(&id)) {
+                    .map(|op| match op.source.and_then(|id| coverage.get(&id)) {
                         Some(owned) => {
                             let mut made = op.clone();
                             made.absorbed = _absorbed_ids(op, source, candidates, Some(owned));
@@ -1111,7 +1111,7 @@ fn _externalized(body: RaisedBody, source: &mut SourceMap, candidates: &[u32]) -
         let mut ops = Vec::new();
         for op in &block.ops {
             let node = op.node().cloned();
-            if let (Some(node), Some(id)) = (&node, op.id) {
+            if let (Some(node), Some(id)) = (&node, op.source) {
                 source.nodes.insert(id, node.clone());
             }
             let (opaque_defs, opaque_uses) = _opaque_effects(node.as_deref());
@@ -1481,7 +1481,7 @@ pub fn _with_raise_context(body: &MirBody, hints: &AllocationHints, source: &Sou
             .iter()
             .flat_map(|identity| source.occurrences.get(identity).into_iter().flatten().copied())
             .collect();
-        let node = op.id.and_then(|id| source.nodes.get(&id)).cloned();
+        let node = op.source.and_then(|id| source.nodes.get(&id)).cloned();
         if spans.is_empty() && node.is_none() {
             return op.clone();
         }

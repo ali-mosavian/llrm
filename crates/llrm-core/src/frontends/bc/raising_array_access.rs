@@ -704,7 +704,7 @@ fn _native(body: RaisedBody, found: &Module, bounds_checks: bool) -> Result<Rais
                             load.defines = vec![value.value];
                             load.results = vec![Arg::Held(value)];
                             load.stores = Vec::new();
-                            load.id = None;
+                            load.source = None;
                             load.raised = None;
                             let load = mir::source_free(load);
                             let mut argument = consumer.clone();

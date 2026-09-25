@@ -277,7 +277,7 @@ fn test_emulator_load_uses_the_allocated_address() {
     let source = mir::Op {
         kind: mir::Kind::Fload,
         source_backed: true,
-        id: Some(1),
+        source: Some(1),
         absorbed: vec![1],
         ..mir::Op::new(0, mir::OpCode::Operation(Operation::FloatLoad), "fld", vec![], vec![])
     };
@@ -453,7 +453,7 @@ fn test_explicit_emission_order_does_not_group_clones_by_source_address() {
 fn test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes() {
     let what = sem(Operation::Call, "call");
     let source = Arc::new(mir::Op {
-        id: Some(7),
+        source: Some(7),
         symbol: Some(true),
         absorbed: vec![7],
         ..mir::Op::new(0, mir::OpCode::Operation(Operation::Call), "call", vec![], vec![])
@@ -484,7 +484,7 @@ fn test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes() {
     )
     .unwrap();
     assert_eq!(emitted.relocations, [(1, 1), (6, 1)]);
-    let anonymous = Insn { op: Some(Arc::new(mir::Op { id: None, ..(*source).clone() })), ..(*clone).clone() };
+    let anonymous = Insn { op: Some(Arc::new(mir::Op { source: None, ..(*source).clone() })), ..(*clone).clone() };
     assert_eq!(asm::_field_in(&found, &anonymous, &fields, None), None);
     let unsymbolic = Insn { symbol: Some(false), ..(*clone).clone() };
     assert_eq!(asm::_field_in(&found, &unsymbolic, &fields, None), None);
@@ -494,7 +494,7 @@ fn test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes() {
 #[test]
 fn test_layout_uses_disjoint_ranges_resolved_onto_lir() {
     let source = mir::Op {
-        id: Some(8),
+        source: Some(8),
         absorbed: vec![7, 8],
         ..mir::Op::new(20, mir::OpCode::Operation(Operation::Nothing), "", vec![], vec![])
     };
@@ -595,7 +595,7 @@ fn test_a_moved_operation_keeps_its_fixup() {
         .values
         .iter()
         .flat_map(|(_, body)| body.blocks.iter().flat_map(|block| &block.ops))
-        .filter(|op| op.id.is_some_and(|id| found.refs.contains_key(&id)))
+        .filter(|op| op.source.is_some_and(|id| found.refs.contains_key(&id)))
         .map(|op| selected(op.clone(), Some(&raised.source)))
         .collect();
     let none = BTreeSet::new();
@@ -627,7 +627,7 @@ fn test_load_hoisted_to_call_does_not_acquire_call_fixup() {
 }
 
 fn selected(op: mir::Op, source: Option<&SourceMap>) -> Insn {
-    let id = op.id.unwrap_or_default();
+    let id = op.source.unwrap_or_default();
     let node = source.and_then(|source| source.nodes.get(&id).cloned());
     let ranges = source.and_then(|source| source.occurrences.get(&id).cloned()).unwrap_or_default();
     let what = crate::backend::lower::current(&op, crate::backend::lower::Place::Default, node.as_deref()).unwrap();
@@ -652,7 +652,7 @@ fn test_promoted_symbolic_load_drops_its_old_fixup() {
         kind: mir::Kind::Copy,
         args: vec![mir::Arg::Held(mir::Held { value: source, width: 4 })],
         results: vec![mir::Arg::Held(mir::Held { value: result, width: 4 })],
-        id: Some(1),
+        source: Some(1),
         symbol: Some(true),
         ..mir::Op::new(0x1b7, mir::OpCode::Operation(Operation::Move), "mov", vec![result], vec![source])
     };
@@ -722,7 +722,7 @@ fn test_a_register_sum_drops_the_fixup_of_the_read_it_replaced() {
     let (source, other, result) = (mir::Value::new(1, 0x48), mir::Value::new(2, 0x48), mir::Value::new(3, 0x48));
     let op = mir::Op {
         kind: mir::Kind::Add,
-        id: Some(1),
+        source: Some(1),
         symbol: Some(true),
         ..mir::Op::new(0x48, mir::OpCode::Operation(Operation::Binary), "add", vec![result], vec![source, other])
     };

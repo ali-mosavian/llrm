@@ -147,7 +147,7 @@ fn test_array_reuse_requires_every_element_to_have_proven_integer_bounds() {
                 }
                 if indexed_fload(op) {
                     if !read.contains(&op.loads[0]) {
-                        first.insert(op.id);
+                        first.insert(op.source);
                     }
                     read.push(op.loads[0].clone());
                 }
@@ -155,7 +155,7 @@ fn test_array_reuse_requires_every_element_to_have_proven_integer_bounds() {
         }
         assert!(!first.is_empty(), "{bits:#x}");
         let kept: BTreeSet<Option<u32>> =
-            testing::ops(&result).iter().filter(|op| op.kind == Kind::Fload).map(|op| op.id).collect();
+            testing::ops(&result).iter().filter(|op| op.kind == Kind::Fload).map(|op| op.source).collect();
         assert!(first.is_subset(&kept), "{bits:#x}");
     }
 }

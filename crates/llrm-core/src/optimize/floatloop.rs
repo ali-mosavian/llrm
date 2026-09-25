@@ -204,7 +204,7 @@ fn _store(beside: &Op, reference: &MemRef, value: Const) -> Op {
     op.results = vec![Arg::Cell(Cell {
         r#ref: reference.clone(),
     })];
-    op.id = beside.id;
+    op.source = beside.source;
     op.symbol = Some(true);
     op
 }

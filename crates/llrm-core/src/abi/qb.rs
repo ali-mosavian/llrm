@@ -221,7 +221,7 @@ fn _inline_block(
         copy.kind = Kind::Copy;
         copy.args = vec![argument.clone()];
         copy.results = vec![Arg::Held(held)];
-        copy.id = Some(*next_at as u32);
+        copy.source = Some(*next_at as u32);
         copy.reads_complete = true;
         copy.memory_complete = true;
         copies.push(copy);
@@ -890,7 +890,7 @@ pub fn physicalize(
         .map(|value| (lowered.values[&value.id], types[&value.r#type]))
         .collect();
 
-    let site_of = |operation: &mir::Op| operation.id.and_then(|id| sites.get(&i64::from(id)).copied());
+    let site_of = |operation: &mir::Op| operation.source.and_then(|id| sites.get(&i64::from(id)).copied());
     let blocks_of: IndexMap<i64, &model::Asm> = function
         .blocks
         .iter()
@@ -909,11 +909,11 @@ pub fn physicalize(
         .min(0)
         - 8;
     let call_name = |operation: &mir::Op| -> Result<String, AbiError> {
-        if operation.id.is_some_and(|id| blocks_of.contains_key(&i64::from(id))) {
+        if operation.source.is_some_and(|id| blocks_of.contains_key(&i64::from(id))) {
             return Ok(operation.name.clone());
         }
         let Some(site) = site_of(operation) else {
-            return Err(AbiError(format!("call {} has no ABI site", operation.id.repr())));
+            return Err(AbiError(format!("call {} has no ABI site", operation.source.repr())));
         };
         Ok(match site.callee {
             Some(callee) => callable_names[&callee].to_owned(),
@@ -1034,7 +1034,7 @@ pub fn physicalize(
             op.kind = Kind::Extract;
             op.args = vec![Arg::Held(*source), Arg::Const(mir::Const::new(offset, 1))];
             op.results = vec![Arg::Held(held)];
-            op.id = Some(*next_at as u32);
+            op.source = Some(*next_at as u32);
             op.reads_complete = true;
             op.memory_complete = true;
             halves.push(op);
@@ -1134,7 +1134,7 @@ pub fn physicalize(
         op.kind = kind;
         op.args = vec![Arg::Cell(mir::Cell { r#ref: reference })];
         op.results = vec![Arg::Held(result)];
-        op.id = Some(next_at as u32);
+        op.source = Some(next_at as u32);
         op.reads_complete = true;
         op.memory_complete = true;
         entry_loads.push(op);
@@ -1189,7 +1189,7 @@ pub fn physicalize(
                 op.kind = Kind::Fstore;
                 op.args = vec![Arg::Held(*source)];
                 op.results = vec![Arg::Cell(mir::Cell { r#ref: reference })];
-                op.id = Some(next_at as u32);
+                op.source = Some(next_at as u32);
                 op.reads_complete = true;
                 op.memory_complete = true;
                 operations.push(op);
@@ -1221,7 +1221,7 @@ pub fn physicalize(
                 operations.push(operation);
                 continue;
             }
-            if let Some(asm) = operation.id.and_then(|id| blocks_of.get(&i64::from(id))) {
+            if let Some(asm) = operation.source.and_then(|id| blocks_of.get(&i64::from(id))) {
                 let (copies, call, contract, code) = _inline_block(&operation, asm, &mut next_value, &mut next_at)?;
                 operations.extend(copies);
                 calls.insert(call.at, call.name.clone());
@@ -1231,7 +1231,7 @@ pub fn physicalize(
                 continue;
             }
             let Some(site) = site_of(&operation) else {
-                return Err(AbiError(format!("call {} has no ABI site", operation.id.repr())));
+                return Err(AbiError(format!("call {} has no ABI site", operation.source.repr())));
             };
             let name = call_name(&operation)?;
             let ordered: Vec<Arg> = site.order.iter().map(|index| operation.args[*index as usize].clone()).collect();
@@ -1290,7 +1290,7 @@ pub fn physicalize(
                 op.kind = Kind::Fstore;
                 op.args = vec![argument.clone()];
                 op.results = vec![Arg::Cell(mir::Cell { r#ref: reference.clone() })];
-                op.id = Some(next_at as u32);
+                op.source = Some(next_at as u32);
                 op.reads_complete = true;
                 op.memory_complete = true;
                 operations.push(op);
@@ -1331,7 +1331,7 @@ pub fn physicalize(
                             }
                             widen.args = vec![part];
                             widen.results = vec![Arg::Held(_held(value, 2))];
-                            widen.id = Some(next_at as u32);
+                            widen.source = Some(next_at as u32);
                             widen.reads_complete = true;
                             widen.memory_complete = true;
                             operations.push(widen);
@@ -1353,7 +1353,7 @@ pub fn physicalize(
                     op.kind = Kind::Arg;
                     op.args = vec![part];
 
-                    op.id = Some(next_at as u32);
+                    op.source = Some(next_at as u32);
                     op.reads_complete = true;
                     operations.push(op);
                     next_at += 1;
@@ -1420,7 +1420,7 @@ pub fn physicalize(
                 });
                 let object_ = parameter_object(
                     Identity::Tuple(vec![
-                        Identity::Int(i64::from(operation.id.expect("a call site has an id"))),
+                        Identity::Int(i64::from(operation.source.expect("a call site has an id"))),
                         Identity::Str("float-result".into()),
                     ]),
                     None,
@@ -1450,7 +1450,7 @@ pub fn physicalize(
                 op.kind = Kind::Fload;
                 op.args = vec![Arg::Cell(mir::Cell { r#ref: reference })];
                 op.results = vec![Arg::Held(result)];
-                op.id = Some(next_at as u32);
+                op.source = Some(next_at as u32);
                 op.reads_complete = true;
                 op.memory_complete = true;
                 operations.push(op);
@@ -1475,7 +1475,7 @@ pub fn physicalize(
             op.kind = Kind::Concat;
             op.args = vec![Arg::Held(_held(high, 2)), Arg::Held(_held(low, 2))];
             op.results = vec![Arg::Held(result)];
-            op.id = Some(next_at as u32);
+            op.source = Some(next_at as u32);
             op.reads_complete = true;
             op.memory_complete = true;
             operations.push(op);

@@ -313,7 +313,7 @@ impl<'a> _Legalizer<'a> {
         op.args = args;
         op.results = results;
         op.target = target;
-        op.id = Some(mir::next_id());
+        op.source = Some(mir::next_id());
         op.args_known = true;
         op.reads_complete = true;
         op.memory_complete = true;

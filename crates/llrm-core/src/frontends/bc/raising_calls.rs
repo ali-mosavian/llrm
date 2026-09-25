@@ -17,7 +17,7 @@ use crate::support::hash::IndexMap;
 pub fn _discarded(push: &Op) -> Op {
     let mut made = Op::new(push.at, OpCode::Operation(Operation::Nothing), "", Vec::new(), Vec::new());
     made.kind = Kind::Nothing;
-    made.id = push.id;
+    made.source = push.source;
     mir::raising_owned(made, &[push])
 }
 
@@ -255,7 +255,7 @@ pub fn arithmetic(body: RaisedBody, found: &Module, blocks: &[Block], basic_sema
                 );
                 comparison.kind = Kind::Sub;
                 comparison.args = arguments.iter().map(|arg| Arg::Held(*arg)).collect();
-                comparison.id = call.id;
+                comparison.source = call.source;
                 let comparison = mir::raising_owned(comparison, &[call]);
                 replacements.extend(pending);
                 setup.push(comparison);
@@ -276,7 +276,7 @@ pub fn arithmetic(body: RaisedBody, found: &Module, blocks: &[Block], basic_sema
             arithmetic.kind = if multiply { Kind::Mul } else { Kind::Divmod };
             arithmetic.args = arguments.iter().rev().map(|arg| Arg::Held(*arg)).collect();
             arithmetic.results = answers.iter().map(|value| Arg::Held(Held { value: *value, width: 4 })).collect();
-            arithmetic.id = call.id;
+            arithmetic.source = call.source;
             let arithmetic = mir::raising_owned(arithmetic, &[call]);
             let answer = if site.name == calls::REMAINDER { remainder } else { quotient };
             let extracts = [(Register::EAX, 0), (Register::EDX, 16)].map(|(register, offset)| {
