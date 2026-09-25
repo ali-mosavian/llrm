@@ -192,7 +192,7 @@ TESTS = {
 #
 # B$CPI4 synthesises the signed answers only. sahf cannot write OF -- it is
 # bit 11, outside the byte -- so `jl` and `jg` after one read a stale flag,
-# which is the bug docs/numbers.md records against BC itself.
+# which is the bug docs/measurement/numbers.md records against BC itself.
 #
 # B$FCMP is the float compare and answers the *unsigned* ones, because the
 # x87 status word arrives through sahf as CF and ZF. Established from

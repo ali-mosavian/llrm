@@ -156,7 +156,7 @@ CALLED = {
     "B$DVI4": 120,
     "B$RMI4": 120,
     "B$CPI4": 40,
-    # Full straight-line bodies, including waits and stack traffic; see docs/float-integer-values.md.
+    # Full straight-line bodies, including waits and stack traffic; see docs/optimizations/float-integer-values.md.
     # FIL2 executes CWD and then the complete FILD body.  FILD itself saves
     # BP/BX, materializes DX:AX on its stack, executes the x87 load, restores
     # the frame and far-returns. Charging either as a bare far CALL made
@@ -474,7 +474,7 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
             found["event-enabled configuration"] += 1
         if "B$LINA" in module_.calls.values():
             # A /D build tracks the current line at every statement and checks
-            # every subscript. Every target in docs/targets.md is BC's own plain
+            # every subscript. Every target in docs/measurement/targets.md is BC's own plain
             # build, so the two are not the same program -- harr-bounds scored
             # 30,578 against HARR's 1,834 and read as a 16.67x miss.
             found["checked configuration"] += 1
@@ -534,10 +534,10 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
 # The best case, per program, hard-coded. Every counter's target is zero --
 # a compiler that leaves a redundant load or an invariant read in a loop has
 # left something on the table by definition. The cost target is the cost of
-# the hand-written optimal listing in docs/targets.md, computed with the
+# the hand-written optimal listing in docs/measurement/targets.md, computed with the
 # same formula this file uses, so the two are comparable.
 #
-# Where docs/targets.md carries a full optimal listing the number is derived
+# Where docs/measurement/targets.md carries a full optimal listing the number is derived
 # from it; the four marked `~` are scaled from the same savings applied to a
 # body that has not been written out by hand yet, and are the weakest thing
 # here. They are targets, not measurements: the point is to have a number to
@@ -545,12 +545,12 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
 TARGETS = {
     # Every one derived by hand from the full listing, both sides: BC's own
     # body costed instruction by instruction with the formula below, and the
-    # optimal listing in docs/targets.md costed the same way. Where the hand
+    # optimal listing in docs/measurement/targets.md costed the same way. Where the hand
     # total differs from what this file computes -- the header bytes BC puts
     # before the first instruction decode as instructions, and a block's
     # depth is not always what reading the listing suggests -- the target is
     # the hand ratio applied to the measured cost, and both numbers are in
-    # docs/targets.md.
+    # docs/measurement/targets.md.
     # Optimal loop body x the same trip count the measurement uses, plus
     # the straight-line part. Weighting one side and not the other was the
     # last mistake in this file: it made matrix read 18x when the honest
@@ -574,8 +574,8 @@ TARGETS = {
     "HG": 304,
     "FPCSE": 157,  # PDS/VBDOS: nine stores, entry checkpoint and complete output.
     "FX": 1038,
-    "HOTLPX": 217,  # Complete runtime-input reference in docs/targets.md.
-    # Runtime-input references are derived independently in docs/targets.md.
+    "HOTLPX": 217,  # Complete runtime-input reference in docs/measurement/targets.md.
+    # Runtime-input references are derived independently in docs/measurement/targets.md.
     "PRESSX": 508,
     "FPCSEX": 1340,
     "LNGMXX": 208,
@@ -587,7 +587,7 @@ TARGETS = {
     "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
     "JUMPS": 742,  # Three expanded iterations, twelve stores and six four-call output rows.
     "FPDEEP": 1317,  # PDS: 1086 output + 21 stores + 21 pending-exception checks.
-    # Complete source-derived listings are documented in docs/targets.md.
+    # Complete source-derived listings are documented in docs/measurement/targets.md.
     "DIVMOD": 1174,
     "FPEMU": 696,
     "PROCS": 533,

@@ -1,7 +1,7 @@
 # Compiler reference kernels
 
 These are independent compiler comparisons, not executable DOS targets and
-not replacements for the complete listings in `docs/targets.md`.
+not replacements for the complete listings in `docs/measurement/targets.md`.
 
 ## Fixed-point square root
 
@@ -43,7 +43,7 @@ REF.OBJ, and `fpdeep-p-g2.obj` for raw scoring. The reference has 21 stores,
 21 WAITs and the original output calls: 1317 modeled units. It links and
 prints byte-identical output to BC and qbopt's native build; evidence is in
 `/tmp/qbopt-fpdeep-jwasm.xq6rYz`, including `result.png`. The accepted scope
-is ordinary PDS without events or resumable errors. See `docs/targets.md`
+is ordinary PDS without events or resumable errors. See `docs/measurement/targets.md`
 for the derivation; other compiler configurations remain provisional.
 
 ## FPCSEX

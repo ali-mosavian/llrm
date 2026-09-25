@@ -1,6 +1,6 @@
 """Audited instruction core-clock bounds, separate from scoreboard estimates.
 
-Sources and limitations: docs/timing-audit.md. Bounds exclude decode,
+Sources and limitations: docs/measurement/timing-audit.md. Bounds exclude decode,
 prefix, memory and scheduling costs; they are not whole-program timings.
 """
 

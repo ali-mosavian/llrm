@@ -443,7 +443,7 @@ def absorb(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     consume()/dividing(), below) would otherwise emit -- for a
     site lift.tail() has already proven BC's own following code widens
     against, so putting the high half back only to immediately re-derive it
-    from eax would be the round trip docs/residue.md calls G and H. COMPARE
+    from eax would be the round trip docs/optimizations/residue.md calls G and H. COMPARE
     has no restore to drop: its own result is flags, not a register value.
     """
     if site.consume and not site.pushed:

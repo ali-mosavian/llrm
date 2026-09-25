@@ -1,5 +1,5 @@
 """
-Re-measures docs/residue.md's patterns B, D, E, F, I against the CURRENT
+Re-measures docs/optimizations/residue.md's patterns B, D, E, F, I against the CURRENT
 rewritten object -- a mechanical, scripted walk of qbopt/model/ir.py's own node
 stream, not a re-read of the disassembly by eye. Built because residue.md's
 own counts for these five were stale twice over: once from the comparison-

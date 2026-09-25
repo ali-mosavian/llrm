@@ -135,7 +135,7 @@ def test_classifier_register_to_register(destination: str, source: str) -> None:
     ],
 )
 def test_classifier_recognises_every_immediate_alu_encoding(name: str, enc: str, want: int) -> None:
-    # docs/residue.md's D: three different encodings BC picks between for the
+    # docs/optimizations/residue.md's D: three different encodings BC picks between for the
     # same operation depending on what's shortest, and classify() has to read
     # the right 16-bit pattern out of each one.
     decoded = classify_code(hx(enc))
@@ -229,7 +229,7 @@ def test_lift_refuses_a_carry_blind_pair(enc: str, why: str) -> None:
 @pytest.mark.parametrize(
     ("enc", "want_imm", "what"),
     [
-        # docs/residue.md's own two worked D examples, byte-identical to
+        # docs/optimizations/residue.md's own two worked D examples, byte-identical to
         # bench/nbody.bas at 0x017e and 0x02ea.
         ("05 00 00 83 D2 04", 0x40000, "add ax,0 / adc dx,4 -- together += 0x40000"),
         ("83 C0 01 83 D2 00", 1, "add ax,1 / adc dx,0 -- together += 1"),
@@ -300,7 +300,7 @@ def test_an_opaque_instruction_invalidates_the_pairs() -> None:
 
 
 def test_an_instruction_touching_no_tracked_register_bridges_the_gap() -> None:
-    # docs/residue.md's E: `inc si` touches neither ax/dx nor cx/bx, so
+    # docs/optimizations/residue.md's E: `inc si` touches neither ax/dx nor cx/bx, so
     # lift() steps over it without invalidating live[0], and regions() (given
     # the bridge lift() reports) treats the load and the alu pair after the
     # gap as one contiguous region.
@@ -328,7 +328,7 @@ def test_everything_feeding_a_store_is_needed_transitively() -> None:
 
 
 def test_tail_widens_the_negate_idiom_right_after_a_seeded_call() -> None:
-    # docs/residue.md's own G/H worked example: idiv/restore/sub/sbb/neg/adc/
+    # docs/optimizations/residue.md's own G/H worked example: idiv/restore/sub/sbb/neg/adc/
     # neg/store -- the NEGATE idiom right after a call's own result, provably
     # already correct in pair 0 (ir.RESTORE_EFFECTS[0]), which lift()'s own
     # walk could never reach on its own because the call sat in front of it
@@ -442,7 +442,7 @@ def test_a_region_is_exactly_as_long_as_it_needs_to_be(enc: str) -> None:
 
 
 def test_emit_region_drops_a_restore_the_caller_proves_dead() -> None:
-    # docs/residue.md's I: the caller (rewrite.py, via qbopt.registers) is the
+    # docs/optimizations/residue.md's I: the caller (rewrite.py, via qbopt.registers) is the
     # only thing that knows whether dx/bx is ever read again -- emit_region()
     # itself just has to honour what it's told, and honour it per pair.
     code = hx("A1 5E 00 8B 16 60 00   A3 62 00 89 16 64 00")
@@ -575,7 +575,7 @@ def test_two_elements_at_the_same_offset_are_not_the_same_address() -> None:
 
 
 # ---------------------------------------------------------------------------
-# docs/residue.md's E -- an interleaved instruction that touches no tracked
+# docs/optimizations/residue.md's E -- an interleaved instruction that touches no tracked
 # register bridges the gap, real shape from bench/nbody.bas (di computes a
 # second array's own index between a load pair and the alu pair that reads
 # through it):
@@ -659,7 +659,7 @@ def test_e_does_not_bridge_after_a_store() -> None:
     # land between the store and the call, corrupting what the call read.
     # Bridging only ever continues a value still in flight in a register,
     # never one already committed to memory -- `inc si` alone would bridge
-    # fine (docs/residue.md's own E shape), but not right after a store.
+    # fine (docs/optimizations/residue.md's own E shape), but not right after a store.
     code = hx("A1 5E 00 8B 16 60 00") + hx("A3 62 00 89 16 64 00") + hx("46") + hx("A1 66 00 8B 16 68 00")
     values, _stores, bridges = lift(code, 0, len(code))
     assert [v.op for v in values] == [Op.LOAD, Op.STORE, Op.LOAD]
@@ -705,7 +705,7 @@ def test_e_does_not_bridge_a_call() -> None:
 
 
 # ---------------------------------------------------------------------------
-# docs/residue.md's F -- an INTEGER's own sign extension to LONG, invisible
+# docs/optimizations/residue.md's F -- an INTEGER's own sign extension to LONG, invisible
 # to lift() before Op.MOVSX existed because cwd is not a value it tracked.
 
 
@@ -747,7 +747,7 @@ def test_movsx_does_not_pull_a_following_argument_push_into_the_value_graph() ->
     # Folding BC's own argument push into the widened value graph was tried
     # and measured net negative (it changed region boundaries enough to stop
     # pattern B's own restore/re-push fold from firing where it used to,
-    # docs/residue.md's own F section has the numbers) and was dropped.
+    # docs/optimizations/residue.md's own F section has the numbers) and was dropped.
     code = hx("8B C3") + hx("99") + hx("52 50")  # mov ax,bx / cwd / push dx / push ax
     values, _stores, bridges = lift(code, 0, len(code))
     assert [v.op for v in values] == [Op.MOVSX]

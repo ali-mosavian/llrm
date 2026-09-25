@@ -20,7 +20,7 @@ instruction patterns can never see that a pair-to-pair copy is dead.
 
 Anything not recognised invalidates both pairs, because an instruction this
 does not understand may write either of them -- unless it provably touches
-neither: docs/residue.md's E, an instruction that BC drops between two halves
+neither: docs/optimizations/residue.md's E, an instruction that BC drops between two halves
 of what is otherwise one contiguous long expression (address arithmetic for
 some other value entirely is the measured case), is exactly this, and
 _bridges() is the one, narrow exception to the rule above.
@@ -101,7 +101,7 @@ class Op(StrEnum):
     CALL = "call"  # an absorbed call site (calls.py), already correctly
     # valued in pair 0 -- see RESTORE_EFFECTS' documented fact in ir.py, which
     # is the reason this needs no instruction of its own to "compute"
-    MOVSX = "movsx"  # docs/residue.md's F: an INTEGER's own sign extension
+    MOVSX = "movsx"  # docs/optimizations/residue.md's F: an INTEGER's own sign extension
 
 
 @dataclass(slots=True)
@@ -404,7 +404,7 @@ TRACKED = frozenset(
 
 def _bridges(insn: Insn) -> bool:
     """Whether an unrecognised instruction can sit inside a widened region,
-    unmoved, without disturbing either tracked pair -- docs/residue.md's E.
+    unmoved, without disturbing either tracked pair -- docs/optimizations/residue.md's E.
 
     Touching neither ax/dx nor cx/bx, in any width, at all means BC's own
     code between two liftable halves is doing something else entirely (the
@@ -431,7 +431,7 @@ def _bridges(insn: Insn) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Bridge:
-    """One span lift() stepped over rather than lifted -- docs/residue.md's E.
+    """One span lift() stepped over rather than lifted -- docs/optimizations/residue.md's E.
     `fields` names every displacement field inside it that carries a real
     fixup (almost always none), so emit_region() can carry that relocation
     forward along with the raw bytes it is already copying unchanged."""
@@ -468,7 +468,7 @@ def _sign_extend_step(
     """`mov ax,<source>` / `cwd`, contiguous -- an INTEGER's own sign
     extension to LONG, invisible to lift() before this: `cwd` is not a value
     it tracks at all, so it falls straight through to "unrecognised" and
-    clears both pairs (docs/residue.md's F). `movsx eax,<source>` is the one
+    clears both pairs (docs/optimizations/residue.md's F). `movsx eax,<source>` is the one
     386 instruction this becomes, seeding pair 0 the way a fresh Kind.LOAD
     already does.
 
@@ -512,7 +512,7 @@ def _negate_step(
     """Tries the three-instruction NEGATE idiom at `instructions[position]`.
     The position past it, or None if it does not apply here. Shared by
     lift()'s own walk and tail()'s, so a NEGATE right after a restored call
-    (docs/residue.md's own worked G/H example) is recognised the same way a
+    (docs/optimizations/residue.md's own worked G/H example) is recognised the same way a
     NEGATE anywhere else in a region already is -- one fact, one place."""
     at = instructions[position].at
     pair = negate_at(code, at)
@@ -630,7 +630,7 @@ def lift(
     reads jump tables and dead code as instructions, and a region built on one
     of those does not begin where an instruction does.
 
-    The third return is docs/residue.md's E: every span this walk stepped
+    The third return is docs/optimizations/residue.md's E: every span this walk stepped
     over without clearing a pair, in address order and already coalesced
     where several such instructions run together, for regions() to bridge
     and emit_region() to carry through unchanged.
@@ -709,7 +709,7 @@ def tail(instructions: list[Insn], code: bytes, bound: int, resolve: Resolver, s
     restore idiom, byte-identical to `ir.RESTORE_EFFECTS[0]`, is exactly this
     fact: the call's real 32-bit result never left eax. Reuses lift()'s own
     pairing rules (`_negate_step`/`_pair_step`) unchanged, so the NEGATE
-    idiom -- docs/residue.md's own largest single G/H example -- is covered
+    idiom -- docs/optimizations/residue.md's own largest single G/H example -- is covered
     without new logic.
 
     Unlike lift()'s own walk, this never falls through to "invalidate and
@@ -750,7 +750,7 @@ def tail(instructions: list[Insn], code: bytes, bound: int, resolve: Resolver, s
 
 def regions(values: list[Value], bridges: Sequence[Bridge] = ()) -> list[list[int]]:
     """Maximal runs of values whose instructions are contiguous in the code,
-    or bridged by one of `bridges` (docs/residue.md's E -- lift()'s own third
+    or bridged by one of `bridges` (docs/optimizations/residue.md's E -- lift()'s own third
     return, spans it stepped over without disturbing either tracked pair).
     Anything else unlifted between two values ends a region -- it has to stay
     where it is, so the rewrite cannot span it."""
@@ -1024,7 +1024,7 @@ def emit_region(
     restoring one of them actually worth doing" needs the block graph this
     module has no notion of.
 
-    `code`/`bridges` are docs/residue.md's E: `bridges` names the gap, if any,
+    `code`/`bridges` are docs/optimizations/residue.md's E: `bridges` names the gap, if any,
     between two consecutive region values that lift() stepped over rather than
     lifted, and `code` is where those bytes are read from -- carried through
     unchanged, at the point they already sat, never re-encoded or moved.

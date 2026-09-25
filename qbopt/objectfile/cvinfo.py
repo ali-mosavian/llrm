@@ -11,7 +11,7 @@ byte, and lexical-scope linkage (pParent/pEnd/pNext) is absent because
 CVPACK is what fills it in. The kind bytes below were recovered by compiling
 the same source through BC, then through LINK /CODEVIEW and CVPACK, and
 matching each raw record's fields against its packed CV4 counterpart --
-see docs/handover.md-adjacent conversation, not a Microsoft spec, since
+see docs/history/handover.md-adjacent conversation, not a Microsoft spec, since
 this pre-4.0 layout isn't the one documented in TIS's "Microsoft Symbol and
 Type Information".
 
@@ -34,7 +34,7 @@ grammar (LF_POINTER, LF_ARGLIST, LF_STRUCTURE, ...) does NOT carry over to
 these bytes; BC's own pre-link tag bytes (0x8C array, 0x79 structure, 0x7F
 type-ref list, 0x76/0x7A byref-of-pointer, ...) are a completely different,
 private numbering, confirmed leaf by leaf against a dozen probe programs
-compiled on all three compilers (see docs/codeview.md's $$TYPES section) --
+compiled on all three compilers (see docs/machine/codeview.md's $$TYPES section) --
 not assumed to mirror the packed side just because $$SYMBOLS did. An array's
 record carries only its element type, never bounds: measured identical for
 a 1-D and a 2-D DIM of the same element type, so BASIC's array bounds live
@@ -46,7 +46,7 @@ STRING parameter at all -- VBDOS and PDS do -- it reuses the PRIMITIVES byte
 plus 0x20 as a parameter type_index directly (0x81->0xA1, 0x82->0xA2,
 0x97->0xB7, and now 0x88->0xA8, 0x89->0xA9 for SINGLE/DOUBLE, measured on
 suite/byref2.bas). QB45_BYREF_PRIMITIVES is that table; STRING(far) is still
-unmeasured -- forcing a far string needs `/Fs`, and `docs/inherited-plan.md`'s
+unmeasured -- forcing a far string needs `/Fs`, and `docs/history/inherited-plan.md`'s
 own switch matrix has PDS take it and QB 4.5 reject it, so there is no QB 4.5
 switch that reaches that code path at all.
 
@@ -124,7 +124,7 @@ from qbopt.frontend import extent
 from qbopt.objectfile import module
 
 
-# $$SYMBOLS record kinds -- see docs/codeview.md's own table for each one's data.
+# $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each one's data.
 class Kind(IntEnum):
     BLOCK = 0x00
     PROC = 0x01

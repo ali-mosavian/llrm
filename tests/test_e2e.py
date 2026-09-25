@@ -171,4 +171,4 @@ def test_a_pass_that_only_the_fallback_has_been_hiding(pass_name: str, broken: l
 
     Marked xfail because the passes are wrong, not the test.
     """
-    pytest.xfail(f"{pass_name} miscompiles {', '.join(broken)}; see docs/architecture.md")
+    pytest.xfail(f"{pass_name} miscompiles {', '.join(broken)}; see docs/architecture/readme.md")

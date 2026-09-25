@@ -3,7 +3,7 @@
 //! Vendored from the runtime pass (`~/work/badlogic/mgl, tools/cycles/timings.py`,
 //! taken 2026-08-29). Legacy approximate rankings, partly recalled from timing
 //! tables; not uniformly verified latencies or reciprocal throughputs. Audited
-//! form-specific bounds live in backend/timing.py; see docs/timing-audit.md.
+//! form-specific bounds live in backend/timing.py; see docs/measurement/timing-audit.md.
 //!
 //! Reciprocal throughput in cycles where the distinction matters. ALU and mov
 //! entries are solid, divide entries the roughest, K5 the least certain column.

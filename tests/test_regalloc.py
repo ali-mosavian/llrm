@@ -56,7 +56,7 @@ def test_a_value_never_interferes_with_another_version_of_itself(obj: Path) -> N
     and so what the whole allocator rests on.
 
     Asks body.origin rather than the value: a value no longer carries where
-    it lived, which is the point of docs/variables.md -- and this is one of
+    it lived, which is the point of docs/architecture/variables.md -- and this is one of
     the few questions genuinely about BC's registers, so it asks for them.
     """
     for body in raised(obj):

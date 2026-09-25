@@ -8,7 +8,7 @@ copy at the end of every predecessor it names.
 LLVM's `PHIElimination`, and it runs in the same place: after the SSA
 passes, before coalescing and allocation. `llvm/lib/CodeGen/PHIElimination.cpp`.
 
-**Why the allocator cannot wait for it.** `docs/hoist-blocker.md` records a
+**Why the allocator cannot wait for it.** `docs/optimizations/hoist-blocker.md` records a
 week spent on a body whose crossing value had one neighbour and kept the
 register the loop counter also had. The graph was right about the body it
 was given, and the body was wrong: two values met at a phi and nothing

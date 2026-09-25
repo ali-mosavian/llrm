@@ -96,7 +96,7 @@ def written_names(stmt: fuzzgen.Stmt) -> Iterator[str]:
 
 
 def test_wrap_matches_measured_boundaries() -> None:
-    # measured on VBDOS directly: see docs/handover.md's probe. 32767 + 1
+    # measured on VBDOS directly: see docs/history/handover.md's probe. 32767 + 1
     # wraps to -32768 and 300 * 300 wraps to 24464, with no /D in play.
     assert s16(32767 + 1) == -32768
     assert s16(300 * 300) == 24464

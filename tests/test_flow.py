@@ -108,7 +108,7 @@ def test_every_machine_phase_takes_lir_and_gives_lir_back() -> None:
 def test_phi_elimination_takes_the_body_out_of_ssa() -> None:
     """Nothing can be assigned a register while a phi still stands: two
     values meet there and the interference is invisible, which is the bug
-    docs/hoist-blocker.md spent a week on."""
+    docs/optimizations/hoist-blocker.md spent a week on."""
     _found, _blocks, bodies, contracts = _raised("nested-p-g2")
     for name, body in bodies:
         low = _lowered(_found, bodies, contracts, name, body)

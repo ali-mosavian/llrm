@@ -77,8 +77,8 @@ The runner must report that state, never treat it as a passing `PASS` result.
 
 ## Evidence and explicit unknowns
 
-Evidence is local and intentionally narrow: `docs/frontend/qb/dialects.md`
-records the underscore distinction and `/G3`; `docs/frontend/qb/parser-provenance.md`
+Evidence is local and intentionally narrow: `docs/frontends/qb/dialects.md`
+records the underscore distinction and `/G3`; `docs/frontends/qb/parser-provenance.md`
 records VBDOS as the full-program bring-up profile; `frontends/qb/src/intrinsics.rs`
 identifies currently catalogued pointer intrinsics; and the installed VBDOS
 tree supplies `INC/VBDOS.BI`, `INC/CUSTCALL.BAS`, and form examples.

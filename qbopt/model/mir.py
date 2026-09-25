@@ -164,7 +164,7 @@ class Value:
     raise/lower round trip checkable and then blocked everything after it:
     two computations cannot be compared by what they compute while their
     names contain where they landed, and a 32-bit root has no way to say
-    "the low half of that". docs/variables.md has the measurement.
+    "the low half of that". docs/architecture/variables.md has the measurement.
 
     Where BC kept it is captured by the raise in ``AllocationHints`` and is
     handed directly to lowering.  It is not reachable from a public MIR body,
@@ -213,7 +213,7 @@ class Synth(StrEnum):
     for what a value IS in terms of other values, which is a different
     question and the one a simplifier asks. They exist because a variable
     is 32 bits wide and BC's whole output is 32-bit work written as 16-bit
-    halves -- see docs/variables.md.
+    halves -- see docs/architecture/variables.md.
     """
 
     # dests[0] <- sources[0] with its low 16 bits replaced by the HIGH 16

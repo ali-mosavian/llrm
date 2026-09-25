@@ -21,7 +21,7 @@ fn bit_length(value: i64) -> i64 {
 ///
 /// Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
 /// max(ceil(log2(m)), 3) + 6. Restricted to positive imm8 so the value is
-/// identical in word and dword forms. See docs/timing-audit.md.
+/// identical in word and dword forms. See docs/measurement/timing-audit.md.
 pub fn immediate_multiply<'a>(
     cpu: impl Into<ProfileOrName<'a>> + Copy,
     number: i64,

@@ -101,8 +101,8 @@ rather than captured from a compiler. `base` is BC's own object, linked and run.
 
 ## Measuring
 
-`docs/measurement.md` says what each kind of number means and which are
-quotable; `docs/numbers.md` holds the results. `docs/metal.md` is the protocol
+`docs/measurement/readme.md` says what each kind of number means and which are
+quotable; `docs/measurement/numbers.md` holds the results. `docs/machine/metal.md` is the protocol
 for the one question a model cannot answer.
 
 ## Driving it by hand

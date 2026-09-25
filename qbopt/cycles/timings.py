@@ -7,7 +7,7 @@ was worked out.
 
 These are legacy approximate rankings, partly recalled from timing tables;
 they are not uniformly verified latencies or reciprocal throughputs. Audited
-form-specific bounds live in backend/timing.py; see docs/timing-audit.md.
+form-specific bounds live in backend/timing.py; see docs/measurement/timing-audit.md.
 DOSBox charges per instruction and does not validate these latency estimates.
 """
 

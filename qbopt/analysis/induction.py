@@ -10,7 +10,7 @@ rewrites; `IndVarSimplify` asks the same thing and does something else; and
 a measurement asks it and does nothing at all. An analysis that changes
 nothing can be run by all three.
 
-**Why it matters here more than anything else.** `docs/targets.md` names
+**Why it matters here more than anything else.** `docs/measurement/targets.md` names
 what closes each program's gap, and induction variables and their strength
 reduction come up in six of the thirteen -- more than any other item.
 `stride` is "a division that is really a counter", `matrix` wants a stride
