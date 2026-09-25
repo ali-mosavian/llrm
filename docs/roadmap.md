@@ -36,11 +36,11 @@ error handlers.
 
 **Produce what a modern optimising compiler would have produced.** Integers,
 longs, floats, array addressing, loops -- judged against a hand-derived
-optimal listing (`docs/targets.md`), not against BC.
+optimal listing (`docs/measurement/targets.md`), not against BC.
 
 Done means **every suite program within 1.5x**, scored by
 `tools/opportunity.py --targets`, with a verified reference for every case.
-See [current target coverage](target-coverage-current.md) for measured ratios,
+See [current target coverage](measurement/target-coverage-current.md) for measured ratios,
 missing/provisional references and remaining gaps. The historical baseline
 spread is not the current optimizer's result.
 
@@ -80,7 +80,7 @@ within one but is switched off.
 **Rewritten 2026-09-02, because this file was wrong about it.** It said the
 classic passes measure empty on BC's output and the wins are in absorption.
 Both came from measurements shaped so BC's own style could not answer them,
-and `docs/targets.md` now carries the hand-written optimal for sixteen
+and `docs/measurement/targets.md` now carries the hand-written optimal for sixteen
 programs against BC's own listing.
 
 BC is **three to seven times** the cost of hand-written code on integer
@@ -90,7 +90,7 @@ helper. Against what a modern optimiser emits rather than a careful 1990s
 one, it is twenty to fifty.
 
 None of that is what this project works on today. Absorption and widening
-are real and they are correct; neither appears in `docs/targets.md` at all.
+are real and they are correct; neither appears in `docs/measurement/targets.md` at all.
 
 The cause is one thing: **BC compiles a statement at a time, so no value
 outlives a statement.** Everything else -- the reloads, the recomputed
@@ -101,7 +101,7 @@ registers -- follows from that.
 
 `transform.hoisted()` moves a loop-invariant load into the preheader and
 asks for a register the loop does not use. The move works -- four separate
-things had to be right and each was wrong first, and `docs/targets.md`'s
+things had to be right and each was wrong first, and `docs/measurement/targets.md`'s
 programs dropped from 4.7x to 4.4x when it fired.
 
 **It fires on nothing today, deliberately.** The register has to be granted
@@ -158,7 +158,7 @@ Then, in dependency order: store-to-load forwarding and copy propagation
 ### Every pass this needs, and what measures it
 
 Scored by `tools/opportunity.py --targets` against the hand-written optimal
-in `docs/targets.md`. A pass with no program that exercises it does not go
+in `docs/measurement/targets.md`. A pass with no program that exercises it does not go
 on this list.
 
 **Infrastructure -- nothing below works without these**
@@ -232,7 +232,7 @@ Measured 2026-09-01. Re-measure before trusting it.
 MIR does, end to end:
 
 - [x] raise to SSA and lower back byte-identical
-- [x] variables that are not registers — `docs/variables.md` stage 1
+- [x] variables that are not registers — `docs/architecture/variables.md` stage 1
 - [x] half and byte access — stage 2
 - [x] the stack as an address space — stage 3
 - [x] prove an identity and delete what computes nothing — stage 4
@@ -379,7 +379,7 @@ with the machine build as the oracle.
 An emitted instruction goes where it is needed, not where the old one stood.
 **This is now the critical path**: LICM, loop rotation and induction
 variables all wait on moving code between blocks, and that is most of what
-`docs/targets.md` measures as missing.
+`docs/measurement/targets.md` measures as missing.
 
 - [x] a definition moves within its block, bounded by its own uses —
       `transform.placed()`, sinking to just before the first use. Built and
@@ -913,5 +913,5 @@ had one.
 
 ## Housekeeping
 
-- [x] `docs/architecture.md` — brought up to date, including that the MIR
+- [x] `docs/architecture/readme.md` — brought up to date, including that the MIR
       tower emits now and that `src/rewrite.rs` does not call it

@@ -9,7 +9,7 @@ inside loops and 8 at loop depth 3.
 
 The whole idiom is identity, and until now nothing could say so. What it
 took was three things MIR did not have, each added in its own stage of
-docs/variables.md: a value that is not named after a register, halves that
+docs/architecture/variables.md: a value that is not named after a register, halves that
 are sayable, and a stack whose slots have addresses.
 
     0x0177 half.tolow  v151 <- (v150, v142)   low16(v151) = high16(v150)

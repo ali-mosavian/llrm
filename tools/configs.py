@@ -4,7 +4,7 @@ The configurations BC is checked under.
 Only the codegen pair (/G2 vs /G3) and event polling (/V /W) change what the
 pass sees; /O, /Ot and /FPi are here because a switch that does not change the
 long shapes today is exactly the kind of thing that changes them tomorrow. The
-tags are the predecessor's, so docs/inherited-plan.md still names the same
+tags are the predecessor's, so docs/history/inherited-plan.md still names the same
 things.
 
 Which switches each compiler accepts was established by feeding every one of

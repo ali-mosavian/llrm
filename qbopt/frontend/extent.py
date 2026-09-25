@@ -4,7 +4,7 @@ Whose code a byte is: the module's own main body, or one of its SUB/FUNCTIONs.
 blocks.py answers "is this byte code, and where does control go"; this answers
 "which body owns it" -- built entirely on that machinery (`code_map()`,
 `partition()`, `Block`), not on CodeView. CodeView is absent from all 110
-objects in this corpus (see docs/codeview.md) and is not needed here: every
+objects in this corpus (see docs/machine/codeview.md) and is not needed here: every
 code-segment PUBDEF is a SUB/FUNCTION's own entry point, measured across
 every procedure-bearing fixture, and `blocks.walk()` already seeds
 reachability off `module.publics` for exactly this reason. That signal

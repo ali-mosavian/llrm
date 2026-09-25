@@ -2,7 +2,7 @@
 
 Highlighting, outline, brackets and indentation come from the grammar in
 `editors/tree-sitter-nib`. Diagnostics, symbols, definitions, hover and
-completion come from `nib-lsp` (see `docs/lsp.md`).
+completion come from `nib-lsp` (see `docs/frontends/nib/lsp.md`).
 
 The extension downloads the server from the GitHub release tagged
 `nib-lsp-v<version>`, where the version is the extension's. Pushing that tag

@@ -163,7 +163,7 @@ def found(body: MirBody) -> tuple[Pair, ...]:
     """Every adjacent load or store pair in `body`.
 
     Adjacent only, for now. lift.py allows an unrelated instruction between
-    the halves -- docs/residue.md's E, address arithmetic for some other
+    the halves -- docs/optimizations/residue.md's E, address arithmetic for some other
     value -- and bridging it is a separate question from recognising the
     pair at all.
     """

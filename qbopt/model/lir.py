@@ -1,6 +1,6 @@
 """What each operation requires of a register, so nothing else has to guess.
 
-MIR names values, not registers -- `docs/variables.md` is the plan for
+MIR names values, not registers -- `docs/architecture/variables.md` is the plan for
 getting the last of the register names out of it -- and a pass that moves
 code has no business choosing where a value lives. But the machine does
 have requirements, and until they were written down they were scattered:

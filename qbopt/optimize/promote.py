@@ -2,7 +2,7 @@
 
 Inspired by LLVM's `mem2reg`. A variable BC keeps in memory and reloads for every
 statement -- because it compiles a statement at a time, which is the fact
-under every number in `docs/targets.md` -- becomes an SSA value, and the
+under every number in `docs/measurement/targets.md` -- becomes an SSA value, and the
 register allocator can keep that value across statements. Unlike LLVM's
 local allocas, these cells can be visible outside this body: every store
 stays in place. Removing stores needs a separate proof of observability.

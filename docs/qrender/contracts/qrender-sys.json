@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "artifacts": {
+    "common.obj": "0f78b99d70fd1454e1799d8db4731234a7cec0d89b0db35b91d4b6379d25f39e",
+    "kbd.obj": "677360877e2f813fd7f5a37ef40766ef37dc48a735a6d8f9d420a7b5b2fffcdc",
+    "main.obj": "4dcc932e696088b0631e877bf77e2f9b9f5a88cea964489b808bfc2ba06ef77f",
+    "mem.obj": "c18eeeb883dcb9ef480b166d5048f27fe4244189e19f717d65187e4205ccd7f8",
+    "mouse.obj": "596ad6d94989933eaccd2f9e14799bbc76b2a75d01e9f5f58e9aa28af9a77806",
+    "tmr.obj": "c1f719ac6804a2167681895734d8a3a8d2fc3501e63e20a0fdc58b6f5bb2abc0",
+    "vga.obj": "201a348a8f4cdc9f8ac904582ed22cd52182fc7985fe74d1d68c0e331dd16d3c"
+  },
+  "contracts": {
+    "COM_PARSE_CONFIG": {
+      "defined_in": "common.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 4
+    },
+    "COM_TOKENIZE": {
+      "defined_in": "common.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 8
+    },
+    "HOST_SHUTDOWN": {
+      "defined_in": "main.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLKBDSHUTDOWN": {
+      "defined_in": "kbd.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLMEMAVAIL": {
+      "defined_in": "mem.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 2
+    },
+    "QGLMEMSHUTDOWN": {
+      "defined_in": "mem.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLMOUSESHUTDOWN": {
+      "defined_in": "mouse.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLTMRCYCLES": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLTMRINIT": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 2
+    },
+    "QGLTMRSHUTDOWN": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLTMRTICKS": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    },
+    "QGLVGASHUTDOWN": {
+      "defined_in": "vga.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Pinned qrender interface audit in docs/qrender/readme.md: entry establishes arithmetic flags before consumption; register inputs bounded to GP arguments. Other effects remain unknown.",
+      "cleanup": 0
+    }
+  }
+}

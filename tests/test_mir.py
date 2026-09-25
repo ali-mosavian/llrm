@@ -458,7 +458,7 @@ def test_a_reference_nothing_can_name_is_never_known_to_be_anything() -> None:
 
 
 def test_a_value_carries_no_register() -> None:
-    """The invariant docs/variables.md exists for.
+    """The invariant docs/architecture/variables.md exists for.
 
     A value used to be named after the register BC kept it in, which made
     two computations incomparable by what they compute and left no way to
@@ -677,7 +677,7 @@ def test_the_raise_says_which_object_a_push_reaches() -> None:
 
 
 def test_induction_finds_a_counter_and_what_it_derives() -> None:
-    """`docs/targets.md` names what closes each program's gap, and
+    """`docs/measurement/targets.md` names what closes each program's gap, and
     induction variables come up in six of the thirteen -- more than
     anything else. matrix recomputes a row address from the counter every
     iteration with `imul word [w]`.

@@ -1,5 +1,5 @@
 /**
- * @file Tree-sitter grammar for Nib (docs/language-spec.md).
+ * @file Tree-sitter grammar for Nib (docs/frontends/nib/language-spec.md).
  * @license MIT
  */
 

@@ -60,7 +60,7 @@ def test_a_real_round_trip_is_found_and_proved() -> None:
     """bench/nbody.bas, after absorption: the worked example in the module.
 
     v152 = concat(high16(v150), low16(v150)) = v150, which needs all three
-    of docs/variables.md's stages -- an abstract variable, a sayable half,
+    of docs/architecture/variables.md's stages -- an abstract variable, a sayable half,
     and a stack slot with an address.
     """
     from qbopt.objectfile import omf

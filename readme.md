@@ -4,12 +4,12 @@
 code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86
 backend, and writes linkable OMF `.OBJ` files.
 
-![llrm pipeline: four frontends meet at MIR, one target-neutral optimizer, one x86 real-mode backend](docs/pipeline.svg)
+![llrm pipeline: four frontends meet at MIR, one target-neutral optimizer, one x86 real-mode backend](docs/architecture/pipeline.svg)
 
 MIR passes are machine-independent; only lowering, allocation and peephole see
-registers or instructions. See [the MIR boundary](docs/split.md). The goal is
+registers or instructions. See [the MIR boundary](docs/architecture/split.md). The goal is
 output within 1.5× a hand-derived modern-compiler listing for every suite
-program; [targets](docs/targets.md) has the evidence and current gaps.
+program; [targets](docs/measurement/targets.md) has the evidence and current gaps.
 
 ## Frontends
 
@@ -17,7 +17,7 @@ program; [targets](docs/targets.md) has the evidence and current gaps.
 | --- | --- |
 | `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
 | `llrm-c` | C, through a patched Open Watcom front end (`owshim/`) |
-| `llrm-nib` | llrm's own language; see [the language](docs/nib-language.md) |
+| `llrm-nib` | llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
 
 `llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
@@ -54,7 +54,7 @@ Unsupported records, unresolved externals and unencodable code are errors;
 `--allow-unchanged` keeps a refused object as it was. `--basic-semantics` keeps
 BASIC's numeric runtime errors and conversions, and `--bounds-checks` keeps
 array checks. Audited external calls come from `--contracts PROFILE.json`; see
-[the profile format](docs/contracts/readme.md).
+[the profile format](docs/qrender/contracts/readme.md).
 
 ## Optimizations
 
@@ -68,7 +68,7 @@ real mode on the 386 and later, allocates registers with coalescing, live-range
 splitting and spill placement, then runs machine CSE, copy propagation,
 peephole, scheduling and jump layout. The BC frontend adds recognition of BC's
 LONG register pairs, runtime arithmetic calls and array descriptors; see
-[HARR](docs/harr.md) for a before and after.
+[HARR](docs/optimizations/harr.md) for a before and after.
 
 ## Example
 
@@ -130,4 +130,4 @@ needs a regression that fails before the fix. Testing details are in
 
 `qbopt/` is the Python compiler the Rust crate was ported from. It is legacy
 and kept only as the reference `tools/port_diff.py` diffs stage dumps against;
-[the port map](docs/port-map.md) tracks every module.
+[the port map](docs/history/port-map.md) tracks every module.

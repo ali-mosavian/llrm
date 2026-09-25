@@ -4,7 +4,7 @@ Total decode: every instruction in a Body becomes a Node, in order.
 lift.py's own value tracker treats anything it does not recognise as a wall
 -- "anything not recognised invalidates both pairs, because an instruction
 this does not understand may write either of them" (lift.py's own module
-docstring). That policy is correct as a default and, per docs/residue.md's
+docstring). That policy is correct as a default and, per docs/optimizations/residue.md's
 patterns G and H, wrong specifically where the unrecognised instruction is
 one this pass itself just emitted (calls.py's own restore idiom) and whose
 real effect is knowable. This module is what makes that fixable without

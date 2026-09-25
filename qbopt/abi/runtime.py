@@ -263,7 +263,7 @@ for _family in ("pds71", "vbdos"):
                 "by all six allocatable GP registers; segments, BP/SP and direction "
                 "are runtime environment. No transitive preservation, cleanup, "
                 "memory or control claim: error paths and indirect dependencies "
-                "remain worst-case. See docs/event-entry-blocker.md."
+                "remain worst-case. See docs/optimizations/event-entry-blocker.md."
             ),
         )
 
@@ -1391,7 +1391,7 @@ for _family, _library, _offset in (
         evidence=(
             f"{_library} evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name "
             f"segment 1 offset {_offset}; exact entry aliases in this runtime family. "
-            "Library hashes and scope: docs/event-entry-blocker.md. " + CONTRACTS["B$EVCK"].evidence
+            "Library hashes and scope: docs/optimizations/event-entry-blocker.md. " + CONTRACTS["B$EVCK"].evidence
         ),
     )
 

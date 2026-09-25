@@ -14,7 +14,7 @@ use crate::objectfile::omf::{self, Record};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
 
-/// $$SYMBOLS record kinds -- see docs/codeview.md's own table for each one's data.
+/// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each one's data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Block = 0x00,

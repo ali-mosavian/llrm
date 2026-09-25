@@ -16,7 +16,7 @@ def immediate_multiply(cpu: str | targets.Profile, number: int) -> int:
 
     Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
     max(ceil(log2(m)), 3) + 6. Restrict to positive imm8 so the value
-    is identical in both word and dword forms. See docs/timing-audit.md.
+    is identical in both word and dword forms. See docs/measurement/timing-audit.md.
     """
     if targets.profile(cpu).name == "386" and 0 <= number <= 127:
         return max((number - 1).bit_length() if number else 0, 3) + 6
