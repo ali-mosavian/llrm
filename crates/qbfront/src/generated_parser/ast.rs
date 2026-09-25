@@ -26,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(lex(source, dialect).map_err(ParseError::from)?);
+    let (tokens, private_at) = without_private(augmented(lex(source, dialect).map_err(ParseError::from)?));
     let mut state = ParseState::new(tokens);
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -196,6 +196,56 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
         },
         actions: state.sink.actions,
     })
+}
+
+/// The prefix of the function an augmented assignment calls: `x += e`
+/// becomes `x = $AUG+(e)`. No source name can spell it.
+pub const AUGMENTED: &str = "$AUG";
+
+/// QuickrBASIC's augmented assignment, `target op= value`, rewritten into
+/// an ordinary assignment the grammar parses anywhere a statement goes. An
+/// operator written directly against `=` cannot occur in QuickBASIC, so the
+/// rewrite changes no valid program.
+fn augmented(tokens: Vec<Token>) -> Vec<Token> {
+    let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
+    let operators = ["tkAdd", "tkMinus", "tkMult", "tkDiv", "tkIdiv", "tkPwr", "tkMOD", "tkAND", "tkOR", "tkXOR"];
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let operator = operators.iter().find(|name| is(token, name));
+        let equals = tokens.get(at + 1).filter(|next| {
+            is(next, "tkEQ") && next.span.line == token.span.line && next.span.start == token.span.end
+        });
+        let (Some(operator), Some(equals)) = (operator, equals) else {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        };
+        // The value runs to the end of the statement: `:`, a new line, or
+        // the ELSE of a one-line IF, outside any parentheses.
+        let mut end = at + 2;
+        let mut depth = 0usize;
+        while let Some(next) = tokens.get(end) {
+            if depth == 0 && (is(next, "tkColon") || is(next, "tkNewLine") || is(next, "tkELSE")) {
+                break;
+            }
+            if is(next, "tkLParen") {
+                depth += 1;
+            } else if is(next, "tkRParen") {
+                depth = depth.saturating_sub(1);
+            }
+            end += 1;
+        }
+        let at_token = |kind: TokenKind| Token { kind, span: token.span };
+        out.push(equals.clone());
+        out.push(at_token(TokenKind::Identifier(format!("{AUGMENTED}{}", operator))));
+        out.push(at_token(TokenKind::Reserved(named("tkLParen"))));
+        out.extend(tokens[at + 2..end].iter().cloned());
+        out.push(at_token(TokenKind::Reserved(named("tkRParen"))));
+        at = end;
+    }
+    out
 }
 
 /// `PRIVATE SUB` and `PRIVATE FUNCTION`: the grammar parses an ordinary

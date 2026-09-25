@@ -193,3 +193,8 @@ itself is BASIC, in `crates/qbfront/src/semantic/prelude.bas`, which the
 compiler adds to programs that use f-strings. Its procedures reserve names
 beginning `QUICKR_`. Numbers are formatted from their exact decimal
 expansion, so `f`, `e`, `g` and `%` match Python digit for digit.
+
+### Augmented assignment
+
+`x op= value` means `x = x op (value)` for `+ - * / \ ^ MOD AND OR XOR`.
+The target's subscripts are evaluated once, so `a(f()) += 1` calls `f` once.

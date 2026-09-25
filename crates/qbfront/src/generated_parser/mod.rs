@@ -10,6 +10,7 @@ pub mod tables;
 
 pub use ast::parse;
 pub use ast::FORMAT_FIELD;
+pub use ast::AUGMENTED;
 pub use ast::parse_vertical_slice;
 pub use ast::ParseOutput;
 pub use engine::ParseResult;

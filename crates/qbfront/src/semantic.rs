@@ -2378,6 +2378,21 @@ impl Compiler {
                         self.tag_last(Tag::Release { descriptor });
                     }
                 }
+                Statement::Assign { target, value, span } if augmented_op(value).is_some() => {
+                    let (op, operand) = augmented_op(value).expect("guard matched");
+                    if !self.dialect.augmented_assignment() {
+                        return self.fail("augmented assignment needs the quickr profile");
+                    }
+                    // `x op= e` is `x = x op (e)`, with x's subscripts evaluated once.
+                    let target = self.stable_target(target)?;
+                    let value = Expr::Binary {
+                        op,
+                        left: Box::new(target.clone()),
+                        right: Box::new(Expr::Unary { op: Unary::Grouped, operand: Box::new(operand.clone()), span: *span }),
+                        span: *span,
+                    };
+                    self.statement_list(&[Statement::Assign { target, value, span: *span }])?;
+                }
                 Statement::Assign { target, value, .. } => {
                     if let Expr::Apply {
                         name, arguments, ..
@@ -5483,6 +5498,37 @@ impl Compiler {
             ),
         };
         self.string_descriptor(&call)
+    }
+
+    /// `target` with each subscript that could change between two readings
+    /// replaced by a held copy of its value.
+    fn stable_target(&mut self, target: &Expr) -> Result<Expr, SemanticError> {
+        Ok(match target {
+            Expr::Apply { name, arguments, span } => Expr::Apply {
+                name: name.clone(),
+                arguments: arguments.iter().map(|one| self.stable_subscript(one)).collect::<Result<_, _>>()?,
+                span: *span,
+            },
+            Expr::Index { base, indices, span } => Expr::Index {
+                base: Box::new(self.stable_target(base)?),
+                indices: indices.iter().map(|one| self.stable_subscript(one)).collect::<Result<_, _>>()?,
+                span: *span,
+            },
+            Expr::Field { base, name, span } => Expr::Field {
+                base: Box::new(self.stable_target(base)?),
+                name: name.clone(),
+                span: *span,
+            },
+            other => other.clone(),
+        })
+    }
+
+    fn stable_subscript(&mut self, index: &Expr) -> Result<Expr, SemanticError> {
+        if matches!(index, Expr::Literal(..)) {
+            return Ok(index.clone());
+        }
+        let (operand, type_id) = self.expression(index)?;
+        self.hold_value(operand, type_id)
     }
 
     /// `operand` stored in a fresh variable, as a name only the compiler
@@ -8606,6 +8652,30 @@ fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> 
     } else {
         common_integer(left, right)
     })
+}
+
+/// The operator and operand of an augmented assignment's rewritten value,
+/// `$AUG<token>(operand)`.
+fn augmented_op(value: &Expr) -> Option<(Binary, &Expr)> {
+    let Expr::Apply { name, arguments, .. } = value else { return None };
+    let token = name.strip_prefix(crate::generated_parser::AUGMENTED)?;
+    let op = match token {
+        "tkAdd" => Binary::Add,
+        "tkMinus" => Binary::Subtract,
+        "tkMult" => Binary::Multiply,
+        "tkDiv" => Binary::Divide,
+        "tkIdiv" => Binary::IntegerDivide,
+        "tkPwr" => Binary::Power,
+        "tkMOD" => Binary::Modulo,
+        "tkAND" => Binary::And,
+        "tkOR" => Binary::Or,
+        "tkXOR" => Binary::Xor,
+        _ => return None,
+    };
+    match arguments.as_slice() {
+        [operand] => Some((op, operand)),
+        _ => None,
+    }
 }
 
 fn unsigned_name(op: Binary) -> &'static str {

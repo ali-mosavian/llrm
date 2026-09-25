@@ -575,3 +575,44 @@ fn the_prelude_is_private_to_each_module() {
     let listing = module_listing("DIM d AS DOUBLE\nd = 1\nPRINT f\"{d:.2f}\"\n", "quickr");
     assert!(!listing.contains("public QUICKR"), "{listing}");
 }
+
+#[test]
+fn augmented_assignment_applies_each_operator() {
+    let source = "DIM n AS LONG, d AS DOUBLE, f AS INTEGER\n\
+        n = 7: n += 5: n -= 2: n *= 3: n \\= 4: n MOD= 5: n ^= 2: PRINT n\n\
+        d = 1: d /= 4: PRINT d\n\
+        f = 12: f AND= 10: f OR= 1: f XOR= 3: PRINT f\n";
+    // (7+5-2)*3 = 30; 30\4 = 7; 7 MOD 5 = 2; 2^2 = 4. 12 AND 10 = 8, OR 1 = 9, XOR 3 = 10.
+    assert_eq!(printed(source), " 4 \n .25 \n 10 \n");
+}
+
+#[test]
+fn augmented_assignment_appends_to_strings_and_fields() {
+    let source = "TYPE P\nx AS INTEGER\nEND TYPE\nDIM s AS STRING, p AS P\n\
+        s = \"ab\": s += \"cd\": p.x = 1: p.x += 41\nPRINT s; p.x\n";
+    assert_eq!(printed(source), "abcd 42 \n");
+}
+
+#[test]
+fn augmented_assignment_evaluates_its_target_once() {
+    // As `a(tick) = a(tick) + 5` the index function would run twice.
+    let source = "DIM SHARED hits AS INTEGER\nDIM a(3) AS INTEGER\nhits = 0\n\
+        a(tick%) += 5\nPRINT hits; a(1)\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 1  5 \n");
+}
+
+#[test]
+fn augmented_assignment_works_in_a_one_line_if() {
+    let source = "DIM t AS INTEGER\nt = 10\nIF t > 5 THEN t += 1 ELSE t -= 1\nIF t < 5 THEN t += 100 ELSE t -= 3\nPRINT t\n";
+    assert_eq!(printed(source), " 8 \n");
+}
+
+#[test]
+fn microsoft_profiles_reject_augmented_assignment() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"x = 1\nx += 1\n");
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no +=");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}
