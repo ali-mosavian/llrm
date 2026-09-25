@@ -14,6 +14,7 @@ pub mod error;
 pub mod hir;
 pub mod lexer;
 pub mod library;
+pub mod lsp;
 pub mod main;
 pub mod modernstages;
 pub mod modules;
@@ -72,20 +73,24 @@ fn module_name(path: &std::path::Path) -> &str {
 /// The module at `path`, linked with every module it imports.
 /// `error` with the file of the module its span is in.
 fn located(path: &std::path::Path, sources: &[String], error: Diagnostic) -> (std::path::PathBuf, Diagnostic) {
-    let name = sources.get(usize::from(error.span.module)).map_or("", String::as_str);
-    (module_path(path, name), error)
+    let (name, error) = in_module(sources, error);
+    (module_path(path, &name), error)
+}
+
+/// `error` with the name of the module its span is in.
+fn in_module(sources: &[String], error: Diagnostic) -> modules::Located {
+    (sources.get(usize::from(error.span.module)).cloned().unwrap_or_default(), error)
 }
 
 /// Where the module `name`, which the program at `path` imports, is read
 /// from: `<std.io>` for one the compiler supplies.
-fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
+pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     if name.is_empty() {
         path.to_path_buf()
     } else if standard::supplied(name) {
         std::path::PathBuf::from(format!("<{name}>"))
     } else {
-        let root = path.parent().unwrap_or(std::path::Path::new("."));
-        root.join(format!("{}.mod", name.replace('.', "/")))
+        modules::file(path.parent().unwrap_or(std::path::Path::new(".")), name)
     }
 }
 
@@ -103,7 +108,40 @@ fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathB
 }
 
 /// Type-checks a parsed module and lowers it to HIR.
-pub fn compile_module(mut module: syntax::Module, module_name: &str) -> Result<String, Diagnostic> {
+pub fn compile_module(module: syntax::Module, module_name: &str) -> Result<String, Diagnostic> {
+    semantic::compile(&prepared(module)?, module_name)
+}
+
+/// The program whose main module is `source`, `read` giving each module it
+/// imports, type-checked as `compile_file` would compile it.
+pub struct Checked {
+    /// Each module as written, when all of them parse.
+    pub loaded: Option<modules::Loaded>,
+    /// What the checker learned of the names the program spells.
+    pub facts: Vec<semantic::Fact>,
+    /// The first error, and the module it is in.
+    pub error: Option<modules::Located>,
+}
+
+pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>) -> Checked {
+    let loaded = match modules::read_all(source, read) {
+        Ok(loaded) => loaded,
+        Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
+    };
+    let sources = loaded.sources.clone();
+    let prepared = loaded.clone().linked().and_then(|module| prepared(module).map_err(|error| in_module(&sources, error)));
+    let (facts, error) = match prepared {
+        Ok(module) => {
+            let (facts, checked) = semantic::check(&module);
+            (facts, checked.err().map(|error| in_module(&sources, error)))
+        }
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    Checked { loaded: Some(loaded), facts, error }
+}
+
+/// A linked module with the prelude and library it is checked with, desugared.
+fn prepared(mut module: syntax::Module) -> Result<syntax::Module, Diagnostic> {
     let prelude = parse(lex(include_str!("prelude.mod"))?)?;
     module.enums.extend(prelude.enums);
     // A module's own function or protocol of a prelude name is the one it names.
@@ -115,5 +153,5 @@ pub fn compile_module(mut module: syntax::Module, module_name: &str) -> Result<S
     module.library.extend(library::derived(&module)?);
     library::entry(&mut module)?;
     desugar::desugar(&mut module)?;
-    semantic::compile(&module, module_name)
+    Ok(module)
 }

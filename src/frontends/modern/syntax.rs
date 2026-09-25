@@ -619,14 +619,19 @@ pub enum Pattern {
 impl Pattern {
     /// The names the pattern binds.
     pub fn names(&self) -> Vec<&str> {
+        self.bindings().into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// The names the pattern binds, each with its span.
+    pub fn bindings(&self) -> Vec<(&str, Span)> {
         match self {
-            Self::Binding(name, _) => vec![name],
+            Self::Binding(name, span) => vec![(name, *span)],
             Self::Wildcard(_) | Self::Literal(_) => Vec::new(),
             Self::Variant { fields, .. } | Self::Struct { fields, .. } | Self::Tuple(fields, _) => {
-                fields.iter().flat_map(Self::names).collect()
+                fields.iter().flat_map(Self::bindings).collect()
             }
             Self::Sequence { before, rest, after, .. } => {
-                before.iter().chain(rest.as_deref()).chain(after).flat_map(Self::names).collect()
+                before.iter().chain(rest.as_deref()).chain(after).flat_map(Self::bindings).collect()
             }
         }
     }

@@ -579,7 +579,7 @@ fn unrelocated_zero_displacements(path: &str) -> Vec<usize> {
 #[test]
 fn test_matrix_reduced_stride_keeps_its_multiplier_address() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        assert_eq!(unrelocated_zero_displacements(&format!("fixtures/omf/matrix-{tag}.obj").to_lowercase()), [], "{tag}");
+        assert_eq!(unrelocated_zero_displacements(&format!("fixtures/omf/matrix-{tag}.obj").to_lowercase()), [0_usize; 0], "{tag}");
     }
 }
 

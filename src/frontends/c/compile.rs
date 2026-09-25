@@ -814,7 +814,7 @@ struct Args {
 /// The code-generator stream wccq records for one C file.
 pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let wccq = Path::new(env!("LLRM_WCCQ"));
+    let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
     // Borland's medium model: far code, near data, cdecl, byte-packed structs,
     // 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
     // inline assembly: qcport's own uses 387 instructions.

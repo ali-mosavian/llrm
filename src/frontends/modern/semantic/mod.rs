@@ -37,6 +37,8 @@ use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
 use super::syntax::{FStringPart, Format};
 
+pub use facts::{Fact, Known};
+
 mod array_places;
 mod basic;
 mod statements;
@@ -64,6 +66,7 @@ mod foreign;
 mod pointers;
 mod generators;
 mod escaping;
+mod facts;
 mod statics;
 mod generics;
 mod borrows;
@@ -1266,6 +1269,18 @@ fn parameter_kind(
 }
 
 pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic> {
+    Ok(program(module, module_name, None)?.json())
+}
+
+/// Type-checks `module` as `compile` does: what the checker learned of the
+/// names it spells, and the first error.
+pub fn check(module: &Module) -> (Vec<Fact>, Result<(), Diagnostic>) {
+    let facts = RefCell::new(Vec::new());
+    let checked = program(module, "", Some(&facts)).map(drop);
+    (facts.into_inner(), checked)
+}
+
+fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>>) -> Result<hir::Program, Diagnostic> {
     let mut types = TypeRegistry::new();
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
@@ -1365,6 +1380,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 &module.private_methods,
                 &mut literals,
                 &mut types,
+                facts,
             )?
             .compile(function)?,
         );
@@ -1395,6 +1411,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
                 &module.private_methods,
                 &mut literals,
                 &mut types,
+                facts,
             )?
             .compile(&function)?,
         );
@@ -1407,7 +1424,7 @@ pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic>
         callables,
         data: literals.data,
     };
-    Ok(program.json())
+    Ok(program)
 }
 
 fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
@@ -1506,6 +1523,8 @@ struct FunctionCompiler<'a> {
     next_frame_offset: i32,
     literals: &'a mut LiteralPool,
     types: &'a mut TypeRegistry,
+    /// Where to keep what the checker learns, when a caller asked.
+    facts: Option<&'a RefCell<Vec<Fact>>>,
     constant_places: BTreeMap<u32, u32>,
     rules: &'static Rules,
     /// Places whose bindings own and drop what they hold.
@@ -1540,6 +1559,7 @@ impl<'a> FunctionCompiler<'a> {
         private_methods: &'a BTreeMap<String, u16>,
         literals: &'a mut LiteralPool,
         types: &'a mut TypeRegistry,
+        facts: Option<&'a RefCell<Vec<Fact>>>,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -1570,6 +1590,7 @@ impl<'a> FunctionCompiler<'a> {
             next_frame_offset: 0,
             literals,
             types,
+            facts,
             constant_places: BTreeMap::new(),
             rules: &conversions::I386_REAL_MODE,
             owned_places: BTreeSet::new(),

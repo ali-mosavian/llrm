@@ -12,9 +12,16 @@ indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
 rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
+
+[features]
+default = ["toolchain"]
+# Open Watcom's wccq, jwasm, jwlink and DOSBox-X, which build.rs bootstraps.
+toolchain = []
 
 [dev-dependencies]
 regex = "1"
@@ -38,6 +45,10 @@ path = "src/bin/llrm-modern.rs"
 [[bin]]
 name = "llrm-run"
 path = "src/bin/llrm-run.rs"
+
+[[bin]]
+name = "nib-lsp"
+path = "src/bin/nib-lsp.rs"
 
 [[bin]]
 name = "modernfront"

@@ -15,24 +15,59 @@ use super::syntax::{Expr, Function, Import, Module, Pattern, Span, Statement, Ty
 /// A diagnostic and the module it is in; the main module is `""`.
 pub type Located = (String, Diagnostic);
 
+/// The extension of a module's file.
+pub const EXTENSION: &str = "mod";
+
+/// The file under the source root `root` that module `name` is read from:
+/// `a.b` from `a/b.mod`.
+pub fn file(root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    root.join(format!("{}.{EXTENSION}", name.replace('.', "/")))
+}
+
 /// The main module `source` and every module it imports, linked as one.
 /// `read` gives the source of a module by its name.
 pub fn load(
     source: &str,
     read: &mut dyn FnMut(&str) -> Result<String, String>,
 ) -> Result<Module, Located> {
-    let mut loaded = BTreeMap::new();
+    read_all(source, read)?.linked()
+}
+
+/// The main module and every module it imports, each parsed as written.
+#[derive(Clone, Debug)]
+pub struct Loaded {
+    /// Each module by name; the main module is `""`.
+    pub modules: BTreeMap<String, Module>,
+    /// The modules' names, which spans name by index.
+    pub sources: Vec<String>,
+    /// Each module once, imported before importer.
+    order: Vec<String>,
+}
+
+/// `load` before linking.
+pub fn read_all(
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Result<String, String>,
+) -> Result<Loaded, Located> {
+    let mut modules = BTreeMap::new();
     let mut sources = Sources::default();
     let main = lexed("", source, &mut sources)?;
     let mut order = Vec::new();
-    visit("", main, &mut Vec::new(), &mut loaded, &mut order, &mut sources, read)?;
-    let mut linked = link(loaded, &order)?;
-    linked.sources = sources.names;
-    linked.fixed_types.sort_by_key(|one| match one.type_name {
-        TypeName::Fixed { declaration, .. } => declaration,
-        _ => unreachable!("a fixed-point type"),
-    });
-    Ok(linked)
+    visit("", main, &mut Vec::new(), &mut modules, &mut order, &mut sources, read)?;
+    Ok(Loaded { modules, sources: sources.names, order })
+}
+
+impl Loaded {
+    /// The modules linked as one.
+    pub fn linked(self) -> Result<Module, Located> {
+        let mut linked = link(self.modules, &self.order)?;
+        linked.sources = self.sources;
+        linked.fixed_types.sort_by_key(|one| match one.type_name {
+            TypeName::Fixed { declaration, .. } => declaration,
+            _ => unreachable!("a fixed-point type"),
+        });
+        Ok(linked)
+    }
 }
 
 /// `name`'s tokens, each span marked with its place in `sources`.

@@ -1,12 +1,16 @@
 //! Builds wccq, the Open Watcom front end llrm-c records C through, into
 //! OUT_DIR. The first build also clones and bootstraps Open Watcom (see
 //! owshim/build.sh). owshim/bin/wccq links to it for the Python reference.
-//! Also builds jwasm and jwlink (tools/jwbuild.sh).
+//! Also builds jwasm and jwlink (tools/jwbuild.sh). All of it only with the
+//! `toolchain` feature.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_TOOLCHAIN").is_none() {
+        return;
+    }
     for input in ["owshim/build.sh", "owshim/cgshim.c", "owshim/cc-objects.txt", "owshim/patches"] {
         println!("cargo:rerun-if-changed={input}");
     }

@@ -510,6 +510,7 @@ impl<'a> FunctionCompiler<'a> {
             .types
             .structure(view.struct_id)
             .expect("resolved struct type");
+        self.learn_member(span, field_name, &layout.name);
         let field = layout.fields.get(field_name).copied().ok_or_else(|| {
             Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name))
         })?;
