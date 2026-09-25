@@ -114,3 +114,11 @@ fn a_dim_inside_a_loop_declares_its_type() {
     let source = "FOR i% = 1 TO 1\nDIM y AS INTEGER\ny = 2.6\nPRINT y\nNEXT\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), " 3 \n");
 }
+
+#[test]
+fn bounds_of_a_static_array_run_in_the_model() {
+    // The segment word of the descriptor's far pointer read as 0, so the
+    // model took the "not allocated" path into an unmodelled B$LBND.
+    let source = "DIM a(1 TO 3) AS INTEGER\nPRINT LBOUND(a); UBOUND(a)\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 1  3 \n");
+}

@@ -1071,6 +1071,9 @@ fn span(where_: &Location<'_>, length: usize) -> Outcome<std::ops::Range<usize>>
     }
 }
 
+/// The segment a far pointer's high word reads as.
+const NOMINAL_SEGMENT: i128 = 0x1000;
+
 fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     let type_ = where_.type_;
     span(where_, type_.width as usize)?;
@@ -1090,6 +1093,11 @@ fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     }
     if let Some(address) = cells.pointers.get(&(where_.offset, type_.width)) {
         return Ok(Scalar::Address(address.clone()));
+    }
+    // A far pointer's segment word, which array code tests to see whether
+    // an array is allocated: any real segment is nonzero.
+    if type_.width == 2 && cells.pointers.contains_key(&(where_.offset - 2, 4)) {
+        return Ok(Scalar::Int(NOMINAL_SEGMENT));
     }
     let data = &cells.bytes[span(where_, type_.width as usize)?];
     match type_.kind {
