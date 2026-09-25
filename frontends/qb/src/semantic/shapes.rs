@@ -252,13 +252,17 @@ pub(super) fn applied(compiler: &mut Compiler) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Compiler};
+    use super::super::{built, Compiler, Instruction};
     use super::*;
     use crate::{parse, Dialect};
 
     fn applied_to(source: &str) -> Compiler {
+        applied_in(source, false)
+    }
+
+    fn applied_in(source: &str, row_major: bool) -> Compiler {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", false, false, false, false, false, false)
+        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", row_major, false, false, false, false, false)
             .unwrap_or_else(|error| panic!("{}", error.message));
         applied(&mut compiler);
         compiler
@@ -282,6 +286,33 @@ mod tests {
             .collect()
     }
 
+    /// The variable each descriptor count scales, traced back through the
+    /// instructions that carry it.
+    fn scaled(function: &Function) -> Vec<String> {
+        let instructions: Vec<&Instruction> = function.blocks.iter().flat_map(|block| &block.instructions).collect();
+        let defining = |value: u32| instructions.iter().find(|one| one.results.contains(&value)).copied();
+        let is_count = |operand: &Operand| {
+            matches!(operand, Operand::Value(value) if defining(*value)
+                .is_some_and(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Count(_), .. }))))
+        };
+        instructions
+            .iter()
+            .filter(|one| one.op == "mul" && is_count(&one.operands[1]))
+            .map(|one| {
+                let mut operand = one.operands[0].clone();
+                loop {
+                    match operand {
+                        Operand::Value(value) => operand = defining(value).expect("defined").operands[0].clone(),
+                        Operand::Place(place) => {
+                            break function.places.iter().find(|one| one.id == place).expect("place").name.clone();
+                        }
+                        _ => panic!("a count scales something other than a variable"),
+                    }
+                }
+            })
+            .collect()
+    }
+
     /// The element accesses that name an origin.
     fn originated(function: &Function) -> usize {
         function
@@ -297,25 +328,34 @@ mod tests {
 
     const TWO_BY_FIVE: &str = "DEFINT A-Z\nSUB t\nDIM a(1, 4)\nx = a(1, 2)\nEND SUB\n";
 
+    const SUBSCRIPTED: &str = "DEFINT A-Z\nSUB t\nDIM a(1, 4)\nx = a(i, j)\nEND SUB\n";
+
+    /// The element formula read record p for the p-th source subscript, so
+    /// a(i, j) was laid out row-major as i * 5 + j while B$DDIM, LBOUND and
+    /// BC laid it out column-major, as BC's j * [a+12h] + i.
     #[test]
-    fn test_a_constant_dim_folds_the_second_dimension_count() {
-        let compiler = applied_to(TWO_BY_FIVE);
-        assert_eq!(counts(function(&compiler, "t")), [5]);
+    fn test_a_column_major_element_scales_the_last_subscript_by_the_first_count() {
+        let compiler = applied_to(SUBSCRIPTED);
+        let t = function(&compiler, "t");
+        assert_eq!((scaled(t), counts(t)), (vec!["J%".to_string()], vec![2]));
     }
 
-    /// REDIM pushes its bounds in source order, so its records run in
-    /// reverse: record 1 of `a(1, 4)` holds the first dimension's count.
+    /// /R numbered a(i, j) as j * 5 + i. BC /R reverses the dimensions,
+    /// i * [a+12h] + j, and B$DDIM's records with them.
     #[test]
-    fn test_a_redim_folds_the_count_its_record_holds() {
-        let compiler = applied_to("DEFINT A-Z\nSUB t\nREDIM a(1, 4)\nx = a(1, 2)\nEND SUB\n");
-        assert_eq!(counts(function(&compiler, "t")), [2]);
+    fn test_a_row_major_element_scales_the_first_subscript_by_the_last_count() {
+        let compiler = applied_in(SUBSCRIPTED, true);
+        let t = function(&compiler, "t");
+        assert_eq!((scaled(t), counts(t)), (vec!["I%".to_string()], vec![5]));
     }
 
-    /// DIM and REDIM of the same bounds fill different records.
+    /// DIM pushed its bounds last dimension first and REDIM in source order,
+    /// so the same bounds filled the descriptor's records in opposite orders
+    /// and an element after a REDIM read the other dimension's count.
     #[test]
-    fn test_a_dim_and_a_redim_of_one_array_fold_no_count() {
+    fn test_a_dim_and_a_redim_fill_the_same_records() {
         let compiler = applied_to("DEFINT A-Z\nSUB t\nDIM a(1, 4)\nREDIM a(1, 4)\nx = a(1, 2)\nEND SUB\n");
-        assert!(counts(function(&compiler, "t")).is_empty());
+        assert_eq!(counts(function(&compiler, "t")), [2]);
     }
 
     #[test]

@@ -167,6 +167,50 @@ mod tests {
         assert!(insns.iter().any(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Selector, .. }))));
     }
 
+    /// The constants each call to `callee` pushes, first pushed first.
+    fn pushed(source: &str, row_major: bool, huge: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
+        let module = parse(source, Dialect::VbDos).expect("parses");
+        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", row_major, huge, false, false, false, false)
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        let mut found = Vec::new();
+        for function in &compiler.functions {
+            for call in &function.calls {
+                let instruction = function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.instructions)
+                    .find(|one| one.id == call.instruction)
+                    .expect("the call");
+                if instruction.callee.as_deref() == Some(callee) {
+                    found.push(call.order.iter().map(|at| integer(&instruction.operands[*at])).collect());
+                }
+            }
+        }
+        found
+    }
+
+    const TWO_BY_THREE: &str = "DEFINT A-Z\nSUB t\nDIM a(1 TO 2, 3 TO 5)\nx = a(1, 4)\nEND SUB\n";
+
+    /// DIM pushed the last dimension's bounds first, so B$DDIM filled record
+    /// 0 from the first dimension and UBOUND(a, 1) answered 5. BC pushes
+    /// 1, 2, 3, 5, and 3, 5, 1, 2 under /R.
+    #[test]
+    fn test_dim_pushes_its_bounds_as_bc_does() {
+        let bounds = |row_major| pushed(TWO_BY_THREE, row_major, false, "B$DDIM")[0][..4].to_vec();
+        assert_eq!(bounds(false), [Some(1), Some(2), Some(3), Some(5)]);
+        assert_eq!(bounds(true), [Some(3), Some(5), Some(1), Some(2)]);
+    }
+
+    /// B$HARY pairs the subscript pushed last with record 0; the subscripts
+    /// were pushed reversed, pairing a(1, 4)'s 1 with the second dimension's
+    /// record. BC pushes 1, 4, and 4, 1 under /R.
+    #[test]
+    fn test_a_huge_element_pushes_its_subscripts_as_bc_does() {
+        let subscripts = |row_major| pushed(TWO_BY_THREE, row_major, true, "B$HARY")[0][..3].to_vec();
+        assert_eq!(subscripts(false), [Some(1), Some(4), Some(2)]);
+        assert_eq!(subscripts(true), [Some(4), Some(1), Some(2)]);
+    }
+
     #[test]
     fn test_a_redim_in_a_procedure_carries_its_lower_bound() {
         let all = tagged("DEFINT A-Z\nREDIM SHARED a(10)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\n");
@@ -178,6 +222,19 @@ mod tests {
             })
             .collect();
         assert_eq!(lower, [Some(5)]);
+    }
+
+    /// REDIM passed 0100h, a far numeric array, whatever the element: B$RDIM
+    /// then allocated a string array's descriptors as data. BC passes 8001h.
+    #[test]
+    fn test_a_redim_of_a_string_array_says_so() {
+        let all = tagged("REDIM b$(4)\n");
+        let flags: Vec<Option<i64>> = procedure(&all, "__main")
+            .iter()
+            .filter(|one| matches!(one.tag, Some(Tag::Reallocate(_))))
+            .map(|one| integer(&one.operands[one.operands.len() - 2]))
+            .collect();
+        assert_eq!(flags, [Some(0x8001)]);
     }
 
     #[test]

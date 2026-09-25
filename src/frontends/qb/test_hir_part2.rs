@@ -590,6 +590,25 @@ fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
     );
 }
 
+/// The static descriptor kept its records last dimension first under /R, and
+/// biased +0Ah for them, but BC /R reverses the dimensions: record 0 holds the
+/// first, 02 00 01 00, as its B$DDIM does.
+#[test]
+fn test_row_major_rank_two_descriptor_matches_bc_r() {
+    let path = root().join("frontends/qb/compat/qb45/q45a05.bas");
+    let source = qb_driver::parsed(&path, "qb45", "qb45", None, &[], "row-major", false, false, false, false, false)
+        .expect("parses");
+    let module = &source.modules[0];
+    let values = place(&module.functions[0], "VALUES");
+    let descriptor = module.data.iter().find(|one| one.name == "VALUES$descriptor").expect("descriptor");
+
+    assert_eq!(data_bytes(descriptor, 8, 22), hex("02 40 00 00 02 00 02 00 01 00 03 00 01 00"));
+    assert_eq!(
+        relocations(descriptor),
+        [(0, values.symbol, values.offset, "far"), (10, values.symbol, values.offset - 8, "near")]
+    );
+}
+
 /// DYNARR wrote a(2).row, leaving a(1).row at zero after Touch a().
 #[test]
 fn test_static_array_formal_uses_a_lower_bound_adjusted_descriptor() {

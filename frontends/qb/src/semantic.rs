@@ -1596,34 +1596,55 @@ impl Compiler {
             vec![Operand::Place(descriptor_place)],
         );
         let bounds = self.bounds(declaration)?;
+        let (operands, records) = self.dimensioned(bounds, element, descriptor);
+        self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
+        Ok(())
+    }
+
+    /// B$DDIM's or B$RDIM's operands for `bounds`, and the bounds in
+    /// descriptor record order. The runtime fills record 0 from the pair
+    /// pushed last.
+    fn dimensioned(
+        &self,
+        bounds: Vec<(Operand, Operand)>,
+        element: u32,
+        descriptor: u32,
+    ) -> (Vec<Operand>, Vec<(Operand, Operand)>) {
+        let rank = bounds.len() as i64;
+        let records = self.descriptor_records(&bounds);
         let mut operands: Vec<Operand> =
-            bounds.iter().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
+            records.iter().rev().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
+        let allocation = if element == STRING {
+            0x8000
+        } else if self.huge_arrays {
+            0x0200
+        } else {
+            0x0100
+        };
         operands.extend([
             Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
-            Operand::Constant(
-                INTEGER,
-                Number::Integer(
-                    declaration.bounds.len() as i64
-                        | if element == STRING {
-                            0x8000
-                        } else if self.huge_arrays {
-                            0x0200
-                        } else {
-                            0x0100
-                        },
-                ),
-            ),
+            Operand::Constant(INTEGER, Number::Integer(rank | allocation)),
             Operand::Value(descriptor),
         ]);
-        let mut order = Vec::new();
-        for dimension in (0..declaration.bounds.len()).rev() {
-            order.extend([2 * dimension, 2 * dimension + 1]);
+        (operands, records)
+    }
+
+    /// The source dimension each descriptor record holds, record 0 first.
+    /// Record 0 is the slowest-varying dimension: the last in column-major
+    /// order, the first under /R. B$DDIM, B$HARY and the adjusted offset at
+    /// +0Ah all run records in this order; LBOUND counts back from the rank.
+    fn record_dimensions(&self, rank: usize) -> Vec<usize> {
+        if self.row_major {
+            (0..rank).collect()
+        } else {
+            (0..rank).rev().collect()
         }
-        order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
-        self.emit_call("B$DDIM", Vec::new(), operands, order, false);
-        // Pushed last dimension first: the records run in source order.
-        self.tag_last(Tag::Allocate(Shape { descriptor, records: bounds, element }));
-        Ok(())
+    }
+
+    /// Per-dimension `bounds` in descriptor record order.
+    fn descriptor_records<T: Clone>(&self, bounds: &[T]) -> Vec<T> {
+        self.record_dimensions(bounds.len()).into_iter().map(|dimension| bounds[dimension].clone()).collect()
     }
 
     fn declare_as(
@@ -2004,28 +2025,21 @@ impl Compiler {
 
         bytes[12..14].copy_from_slice(&(element_width as u16).to_le_bytes());
         // Q45A05's QB 4.5 BC_CN bytes are 03 00 01 00 then
-        // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3). B$LBND/B$UBND
-        // count backward from AD_cDims, so the ABI stores dimensions in
-        // reverse source order regardless of /R element ordering.
-        for (dimension, (low, high)) in bounds.iter().rev().enumerate() {
-            let at = 14 + 4 * dimension;
+        // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3); BC /R stores
+        // 02 00 01 00 first.
+        let records = self.descriptor_records(bounds);
+        for (record, (low, high)) in records.iter().enumerate() {
+            let at = 14 + 4 * record;
             let count = (high - low + 1) as u16;
             bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
             bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
         }
-        let ordered_bounds: Vec<_> = if self.row_major {
-            bounds.iter().rev().collect()
-        } else {
-            bounds.iter().collect()
-        };
-        let reversed_bounds: Vec<_> = bounds.iter().rev().collect();
+        // B$DDIM's bias: the element number of the lower bounds.
         let mut lower_linear = None;
-        for (dimension, (lower, _)) in ordered_bounds.into_iter().enumerate() {
-            lower_linear = Some(if let Some(previous) = lower_linear {
-                let (count_lower, count_upper) = reversed_bounds[dimension];
-                previous * (count_upper - count_lower + 1) + lower
-            } else {
-                *lower
+        for (lower, upper) in &records {
+            lower_linear = Some(match lower_linear {
+                Some(previous) => previous * (upper - lower + 1) + lower,
+                None => *lower,
             });
         }
         let lower_bias = lower_linear.unwrap_or(0) * element_width as i64;
@@ -3958,22 +3972,14 @@ impl Compiler {
         let array_pointer = self.value(array_pointer_type);
         self.emit("address", vec![array_pointer], vec![location]);
 
-        let dimensions: Vec<_> = if self.row_major {
-            indices.iter().zip(array.bounds.iter()).collect()
-        } else {
-            indices.iter().zip(array.bounds.iter()).rev().collect()
-        };
+        let dimensions: Vec<_> = self
+            .record_dimensions(indices.len())
+            .into_iter()
+            .map(|dimension| (&indices[dimension], &array.bounds[dimension]))
+            .collect();
         let mut linear = None;
         for (index, (lower, upper)) in dimensions {
-            let line = index.span().line;
-            let (mut index, mut index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                return self.fail(format!(
-                    "line {} array subscript is {} rather than numeric",
-                    line,
-                    self.name(index_type)
-                ));
-            }
+            let (mut index, mut index_type) = self.subscript(index)?;
             if matches!(index_type, SINGLE | DOUBLE | BYTE) {
                 index = self.convert(index, index_type, INTEGER)?;
                 index_type = INTEGER;
@@ -4048,21 +4054,13 @@ impl Compiler {
         }
         if matches!(address, "split_huge" | "checked") {
             // PDS /Ah and /D do not inline descriptor arithmetic. BC evaluates
-            // source subscripts, pushes them last-to-first followed by rank,
-            // supplies the near descriptor in BX, and B$HARY returns ES:BX.
+            // source subscripts, pushes them so record 0's is last, then the
+            // rank, supplies the near descriptor in BX, and B$HARY returns ES:BX.
             // Keep both returned words explicit until CONCAT makes the whole
             // pointer consumed by the element load/store.
             let mut operands = Vec::new();
             for index in indices {
-                let line = index.span().line;
-                let (index, index_type) = self.expression(index)?;
-                if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                    return self.fail(format!(
-                        "line {} array subscript is {} rather than numeric",
-                        line,
-                        self.name(index_type)
-                    ));
-                }
+                let (index, index_type) = self.subscript(index)?;
                 operands.push(self.convert(index, index_type, INTEGER)?);
             }
             operands.push(Operand::Constant(
@@ -4070,7 +4068,7 @@ impl Compiler {
                 Number::Integer(indices.len() as i64),
             ));
             operands.push(Operand::Value(descriptor));
-            let mut order: Vec<_> = (0..indices.len()).rev().collect();
+            let mut order: Vec<_> = self.record_dimensions(indices.len()).into_iter().rev().collect();
             order.extend(indices.len()..indices.len() + 2);
             let offset = self.value(INTEGER);
             let selector = self.value(INTEGER);
@@ -4095,39 +4093,14 @@ impl Compiler {
         } else {
             LONG
         };
-        let mut linear: Option<Operand> = None;
-        let ordered: Vec<_> = if self.row_major {
-            indices.iter().rev().collect()
-        } else {
-            indices.iter().collect()
-        };
-        for (dimension, index) in ordered.into_iter().enumerate() {
-            let line = index.span().line;
-            let (index, index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                return self.fail(format!(
-                    "line {} array subscript is {} rather than numeric",
-                    line,
-                    self.name(index_type)
-                ));
-            }
-            let index = self.convert(index, index_type, offset_type)?;
-            linear = Some(if let Some(previous) = linear {
-                let count = self.descriptor_field(descriptor, 14 + 4 * dimension, INTEGER);
-                let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
-                let multiplied = self.value(offset_type);
-                self.emit("mul", vec![multiplied], vec![previous, count]);
-                let combined = self.value(offset_type);
-                self.emit(
-                    "add",
-                    vec![combined],
-                    vec![Operand::Value(multiplied), index],
-                );
-                Operand::Value(combined)
-            } else {
-                index
-            });
+        // Evaluate every subscript, in source order, before reading any
+        // descriptor field: a subscript can call a function that REDIMs.
+        let mut subscripts = Vec::new();
+        for index in indices {
+            let (index, index_type) = self.subscript(index)?;
+            subscripts.push(self.convert(index, index_type, offset_type)?);
         }
+        let linear = Some(self.element_number(descriptor, &subscripts, offset_type)?);
         let bytes = self.value(offset_type);
         self.emit(
             "mul",
@@ -4177,6 +4150,48 @@ impl Compiler {
             pointer
         };
         Ok(pointer)
+    }
+
+    /// An array subscript's value and numeric type.
+    fn subscript(&mut self, index: &Expr) -> Result<(Operand, u32), SemanticError> {
+        let line = index.span().line;
+        let (index, index_type) = self.expression(index)?;
+        if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+            return self.fail(format!(
+                "line {} array subscript is {} rather than numeric",
+                line,
+                self.name(index_type)
+            ));
+        }
+        Ok((index, index_type))
+    }
+
+    /// The element number of `subscripts`, one per source dimension, from
+    /// the descriptor's counts: record 0's subscript is the most significant.
+    /// The lower bounds are already in the adjusted offset at +0Ah.
+    fn element_number(
+        &mut self,
+        descriptor: u32,
+        subscripts: &[Operand],
+        offset_type: u32,
+    ) -> Result<Operand, SemanticError> {
+        let mut linear: Option<Operand> = None;
+        for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
+            let subscript = subscripts[dimension].clone();
+            linear = Some(match linear {
+                None => subscript,
+                Some(previous) => {
+                    let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+                    let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
+                    let multiplied = self.value(offset_type);
+                    self.emit("mul", vec![multiplied], vec![previous, count]);
+                    let combined = self.value(offset_type);
+                    self.emit("add", vec![combined], vec![Operand::Value(multiplied), subscript]);
+                    Operand::Value(combined)
+                }
+            });
+        }
+        Ok(linear.expect("an element has a subscript"))
     }
 
     fn descriptor_data_pointer(
@@ -4254,7 +4269,8 @@ impl Compiler {
             _ => self.terminate("jump", Vec::new(), vec![read])?,
         }
 
-        // Dimensions are stored last first: dimension d is entry cDims - d.
+        // As B$LBND: dimension d reads record cDims - d, which under /R holds
+        // source dimension cDims + 1 - d, as in BC.
         self.select_block(read);
         let entry = self.value(INTEGER);
         self.emit("sub", vec![entry], vec![rank, dimension.clone()]);
@@ -5059,21 +5075,9 @@ impl Compiler {
             ));
         }
         let bounds = self.bounds(declaration)?;
-        let mut operands: Vec<Operand> =
-            bounds.iter().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
-        operands.push(Operand::Constant(
-            INTEGER,
-            Number::Integer(self.width(element) as i64),
-        ));
-        operands.push(Operand::Constant(
-            INTEGER,
-            Number::Integer((declaration.bounds.len() | (1 << 8)) as i64),
-        ));
         let descriptor = self.descriptor_pointer(&variable)?;
-        operands.push(Operand::Value(descriptor));
+        let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
-        // Pushed in source order: the records run in reverse.
-        let records = bounds.into_iter().rev().collect();
         self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
         Ok(())
     }
