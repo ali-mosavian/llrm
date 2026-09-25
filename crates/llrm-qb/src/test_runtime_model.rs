@@ -107,3 +107,10 @@ fn a_bare_function_name_assigns_its_result() {
         FUNCTION greet$\ngreet = \"hi\"\nEND FUNCTION\n";
     assert_eq!(printed(source), " 39 hi\n");
 }
+
+#[test]
+fn a_dim_inside_a_loop_declares_its_type() {
+    // The declaration pass skipped block bodies, so y stayed SINGLE: 2.6.
+    let source = "FOR i% = 1 TO 1\nDIM y AS INTEGER\ny = 2.6\nPRINT y\nNEXT\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 3 \n");
+}

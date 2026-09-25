@@ -1700,7 +1700,11 @@ impl Compiler {
                         return self.fail(format!("duplicate declaration {name}"));
                     }
                 }
-                _ => {}
+                nested => {
+                    for body in nested.bodies() {
+                        self.declarations_in(body, storage)?;
+                    }
+                }
             }
         }
         Ok(())

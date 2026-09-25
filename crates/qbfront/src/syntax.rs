@@ -336,6 +336,26 @@ pub enum Statement {
 }
 
 impl Statement {
+    /// The statement lists nested directly inside this one.
+    pub fn bodies(&self) -> Vec<&[Statement]> {
+        match self {
+            Self::If {
+                then_branch,
+                else_branch,
+                ..
+            } => vec![then_branch, else_branch],
+            Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
+            Self::Select {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .map(|(_, body)| body.as_slice())
+                .chain([otherwise.as_slice()])
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) => {
