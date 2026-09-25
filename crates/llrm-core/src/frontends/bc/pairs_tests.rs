@@ -8,7 +8,7 @@ use crate::model::ir::nodes::{Data, Node, TableKind};
 use crate::model::ir::{Effects, Imm, Reg, Semantics};
 use crate::model::mir::{OpCode, Raising};
 use crate::objectfile::module::{Addr, Space};
-use crate::support::testing;
+use crate::testing;
 
 /// Python's `SimpleNamespace(semantics=...)` node.
 fn node(semantics: Semantics) -> Arc<Node> {

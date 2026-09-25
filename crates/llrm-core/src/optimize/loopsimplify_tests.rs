@@ -102,7 +102,7 @@ fn test_conditional_entry_and_shared_exit_become_dedicated() {
 
 /// The body named `...suffix` in a fixture's raised bodies.
 fn named(path: &str, suffix: &str) -> (Rc<crate::objectfile::module::Module>, Rc<MirBody>) {
-    use crate::support::testing;
+    use crate::testing;
     let found = testing::module(path);
     let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
     let body = raised.values.iter().find(|(name, _)| name.ends_with(suffix)).unwrap().1.clone();

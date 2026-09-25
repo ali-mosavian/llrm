@@ -905,7 +905,7 @@ fn test_inserted_counter_operations_own_their_insertion_location() {
 /// preheader and an add of the same width advances it.
 #[test]
 fn test_strength_reduction_replaces_a_loop_multiply_with_an_add() {
-    use crate::support::testing;
+    use crate::testing;
     let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/matrix-p-g2.obj"));
     let blocks = testing::blocks_of(&found);
     let landmarks = crate::objectfile::module::landmarks(&found);

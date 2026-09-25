@@ -3,7 +3,7 @@
 pub mod abi;
 pub mod analysis;
 pub mod backend;
-pub mod cycles;
+pub use llrm_cycles as cycles;
 pub mod flow;
 pub mod frontends;
 pub mod hir;
@@ -12,6 +12,8 @@ pub mod model;
 pub mod objectfile;
 pub mod optimize;
 pub mod rewrite;
-pub mod support;
+pub use llrm_support as support;
 pub mod tools;
 pub mod wholeseg;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;

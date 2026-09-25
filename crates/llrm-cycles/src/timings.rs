@@ -15,7 +15,7 @@
 
 use std::sync::LazyLock;
 
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
 pub const ARCHS: [&str; 7] = ["486", "P5", "P6", "K5", "K6", "K7", "Core"];
 

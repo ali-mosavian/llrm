@@ -48,7 +48,7 @@ pub fn admitted(
 ) -> bool {
     let limits = &r#where.options;
     if limits.max_unroll_iterations != 0 && *count > BigInt::from(limits.max_unroll_iterations) {
-        crate::debug!("unroll", "loop b{} x{count}: refused: max-completely-peel-times", loop_.header);
+        llrm_support::debug!("unroll", "loop b{} x{count}: refused: max-completely-peel-times", loop_.header);
         return false;
     }
     let (size, folded) = _sizes(body, loop_, facts);
@@ -60,13 +60,13 @@ pub fn admitted(
         .collect::<BTreeMap<i64, &MirBlock>>();
     let (Some(order), Some(count)) = (_ordered(&blocks, loop_.header), count.to_i64()) else {
         let shrinks = count * BigInt::from(size - folded) <= BigInt::from(size);
-        crate::debug!("unroll", "loop b{} x{count}: holds a loop, {size} ops, {}", loop_.header, if shrinks { "shrinks" } else { "refused: not innermost and code would grow" });
+        llrm_support::debug!("unroll", "loop b{} x{count}: holds a loop, {size} ops, {}", loop_.header, if shrinks { "shrinks" } else { "refused: not innermost and code would grow" });
         return shrinks;
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
     let limit = budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100;
     let Some(unrolled) = unrolled(&blocks, &order, loop_, count, facts, r#where, limit.max(size)) else {
-        crate::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
+        llrm_support::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
         return false;
     };
     let boost = _boost(&unrolled);
@@ -84,7 +84,7 @@ pub fn admitted(
     } else {
         None
     };
-    crate::debug!(
+    llrm_support::debug!(
         "unroll",
         "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches{}), {}",
         loop_.header,

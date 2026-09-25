@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::model::mir;
-use crate::support::testing::{self, overlapping};
+use crate::testing::{self, overlapping};
 
 const PL_MOVE: &str = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-pl-move-v-g3.obj");
 

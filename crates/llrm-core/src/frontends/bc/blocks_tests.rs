@@ -97,9 +97,9 @@ fn test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump() {
 #[test]
 fn test_rebuilt_event_code_is_fully_visible() {
     for tag in ["p-evt", "v-evt"] {
-        let result = crate::support::testing::emitted(&crate::support::testing::data(format!("{}/tests/fixtures/omf/addrm-{tag}.obj", env!("LLRM_ROOT"))));
+        let result = crate::testing::emitted(&crate::testing::data(format!("{}/tests/fixtures/omf/addrm-{tag}.obj", env!("LLRM_ROOT"))));
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}");
-        let found = crate::support::testing::loaded_bytes(&result.data).unwrap();
+        let found = crate::testing::loaded_bytes(&result.data).unwrap();
         let code = instructions(&found).unwrap();
         let stub = event_stub(&found).unwrap();
         assert!(code.iter().any(|one| one.at == stub), "{tag}");

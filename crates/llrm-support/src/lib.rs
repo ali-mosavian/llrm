@@ -3,8 +3,6 @@
 pub mod bits;
 pub mod codepage;
 pub mod debug;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 pub mod diagnostic;
 pub mod hash;
 pub mod pyjson;

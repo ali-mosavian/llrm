@@ -55,3 +55,6 @@ pub mod timing;
 pub mod twoaddr;
 pub mod upperzero;
 pub mod verify;
+
+#[cfg(test)]
+mod pricing_tests;

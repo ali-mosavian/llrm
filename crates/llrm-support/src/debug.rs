@@ -21,7 +21,7 @@ pub fn enabled(channel: &str) -> bool {
 #[macro_export]
 macro_rules! debug {
     ($channel:literal, $($arg:tt)*) => {
-        if $crate::support::debug::enabled($channel) {
+        if $crate::debug::enabled($channel) {
             eprintln!("[{}] {}", $channel, format_args!($($arg)*));
         }
     };

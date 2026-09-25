@@ -4,9 +4,9 @@
 //! so a malformed document is refused with Python's exact message, and of
 //! `json.encoder`'s `ensure_ascii` spelling.
 
-use crate::support::hash::IndexMap;
+use crate::hash::IndexMap;
 
-use crate::support::pyrepr;
+use crate::pyrepr;
 
 /// A value `json.loads` produces: `None | bool | int | float | str | list |
 /// dict`.

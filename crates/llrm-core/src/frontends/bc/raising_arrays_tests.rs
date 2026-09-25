@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::model::ir::Operation;
 use crate::model::mir::{self, MirBlock, MirBody, Op, OpCode};
-use crate::support::testing::{self, nth, ops, overlapping};
+use crate::testing::{self, nth, ops, overlapping};
 
 const TAGS: [&str; 3] = ["p-g2", "q-O", "v-g3"];
 

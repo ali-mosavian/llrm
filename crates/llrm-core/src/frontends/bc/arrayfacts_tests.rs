@@ -11,7 +11,7 @@ use super::*;
 use crate::frontends::bc::addressfacts::region;
 use crate::model::ir::Operation;
 use crate::model::mir::{ArrayRequest, Const, MirBody, OpCode};
-use crate::support::testing;
+use crate::testing;
 
 /// ARRPHI prints 10,9; its six bounded accesses used to lose all allocation facts.
 #[test]

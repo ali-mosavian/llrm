@@ -13,7 +13,7 @@ use iced_x86::{Mnemonic, OpKind};
 use super::*;
 use crate::model::mir::{Const, MemRef};
 use crate::objectfile::module::Module;
-use crate::support::testing;
+use crate::testing;
 use crate::wholeseg::{Emission, Watched};
 
 /// IVARM should branch once and store 34; its final counter remains 37.

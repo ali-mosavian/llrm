@@ -11,7 +11,7 @@ use crate::model::ir::nodes::{self, Node, Restore};
 use crate::model::ir::{self, Effects, Loc, Operation, Semantics};
 use crate::model::mir::{Const, Held, MirBlock, MirBody, Opaque, OpCode, Synth};
 use crate::objectfile::module::Addr;
-use crate::support::testing;
+use crate::testing;
 
 #[test]
 fn test_a_clobber_ends_the_raised_selector_dependency() {

@@ -6,6 +6,8 @@ rust-version.workspace = true
 description = "llrm's HIR, MIR, optimizer, x86 backend, OMF object support and BC raising"
 
 [dependencies]
+llrm-support = { workspace = true }
+llrm-cycles = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }

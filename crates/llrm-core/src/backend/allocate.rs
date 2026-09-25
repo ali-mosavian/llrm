@@ -1219,7 +1219,7 @@ impl RegAlloc {
             let (answer, now) = _assigned_plan(&body, &self.pinned, &reloads, &retained, &cpu)?;
             let mut got = answer;
             retained = now;
-            crate::debug!(
+            llrm_support::debug!(
                 "regalloc",
                 "{}: round {}: {} insns, {} spilled",
                 body.name,
@@ -1234,7 +1234,7 @@ impl RegAlloc {
              -> Result<Option<Assignment>, Error> {
                 match allocate(candidate, Some(&pinned), Some(unspillable), Some(protected), None, (&cpu).into()) {
                     Ok(trial) => {
-                        crate::debug!("regalloc", "  trial allocation: {} spilled", trial.spilled.len());
+                        llrm_support::debug!("regalloc", "  trial allocation: {} spilled", trial.spilled.len());
                         Ok(Some(trial))
                     }
                     Err(Error::Unplaced(_)) => Ok(None),
@@ -1380,7 +1380,7 @@ impl RegAlloc {
                 let mut wanted = prefer.clone();
                 wanted.extend(constrain::required(&cut)?);
                 let after = allocate(&cut, Some(&wanted), Some(&reloads), None, None, (&cpu).into())?;
-                crate::debug!("regalloc", "  split {} values, reallocated: {} spilled", failing.len(), after.spilled.len());
+                llrm_support::debug!("regalloc", "  split {} values, reallocated: {} spilled", failing.len(), after.spilled.len());
                 if after.spilled.is_empty() {
                     return applied(&cut, &after).map(|placed| datagroup::restored(&placed, data_free));
                 }

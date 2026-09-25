@@ -4,7 +4,7 @@
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::support::pyrepr;
+use crate::pyrepr;
 
 /// `Path(path).resolve()`, which is `posixpath.realpath` without `strict`:
 /// absolute, each existing symlink followed, `..` applied to what came

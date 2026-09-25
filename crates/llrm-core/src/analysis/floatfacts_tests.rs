@@ -9,7 +9,7 @@ use crate::model::mir::{Arg, Kind, MirBlock, MirBody};
 use crate::objectfile::module::{Addr, Space};
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
-use crate::support::testing;
+use crate::testing;
 
 fn finite(value: Fraction) -> Finite {
     Finite::new(value, false)

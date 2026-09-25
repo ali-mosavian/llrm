@@ -10,7 +10,7 @@ use iced_x86::Register;
 use super::*;
 use crate::model::ir::{Operation, Reg};
 use crate::model::mir::{MirBlock, MirBody, OpCode, Opaque};
-use crate::support::testing;
+use crate::testing;
 
 #[test]
 fn test_nbody_high_byte_clear_defines_the_word_its_consumer_reads() {

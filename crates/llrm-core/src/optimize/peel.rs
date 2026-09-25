@@ -126,7 +126,7 @@ pub fn optimized(
         if let Some(watch) = watch.as_deref_mut() {
             watch("peel-accepted", &candidate);
         }
-        crate::debug!("peel", "peeled the loop with latch b{latch}");
+        llrm_support::debug!("peel", "peeled the loop with latch b{latch}");
         peeled.insert(latch);
         body = candidate;
     }

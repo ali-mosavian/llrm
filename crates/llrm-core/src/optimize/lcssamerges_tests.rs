@@ -82,7 +82,7 @@ fn test_following_cycle_keeps_complete_phi_edges() {
 #[ignore = "fails in Python too: assert result != body (closing changes nothing)"]
 fn test_compiled_early_exit_accumulator_is_closed() {
     use crate::model::passes::Options;
-    use crate::support::testing;
+    use crate::testing;
     let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/lcmerge-p-g2.obj"));
     let partition = testing::blocks_of(&found);
     let raised = testing::main_body(&found, &partition);

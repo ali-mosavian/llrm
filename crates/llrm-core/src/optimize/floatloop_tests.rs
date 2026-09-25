@@ -10,7 +10,7 @@ use crate::model::mir::{Arg, Const, Kind, MemRef, MirBody, Op, OpCode, Value};
 use crate::model::passes::Options;
 use crate::objectfile::module::Module;
 use crate::optimize::{loopmotion, transform};
-use crate::support::testing;
+use crate::testing;
 
 fn fpcse(tag: &str) -> (Rc<Module>, Rc<MirBody>) {
     let found = testing::module(&format!("{}/tests/fixtures/omf/fpcse-{tag}.obj", env!("LLRM_ROOT")));

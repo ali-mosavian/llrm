@@ -22,7 +22,7 @@ use crate::model::passes::{O2, Options};
 use crate::objectfile::module::{Module, Space};
 use crate::optimize::transform;
 use crate::support::hash::IndexMap;
-use crate::support::testing;
+use crate::testing;
 
 #[test]
 fn test_dynamic_arithmetic_requires_exactness_at_every_precision() {

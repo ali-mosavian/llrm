@@ -429,7 +429,7 @@ mod tests {
     }
 
     fn udtrng() -> (Rc<crate::objectfile::module::Module>, Rc<MirBody>) {
-        use crate::support::testing;
+        use crate::testing;
         let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/udtrng-p-g2.obj"));
         let body = testing::main_body(&found, &testing::blocks_of(&found));
         (found, body)
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn test_udtrng_bounds_compare_explicit_values() {
         let (_, body) = udtrng();
-        let guards: Vec<Op> = crate::support::testing::ops(&body)
+        let guards: Vec<Op> = crate::testing::ops(&body)
             .into_iter()
             .filter(|op| [0x54, 0x60].contains(&op.at) && op.op == Some(OpCode::Operation(Operation::Compare)))
             .collect();
@@ -483,7 +483,7 @@ mod tests {
     #[test]
     fn test_only_established_terminal_contracts_remove_return_edges() {
         use crate::abi::runtime::{self, Control};
-        use crate::support::testing;
+        use crate::testing;
         let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/udtrng-p-g2.obj"));
         let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
         let contracts = runtime::for_module(&found, None).unwrap();
@@ -509,7 +509,7 @@ mod tests {
     /// BOOLS still split four constant stores and PRINT across four live blocks.
     #[test]
     fn test_bools_constant_program_is_one_live_block() {
-        use crate::support::testing;
+        use crate::testing;
         for tag in ["q-o", "p-g2", "v-g3"] {
             let (result, states) = testing::emitted_states(&testing::data(format!("{}/tests/fixtures/omf/bools-{tag}.obj", env!("LLRM_ROOT"))));
             assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
@@ -520,7 +520,7 @@ mod tests {
     /// LOCALP printed 28/DONE in BC but nothing after optimization lost main's exit.
     #[test]
     fn test_localp_keeps_termination_after_interleaved_procedure() {
-        use crate::support::testing;
+        use crate::testing;
         for tag in ["q-o", "p-g2", "v-g3"] {
             let result = testing::emitted_lir(format!("{}/tests/fixtures/regressions/localp-{tag}.obj", env!("LLRM_ROOT")));
             let found = testing::loaded_bytes(&result.data).unwrap();

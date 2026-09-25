@@ -516,14 +516,14 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
 /// `[one.insn for block in corpus.partitioned(result.data) for one in block.insns]`
 /// of a fixture the LIR emitter wrote.
 fn emitted_insns(relative: &str) -> Vec<iced_x86::Instruction> {
-    let result = crate::support::testing::emitted_lir(relative);
-    crate::support::testing::instructions(&result.data)
+    let result = crate::testing::emitted_lir(relative);
+    crate::testing::instructions(&result.data)
 }
 
 /// HARR has one recurrence per retained loop, or is completely unrolled.
 #[test]
 fn test_harr_reuses_an_existing_recurrence_for_termination() {
-    use crate::support::testing;
+    use crate::testing;
     for (program, loop_count, increments, tag) in [("harr", 1, 1, "v-g3")] {
         let result = testing::emitted_lir(format!("{}/tests/fixtures/omf/{program}-{tag}.obj", env!("LLRM_ROOT")));
         let blocks = testing::partitioned_bytes(&result.data);

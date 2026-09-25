@@ -21,7 +21,7 @@ use crate::abi::runtime;
 use crate::analysis::loops;
 use crate::model::mir::{Arg, Const, Kind, MemRef, MirBody};
 use crate::objectfile::module::{self, Space};
-use crate::support::testing;
+use crate::testing;
 use crate::optimize::{promote, transform};
 use crate::support::hash::IndexMap;
 
