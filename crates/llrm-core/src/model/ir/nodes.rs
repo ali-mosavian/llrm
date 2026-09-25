@@ -11,7 +11,6 @@ use std::sync::LazyLock;
 
 use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
 
-use iced_x86::Register;
 
 use crate::frontends::bc::declen::Insn;
 use crate::legacy::lift::Decoded;

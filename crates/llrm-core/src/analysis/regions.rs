@@ -1595,3 +1595,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "regions_alias_tests.rs"]
+mod alias_tests;

@@ -13,7 +13,7 @@ use num_bigint::BigInt;
 use crate::abi::runtime::{self, Contract, Memory};
 use crate::frontends::bc::blocks::ENTRY;
 use crate::model::mir::{self, Const, Kind, MemRef, Op, RaisedBody};
-use crate::objectfile::module::{self, Addr, Module, Space};
+use crate::objectfile::module::{Addr, Module, Space};
 use crate::objectfile::omf::{self, Fixup};
 use crate::support::hash::IndexMap;
 
@@ -105,7 +105,7 @@ pub fn initialized(
     if values.is_empty() {
         return Ok(body);
     }
-    let protected = _numeric_ranges(&values, &data, &ambiguous, &fixups, &module::escaped(found), &far_strings);
+    let protected = _numeric_ranges(&values, &data, &ambiguous, &fixups, &crate::frontends::bc::escaped::escaped(found), &far_strings);
     let owned;
     let selected = match contracts {
         Some(one) => one,

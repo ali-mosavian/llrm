@@ -22,7 +22,7 @@ use crate::objectfile::omf::Record;
 use crate::testing;
 
 fn load(path: &str) -> Module {
-    module::load(std::path::Path::new(env!("LLRM_ROOT")).join(path)).unwrap().unwrap()
+    crate::objectfile::module::load(std::path::Path::new(env!("LLRM_ROOT")).join(path)).unwrap().unwrap()
 }
 
 fn raised(body: MirBody) -> RaisedBody {

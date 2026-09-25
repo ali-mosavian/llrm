@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::model::mir::MirBlock;
-use crate::objectfile::module::tests::{loaded, objects};
+use crate::objectfile::testing::{loaded, objects};
 
 fn block(at: i64, succ: &[i64]) -> MirBlock {
     MirBlock::new(at, vec![], vec![], succ.to_vec())

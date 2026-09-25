@@ -23,7 +23,8 @@ use crate::backend::select;
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
 use crate::model::lir::LirBody;
-use crate::objectfile::module::{Addr, Module, SourceMap};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::{Addr, Module};
 use crate::objectfile::omf;
 use crate::support::pyrepr::{self, Repr};
 

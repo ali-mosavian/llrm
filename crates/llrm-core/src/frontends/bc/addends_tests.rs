@@ -3,9 +3,14 @@
 
 use std::path::Path;
 
-use super::*;
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
 use crate::frontends::bc::{blocks, fppatches};
+use crate::objectfile::addends::canonical;
 use crate::objectfile::module;
+use crate::objectfile::omf::{self, Record};
+use crate::support::hash::IndexMap;
 
 fn word(code: &[u8], at: i64) -> i64 {
     i64::from(u16::from_le_bytes([code[at as usize], code[at as usize + 1]]))

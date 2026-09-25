@@ -13,7 +13,8 @@ use crate::frontends::bc::{blocks as split, declen};
 use crate::model::ir::{self, nodes, Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::mir;
-use crate::objectfile::module::{self, Group, Module, SourceMap};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::{self, Group, Module};
 use crate::objectfile::omf;
 use crate::wholeseg;
 

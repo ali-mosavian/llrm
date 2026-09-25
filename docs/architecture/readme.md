@@ -164,8 +164,8 @@ The main ownership split is:
 
 | Concern | Owner |
 | --- | --- |
-| OMF parsing and record fidelity | `crates/llrm-core/src/objectfile/omf.rs` |
-| Segment, group, symbol, call and object-bound facts | `crates/llrm-core/src/objectfile/module.rs` |
+| OMF parsing and record fidelity | `crates/llrm-omf/src/omf.rs` |
+| Segment, group, symbol, call and object-bound facts | `crates/llrm-omf/src/module.rs` |
 | Instruction lengths and BC emulator forms | `crates/llrm-core/src/frontends/bc/declen.rs` |
 | Reachability, inline tables and basic blocks | `crates/llrm-core/src/frontends/bc/blocks.rs` |
 | BC calling and runtime contracts | `crates/llrm-core/src/abi/runtime.rs`, `runtime.toml` |

@@ -9,7 +9,7 @@ pub mod frontends;
 pub mod hir;
 pub mod legacy;
 pub mod model;
-pub mod objectfile;
+pub use llrm_omf as objectfile;
 pub mod optimize;
 pub mod rewrite;
 pub use llrm_support as support;

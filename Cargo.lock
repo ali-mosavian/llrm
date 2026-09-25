@@ -198,6 +198,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-cycles",
+ "llrm-omf",
  "llrm-support",
  "num-bigint",
  "num-traits",
@@ -241,6 +242,14 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-omf"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-support",
 ]
 
 [[package]]

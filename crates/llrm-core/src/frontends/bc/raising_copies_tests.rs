@@ -21,7 +21,7 @@ use crate::frontends::bc::raising_literals;
 use crate::model::ir::semantics::instruction_effects;
 use crate::model::mir::Phi;
 use crate::objectfile::module::literal_only;
-use crate::objectfile::module::tests::{fixtures, loaded};
+use crate::objectfile::testing::{fixtures, loaded};
 use crate::support::pyrepr::Repr;
 use crate::testing;
 

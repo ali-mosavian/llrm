@@ -8,7 +8,7 @@ use crate::abi::handlers::error_entries;
 use crate::frontends::bc::blocks::{code_map, statement_table};
 use crate::testing;
 use crate::wholeseg::Emission;
-use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};
+use crate::objectfile::testing::{bare, fixtures, loaded, objects};
 
 fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("LLRM_ROOT")).join(relative.to_lowercase())

@@ -26,7 +26,8 @@ use crate::model::ir::nodes::{self, Node};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::Insn;
 use crate::model::mir;
-use crate::objectfile::module::{Addr, Module, SourceMap, Space};
+use crate::model::mir::SourceMap;
+use crate::objectfile::module::{Addr, Module, Space};
 use crate::support::hash::IndexMap;
 
 /// A body's new bytes, and what moved.

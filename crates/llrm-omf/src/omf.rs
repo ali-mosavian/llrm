@@ -9,15 +9,15 @@
 //! A Python `list[Record]` holds references, and callers compare them by
 //! identity (`is`, `id()`), so records are carried as `Rc<Record>`.
 
-use crate::support::hash::HashSet;
+use llrm_support::hash::HashSet;
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
-use crate::support::pyrepr::{self, Repr};
+use llrm_support::pyrepr::{self, Repr};
 
 pub const THEADR: u8 = 0x80;
 pub const COMENT: u8 = 0x88;

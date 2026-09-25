@@ -8,6 +8,7 @@ description = "llrm's HIR, MIR, optimizer, x86 backend, OMF object support and B
 [dependencies]
 llrm-support = { workspace = true }
 llrm-cycles = { workspace = true }
+llrm-omf = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }
@@ -20,8 +21,9 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [features]
-# support::testing, for the other crates' tests
-testing = []
+# testing, for the other crates' tests
+testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
+llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }

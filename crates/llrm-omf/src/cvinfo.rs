@@ -8,11 +8,9 @@
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use crate::frontends::bc::extent;
-use crate::objectfile::module;
-use crate::objectfile::omf::{self, Record};
-use crate::support::hash::IndexMap;
-use crate::support::pyrepr::{self, Repr};
+use crate::omf::{self, Record};
+use llrm_support::hash::IndexMap;
+use llrm_support::pyrepr::{self, Repr};
 
 /// $$SYMBOLS record kinds -- see docs/machine/codeview.md's own table for each one's data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1061,85 +1059,6 @@ fn _fmt_fields(type_index: i64, types: &Types, indent: &str) -> Vec<String> {
             format!("{indent}.{:<12} +{:<3} {resolved}", f.name, f.offset)
         })
         .collect()
-}
-
-fn _fmt_body(body: &extent::Body) -> String {
-    let ranges: Vec<String> = body.ranges.iter().map(|(lo, hi)| format!("{lo:#06x}-{hi:#06x}")).collect();
-    let label = body.name.clone().filter(|name| !name.is_empty()).unwrap_or_else(|| body.kind.value().to_owned());
-    format!("  {:9} {label:<12} {}  ({} bytes)", body.kind.value(), ranges.join(", "), body.length())
-}
-
-pub fn main(path: impl AsRef<std::path::Path>) -> Result<(), omf::ReadError> {
-    let path = path.as_ref();
-    let records = omf::read(path)?;
-    println!("{}", path.display());
-
-    // No CodeView needed for this part -- extent.py's own reachability answers
-    // it, and does so for every real object in the corpus, /Zi or not.
-    match module::of(&records) {
-        None => println!("  no code segment"),
-        Some(found) => match extent::partition(&found) {
-            Err(refused) => println!("  body partition refused: {refused}"),
-            Ok(found_partition) => {
-                for body in &found_partition.bodies {
-                    println!("{}", _fmt_body(body));
-                }
-            }
-        },
-    }
-
-    let info = parse(&records);
-    let Some(name) = &info.module else {
-        println!("  no /Zi debug info ($$SYMBOLS is empty)");
-        return Ok(());
-    };
-    println!("  module: {name}");
-    for proc in &info.procedures {
-        let params: Vec<String> = proc
-            .params()
-            .iter()
-            .map(|p| format!("{}:{}", p.name, _fmt_type(p.type_index, p.type_name())))
-            .collect();
-        let ret = proc.return_type().map_or(String::new(), |one| format!(" returns {one}"));
-        println!(
-            "  sub/function {}{ret}  off={:#06x} len={} flags={:#x}",
-            proc.name, proc.offset, proc.proc_length, proc.flags
-        );
-        let params = params.join(", ");
-        println!("    params: {}", if params.is_empty() { "(none)" } else { &params });
-        for p in proc.params() {
-            for line in _fmt_fields(p.type_index, &info.types, "      ") {
-                println!("{line}");
-            }
-        }
-        for loc in proc.own_locals() {
-            println!(
-                "    local  {:<12} bp={:+5}  {}",
-                loc.name,
-                loc.bp_offset,
-                _fmt_type(loc.type_index, loc.type_name())
-            );
-            for line in _fmt_fields(loc.type_index, &info.types, "      ") {
-                println!("{line}");
-            }
-        }
-    }
-    for v in &info.variables {
-        println!(
-            "  var   {:<12} seg={:3} off={:#06x}  {}",
-            v.name,
-            v.segment,
-            v.offset,
-            _fmt_type(v.type_index, v.type_name())
-        );
-        for line in _fmt_fields(v.type_index, &info.types, "        ") {
-            println!("{line}");
-        }
-    }
-    for lbl in &info.labels {
-        println!("  label {:<12} off={:#06x}", lbl.name, lbl.offset);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
