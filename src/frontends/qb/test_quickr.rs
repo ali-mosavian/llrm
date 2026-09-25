@@ -188,3 +188,28 @@ fn vbdos_still_declares_implicitly() {
     qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
         .expect("VBDOS declares x");
 }
+
+#[test]
+fn defu_statements_type_unsuffixed_names_unsigned() {
+    // Under the SINGLE default each would read -1, 256 or a wrapped LONG.
+    assert_eq!(returned("DEFUINT U\nFUNCTION f&\nDIM u\nu = &HFFFF\nf& = u\nEND FUNCTION\n"), 65535);
+    assert_eq!(returned("DEFUBYTE B\nFUNCTION f&\nDIM b\nb = 255\nb = b + 1\nf& = b\nEND FUNCTION\n"), 0);
+    let doubled = "DEFULNG U\nFUNCTION f&\nDIM u\nu = 2000000000\nu = u + u\nf& = u \\ 2\nEND FUNCTION\n";
+    assert_eq!(returned(doubled), 2_000_000_000);
+}
+
+#[test]
+fn defuint_types_function_names() {
+    let source = "DEFUINT G\nFUNCTION g\ng = &HFFFF\nEND FUNCTION\nFUNCTION f&\nf& = g\nEND FUNCTION\n";
+    assert_eq!(returned(source), 65535);
+}
+
+
+#[test]
+fn microsoft_profiles_reject_defu_statements() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"DEFUINT A-Z\n");
+    let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .expect_err("VBDOS has no DEFUINT");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}

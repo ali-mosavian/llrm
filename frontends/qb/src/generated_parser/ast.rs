@@ -53,13 +53,7 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                         .push(Statement::OptionExplicit(keyword_span));
                     ParseResult::GoodSyntax
                 }
-                ExtensionAction::DefByte { .. } => def_type_list(
-                    &mut state,
-                    TypeName::Integral {
-                        width: 1,
-                        signed: false,
-                    },
-                ),
+                ExtensionAction::DefType { type_name, .. } => def_type_list(&mut state, type_name),
                 ExtensionAction::OnLocalError { label, .. } => {
                     state.statements.push(Statement::OnError {
                         label,

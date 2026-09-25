@@ -129,8 +129,9 @@ faithful.
 
 `SIGNED` and `UNSIGNED` modify an integer type wherever `AS` takes one: `DIM`,
 `REDIM`, `COMMON`, `STATIC`, `SHARED`, parameters, `FUNCTION` results and
-`TYPE` fields. `BYTE` is unsigned, as in Visual Basic. `DEFBYTE` sets the
-default type of a letter range. There are no new suffixes.
+`TYPE` fields. `BYTE` is unsigned, as in Visual Basic. `DEFBYTE` (or `DEFUBYTE`), `DEFUINT`
+and `DEFULNG` set the default type of a letter range, as `DEFINT` does. There
+are no new suffixes.
 
 Arithmetic follows C. An operand narrower than `INTEGER` widens to `INTEGER`.
 Otherwise the result has the wider width, and it is unsigned when either

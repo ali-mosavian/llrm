@@ -1118,7 +1118,7 @@ impl Compiler {
                 format!(
                     "line {}: warning: {} is read before it is assigned",
                     load_lines.get(&instruction).copied().unwrap_or(0),
-                    names[&place].trim_end_matches('`')
+                    names[&place].split('`').next().unwrap_or_default()
                 )
             })
             .collect();
@@ -1418,9 +1418,15 @@ impl Compiler {
 
     fn typed_name(&self, name: &str) -> Result<String, SemanticError> {
         let type_id = self.named_type(name, None)?;
-        // A DEFBYTE name has no suffix; mark its key with one no source
-        // name can spell so it cannot meet an AS-declared namesake.
-        let marker = if type_id == BYTE { "`" } else { type_suffix(type_id) };
+        // A DEFBYTE or DEFU* name has no suffix; mark its key with one no
+        // source name can spell so it cannot meet an AS-declared namesake.
+        let marker = match type_id {
+            BYTE => "`byte",
+            SIGNED_BYTE => "`sbyte",
+            UNSIGNED_INTEGER => "`uint",
+            UNSIGNED_LONG => "`ulng",
+            other => type_suffix(other),
+        };
         Ok(format!("{name}{marker}"))
     }
 
