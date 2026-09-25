@@ -1,0 +1,4 @@
+# The repository root, for tests and tools that read tests/, examples/ and
+# the Nib runtime, whichever crate they are in.
+[env]
+LLRM_ROOT = { value = "", relative = true }

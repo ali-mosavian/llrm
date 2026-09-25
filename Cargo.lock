@@ -164,7 +164,75 @@ name = "llrm"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-c",
+ "llrm-core",
+ "llrm-nib",
+ "llrm-qb",
+ "regex",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "llrm-c"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
  "indexmap",
+ "llrm-core",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-core"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-nib"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-core",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-qb"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-core",
  "num-bigint",
  "num-traits",
  "regex",

@@ -218,7 +218,7 @@ near. The frontend projects the element descriptor's 16-bit offset before
 `B$SASS`, `B$FLEN`, or `B$SCMP`, matching VBDOS listings; it does not ask MIR
 or the backend to learn a BASIC descriptor special case.
 
-The first part of that adapter is implemented in `src/frontends/qb/abi.rs`.
+The first part of that adapter is implemented in `crates/llrm-core/src/abi/qb.rs`.
 Calls retain typed, source-order operands through semantic MIR and its
 optimizers. The adapter materializes the already-existing `ARG` operations in
 the HIR side table's order, removes arguments from the physical `CALL`, and
@@ -252,8 +252,8 @@ crates/qbfront/                 Rust source frontend executable
   src/syntax.rs               private syntax nodes
   src/semantic.rs             types, storage, CFG, and HIR JSON construction
 
-src/hir/                    language-neutral Python HIR decoder/verifier
-src/frontends/qb/            QB ABI, link plan, and HIR-to-MIR adapter
+crates/llrm-core/src/hir/                    language-neutral Python HIR decoder/verifier
+crates/llrm-qb/src/            QB ABI, link plan, and HIR-to-MIR adapter
 crates/qbfront/tests/           focused parser/semantic regressions
 tests/test_hir.py             common-boundary and MIR-lowering tests
 ```
@@ -315,7 +315,7 @@ compiler must not depend on a sibling checkout at build time.
 
 The existing OMF frontend already answers the difficult lowering questions
 for compiler output. Its main raising sequence in
-[`mir.rs`](../../../src/model/mir.rs) recognizes whole LONG values,
+[`mir.rs`](../../../crates/llrm-core/src/model/mir.rs) recognizes whole LONG values,
 arithmetic runtime helpers, floating evaluation, and numeric array access.
 
 For a small program accepted by a legacy compiler, the validation loop is:

@@ -1,7 +1,5 @@
-//! Builds wccq, the Open Watcom front end llrm-c records C through, into
-//! OUT_DIR. The first build also clones and bootstraps Open Watcom (see
-//! toolchain/owshim/build.sh).
-//! Also builds jwasm and jwlink (toolchain/jwbuild.sh). All of it only with the
+//! Builds jwasm and jwlink (toolchain/jwbuild.sh) and the headless DOSBox-X
+//! (toolchain/dosrunbuild.sh) beside llrm's binaries. Only with the
 //! `toolchain` feature, whose scripts need a Unix host.
 
 use std::path::PathBuf;
@@ -20,16 +18,6 @@ fn toolchain() {
 
 #[cfg(unix)]
 fn toolchain() {
-    for input in ["toolchain/owshim/build.sh", "toolchain/owshim/cgshim.c", "toolchain/owshim/cc-objects.txt", "toolchain/owshim/patches"] {
-        println!("cargo:rerun-if-changed={input}");
-    }
-    println!("cargo:rerun-if-env-changed=OWROOT");
-    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim");
-    let status = Command::new("sh").arg("toolchain/owshim/build.sh").arg(&out).status().expect("could not start sh");
-    assert!(status.success(), "toolchain/owshim/build.sh failed: {status}");
-    let wccq = out.join("wccq");
-    println!("cargo:rustc-env=LLRM_WCCQ={}", wccq.display());
-
     // jwasm and jwlink beside llrm's own binaries, in target/<profile>.
     println!("cargo:rerun-if-changed=toolchain/jwbuild.sh");
     let profile = PathBuf::from(std::env::var("OUT_DIR").unwrap()).ancestors().nth(3).unwrap().to_path_buf();

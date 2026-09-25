@@ -186,16 +186,16 @@ without changing its model:
 The adapter should reuse the policies already implemented by the object
 raiser, notably:
 
-- [`raising_calls.rs`](../../../src/frontends/bc/raising_calls.rs) for recognized
+- [`raising_calls.rs`](../../../crates/llrm-core/src/frontends/bc/raising_calls.rs) for recognized
   long arithmetic calls;
-- [`raising_longs.rs`](../../../src/frontends/bc/raising_longs.rs) for whole LONG
+- [`raising_longs.rs`](../../../crates/llrm-core/src/frontends/bc/raising_longs.rs) for whole LONG
   values;
-- [`raising_floats.rs`](../../../src/frontends/bc/raising_floats.rs),
-  [`raising_float_calls.rs`](../../../src/frontends/bc/raising_float_calls.rs), and
-  [`raising_float_values.rs`](../../../src/frontends/bc/raising_float_values.rs)
+- [`raising_floats.rs`](../../../crates/llrm-core/src/frontends/bc/raising_floats.rs),
+  [`raising_float_calls.rs`](../../../crates/llrm-core/src/frontends/bc/raising_float_calls.rs), and
+  [`raising_float_values.rs`](../../../crates/llrm-core/src/frontends/bc/raising_float_values.rs)
   for floating semantics; and
-- [`raising_arrays.rs`](../../../src/frontends/bc/raising_arrays.rs) and
-  [`raising_array_access.rs`](../../../src/frontends/bc/raising_array_access.rs)
+- [`raising_arrays.rs`](../../../crates/llrm-core/src/frontends/bc/raising_arrays.rs) and
+  [`raising_array_access.rs`](../../../crates/llrm-core/src/frontends/bc/raising_array_access.rs)
   for array identity and access.
 
 “Reuse” first means factor or call the same semantic policy, not copy it into

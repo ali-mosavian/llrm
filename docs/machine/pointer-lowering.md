@@ -2,7 +2,7 @@
 
 MIR's `PTR_OFFSET(pointer, byte_displacement)` produces one whole pointer.
 It does not say how selectors, registers or segment boundaries work.
-`src/backend/pointers.rs` owns that representation and requires an explicit ABI
+`crates/llrm-core/src/backend/pointers.rs` owns that representation and requires an explicit ABI
 model. CPU arithmetic tuning does not establish an operating-system ABI.
 
 The runtime source `runtime/rt/gwini.asm` documents `b$HugeShift`: each 64K

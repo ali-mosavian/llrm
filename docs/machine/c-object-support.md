@@ -67,7 +67,7 @@ Before/after assembly is unchanged (discovery does not emit):
 ```
 
 Borland floating-point FIXUPP records name FIDRQQ/FIERQQ/FIWRQQ at
-WAIT/opcode bytes, not ordinary operand fields. `src/frontends/bc/fppatches.rs` now
+WAIT/opcode bytes, not ordinary operand fields. `crates/llrm-core/src/frontends/bc/fppatches.rs` now
 recognizes their verified byte shapes separately from ordinary operands.
 The symbol categories agree with JWlink's `c/objcalc.c` FloatNames table.
 Nonzero addends, self-relative fixups, wrong widths and wrong bytes are not
@@ -89,7 +89,7 @@ also partition completely (four, three and two procedures). Native frame
 emission remains explicitly refused. r_span's unexplained function matches
 the unused `toggle_active` in its source; no heuristic deletion is performed.
 
-`src/backend/nativeframe.rs` now recognizes the entry footprint. R_WALK's public
+`crates/llrm-core/src/backend/nativeframe.rs` now recognizes the entry footprint. R_WALK's public
 renderer procedure reserves 72 bytes and pushes SI/DI, so a new spill must
 start below BP-76, not BP-72. Five focused tests verify these offsets against
 the real object. Exit matching now locates restores (including x87 cleanup
@@ -104,7 +104,7 @@ edges, requires equal depths at joins, checks restore-site depth and the
 final saved-BP pop, and requires an explicit cleanup value for every call.
 All five R_WALK procedures balance using private near-call cleanup derived
 from their actual RET instructions and the artifact-pinned external contract
-for R_EMIT_ENTITIES (28 bytes). `src/abi/nativecalls.rs` supplies those facts;
+for R_EMIT_ENTITIES (28 bytes). `crates/llrm-core/src/abi/nativecalls.rs` supplies those facts;
 unknown external calls remain unknown. Tests reject missing caller cleanup and
 wrong or missing callee cleanup. This verifier is not yet the production
 emission gate; whole-C emission stays refused.
@@ -569,7 +569,7 @@ No performance change was made or claimed by this audit. Captured dumps:
 
 ### Recurrence-sharing prototype
 
-`src/optimize/ivshare.rs` reconstructs a related recurrence from an equal-step
+`crates/llrm-core/src/optimize/ivshare.rs` reconstructs a related recurrence from an equal-step
 base plus its constant seed offset, at the same integer width. It reads no
 machine registers or origin map. Two focused real-object tests cover sharing
 the culling pointers and refusing unequal strides; changed-file ty/ruff pass.
@@ -598,7 +598,7 @@ prototype; the latest runtime-verified build remains `zwctexv3`.
 
 ### Lowered address forms
 
-`src/backend/addressforms.rs` follows word-sized copies and constant additions
+`crates/llrm-core/src/backend/addressforms.rs` follows word-sized copies and constant additions
 when selecting far memory operands. The effective displacement wraps at
 16 bits and keeps the original selector. MIR is unchanged. This is enabled
 independently of the recurrence-sharing prototype, which remains disabled.
@@ -689,7 +689,7 @@ add si,14h               ; add si,14h
 No new FPS claim or redundant renderer run. This repairs the dependency
 needed for sound simplification; it does not yet remove the extra updates.
 Recurrence sharing remains disabled. Existing lint failures elsewhere in
-`src/model/mir.rs` and the full integration/commit gate remain outstanding.
+`crates/llrm-core/src/model/mir.rs` and the full integration/commit gate remain outstanding.
 
 ### Upper-word identity normalization
 
@@ -959,7 +959,7 @@ the counter private. Track the explicit addresses' escape and the runtime's
 implicit access separately before narrowing call effects.
 Do not extend the data-segment exclusion to all frame cells.
 
-`src/analysis/frameescape.rs` now propagates explicit frame origins through
+`crates/llrm-core/src/analysis/frameescape.rs` now propagates explicit frame origins through
 copies and phis to a fixed point. Other uses conservatively expose those
 origins; opaque address sites are reported separately. Stage dumps include
 the result. On the real `LS_ANIMATE` fixture the observed exposed origin is
@@ -1057,7 +1057,7 @@ Borland puts OFF16 addends in instruction bytes: the store at `09F4`
 contains `0CA0h`, while its FIXUPP displacement is zero. Raising read only
 the FIXUPP; emission zeroed the operand and lost the addend.
 
-`src/objectfile/addends.rs` now moves code OFF16 addends into FIXUPP before
+`crates/llrm-core/src/objectfile/addends.rs` now moves code OFF16 addends into FIXUPP before
 raising, after removing native-FPU linker patch records. Those patch records
 point at instructions, not address addends, so the order matters.
 

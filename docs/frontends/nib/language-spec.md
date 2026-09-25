@@ -1553,7 +1553,7 @@ A float prints as the shortest decimal that reads back as the same `f32` or
 #### Runtime
 
 The compiler emits length, indexing, slicing, and iteration inline. The
-runtime is written in the language itself (`src/frontends/nib/runtime/*.nib`); only
+runtime is written in the language itself (`crates/llrm-nib/src/runtime/*.nib`); only
 startup and the DOS calls are assembly. Each routine is a code segment of
 its own, so a program links only the routines it reaches. As BC's are, its
 routines are named

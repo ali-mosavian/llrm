@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/frontends/nib/runtime/start.asm");
+    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/llrm-nib/src/runtime/start.asm");
     let assembled = Command::new(bin.join("jwasm"))
         .args(["-q", "-c", "-Cp", "-Zg", "-omf"])
         .arg(format!("-Fo{}", scratch.path().join("START.OBJ").display()))

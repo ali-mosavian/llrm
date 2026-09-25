@@ -1,6 +1,6 @@
 # HIR architecture
 
-Status: initial implementation. `src/hir/` contains the typed model, strict
+Status: initial implementation. `crates/llrm-core/src/hir/` contains the typed model, strict
 versioned JSON codec, verifier, canonical MIR projection, and adapter to
 existing MIR. `crates/qbfront/` is now a real producer for numeric, control-flow,
 string, file, array, and procedure slices; source reaches existing MIR without
@@ -156,7 +156,7 @@ capture into HIR. We do not make the unproved C adapter a prerequisite for QB.
 
 ### Relationship to the current WCC path
 
-[`src/frontends/c/hir.rs`](../../../src/frontends/c/hir.rs) is accurately named within that
+[`crates/llrm-c/src/hir.rs`](../../../crates/llrm-c/src/hir.rs) is accurately named within that
 frontend, but it is a capture of WCC code-generator calls: nodes retain names
 such as `CGBinary`, WCC type codes, target flags, handles, and call classes.
 Those are excellent evidence for the C adapter and should not become the

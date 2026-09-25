@@ -22,3 +22,6 @@ buildprs = { path = "crates/buildprs" }
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.
 [profile.release]
 incremental = true
+
+# Its own workspace: llrm-qb runs it as a program.
+[workspace]

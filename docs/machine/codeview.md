@@ -4,7 +4,7 @@
 empty debug segments (class `DEBSYM`/`DEBTYP`); `/Zi` is what makes BC put
 bytes in them, plus `LINNUM` records the compiler otherwise omits.
 
-    src/objectfile/cvinfo.rs       reads $$SYMBOLS directly from the .OBJ, no LINK/CVPACK
+    crates/llrm-core/src/objectfile/cvinfo.rs       reads $$SYMBOLS directly from the .OBJ, no LINK/CVPACK
     python -m qbopt.objectfile.cvinfo FILE.OBJ
 
 Verified identical across all three compilers (VBDOS, PDS 7.1, QB 4.5) by

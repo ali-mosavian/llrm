@@ -21,7 +21,7 @@ the alias alone left the production refusal and assembly unchanged.
 
 ## Near-call adapter established
 
-`src/abi/events.rs` now recognizes the exact compiler adapter and both external
+`crates/llrm-core/src/abi/events.rs` now recognizes the exact compiler adapter and both external
 relocations, only for these established runtime families. Its pending path
 pops the near return IP into AX, pushes CS then IP, and tail-jumps to EVK1.
 Its no-event path returns directly. Neither path takes caller arguments.
