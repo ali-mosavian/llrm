@@ -177,6 +177,8 @@ fn _run(arguments: Vec<String>) -> Result<String, FrontendError> {
         };
         return Err(FrontendError(message));
     }
+    // Warnings: the program still compiled.
+    eprint!("{}", String::from_utf8_lossy(&result.stderr));
     Ok(String::from_utf8_lossy(&result.stdout).into_owned())
 }
 

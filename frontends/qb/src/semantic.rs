@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod assignment;
 mod shapes;
 mod tags;
 
@@ -285,6 +286,9 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
+    /// The source line of each load in the function being built.
+    load_lines: BTreeMap<u32, usize>,
+    warnings: Vec<String>,
 }
 
 pub fn compile(
@@ -327,6 +331,7 @@ pub struct Options {
     pub whole_program: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compile_with_options(
     module: &Module,
     module_name: &str,
@@ -334,9 +339,20 @@ pub fn compile_with_options(
     runtime: &str,
     options: &Options,
 ) -> Result<String, SemanticError> {
+    compile_with_warnings(module, module_name, dialect, runtime, options).map(|(hir, _)| hir)
+}
+
+/// [`compile_with_options`], plus the warnings the program earns.
+pub fn compile_with_warnings(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    options: &Options,
+) -> Result<(String, Vec<String>), SemanticError> {
     let mut compiler = built(module, module_name, dialect, runtime, options)?;
     shapes::applied(&mut compiler);
-    Ok(compiler.json())
+    Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
 /// Every procedure of `module` as HIR, before emission.
@@ -962,6 +978,8 @@ impl Compiler {
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
+            load_lines: BTreeMap::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -1016,6 +1034,7 @@ impl Compiler {
     ) {
         self.prune_unreachable(&parameters);
         let retained: BTreeSet<u32> = self.blocks.iter().map(|block| block.id).collect();
+        let load_lines = std::mem::take(&mut self.load_lines);
         let external_entries: Vec<u32> = self
             .statement_entries
             .iter()
@@ -1026,6 +1045,9 @@ impl Compiler {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        if self.dialect.explicit_declarations() {
+            self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
+        }
         let table = self
             .data
             .iter_mut()
@@ -1057,6 +1079,50 @@ impl Compiler {
             linkage,
             origins: BTreeMap::new(),
         });
+    }
+
+    /// Warn once per source variable a path reads before assigning: a
+    /// procedure's locals, or in module code the module's variables.
+    fn warn_unassigned_reads(
+        &mut self,
+        module_code: bool,
+        entries: &[u32],
+        load_lines: &BTreeMap<u32, usize>,
+    ) {
+        let storage = if module_code { "module" } else { "local" };
+        let names: BTreeMap<u32, &str> = self
+            .places
+            .iter()
+            .filter(|place| {
+                place.storage == storage
+                    && !place.name.starts_with('$')
+                    && (integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE))
+            })
+            .map(|place| (place.id, place.name.as_str()))
+            .collect();
+        let tracked = names.keys().copied().collect();
+        // A user procedure may assign any variable the module shares.
+        let assigns_all = if module_code {
+            self.calls
+                .iter()
+                .filter(|call| call.callee.is_some())
+                .map(|call| call.instruction)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries);
+        let warnings: Vec<String> = reads
+            .into_iter()
+            .map(|(place, instruction)| {
+                format!(
+                    "line {}: warning: {} is read before it is assigned",
+                    load_lines.get(&instruction).copied().unwrap_or(0),
+                    names[&place].trim_end_matches('`')
+                )
+            })
+            .collect();
+        self.warnings.extend(warnings);
     }
 
     fn prune_unreachable(&mut self, parameters: &[u32]) {
@@ -7338,6 +7404,9 @@ impl Compiler {
     fn emit(&mut self, op: &'static str, results: Vec<u32>, operands: Vec<Operand>) {
         let id = self.next_instruction;
         self.next_instruction += 1;
+        if op == "load" {
+            self.load_lines.insert(id, self.current_source_line);
+        }
         self.blocks[self.current_block]
             .instructions
             .push(Instruction {
