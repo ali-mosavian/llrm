@@ -114,3 +114,27 @@ pub fn declaring<'o>(loaded: &Loaded, owner: &'o str) -> (String, &'o str) {
     let owner = if module.is_empty() { owner } else { &owner[module.len() + 1..] };
     (module, owner)
 }
+
+/// The locals a name at `line` and `column` of `module` sees, innermost first.
+pub fn visible(module: &Module, line: usize, column: usize) -> Vec<String> {
+    for function in &module.functions {
+        let mut locals: Vec<(String, Span)> = function.parameters.iter().map(|one| (one.name.clone(), one.span)).collect();
+        let mut seen = None;
+        let Ok(()) = scopes::walk_mut(&mut function.body.clone(), &mut locals, &mut |expression, locals: &[(String, Span)]| -> Result<(), std::convert::Infallible> {
+            if matches!(expression, Expr::Name(_, span) if text::contains(*span, line, column)) {
+                seen = Some(locals.to_vec());
+            }
+            Ok(())
+        });
+        if let Some(locals) = seen {
+            let mut names: Vec<String> = Vec::new();
+            for (name, _) in locals.into_iter().rev() {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+            return names;
+        }
+    }
+    Vec::new()
+}

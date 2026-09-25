@@ -212,3 +212,19 @@ fn completion_after_a_value_offers_its_types_fields_and_methods() {
     assert_eq!(labels(1), ["x", "y", "length2"]);
     assert_eq!(labels(2), ["x", "y", "length2"]);
 }
+
+/// Locals were never offered: `to` in `main` did not complete `total`.
+#[test]
+fn completion_offers_the_locals_in_scope_at_the_cursor() {
+    let program = Program::new();
+    let typing = MAIN.replace("    let mode = io.READ\n", "    to\n    let mode = io.READ\n");
+    let changed = json!({"textDocument": {"uri": program.uri("main")}, "contentChanges": [{"text": typing}]});
+    let sent = session(&[program.opened("main", MAIN), notification("textDocument/didChange", changed), request(1, "textDocument/completion", program.at(10, 6))]);
+    let labels: Vec<String> = result(&sent, 1).as_array().expect("items").iter().map(|one| one["label"].as_str().expect("a label").to_owned()).collect();
+    for expected in ["total", "p"] {
+        assert!(labels.iter().any(|one| one == expected), "{expected} in {labels:?}");
+    }
+    for hidden in ["value", "mode"] {
+        assert!(!labels.iter().any(|one| one == hidden), "{hidden}, out of scope, in {labels:?}");
+    }
+}
