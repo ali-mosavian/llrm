@@ -204,3 +204,17 @@ The target's subscripts are evaluated once, so `a(f()) += 1` calls `f` once.
 `BREAK` leaves the innermost `FOR`, `WHILE` or `DO` loop. `CONTINUE` starts its
 next iteration: a `FOR` steps its counter first, and a `DO … LOOP WHILE` runs
 its test. Both names are reserved.
+
+### FOR EACH
+
+`FOR EACH x IN iterable … NEXT` runs its body once per element, with `x`
+holding a copy: assigning `x` changes neither the iterable nor the iteration.
+`AS type` declares `x`, and several loops may declare it with the same type.
+
+| Iterable | Elements |
+|---|---|
+| `a()` or `a` | each element of one-dimensional array `a`, live |
+| `RANGE(stop)`, `RANGE(start, stop[, step])` | Python's `range`; `x` must be an integer |
+| any string expression | each character of a copy taken before the loop |
+
+`RANGE` evaluates its arguments once, in order.

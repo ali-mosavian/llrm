@@ -650,3 +650,61 @@ fn quickr_reserves_break_and_continue() {
         assert!(error.to_string().contains("reserved"), "{error}");
     }
 }
+
+#[test]
+fn for_each_counts_through_range() {
+    // Assigning the variable must not steer the loop: it is a copy.
+    let source = "FOR EACH i AS INTEGER IN RANGE(3)\nPRINT i;\ni = 10\nNEXT\nPRINT\n\
+        FOR EACH i AS INTEGER IN RANGE(10, 0, -3)\nPRINT i;\nNEXT\nPRINT\n\
+        FOR EACH i IN RANGE(2, 4)\nPRINT i;\nNEXT\nPRINT i\n\
+        FOR EACH i IN RANGE(0)\nPRINT \"never\"\nNEXT\n";
+    assert_eq!(printed(source), " 0  1  2 \n 10  7  4  1 \n 2  3  3 \n");
+}
+
+#[test]
+fn for_each_evaluates_range_bounds_once() {
+    let source = "DIM SHARED hits AS INTEGER\n\
+        FOR EACH i AS INTEGER IN RANGE(1, 6, by%)\nNEXT\nPRINT hits; i\n\
+        FUNCTION by%\nhits += 1\nby% = 2\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 1  5 \n");
+}
+
+#[test]
+fn for_each_copies_array_elements() {
+    let source = "TYPE P\nx AS INTEGER\nEND TYPE\n\
+        DIM a(2) AS INTEGER, ps(2) AS P\na(0) = 5: a(1) = 6: a(2) = 7\n\
+        FOR EACH v AS INTEGER IN a()\nv = v * 10\nPRINT v;\nNEXT\nPRINT a(0)\n\
+        ps(1).x = 4\nFOR EACH p AS P IN ps\nPRINT p.x;\nNEXT\nPRINT\n";
+    assert_eq!(printed(source), " 50  60  70  5 \n 0  4  0 \n");
+}
+
+#[test]
+fn for_each_walks_a_copy_of_a_string() {
+    let source = "DIM s AS STRING, n AS INTEGER\ns = \"abc\"\n\
+        FOR EACH c AS STRING IN s + \"d\"\nIF c = \"b\" THEN CONTINUE\nPRINT c;\nNEXT\nPRINT\n\
+        FOR EACH c IN s\ns = \"\"\nn += 1\nNEXT\nPRINT n\n";
+    assert_eq!(printed(source), "acd\n 3 \n");
+}
+
+#[test]
+fn for_each_errors() {
+    for (source, message) in [
+        ("FOR EACH i AS INTEGER IN RANGE(2)\nNEXT\nFOR EACH i AS LONG IN RANGE(2)\nNEXT\n", "another type"),
+        ("FOR EACH d AS DOUBLE IN RANGE(2)\nNEXT\n", "integer variable"),
+        ("FOR EACH i IN RANGE(2)\nNEXT\n", "not defined"),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
+
+#[test]
+fn microsoft_profiles_keep_each_a_name() {
+    let source = "FOR each = 1 TO 2\nPRINT each;\nNEXT\n";
+    assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), " 1  2 ");
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"DIM a(2)\nFOR EACH v IN a()\nNEXT\n");
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no FOR EACH");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}

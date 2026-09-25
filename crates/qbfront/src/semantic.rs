@@ -9,6 +9,7 @@ mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
+use crate::generated_parser::EACH;
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
@@ -258,6 +259,9 @@ struct Compiler {
     /// CONTINUE target is made when first needed, so a loop without one
     /// steps its counter at the end of the body as before.
     loops: Vec<(u32, Option<u32>)>,
+    /// Variables a FOR EACH `AS` declared in this scope, which a later
+    /// FOR EACH may declare again with the same type.
+    each_declared: BTreeSet<String>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
     /// The FUNCTION being compiled, without its suffix.
@@ -540,6 +544,7 @@ fn built(
             compiler.result_place = Some((place, result_type));
             compiler.result_name = Some(canonical(&procedure.name).into());
         }
+        compiler.each_declared.clear();
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler
@@ -998,6 +1003,7 @@ impl Compiler {
             next_read_data_row: 0,
             exits: Vec::new(),
             loops: Vec::new(),
+            each_declared: BTreeSet::new(),
             return_block: None,
             result_place: None,
             result_name: None,
@@ -1261,6 +1267,7 @@ impl Compiler {
     }
 
     fn declarations(&mut self, module: &Module) -> Result<(), SemanticError> {
+        self.each_declared.clear();
         self.declarations_in(&module.statements, "module")
     }
 
@@ -1635,6 +1642,18 @@ impl Compiler {
             match statement {
                 Statement::Dim(items) => {
                     for item in items {
+                        let each = item.name.strip_prefix(EACH);
+                        let item = &Declaration {
+                            name: each.unwrap_or(&item.name).into(),
+                            ..item.clone()
+                        };
+                        if each.is_some() && !self.each_declared.insert(self.declaration_key(item)?) {
+                            let declared = self.variables[&self.declaration_key(item)?].type_id;
+                            if declared != self.resolve_type(item.type_name.as_ref())? {
+                                return self.fail(format!("{} is declared with another type", item.name));
+                            }
+                            continue;
+                        }
                         if storage != "module" && !item.shared {
                             // An explicit procedure DIM shadows a module
                             // variable of the same name, STATIC or not:
@@ -2500,6 +2519,20 @@ impl Compiler {
                     else_branch,
                     ..
                 } => self.if_statement(condition, then_branch, else_branch)?,
+                Statement::For {
+                    counter,
+                    start: Expr::Apply { name, arguments, .. },
+                    body,
+                    ..
+                } if name == EACH => {
+                    if !self.dialect.for_each() {
+                        return self.fail("FOR EACH needs the quickr profile");
+                    }
+                    let [iterable] = arguments.as_slice() else {
+                        return self.fail("FOR EACH takes one iterable");
+                    };
+                    self.for_each(counter, iterable, body)?
+                }
                 Statement::For {
                     counter,
                     start,
@@ -3787,6 +3820,125 @@ impl Compiler {
         }
         self.select_block(done_block);
         Ok(())
+    }
+
+    /// `FOR EACH item IN iterable` as a FOR over a hidden index, which copies
+    /// each element into `item` before the body: assigning `item` changes
+    /// neither the iterable nor the iteration.
+    fn for_each(
+        &mut self,
+        item: &Expr,
+        iterable: &Expr,
+        body: &[Statement],
+    ) -> Result<(), SemanticError> {
+        let Expr::Name(item_name, span) = item else {
+            return self.fail("FOR EACH needs a variable");
+        };
+        let span = *span;
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: name.into(),
+            arguments,
+            span,
+        };
+        let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+        let array = match iterable {
+            Expr::Apply {
+                name, arguments, ..
+            } if arguments.is_empty() => Some(name),
+            Expr::Name(name, _) if !self.variables.contains_key(&self.variable_key(name)) => {
+                Some(name)
+            }
+            _ => None,
+        }
+        .filter(|name| self.array(name).is_ok());
+        let (index, first, last, step, element) = if let Some(array) = array {
+            let (_, index) = self.hidden(INTEGER)?;
+            let whole = Expr::Name(array.clone(), span);
+            let element = apply(array, vec![index.clone()]);
+            (index, apply("LBOUND", vec![whole.clone()]), apply("UBOUND", vec![whole]), None, element)
+        } else if let Some(arguments) = self.range_arguments(iterable) {
+            let item_type = self.variable(item_name)?.type_id;
+            if !integral(item_type) || item_type == BOOLEAN {
+                return self.fail("FOR EACH over RANGE needs an integer variable");
+            }
+            // Each bound is evaluated once, in order; STEP is read twice.
+            let mut held = Vec::new();
+            for argument in arguments {
+                held.push(match argument {
+                    Expr::Literal(..) => argument.clone(),
+                    _ => {
+                        let (value, type_id) = self.expression(argument)?;
+                        self.hold_value(value, type_id)?
+                    }
+                });
+            }
+            let (first, stop, step) = match held.as_slice() {
+                [stop] => (integer(0), stop.clone(), None),
+                [first, stop] => (first.clone(), stop.clone(), None),
+                [first, stop, step] => (first.clone(), stop.clone(), Some(step.clone())),
+                _ => return self.fail("RANGE takes one to three arguments"),
+            };
+            // RANGE stops before `stop`; FOR runs through its end.
+            let toward = match &step {
+                Some(step) => apply("SGN", vec![step.clone()]),
+                None => integer(1),
+            };
+            let last = Expr::Binary {
+                op: Binary::Subtract,
+                left: Box::new(stop),
+                right: Box::new(toward),
+                span,
+            };
+            let (_, index) = self.hidden(item_type)?;
+            (index.clone(), first, last, step, index)
+        } else {
+            // A string is copied first, so the body cannot change it.
+            let copy = format!("{EACH}TEXT{}", self.next_place);
+            self.declare_as(
+                &Declaration {
+                    name: copy.clone(),
+                    type_name: Some(TypeName::String),
+                    array: false,
+                    bounds: Vec::new(),
+                    fixed_length: None,
+                    shared: false,
+                    dynamic: false,
+                    span,
+                },
+                self.implicit_storage,
+            )?;
+            let text = Expr::Name(copy, span);
+            self.statement_list(&[Statement::Assign {
+                target: text.clone(),
+                value: iterable.clone(),
+                span,
+            }])?;
+            let (_, index) = self.hidden(INTEGER)?;
+            let element = apply("MID$", vec![text.clone(), index.clone(), integer(1)]);
+            (index, integer(1), apply("LEN", vec![text]), None, element)
+        };
+        let mut statements = vec![Statement::Assign {
+            target: item.clone(),
+            value: element,
+            span,
+        }];
+        statements.extend(body.iter().cloned());
+        self.for_statement(&index, &first, &last, step.as_ref(), &statements)
+    }
+
+    /// RANGE's arguments, unless the program names something RANGE.
+    fn range_arguments<'e>(&self, iterable: &'e Expr) -> Option<&'e [Expr]> {
+        match iterable {
+            Expr::Apply {
+                name, arguments, ..
+            } if name == "RANGE"
+                && !self.signatures.contains_key("RANGE")
+                && self.array(name).is_err() =>
+            {
+                Some(arguments)
+            }
+            _ => None,
+        }
     }
 
     fn while_statement(
@@ -5586,8 +5738,14 @@ impl Compiler {
     /// `operand` stored in a fresh variable, as a name only the compiler
     /// can spell, so an expression built around it evaluates it once.
     fn hold_value(&mut self, operand: Operand, type_id: u32) -> Result<Expr, SemanticError> {
-        let place = self.compiler_temporary("$held", type_id)?;
+        let (place, held) = self.hidden(type_id)?;
         self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
+        Ok(held)
+    }
+
+    /// A compiler temporary that expressions can name.
+    fn hidden(&mut self, type_id: u32) -> Result<(u32, Expr), SemanticError> {
+        let place = self.compiler_temporary("$held", type_id)?;
         let name = format!("$HELD{place}");
         self.variables.insert(
             name.clone(),
@@ -5602,7 +5760,7 @@ impl Compiler {
                 descriptor_data: "none",
             },
         );
-        Ok(Expr::Name(name, crate::syntax::Span { line: 0, start: 0, end: 0 }))
+        Ok((place, Expr::Name(name, crate::syntax::Span { line: 0, start: 0, end: 0 })))
     }
 
     /// A numeric value for a runtime routine or intrinsic, which knows only

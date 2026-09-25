@@ -53,6 +53,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `FOR EACH item IN iterable`.
+    pub fn for_each(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

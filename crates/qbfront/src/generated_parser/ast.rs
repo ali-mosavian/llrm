@@ -26,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(augmented(lex(source, dialect).map_err(ParseError::from)?));
+    let (tokens, private_at) = without_private(for_each(augmented(lex(source, dialect).map_err(ParseError::from)?)));
     let mut state = ParseState::new(tokens);
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -222,27 +222,95 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
             at += 1;
             continue;
         };
-        // The value runs to the end of the statement: `:`, a new line, or
-        // the ELSE of a one-line IF, outside any parentheses.
-        let mut end = at + 2;
-        let mut depth = 0usize;
-        while let Some(next) = tokens.get(end) {
-            if depth == 0 && (is(next, "tkColon") || is(next, "tkNewLine") || is(next, "tkELSE")) {
-                break;
-            }
-            if is(next, "tkLParen") {
-                depth += 1;
-            } else if is(next, "tkRParen") {
-                depth = depth.saturating_sub(1);
-            }
-            end += 1;
-        }
+        let end = token_statement_end(&tokens, at + 2);
         let at_token = |kind: TokenKind| Token { kind, span: token.span };
         out.push(equals.clone());
         out.push(at_token(TokenKind::Identifier(format!("{AUGMENTED}{}", operator))));
         out.push(at_token(TokenKind::Reserved(named("tkLParen"))));
         out.extend(tokens[at + 2..end].iter().cloned());
         out.push(at_token(TokenKind::Reserved(named("tkRParen"))));
+        at = end;
+    }
+    out
+}
+
+/// Where the statement running from `at` ends: `:`, a new line, or the ELSE
+/// of a one-line IF, outside any parentheses.
+fn token_statement_end(tokens: &[Token], mut at: usize) -> usize {
+    let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
+    let mut depth = 0usize;
+    while let Some(next) = tokens.get(at) {
+        if depth == 0 && (is(next, "tkColon") || is(next, "tkNewLine") || is(next, "tkELSE")) {
+            break;
+        }
+        if is(next, "tkLParen") {
+            depth += 1;
+        } else if is(next, "tkRParen") {
+            depth = depth.saturating_sub(1);
+        }
+        at += 1;
+    }
+    at
+}
+
+/// The function a FOR EACH loop starts from, and the prefix of the name its
+/// `AS` declares: `FOR EACH x AS t IN e` becomes
+/// `DIM $EACHx AS t: FOR x = $EACH(e) TO 0`. No source name can spell it.
+pub const EACH: &str = "$EACH";
+
+/// QuickrBASIC's `FOR EACH x [AS type] IN iterable`, rewritten into a FOR
+/// the grammar parses and pairs with its NEXT. `FOR EACH =` stays a counter
+/// named EACH.
+fn for_each(tokens: Vec<Token>) -> Vec<Token> {
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let word = |token: Option<&Token>, text: &str| {
+        token.is_some_and(|token| matches!(&token.kind, TokenKind::Identifier(word) if word == text))
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let variable = match tokens.get(at + 2).map(|token| &token.kind) {
+            Some(TokenKind::Identifier(name))
+                if is(tokens.get(at), "tkFOR") && word(tokens.get(at + 1), "EACH") =>
+            {
+                name.clone()
+            }
+            _ => {
+                out.push(tokens[at].clone());
+                at += 1;
+                continue;
+            }
+        };
+        let end = token_statement_end(&tokens, at);
+        let Some(within) = (at + 3..end).find(|&index| word(tokens.get(index), "IN")) else {
+            out.push(tokens[at].clone());
+            at += 1;
+            continue;
+        };
+        let span = tokens[at].span;
+        let token = |kind: TokenKind| Token { kind, span };
+        let reserved = |name: &str| token(TokenKind::Reserved(named(name)));
+        if is(tokens.get(at + 3), "tkAS") {
+            out.push(reserved("tkDIM"));
+            out.push(token(TokenKind::Identifier(format!("{EACH}{variable}"))));
+            out.extend(tokens[at + 3..within].iter().cloned());
+            out.push(reserved("tkColon"));
+        } else if within != at + 3 {
+            out.push(tokens[at].clone());
+            at += 1;
+            continue;
+        }
+        out.push(tokens[at].clone());
+        out.push(tokens[at + 2].clone());
+        out.push(reserved("tkEQ"));
+        out.push(token(TokenKind::Identifier(EACH.into())));
+        out.push(reserved("tkLParen"));
+        out.extend(tokens[within + 1..end].iter().cloned());
+        out.push(reserved("tkRParen"));
+        out.push(reserved("tkTO"));
+        out.push(token(TokenKind::Integer(0, None)));
         at = end;
     }
     out
