@@ -1,14 +1,11 @@
-//! Port of `qbopt/hir/__init__.py`: the small, source-language-neutral IR
-//! above qbopt MIR.
+//! The common HIR (`llrm-hir`), its lowering to MIR, and its interpreter.
 
 pub mod callmemory;
-pub mod codec;
 pub mod dump;
-pub mod escape;
 pub mod execute;
 pub mod lower;
-pub mod model;
-pub mod verify;
+
+pub use llrm_hir::{codec, escape, model, verify};
 
 pub use codec::{decode, encode};
 pub use dump::mir_text;

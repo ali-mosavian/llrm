@@ -1,13 +1,13 @@
 //! Port of `qbopt/hir/verify.py`: structural and semantic checks at the
 //! source/frontend boundary.
 
-use crate::support::hash::HashSet;
+use llrm_support::hash::HashSet;
 use std::fmt;
 
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
-use crate::hir::model;
-use crate::support::pyrepr::{self, Repr};
+use crate::model;
+use llrm_support::pyrepr::{self, Repr};
 
 /// HIR cannot be represented faithfully by the current MIR.
 #[derive(Clone, Debug, Eq, PartialEq)]

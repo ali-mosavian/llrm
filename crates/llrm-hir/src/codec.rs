@@ -7,12 +7,12 @@
 
 use std::any::Any;
 
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
-use crate::hir::model;
-use crate::hir::verify::{InvalidHIR, verify};
-use crate::support::pyjson::{self, Json};
-use crate::support::pyrepr;
+use crate::model;
+use crate::verify::{InvalidHIR, verify};
+use llrm_support::pyjson::{self, Json};
+use llrm_support::pyrepr;
 
 pub type JSON = Json;
 

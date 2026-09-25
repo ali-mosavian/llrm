@@ -7,9 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
-use crate::hir::model;
+use crate::model;
 
 const _NAMING: [model::Op; 3] = [model::Op::Load, model::Op::Store, model::Op::Copy];
 
