@@ -109,10 +109,47 @@ def _entered(text: list[ix.Instruction], formatter: ix.Formatter) -> list[int]:
     return starts
 
 
+# A BASIC main module's code opens with the runtime's MODULE_CODE record,
+# data of O_ENT bytes (runtime/inc/addr.inc) signed "bl"; its entry follows.
+MODULE_CODE = 48
+
+
+def _decoded(code: bytes, entries: list[int]) -> list[ix.Instruction]:
+    """The instructions control reaches from `entries`, in address order.
+
+    Following flow rather than sweeping keeps data in the code segment -- a
+    module header, a jump table -- from being read as instructions and
+    shifting the decode off every boundary after it."""
+    found: dict[int, ix.Instruction] = {}
+    pending = [one for one in entries if 0 <= one < len(code)]
+    while pending:
+        at = pending.pop()
+        while 0 <= at < len(code) and at not in found:
+            one = ix.Decoder(16, code[at:], ip=at).decode()
+            if one.code == ix.Code.INVALID:
+                break
+            found[at] = one
+            flow = one.flow_control
+            if flow in (ix.FlowControl.CONDITIONAL_BRANCH, ix.FlowControl.UNCONDITIONAL_BRANCH, ix.FlowControl.CALL):
+                if one.op0_kind in (ix.OpKind.NEAR_BRANCH16, ix.OpKind.NEAR_BRANCH32):
+                    pending.append(one.near_branch_target)
+            if flow in (
+                ix.FlowControl.UNCONDITIONAL_BRANCH,
+                ix.FlowControl.INDIRECT_BRANCH,
+                ix.FlowControl.RETURN,
+                ix.FlowControl.INTERRUPT,
+                ix.FlowControl.EXCEPTION,
+            ):
+                break
+            at = one.next_ip
+    return [found[at] for at in sorted(found)]
+
+
 def loops(data: bytes, names: list[str] | None = None) -> list[Loop]:
     code, publics = image(data)
     formatter = ix.Formatter(ix.FormatterSyntax.MASM)
-    text = list(ix.Decoder(16, code, ip=0))
+    start = MODULE_CODE if code[:2] == b"bl" else 0
+    text = _decoded(code, [start, *publics])
     if names:
         starts = _entered(text, formatter)
         starts = ([0] if len(starts) < len(names) else []) + starts
