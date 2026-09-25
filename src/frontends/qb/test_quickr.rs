@@ -23,7 +23,7 @@ fn returned(source: &str) -> i128 {
 }
 
 #[test]
-fn quickr_runs_vbdos_programs() {
+fn quickr_runs_declared_vbdos_programs() {
     assert_eq!(returned("FUNCTION f&\n  DIM a AS LONG\n  a = 40000\n  f& = a \\ 2\nEND FUNCTION\n"), 20000);
 }
 
@@ -156,4 +156,35 @@ fn input_and_read_accept_sized_integers() {
 fn defbyte_types_unsuffixed_names() {
     // As SINGLE, the default, b + 1 would be 256.
     assert_eq!(returned("DEFBYTE B\nFUNCTION f&\nDIM b\nb = 255\nb = b + 1\nf& = b\nEND FUNCTION\n"), 0);
+}
+
+#[test]
+fn undeclared_variables_are_not_defined() {
+    for source in ["x = 1\n", "DIM y AS INTEGER\ny = x\n", "DIM i AS INTEGER\nFOR k = 1 TO 2\nNEXT\n"] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains("Variable not defined"), "{source}: {error}");
+    }
+}
+
+#[test]
+fn every_declaring_statement_declares() {
+    let source = "DIM SHARED c AS INTEGER, d AS INTEGER\n\
+        DIM m AS INTEGER\n\
+        CONST k = 3\n\
+        REDIM r(5) AS INTEGER\n\
+        c = 1: d = 2: m = k: r(1) = m\n\
+        SUB s (p AS INTEGER)\n\
+        STATIC t AS INTEGER\n\
+        SHARED m\n\
+        t = p + c + d + m\n\
+        END SUB\n";
+    compiled(source).expect("declared names compile");
+}
+
+#[test]
+fn vbdos_still_declares_implicitly() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"x = 1\n");
+    qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .expect("VBDOS declares x");
 }

@@ -6941,6 +6941,9 @@ impl Compiler {
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
         }
+        if self.dialect.explicit_declarations() {
+            return self.fail(format!("Variable not defined: {name}"));
+        }
         let declaration = Declaration {
             name: key.clone(),
             type_name: None,
