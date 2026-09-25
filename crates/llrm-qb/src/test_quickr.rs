@@ -722,3 +722,52 @@ fn quickr_arrays_start_at_zero() {
         assert!(error.contains("start at 0"), "{source}: {error}");
     }
 }
+
+#[test]
+fn conditional_expressions_choose_one_arm() {
+    let source = "DIM SHARED hits AS INTEGER\nDIM n AS INTEGER, s AS STRING, d AS DOUBLE\nn = 5\n\
+        PRINT 1 IF n > 3 ELSE 2; 10 IF n > 9 ELSE 20 IF n > 4 ELSE 30\n\
+        d = 1 IF n = 0 ELSE 2.5\nPRINT d\n\
+        s = \"big\" IF n > 3 ELSE \"small\"\nPRINT s; LEN(\"x\" IF n < 0 ELSE \"yy\")\n\
+        IF n > 3 THEN s = \"a\" IF n > 4 ELSE \"b\" ELSE s = \"c\"\n\
+        n = tick% IF n > 100 ELSE 7\nPRINT s; n; hits\n\
+        PRINT f\"{n IF n IN (6, 7) ELSE -n}\"\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    // f-string fields are parsed apart from their line, and took none of these.
+    assert_eq!(printed(source), " 1  20 \n 2.5 \nbig 2 \na 7  0 \n7\n");
+}
+
+#[test]
+fn chained_comparisons_hold_each_operand_once() {
+    // Parenthesized, a comparison is a value again, as in QB.
+    let source = "DIM SHARED hits AS INTEGER\nDIM a AS INTEGER, b AS INTEGER\na = 1: b = 5\n\
+        PRINT 0 < a < b; a < b < 3; 1 <= a <= 1 < b\n\
+        PRINT (a < b) < 0; a < b < 0\n\
+        PRINT 5 < tick% < 10; 9 < 1 < tick%; hits\n\
+        PRINT a = 1 AND b = 5; \"x\" = \"x\" AND a = 1\n\
+        FUNCTION tick%\nhits += 1\ntick% = 7\nEND FUNCTION\n";
+    // A comparison after AND starts a new operand, not a chain.
+    assert_eq!(printed(source), "-1  0 -1 \n-1  0 \n-1  0  1 \n-1 -1 \n");
+}
+
+#[test]
+fn in_searches_lists_strings_and_arrays() {
+    let source = "DIM SHARED hits AS INTEGER\nDIM x AS INTEGER, w AS STRING, v(2) AS INTEGER\n\
+        x = 3: w = \"bc\": v(1) = 3\n\
+        PRINT x IN (1, 2, 3); x NOT IN (1, 2, 3); w IN \"abcd\"; \"z\" IN \"abc\"; x IN v(); 4 IN v; x NOT IN v()\n\
+        PRINT w IN (\"a\", \"bc\"); x IN (3, tick%); hits\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    assert_eq!(printed(source), "-1  0 -1  0 -1  0  0 \n-1 -1  0 \n");
+}
+
+#[test]
+fn microsoft_profiles_keep_qb_expressions() {
+    // QB compares the first comparison's -1 or 0 with the third operand.
+    let source = "PRINT 3 < 2 < 1\n";
+    assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), "-1 \n");
+    assert_eq!(printed(source), " 0 \n");
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"x = 1 IF 1 ELSE 2\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no conditional expression");
+}

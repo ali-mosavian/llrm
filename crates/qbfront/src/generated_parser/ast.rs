@@ -3,7 +3,7 @@ use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintItem,
+    Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem,
     PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
@@ -28,6 +28,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
     let (tokens, private_at) = without_private(for_each(augmented(lex(source, dialect).map_err(ParseError::from)?)));
     let mut state = ParseState::new(tokens);
+    state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
         while consume_named(&mut state, "tkNewLine") || consume_named(&mut state, "tkColon") {}
@@ -609,7 +610,7 @@ fn literal_string(state: &mut ParseState) -> ParseResult {
     };
     let expression = match token.kind {
         TokenKind::String(value) => Expr::Literal(Literal::String(value), token.span),
-        TokenKind::FormatString(segments) => match format_string(&segments, token.span) {
+        TokenKind::FormatString(segments) => match format_string(&segments, token.span, state.python_expressions) {
             Ok(expression) => expression,
             Err(result) => return result,
         },
@@ -626,13 +627,18 @@ pub const FORMAT_FIELD: &str = "$FSTRING";
 
 /// `f"…"` as the concatenation of its text and its converted fields, a
 /// field's spec passed to the conversion as a string.
-fn format_string(segments: &[FormatSegment], span: Span) -> Result<Expr, ParseResult> {
+fn format_string(
+    segments: &[FormatSegment],
+    span: Span,
+    python_expressions: bool,
+) -> Result<Expr, ParseResult> {
     let mut parts = Vec::new();
     for segment in segments {
         parts.push(match segment {
             FormatSegment::Text(text) => Expr::Literal(Literal::String(text.clone()), span),
             FormatSegment::Field { tokens, spec, span } => {
                 let mut field = ParseState::new(tokens.clone());
+                field.python_expressions = python_expressions;
                 let value = expression(&mut field, 0)?;
                 if field.at != tokens.len() {
                     return Err(ParseResult::BadSyntax);
@@ -2390,7 +2396,32 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
     } else {
         primary(state)?
     };
+    // Whether this loop built `left` from a comparison, which another
+    // comparison then chains rather than compares.
+    let mut chained = false;
+    let span_of = |left: &Expr, right: &Expr| Span {
+        line: left.span().line,
+        start: left.span().start,
+        end: right.span().end,
+    };
     loop {
+        if let Some(negated) = in_operator(state) {
+            if COMPARISON_BINDING < minimum {
+                break;
+            }
+            state.at += if negated { 2 } else { 1 };
+            let haystack = haystack(state)?;
+            let end = previous_end(state);
+            let start = left.span();
+            left = Expr::In {
+                needle: Box::new(left),
+                haystack,
+                negated,
+                span: Span { end, ..start },
+            };
+            chained = false;
+            continue;
+        }
         let Some((op, left_binding, right_binding)) = binary(state) else {
             break;
         };
@@ -2399,19 +2430,92 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
         }
         state.at += 1;
         let right = expression(state, right_binding)?;
-        let span = Span {
-            line: left.span().line,
-            start: left.span().start,
-            end: right.span().end,
+        let span = span_of(&left, &right);
+        let comparison = left_binding == COMPARISON_BINDING;
+        left = match left {
+            Expr::Binary {
+                op: first_op,
+                left: first,
+                right: middle,
+                ..
+            } if chained && comparison && state.python_expressions => Expr::Chain {
+                first,
+                rest: vec![(first_op, *middle), (op, right)],
+                span,
+            },
+            Expr::Chain { first, mut rest, .. } if chained && comparison => {
+                rest.push((op, right));
+                Expr::Chain { first, rest, span }
+            }
+            left => Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            },
         };
-        left = Expr::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
+        chained = comparison;
+    }
+    // `then IF condition ELSE otherwise` binds loosest, and nests only to
+    // the right, as in Python.
+    if state.python_expressions && minimum == 0 && consume_named(state, "tkIF") {
+        let condition = expression(state, 1)?;
+        if !consume_named(state, "tkELSE") {
+            return Err(ParseResult::BadSyntax);
+        }
+        let otherwise = expression(state, 0)?;
+        let span = span_of(&left, &otherwise);
+        left = Expr::Conditional {
+            condition: Box::new(condition),
+            then: Box::new(left),
+            otherwise: Box::new(otherwise),
             span,
         };
     }
     Ok(left)
+}
+
+const COMPARISON_BINDING: u8 = 60;
+
+/// `IN` or `NOT IN` after an operand: Some(negated).
+fn in_operator(state: &ParseState) -> Option<bool> {
+    if !state.python_expressions {
+        return None;
+    }
+    let is_in = |token: Option<&Token>| {
+        token.is_some_and(|token| matches!(&token.kind, TokenKind::Identifier(word) if word == "IN"))
+    };
+    if is_in(state.token()) {
+        Some(false)
+    } else if at_named(state, "tkNOT") && is_in(state.tokens.get(state.at + 1)) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// IN's right side: `(a, b, …)` is a list of values; anything else, a
+/// parenthesized one included, is a string or an array.
+fn haystack(state: &mut ParseState) -> Result<Haystack, ParseResult> {
+    let start = state.at;
+    if consume_named(state, "tkLParen") {
+        let first = expression(state, 0)?;
+        if consume_named(state, "tkComma") {
+            let mut values = vec![first, expression(state, 0)?];
+            while consume_named(state, "tkComma") {
+                values.push(expression(state, 0)?);
+            }
+            if !consume_named(state, "tkRParen") {
+                return Err(ParseResult::BadSyntax);
+            }
+            return Ok(Haystack::Values(values));
+        }
+        state.at = start;
+    }
+    Ok(Haystack::Container(Box::new(expression(
+        state,
+        COMPARISON_BINDING + 1,
+    )?)))
 }
 
 fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
@@ -2443,7 +2547,9 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             token.span,
         )),
         TokenKind::String(value) => Ok(Expr::Literal(Literal::String(value), token.span)),
-        TokenKind::FormatString(segments) => format_string(&segments, token.span),
+        TokenKind::FormatString(segments) => {
+            format_string(&segments, token.span, state.python_expressions)
+        }
         TokenKind::Identifier(name) => name_or_apply(state, name, token.span),
         TokenKind::Reserved(id) if id == named("tkLParen") => {
             let value = expression(state, 0)?;
@@ -2570,15 +2676,15 @@ fn unary(state: &mut ParseState) -> Option<Unary> {
 
 fn binary(state: &ParseState) -> Option<(Binary, u8, u8)> {
     let pair = match state.token().map(|token| &token.kind)? {
-        TokenKind::Comparison(op) => (*op, 60),
+        TokenKind::Comparison(op) => (*op, COMPARISON_BINDING),
         TokenKind::Reserved(id) if *id == named("tkIMP") => (Binary::Imp, 10),
         TokenKind::Reserved(id) if *id == named("tkEQV") => (Binary::Eqv, 20),
         TokenKind::Reserved(id) if *id == named("tkXOR") => (Binary::Xor, 30),
         TokenKind::Reserved(id) if *id == named("tkOR") => (Binary::Or, 40),
         TokenKind::Reserved(id) if *id == named("tkAND") => (Binary::And, 50),
-        TokenKind::Reserved(id) if *id == named("tkEQ") => (Binary::Eq, 60),
-        TokenKind::Reserved(id) if *id == named("tkLT") => (Binary::Less, 60),
-        TokenKind::Reserved(id) if *id == named("tkGT") => (Binary::Greater, 60),
+        TokenKind::Reserved(id) if *id == named("tkEQ") => (Binary::Eq, COMPARISON_BINDING),
+        TokenKind::Reserved(id) if *id == named("tkLT") => (Binary::Less, COMPARISON_BINDING),
+        TokenKind::Reserved(id) if *id == named("tkGT") => (Binary::Greater, COMPARISON_BINDING),
         TokenKind::Reserved(id) if *id == named("tkAdd") => (Binary::Add, 70),
         TokenKind::Reserved(id) if *id == named("tkMinus") => (Binary::Subtract, 70),
         TokenKind::Reserved(id) if *id == named("tkMOD") => (Binary::Modulo, 75),

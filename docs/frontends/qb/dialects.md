@@ -223,3 +223,18 @@ holding a copy: assigning `x` changes neither the iterable nor the iteration.
 | any string expression | each character of a copy taken before the loop |
 
 `RANGE` evaluates its arguments once, in order.
+
+### Conditional, IN and chained comparisons
+
+`a IF c ELSE b` evaluates `c`, then only the arm it picks. It binds loosest
+and nests to the right: `x IF p ELSE y IF q ELSE z`. Both arms are strings or
+both are numbers, which take the wider type.
+
+`x IN (v1, v2, …)` compares `x` with each value until one is equal. `x IN s`
+tests whether string `s` contains `x`, and `x IN a()` (or `x IN a`) whether an
+element of array `a` equals `x`. `NOT IN` is the negation. Each is `-1` or `0`.
+
+`a < b <= c` means `a < b AND b <= c`, with `b` evaluated once and `c` not at
+all when `a < b` is false. Any run of `=`, `<>`, `<`, `<=`, `>`, `>=` chains
+this way. A parenthesized comparison is a value again, so `(a < b) < c` keeps
+QB's meaning.

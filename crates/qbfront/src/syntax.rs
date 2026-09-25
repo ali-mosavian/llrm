@@ -176,6 +176,35 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
+    /// QuickrBASIC's `then IF condition ELSE otherwise`.
+    Conditional {
+        condition: Box<Expr>,
+        then: Box<Expr>,
+        otherwise: Box<Expr>,
+        span: Span,
+    },
+    /// QuickrBASIC's `needle [NOT] IN haystack`.
+    In {
+        needle: Box<Expr>,
+        haystack: Haystack,
+        negated: bool,
+        span: Span,
+    },
+    /// QuickrBASIC's chained comparison `a < b <= c`: `a < b AND b <= c`
+    /// with `b` evaluated once, stopping at the first false comparison.
+    Chain {
+        first: Box<Expr>,
+        rest: Vec<(Binary, Expr)>,
+        span: Span,
+    },
+}
+
+/// What IN searches: a parenthesized list with a comma, or one string or
+/// array.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Haystack {
+    Values(Vec<Expr>),
+    Container(Box<Expr>),
 }
 
 impl Eq for Expr {}
@@ -188,7 +217,10 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::Field { span, .. }
             | Self::Unary { span, .. }
-            | Self::Binary { span, .. } => *span,
+            | Self::Binary { span, .. }
+            | Self::Conditional { span, .. }
+            | Self::In { span, .. }
+            | Self::Chain { span, .. } => *span,
         }
     }
 }

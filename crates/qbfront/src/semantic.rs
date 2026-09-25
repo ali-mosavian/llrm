@@ -12,7 +12,8 @@ use crate::dialect::Dialect;
 use crate::generated_parser::EACH;
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
-    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
+    Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module,
+    PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 use tags::{Passing, Shape, Slot, Tag};
@@ -3880,17 +3881,8 @@ impl Compiler {
             span,
         };
         let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
-        let array = match iterable {
-            Expr::Apply {
-                name, arguments, ..
-            } if arguments.is_empty() => Some(name),
-            Expr::Name(name, _) if !self.variables.contains_key(&self.variable_key(name)) => {
-                Some(name)
-            }
-            _ => None,
-        }
-        .filter(|name| self.array(name).is_ok());
-        let (index, first, last, step, element) = if let Some(array) = array {
+        let (index, first, last, step, element) = if let Some(array) = self.array_name(iterable) {
+            let array = &array.to_owned();
             let (_, index) = self.hidden(INTEGER)?;
             let whole = Expr::Name(array.clone(), span);
             let element = apply(array, vec![index.clone()]);
@@ -3903,13 +3895,7 @@ impl Compiler {
             // Each bound is evaluated once, in order; STEP is read twice.
             let mut held = Vec::new();
             for argument in arguments {
-                held.push(match argument {
-                    Expr::Literal(..) => argument.clone(),
-                    _ => {
-                        let (value, type_id) = self.expression(argument)?;
-                        self.hold_value(value, type_id)?
-                    }
-                });
+                held.push(self.once(argument)?);
             }
             let (first, stop, step) = match held.as_slice() {
                 [stop] => (integer(0), stop.clone(), None),
@@ -3932,26 +3918,9 @@ impl Compiler {
             (index.clone(), first, last, step, index)
         } else {
             // A string is copied first, so the body cannot change it.
-            let copy = format!("{EACH}TEXT{}", self.next_place);
-            self.declare_as(
-                &Declaration {
-                    name: copy.clone(),
-                    type_name: Some(TypeName::String),
-                    array: false,
-                    bounds: Vec::new(),
-                    fixed_length: None,
-                    shared: false,
-                    dynamic: false,
-                    span,
-                },
-                self.implicit_storage,
-            )?;
-            let text = Expr::Name(copy, span);
-            self.statement_list(&[Statement::Assign {
-                target: text.clone(),
-                value: iterable.clone(),
-                span,
-            }])?;
+            let text = self.hidden_string(span)?;
+            let (place, type_id) = self.destination(&text)?;
+            self.string_assignment(place, type_id, iterable)?;
             let (_, index) = self.hidden(INTEGER)?;
             let element = apply("MID$", vec![text.clone(), index.clone(), integer(1)]);
             (index, integer(1), apply("LEN", vec![text]), None, element)
@@ -5153,6 +5122,17 @@ impl Compiler {
     }
 
     fn string_descriptor(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Expr::Conditional {
+            condition,
+            then,
+            otherwise,
+            ..
+        } = expression
+        {
+            let arms = self.arms(condition, then, otherwise, true)?;
+            let pointer_type = self.pointer_type(STRING);
+            return self.join(arms, pointer_type);
+        }
         if let Expr::Unary {
             op: Unary::Grouped,
             operand,
@@ -5636,7 +5616,228 @@ impl Compiler {
             Expr::Binary {
                 op, left, right, ..
             } => self.binary(*op, left, right),
+            Expr::Conditional {
+                condition,
+                then,
+                otherwise,
+                ..
+            } => {
+                let arms = self.arms(condition, then, otherwise, false)?;
+                let type_id = common_type(arms[0].2, arms[1].2, Binary::Add)?;
+                Ok((self.join(arms, type_id)?, type_id))
+            }
+            Expr::In {
+                needle,
+                haystack,
+                negated,
+                ..
+            } => Ok((self.membership(needle, haystack, *negated)?, BOOLEAN)),
+            Expr::Chain { first, rest, .. } => Ok((self.chain(first, rest)?, BOOLEAN)),
         }
+    }
+
+    /// Each arm of `then IF condition ELSE otherwise` evaluated in its own
+    /// block, which stays open for `join`: (block, value, type).
+    fn arms(
+        &mut self,
+        condition: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        string: bool,
+    ) -> Result<[(u32, Operand, u32); 2], SemanticError> {
+        let yes = self.new_block();
+        let no = self.new_block();
+        self.condition(condition, yes, no, true)?;
+        let arm = |this: &mut Self, block: u32, arm: &Expr| {
+            this.select_block(block);
+            let (value, type_id) = if string {
+                (this.string_descriptor(arm)?, this.pointer_type(STRING))
+            } else {
+                this.expression(arm)?
+            };
+            Ok::<_, SemanticError>((this.blocks[this.current_block].id, value, type_id))
+        };
+        Ok([arm(self, yes, then)?, arm(self, no, otherwise)?])
+    }
+
+    /// Each arm's value as `type_id`, meeting in one block.
+    fn join(&mut self, arms: [(u32, Operand, u32); 2], type_id: u32) -> Result<Operand, SemanticError> {
+        let place = self.compiler_temporary("$choice", type_id)?;
+        let done = self.new_block();
+        for (block, value, from) in arms {
+            self.select_block(block);
+            let value = self.convert(value, from, type_id)?;
+            self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+            self.terminate("jump", Vec::new(), vec![done])?;
+        }
+        self.select_block(done);
+        let result = self.value(type_id);
+        self.emit("load", vec![result], vec![Operand::Place(place)]);
+        Ok(Operand::Value(result))
+    }
+
+    /// A BOOLEAN that `decide` settles: it branches to the first block it
+    /// is given for true, the second for false.
+    fn decided(
+        &mut self,
+        decide: impl FnOnce(&mut Self, u32, u32) -> Result<(), SemanticError>,
+    ) -> Result<Operand, SemanticError> {
+        let place = self.compiler_temporary("$truth", BOOLEAN)?;
+        let yes = self.new_block();
+        let no = self.new_block();
+        let done = self.new_block();
+        decide(self, yes, no)?;
+        for (block, truth) in [(yes, -1), (no, 0)] {
+            self.select_block(block);
+            self.emit(
+                "store",
+                Vec::new(),
+                vec![Operand::Place(place), Operand::Constant(BOOLEAN, Number::Integer(truth))],
+            );
+            self.terminate("jump", Vec::new(), vec![done])?;
+        }
+        self.select_block(done);
+        let result = self.value(BOOLEAN);
+        self.emit("load", vec![result], vec![Operand::Place(place)]);
+        Ok(Operand::Value(result))
+    }
+
+    /// `a < b <= c`: each comparison runs only while those before it held.
+    fn chain(&mut self, first: &Expr, rest: &[(Binary, Expr)]) -> Result<Operand, SemanticError> {
+        self.decided(|this, yes, no| {
+            let mut left = this.once(first)?;
+            for (index, (op, right)) in rest.iter().enumerate() {
+                let last = index + 1 == rest.len();
+                let right = if last { right.clone() } else { this.once(right)? };
+                let (held, _) = this.binary(*op, &left, &right)?;
+                let next = if last { yes } else { this.new_block() };
+                this.terminate("branch", vec![held], vec![next, no])?;
+                this.select_block(next);
+                left = right;
+            }
+            Ok(())
+        })
+    }
+
+    /// `needle IN haystack`, stopping at the first match.
+    fn membership(
+        &mut self,
+        needle: &Expr,
+        haystack: &Haystack,
+        negated: bool,
+    ) -> Result<Operand, SemanticError> {
+        let span = needle.span();
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: name.into(),
+            arguments,
+            span,
+        };
+        let found_missing = |yes: u32, no: u32| if negated { (no, yes) } else { (yes, no) };
+        let container = match haystack {
+            Haystack::Values(values) => {
+                return self.decided(|this, yes, no| {
+                    let (found, missing) = found_missing(yes, no);
+                    let needle = this.once(needle)?;
+                    for value in values {
+                        let (hit, _) = this.binary(Binary::Eq, &needle, value)?;
+                        let next = this.new_block();
+                        this.terminate("branch", vec![hit], vec![found, next])?;
+                        this.select_block(next);
+                    }
+                    this.terminate("jump", Vec::new(), vec![missing])
+                });
+            }
+            Haystack::Container(container) => container.as_ref(),
+        };
+        if let Some(array) = self.array_name(container) {
+            let array = array.to_owned();
+            return self.decided(|this, yes, no| {
+                let (found, missing) = found_missing(yes, no);
+                let needle = this.once(needle)?;
+                let whole = Expr::Name(array.clone(), span);
+                let upper = this.once(&apply("UBOUND", vec![whole.clone()]))?;
+                let (lower, _) = this.expression(&apply("LBOUND", vec![whole]))?;
+                let (index_place, index) = this.hidden(INTEGER)?;
+                this.emit("store", Vec::new(), vec![Operand::Place(index_place), lower]);
+                let test = this.new_block();
+                let body = this.new_block();
+                let step = this.new_block();
+                this.terminate("jump", Vec::new(), vec![test])?;
+                this.select_block(test);
+                let (within, _) = this.binary(Binary::LessEqual, &index, &upper)?;
+                this.terminate("branch", vec![within], vec![body, missing])?;
+                this.select_block(body);
+                let (hit, _) = this.binary(Binary::Eq, &needle, &apply(&array, vec![index.clone()]))?;
+                this.terminate("branch", vec![hit], vec![found, step])?;
+                this.select_block(step);
+                let one = Expr::Literal(Literal::Integer(1, TypeName::Integer), span);
+                let (next, next_type) = this.binary(Binary::Add, &index, &one)?;
+                let next = this.convert(next, next_type, INTEGER)?;
+                this.emit("store", Vec::new(), vec![Operand::Place(index_place), next]);
+                this.terminate("jump", Vec::new(), vec![test])
+            });
+        }
+        if !self.string_syntax(container) {
+            return self.fail("IN needs a list of values, a string or an array");
+        }
+        let position = apply("INSTR", vec![container.clone(), needle.clone()]);
+        let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
+        let op = if negated { Binary::Eq } else { Binary::NotEqual };
+        Ok(self.binary(op, &position, &zero)?.0)
+    }
+
+    /// `expression` as one that can be evaluated again with the same value
+    /// and no effects: a literal or variable as it is, anything else held.
+    fn once(&mut self, expression: &Expr) -> Result<Expr, SemanticError> {
+        match expression {
+            Expr::Literal(..) => return Ok(expression.clone()),
+            Expr::Name(name, _) if self.bare_function_type(name).is_none() => {
+                return Ok(expression.clone())
+            }
+            _ => {}
+        }
+        if self.string_syntax(expression) {
+            let copy = self.hidden_string(expression.span())?;
+            let (place, type_id) = self.destination(&copy)?;
+            self.string_assignment(place, type_id, expression)?;
+            return Ok(copy);
+        }
+        let (value, type_id) = self.expression(expression)?;
+        self.hold_value(value, type_id)
+    }
+
+    /// A STRING variable no source can name.
+    fn hidden_string(&mut self, span: Span) -> Result<Expr, SemanticError> {
+        let name = format!("{EACH}TEXT{}", self.next_place);
+        self.declare_as(
+            &Declaration {
+                name: name.clone(),
+                type_name: Some(TypeName::String),
+                array: false,
+                bounds: Vec::new(),
+                fixed_length: None,
+                shared: false,
+                dynamic: false,
+                span,
+            },
+            self.implicit_storage,
+        )?;
+        Ok(Expr::Name(name, span))
+    }
+
+    /// The array a whole-array reference names: `a()`, or `a` where no
+    /// scalar `a` exists.
+    fn array_name<'e>(&self, expression: &'e Expr) -> Option<&'e str> {
+        match expression {
+            Expr::Apply {
+                name, arguments, ..
+            } if arguments.is_empty() => Some(name.as_str()),
+            Expr::Name(name, _) if !self.variables.contains_key(&self.variable_key(name)) => {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
+        .filter(|name| self.array(name).is_ok())
     }
 
     /// An f-string field's text: a string as it is, a number as Python's
@@ -6403,7 +6604,9 @@ impl Compiler {
                     Expr::Apply { name, .. }
                         if intrinsics::find(canonical(name), self.dialect)
                             .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
-                ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _));
+                ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _))
+                    || (self.place_syntax_type(&arguments[0]).is_none()
+                        && self.string_syntax(&arguments[0]));
             if produced_string {
                 let address = self.string_descriptor(&arguments[0])?;
                 let result = self.value(INTEGER);
@@ -7165,6 +7368,9 @@ impl Compiler {
                 right,
                 ..
             } => self.string_syntax(left) && self.string_syntax(right),
+            Expr::Conditional {
+                then, otherwise, ..
+            } => self.string_syntax(then) || self.string_syntax(otherwise),
             _ => false,
         }
     }
@@ -7558,6 +7764,9 @@ impl Compiler {
     fn constant(&self, expression: &Expr) -> Result<(u32, Number), SemanticError> {
         match expression {
             Expr::Omitted(_) => self.fail("omitted argument used as a constant expression"),
+            Expr::Conditional { .. } | Expr::In { .. } | Expr::Chain { .. } => {
+                self.fail("not a constant expression")
+            }
             Expr::Literal(Literal::Integer(value, type_name), _) => {
                 Ok((type_id(Some(type_name))?, Number::Integer(*value)))
             }

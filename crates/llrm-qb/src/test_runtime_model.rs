@@ -122,3 +122,10 @@ fn bounds_of_a_static_array_run_in_the_model() {
     let source = "DIM a(1 TO 3) AS INTEGER\nPRINT LBOUND(a); UBOUND(a)\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), " 1  3 \n");
 }
+
+#[test]
+fn len_of_a_concatenation_is_its_length() {
+    // LEN took a string it could not name as a place for a variable to size.
+    let source = "a$ = \"ab\"\nPRINT LEN(a$ + \"cde\")\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 5 \n");
+}
