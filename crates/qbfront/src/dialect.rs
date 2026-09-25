@@ -78,6 +78,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// A FUNCTION `AS record`, returned through a hidden BYREF parameter.
+    pub fn record_results(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

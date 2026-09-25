@@ -239,7 +239,7 @@ fn augmented(tokens: Vec<Token>) -> Vec<Token> {
 }
 
 /// QuickrBASIC's `RETURN value` in a FUNCTION, rewritten into QB's own way
-/// to return: `name = (value): EXIT FUNCTION`. A bare RETURN still ends a
+/// to return: `name = value: EXIT FUNCTION`. A bare RETURN still ends a
 /// GOSUB, and QB's `RETURN label` has no place left in a FUNCTION.
 fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
     if !dialect.return_values() {
@@ -275,15 +275,18 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
                 };
                 out.push(Token { span: token.span, ..name.clone() });
                 out.push(reserved("tkEQ"));
-                if depth_zero_comma(&tokens[at + 1..end]).is_some() {
+                let value = &tokens[at + 1..end];
+                if depth_zero_comma(value).is_some() {
                     out.push(Token {
                         kind: TokenKind::Identifier(TUPLE.into()),
                         span: token.span,
                     });
+                    out.push(reserved("tkLParen"));
+                    out.extend(value.iter().cloned());
+                    out.push(reserved("tkRParen"));
+                } else {
+                    out.extend(value.iter().cloned());
                 }
-                out.push(reserved("tkLParen"));
-                out.extend(tokens[at + 1..end].iter().cloned());
-                out.push(reserved("tkRParen"));
                 out.push(reserved("tkColon"));
                 out.push(reserved("tkEXIT"));
                 out.push(reserved("tkFUNCTION"));

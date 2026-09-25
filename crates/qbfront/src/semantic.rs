@@ -263,8 +263,9 @@ struct Compiler {
     /// Variables a FOR EACH `AS` declared in this scope, which a later
     /// FOR EACH may declare again with the same type.
     each_declared: BTreeSet<String>,
-    /// Each FUNCTION `AS (…)`, now a SUB, by name: its result types.
-    tuple_results: BTreeMap<String, Vec<TypeName>>,
+    /// Each FUNCTION `AS (…)` or `AS record`, now a SUB, by name: its
+    /// result type.
+    detached_results: BTreeMap<String, TypeName>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
     /// The FUNCTION being compiled, without its suffix.
@@ -394,10 +395,10 @@ fn built(
     if module.format_strings {
         add_prelude(&mut module)?;
     }
-    let tuple_results = untupled(&mut module);
+    let detached_results = detach_results(&mut module, dialect);
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
-    compiler.tuple_results = tuple_results;
+    compiler.detached_results = detached_results;
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -629,15 +630,33 @@ fn tuple_misplaced() -> SemanticError {
 /// The prefix of the hidden parameters a FUNCTION `AS (…)` returns through.
 const RESULT: &str = "$RESULT";
 
-/// A FUNCTION `AS (t1, t2, …)` becomes a SUB with a hidden BYREF parameter
-/// per result: assigning the FUNCTION's name assigns them, as a tuple, and
-/// EXIT FUNCTION leaves the SUB. Returns each one's result types.
-fn untupled(module: &mut Module) -> BTreeMap<String, Vec<TypeName>> {
+/// A FUNCTION `AS (t1, t2, …)` or, under QuickrBASIC, `AS record` becomes
+/// a SUB with a hidden BYREF parameter per result, which the caller points
+/// at its temporaries: assigning the FUNCTION's name, or a field of it,
+/// assigns them, and EXIT FUNCTION leaves the SUB. Returns each one's
+/// result type.
+fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, TypeName> {
+    let records: BTreeSet<String> = module
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::TypeDecl { name, .. } => Some(canonical(name).to_owned()),
+            _ => None,
+        })
+        .collect();
+    let detached = |result: &mut TypeName| match result {
+        TypeName::Tuple(_) => true,
+        TypeName::Named(name) => dialect.record_results() && records.contains(canonical(name)),
+        _ => false,
+    };
     let mut results = BTreeMap::new();
     for procedure in &mut module.procedures {
-        let Some(TypeName::Tuple(types)) = procedure.result.take_if(|one| matches!(one, TypeName::Tuple(_)))
-        else {
+        let Some(result) = procedure.result.take_if(detached) else {
             continue;
+        };
+        let types = match &result {
+            TypeName::Tuple(types) => types.clone(),
+            record => vec![record.clone()],
         };
         let span = procedure.span;
         procedure.kind = ProcedureKind::Sub;
@@ -657,28 +676,44 @@ fn untupled(module: &mut Module) -> BTreeMap<String, Vec<TypeName>> {
                 segmented: false,
             });
         }
-        let targets = Expr::Apply {
-            name: TUPLE.into(),
-            arguments: (0..types.len())
-                .map(|index| Expr::Name(format!("{RESULT}{index}"), span))
-                .collect(),
-            span,
+        let mut targets = (0..types.len()).map(|index| Expr::Name(format!("{RESULT}{index}"), span));
+        let targets = match &result {
+            TypeName::Tuple(_) => Expr::Apply {
+                name: TUPLE.into(),
+                arguments: targets.collect(),
+                span,
+            },
+            _ => targets.next().expect("one result"),
         };
         let name = canonical(&procedure.name).to_owned();
         retarget(&mut procedure.body, &name, &targets);
-        results.insert(name, types);
+        results.insert(name, result);
     }
     results
 }
 
-/// `name = …` assigns `targets`, and EXIT FUNCTION leaves a SUB.
+/// `name = …` and `name.field = …` assign `targets`, and EXIT FUNCTION
+/// leaves a SUB.
 fn retarget(statements: &mut [Statement], name: &str, targets: &Expr) {
+    fn root(target: &mut Expr) -> &mut Expr {
+        match target {
+            Expr::Field { base, .. } => root(base),
+            other => other,
+        }
+    }
+    fn named(target: &Expr, name: &str) -> bool {
+        match target {
+            Expr::Field { base, .. } => named(base, name),
+            Expr::Name(assigned, _) => canonical(assigned) == name,
+            _ => false,
+        }
+    }
     for statement in statements {
         match statement {
             Statement::Assign { target, .. }
-                if matches!(&*target, Expr::Name(assigned, _) if canonical(assigned) == name) =>
+                if named(target, name) =>
             {
-                *target = targets.clone()
+                *root(target) = targets.clone()
             }
             Statement::Exit(exit @ ExitTarget::Function, _) => *exit = ExitTarget::Sub,
             nested => {
@@ -1118,7 +1153,7 @@ impl Compiler {
             exits: Vec::new(),
             loops: Vec::new(),
             each_declared: BTreeSet::new(),
-            tuple_results: BTreeMap::new(),
+            detached_results: BTreeMap::new(),
             return_block: None,
             result_place: None,
             result_name: None,
@@ -3998,7 +4033,7 @@ impl Compiler {
             (index.clone(), first, last, step, index)
         } else {
             // A string is copied first, so the body cannot change it.
-            let text = self.hidden_string(span)?;
+            let text = self.hidden_variable(TypeName::String, span)?;
             let (place, type_id) = self.destination(&text)?;
             self.string_assignment(place, type_id, iterable)?;
             let (_, index) = self.hidden(INTEGER)?;
@@ -4191,6 +4226,22 @@ impl Compiler {
         }
     }
 
+    /// Zero `width` bytes at `destination`.
+    fn zero_aggregate(&mut self, destination: Operand, width: usize) -> Result<(), SemanticError> {
+        let mut offset = 0;
+        while offset < width {
+            let type_id = match width - offset {
+                4.. => LONG,
+                2 | 3 => INTEGER,
+                _ => BYTE,
+            };
+            let to = self.subplace(&destination, offset, type_id)?;
+            self.emit("store", Vec::new(), vec![to, Operand::Constant(type_id, Number::Integer(0))]);
+            offset += self.width(type_id);
+        }
+        Ok(())
+    }
+
     fn aggregate_assignment(
         &mut self,
         destination: Operand,
@@ -4227,6 +4278,10 @@ impl Compiler {
     }
 
     fn destination(&mut self, expression: &Expr) -> Result<(Operand, u32), SemanticError> {
+        if let Some((name, arguments)) = self.record_call(expression) {
+            let record = self.detached_call(name, arguments, expression.span())?.remove(0);
+            return self.destination(&record);
+        }
         match expression {
             Expr::Literal(Literal::String(text), _) => {
                 let place = self.string_literal(text)?;
@@ -4341,6 +4396,10 @@ impl Compiler {
         &mut self,
         expression: &Expr,
     ) -> Result<(ProjectionBase, usize, u32), SemanticError> {
+        if let Some((name, arguments)) = self.record_call(expression) {
+            let record = self.detached_call(name, arguments, expression.span())?.remove(0);
+            return self.projection(&record);
+        }
         match expression {
             Expr::Name(name, _) => {
                 let variable = self.variable(name)?;
@@ -5893,28 +5952,8 @@ impl Compiler {
                 }
                 held
             }
-            (_, Some((name, arguments))) if self.tuple_results.contains_key(canonical(name)) => {
-                let mut results = Vec::new();
-                for type_name in self.tuple_results[canonical(name)].clone() {
-                    let type_id = self.resolve_type(Some(&type_name))?;
-                    results.push(if type_id == STRING {
-                        self.hidden_string(span)?
-                    } else {
-                        // A path that returns nothing leaves zero, as in QB.
-                        let (place, result) = self.hidden(type_id)?;
-                        let zero = if matches!(type_id, SINGLE | DOUBLE) {
-                            self.floating_literal("0.0", type_id)?
-                        } else {
-                            Operand::Constant(type_id, Number::Integer(0))
-                        };
-                        self.emit("store", Vec::new(), vec![Operand::Place(place), zero]);
-                        result
-                    });
-                }
-                let mut passed = arguments.to_vec();
-                passed.extend(results.iter().cloned());
-                self.call(name, &passed, false)?;
-                results
+            (_, Some((name, arguments))) if matches!(self.detached_results.get(canonical(name)), Some(TypeName::Tuple(_))) => {
+                self.detached_call(name, arguments, span)?
             }
             _ => return self.fail("a tuple takes several values or a FUNCTION AS (…)"),
         };
@@ -5931,13 +5970,63 @@ impl Compiler {
         Ok(())
     }
 
+    /// Calls a FUNCTION whose results come back through hidden parameters,
+    /// into temporaries it returns in order.
+    fn detached_call(&mut self, name: &str, arguments: &[Expr], span: Span) -> Result<Vec<Expr>, SemanticError> {
+        let types = match &self.detached_results[canonical(name)] {
+            TypeName::Tuple(types) => types.clone(),
+            record => vec![record.clone()],
+        };
+        let mut results = Vec::new();
+        for type_name in types {
+            let type_id = self.resolve_type(Some(&type_name))?;
+            results.push(if type_id == STRING {
+                self.hidden_variable(TypeName::String, span)?
+            } else if matches!(type_name, TypeName::Named(_)) && self.udts.values().any(|udt| udt.type_id == type_id) {
+                // A record FUNCTION that sets no field returns zeros, as a
+                // QB FUNCTION that sets no result returns zero.
+                let record = self.hidden_variable(type_name, span)?;
+                let (place, _) = self.destination(&record)?;
+                self.zero_aggregate(place, self.width(type_id))?;
+                record
+            } else {
+                // A path that returns nothing leaves zero, as in QB.
+                let (place, result) = self.hidden(type_id)?;
+                let zero = if matches!(type_id, SINGLE | DOUBLE) {
+                    self.floating_literal("0.0", type_id)?
+                } else {
+                    Operand::Constant(type_id, Number::Integer(0))
+                };
+                self.emit("store", Vec::new(), vec![Operand::Place(place), zero]);
+                result
+            });
+        }
+        let mut passed = arguments.to_vec();
+        passed.extend(results.iter().cloned());
+        self.call(name, &passed, false)?;
+        Ok(results)
+    }
+
+    /// A call of a FUNCTION `AS record`: its name and arguments.
+    fn record_call<'e>(&self, expression: &'e Expr) -> Option<(&'e str, &'e [Expr])> {
+        let (name, arguments) = match expression {
+            Expr::Apply {
+                name, arguments, ..
+            } => (name, arguments.as_slice()),
+            Expr::Name(name, _) => (name, &[][..]),
+            _ => return None,
+        };
+        matches!(self.detached_results.get(canonical(name)), Some(TypeName::Named(_)))
+            .then_some((name.as_str(), arguments))
+    }
+
     /// `expression`'s value now, in a name no later assignment changes.
     fn snapshot(&mut self, expression: &Expr) -> Result<Expr, SemanticError> {
         if matches!(expression, Expr::Literal(..)) {
             return Ok(expression.clone());
         }
         if self.string_syntax(expression) {
-            let copy = self.hidden_string(expression.span())?;
+            let copy = self.hidden_variable(TypeName::String, expression.span())?;
             let (place, type_id) = self.destination(&copy)?;
             self.string_assignment(place, type_id, expression)?;
             return Ok(copy);
@@ -5959,13 +6048,13 @@ impl Compiler {
         self.snapshot(expression)
     }
 
-    /// A STRING variable no source can name.
-    fn hidden_string(&mut self, span: Span) -> Result<Expr, SemanticError> {
-        let name = format!("{EACH}TEXT{}", self.next_place);
+    /// A variable no source can name.
+    fn hidden_variable(&mut self, type_name: TypeName, span: Span) -> Result<Expr, SemanticError> {
+        let name = format!("{EACH}HELD{}", self.next_place);
         self.declare_as(
             &Declaration {
                 name: name.clone(),
-                type_name: Some(TypeName::String),
+                type_name: Some(type_name),
                 array: false,
                 bounds: Vec::new(),
                 fixed_length: None,
@@ -7542,6 +7631,9 @@ impl Compiler {
     }
 
     fn place_syntax_type(&self, expression: &Expr) -> Option<u32> {
+        if let Some((name, _)) = self.record_call(expression) {
+            return self.resolve_type(Some(&self.detached_results[canonical(name)])).ok();
+        }
         match expression {
             Expr::Name(name, _) => self
                 .variables

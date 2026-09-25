@@ -841,3 +841,19 @@ fn tuple_errors() {
     qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS has no tuples");
 }
+
+#[test]
+fn functions_return_records() {
+    // maybe() sets x only on its first call: the second must see zero, not
+    // the 9 its caller's temporary held from the first.
+    let source = "TYPE Point\nx AS INTEGER\ny AS INTEGER\nEND TYPE\n\
+        DIM p AS Point, q AS Point\n\
+        p = make(3, 4)\nPRINT p.x; p.y; make(5, 6).y; norm1&(make(-2, 7))\n\
+        q = moved(p)\nPRINT q.x; q.y; p.x\n\
+        FOR EACH i AS INTEGER IN RANGE(2)\nq = maybe(i)\nPRINT q.x;\nNEXT\nPRINT\n\
+        FUNCTION make (a AS INTEGER, b AS INTEGER) AS Point\nDIM r AS Point\nr.x = a: r.y = b\nRETURN r\nEND FUNCTION\n\
+        FUNCTION moved (s AS Point) AS Point\nmoved = s\nmoved.x = s.x + 100\nEND FUNCTION\n\
+        FUNCTION maybe (k AS INTEGER) AS Point\nIF k = 0 THEN maybe.x = 9\nEND FUNCTION\n\
+        FUNCTION norm1& (v AS Point)\nRETURN ABS(v.x) + ABS(v.y)\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 3  4  6  9 \n 103  4  3 \n 9  0 \n");
+}

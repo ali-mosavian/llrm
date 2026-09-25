@@ -242,7 +242,7 @@ QB's meaning.
 ### RETURN value
 
 In a FUNCTION, `RETURN value` sets the result and leaves, as
-`name = (value): EXIT FUNCTION` does. A bare `RETURN` still ends a GOSUB, and
+`name = value: EXIT FUNCTION` does. A bare `RETURN` still ends a GOSUB, and
 `RETURN label` is not available in a FUNCTION.
 
 ### Tuples
@@ -252,3 +252,11 @@ so `a, b = b, a` swaps. A FUNCTION `AS (t1, t2, …)` returns several values:
 `RETURN x, y` inside it, and `q, r = f(…)` at the call. It compiles as a SUB
 with a hidden BYREF parameter per result; the caller passes temporaries and
 assigns them to the targets. A tuple is only a FUNCTION's result type.
+
+### Record results
+
+A FUNCTION `AS record` returns a record. It compiles as a SUB with a hidden
+BYREF parameter the caller points at a zeroed temporary, so fields the
+FUNCTION does not set are zero. Assigning the FUNCTION's name, or a field of
+it, sets the result, and a call can stand anywhere a record can:
+`p = make(1, 2)`, `make(1, 2).x`, or an argument.
