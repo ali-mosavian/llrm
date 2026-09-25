@@ -494,6 +494,20 @@ fn narrowed(
 /// Each reference gets its own interval facts.  If both have provenance,
 /// their concrete object paths decide; otherwise the source-neutral region
 /// lattice supplies the conservative answer.
+/// Whether one reference lands in foreign memory and the other in the data
+/// group. An access with no selector of its own goes through the data or
+/// stack segment, both the data group; it holds program data, and foreign
+/// memory holds none.
+fn foreign_apart(
+    one: &MemRef,
+    other: &MemRef,
+    known: Option<&BTreeMap<Value, Interval>>,
+    other_known: Option<&BTreeMap<Value, Interval>>,
+) -> bool {
+    let grouped = |reference: &MemRef| reference.segment.is_none() && reference.where_() != Some(Space::Far);
+    (grouped(one) && foreign(other, other_known).is_some()) || (grouped(other) && foreign(one, known).is_some())
+}
+
 pub(crate) fn may_alias(
     one: &MemRef,
     other: &MemRef,
@@ -501,7 +515,7 @@ pub(crate) fn may_alias(
     other_known: Option<&BTreeMap<Value, Interval>>,
     layout: Option<&RegionLayout>,
 ) -> Result<bool, RegionError> {
-    if typed_apart(one, other) {
+    if typed_apart(one, other) || foreign_apart(one, other, known, other_known) {
         return Ok(false);
     }
     if let (Some(one), Some(other)) = (refined(one, known)?, refined(other, other_known)?) {
@@ -524,7 +538,7 @@ pub(crate) fn overlapping(
     other_known: Option<&BTreeMap<Value, Interval>>,
     layout: Option<&RegionLayout>,
 ) -> Result<bool, RegionError> {
-    if typed_apart(one, other) {
+    if typed_apart(one, other) || foreign_apart(one, other, known, other_known) {
         return Ok(false);
     }
     // Canonical references carry their own object identity. Keep their base
@@ -914,6 +928,14 @@ fn _without(one: &Slice, hole: &MemoryObject, low: i64, high: i64) -> Vec<Slice>
         .collect()
 }
 
+/// The allocation the descriptor at `symbol` owns, as one object.
+pub(crate) fn allocation(symbol: &Symbol) -> MemoryObject {
+    MemoryObject {
+        identity: Some(Identity::Tuple(vec![Identity::Str(crate::support::pyrepr::Repr::repr(symbol))])),
+        ..MemoryObject::new(MemoryKind::Allocation)
+    }
+}
+
 /// Python `_object`.
 fn _object(region: &Region, origin: &Origin, private: &BTreeSet<i64>) -> MemoryObject {
     let origin_name = match origin {
@@ -934,12 +956,7 @@ fn _object(region: &Region, origin: &Origin, private: &BTreeSet<i64>) -> MemoryO
         return MemoryObject { identity: Some(Identity::Str(origin_name)), ..MemoryObject::new(MemoryKind::Frame) };
     }
     match region.0.as_slice() {
-        [RegionPart::Alloc, RegionPart::Allocation(symbol)] => {
-            return MemoryObject {
-                identity: Some(Identity::Tuple(vec![Identity::Str(crate::support::pyrepr::Repr::repr(symbol))])),
-                ..MemoryObject::new(MemoryKind::Allocation)
-            };
-        }
+        [RegionPart::Alloc, RegionPart::Allocation(symbol)] => return allocation(symbol),
         [RegionPart::Absolute] => return linear(),
         _ => {}
     }
@@ -1593,5 +1610,28 @@ mod tests {
             regions(&overflowing, None, None),
             Err(RegionError::EndpointOverflow)
         );
+    }
+
+    /// A POKE to text memory at an unknown offset was taken to hit a BYREF
+    /// argument: every counted loop reloaded its parameters.
+    #[test]
+    fn test_a_data_group_access_misses_foreign_memory() {
+        let pointer = Value::new(1, 0x10);
+        let (offset, selector) = (Value::new(2, 0x10), Value::new(3, 0x10));
+        let near = MemRef { base: Some(pointer), space: Some(Space::Literal), base_width: 2, ..MemRef::new(Some(address(Space::Literal, 0, 0)), 2) };
+        let text = MemRef {
+            base: Some(offset),
+            segment: Some(selector),
+            space: Some(Space::Far),
+            base_width: 2,
+            ..MemRef::new(Some(address(Space::Far, 0, 0)), 1)
+        };
+        let at = |one: i64| Interval { low: one.into(), high: one.into(), width: 2 };
+        let foreign = BTreeMap::from([(selector, at(0xB800))]);
+        let ordinary = BTreeMap::from([(selector, at(0x1234))]);
+
+        assert!(!overlapping(&near, &text, None, Some(&foreign), None).unwrap());
+        assert!(!may_alias(&text, &near, Some(&foreign), None, None).unwrap());
+        assert!(overlapping(&near, &text, None, Some(&ordinary), None).unwrap());
     }
 }

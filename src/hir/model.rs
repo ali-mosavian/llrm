@@ -314,6 +314,10 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
+    /// Another agent may write the pointee at any time, as a BYREF argument
+    /// an interrupt handler owns: ordered like `volatile`, but a loop that
+    /// ends without the value may read it once.
+    pub published: bool,
     /// The language promises the access stays inside one object.
     pub inbounds: bool,
     /// The value holding the offset of that object's first byte, where the
@@ -321,6 +325,9 @@ pub struct IndirectPlace {
     /// value plus a non-negative offset inside the object, and the object
     /// ends inside its segment.
     pub origin: Option<i64>,
+    /// The descriptor place owning the far allocation the access stays
+    /// inside, where the frontend knows it: disjoint from every place.
+    pub allocation: Option<i64>,
 }
 
 str_enum!(DescriptorField {

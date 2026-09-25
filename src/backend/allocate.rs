@@ -999,25 +999,30 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     out
 }
 
-pub type Masks = Vec<(i64, BTreeSet<Register>, BTreeSet<Register>)>;
+/// A point that destroys registers without naming them: `during` the
+/// instruction, their high halves only, or `before` it reads its operands.
+pub struct Mask {
+    pub slot: i64,
+    pub during: BTreeSet<Register>,
+    pub high: BTreeSet<Register>,
+    pub before: BTreeSet<Register>,
+}
 
-/// Every point a register is destroyed without being named, and which. A
-/// point that needs the data group takes the data segment register from any
-/// value held in it.
+pub type Masks = Vec<Mask>;
+
+/// Every point a register is destroyed without being named, and which. The
+/// data segment register is reloaded ahead of a point that needs the data
+/// group, so it holds none of that point's operands either.
 pub fn _masks(body: &LirBody, index: &Indexes) -> Masks {
     let mut out = Vec::new();
     for block in &body.blocks {
         for one in &block.insns {
-            let mut clobbers: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
-            if target::needs_data_group(one) {
-                clobbers.insert(*target::DATA_SEGMENT);
-            }
-            if !clobbers.is_empty() || !one.clobbers_high.is_empty() {
-                out.push((
-                    index.at[&ranges::key(one)],
-                    clobbers,
-                    one.clobbers_high.iter().map(|register| _whole(*register)).collect(),
-                ));
+            let during: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
+            let high: BTreeSet<Register> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
+            let before: BTreeSet<Register> =
+                target::needs_data_group(one).then_some(*target::DATA_SEGMENT).into_iter().collect();
+            if !during.is_empty() || !high.is_empty() || !before.is_empty() {
+                out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
             }
         }
     }
@@ -1029,14 +1034,19 @@ pub fn _whole(register: Register) -> Register {
     ir::root(register)
 }
 
-/// Whether this range is live across a point that destroys the register.
+/// Whether this range is live across a point that destroys the register, or
+/// into one that destroys it before reading.
 pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
     let mine = _whole(register);
-    for (slot, mask, high) in masks {
-        if !mask.contains(&mine) && (!high.contains(&mine) || width <= 2) {
+    for mask in masks {
+        let slot = mask.slot;
+        let read = mask.before.contains(&mine);
+        if !read && !mask.during.contains(&mine) && (!mask.high.contains(&mine) || width <= 2) {
             continue;
         }
-        if one.segments.iter().any(|seg| seg.start < *slot && seg.end > slot + ranges::DEF) {
+        // A use keeps its value alive to `slot + DEF`.
+        let reaches = |end: i64| if read { end >= slot + ranges::DEF } else { end > slot + ranges::DEF };
+        if one.segments.iter().any(|seg| seg.start < slot && reaches(seg.end)) {
             return true;
         }
     }

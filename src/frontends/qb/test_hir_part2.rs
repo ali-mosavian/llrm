@@ -380,6 +380,8 @@ fn test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() {
 }
 
 /// SYS_PARSE_ARGS exhausted string space when a native shell preceded B$ENRA.
+/// The frame is the two descriptors alone: a descriptor address that lived
+/// across calls took a 4-byte spill slot rather than being remade by LEA.
 #[test]
 fn test_qb_runtime_frame_establishes_and_zero_initializes_managed_locals() {
     let source = parsed(&fixture("managed-locals.bas"));
@@ -392,7 +394,7 @@ fn test_qb_runtime_frame_establishes_and_zero_initializes_managed_locals() {
     let image =
         omf::segment_image(&records, code_segment, omf::segments(&records)[code_segment as usize].as_ref().unwrap().1);
     // VBDOS starts the procedure with MOV CX/MOV BX/CALL.
-    assert_eq!(image[start as usize..start as usize + 7], hex("b91800bb01009a"));
+    assert_eq!(image[start as usize..start as usize + 7], hex("b91600bb01009a"));
 }
 
 /// SHOWCOMMAND overwrote B$EXSA's frame link and failed at 0825:0086.

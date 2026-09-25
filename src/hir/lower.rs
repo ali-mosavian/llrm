@@ -806,8 +806,18 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds, origin }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, published, inbounds, origin, allocation }) => {
                 let type_ = self.types[type_id];
+                // The owning descriptor names the allocation, as a symbol.
+                let allocation = match allocation.as_ref() {
+                    Some(place) => {
+                        let descriptor = self.places[place];
+                        let reference = _ref(descriptor, self.types[&descriptor.r#type], self.symbols, &self.pieces)?;
+                        let addr = reference.addr.expect("a place has an address");
+                        Some(mir::Symbol::new(addr.space, addr.index, addr.disp, reference.width))
+                    }
+                    None => None,
+                };
                 let pointer_type = self.value_types[base];
                 let parameter = self.parameter_numbers.get(base).copied();
                 let provenance = parameter.map(|parameter| {
@@ -816,6 +826,11 @@ impl<'a> _Scope<'a> {
                         ..MemoryObject::new(MemoryKind::Parameter)
                     })
                 });
+                // Inside it, the access reaches that allocation alone.
+                let provenance = match allocation {
+                    Some(symbol) => Some(Provenance::one(crate::analysis::regions::allocation(&symbol))),
+                    None => provenance,
+                };
                 if pointer_type.address == model::AddressKind::Near {
                     return Ok(Arg::Cell(Cell {
                         r#ref: MemRef {
@@ -824,7 +839,8 @@ impl<'a> _Scope<'a> {
                             base_width: pointer_type.width as u32,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile,
+                            volatile: *volatile || *published,
+                            published: *published,
                             origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
@@ -890,8 +906,10 @@ impl<'a> _Scope<'a> {
                             base_width: 2,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile,
+                            volatile: *volatile || *published,
+                            published: *published,
                             origin: origin.map(|one| self.values[&one]),
+                            allocation,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -939,6 +957,7 @@ impl<'a> _Scope<'a> {
                             provenance,
                             inbounds: *inbounds,
                             origin: origin.map(|one| self.values[&one]),
+                            allocation,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -950,7 +969,8 @@ impl<'a> _Scope<'a> {
                         pointer: true,
                         provenance,
                         inbounds: *inbounds,
-                        volatile: *volatile,
+                        volatile: *volatile || *published,
+                            published: *published,
                         ..MemRef::new(None, type_.width as u32)
                     },
                 }))
@@ -973,8 +993,10 @@ impl<'a> _Scope<'a> {
                         offset,
                         r#type: *type_id,
                         volatile: false,
+                        published: false,
                         inbounds: false,
                         origin: None,
+                        allocation: None,
                     }),
                     before,
                 )

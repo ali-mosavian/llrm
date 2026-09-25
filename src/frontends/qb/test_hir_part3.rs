@@ -620,7 +620,11 @@ fn test_pds_huge_array_uses_measured_ddim_and_hary_abi() {
     assert!(text.contains("arg 2:2\n  arg 514:2"));
     assert_eq!(text.matches("call B$HARY(").count(), 10);
     assert!(has_hary_pair(&text));
-    assert!(text.contains("+v4@v5):2 <- 123:2"));
+    // 123 is stored through the offset and selector B$HARY returned.
+    let store = text.lines().find(|line| line.ends_with("):2 <- 123:2")).expect("the store of 123");
+    let (offset, selector) =
+        store.split_once("far+").and_then(|(_, rest)| rest.split_once(')')).and_then(|(pair, _)| pair.split_once('@')).expect("a far cell");
+    assert!(text.contains(&format!("{offset}, {selector} <- call B$HARY(")));
 
     let assembly = listing(&source);
     assert_eq!(assembly.matches("call far ptr B$HARY").count(), 10);
@@ -1025,7 +1029,7 @@ fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
             1,
             hir::Op::Load,
             vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
+            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
         )],
     );
     let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
@@ -1072,7 +1076,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
                     1,
                     hir::Op::Load,
                     vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
+                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
                 )],
             )],
             1,
@@ -1138,6 +1142,28 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
     assert!(optimized.body.blocks.iter().any(|block| {
         inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load && one.volatile)
     }));
+}
+
+/// Every iteration of a counted loop reloaded its BYREF arguments, as if the
+/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times.
+#[test]
+fn test_a_counted_loop_reads_a_published_pointee_once() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "FILLBYREF.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Fill (ch)\r\nFill 65\r\nSUB Fill (ch)\r\nDEF SEG = &HB800\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let (_, function) = function_named(&source, "FILL");
+    let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("FILL")).expect("FILL");
+    let optimized = optimized(&source, function, &semantic);
+    let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
+    let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
+    let published = |one: &mir::Op| one.kind == Kind::Load && one.loads.iter().any(|reference| reference.published);
+
+    assert!(ops(&optimized.body).into_iter().any(published));
+    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(published)));
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -1444,6 +1470,8 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
             .expect("emits");
 
     assert_eq!(captured, uncaptured);
+    let (passes, names): (Vec<String>, Vec<String>) = names.into_iter().partition(|name| name.starts_with("pass:"));
+    assert!(passes.iter().any(|name| name.starts_with("pass:source-")) && passes.iter().any(|name| name.starts_with("pass:physical-")));
     assert_eq!(
         names,
         [
@@ -1681,4 +1709,119 @@ o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
     if regex::Regex::new(r"pop\s+ds|mov\s+ds,|\blds\b").unwrap().is_match(&inner) {
         assert!(inner.lines().filter(|line| line.contains("K%")).all(|line| line.contains("ss:K%")), "{inner}");
     }
+}
+
+/// A far element store was taken to reach any descriptor: deedlines'
+/// ROTATE3D reloaded a selector and origin for each of its 12 accesses.
+#[test]
+fn test_element_stores_leave_descriptors_unread() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "WALK.BAS",
+        b"'$DYNAMIC\r\nDIM a(100) AS INTEGER, b(100) AS INTEGER\r\nFOR i% = 0 TO 99\r\na(i%) = b(i%) + 1\r\nb(i%) = a(i%) * 3\r\nNEXT\r\n",
+    );
+    let assembly = listing(&parsed_as(&basic, "qb45", "qb45"));
+    let selectors = stripped_lines(&assembly)
+        .into_iter()
+        .filter(|line| ["mov es, word ptr", "mov fs, word ptr", "mov gs, word ptr"].iter().any(|one| line.starts_with(one)))
+        .count();
+    // One selector per array, read once.
+    assert_eq!(selectors, 2, "{assembly}");
+}
+
+/// A counter widened to a dword to index an array rebased the loop's word
+/// offsets as dwords too: deedlines' COPPER selected `mov eax, ax` and the
+/// compile failed.
+#[test]
+fn test_a_widened_counter_rebases_word_offsets_as_words() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "COPPER.BAS",
+        b"DIM SHARED fsin1%(-48 TO 1083)\r\nDIM SHARED fsin2%(-640 TO 957)\r\nDIM SHARED fsin3%(-640 TO 871)\r\nSUB actions3d\r\nDIM y2%(0 TO 399)\r\nFOR i% = 17 TO 32\r\nOUT &H3C9, (i% - 33) * 4\r\nNEXT i%\r\nFOR a% = 0 TO 15\r\nFOR B% = 0 TO 15\r\nNEXT B%\r\nNEXT a%\r\nDIM c1%(0 TO 7), c2%(0 TO 7), c3%(0 TO 7)\r\nDO WHILE INKEY$ = \"\"\r\nDEF SEG = &HA000\r\nFOR y% = 0 TO y1%\r\nFOR i% = 0 TO 7\r\nPOKE fsin2%(y2%(y%) + l%) + fsin3%(y% - m%) + i%, c1%(i%)\r\nPOKE fsin2%(y% + l%) + fsin1%(y2%(y%) + k%) + i%, c2%(i%)\r\nPOKE fsin1%(y% + k%) + fsin2%(y% + l%) + fsin3%(y% + m%) + i% - 99, c3%(i%)\r\nNEXT i%\r\nNEXT y%\r\nLOOP\r\nEND SUB\r\n",
+    );
+    object_bytes(&parsed_as(&basic, "qb45", "qb45"), "COPPER.BAS").expect("encodes");
+}
+
+/// A merged array's shift was added under the origin, `origin + (i * 2 +
+/// 1284)`, and cost qbdemo's PLASMA an `add` per access instead of a
+/// displacement.
+#[test]
+fn test_a_merged_array_shift_is_a_displacement() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "MERGED.BAS",
+        b"'$DYNAMIC\r\nDIM a(10) AS INTEGER, b(1 TO 5) AS LONG\r\nFOR i% = 1 TO n%\r\nb((i% AND 3) + 1) = a(i% AND 7)\r\nNEXT\r\n",
+    );
+    let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    // b's first element is at byte 24 of the group, element 1 of 4 bytes.
+    assert!(lines.iter().any(|line| line.contains("+20]")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.starts_with("add") && line.ends_with(", 20")), "{lines:#?}");
+}
+
+#[test]
+/// A selector the allocator put in DS was reloaded with the data group
+/// before the float load that read through it: deedlines' 3D object
+/// collapsed to a point.
+fn test_a_float_load_reads_its_selector_after_the_data_group_restore() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "RESTORE.BAS",
+        b"'$DYNAMIC\r\nDIM SHARED x(4096), y(4096), z(4096)\r\nDIM SHARED xs%(4096, 1), ys%(4096, 1)\r\nSUB t\r\nSHARED n%, zpr%\r\nFOR i% = 0 TO n% - 1\r\nxs%(i%, 1) = xs%(i%, 0)\r\nys%(i%, 1) = ys%(i%, 0)\r\nIF z(i%) <= zpr% THEN GOTO 10\r\nxs%(i%, 0) = (x(i%) * 256) / z(i%)\r\nys%(i%, 0) = (y(i%) * 256) / z(i%)\r\n10\r\nNEXT i%\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    let mut restored = false;
+    for line in &lines {
+        if line.contains("ds:") {
+            assert!(!restored, "reads the data group as an array: {lines:#?}");
+        }
+        if line.starts_with("mov ds,") {
+            restored = line.ends_with(", ss");
+        }
+        if line.ends_with(':') {
+            restored = false;
+        }
+    }
+}
+
+#[test]
+/// QB code was priced for a hard-coded 386, not the machine's CPU: `x * 100`
+/// became a 26-clock 486 `imul` instead of shifts and adds.
+fn test_code_is_priced_for_the_machines_cpu() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "PRICED.BAS",
+        b"DEFINT A-Z\r\nDECLARE FUNCTION F (x)\r\nPRINT F(7)\r\nFUNCTION F (x)\r\nF = x * 100\r\nEND FUNCTION\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    assert_eq!(crate::abi::machine::current().cpu, "486");
+    assert!(!lines.iter().any(|line| line.starts_with("imul")), "{lines:#?}");
+}
+
+#[test]
+/// B800:FFFF ends in the VGA BIOS ROM, which the machine did not list: a POKE
+/// to text memory at an unbounded offset might have hit any descriptor, so
+/// the array's selector and origin were reloaded every iteration.
+fn test_text_memory_stores_leave_array_descriptors_invariant() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "TEXTPOKE.BAS",
+        b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM SHARED t(63)\r\nDECLARE SUB Blit (w)\r\nBlit 40\r\nSUB Blit (w)\r\nDEF SEG = &HB800\r\no = 0\r\nFOR x = 0 TO w - 1\r\nPOKE o, t(x AND 63)\r\no = o + 2\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("BLIT proc").expect("BLIT proc");
+    let end = text.find("BLIT endp").expect("BLIT endp");
+    let body = backward_loop(&text[start..end]);
+    let loads = body.lines().map(str::trim).filter(|line| ["mov es,", "mov fs,", "mov gs,", "mov ds,"].iter().any(|one| line.starts_with(one)));
+    assert_eq!(loads.count(), 0, "{body}");
 }

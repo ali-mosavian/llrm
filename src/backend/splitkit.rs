@@ -99,7 +99,8 @@ pub fn split(
     cut
 }
 
-/// Carve spilled address bases into the natural loops that reuse them.
+/// Carve spilled address operands -- base, index, selector -- into the
+/// natural loops that reuse them.
 pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<u32>) {
     if values.is_empty() {
         return (body.clone(), BTreeSet::new());
@@ -122,7 +123,12 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
                         .flat_map(|block| &block.insns)
                         .filter_map(|one| one.what.as_ref())
                         .flat_map(|what| what.dests.iter().chain(&what.sources))
-                        .any(|place| matches!(place, Loc::Mem(cell) if cell.base.is_some_and(|base| base.value == **value)))
+                        .any(|place| {
+                            matches!(place, Loc::Mem(cell) if [cell.base, cell.index, cell.selector]
+                                .iter()
+                                .flatten()
+                                .any(|operand| operand.value == **value))
+                        })
             })
             .map(|(value, _found)| *value)
             .collect();

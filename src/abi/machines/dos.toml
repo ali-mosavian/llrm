@@ -3,6 +3,9 @@
 # A far address is selector * 16 + offset.
 addressing = "real"
 
+# The processor code is priced for.
+cpu = "486"
+
 # The segment registers the program model reserves: the data group every
 # unprefixed access reads, the stack and the code. The rest hold selectors.
 # The stack lives in the data group, so ss: reaches the data too.
@@ -18,6 +21,11 @@ stack_is_data = true
 name = "VGA memory: graphics, monochrome and colour text"
 low = 0xA0000
 high = 0xC0000
+
+[[foreign]]
+name = "VGA BIOS ROM: B800:FFFF ends inside it"
+low = 0xC0000
+high = 0xC8000
 
 # I/O ports a write to changes no memory. The VGA DAC: PEL mask, read
 # index, write index, data; the palette is mapped at no address.

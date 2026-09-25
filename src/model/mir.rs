@@ -161,6 +161,11 @@ pub struct MemRef {
     pub within: Option<Vec<(i64, i64)>>,
     pub provenance: Option<Provenance>,
     pub volatile: bool,
+    /// Another agent may write the object at any time: an interrupt handler,
+    /// the runtime. The access is `volatile`, ordered as one; reading it once
+    /// before a loop that ends without it is the run where the write comes
+    /// after the loop, so such a read may leave that loop.
+    pub published: bool,
     /// The source language promises this access stays inside one object.
     /// Not part of equality or hashing, as Python's `compare=False`.
     pub inbounds: bool,
@@ -201,6 +206,7 @@ impl MemRef {
             within: None,
             provenance: None,
             volatile: false,
+            published: false,
             inbounds: false,
             origin: None,
         }
@@ -230,6 +236,7 @@ impl PartialEq for MemRef {
             && self.excludes == other.excludes
             && self.provenance == other.provenance
             && self.volatile == other.volatile
+            && self.published == other.published
     }
 }
 
@@ -250,6 +257,7 @@ impl Hash for MemRef {
         self.excludes.hash(state);
         self.provenance.hash(state);
         self.volatile.hash(state);
+        self.published.hash(state);
     }
 }
 

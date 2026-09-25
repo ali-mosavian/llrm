@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math]
-//!         [--mbf] [--whole-program] [--include DIR]... [--mir] [-o OUTPUT] [-O {s,2}] [--dump DIR]
+//!         [--mbf] [--whole-program] [--array-merging] [--include DIR]... [--mir] [-o OUTPUT] [-O {s,2}] [--dump DIR]
 //!         [--machine TOML]
 //! ```
 
@@ -19,7 +19,7 @@ use crate::model::passes::{Options, O2};
 
 const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
 [--array-order {column-major,row-major}] [--dump-hir DUMP_HIR] [--huge-arrays] [--checked-arrays] \
-[--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
+[--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
 [--dump DUMP] [--machine MACHINE] source";
 
 pub(super) struct Arguments {
@@ -69,6 +69,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,
             "--whole-program" => frontend.whole_program = true,
+            "--array-merging" => frontend.array_merging = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--mir" => mir = true,
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),

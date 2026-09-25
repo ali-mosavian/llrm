@@ -1626,7 +1626,20 @@ fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> 
         if what.op != Operation::Address || what.name.as_deref() != Some("lea") {
             continue;
         }
-        let ([Loc::Held(destination)], [Loc::Address(source)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+        // A cell's address is an address like any other once nothing held is in it.
+        let source = match what.sources.as_slice() {
+            [Loc::Address(source)] => source.clone(),
+            [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => Address {
+                addr: cell.addr,
+                through: cell.through,
+                index: Register::None,
+                scale: 1,
+                offset: cell.offset,
+                disp_width: cell.disp_width,
+            },
+            _ => continue,
+        };
+        let [Loc::Held(destination)] = what.dests.as_slice() else {
             continue;
         };
         if destination.value == *value
@@ -1644,7 +1657,7 @@ fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> 
             })
             && source.index == Register::None
         {
-            result.insert(*value, source.clone());
+            result.insert(*value, source);
         }
     }
     result

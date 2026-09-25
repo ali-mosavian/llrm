@@ -18,7 +18,7 @@ use super::{Compiler, Function, Number, Operand, Place};
 
 /// A descriptor, independently of the value that points to it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Identity {
+pub(super) enum Identity {
     /// A module or STATIC descriptor: its data symbol and offset.
     Global(u32, isize),
     /// A procedure's local descriptor.
@@ -91,7 +91,7 @@ impl Classes {
 }
 
 /// The descriptor `place` of `function` is.
-fn identity(function: &Function, place: &Place) -> Identity {
+pub(super) fn identity(function: &Function, place: &Place) -> Identity {
     match place.storage {
         "local" => Identity::Local(function.id, place.id),
         _ => Identity::Global(place.symbol, place.offset),
@@ -99,7 +99,7 @@ fn identity(function: &Function, place: &Place) -> Identity {
 }
 
 /// Each descriptor pointer value of `function` and the descriptor it names.
-fn pointers(function: &Function) -> BTreeMap<u32, Identity> {
+pub(super) fn pointers(function: &Function) -> BTreeMap<u32, Identity> {
     let mut out: BTreeMap<u32, Identity> = function
         .parameters
         .iter()
@@ -223,6 +223,10 @@ pub(super) fn applied(compiler: &mut Compiler) {
             known.get(&classes.root(*identity)).filter(|one| one.proven()).cloned()
         };
         let types: BTreeMap<u32, u32> = function.values.iter().copied().collect();
+        // A descriptor this function names as a place: a parameter's has none.
+        let places: BTreeMap<Identity, u32> =
+            function.places.iter().rev().map(|place| (identity(function, place), place.id)).collect();
+        let owner = |descriptor: u32| pointers.get(&descriptor).and_then(|identity| places.get(identity)).copied();
 
         for block in &mut function.blocks {
             for one in &mut block.instructions {
@@ -241,6 +245,10 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         if fact(descriptor).is_some_and(|fact| fact.zero_based) {
                             function.origins.extend(one.results.iter().map(|result| (*result, origin)));
                         }
+                        // A far array's element is in its own allocation.
+                        if let Some(place) = owner(descriptor) {
+                            function.allocations.extend(one.results.iter().map(|result| (*result, place)));
+                        }
                     }
                     _ => {}
                 }
@@ -252,12 +260,17 @@ pub(super) fn applied(compiler: &mut Compiler) {
             if let ("concat", [result], [_, Operand::Value(offset)]) =
                 (one.op, one.results.as_slice(), one.operands.as_slice())
             {
-                if let Some(origin) = function.origins.get(offset) {
-                    concatenated.push((*result, *origin));
-                }
+                concatenated.push((*result, *offset));
             }
         }
-        function.origins.extend(concatenated);
+        for (result, offset) in concatenated {
+            if let Some(origin) = function.origins.get(&offset).copied() {
+                function.origins.insert(result, origin);
+            }
+            if let Some(place) = function.allocations.get(&offset).copied() {
+                function.allocations.insert(result, place);
+            }
+        }
     }
 }
 

@@ -742,6 +742,16 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                 continue;
             }
 
+            // Each offset is rebased at the width its operation reads: the
+            // counter's low bytes, never more than the counter has.
+            let reading = |at: (usize, usize), position: usize| match &operation(at).args[position] {
+                Arg::Held(held) => held.width,
+                Arg::Const(constant) => constant.width,
+                _ => width,
+            };
+            if offsets.iter().any(|(at, position, ..)| reading(*at, position.expect("checked above")) > width) {
+                continue;
+            }
             let compare = &body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()];
             let ending = body.blocks[blocks[&preheader]].ops.last().unwrap_or(compare);
             let mut builder = counting::Seeds {
@@ -769,7 +779,14 @@ pub(crate) fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, Sub
                     Kind::Mul,
                     vec![final_.as_arg(), Arg::Const(Const::new(consts::masked(multiplier, width), width))],
                 );
-                let adjusted = builder.computed(Kind::Add, vec![base.clone(), delta.as_arg()]);
+                let narrow = reading(*at, position);
+                let delta = match delta {
+                    AffineOperand::Held(held) => Arg::Held(Held { width: narrow, ..held }),
+                    AffineOperand::Const(constant) => Arg::Const(Const::new(consts::masked(&constant.n, narrow), narrow)),
+                };
+                builder.width = narrow;
+                let adjusted = builder.computed(Kind::Add, vec![base.clone(), delta]);
+                builder.width = width;
                 let args = op
                     .args
                     .iter()

@@ -149,9 +149,12 @@ fn _operand_type(
             }
             Ok(*r#type)
         }
-        model::Operand::IndirectPlace(model::IndirectPlace { base, r#type, origin, .. }) => {
+        model::Operand::IndirectPlace(model::IndirectPlace { base, r#type, origin, allocation, .. }) => {
             if !values.contains_key(base) {
                 invalid!("unknown pointer value {base}");
+            }
+            if let Some(allocation) = allocation.filter(|allocation| !places.contains_key(allocation)) {
+                invalid!("unknown allocation descriptor place {allocation}");
             }
             if let Some(origin) = origin.filter(|origin| !values.contains_key(origin)) {
                 invalid!("unknown origin value {origin}");

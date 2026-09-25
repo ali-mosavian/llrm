@@ -535,7 +535,9 @@ pub(crate) fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &Index
             _ => None,
         })
         .collect::<HashSet<_>>();
-    if op.loads.iter().collect::<HashSet<_>>() != cells {
+    // An address names its cell without reading it.
+    let read = if op.kind == Kind::Address { HashSet::default() } else { cells };
+    if op.loads.iter().collect::<HashSet<_>>() != read {
         return None;
     }
     let mut named: Vec<Arg> = Vec::new();
@@ -1251,6 +1253,12 @@ pub(crate) fn motion_blocked<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool 
 /// refused whole.  `intervals` and `floating_allowed` are keyed by Python's
 /// `id(op)`, the operation's address.
 #[allow(clippy::too_many_arguments)]
+/// A load of published memory alone: another agent may write it, and no
+/// device sees the read.
+fn _published_read(one: &Op) -> bool {
+    one.kind == Kind::Load && one.stores.is_empty() && one.loads.iter().all(|reference| !reference.volatile || reference.published)
+}
+
 pub(crate) fn _invariant_run<'a>(
     ops: &[&'a Op],
     carried: &BTreeSet<Value>,
@@ -1264,6 +1272,7 @@ pub(crate) fn _invariant_run<'a>(
     intervals: Option<&crate::support::hash::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
     nonempty: bool,
     floating_allowed: &BTreeSet<usize>,
+    finite: bool,
 ) -> Result<Vec<&'a Op>, String> {
     let _ = (dgroup, calls);
     let id = |op: &Op| std::ptr::from_ref(op) as usize;
@@ -1296,7 +1305,7 @@ pub(crate) fn _invariant_run<'a>(
             // `mir.instruction`
             let real = one.kind != Kind::Nothing;
             if run.iter().any(|other| **other == *one)
-                || one.volatile
+                || (one.volatile && !(finite && _published_read(one)))
                 || !one.stores.is_empty()
                 || (one.floating.is_some() && !floating_allowed.contains(&id(one)))
                 || !real
@@ -1347,6 +1356,7 @@ pub(crate) fn _invariant_run<'a>(
                         || crate::analysis::regions::overlapping(reference, other, known, *theirs, layout.as_ref())
                             .map_err(|error| format!("{error:?}"))?
                     {
+                        crate::debug!("hoist", "keeps {:?}: may overlap store {:?}", reference, other);
                         overlaps = true;
                         break 'refs;
                     }
@@ -3216,14 +3226,22 @@ pub(crate) fn _folded_op(op: &Op, facts: &IndexMap<Value, crate::analysis::const
     result
 }
 /// The latest place in the preheader every value the run reads is defined.
-pub(crate) fn _placement(block: &MirBlock, run: &[&Op], alive: &crate::analysis::liveness::Liveness) -> Option<usize> {
+pub(crate) fn _placement(
+    block: &MirBlock,
+    run: &[&Op],
+    alive: &crate::analysis::liveness::Liveness,
+    arriving: &BTreeSet<Value>,
+) -> Option<usize> {
     let made = run.iter().flat_map(|one| one.defines.iter().copied()).collect::<BTreeSet<_>>();
     let wants = run
         .iter()
         .flat_map(|one| _consumed(one))
         .filter(|value| !value.flags && !made.contains(value))
         .collect::<BTreeSet<_>>();
+    // What arrives at entry is ready everywhere; liveness counts it as the
+    // entry block's own definition, which no op makes.
     let mut ready = alive.live_in.get(&block.at).cloned().unwrap_or_default();
+    ready.extend(arriving.iter().copied());
     let mut index = 0;
     for (number, one) in block.ops.iter().enumerate() {
         if wants.is_subset(&ready) {
@@ -3427,6 +3445,7 @@ pub(crate) fn hoisted(
         .collect::<HashMap<usize, &BTreeMap<Value, Interval>>>();
     let at_of = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<i64, &MirBlock>>();
     let alive = crate::analysis::liveness::live(body);
+    let arriving = crate::analysis::liveness::entry_values(body);
     let readable = live(body);
     let effective = _effective(body, calls);
     let mut crossed: PySet<Value> = PySet::new();
@@ -3437,6 +3456,7 @@ pub(crate) fn hoisted(
 
     for loop_ in &inside {
         let Some(into) = _preheader(body, loop_) else {
+            crate::debug!("hoist", "loop at b{} has no preheader", loop_.header);
             continue;
         };
         if loop_.body.contains(&into) {
@@ -3497,7 +3517,10 @@ pub(crate) fn hoisted(
             Some(&intervals),
             nonempty,
             &_guaranteed_float_work(body, loop_, nonempty),
+            // A loop that ends without a published value may read it once.
+            !crate::analysis::induction::counted(body, loop_, None, false).is_empty(),
         )?;
+        crate::debug!("hoist", "loop at b{} of {} blocks moves {} of {} ops", loop_.header, loop_.body.len(), run.len(), ops.len());
         // Track operations, not source addresses: hoisted definitions share
         // their anchor's address with other computations and the jump.
         run.retain(|one| !gone.contains(&identities[&id(one)]));
@@ -3522,7 +3545,7 @@ pub(crate) fn hoisted(
         }
 
         // The latest point every value the run reads is defined.
-        let Some(index) = _placement(at_of[&into], &run, &alive) else {
+        let Some(index) = _placement(at_of[&into], &run, &alive, &arriving) else {
             continue;
         };
 

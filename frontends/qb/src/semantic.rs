@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod merging;
 mod shapes;
 mod tags;
 
@@ -76,7 +77,9 @@ enum Operand {
         base: u32,
         offset: usize,
         type_id: u32,
-        volatile: bool,
+        // A BYREF pointee: an interrupt handler may write it while a loop
+        // waits on it (VBDOS IN_KEYSTROKE).
+        published: bool,
         // An array element: QB promises it stays inside its array.
         inbounds: bool,
     },
@@ -84,7 +87,7 @@ enum Operand {
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    // Base, volatile, inbounds.
+    // Base, published, inbounds.
     Indirect(u32, bool, bool),
 }
 
@@ -217,6 +220,9 @@ struct Function {
     // Each element pointer whose offset is its array's first byte plus a
     // non-negative in-object offset: the pointer's origin value.
     origins: BTreeMap<u32, u32>,
+    // Each element pointer into a far array: the place of the descriptor
+    // owning the allocation it stays inside.
+    allocations: BTreeMap<u32, u32>,
 }
 
 struct Compiler {
@@ -321,6 +327,8 @@ pub struct Options {
     /// Nothing outside the module calls its procedures: they get internal
     /// linkage, and no PUBDEF, so such a call fails to link.
     pub whole_program: bool,
+    /// Lay out dynamic arrays read together in one allocation.
+    pub array_merging: bool,
 }
 
 pub fn compile_with_options(
@@ -331,6 +339,10 @@ pub fn compile_with_options(
     options: &Options,
 ) -> Result<String, SemanticError> {
     let mut compiler = built(module, module_name, dialect, runtime, options)?;
+    // /Ah and /D address every element through the descriptor at run time.
+    if options.array_merging && !options.huge_arrays && !options.checked_arrays {
+        merging::applied(&mut compiler);
+    }
     shapes::applied(&mut compiler);
     Ok(compiler.json())
 }
@@ -1049,6 +1061,7 @@ impl Compiler {
             external_entries,
             linkage,
             origins: BTreeMap::new(),
+            allocations: BTreeMap::new(),
         });
     }
 
@@ -3047,7 +3060,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    volatile: false,
+                                    published: false,
                                     inbounds: false,
                                 },
                                 value,
@@ -3677,14 +3690,14 @@ impl Compiler {
             Operand::Indirect {
                 base,
                 offset: at,
-                volatile,
+                published,
                 inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
-                volatile: *volatile,
+                published: *published,
                 inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
@@ -3744,7 +3757,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        volatile: true,
+                        published: true,
                         inbounds: false,
                     }
                 } else {
@@ -3773,7 +3786,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
-                            volatile: false,
+                            published: false,
                             inbounds: true,
                         },
                         element,
@@ -3802,7 +3815,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
-                        volatile: false,
+                        published: false,
                         inbounds: true,
                     },
                     element,
@@ -3817,11 +3830,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
-                        volatile,
+                        published,
                         inbounds,
                     },
                 };
@@ -3930,11 +3943,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
+            ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
-                volatile,
+                published,
                 inbounds,
             },
         };
@@ -4281,7 +4294,7 @@ impl Compiler {
                 base: at,
                 offset: 16,
                 type_id: INTEGER,
-                volatile: false,
+                published: false,
                 inbounds: false,
             }],
         );
@@ -4294,7 +4307,7 @@ impl Compiler {
                     base: at,
                     offset: 14,
                     type_id: INTEGER,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -4359,7 +4372,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
-                volatile: false,
+                published: false,
                 inbounds: false,
             }],
         );
@@ -5098,7 +5111,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        volatile: true,
+                        published: true,
                         inbounds: false,
                     }
                 } else {
@@ -5270,7 +5283,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -5310,7 +5323,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -5689,7 +5702,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -5816,7 +5829,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -5839,7 +5852,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -6148,7 +6161,7 @@ impl Compiler {
                         base,
                         offset,
                         type_id,
-                        volatile,
+                        published,
                         inbounds,
                     } => {
                         let pointer_type = self
@@ -6162,7 +6175,7 @@ impl Compiler {
                             base,
                             offset,
                             type_id,
-                            volatile,
+                            published,
                             inbounds,
                         };
                         if self.width(pointer_type) == 4 {
@@ -7617,7 +7630,7 @@ impl Compiler {
                         if operand_index != 0 {
                             out.push(',');
                         }
-                        operand_json(&mut out, operand, &function.origins);
+                        operand_json(&mut out, operand, function);
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -7631,7 +7644,7 @@ impl Compiler {
                     if index != 0 {
                         out.push(',');
                     }
-                    operand_json(&mut out, operand, &function.origins);
+                    operand_json(&mut out, operand, function);
                 }
                 out.push_str("],\"targets\":[");
                 numbers(&mut out, &terminator.targets);
@@ -8187,7 +8200,7 @@ fn numbers(out: &mut String, values: &[u32]) {
     }
 }
 
-fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32>) {
+fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
     match operand {
         Operand::Value(value) => write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap(),
         Operand::Constant(type_id, Number::Integer(value)) => write!(
@@ -8207,7 +8220,7 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand, origins);
+                operand_json(out, operand, function);
             }
             write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
         }
@@ -8222,7 +8235,7 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand, origins);
+                operand_json(out, operand, function);
             }
             write!(
                 out,
@@ -8234,14 +8247,19 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
             base,
             offset,
             type_id,
-            volatile,
+            published,
             inbounds,
         } => {
-            write!(out, "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
-            if let Some(origin) = origins.get(base).filter(|_| *inbounds) {
+            if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
+                write!(out, "{{\"allocation\":{place},").unwrap();
+            } else {
+                out.push('{');
+            }
+            write!(out, "\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }
-            write!(out, "\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}").unwrap();
+            write!(out, "\"published\":{published},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
         }
     }
 }
