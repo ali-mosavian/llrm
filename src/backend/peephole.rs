@@ -2069,124 +2069,6 @@ fn _next_word(low: &Mem, high: &Mem) -> bool {
     moved == 2 && [0, 2].contains(&(high.offset - low.offset)) || moved == 0 && high.offset == low.offset + 2
 }
 
-fn _scaled_address<'a>(
-    parts: &[Arc<Insn>],
-    flags_dead: bool,
-    cpu: impl Into<ProfileOrName<'a>>,
-) -> Result<Option<Arc<Insn>>, String> {
-    if ![3, 4].contains(&parts.len())
-        || parts.iter().any(|one| one.what.is_none() || !one.clobbers.is_empty() || one.symbol == Some(true))
-    {
-        return Ok(None);
-    }
-    let (copy, shift, add) = (&parts[0], &parts[1], &parts[2]);
-    if [copy, shift, add].into_iter().any(|one| !one.spread.is_empty()) {
-        return Ok(None);
-    }
-    let copied = copy.what.as_ref().expect("checked above");
-    let (dest, source) = match (copied.op, copied.name.as_deref(), copied.dests.as_slice(), copied.sources.as_slice()) {
-        (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]) => (*dest, *source),
-        _ => return Ok(None),
-    };
-    if dest.width != source.width
-        || ![2, 4].contains(&dest.width)
-        || !target::WIDTHS.contains_key(&dest.register)
-        || !target::WIDTHS.contains_key(&source.register)
-        || full32(dest.register) == full32(source.register)
-    {
-        return Ok(None);
-    }
-    let (shifted, added) = (shift.what.as_ref().expect("checked above"), add.what.as_ref().expect("checked above"));
-    let amount = match (
-        (shifted.op, shifted.name.as_deref(), shifted.dests.as_slice(), shifted.sources.as_slice()),
-        (added.op, added.name.as_deref(), added.dests.as_slice(), added.sources.as_slice()),
-    ) {
-        (
-            (
-                Operation::Binary,
-                Some("shl"),
-                [shift_dest],
-                [shift_source, Loc::Imm(Imm { value: amount, address: None, .. })],
-            ),
-            (Operation::Binary, Some("add"), [add_dest], [left, right]),
-        ) => {
-            if !(1..=3).contains(amount)
-                || [shift_dest, shift_source, add_dest, left].into_iter().any(|one| *one != Loc::Reg(dest))
-                || *right != Loc::Reg(source)
-            {
-                return Ok(None);
-            }
-            *amount
-        }
-        _ => return Ok(None),
-    };
-    if !flags_dead {
-        if parts.len() != 4 {
-            return Ok(None);
-        }
-        let last = parts[3].what.as_ref().expect("checked above");
-        match (last.op, last.name.as_deref(), last.dests.as_slice(), last.sources.as_slice()) {
-            (
-                Operation::Binary,
-                Some("shl"),
-                [last_dest],
-                [last_source, Loc::Imm(Imm { value: count, address: None, .. })],
-            ) => {
-                if *last_dest != Loc::Reg(dest)
-                    || *last_source != Loc::Reg(dest)
-                    || !(0 < *count && *count < i64::from(dest.width) * 8)
-                {
-                    return Ok(None);
-                }
-            }
-            _ => return Ok(None),
-        }
-    }
-    let base = full32(source.register);
-    if base == Register::ESP {
-        return Ok(None);
-    }
-    let target_cpu = targets::profile(cpu)?;
-    if !_scaled_address_is_cheaper(&source, parts[..3].len(), target_cpu) {
-        return Ok(None);
-    }
-    // For a word result only the low sixteen address bits are used. Unknown
-    // upper source bits cannot affect them; LEA performs no memory access.
-    let what = semantics(
-        Operation::Address,
-        "lea",
-        vec![Loc::Reg(dest)],
-        vec![Loc::Address(Address { through: base, index: base, scale: 1 << amount, ..Address::new(None) })],
-    );
-    let owned: Vec<&Arc<Insn>> =
-        [copy, shift, add].into_iter().filter(|one| one.covers.is_some_and(|covers| covers.0 != covers.1)).collect();
-    // Fresh emission may replace an original instruction just as safely as a
-    // synthetic one, provided there is one unambiguous owner for its source
-    // interval.  Keeping the old blanket refusal here made identical MIR
-    // select LEA for C and MOV/SHL/ADD for BASIC solely because the latter had
-    // decoded-byte provenance.  The surviving LEA inherits that provenance;
-    // multiple owners still need a more general interval merge and are kept.
-    if owned.len() > 1 {
-        return Ok(None);
-    }
-    let owner = owned.first().copied().unwrap_or(copy);
-    let intermediate: HashSet<u32> = copy.defines.iter().copied().collect();
-    let uses = deduped(
-        copy.uses.iter().copied().chain(add.uses.iter().copied().filter(|value| !intermediate.contains(value))),
-    );
-    let live: HashSet<u32> = uses.iter().chain(&add.defines).copied().collect();
-    let widths = deduped(copy.widths.iter().chain(&add.widths).copied().filter(|pair| live.contains(&pair.0)));
-    Ok(Some(Arc::new(Insn {
-        what: Some(what),
-        defines: add.defines.clone(),
-        uses,
-        widths,
-        requires: deduped(copy.requires.iter().chain(&add.requires).copied()),
-        delivers: deduped(copy.delivers.iter().chain(&add.delivers).copied()),
-        ..(**owner).clone()
-    })))
-}
-
 /// Replace a dead temporary's shift with a scaled 67h LEA.
 ///
 /// The load remains a load.  Only the register-only `shl; add` tail is
@@ -2280,16 +2162,8 @@ fn _loaded_scaled_add<'a>(
 }
 
 /// Select physically adjacent load/scale/add tails across inert anchors.
-fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
-    let mut dead: HashSet<usize> = HashSet::default();
-    let mut flags_dead = false;
-    for one in block.insns.iter().rev() {
-        if flags_dead {
-            dead.insert(id(one));
-        }
-        flags_dead = _flags_before(one, flags_dead);
-    }
-
+fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
+    let dead = _flags_dead_after(block, flags_dead_out);
     let mut insns = block.insns.clone();
     let work: Vec<usize> = insns
         .iter()
@@ -2332,35 +2206,58 @@ fn _loaded_addresses(block: &LirBlock, uses: &Counter, cpu: &Profile) -> Result<
     Ok(block.with_insns(insns))
 }
 
-/// Whether replacing `parts` drops a value read outside that region.
+/// The instructions of `block` after which no arithmetic flag is read,
+/// given whether any is read after its end.
+fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
+    let mut dead: HashSet<usize> = HashSet::default();
+    let mut flags_dead = dead_out;
+    for one in block.insns.iter().rev() {
+        if flags_dead {
+            dead.insert(id(one));
+        }
+        flags_dead = _flags_before(one, flags_dead);
+    }
+    dead
+}
+
+/// Whether replacing `parts`, followed in their block by `after`, drops a
+/// definition something still reads.
 ///
-/// Allocated instructions may carry virtual occurrence identities that do
-/// not follow their final physical two-address spelling.  A copy feeding an
-/// ADD normally has no reader beyond that ADD, but constrained occurrences
-/// can still name the copy result later even after the physical register has
-/// been updated.  A machine fold cannot erase such an identity: the verifier
-/// and later opaque occurrences still need its definition.
-fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, users: &Counter) -> bool {
+/// Allocated instructions carry virtual identities that need not follow
+/// their physical two-address spelling, and coalescing gives one identity
+/// several definitions. A definition is lost only where a read reaches it:
+/// later in the block before the identity is defined again, or past the
+/// block's end (`live_out`).
+pub(crate) fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, after: &[Arc<Insn>], live_out: &BTreeSet<u32>) -> bool {
     let eliminated: BTreeSet<u32> = parts
         .iter()
         .flat_map(|one| one.defines.iter().copied())
         .filter(|value| !combined.defines.contains(value))
         .collect();
-    if eliminated.is_empty() {
-        return false;
-    }
-    let mut local = Counter::default();
-    for one in parts {
-        for value in &one.uses {
-            *local.entry(*value).or_insert(0) += 1;
+    let reads = |one: &Insn, value: u32| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value);
+    eliminated.iter().any(|value| {
+        let mut redefined: Option<Option<i64>> = None;
+        for one in after {
+            match redefined {
+                // A group reads before any member writes.
+                Some(group) if group.is_some() && one.group == group => {
+                    if reads(one, *value) {
+                        return true;
+                    }
+                    continue;
+                }
+                Some(_) => return false,
+                None => {}
+            }
+            if reads(one, *value) {
+                return true;
+            }
+            if one.defines.contains(value) {
+                redefined = Some(one.group);
+            }
         }
-    }
-    for one in parts {
-        for (held, _register) in &one.requires {
-            *local.entry(held.value).or_insert(0) += 1;
-        }
-    }
-    eliminated.iter().any(|value| count(users, *value) > count(&local, *value))
+        redefined.is_none() && live_out.contains(value)
+    })
 }
 
 /// Select LEA for allocated arithmetic when the replaced flags are dead.
@@ -2388,74 +2285,27 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
             }
         }
     }
+    let (_, live_out) = crate::backend::allocate::live(body);
+    let flags_out = _flags_live_out(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let block = _loaded_addresses(block, &virtual_uses, target_cpu)?;
-        let mut dead: HashSet<usize> = HashSet::default();
-        let mut flags_dead = false;
-        for one in block.insns.iter().rev() {
-            if flags_dead {
-                dead.insert(id(one));
-            }
-            flags_dead = _flags_before(one, flags_dead);
-        }
+        let flags_dead_out = flags_out.get(&block.at).is_some_and(Lanes::is_empty);
+        let block = _loaded_addresses(block, flags_dead_out, &virtual_uses, target_cpu)?;
+        let dead = _flags_dead_after(&block, flags_dead_out);
+        let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
         let mut insns = Vec::new();
         let mut index = 0;
         while index < block.insns.len() {
-            let triple = &block.insns[index..(index + 3).min(block.insns.len())];
-            let mut combined_parts = triple;
-            let mut combined = if triple.len() == 3 && dead.contains(&id(&triple[2])) {
-                _scaled_address(triple, true, target_cpu)?
-            } else {
-                None
-            };
-            if combined.is_none() {
-                combined_parts = &block.insns[index..(index + 4).min(block.insns.len())];
-                combined = _scaled_address(combined_parts, false, target_cpu)?;
-            }
-            if combined.as_ref().is_some_and(|combined| _loses_live_definition(combined_parts, combined, &virtual_uses))
-            {
-                combined = None;
-            }
-            if let Some(combined) = combined {
-                insns.push(combined);
-                index += 3;
-            } else {
-                let pair = &block.insns[index..(index + 2).min(block.insns.len())];
-                let mut combined = if pair.len() == 2 && dead.contains(&id(&pair[1])) {
-                    _sum_address(pair, target_cpu)?
-                } else {
-                    None
-                };
-                if combined.is_none() {
-                    combined = if pair.len() == 2 && dead.contains(&id(&pair[1])) {
-                        _shift_address(pair, target_cpu)?
-                    } else {
-                        None
-                    };
+            let rest = &block.insns[index..];
+            match _affine_address(rest, &dead, target_cpu)? {
+                Some((taken, combined)) if !_loses_live_definition(&rest[..taken], &combined, &rest[taken..], &live_out) => {
+                    insns.push(combined);
+                    index += taken;
                 }
-                if combined.as_ref().is_some_and(|combined| _loses_live_definition(pair, combined, &virtual_uses)) {
-                    combined = None;
+                _ => {
+                    insns.push(Arc::clone(&block.insns[index]));
+                    index += 1;
                 }
-                if let Some(combined) = combined {
-                    let removed = Arc::clone(&pair[1]);
-                    let folded = if pair[0].covers == Some((removed.at, removed.at)) {
-                        vec![combined]
-                    } else {
-                        lir::without(
-                            &[combined, Arc::clone(&removed)],
-                            |one| Arc::ptr_eq(one, &removed),
-                            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-                        )
-                    };
-                    if folded.len() == 1 {
-                        insns.extend(folded);
-                        index += 2;
-                        continue;
-                    }
-                }
-                insns.push(Arc::clone(&block.insns[index]));
-                index += 1;
             }
         }
         blocks.push(block.with_insns(insns));
@@ -2714,202 +2564,180 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
     Ok(body.with_blocks(blocks))
 }
 
-/// Fold `mov result,left; add result,term` into one 67h LEA.
+/// One register's multiple, as an affine chain computes it.
+type Terms = Vec<(Register, i64)>;
+
+/// The 67h address naming `terms` plus `disp`, if one does.
+/// `scales` are the index scales the target's 32-bit address form takes.
+fn _affine_form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Option<Address> {
+    let at = |through: Register, index: Register, scale: i64| {
+        (index != Register::ESP && scales.contains(&scale))
+            .then_some(Address { through, index, scale, offset: disp, ..Address::new(None) })
+    };
+    match *terms {
+        [(only, 1)] => Some(Address { through: only, offset: disp, ..Address::new(None) }),
+        [(only, scale)] => at(only, only, scale - 1).or_else(|| at(Register::None, only, scale)),
+        [(base, 1), (index, scale)] | [(index, scale), (base, 1)] => {
+            at(base, index, scale).or_else(|| at(index, base, 1).filter(|_| scale == 1))
+        }
+        _ => None,
+    }
+}
+
+/// `mov z,y` and the arithmetic after it that only rewrites z, as one 67h LEA.
 ///
-/// This is ordinary three-address addition after physical allocation, not a
-/// source-level pointer operation.  LEA is useful only when the ADD's flags
-/// are dead (proved by the caller) and when it removes a real copy.  The
-/// address-size override is the secondary legal form in 16-bit mode.
-fn _sum_address<'a>(parts: &[Arc<Insn>], cpu: impl Into<ProfileOrName<'a>>) -> Result<Option<Arc<Insn>>, String> {
-    if parts.len() != 2
-        || parts.iter().any(|one| {
-            one.what.is_none()
-                || !one.clobbers.is_empty()
-                || !one.clobbers_high.is_empty()
-                || !one.spread.is_empty()
-                || one.group.is_some()
-                || one.frame_adjust
-        })
-    {
+/// Each step keeps z an affine sum of registers: `add`/`sub` of a constant,
+/// `inc`/`dec`, `shl` by a constant, `add z,z` and `add z,w`. The longest
+/// prefix whose flags are dead (`dead`), whose sum an address names, and
+/// which the target prices no dearer in cycles or bytes becomes one LEA. A
+/// word result keeps only the low sixteen bits, which the upper halves of
+/// the registers read cannot reach. Returns the instructions consumed.
+fn _affine_address(
+    parts: &[Arc<Insn>],
+    dead: &HashSet<usize>,
+    cpu: &Profile,
+) -> Result<Option<(usize, Arc<Insn>)>, String> {
+    let plain = |one: &Insn| {
+        one.what.is_some()
+            && one.clobbers.is_empty()
+            && one.clobbers_high.is_empty()
+            && one.spread.is_empty()
+            && one.group.is_none()
+            && !one.frame_adjust
+    };
+    let Some(copy) = parts.first().filter(|one| plain(one)) else {
         return Ok(None);
-    }
-    let (copy, addition) = (&parts[0], &parts[1]);
-    let (copied, added) = (copy.what.as_ref().expect("checked above"), addition.what.as_ref().expect("checked above"));
-    let (dest, left, right) = match (
-        (copied.op, copied.name.as_deref(), copied.dests.as_slice(), copied.sources.as_slice()),
-        (added.op, added.name.as_deref(), added.dests.as_slice(), added.sources.as_slice()),
-    ) {
-        (
-            (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(left)]),
-            (Operation::Binary, Some("add"), [written], [read, right]),
-        ) => {
-            if *written != Loc::Reg(*dest) || *read != Loc::Reg(*dest) {
-                return Ok(None);
-            }
-            (*dest, *left, right.clone())
-        }
+    };
+    let Some(wide) = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+        return Ok(None);
+    };
+    let copied = copy.what.as_ref().expect("checked plain");
+    let (dest, source) = match (copied.op, copied.name.as_deref(), copied.dests.as_slice(), copied.sources.as_slice()) {
+        (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]) => (*dest, *source),
         _ => return Ok(None),
     };
-    if dest.width != left.width
-        || ![2, 4].contains(&dest.width)
-        || [dest, left].into_iter().any(|one| !target::WIDTHS.contains_key(&one.register))
-        || full32(dest.register) == full32(left.register)
-    {
+    let register = |one: &Reg| one.width == dest.width && target::WIDTHS.contains_key(&one.register);
+    let z = full32(dest.register);
+    if ![2, 4].contains(&dest.width) || !register(&dest) || !register(&source) || full32(source.register) == z {
         return Ok(None);
     }
-
-    let mut base = full32(left.register);
-    let mut size_neutral = false;
-    let (inputs, address) = match &right {
-        Loc::Reg(right) => {
-            if right.width != dest.width || !target::WIDTHS.contains_key(&right.register) {
-                return Ok(None);
-            }
-            // If ADD names the just-written destination as its second operand, it
-            // is the copied left value at that point. Otherwise it is the
-            // independent right input. SIB cannot use ESP as an index, but its
-            // two inputs are commutative, so put ESP in the base position.
-            let repeated = full32(right.register) == full32(dest.register);
-            let mut index = if repeated { base } else { full32(right.register) };
-            if index == Register::ESP {
-                (base, index) = (index, base);
-            }
-            if index == Register::ESP {
-                return Ok(None);
-            }
-            let inputs = vec![left, if repeated { left } else { *right }];
-            (inputs, Address { through: base, index, ..Address::new(None) })
+    let bits = i64::from(dest.width) * 8;
+    let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
+    let (mut terms, mut disp): (Terms, i64) = (vec![(full32(source.register), 1)], 0);
+    let mut old = cpu.operations.r#move;
+    let mut best: Option<(usize, Address, i64)> = None;
+    for (at, one) in parts.iter().enumerate().skip(1) {
+        if !plain(one) {
+            break;
         }
-        Loc::Imm(right) if right.width == dest.width && right.address.is_none() => {
-            let bits = i64::from(dest.width) * 8;
-            let displacement = (right.value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
-            size_neutral = true;
-            (vec![left], Address { through: base, offset: displacement, ..Address::new(None) })
-        }
-        _ => return Ok(None),
-    };
-    let target_cpu = targets::profile(cpu)?;
-    if !_sum_address_is_cheaper(&inputs, target_cpu) {
-        return Ok(None);
-    }
-
-    let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
-    if size_neutral {
-        let old: Vec<Option<select::Emitted>> =
-            parts.iter().map(|one| emit(one.what.as_ref().expect("checked above"))).collect();
-        let new = emit(&what);
-        let Some(new) = new else {
-            return Ok(None);
+        let what = one.what.as_ref().expect("checked plain");
+        let [Loc::Reg(written)] = what.dests.as_slice() else {
+            break;
         };
-        if old.iter().any(Option::is_none) {
-            return Ok(None);
+        if *written != dest {
+            break;
         }
-        if new.code.len() > old.iter().flatten().map(|one| one.code.len()).sum() {
-            return Ok(None);
+        let first = what.sources.first();
+        if first.is_some_and(|first| *first != Loc::Reg(dest)) {
+            break;
+        }
+        match (what.op, what.name.as_deref(), &what.sources[1..]) {
+            (Operation::Binary, Some(name @ ("add" | "sub")), [Loc::Imm(Imm { value, address: None, .. })]) => {
+                disp = wrapped(if name == "add" { disp + value } else { disp - value });
+                old += cpu.operations.add;
+            }
+            (Operation::Unary, Some(name @ ("inc" | "dec")), []) => {
+                disp = wrapped(if name == "inc" { disp + 1 } else { disp - 1 });
+                old += cpu.operations.add;
+            }
+            (Operation::Binary, Some("shl" | "sal"), [Loc::Imm(Imm { value: count @ 1..=3, address: None, .. })]) => {
+                terms.iter_mut().for_each(|term| term.1 <<= count);
+                disp = wrapped(disp << count);
+                old += cpu.operations.shift;
+            }
+            (Operation::Binary, Some("add"), [Loc::Reg(other)]) if *other == dest => {
+                terms.iter_mut().for_each(|term| term.1 *= 2);
+                disp = wrapped(disp * 2);
+                old += cpu.operations.add;
+            }
+            (Operation::Binary, Some("add"), [Loc::Reg(other)]) if register(other) => {
+                let root = full32(other.register);
+                match terms.iter_mut().find(|term| term.0 == root) {
+                    Some(term) => term.1 += 1,
+                    None => terms.push((root, 1)),
+                }
+                old += cpu.operations.add;
+            }
+            _ => break,
+        }
+        if terms.len() > 2 || terms.iter().any(|term| term.1 > 9) {
+            break;
+        }
+        if !dead.contains(&id(one)) {
+            continue;
+        }
+        if let Some(address) = _affine_form(&terms, disp, &wide.scales) {
+            best = Some((at, address, old));
         }
     }
-    let intermediate: HashSet<u32> = copy.defines.iter().copied().collect();
-    let uses = deduped(
-        copy.uses.iter().copied().chain(addition.uses.iter().copied().filter(|value| !intermediate.contains(value))),
-    );
-    let live: HashSet<u32> = uses.iter().chain(&addition.defines).copied().collect();
-    let widths = deduped(copy.widths.iter().chain(&addition.widths).copied().filter(|pair| live.contains(&pair.0)));
-    let owner = if copy.covers == Some((addition.at, addition.at)) { addition } else { copy };
-    let symbolic: Vec<&Arc<Insn>> = parts.iter().filter(|one| one.symbol == Some(true)).collect();
-    // A cloned source operation conservatively claims its source-map anchor
-    // even when its allocated form has no relocated operand.  Folding is
-    // still safe when that exact owner survives as the LEA; dropping it or
-    // trying to combine two independently owned operands is not.
+    let Some((last, address, old)) = best else {
+        return Ok(None);
+    };
+    let replaced = &parts[..=last];
+    let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
+    let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
+    if cpu.operations.address + cpu.operations.prefix + stalls > old {
+        return Ok(None);
+    }
+    let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
+    let (Some(new), Some(before)) = (
+        emit(&what),
+        replaced.iter().map(|one| emit(one.what.as_ref().expect("checked plain"))).collect::<Option<Vec<_>>>(),
+    ) else {
+        return Ok(None);
+    };
+    if new.code.len() > before.iter().map(|one| one.code.len()).sum() {
+        return Ok(None);
+    }
+    // One instruction owns the source interval the LEA keeps: a single
+    // wider owner, or intervals that meet end to start.
+    let owned: Vec<&Arc<Insn>> =
+        replaced.iter().filter(|one| one.covers.is_some_and(|(start, end)| start != end)).collect();
+    if owned.windows(2).any(|pair| pair[0].covers.expect("owned").1 != pair[1].covers.expect("owned").0) {
+        return Ok(None);
+    }
+    let owner = owned.first().copied().unwrap_or(copy);
+    let symbolic: Vec<&Arc<Insn>> = replaced.iter().filter(|one| one.symbol == Some(true)).collect();
     if !symbolic.is_empty() && (symbolic.len() != 1 || !Arc::ptr_eq(symbolic[0], owner)) {
         return Ok(None);
     }
-    Ok(Some(Arc::new(Insn {
-        what: Some(what),
-        defines: addition.defines.clone(),
-        uses,
-        widths,
-        requires: deduped(copy.requires.iter().chain(&addition.requires).copied()),
-        delivers: deduped(copy.delivers.iter().chain(&addition.delivers).copied()),
-        ..(**owner).clone()
-    })))
-}
-
-fn _shift_address<'a>(parts: &[Arc<Insn>], cpu: impl Into<ProfileOrName<'a>>) -> Result<Option<Arc<Insn>>, String> {
-    let (copy, shift) = (&parts[0], &parts[1]);
-    if parts
-        .iter()
-        .any(|one| one.what.is_none() || !one.clobbers.is_empty() || one.symbol == Some(true) || !one.spread.is_empty())
-    {
-        return Ok(None);
-    }
-    let (copied, shifted) = (copy.what.as_ref().expect("checked above"), shift.what.as_ref().expect("checked above"));
-    let (dest, source) = match (
-        (copied.op, copied.name.as_deref(), copied.dests.as_slice(), copied.sources.as_slice()),
-        (shifted.op, shifted.name.as_deref(), shifted.dests.as_slice(), shifted.sources.as_slice()),
-    ) {
-        (
-            (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]),
-            (Operation::Binary, Some("shl"), [written], [read, Loc::Imm(Imm { value: 1, address: None, .. })]),
-        ) => {
-            if *written != Loc::Reg(*dest)
-                || *read != Loc::Reg(*dest)
-                || dest.width != source.width
-                || ![2, 4].contains(&dest.width)
-                || !target::WIDTHS.contains_key(&dest.register)
-                || !target::WIDTHS.contains_key(&source.register)
-            {
-                return Ok(None);
-            }
-            (*dest, *source)
-        }
-        _ => return Ok(None),
+    let covers = match (owned.first(), owned.last()) {
+        (Some(first), Some(end)) => Some((first.covers.expect("owned").0, end.covers.expect("owned").1)),
+        _ => owner.covers,
     };
-    let base = full32(source.register);
-    if base == Register::ESP || base == full32(dest.register) {
-        return Ok(None);
-    }
-    let target_cpu = targets::profile(cpu)?;
-    if !_scaled_address_is_cheaper(&source, parts.len(), target_cpu) {
-        return Ok(None);
-    }
-    let what = semantics(
-        Operation::Address,
-        "lea",
-        vec![Loc::Reg(dest)],
-        vec![Loc::Address(Address { through: base, index: base, ..Address::new(None) })],
+    let result = &replaced[last];
+    let intermediate: HashSet<u32> = replaced[..last].iter().flat_map(|one| one.defines.iter().copied()).collect();
+    let uses = deduped(
+        copy.uses
+            .iter()
+            .copied()
+            .chain(replaced[1..].iter().flat_map(|one| one.uses.iter().copied()).filter(|value| !intermediate.contains(value))),
     );
-    if copy.covers == Some((shift.at, shift.at)) {
-        return Ok(Some(Arc::new(Insn { what: Some(what), uses: copy.uses.clone(), ..(**shift).clone() })));
-    }
-    Ok(Some(Arc::new(Insn { what: Some(what), defines: shift.defines.clone(), ..(**copy).clone() })))
-}
-
-/// Whether one 67h LEA beats the allocated register sequence it replaces.
-///
-/// A word source is consumed through its full 32-bit root by SIB addressing.
-/// That is semantically harmless for a low-word result, but on targets with
-/// partial-register merging it is not free.  Ties prefer LEA because it is
-/// one instruction and normally fewer bytes.
-fn _scaled_address_is_cheaper(source: &Reg, replaced: usize, cpu: &Profile) -> bool {
-    let mut old = cpu.operations.r#move + cpu.operations.shift;
-    if replaced == 3 {
-        old += cpu.operations.add;
-    }
-    let mut new = cpu.operations.address + cpu.operations.prefix;
-    if source.width < 4 {
-        new += cpu.partial_register_stall;
-    }
-    new <= old
-}
-
-/// Whether one 67h LEA beats keeping a copied two-address ADD.
-fn _sum_address_is_cheaper(sources: &[Reg], cpu: &Profile) -> bool {
-    let old = cpu.operations.r#move + cpu.operations.add;
-    let mut new = cpu.operations.address + cpu.operations.prefix;
-    let partial_roots: HashSet<Register> =
-        sources.iter().filter(|source| source.width < 4).map(|source| full32(source.register)).collect();
-    new += partial_roots.len() as i64 * cpu.partial_register_stall;
-    new <= old
+    let live: HashSet<u32> = uses.iter().chain(&result.defines).copied().collect();
+    let widths = deduped(replaced.iter().flat_map(|one| one.widths.iter().copied()).filter(|pair| live.contains(&pair.0)));
+    Ok(Some((
+        last + 1,
+        Arc::new(Insn {
+            what: Some(what),
+            defines: result.defines.clone(),
+            uses,
+            widths,
+            requires: deduped(replaced.iter().flat_map(|one| one.requires.iter().copied())),
+            delivers: deduped(replaced.iter().flat_map(|one| one.delivers.iter().copied())),
+            covers,
+            ..(**owner).clone()
+        }),
+    )))
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead.
