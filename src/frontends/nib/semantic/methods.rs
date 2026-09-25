@@ -57,17 +57,21 @@ impl FunctionCompiler<'_> {
                 return Some(Expr::Call { name: qualified, type_arguments: Vec::new(), arguments: arguments.clone(), span: *span });
             }
         }
-        let qualified = format!("{}.{name}", self.receiver_type(receiver)?);
-        (self.known_signature(&qualified).is_some() || self.is_generator_call(&qualified))
-            .then(|| Expr::Call {
-                name: qualified,
-                type_arguments: Vec::new(),
-                arguments: std::iter::once(receiver.as_ref())
-                    .chain(arguments)
-                    .cloned()
-                    .collect(),
-                span: *span,
-            })
+        let owner = self.receiver_type(receiver)?;
+        let qualified = format!("{owner}.{name}");
+        let known = self.known_signature(&qualified).is_some() || self.is_generator_call(&qualified);
+        if known {
+            self.learn_method(receiver, name, &owner);
+        }
+        known.then(|| Expr::Call {
+            name: qualified,
+            type_arguments: Vec::new(),
+            arguments: std::iter::once(receiver.as_ref())
+                .chain(arguments)
+                .cloned()
+                .collect(),
+            span: *span,
+        })
     }
 
     /// `receiver.name(arguments)` of a generic type's method, as the call of
@@ -78,7 +82,11 @@ impl FunctionCompiler<'_> {
         };
         let owner = self.receiver_type(receiver)?;
         let qualified = format!("{}.{name}", self.types.template_of(&owner));
-        self.templates.borrow().is_template(&qualified).then(|| Expr::Call {
+        let template = self.templates.borrow().is_template(&qualified);
+        if template {
+            self.learn_method(receiver, name, &owner);
+        }
+        template.then(|| Expr::Call {
             name: qualified,
             type_arguments: type_arguments.clone(),
             arguments: std::iter::once(receiver.as_ref()).chain(arguments).cloned().collect(),

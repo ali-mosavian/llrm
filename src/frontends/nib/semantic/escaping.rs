@@ -82,7 +82,7 @@ impl FunctionCompiler<'_> {
             span,
         };
         let signature = signature(self.types, &check, 0)?;
-        let compiler = FunctionCompiler::new(&check, &signature, self.signatures, self.templates, self.builtin_ids, self.private_methods, self.literals, self.types)?;
+        let compiler = FunctionCompiler::new(&check, &signature, self.signatures, self.templates, self.builtin_ids, self.private_methods, self.literals, self.types, self.facts)?;
         compiler.compile(&check).map(|_| ())
     }
 

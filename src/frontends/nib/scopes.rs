@@ -2,15 +2,32 @@
 //! module-level names asks this walk, so that a local of the same name hides
 //! the declaration, as the semantic scopes will.
 
-use super::syntax::{AsmTarget, AssignTarget, Clause, Expr, Span, Statement};
+use super::syntax::{AsmTarget, AssignTarget, Clause, Expr, Pattern, Span, Statement};
+
+/// A local as a caller of the walk keeps it: its name, or also where it is bound.
+pub trait Local {
+    fn bound(name: &str, span: Span) -> Self;
+}
+
+impl Local for String {
+    fn bound(name: &str, _: Span) -> Self {
+        name.to_owned()
+    }
+}
+
+impl Local for (String, Span) {
+    fn bound(name: &str, span: Span) -> Self {
+        (name.to_owned(), span)
+    }
+}
 
 /// Calls `visit` on each expression of `body`, innermost first, with the
-/// local names bound where it stands: `locals`, then each binding before it.
+/// locals bound where it stands: `locals`, then each binding before it.
 /// An assignment's named target is visited as the name it is.
-pub fn walk_mut<E>(
+pub fn walk_mut<E, L: Local>(
     body: &mut [Statement],
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     let depth = locals.len();
     for statement in body {
@@ -20,22 +37,22 @@ pub fn walk_mut<E>(
     Ok(())
 }
 
-fn statement_mut<E>(
+fn statement_mut<E, L: Local>(
     statement: &mut Statement,
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     match statement {
-        Statement::Bind { name, value, .. } => {
+        Statement::Bind { name, value, span, .. } => {
             expression_mut(value, locals, visit)?;
-            locals.push(name.clone());
+            locals.push(L::bound(name, *span));
         }
         Statement::Destructure { pattern, value, otherwise, .. } => {
             expression_mut(value, locals, visit)?;
             if let Some(otherwise) = otherwise {
                 walk_mut(otherwise, locals, visit)?;
             }
-            locals.extend(pattern.names().into_iter().map(str::to_owned));
+            locals.extend(bound(pattern));
         }
         Statement::Assign { target, value, span, .. } => {
             match target {
@@ -51,18 +68,18 @@ fn statement_mut<E>(
             }
             expression_mut(value, locals, visit)?;
         }
-        Statement::For { name, iterable, body, .. } => {
+        Statement::For { name, iterable, body, span, .. } => {
             expression_mut(iterable, locals, visit)?;
-            scoped(name, body, locals, visit)?;
+            scoped(name, *span, body, locals, visit)?;
         }
-        Statement::ForRange { name, start, end, body, .. } => {
+        Statement::ForRange { name, start, end, body, span } => {
             expression_mut(start, locals, visit)?;
             expression_mut(end, locals, visit)?;
-            scoped(name, body, locals, visit)?;
+            scoped(name, *span, body, locals, visit)?;
         }
-        Statement::With { name, value, body, .. } => {
+        Statement::With { name, value, body, span, .. } => {
             expression_mut(value, locals, visit)?;
-            scoped(name, body, locals, visit)?;
+            scoped(name, *span, body, locals, visit)?;
         }
         Statement::Asm(asm) => {
             for one in asm.expressions_mut() {
@@ -74,8 +91,8 @@ fn statement_mut<E>(
                     assigned(name, span, locals, visit)?;
                 }
             }
-            locals.extend(asm.outputs.iter().filter_map(|(_, target, _)| match target {
-                AsmTarget::Bind { name, .. } => Some(name.clone()),
+            locals.extend(asm.outputs.iter().filter_map(|(_, target, span)| match target {
+                AsmTarget::Bind { name, .. } => Some(L::bound(name, *span)),
                 AsmTarget::Place(_) => None,
             }));
         }
@@ -83,7 +100,7 @@ fn statement_mut<E>(
             expression_mut(subject, locals, visit)?;
             for arm in arms {
                 let depth = locals.len();
-                locals.extend(arm.pattern.names().into_iter().map(str::to_owned));
+                locals.extend(bound(&arm.pattern));
                 walk_mut(&mut arm.body, locals, visit)?;
                 locals.truncate(depth);
             }
@@ -100,12 +117,16 @@ fn statement_mut<E>(
     Ok(())
 }
 
+fn bound<L: Local>(pattern: &Pattern) -> impl Iterator<Item = L> + '_ {
+    pattern.bindings().into_iter().map(|(name, span)| L::bound(name, span))
+}
+
 /// An assigned `name`, visited as the name it is.
-fn assigned<E>(
+fn assigned<E, L: Local>(
     name: &mut String,
     span: Span,
-    locals: &[String],
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &[L],
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     let mut named = Expr::Name(std::mem::take(name), span);
     visit(&mut named, locals)?;
@@ -116,37 +137,38 @@ fn assigned<E>(
     Ok(())
 }
 
-/// `body` with `name` bound in it.
-fn scoped<E>(
+/// `body` with `name`, bound at `span`, in it.
+fn scoped<E, L: Local>(
     name: &str,
+    span: Span,
     body: &mut [Statement],
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
-    locals.push(name.to_owned());
+    locals.push(L::bound(name, span));
     walk_mut(body, locals, visit)?;
     locals.pop();
     Ok(())
 }
 
 /// `walk_mut` for one expression.
-pub fn expression_walk_mut<E>(
+pub fn expression_walk_mut<E, L: Local>(
     expression: &mut Expr,
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     expression_mut(expression, locals, visit)
 }
 
-fn expression_mut<E>(
+fn expression_mut<E, L: Local>(
     expression: &mut Expr,
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     let depth = locals.len();
     match expression {
-        Expr::Lambda { parameters, body, .. } => {
-            locals.extend(parameters.iter().map(|one| one.name.clone()));
+        Expr::Lambda { parameters, body, span } => {
+            locals.extend(parameters.iter().map(|one| L::bound(&one.name, *span)));
             expression_mut(body, locals, visit)?;
         }
         // Each clause's names are bound in the clauses after it and in the element.
@@ -169,10 +191,10 @@ fn expression_mut<E>(
     visit(expression, locals)
 }
 
-fn clauses_mut<E>(
+fn clauses_mut<E, L: Local>(
     clauses: &mut [Clause],
-    locals: &mut Vec<String>,
-    visit: &mut impl FnMut(&mut Expr, &[String]) -> Result<(), E>,
+    locals: &mut Vec<L>,
+    visit: &mut impl FnMut(&mut Expr, &[L]) -> Result<(), E>,
 ) -> Result<(), E> {
     for clause in clauses {
         match clause {
@@ -182,7 +204,7 @@ fn clauses_mut<E>(
                 if let Some(end) = end {
                     expression_mut(end, locals, visit)?;
                 }
-                locals.extend(pattern.names().into_iter().map(str::to_owned));
+                locals.extend(bound(pattern));
             }
         }
     }

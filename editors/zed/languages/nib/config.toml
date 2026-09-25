@@ -1,0 +1,15 @@
+name = "Nib"
+grammar = "nib"
+path_suffixes = ["nbl"]
+line_comments = ["# "]
+tab_size = 4
+hard_tabs = false
+increase_indent_pattern = ":\\s*(#.*)?$"
+autoclose_before = ";:.,=}])"
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+    { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },
+]

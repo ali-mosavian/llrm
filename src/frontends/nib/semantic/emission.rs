@@ -47,6 +47,7 @@ impl<'a> FunctionCompiler<'a> {
         let binding = self
             .visible(name)
             .ok_or_else(|| Diagnostic::new(span, format!("unknown name {name:?}")))?;
+        self.learn(span, name, || Known::Local(self.spelled(binding.type_)));
         self.check_unmoved(name, binding, span)?;
         Ok(binding)
     }

@@ -1,0 +1,16 @@
+{
+  "grammars": [
+    {
+      "name": "nib",
+      "camelcase": "Nib",
+      "scope": "source.nib",
+      "path": ".",
+      "file-types": ["nbl"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Nib grammar for tree-sitter"
+  }
+}
