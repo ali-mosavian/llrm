@@ -19,7 +19,7 @@ use crate::analysis::regions::overlapping;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, Held, MirBlock, MirBody, OpCode, Value};
 use crate::objectfile::omf::Record;
-use crate::support::testing;
+use crate::testing;
 
 fn load(path: &str) -> Module {
     module::load(std::path::Path::new(env!("LLRM_ROOT")).join(path)).unwrap().unwrap()

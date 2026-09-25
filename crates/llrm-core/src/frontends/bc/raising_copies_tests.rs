@@ -23,7 +23,7 @@ use crate::model::mir::Phi;
 use crate::objectfile::module::literal_only;
 use crate::objectfile::module::tests::{fixtures, loaded};
 use crate::support::pyrepr::Repr;
-use crate::support::testing;
+use crate::testing;
 
 fn occurrence(at: usize, raw: &[u8], defs: &[Register], op: Op) -> Op {
     let mut code = vec![0; at];

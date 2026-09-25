@@ -257,7 +257,7 @@ pub fn optimized(
         if let Some(watch) = watch.as_deref_mut() {
             watch("unroll-accepted", &candidate);
         }
-        crate::debug!("unroll", "expanded; {} copies so far", candidate.repetitions.len());
+        llrm_support::debug!("unroll", "expanded; {} copies so far", candidate.repetitions.len());
         body = candidate;
     }
 }

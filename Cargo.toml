@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
-default-members = [".", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+members = [".", "crates/llrm-support", "crates/llrm-cycles", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+default-members = [".", "crates/llrm-support", "crates/llrm-cycles", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
 resolver = "3"
 
 [workspace.package]
@@ -20,6 +20,8 @@ sha2 = "0.10"
 tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
+llrm-support = { path = "crates/llrm-support" }
+llrm-cycles = { path = "crates/llrm-cycles" }
 llrm-core = { path = "crates/llrm-core" }
 llrm-nib = { path = "crates/llrm-nib" }
 llrm-qb = { path = "crates/llrm-qb" }

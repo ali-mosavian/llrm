@@ -11,7 +11,7 @@ use crate::abi::linkunit::LinkUnit;
 use crate::objectfile::omf;
 use crate::rewrite::{rewrite, Rewrite};
 use crate::support::pyjson::{self, Json};
-use crate::support::testing::{self, nth, ops};
+use crate::testing::{self, nth, ops};
 use crate::wholeseg::Emission;
 
 const HARR: &str = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/harr-bounds-p-g2.obj");

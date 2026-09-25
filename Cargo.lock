@@ -197,6 +197,8 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-cycles",
+ "llrm-support",
  "num-bigint",
  "num-traits",
  "regex",
@@ -206,6 +208,21 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-cycles"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-support",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -242,6 +259,19 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-support"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

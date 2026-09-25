@@ -8,7 +8,7 @@ use crate::analysis::floatfacts::{Finite, Fraction};
 use crate::model::floating::{Precision, Rounding, Semantics};
 use crate::model::ir::{Addr, Operation, Space};
 use crate::model::mir::{Held, MemRef, MirBlock, OpCode};
-use crate::support::testing;
+use crate::testing;
 
 fn op(at: i64, operation: Operation, name: &str, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut op = Op::new(at, OpCode::Operation(operation), name, defines, uses);

@@ -1311,7 +1311,7 @@ pub fn points_to(
     out.values().for_each(|one| every.union_with(one));
     let escaped = named(&every);
     let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
-    crate::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
+    llrm_support::debug!("alias", "points_to: values {:.1} ms, escape {:.1} ms, {} ops", solved_values.as_secs_f64() * 1e3, started.elapsed().as_secs_f64() * 1e3, body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     Ok(PointsTo {
         values,
         escaped,

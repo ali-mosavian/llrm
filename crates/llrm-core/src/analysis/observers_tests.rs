@@ -13,7 +13,7 @@ use crate::wholeseg::Emission;
 use crate::model::ir::Operation;
 use crate::model::mir::{Arg, Cell, FrameAddress, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, Value};
 use crate::objectfile::module::{Addr, Module, Space};
-use crate::support::testing;
+use crate::testing;
 
 const NBODY: &str = concat!(env!("LLRM_ROOT"), "/tests/fixtures/bench/nbody-v-g3.obj");
 

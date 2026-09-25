@@ -171,11 +171,6 @@ impl Repr for Record {
     }
 }
 
-impl Repr for Rc<Record> {
-    fn repr(&self) -> String {
-        (**self).repr()
-    }
-}
 
 /// Every record in the file, in order.
 pub fn read(path: impl AsRef<Path>) -> Result<Vec<Rc<Record>>, ReadError> {

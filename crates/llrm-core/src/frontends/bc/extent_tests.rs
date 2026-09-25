@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::abi::handlers::error_entries;
 use crate::frontends::bc::blocks::{code_map, statement_table};
-use crate::support::testing;
+use crate::testing;
 use crate::wholeseg::Emission;
 use crate::objectfile::module::tests::{bare, fixtures, loaded, objects};
 

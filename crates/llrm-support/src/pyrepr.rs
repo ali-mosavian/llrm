@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use crate::support::hash::IndexMap;
+use crate::hash::IndexMap;
 
 /// `repr(value)`.
 pub trait Repr {
@@ -58,6 +58,25 @@ impl Repr for String {
 impl<T: Repr + ?Sized> Repr for &T {
     fn repr(&self) -> String {
         (**self).repr()
+    }
+}
+
+impl<T: Repr + ?Sized> Repr for std::rc::Rc<T> {
+    fn repr(&self) -> String {
+        (**self).repr()
+    }
+}
+
+/// A register as its number, which is how every dump names it.
+impl Repr for iced_x86::Register {
+    fn repr(&self) -> String {
+        (*self as u32).to_string()
+    }
+}
+
+impl Repr for num_bigint::BigInt {
+    fn repr(&self) -> String {
+        self.to_string()
     }
 }
 

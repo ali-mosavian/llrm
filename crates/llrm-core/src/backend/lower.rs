@@ -2494,7 +2494,7 @@ pub fn lowered(
     if crate::support::debug::enabled("cost") {
         let costs = crate::model::passes::OperationCosts::default();
         let weighted = crate::optimize::profit::weighted(&std::rc::Rc::new(body.clone()), &costs, None);
-        crate::debug!("cost", "{name} weighted cycles {weighted:?}");
+        llrm_support::debug!("cost", "{name} weighted cycles {weighted:?}");
     }
     // Width does not identify a type here: the C path runs lower_int64 first.
     let default_hints = AllocationHints::new();

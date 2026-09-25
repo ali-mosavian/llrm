@@ -12,7 +12,7 @@ use num_bigint::BigInt;
 use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge};
 use crate::analysis::induction::counted_loops_tests::{_loop, shaped};
 use crate::model::passes::{O2, Options};
-use crate::support::testing;
+use crate::testing;
 use crate::wholeseg::Emission;
 use crate::analysis::regions::overlapping;
 use crate::model::ir::Operation;

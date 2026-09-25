@@ -18,7 +18,7 @@ use crate::model::passes::O2;
 use crate::objectfile::module::{Addr, Space};
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
-use crate::support::testing::{self, nth, ops, width};
+use crate::testing::{self, nth, ops, width};
 
 const NBODY_STACK: &str = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/nbody-stack-p-g2.obj");
 

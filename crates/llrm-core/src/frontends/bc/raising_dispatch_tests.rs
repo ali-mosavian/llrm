@@ -9,7 +9,7 @@ use crate::analysis::loops;
 use crate::model::mir::{Arg, Const, Kind, MirBlock, MirBody};
 use crate::optimize::transform::_executable_successors;
 use crate::support::hash::IndexMap;
-use crate::support::testing;
+use crate::testing;
 
 /// The block ending in the SWITCH, and the block guarding it.
 fn _dispatch(body: &MirBody) -> (&MirBlock, &MirBlock) {

@@ -33,7 +33,7 @@ use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, Mi
 use crate::model::passes::O2;
 use crate::objectfile::module::{Addr, Space};
 use crate::optimize::transform;
-use crate::support::testing;
+use crate::testing;
 use crate::wholeseg::Emission;
 use iced_x86::Mnemonic;
 

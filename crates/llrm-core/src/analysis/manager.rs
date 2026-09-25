@@ -32,7 +32,7 @@ pub fn cached<K: Eq + 'static, R: 'static>(body: &Rc<MirBody>, key: K, compute: 
             results.get(&slot)?.iter().find(|(saved, ..)| saved.downcast_ref::<K>() == Some(&key)).map(|(.., result)| Rc::clone(result))
         })
     });
-    crate::debug!("manager", "{} {}", std::any::type_name::<R>().rsplit("::").next().unwrap_or(""), if saved.is_some() { "hit" } else { "miss" });
+    llrm_support::debug!("manager", "{} {}", std::any::type_name::<R>().rsplit("::").next().unwrap_or(""), if saved.is_some() { "hit" } else { "miss" });
     if let Some(saved) = saved {
         return saved.downcast::<R>().expect("a result keeps its type");
     }

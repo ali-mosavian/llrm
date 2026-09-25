@@ -18,7 +18,7 @@ use crate::model::mir::{self, Kind, MirBody, RaisedBodies};
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf;
 use crate::optimize::transform;
-use crate::support::testing;
+use crate::testing;
 
 fn raised(stem: &str) -> (Rc<Module>, Rc<Vec<Block>>, RaisedBodies) {
     let found = testing::module(&format!("{}/tests/fixtures/omf/{}.obj", env!("LLRM_ROOT"), stem.to_lowercase()));

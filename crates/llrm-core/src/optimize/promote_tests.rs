@@ -30,7 +30,7 @@ use crate::model::mir::{
 use crate::model::passes::{MIRTransform, Options, Where};
 use crate::objectfile::module::{self, Addr, Module, Space};
 use crate::optimize::{transform};
-use crate::support::testing;
+use crate::testing;
 
 fn value(id: u32, at: i64) -> Value {
     Value {

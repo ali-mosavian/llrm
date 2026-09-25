@@ -30,7 +30,7 @@ use crate::model::mir::MirBody;
 use crate::model::passes::O2;
 use crate::objectfile::module::Addr;
 use crate::support::pyrepr::Repr;
-use crate::support::testing::{self, all_ops, nth, ops, width};
+use crate::testing::{self, all_ops, nth, ops, width};
 
 const AX: Loc = Loc::Reg(Reg { register: Register::AX, width: 2 });
 const DX: Loc = Loc::Reg(Reg { register: Register::DX, width: 2 });

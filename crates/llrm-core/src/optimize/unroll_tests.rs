@@ -33,7 +33,7 @@ use crate::model::mir::{Arg, Cell, Const, MemRef, MirBlock, OpCode};
 use crate::model::passes::Options;
 use crate::objectfile::module::{Addr, Module, Space};
 use crate::optimize::{transform};
-use crate::support::testing;
+use crate::testing;
 
 fn op(at: i64, operation: Operation, name: &str, kind: Kind) -> Op {
     let mut op = Op::new(at, OpCode::Operation(operation), name, vec![], vec![]);

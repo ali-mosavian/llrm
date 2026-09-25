@@ -825,14 +825,14 @@ fn _cells_solved(
         }
     }
 
-    crate::debug!("consts", "cells solved in {rounds} block visits");
+    llrm_support::debug!("consts", "cells solved in {rounds} block visits");
     if crate::support::debug::enabled("cellsize") {
         let ops = body.blocks.iter().map(|block| block.ops.len()).sum::<usize>();
         let writes = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| !op.stores.is_empty()).count();
         let reads = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| !op.loads.is_empty() || op.args.iter().any(|arg| matches!(arg, Arg::Cell(_)))).count();
         let largest = outof.values().flatten().map(|one| one.len()).max().unwrap_or(0);
         let total = outof.values().flatten().map(|one| one.len()).sum::<usize>();
-        crate::debug!("cellsize", "{ops} ops, {} blocks, {writes} writes, {reads} reads, cells per block: max {largest}, total {total}", body.blocks.len());
+        llrm_support::debug!("cellsize", "{ops} ops, {} blocks, {writes} writes, {reads} reads, cells per block: max {largest}, total {total}", body.blocks.len());
     }
     let mut found = IndexMap::default();
     for block in &body.blocks {
@@ -1211,7 +1211,7 @@ pub fn known(
             } else {
                 "miss: a new body"
             };
-            crate::debug!("consts", "known dgroup={} calls={}: {why}", dgroup.is_some(), calls.is_some());
+            llrm_support::debug!("consts", "known dgroup={} calls={}: {why}", dgroup.is_some(), calls.is_some());
         }
         if let Some(saved) = saved {
             if !crate::support::checking_caches() {
@@ -1220,7 +1220,7 @@ pub fn known(
             checked = Some(saved);
         }
     } else {
-        crate::debug!("consts", "known: uncached (edges or initial)");
+        llrm_support::debug!("consts", "known: uncached (edges or initial)");
     }
     let mut allowed: Option<BTreeSet<Value>> = None;
     loop {
@@ -1347,7 +1347,7 @@ fn _solved(
             }
         }
     }
-    crate::debug!("consts", "known solved in {rounds} rounds, {} ops", body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
+    llrm_support::debug!("consts", "known solved in {rounds} rounds, {} ops", body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     (constant_cycles::propagated(body, &facts, None), assume.unwrap_or_default())
 }
 

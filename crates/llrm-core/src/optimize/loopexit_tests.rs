@@ -21,7 +21,7 @@
 use std::rc::Rc;
 use crate::analysis::{consts, loops};
 use crate::optimize::{transform};
-use crate::support::testing;
+use crate::testing;
 use crate::model::mir::{
     Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value,
 };

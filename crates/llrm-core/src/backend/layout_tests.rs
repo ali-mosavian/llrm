@@ -586,8 +586,8 @@ fn test_split_exit_executes_its_reload_before_the_increment() {
 /// keyed by `at`, the relocation stays behind and the address comes out a bare zero.
 #[test]
 fn test_a_moved_operation_keeps_its_fixup() {
-    let found = crate::support::testing::loaded(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj")).unwrap();
-    let raised = crate::support::testing::raised(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj"));
+    let found = crate::testing::loaded(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj")).unwrap();
+    let raised = crate::testing::raised(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj"));
     let found = raised.source.applied(&found);
     assert!(!found.refs.is_empty(), "the raise recorded no relocations at all");
     let selected: Vec<Insn> = raised
@@ -612,9 +612,9 @@ fn test_a_moved_operation_keeps_its_fixup() {
 #[test]
 fn test_load_hoisted_to_call_does_not_acquire_call_fixup() {
     let path = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-view-v-g3.obj");
-    let found = crate::support::testing::loaded(path).unwrap();
-    let raised = crate::support::testing::raised(path);
-    let ops = crate::support::testing::all_ops(&raised);
+    let found = crate::testing::loaded(path).unwrap();
+    let raised = crate::testing::raised(path);
+    let ops = crate::testing::all_ops(&raised);
     let call = ops.iter().find(|op| op.at == 0x941).unwrap();
     let load = ops.iter().find(|op| op.at == 0x946).unwrap();
     let fields = BTreeSet::from([0x942]);

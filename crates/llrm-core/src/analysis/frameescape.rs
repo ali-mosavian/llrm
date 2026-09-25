@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_renderer_exposes_temporary_string_not_counter_address() {
-        let raised = crate::support::testing::raised(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-d-surf-v-g3.obj"));
+        let raised = crate::testing::raised(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-d-surf-v-g3.obj"));
         let (_, body) = raised.values.iter().find(|(name, _)| name.ends_with(" LS_ANIMATE")).unwrap();
         let result = analysed(body);
         assert_eq!(result.exposed, BTreeSet::from([-32]));

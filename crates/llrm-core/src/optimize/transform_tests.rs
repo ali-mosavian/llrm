@@ -688,7 +688,7 @@ mod pipeline_tests {
 mod corpus_tests {
     use crate::model::mir::{Arg, Kind};
     use crate::optimize::transform::{forwarded, placed};
-    use crate::support::testing;
+    use crate::testing;
 
     /// `add ax,[y]` served from a register used to say which register.
     #[test]

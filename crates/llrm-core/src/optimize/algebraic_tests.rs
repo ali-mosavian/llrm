@@ -18,7 +18,7 @@ use crate::model::mir::{
 use crate::model::passes::{MIRTransform, Options};
 use crate::objectfile::module::{Addr, Module, Space};
 use crate::optimize::{transform, wholephis, wholestores};
-use crate::support::testing;
+use crate::testing;
 
 fn value(id: u32, at: i64) -> Value {
     Value::new(id, at)

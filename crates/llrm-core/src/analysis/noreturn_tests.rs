@@ -92,7 +92,7 @@ fn test_qrender_main_spill_uses_shutdown_control_proof() {
     use crate::model::ir::Loc;
     use crate::model::mir;
     use crate::objectfile::omf;
-    use crate::support::testing;
+    use crate::testing;
 
     for terminal in [true, false] {
         let path = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-main-v-g3.obj");

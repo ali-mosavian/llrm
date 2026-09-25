@@ -19,7 +19,7 @@ use crate::model::mir::{self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, Mi
 use crate::objectfile::module::tests::objects;
 use crate::objectfile::module::{Addr, Space};
 use crate::optimize::transform;
-use crate::support::testing;
+use crate::testing;
 
 fn op(at: i64, operation: OpCode, name: &str, defines: Vec<Value>, uses: Vec<Value>, kind: Kind) -> Op {
     let mut made = Op::new(at, operation, name, defines, uses);

@@ -3950,7 +3950,7 @@ impl _Transaction<'_, '_> {
         let limit = std::cmp::max(16, size + 1);
         let mut state = state;
         let mut history = vec![Rc::clone(&state)];
-        crate::debug!("fixed", "{prefix}start: {size} ops, at most {limit} rounds");
+        llrm_support::debug!("fixed", "{prefix}start: {size} ops, at most {limit} rounds");
         // The body each pass last left unchanged. Passes are pure, so a pass
         // handed that same body again would change nothing: a round after the
         // last change skips every pass that already saw it.
@@ -3999,7 +3999,7 @@ impl _Transaction<'_, '_> {
                     state = self.scalarized(unrolled, &format!("{prefix}unrolled"))?;
                 }
             }
-            crate::debug!(
+            llrm_support::debug!(
                 "fixed",
                 "{prefix}round {}: {} ops, {:.0} ms, changed by {}",
                 iteration + 1,

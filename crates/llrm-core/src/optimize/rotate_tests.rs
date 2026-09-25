@@ -224,7 +224,7 @@ fn test_countdown_refuses_an_observed_source_counter() {
 #[test]
 #[ignore = "fails in Python too: 0x03f7: 45 bytes between the ops are not instructions"]
 fn test_entering_mains_first_loop_at_its_body_keeps_the_code_after_it() {
-    crate::support::testing::emitted_lir(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qbdemo-fil2.obj"));
+    crate::testing::emitted_lir(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qbdemo-fil2.obj"));
 }
 
 /// Entered at its body, harr's inner loop branched to a copy block placed
@@ -238,8 +238,8 @@ fn test_a_back_edge_keeps_its_copies_in_the_latch() {
             body.insert(name.to_owned(), state.clone());
         }
     };
-    let data = crate::support::testing::data(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/harr-v-g3.obj"));
-    let result = crate::support::testing::emitted_watching(&data, Some(&mut watch));
+    let data = crate::testing::data(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/harr-v-g3.obj"));
+    let result = crate::testing::emitted_watching(&data, Some(&mut watch));
     assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
     assert!(!body.is_empty());
     let split: Vec<String> = body

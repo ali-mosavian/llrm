@@ -2542,11 +2542,6 @@ impl Repr for Value {
     }
 }
 
-impl Repr for BigInt {
-    fn repr(&self) -> String {
-        self.to_string()
-    }
-}
 
 impl Repr for IntegerRange {
     fn repr(&self) -> String {
