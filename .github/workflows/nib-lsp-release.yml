@@ -1,16 +1,19 @@
 # Builds nib-lsp for the Zed extension, which downloads it from the release
-# tagged nib-lsp-v<extension version>.
+# tagged nib-lsp-v<extension version>. Pull requests build it without releasing.
 name: nib-lsp release
 
 on:
   push:
     tags: ["nib-lsp-v*"]
+  pull_request:
+    paths: ["build.rs", "Cargo.toml", "Cargo.lock", "src/**", ".github/workflows/nib-lsp-release.yml"]
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "nib-lsp for the Nib Zed extension."
@@ -19,6 +22,7 @@ jobs:
 
   build:
     needs: release
+    if: ${{ !failure() && !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,6 +38,7 @@ jobs:
       - run: rustup target add ${{ matrix.target }}
       - run: cargo build --release --locked --no-default-features --bin nib-lsp --target ${{ matrix.target }}
       - name: Upload
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
