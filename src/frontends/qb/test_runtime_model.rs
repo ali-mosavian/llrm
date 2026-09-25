@@ -98,3 +98,12 @@ fn convert_rounds_to_nearest_even() {
     assert_eq!(printed(source), " 3  2  4 \n");
 }
 
+#[test]
+fn a_bare_function_name_assigns_its_result() {
+    // PDS 7.1's measured pdqcall.bas: `ordered = ...` inside FUNCTION ordered&
+    // went to a new variable, so the function returned 0.
+    let source = "PRINT ordered&(50); greet$\n\
+        FUNCTION ordered& (x AS LONG)\nordered = x - 11\nEND FUNCTION\n\
+        FUNCTION greet$\ngreet = \"hi\"\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 39 hi\n");
+}

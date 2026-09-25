@@ -256,6 +256,8 @@ struct Compiler {
     exits: Vec<(ExitTarget, u32)>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
+    /// The FUNCTION being compiled, without its suffix.
+    result_name: Option<String>,
     error_handler: Option<u32>,
     error_handler_local: bool,
     error_handlers: BTreeSet<u32>,
@@ -526,6 +528,7 @@ fn built(
             };
             let place = compiler.declare_as(&declaration, "local")?;
             compiler.result_place = Some((place, result_type));
+            compiler.result_name = Some(canonical(&procedure.name).into());
         }
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
@@ -970,6 +973,7 @@ impl Compiler {
             exits: Vec::new(),
             return_block: None,
             result_place: None,
+            result_name: None,
             error_handler: None,
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
@@ -1029,6 +1033,7 @@ impl Compiler {
         self.exits.clear();
         self.return_block = None;
         self.result_place = None;
+        self.result_name = None;
         self.error_handler = None;
         self.error_handler_local = false;
         self.error_handlers.clear();
@@ -3871,6 +3876,14 @@ impl Compiler {
             Expr::Name(name, _) => {
                 if self.constants.contains_key(canonical(name)) {
                     return self.fail(format!("constant {name} is not assignable"));
+                }
+                // Inside FUNCTION f&, a bare f names the result, as f& does.
+                if let (Some((place, type_id)), Some(result), None) =
+                    (self.result_place, &self.result_name, suffix(name))
+                {
+                    if canonical(name) == result {
+                        return Ok((Operand::Place(place), type_id));
+                    }
                 }
                 let variable = self.variable(name)?;
                 let operand = if let Some(base) = variable.indirect {
