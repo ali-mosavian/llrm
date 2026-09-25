@@ -98,11 +98,62 @@ fn _space(place: &model::Place) -> Space {
     Space::Segment
 }
 
+/// A frame piece: its `(low, high)` frame span and its object's identity.
+type FramePiece = (i64, i64, Identity);
+
+/// Python `frame_pieces`: each frame place's bytes as the objects holding them.
+///
+/// A place overlapping no other is one object. Where places overlap, the frame splits at
+/// every place's edge and each piece is one object: a region filled at once is the union of
+/// the places it holds, which stay apart.
+fn frame_pieces(places: &[model::Place]) -> std::collections::HashMap<i64, Vec<FramePiece>> {
+    let top = |one: &model::Place| one.offset + one.extent.unwrap_or(0);
+    let mut frame: Vec<&model::Place> =
+        places.iter().filter(|one| matches!(one.storage, model::Storage::Local | model::Storage::Parameter)).collect();
+    frame.sort_by_key(|one| (one.offset, one.id));
+    let mut pieces = std::collections::HashMap::new();
+    let mut at = 0;
+    while at < frame.len() {
+        let mut end = top(frame[at]);
+        let mut group = at + 1;
+        while group < frame.len() && frame[group].offset < end {
+            end = end.max(top(frame[group]));
+            group += 1;
+        }
+        let members = &frame[at..group];
+        let edges: std::collections::BTreeSet<i64> =
+            members.iter().flat_map(|one| [one.offset, top(one)]).collect();
+        let edges: Vec<i64> = edges.into_iter().collect();
+        let spans: Vec<FramePiece> = edges
+            .windows(2)
+            .map(|edge| {
+                let (low, high) = (edge[0], edge[1]);
+                let owner = members
+                    .iter()
+                    .filter(|one| one.offset <= low && high <= top(one))
+                    .min_by_key(|one| (one.extent.unwrap_or(0), one.id))
+                    .expect("a group's pieces are covered");
+                let mut identity = vec![Identity::Storage(owner.storage), Identity::Int(owner.id)];
+                if owner.offset != low || top(owner) != high {
+                    identity.push(Identity::Int(low - owner.offset));
+                }
+                (low, high, Identity::Tuple(identity))
+            })
+            .collect();
+        for one in members {
+            let within = spans.iter().filter(|span| one.offset <= span.0 && span.1 <= top(one)).cloned().collect();
+            pieces.insert(one.id, within);
+        }
+        at = group;
+    }
+    pieces
+}
+
 /// A frame piece and whether any place holding it has its address handed out.
 type _Pieces = std::collections::HashMap<i64, Vec<(i64, i64, Identity, bool)>>;
 
 fn _pieces(function: &model::Function) -> _Pieces {
-    let pieces = model::frame_pieces(&function.places);
+    let pieces = frame_pieces(&function.places);
     let exposed = escape::exposed_frame(function);
     let reached: BTreeSet<&Identity> =
         exposed.iter().flat_map(|place| pieces.get(place).into_iter().flatten()).map(|piece| &piece.2).collect();

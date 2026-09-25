@@ -198,6 +198,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-cycles",
+ "llrm-hir",
  "llrm-omf",
  "llrm-support",
  "num-bigint",
@@ -224,6 +225,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "llrm-hir"
+version = "0.1.0"
+dependencies = [
+ "llrm-support",
 ]
 
 [[package]]
