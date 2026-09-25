@@ -245,6 +245,10 @@ fn test_an_address_is_unwrapped_only_from_its_origin_and_in_range() {
     assert!(!unwrapped(&reference, origin, &interval(0, 32768, 2), 2));
     assert!(!unwrapped(&reference, origin, &interval(-1, 511, 2), 2));
     assert!(!unwrapped(&MemRef { inbounds: false, ..reference.clone() }, origin, &interval(0, 511, 2), 2));
+    // `DIM a(-10 TO 10)`: a displacement covering a negative index still
+    // zero-extends it, -1 to 0FFFFh, past the segment.
+    let displaced = MemRef { addr: Some(Addr::new(Space::Far, 20)), ..reference.clone() };
+    assert!(!unwrapped(&displaced, origin, &interval(-10, 10, 2), 2));
 }
 
 #[test]

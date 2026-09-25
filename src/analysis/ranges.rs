@@ -73,17 +73,18 @@ pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interv
 /// Whether `reference`, based at `base` plus `index * scale`, names the same
 /// byte when its address is summed wider than its address width.
 ///
-/// It does when `base` is the reference's origin and `index * scale` plus the
-/// displacement cannot leave the address width: the wrapped in-object offset
-/// then equals the unwrapped one, and origin plus an in-object offset cannot
-/// pass the segment's end.
+/// It does when `base` is the reference's origin, `index` is never negative
+/// (the wider sum zero-extends it), and `index * scale` plus the displacement
+/// cannot leave the address width: the wrapped in-object offset then equals
+/// the unwrapped one, and origin plus an in-object offset cannot pass the
+/// segment's end.
 pub(crate) fn unwrapped(reference: &MemRef, base: Value, index: &Interval, scale: i64) -> bool {
     if !reference.inbounds || reference.origin != Some(base) || index.width != reference.base_width {
         return false;
     }
     let disp = BigInt::from(reference.addr.map_or(0, |address| address.disp));
     let limit = BigInt::from(1_u8) << (8 * reference.base_width);
-    &index.low * scale + &disp >= BigInt::from(0_u8) && &index.high * scale + &disp < limit
+    index.low >= BigInt::from(0_u8) && &index.low * scale + &disp >= BigInt::from(0_u8) && &index.high * scale + &disp < limit
 }
 
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
