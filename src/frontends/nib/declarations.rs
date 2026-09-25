@@ -43,7 +43,7 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
         Language::Assembler => ";",
     };
     let close = if language == Language::C { " */" } else { "" };
-    writeln!(out, "{comment} Declarations of {name}.nbl's exports. Generated; do not edit.{close}").unwrap();
+    writeln!(out, "{comment} Declarations of {name}.nib's exports. Generated; do not edit.{close}").unwrap();
     let guard = format!("{}_H", name.to_ascii_uppercase().replace(['.', '-'], "_"));
     if language == Language::C {
         writeln!(out, "#ifndef {guard}\n#define {guard}").unwrap();

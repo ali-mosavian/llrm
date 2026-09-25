@@ -41,7 +41,7 @@ fn put_text(text: &string) -> void:
 fn pad(count: u16) -> void:
     unsafe:
         let filler: *near mut u8 = &mut fill
-        for _at in range(0, count):
+        for _at in 0..count:
             put(filler.far(), 1)
 
 # Fills in front of a value of `length` bytes; what is owed after it.

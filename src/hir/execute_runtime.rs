@@ -1,5 +1,5 @@
 //! Nib's runtime heap and string routines, modelled on the
-//! host (runtime/nib/buffers.nbl and strings.nbl). A dropped buffer is marked, so a
+//! host (runtime/nib/buffers.nib and strings.nib). A dropped buffer is marked, so a
 //! second drop or a leak is an execution error, not silent.
 
 use crate::abi::nib as rt;
@@ -121,7 +121,7 @@ impl Machine<'_> {
         Ok(copy)
     }
 
-    /// runtime/nib/dicts.nbl's `N$DRES`: room for one more entry.
+    /// runtime/nib/dicts.nib's `N$DRES`: room for one more entry.
     fn dict_reserve(&mut self, table: &Address, size: usize) -> Outcome<Address> {
         flags(table)?;
         let slots = word(table, -4)? as usize;

@@ -4,7 +4,7 @@
     uv run python tools/port_diff.py --corpus [--opt]
     uv run python tools/port_diff.py --qb [bench/parity/algebra.bas ...]
     uv run python tools/port_diff.py --bc [fixtures/omf/hotlop-p-g2.obj ...]
-    uv run python tools/port_diff.py --modern [fixtures/nib/sum.nbl ...]
+    uv run python tools/port_diff.py --modern [fixtures/nib/sum.nib ...]
 
 Python writes the reference dump (`python -m qbopt.cfront --dump`); the Rust
 port writes the same tree (`llrm-c --dump`). With `--qb`, Python's is
@@ -15,7 +15,7 @@ the options both compilers get. With `--bc`, Python's is `tools/stages.py
 --dump` and Rust's `llrm-omf --dump`; with no objects it runs every
 `fixtures/omf/*.obj`. With `--modern`, Python's dump is
 `tools/modernstages.py` and its object `compile.written`; Rust's is
-`llrm-nib --dump`. With no sources it runs `fixtures/nib/*.nbl` and
+`llrm-nib --dump`. With no sources it runs `fixtures/nib/*.nib` and
 `fixtures/nib/port`, every source the modern tests compile
 (`tools/modern_port_corpus.py`). Stages are
 compared in the order Python wrote them, so the first mismatch is the first
@@ -266,9 +266,9 @@ def run_qb(source: Path, work: Path, rust: Path) -> Result:
 
 
 def modern_corpus() -> list[Path]:
-    """`fixtures/nib/*.nbl`, then every source the modern tests compile."""
-    found = sorted(ROOT.glob("fixtures/nib/*.nbl"))
-    return found + sorted((ROOT / "fixtures/nib/port").glob("*/*.nbl"))
+    """`fixtures/nib/*.nib`, then every source the modern tests compile."""
+    found = sorted(ROOT.glob("fixtures/nib/*.nib"))
+    return found + sorted((ROOT / "fixtures/nib/port").glob("*/*.nib"))
 
 
 def _level(flags: list[str]) -> list[str]:

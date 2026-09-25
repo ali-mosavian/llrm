@@ -109,7 +109,7 @@ def _modern(fixture: str, name: str) -> str:
     from qbopt.frontend.modern import driver
     from qbopt.frontend.modern import compile as modern
 
-    source = Path(__file__).resolve().parents[1] / "fixtures" / "modern" / f"{fixture}.nbl"
+    source = Path(__file__).resolve().parents[1] / "fixtures" / "modern" / f"{fixture}.nib"
     return _procedure(masm.text(modern.assembled(driver.parsed(source), entry="main")), name)
 
 

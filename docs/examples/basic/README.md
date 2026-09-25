@@ -1,15 +1,15 @@
 # Calling a Nib library from QuickBASIC 4.5
 
-`sortlib.nbl` exports QB45 procedures: SUBs taking an array and a string by
+`sortlib.nib` exports QB45 procedures: SUBs taking an array and a string by
 reference, and DOUBLE, INTEGER and string FUNCTIONs, one of a 2-D array.
 `scores.bas` calls them through `SORTLIB.BI`, which
-`nibfront --declare bi sortlib.nbl` wrote, and `Average#` calls back
+`nibfront --declare bi sortlib.nib` wrote, and `Average#` calls back
 into its `Mean#`.
 
 Build the library on the host:
 
 ```text
-target/release/llrm-nib docs/examples/basic/sortlib.nbl -o SORTLIB.OBJ -O2
+target/release/llrm-nib docs/examples/basic/sortlib.nib -o SORTLIB.OBJ -O2
 ```
 
 Then, in DOS, with `SCORES.BAS`, `SORTLIB.BI` and `SORTLIB.OBJ` in one

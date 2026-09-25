@@ -114,7 +114,7 @@ fn main() -> i16:
 
 #[test]
 fn enums_match_exhaustively_on_tags_and_payloads() {
-    let source = include_str!("../../../docs/examples/shapes.nbl");
+    let source = include_str!("../../../docs/examples/shapes.nib");
     assert_eq!(
         output(source),
         "area 87\nmode 19 has 320 columns\ntext is 80\n"
@@ -125,7 +125,7 @@ fn enums_match_exhaustively_on_tags_and_payloads() {
 
 #[test]
 fn question_mark_returns_the_failure_and_nested_patterns_cover_every_error() {
-    let source = include_str!("../../../docs/examples/digits.nbl");
+    let source = include_str!("../../../docs/examples/digits.nib");
     assert_eq!(
         output(source),
         "1234\nempty\nnot a digit\ntoo big\nfirst even 8\n"
@@ -152,7 +152,7 @@ fn output_without_leaks(source: &str) -> String {
 
 #[test]
 fn strings_join_append_copy_on_write_and_every_owner_drops_its_buffer() {
-    let source = include_str!("../../../docs/examples/greeting.nbl");
+    let source = include_str!("../../../docs/examples/greeting.nib");
     assert_eq!(
         output_without_leaks(source),
         "hello, world!\nHELLO, WORLD!\nhello\n[ada: 42] has 7 chars\nada sorts first\nreset\n"
@@ -1028,7 +1028,7 @@ fn main() -> i16:
 fn string_views_borrow_ranges_and_temporaries_and_print_compare_and_copy() {
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/docs/examples/settings.nbl"
+        "/docs/examples/settings.nib"
     ))
     .expect("the example");
     assert_eq!(
@@ -1123,14 +1123,14 @@ fn main() -> i16:
 
 #[test]
 fn a_for_takes_an_iterator_from_iter_and_calls_next_until_none() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/dice.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/dice.nib")).expect("the example");
     assert_eq!(output_without_leaks(&source), "1: 10\n2: 14\n3:  8\n4:  8\n5: 13\n6:  7\nfirst six\n");
     assert!(refused(&source.replace("for face in dice:", "for face in &mut dice:")).contains("an iterator yields values"));
 }
 
 #[test]
 fn a_view_result_borrows_what_the_caller_lent_and_never_a_local() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/csv.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/csv.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "Ada   | pilot at level 7\nGrace | admiral at level 9\nLinus | (no role)\ntrue Grace\n"
@@ -1176,7 +1176,7 @@ fn a_float_outside_the_integer_it_converts_to_panics() {
 #[test]
 fn exports_are_declared_for_c_basic_and_assembler_callers() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nib")).expect("the example");
     let module = super::parse(super::lex(&source).expect("lexes")).expect("parses");
     let declared = |language| declarations(&module, "levels", language).expect("declares");
     let c = declared(Language::C);
@@ -1191,7 +1191,7 @@ fn exports_are_declared_for_c_basic_and_assembler_callers() {
 
 #[test]
 fn sequence_patterns_match_lengths_and_view_the_rest() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/sequences.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/sequences.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "empty\none 7\n1..4 around 2\n4 -1\nfirst at 1,2\nstarts 1, 2 then 2\ntrue false\n"
@@ -1373,7 +1373,7 @@ fn main() -> i16:
         "32767 none -32768 none\n0 none -32767\n32767 -32768 -32768 -30000 -32768\n255 0 4294967295 4294967295 4294967295\n"
     );
     assert_eq!(
-        output_without_leaks(include_str!("../../../docs/examples/meter.nbl")),
+        output_without_leaks(include_str!("../../../docs/examples/meter.nib")),
         "health 255\nhealth 0\ntrue 2100000000\nfalse 2100000000\nfalse 2100000000\n"
     );
     assert!(refused("fn i16.twice(self: i16) -> i16:\n    return self * 2\n\nfn main() -> i16:\n    return 0\n").contains("only the language defines i16's methods"));
@@ -1411,7 +1411,7 @@ fn main() -> i16:
 
 #[test]
 fn enumerate_zip_and_range_are_library_generators_yielding_references() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/laps.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/laps.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "lap 1: 62s\nlap 2: 58s\nlap 3: 60s\nlap 4: 57s\nfastest lap 4\nada made 10\nbob is 1 short\n\
@@ -1481,7 +1481,7 @@ fn fields_elements_and_views_are_places_like_names() {
     // `s.v.push`, `s.v[i]`, `for x in s.v`, `f(s.v)`, `let r = &v[1:]` and
     // `outer[0][1]` each failed: "array base must be a named binding",
     // "a borrow is valid only as a borrowed function argument", or a move.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/gradebook.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/gradebook.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "ada: 3 marks, first 71\nrecent 3, average 53\nbest 85\nweek 2 day 2: 5, week 1 has 3\n"
@@ -1495,7 +1495,7 @@ fn generic_structs_enums_and_methods_take_their_types_from_use() {
     // `Pair(first=1, ...)` was "unknown struct", `Maybe.yes(4)` "unknown
     // enum", `Result.ok()` of `Result[void, E]` wanted a payload, and a
     // generic type's method named an unknown `T`.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/generic_types.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/generic_types.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "ada 42 7 true\ntop 9\nstored 11\nfull at 12\nfull at 13\n200 -1\nfirst roll 4\nnothing held\n"
@@ -1538,7 +1538,7 @@ fn main() -> i16:
     assert!(refused(walked).contains("borrowed here"), "{}", refused(walked));
     // What may be done: return `&T` of a parameter, rename a reference,
     // and reseat a `let mut` view.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/borrows.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/borrows.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "leader bob\nbest di with 58\nfirst cy\n[move]\n[north]\n[then]\n[east]\n"
@@ -1549,7 +1549,7 @@ fn main() -> i16:
 fn dicts_hash_their_keys_grow_and_lend_a_looked_up_key() {
     // `dict[K, V]` was "unknown type"; a lookup by a borrowed string moved
     // it, and `&s` had no `.hash()`: "array has no method".
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/tally.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/tally.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "6 words, the x3, owl x0\nhearts 2, distinct 2, queen true\n40 squares, 37 -> 1369\n"
@@ -1659,7 +1659,7 @@ fn a_question_mark_returns_before_its_statement_makes_a_place() {
 
 #[test]
 fn the_roster_example_prints_compares_and_builds_players() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/roster.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/roster.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "refused rating -3\nada (2150) master *\nbob (1505) expert\ncy (1620) expert\n3 above 1500, first ada at 2150\n"
@@ -1687,7 +1687,7 @@ fn a_local_fn_is_a_function_seen_to_the_end_of_its_block() {
 
 #[test]
 fn the_easing_example_slides_through_a_table_of_function_values() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/easing.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/easing.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "linear    0   8  16  24  32  40\nin        0   1   6  14  25  40\nout       0  14  25  33  38  40\nsmooth    0   3  12  27  36  40\nstep      0   0   0  20  20  40\n"
@@ -1698,7 +1698,7 @@ fn the_easing_example_slides_through_a_table_of_function_values() {
 fn a_generator_that_escapes_is_a_state_its_next_resumes() {
     // `let g = count(3)` was "consumed by a 'for', not called", and an
     // `iter[T]` parameter was "iter is not a generic type".
-    let shapes = "struct P:\n    x: i16\n    y: i16\n\nfn grid(w: i16, h: i16) -> iter[P]:\n    for y in 0..h:\n        let mut x: i16 = 0\n        loop:\n            if x == w:\n                break\n            if x == 1:\n                x += 1\n                continue\n            yield P(x=x, y=y)\n            x += 1\n\nfn evens(limit: u16) -> iter[u16]:\n    for v in range(0, limit):\n        match v % 2:\n            0:\n                yield v\n            _:\n                if v > 6:\n                    return\n\nfn total(g: iter[u16]) -> u16:\n    let mut t: u16 = 0\n    for x in g:\n        t += x\n    return t\n\nfn main() -> i16:\n    let mut g = grid(3, 2)\n    let mut n: i16 = 0\n    for p in g:\n        print(f\"{p.x},{p.y}\")\n        n += 1\n    print(n)\n    print(total(evens(20)))\n    let mut r = range(5, 8)\n    let _ = r.next()\n    for v in r:\n        print(v)\n    return 0\n";
+    let shapes = "struct P:\n    x: i16\n    y: i16\n\nfn grid(w: i16, h: i16) -> iter[P]:\n    for y in 0..h:\n        let mut x: i16 = 0\n        loop:\n            if x == w:\n                break\n            if x == 1:\n                x += 1\n                continue\n            yield P(x=x, y=y)\n            x += 1\n\nfn evens(limit: u16) -> iter[u16]:\n    for v in 0..limit:\n        match v % 2:\n            0:\n                yield v\n            _:\n                if v > 6:\n                    return\n\nfn total(g: iter[u16]) -> u16:\n    let mut t: u16 = 0\n    for x in g:\n        t += x\n    return t\n\nfn upto(start: i16, end: i16) -> iter[i16]:\n    for i in start..end:\n        yield i\n\nfn main() -> i16:\n    let mut g = grid(3, 2)\n    let mut n: i16 = 0\n    for p in g:\n        print(f\"{p.x},{p.y}\")\n        n += 1\n    print(n)\n    print(total(evens(20)))\n    let mut r = upto(5, 8)\n    let _ = r.next()\n    for v in r:\n        print(v)\n    return 0\n";
     assert_eq!(output(shapes), "0,0\n2,0\n0,1\n2,1\n4\n12\n6\n7\n");
     let spec = "struct Point:\n    mut x: i16\n    mut y: i16\n\nfn countdown(start: u16) -> iter[u16]:\n    let mut n = start\n    while n > 0:\n        yield n\n        n -= 1\n\nfn total(values: iter[u16]) -> u16:\n    let mut sum: u16 = 0\n    for v in values:\n        sum += v\n    return sum\n\nfn main() -> i16:\n    let mut c = countdown(3)\n    c.next()\n    print(total(c))\n    let mut count: i16 = 5\n    let mut corner = Point(x=0, y=0)\n    unsafe:\n        let p: *far mut i16 = &mut count\n        *p = *p + 1\n        let q: *far mut Point = &mut corner\n        (*q).x = 3\n    print(f\"{count} {corner.x}\")\n    return 0\n";
     assert_eq!(output(spec), "3\n6 3\n");
@@ -1742,7 +1742,7 @@ fn iter_on_a_sequence_is_an_iterator_that_keeps_its_view_borrowed() {
 
 #[test]
 fn the_readings_example_smooths_peeks_and_reports_generators() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/readings.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/readings.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "raw       12  15  11  30  28  27   9  10\navg3      12  18  23  28  21  15\nfirst pair averages 13\npeak of the rest: 29\n"
@@ -1787,8 +1787,8 @@ fn a_mut_pointer_passes_where_a_read_only_one_is_expected() {
 
 #[test]
 fn a_literal_argument_takes_the_type_its_generic_gets_from_the_others() {
-    // `range(0, n)` bound T to the literal's i16: "i16 and u16 have no common type".
-    let source = "fn f(n: u16) -> u16:\n    let mut t: u16 = 0\n    for i in range(0, n):\n        t += i * n\n    return t\n\nfn main() -> i16:\n    print(f(3))\n    return 0\n";
+    // `upto(0, n)` bound T to the literal's i16: "i16 and u16 have no common type".
+    let source = "fn upto[T](start: T, end: T) -> iter[T]:\n    let mut i = start\n    while i < end:\n        yield i\n        i += 1\n\nfn f(n: u16) -> u16:\n    let mut t: u16 = 0\n    for i in upto(0, n):\n        t += i * n\n    return t\n\nfn main() -> i16:\n    print(f(3))\n    return 0\n";
     assert_eq!(output(source), "9\n");
 }
 
@@ -1811,7 +1811,7 @@ fn an_f32_prints_the_shortest_text_that_reads_back_as_it() {
 
 #[test]
 fn the_planets_example_prints_floats_as_the_shortest_text_that_reads_back() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/planets.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/planets.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "Mercury: g 3.7013390935421295 m/s2, orbit 47877.7475278498 m/s, year 87.96015390047978 days\n\
@@ -1853,14 +1853,14 @@ fn a_string_pushes_and_pops_chars_and_a_nul_follows_its_last() {
 #[test]
 fn a_loop_walks_a_generator_method() {
     // Only a plain call was a generator: "\"counter\" is not an array or string".
-    let source = "struct Counter:\n    limit: i16\n\nfn Counter.upto(self: &Counter) -> iter[i16]:\n    for i in range(0, self.limit):\n        yield i\n\nfn main() -> i16:\n    let counter = Counter(limit=3)\n    for i in counter.upto():\n        print(i)\n    return 0\n";
+    let source = "struct Counter:\n    limit: i16\n\nfn Counter.upto(self: &Counter) -> iter[i16]:\n    for i in 0..self.limit:\n        yield i\n\nfn main() -> i16:\n    let counter = Counter(limit=3)\n    for i in counter.upto():\n        print(i)\n    return 0\n";
     assert_eq!(output(source), "0\n1\n2\n");
 }
 
 #[test]
 fn a_match_on_a_temporary_moves_what_its_arm_binds_and_drops_the_rest() {
     // Bindings borrowed from the temporary: "cannot move out of a borrow, field, or element".
-    let source = "enum Found:\n    none\n    both(first: string, second: string)\n\nfn find(n: i16) -> Found:\n    if n == 0:\n        return .none\n    return .both(f\"a{n}\", f\"b{n}\")\n\nfn main() -> i16:\n    let mut kept: vec[string] = []\n    for i in range(0, 3):\n        match find(i):\n            .both(first, _):\n                kept.push(first)\n            .none:\n                print(\"none\")\n    for one in kept:\n        print(one)\n    return 0\n";
+    let source = "enum Found:\n    none\n    both(first: string, second: string)\n\nfn find(n: i16) -> Found:\n    if n == 0:\n        return .none\n    return .both(f\"a{n}\", f\"b{n}\")\n\nfn main() -> i16:\n    let mut kept: vec[string] = []\n    for i in 0..3:\n        match find(i):\n            .both(first, _):\n                kept.push(first)\n            .none:\n                print(\"none\")\n    for one in kept:\n        print(one)\n    return 0\n";
     assert_eq!(output(source), "none\na1\na2\n");
 }
 
@@ -2033,7 +2033,7 @@ fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
 #[test]
 fn qb45_exports_are_declared_as_basic_procedures() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/basic/sortlib.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/basic/sortlib.nib")).expect("the example");
     let module = super::modules::load(&source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
     let basic = declarations(&module, "sortlib", Language::Basic).expect("declares");
     assert!(basic.contains("DECLARE SUB SortScores (scores() AS INTEGER, count AS INTEGER)\nDECLARE SUB Upper (text AS STRING)\n"), "{basic}");
@@ -2927,7 +2927,7 @@ fn a_reference_field_read_as_a_value_reads_what_it_refers_to() {
 
 #[test]
 fn the_pipeline_example_streams_words_through_escaping_stages() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pipeline.nbl")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pipeline.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "skipped x\nmean 12\nmean 18\nmean 23\nskipped err\nmean 28\nmean 21\nmean 15\nclosed feed\nskipped x\nalarm at 23\nclosed alarm\ndone\n"

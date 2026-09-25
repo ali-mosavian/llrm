@@ -10,13 +10,13 @@ pub fn supplied(module: &str) -> bool {
 /// The source of `module`, when it is one of these.
 pub fn source(module: &str) -> Option<&'static str> {
     match module {
-        "std.io" => Some(include_str!("std/io.nbl")),
-        "std.dos" => Some(include_str!("std/dos.nbl")),
-        "std.os" => Some(include_str!("../../../runtime/nib/os.nbl")),
-        "abi.basic" => Some(include_str!("abi/basic.nbl")),
-        "abi.qb45" => Some(include_str!("abi/qb45.nbl")),
-        "abi.pds71" => Some(include_str!("abi/pds71.nbl")),
-        "abi.vbdos" => Some(include_str!("abi/vbdos.nbl")),
+        "std.io" => Some(include_str!("std/io.nib")),
+        "std.dos" => Some(include_str!("std/dos.nib")),
+        "std.os" => Some(include_str!("../../../runtime/nib/os.nib")),
+        "abi.basic" => Some(include_str!("abi/basic.nib")),
+        "abi.qb45" => Some(include_str!("abi/qb45.nib")),
+        "abi.pds71" => Some(include_str!("abi/pds71.nib")),
+        "abi.vbdos" => Some(include_str!("abi/vbdos.nib")),
         _ => None,
     }
 }
@@ -25,7 +25,7 @@ pub fn source(module: &str) -> Option<&'static str> {
 /// or the runtime's operating-system layer, which is not beside the program.
 pub fn imported(module: &str) -> Option<&'static str> {
     match module {
-        "os" => Some(include_str!("../../../runtime/nib/os.nbl")),
+        "os" => Some(include_str!("../../../runtime/nib/os.nib")),
         _ => source(module),
     }
 }

@@ -5,7 +5,7 @@
       "camelcase": "Nib",
       "scope": "source.nib",
       "path": ".",
-      "file-types": ["nbl"]
+      "file-types": ["nib"]
     }
   ],
   "metadata": {

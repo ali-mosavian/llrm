@@ -1,6 +1,6 @@
 name = "Nib"
 grammar = "nib"
-path_suffixes = ["nbl"]
+path_suffixes = ["nib"]
 line_comments = ["# "]
 tab_size = 4
 hard_tabs = false

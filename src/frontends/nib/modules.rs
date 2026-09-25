@@ -16,10 +16,10 @@ use super::syntax::{Expr, Function, Import, Module, Pattern, Span, Statement, Ty
 pub type Located = (String, Diagnostic);
 
 /// The extension of a module's file.
-pub const EXTENSION: &str = "nbl";
+pub const EXTENSION: &str = "nib";
 
 /// The file under the source root `root` that module `name` is read from:
-/// `a.b` from `a/b.nbl`.
+/// `a.b` from `a/b.nib`.
 pub fn file(root: &std::path::Path, name: &str) -> std::path::PathBuf {
     root.join(format!("{}.{EXTENSION}", name.replace('.', "/")))
 }

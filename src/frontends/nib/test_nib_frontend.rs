@@ -114,7 +114,7 @@ fn search_back(text: &str, prefix: &str, tail: impl Fn(&regex::Captures<'_>) -> 
 }
 
 fn program() -> model::Program {
-    parsed(&fixture("control.nbl"))
+    parsed(&fixture("control.nib"))
 }
 
 #[test]
@@ -143,8 +143,8 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let directory = tempfile::tempdir().expect("a directory");
     let first = directory.path().join("first.json");
     let second = directory.path().join("second.json");
-    driver::parsed(&fixture("control.nbl"), Some(&first)).expect("parses");
-    driver::parsed(&fixture("control.nbl"), Some(&second)).expect("parses");
+    driver::parsed(&fixture("control.nib"), Some(&first)).expect("parses");
+    driver::parsed(&fixture("control.nib"), Some(&second)).expect("parses");
     let first = std::fs::read(first).expect("dumped");
     assert_eq!(first, std::fs::read(second).expect("dumped"));
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
@@ -158,7 +158,7 @@ fn test_type_error_is_reported_above_hir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "wrong.nbl",
+        "wrong.nib",
         "fn wrong(value: i16) -> i16:\n    if value:\n        return 1\n    return 0\n",
     );
     assert!(refused(&source).contains("expected bool"));
@@ -166,7 +166,7 @@ fn test_type_error_is_reported_above_hir() {
 
 #[test]
 fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
-    let program = parsed(&fixture("primitives.nbl"));
+    let program = parsed(&fixture("primitives.nib"));
     let types = types(&program);
     let names: BTreeSet<&str> = types.keys().copied().collect();
     assert_eq!(
@@ -190,7 +190,7 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
 
 #[test]
 fn test_unsigned_and_floating_operations_keep_their_semantics_in_mir() {
-    let program = parsed(&fixture("primitives.nbl"));
+    let program = parsed(&fixture("primitives.nib"));
     let lowered = hir::lower(&program).expect("lowers");
     assert!(lowered.iter().all(|one| mir::verify(&one.body).is_empty()));
     let kinds_of = |name: &str| kinds(&lowered.iter().find(|one| one.name == format!("primitives.{name}")).unwrap().body);
@@ -207,7 +207,7 @@ fn test_unsigned_and_floating_operations_keep_their_semantics_in_mir() {
 
 #[test]
 fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
-    let program = parsed(&fixture("fixed.nbl"));
+    let program = parsed(&fixture("fixed.nib"));
     let types = types(&program);
     assert_eq!((types["fixed8"].width, types["fixed8"].signed), (2, Some(true)));
     assert_eq!((types["fixed16"].width, types["fixed16"].signed), (4, Some(true)));
@@ -245,7 +245,7 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
 
 /// `physicalize(program, nbody, lowered nbody.nbody)`.
 fn nbody_physical() -> crate::frontends::qb::abi::Physicalized {
-    let program = parsed(&fixture("nbody.nbl"));
+    let program = parsed(&fixture("nbody.nib"));
     let function = function(&program, "nbody");
     let lowered = lowered_named(&program, "nbody.nbody");
     physicalize(&program, function, &lowered).expect("physicalizes")
@@ -286,7 +286,7 @@ fn test_fixed_i32_arithmetic_never_enters_generic_int64_legalization() {
 
 #[test]
 fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
-    let program = parsed(&fixture("nbody.nbl"));
+    let program = parsed(&fixture("nbody.nib"));
     let module = &program.modules[0];
     let types = types(&program);
     let scalar = types["scalar"];
@@ -345,7 +345,7 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
 
 #[test]
 fn test_nbody_string_places_point_after_the_descriptor() {
-    let program = parsed(&fixture("nbody.nbl"));
+    let program = parsed(&fixture("nbody.nib"));
     let strings: Vec<&model::Place> =
         program.modules[0].functions[0].places.iter().filter(|place| place.name.starts_with("$string")).collect();
     assert!(!strings.is_empty());
@@ -355,7 +355,7 @@ fn test_nbody_string_places_point_after_the_descriptor() {
 #[test]
 fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
     // Nib nbody emitted 52 `sub index,0; shl index,4` address chains.
-    let assembly = listing(&parsed(&fixture("nbody.nbl")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
 
     assert!(!assembly.contains("sub si, 0"));
     assert!(!assembly.contains("sub di, 0"));
@@ -366,7 +366,7 @@ fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
 #[test]
 fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
     // -O2 unrolls the loop away.
-    let assembly = listing(&parsed(&fixture("nbody.nbl")), "main", &level("Os"));
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &level("Os"));
     let loop_ = between(&assembly, "L0_18:\n", "    jne L0_18\n");
 
     assert!(!loop_.contains("mov si, ax"));
@@ -394,7 +394,7 @@ fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
 #[test]
 fn test_nbody_identity_uses_the_paired_byte_recurrences() {
     // -O2 unrolls the loop away.
-    let assembly = listing(&parsed(&fixture("nbody.nbl")), "main", &level("Os"));
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &level("Os"));
     let interaction = between(&assembly, "L0_7:\n", "L0_2:\n");
     let force_loops = between(&assembly, "L0_3:\n", "L0_9:\n");
 
@@ -410,7 +410,7 @@ fn test_nbody_identity_uses_the_paired_byte_recurrences() {
 
 #[test]
 fn test_nbody_velocity_fields_are_stored_once_per_update() {
-    let assembly = listing(&parsed(&fixture("nbody.nbl")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
     let interaction = between(&assembly, "L0_7:\n", "L0_2:\n");
 
     for field in [8, 12] {
@@ -448,7 +448,7 @@ fn main() -> i16:
 fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
     // The end-relative recurrence is an affine-loop rule, !a body/16 rule.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "stride.nbl", STRIDE);
+    let source = written(&directory, "stride.nib", STRIDE);
 
     // -O2 unrolls the loop away.
     let assembly = listing(&parsed(&source), "main", &level("Os"));
@@ -475,7 +475,7 @@ fn test_os_copies_no_loop_into_larger_code() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "stride.nbl",
+        "stride.nib",
         "\
 struct sample:
     tag: i16
@@ -520,7 +520,7 @@ fn test_fixed_array_storage_has_a_prefix_descriptor() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "array_descriptor.nbl",
+        "array_descriptor.nib",
         "fn main() -> i16:\n    let mut values: i16[3] = [10, 20, 30]\n    print(values.len)\n    return values[0]\n",
     );
 
@@ -543,7 +543,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "array_borrow.nbl",
+        "array_borrow.nib",
         "fn bump(values: &mut [u16]) -> void:\n    values[1] += 3\nfn main() -> i16:\n    let mut values: u16[3] = [10, 20, 30]\n    bump(&mut values)\n    return 0\n",
     );
 
@@ -577,12 +577,12 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
 #[test]
 fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
     let directory = tempfile::tempdir().expect("a directory");
-    let shared = written(&directory, "shared.nbl", "fn bad(values: &[u16]) -> void:\n    values[0] = 2\n");
+    let shared = written(&directory, "shared.nib", "fn bad(values: &[u16]) -> void:\n    values[0] = 2\n");
     assert!(refused(&shared).contains("immutable"));
 
     let aliased = written(
         &directory,
-        "aliased.nbl",
+        "aliased.nib",
         "fn use(left: &mut [u16], right: &[u16]) -> void:\n    left[0] += right[0]\nfn bad() -> void:\n    let mut values: u16[1] = [1]\n    use(&mut values, &values)\n",
     );
     assert!(refused(&aliased).contains("aliases a mutable argument"));
@@ -591,7 +591,7 @@ fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
 #[test]
 fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
     // sum returned stack garbage after DSE erased every payload store before its read-only call.
-    let assembly = listing(&parsed(&fixture("sum.nbl")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("sum.nib")), "main", &O2());
     let main = between(&assembly, "_main proc far", "_main endp");
 
     assert!((1..7).all(|value| main.contains(&format!(", {value}"))));
@@ -599,7 +599,7 @@ fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
 
 #[test]
 fn test_array_parameter_is_one_unsized_view_pointer() {
-    let program = parsed(&fixture("sum.nbl"));
+    let program = parsed(&fixture("sum.nib"));
     let module = &program.modules[0];
     let function = function(&program, "sum");
     let by_id = |id: i64| module.types.iter().find(|one| one.id == id).unwrap();
@@ -630,7 +630,7 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 #[test]
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
     // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
-    let assembly = listing(&parsed(&fixture("sum.nbl")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("sum.nib")), "main", &O2());
     let function = between(&assembly, "_sum proc far", "_sum endp");
     let hot = between(function, "L0_3:", "L0_5:");
 
@@ -643,7 +643,7 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 #[test]
 fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
-    let assembly = listing(&parsed(&fixture("sum_three.nbl")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &O2());
     let main = between(&assembly, "_main proc far", "call far ptr _sum_three");
     let cells: BTreeSet<String> =
         [-8, -20, -32].iter().flat_map(|payload| (0..4).map(move |index| format!("[bp{}]", payload + 2 * index))).collect();
@@ -668,7 +668,7 @@ fn sum_optimized_physical(program: &model::Program, semantic: &hir::Lowered) -> 
 
 #[test]
 fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
-    let program = parsed(&fixture("sum.nbl"));
+    let program = parsed(&fixture("sum.nib"));
     let semantic =
         nib_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
     let length = semantic
@@ -704,7 +704,7 @@ fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
 #[test]
 fn test_runtime_bounded_array_control_respects_the_recurrence_period() {
     // A stride-two offset repeats after 32768 word updates && cannot control a longer loop.
-    let program = parsed(&fixture("sum.nbl"));
+    let program = parsed(&fixture("sum.nib"));
     let semantic =
         nib_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
     let [length] = semantic.body.integer_ranges.keys().copied().collect::<Vec<_>>()[..] else {
@@ -735,7 +735,7 @@ fn test_scoped_array_range_is_one_descriptor_pointer_and_executes() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "slice.nbl",
+        "slice.nib",
         "fn sum(values: &[i16]) -> i16:\n    let mut total: i16 = 0\n    for value in &values:\n        total += value\n    return total\nfn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    return sum(&values[1:3])\n",
     );
 
@@ -754,7 +754,7 @@ fn test_a_range_is_not_a_slice() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "range_slice.nbl",
+        "range_slice.nib",
         "fn sum(values: &[i16]) -> i16:\n    return values[0]\nfn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    return sum(&values[1..3])\n",
     );
 
@@ -766,7 +766,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "data.nbl",
+        "data.nib",
         "fn data(values: &[i16]) -> addr:\n    return values.data()\nfn main() -> i16:\n    let values: i16[2] = [4, 9]\n    data(&values)\n    return 0\n",
     );
 
@@ -782,7 +782,7 @@ fn test_string_descriptor_methods_and_value_iteration_need_no_runtime() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "string_view.nbl",
+        "string_view.nib",
         "fn first(text: &string) -> char:\n    for byte in text:\n        return byte\n    return '\\0'\nfn size(text: string) -> u16:\n    return text.len + text.capacity\nfn main() -> u16:\n    let text: string = \"abc\"\n    if first(text) == 'a':\n        return size(text)\n    return 0\n",
     );
 
@@ -796,7 +796,7 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "first.nbl",
+        "first.nib",
         "fn first(text: string) -> char:\n    for byte in text:\n        return byte\n    return '\\0'\nfn main() -> i16:\n    if first(\"metal\") == 'm':\n        print(\"ok\")\n        return 0\n    return 1\n",
     );
 
@@ -809,7 +809,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "comprehension.nbl",
+        "comprehension.nib",
         "fn main() -> i16:\n    let values: i16[4] = [1, 2, 3, 4]\n    let doubled = [value * 2 for value in values]\n    let mut total: i16 = 0\n    for value in (item + 1 for item in doubled):\n        total += value\n    return total\n",
     );
 
@@ -823,7 +823,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "dictionary.nbl",
+        "dictionary.nib",
         "fn main() -> i16:\n    let values: i16[4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.get(1, 0) + table.get(3, 0) + table.get(9, 5)\nfn count() -> u16:\n    let values: i16[4] = [1, 2, 1, 3]\n    let table = {item: item * 10 for item in values}\n    return table.len\n",
     );
 
@@ -837,7 +837,7 @@ fn test_fixed_point_arithmetic_has_a_price() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "fixed.nbl",
+        "fixed.nib",
         "type fixed16 = fixed i32, fraction=16\n\nfn scaled(left: fixed16, right: fixed16) -> fixed16:\n    return left * right / right\n\nfn main() -> i16:\n    scaled(1.5, 2.25)\n    return 0\n",
     );
     let costs = &targets::profile("386").unwrap().operations;
@@ -854,7 +854,7 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "frame_fill.nbl",
+        "frame_fill.nib",
         "fn value(k: i16) -> i32:\n    let mut a: i32[64] = [0] * 64\n    unsafe:\n        a[k] = 5\n        return a[k] + a[k + 1]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
@@ -870,7 +870,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "priced_fill.nbl",
+        "priced_fill.nib",
         "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
@@ -886,7 +886,7 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "field_runs.nbl",
+        "field_runs.nib",
         "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
@@ -906,7 +906,7 @@ fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "nested_fill.nbl",
+        "nested_fill.nib",
         "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
     );
     let assembly = listing(&parsed(&source), "main", &level("Os"));
@@ -923,7 +923,7 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "priced_unroll.nbl",
+        "priced_unroll.nib",
         concat!(
             "type fix = fixed i32, fraction=8\n",
             "fn value(k: i16) -> fix:\n",
@@ -950,7 +950,7 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
 }
 
 fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir::MirBody {
-    let source = written(directory, "settled.nbl", text);
+    let source = written(directory, "settled.nib", text);
     let program = parsed(&source);
     let function = function(&program, "value");
     let semantic = nib_compile::semantic_lowered(&program)
@@ -1017,7 +1017,7 @@ fn test_a_new_counter_steps_where_no_condition_is_live() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "struct_view.nbl",
+        "struct_view.nib",
         concat!(
             "struct sample:\n",
             "    tag: i16\n",
@@ -1047,7 +1047,7 @@ fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "unrolled_fill.nbl",
+        "unrolled_fill.nib",
         "fn value(k: i16, j: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, j]\nfn main() -> i16:\n    return i16(value(3, 2) + value(4, 1))\n",
     );
     // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n. Two calls keep `value` unspecialized.
@@ -1073,7 +1073,7 @@ fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
         "    let a: i16[4] = [0] * 3\n    return a[0]\n",
     ] {
         let directory = tempfile::tempdir().expect("a directory");
-        let source = written(&directory, "rejected.nbl", &format!("fn value() -> i16:\n{body}"));
+        let source = written(&directory, "rejected.nib", &format!("fn value() -> i16:\n{body}"));
         refused(&source);
     }
 }
@@ -1081,7 +1081,7 @@ fn test_ill_formed_operators_conversions_and_repeats_are_rejected() {
 #[test]
 fn test_not_is_not_an_operand_of_a_tighter_operator() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "not.nbl", "fn value() -> bool:\n    return true == !false\n");
+    let source = written(&directory, "not.nib", "fn value() -> bool:\n    return true == !false\n");
     refused(&source);
 }
 
@@ -1090,7 +1090,7 @@ fn test_a_float_does_not_convert_to_fixed_point() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "float_fixed.nbl",
+        "float_fixed.nib",
         "type fix = fixed i32, fraction=8\nfn value() -> i16:\n    let x: f64 = 1.5\n    return i16(fix(x))\n",
     );
     refused(&source);
@@ -1098,7 +1098,7 @@ fn test_a_float_does_not_convert_to_fixed_point() {
 
 #[test]
 fn test_ranked_arrays_index_fill_and_borrow_row_major() {
-    let program = parsed(&fixture("ranked.nbl"));
+    let program = parsed(&fixture("ranked.nib"));
     assert_eq!(program.array_order, model::ArrayOrder::RowMajor);
 }
 
@@ -1108,7 +1108,7 @@ fn test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "struct_array_borrow.nbl",
+        "struct_array_borrow.nib",
         "struct point:\n    mut x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    let mut points: point[2] = [point(1, 2), point(10, 20)]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
     );
 
@@ -1131,7 +1131,7 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
         let directory = tempfile::tempdir().expect("a directory");
         let source = written(
             &directory,
-            "ranked_rejected.nbl",
+            "ranked_rejected.nib",
             &format!("fn first(values: &[i16]) -> i16:\n    return values[0]\nfn value() -> i16:\n{body}"),
         );
         refused(&source);
@@ -1154,7 +1154,7 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
 
 /// `_sum_three proc far` .. `endp` for the 486.
 fn sum_three_on_486() -> String {
-    let assembly = listing_on(&parsed(&fixture("sum_three.nbl")), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&fixture("sum_three.nib")), "main", &O2(), "486");
     between(&assembly, "_sum_three proc far", "_sum_three endp").to_owned()
 }
 
@@ -1208,7 +1208,7 @@ fn main() -> i16:
 
 fn column_loop() -> String {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "column.nbl", COLUMN);
+    let source = written(&directory, "column.nib", COLUMN);
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let function = between(&assembly, "_column proc far", "_column endp");
     let start = function.find("L0_3:").unwrap_or_else(|| panic!("no L0_3:\n{function}"));
@@ -1238,7 +1238,7 @@ fn test_a_byte_argument_is_pushed_as_a_word() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "byte_argument.nbl",
+        "byte_argument.nib",
         "@export(\"cdecl16\")\nfn digit(c: char) -> u8:\n    return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
@@ -1252,7 +1252,7 @@ fn test_a_branch_on_a_constant_lowers_as_a_jump() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "forever.nbl",
+        "forever.nib",
         "fn main() -> i16:\n    let mut n = 3\n    while true:\n        if n == 0:\n            return 7\n        n -= 1\n    return 0\n",
     );
     lowered_named(&parsed(&source), "forever.main");
@@ -1265,7 +1265,7 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "view.nbl",
+        "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
     nib_compile::written(&parsed(&source), "main", &source, &level("O2"))
@@ -1279,7 +1279,7 @@ fn test_a_method_on_a_vec_element_takes_a_far_pointer() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "bump.nbl",
+        "bump.nib",
         "struct T:\n    mut n: i16\n\nfn T.bump(self: &mut T) -> void:\n    self.n += 1\n\nfn main() -> i16:\n    let mut v: vec[T] = [T(n=0)]\n    v[0].bump()\n    return v[0].n\n",
     );
     parsed(&source);
@@ -1292,7 +1292,7 @@ fn test_a_method_on_a_loop_binding_over_a_vec_takes_a_far_pointer() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "each.nbl",
+        "each.nib",
         "struct T:\n    mut n: i16\n\nfn T.get(self: &T) -> i16:\n    return self.n\n\nfn main() -> i16:\n    let v: vec[T] = [T(n=2), T(n=3)]\n    let mut total = 0\n    for t in v:\n        total += t.get()\n    return total\n",
     );
     parsed(&source);
@@ -1305,7 +1305,7 @@ fn test_foreign_functions_link_by_their_c_symbols() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "interop.nbl",
+        "interop.nib",
         "@extern(\"cdecl16\", name=\"_sum_all\")\nfn total(values: *far i16, count: u16) -> i32\n\n@export(\"cdecl16\")\nfn weight(value: i16) -> i16:\n    return value * 2\n\nfn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
     );
     let module = nib_compile::assembled(
@@ -1333,7 +1333,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "floats.nbl",
+        "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
     nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
@@ -1343,7 +1343,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
 /// pascal16 pushes the first argument first, names symbols in upper case, and
 /// the callee removes the arguments with `retf n`.
 fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
-    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nbl"));
+    let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nib"));
     let module =
         nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["CLAMP", "_main"]);
@@ -1363,7 +1363,7 @@ fn test_a_pascal_float_result_returns_in_st0_whatever_its_last_parameter() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "half.nbl",
+        "half.nib",
         "@export(\"pascal16\")\nfn half(value: f32, out: *near f32) -> f32:\n    return value / 2.0\n\nfn main() -> i16:\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
@@ -1378,7 +1378,7 @@ fn test_a_pascal_float_result_is_read_from_st0() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "scaled.nbl",
+        "scaled.nib",
         "@extern(\"pascal16\")\nfn scale(value: f32) -> f32\n\n@export(\"pascal16\")\nfn twice(value: f32) -> f32:\n    unsafe:\n        return scale(value) * 2.0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
@@ -1393,7 +1393,7 @@ fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "near.nbl",
+        "near.nib",
         "@repr(\"c16\", pack=1)\nstruct Pair:\n    low: u16\n    high: u16\n\nvar pair: Pair = Pair(low=1, high=2)\n\n@extern(\"pascal16\")\nfn take(pair: *near Pair) -> u16\n\n@export(\"pascal16\")\nfn give() -> u16:\n    unsafe:\n        return take(&pair)\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
@@ -1408,7 +1408,7 @@ fn test_any_integer_operand_converts_to_a_float() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "floats.nbl",
+        "floats.nib",
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
@@ -1424,7 +1424,7 @@ fn test_small_aggregates_return_in_registers() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "r.nbl",
+        "r.nib",
         "struct Point:\n    mut x: i16\n    y: i16\n\n@repr(\"c16\", pack=1)\nstruct Cell:\n    glyph: u8\n    count: i16\n\n\
          struct Box:\n    low: Point\n    high: Point\n\n\
          fn point(x: i16, y: i16) -> Point:\n    return Point(x=x, y=y)\n\n\
@@ -1449,7 +1449,7 @@ fn test_a_call_result_does_not_point_into_a_frame_the_call_can_read() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "grow.nbl",
+        "grow.nib",
         "fn total(values: &[i16]) -> i16:\n    return 0\n\n\
          fn main() -> i16:\n    let one: i16[1] = [7]\n    total(&one)\n    let many: vec[i16] = [1, 2]\n    return many[1]\n",
     );
@@ -1465,7 +1465,7 @@ fn test_a_panic_path_reaches_the_object() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "checked.nbl",
+        "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
     nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
@@ -1478,7 +1478,7 @@ fn a_float_converts_to_every_integer_width() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "convert.nbl",
+        "convert.nib",
         "fn main() -> i16:\n    let x: f64 = 250.5\n    let y: f64 = 4000000000.0\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("Os"), crate::frontends::nib::compile::CPU);
@@ -1490,7 +1490,7 @@ fn a_float_converts_to_every_integer_width() {
 #[test]
 fn test_parsing_runs_no_cargo() {
     if std::env::var_os("LLRM_NO_CARGO").is_some() {
-        parsed(&fixture("fixed.nbl"));
+        parsed(&fixture("fixed.nib"));
         return;
     }
     let name = concat!(module_path!(), "::test_parsing_runs_no_cargo").split_once("::").expect("a crate").1;
@@ -1511,7 +1511,7 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "enumerate.nbl",
+        "enumerate.nib",
         "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("Os"), crate::frontends::nib::compile::CPU);
@@ -1539,7 +1539,7 @@ fn a_private_one_line_helper_is_inlined_into_its_caller() {
     // Each function was optimized alone, so scaled kept
     // `push [bp+6] / call far ptr _twice` for a one-line add.
     let directory = tempfile::tempdir().expect("a directory");
-    let text = listing(&parsed(&written(&directory, "helper.nbl", HELPERS)), "main", &O2());
+    let text = listing(&parsed(&written(&directory, "helper.nib", HELPERS)), "main", &O2());
     assert!(!text.lines().any(|line| line.contains("call") && line.contains("_twice")), "{text}");
 }
 
@@ -1548,7 +1548,7 @@ fn a_call_inlined_away_leaves_no_extern() {
     // The call table outlived the inlined call: main declared
     // `extern _scaled:far` for a procedure the module no longer has.
     let directory = tempfile::tempdir().expect("a directory");
-    let text = listing(&parsed(&written(&directory, "helper.nbl", HELPERS)), "main", &O2());
+    let text = listing(&parsed(&written(&directory, "helper.nib", HELPERS)), "main", &O2());
     assert!(!text.contains("_scaled"), "{text}");
 }
 
@@ -1557,7 +1557,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // One segment held every procedure, so a program linked all of the
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nbl", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
     let object = nib_compile::written_as(&parsed(&source), "main", &source, &level("O2"), crate::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
     let records = crate::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
@@ -1570,7 +1570,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // A segment per procedure, all of one name, was the default: Microsoft
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nbl", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
+    let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
     let object = nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes");
     let records = crate::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == crate::objectfile::omf::SEGDEF).count();
@@ -1582,7 +1582,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
 fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "pushed.nbl", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
+    let source = written(&directory, "pushed.nib", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
     nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
 }
 
@@ -1593,7 +1593,7 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "far.nbl",
+        "far.nib",
         "@extern(\"pascal16\")\nfn address(of: *near u8) -> *far u8\n\n@export(\"pascal16\")\nfn first(bytes: *far u8) -> *far u8:\n    return bytes\n\n@export(\"pascal16\")\nfn through(of: *near u8) -> u8:\n    unsafe:\n        let p = address(of)\n        return *p\n",
     );
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
@@ -1607,7 +1607,7 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
 /// Section 15: a qb45 export takes BASIC's arguments first to last, each a
 /// near pointer, and removes them; it links without the Nib runtime.
 fn test_a_qb45_library_takes_basic_arguments_by_reference() {
-    let source = root().join("docs/examples/basic/sortlib.nbl");
+    let source = root().join("docs/examples/basic/sortlib.nib");
     let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["SORTSCORES", "UPPER", "AVERAGE", "ROWTOTAL", "INITIALS"]);
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
@@ -1633,7 +1633,7 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
 /// last, to store its result through, and reads the pointer back from ax.
 fn test_a_basic_float_result_goes_through_its_hidden_pointer() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "half.nbl", "@export(\"qb45\")\nfn half(value: f64) -> f64:\n    return value / 2.0\n");
+    let source = written(&directory, "half.nib", "@export(\"qb45\")\nfn half(value: f64) -> f64:\n    return value / 2.0\n");
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let half = between(&text, "HALF proc far", "HALF endp");
     assert!(half.contains("mov bx, word ptr [bp+6]") && half.contains("fstp qword ptr [bx]"), "{half}");
@@ -1647,7 +1647,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "count.nbl",
+        "count.nib",
         "import abi.pds71 as pds\n\n@export(\"pds71\")\nfn Spaces(text: pds.StringRef) -> i16:\n    let mut count: i16 = 0\n    for letter in text:\n        if letter == ' ':\n            count += 1\n    return count\n",
     );
     let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
@@ -1662,7 +1662,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
 /// runs with DGROUP in DS and ES and the direction flag clear, and leaves
 /// by `iret`. Its name is its far address, a `dd` the linker fills.
 fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
-    let source = root().join("docs/examples/ticker.nbl");
+    let source = root().join("docs/examples/ticker.nib");
     let program = parsed(&source);
     let text = listing_on(&program, "main", &level("O2"), "486");
     let lines: Vec<&str> = between(&text, "_tick proc far", "_tick endp").lines().map(str::trim).collect();
@@ -1683,7 +1683,7 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "wait.nbl",
+        "wait.nib",
         "var ticks: u16 = 0\n\n@export(\"interrupt16\")\nfn tick() -> void:\n    ticks += 1\n\nfn main() -> i16:\n    while ticks < 36:\n        continue\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
@@ -1694,9 +1694,9 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
 /// Nothing calls a handler, and an interrupt passes it nothing.
 fn test_an_interrupt_handler_takes_nothing_and_is_not_called() {
     let directory = tempfile::tempdir().expect("a directory");
-    let taking = written(&directory, "taking.nbl", "@export(\"interrupt16\")\nfn tick(n: i16) -> void:\n    return\n\nfn main() -> i16:\n    return 0\n");
+    let taking = written(&directory, "taking.nib", "@export(\"interrupt16\")\nfn tick(n: i16) -> void:\n    return\n\nfn main() -> i16:\n    return 0\n");
     assert!(refused(&taking).contains("takes nothing and returns void"));
-    let called = written(&directory, "called.nbl", "@export(\"interrupt16\")\nfn tick() -> void:\n    return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
+    let called = written(&directory, "called.nib", "@export(\"interrupt16\")\nfn tick() -> void:\n    return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
     assert!(refused(&called).contains("only an interrupt enters it"));
 }
 
@@ -1707,7 +1707,7 @@ fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "byte.nbl",
+        "byte.nib",
         "@extern(\"cdecl16\")\nfn put(number: u8) -> void\n\nfn set(number: u8) -> void:\n    unsafe:\n        put(number)\n\nfn main() -> i16:\n    set(28)\n    set(29)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
@@ -1721,7 +1721,7 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "far.nbl",
+        "far.nib",
         "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
@@ -1736,7 +1736,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "blocks.nbl",
+        "blocks.nib",
         "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
          asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
          mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
@@ -1762,7 +1762,7 @@ fn test_inline_assembly_declaring_memory_is_read_again_after() {
         mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
         fn main() -> i16:\n    return i16(poke())\n";
     let reads = |text: &str| {
-        let assembly = listing(&parsed(&written(&directory, "poke.nbl", text)), "main", &O2());
+        let assembly = listing(&parsed(&written(&directory, "poke.nib", text)), "main", &O2());
         between(&assembly, "db 0c6h,044h,003h,007h", "_poke endp").contains("byte ptr poke$D1+3")
     };
     assert!(reads(text));
@@ -1776,7 +1776,7 @@ fn test_inline_assembly_inputs_reach_the_registers_they_name() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "pair.nbl",
+        "pair.nib",
         "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
@@ -1793,7 +1793,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "spin.nbl",
+        "spin.nib",
         "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
          unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
          total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n",
@@ -1809,7 +1809,7 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
     // one it drops: every program carried the unused float printer, 2.8 KB.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "lib.nbl", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in range(0, x):\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n");
+    let source = written(&directory, "lib.nib", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in 0..x:\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n");
     let mut program = parsed(&source);
     nib_compile::keep_exports(&mut program, &["N$ZB".to_owned()].into_iter().collect());
     let module = nib_compile::assembled(&program, "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
@@ -1819,12 +1819,12 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
 
 #[test]
 fn test_an_error_in_an_imported_module_names_that_module() {
-    // Semantic errors carried no module: one in shapes.nbl was reported at main.nbl's line.
+    // Semantic errors carried no module: one in shapes.nib was reported at main.nib's line.
     let directory = tempfile::tempdir().expect("a directory");
-    written(&directory, "shapes.nbl", "pub fn area(w: i16, h: u16) -> i16:\n    return w * h\n");
-    let main = written(&directory, "main.nbl", "import shapes\n\nfn main() -> i16:\n    return shapes.area(2, 3)\n");
+    written(&directory, "shapes.nib", "pub fn area(w: i16, h: u16) -> i16:\n    return w * h\n");
+    let main = written(&directory, "main.nib", "import shapes\n\nfn main() -> i16:\n    return shapes.area(2, 3)\n");
     let (path, error) = super::compile_file(&main).expect_err("refused");
-    assert!(path.ends_with("shapes.nbl"), "{} {}", path.display(), error.message);
+    assert!(path.ends_with("shapes.nib"), "{} {}", path.display(), error.message);
     assert_eq!(error.span.line, 2);
 }
 
@@ -1834,7 +1834,7 @@ fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
-        "fixed_borrow.nbl",
+        "fixed_borrow.nib",
         "fn last(values: &i16[4]) -> i16:\n    return values[values.len - 1]\n\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return last(&v)\n",
     );
     let program = parsed(&source);
@@ -1855,8 +1855,8 @@ fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
 fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = |decorator: &str| format!("{decorator}\nfn size(text: &string) -> u16:\n    return text.len\n\nfn main() -> i16:\n    return 0\n");
-    let foreign = written(&directory, "foreign.nbl", &text("@export(\"cdecl16\")"));
+    let foreign = written(&directory, "foreign.nib", &text("@export(\"cdecl16\")"));
     assert!(refused(&foreign).contains("cannot cross a foreign ABI"), "{}", refused(&foreign));
-    let native = written(&directory, "native.nbl", &text("@export(name=\"N$SIZE\")"));
+    let native = written(&directory, "native.nib", &text("@export(name=\"N$SIZE\")"));
     driver::parsed(&native, None).expect("a native export takes a view");
 }

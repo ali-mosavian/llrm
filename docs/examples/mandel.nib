@@ -11,7 +11,7 @@ const LIMIT: u16 = 40
 fn escape(cr: Real, ci: Real) -> u16:
     let mut zr = Real(0)
     let mut zi = Real(0)
-    for step in range(0, LIMIT):
+    for step in 0..LIMIT:
         let zr2 = zr * zr
         let zi2 = zi * zi
         if zr2 + zi2 > Real(4):
@@ -26,10 +26,10 @@ fn main() -> i16:
     let top = Real(1.2)
     let dx = Real(3.2) / Real(WIDTH)
     let dy = Real(2.4) / Real(HEIGHT)
-    for row in range(0, HEIGHT):
+    for row in 0..HEIGHT:
         let mut line: string = ""
         let ci = top - Real(row) * dy
-        for column in range(0, WIDTH):
+        for column in 0..WIDTH:
             let steps = escape(left + Real(column) * dx, ci)
             line.push(steps == LIMIT ? '@' : shades[steps % 9])
         print(line)

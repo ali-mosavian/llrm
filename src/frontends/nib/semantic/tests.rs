@@ -121,7 +121,7 @@ fn literal_array_bounds_are_checked_before_hir() {
     assert!(error.message.contains("outside 0..2"));
 }
 
-/// matmul.nbl spelled `[0, 0, ...]` three times: 192 stores that every unroll candidate carried.
+/// matmul.nib spelled `[0, 0, ...]` three times: 192 stores that every unroll candidate carried.
 #[test]
 fn an_array_literal_of_one_repeated_value_fills_like_a_repeat_literal() {
     let spelled = compile_source(

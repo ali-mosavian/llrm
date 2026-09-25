@@ -1,6 +1,6 @@
 //! Runs a Nib module's entry on the host HIR interpreter.
 //!
-//!   llrm-run SOURCE.nbl [ENTRY] [INTEGER...]
+//!   llrm-run SOURCE.nib [ENTRY] [INTEGER...]
 
 use std::process::ExitCode;
 
@@ -11,7 +11,7 @@ use llrm::hir::model::Number;
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let Some(input) = arguments.first() else {
-        eprintln!("usage: llrm-run SOURCE.nbl [ENTRY] [INTEGER...]");
+        eprintln!("usage: llrm-run SOURCE.nib [ENTRY] [INTEGER...]");
         return ExitCode::from(2);
     };
     let entry = arguments.get(1).map_or("main", String::as_str);

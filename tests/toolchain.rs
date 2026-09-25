@@ -47,3 +47,25 @@ fn test_a_jwlink_exe_runs_under_the_built_dosbox() {
     run("dosbox-x", &["-nolog", "-exit", "-conf", conf]);
     assert_eq!(std::fs::read_to_string(dir.join("OUT.TXT")).unwrap(), "dosrun\r\n");
 }
+
+/// nib-build.sh named the generated header `main.nbl.h`, stripping `.mod`,
+/// so geometry.c's `#include "main.h"` found no CPoint and the interop
+/// example did not build.
+#[test]
+fn test_nib_build_links_the_interop_example_with_its_c_library() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-nib")).parent().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let exe = scratch.path().join("INTEROP.EXE");
+    let example = root.join("docs/examples/interop");
+    let status = Command::new(root.join("tools/nib-build.sh"))
+        .arg(example.join("main.nib"))
+        .arg(&exe)
+        .arg("-O2")
+        .arg(example.join("geometry.c"))
+        .env("TOOLCHAIN", bin)
+        .status()
+        .unwrap();
+    assert!(status.success(), "nib-build.sh");
+    assert!(exe.exists());
+}

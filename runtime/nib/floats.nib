@@ -13,13 +13,13 @@ const ZERO: u8 = 48
 
 fn assign(a: *near mut u16, value: u16) -> void:
     unsafe:
-        for at in range(0, LIMBS):
+        for at in 0..LIMBS:
             a[at] = 0
         a[0] = value
 
 fn copy(to: *near mut u16, source: *near mut u16) -> void:
     unsafe:
-        for at in range(0, LIMBS):
+        for at in 0..LIMBS:
             to[at] = source[at]
 
 # `a` times 2^places.
@@ -41,7 +41,7 @@ fn shift(a: *near mut u16, places: u16) -> void:
 fn multiply(a: *near mut u16, factor: u16) -> void:
     let mut carry: u32 = 0
     unsafe:
-        for at in range(0, LIMBS):
+        for at in 0..LIMBS:
             let product = u32(a[at]) * factor + carry
             a[at] = u16(product)
             carry = product >> 16
@@ -49,7 +49,7 @@ fn multiply(a: *near mut u16, factor: u16) -> void:
 fn add(a: *near mut u16, b: *near mut u16) -> void:
     let mut carry: u32 = 0
     unsafe:
-        for at in range(0, LIMBS):
+        for at in 0..LIMBS:
             let sum = u32(a[at]) + b[at] + carry
             a[at] = u16(sum)
             carry = sum >> 16
@@ -58,7 +58,7 @@ fn add(a: *near mut u16, b: *near mut u16) -> void:
 fn subtract(a: *near mut u16, b: *near mut u16) -> void:
     let mut borrow: u32 = 0
     unsafe:
-        for at in range(0, LIMBS):
+        for at in 0..LIMBS:
             let difference = u32(a[at]) - b[at] - borrow
             a[at] = u16(difference)
             borrow = (difference >> 16) & 1
@@ -171,7 +171,7 @@ fn print_float(words: *far u16, count: u16, places: u16, exponent: u16, bias: i1
         let biased = (top >> places) & exponent
         let high_fraction = top & ((u16(1) << places) - 1)
         let mut empty = high_fraction == 0
-        for word in range(0, count - 1):
+        for word in 0..count - 1:
             empty = empty && words[word] == 0
         if top >> 15 != 0 && !(biased == exponent && !empty):
             at = put(text, at, 45)
@@ -181,7 +181,7 @@ fn print_float(words: *far u16, count: u16, places: u16, exponent: u16, bias: i1
             at = put_text(text, at, "0.0")
         else:
             assign(numbers, 0)
-            for word in range(0, count - 1):
+            for word in 0..count - 1:
                 numbers[word] = words[word]
             numbers[count - 1] = high_fraction | (biased != 0 ? u16(1) << places : 0)
             let e = (biased != 0 ? i16(biased) : 1) - bias
@@ -198,24 +198,24 @@ fn decimal(text: *near mut u8, start: u16, digits: *near mut u8, length: u16, po
         if point >= -4 && point < 16:
             if point < 0:
                 at = put_text(text, at, "0.")
-                for _zero in range(0, -point - 1):
+                for _zero in 0..-point - 1:
                     at = put(text, at, ZERO)
-                for index in range(0, length):
+                for index in 0..length:
                     at = put(text, at, digits[index])
                 return at
             let whole = u16(point) + 1
-            for index in range(0, whole):
+            for index in 0..whole:
                 at = put(text, at, index < length ? digits[index] : ZERO)
             at = put(text, at, 46)
             if length <= whole:
                 return put(text, at, ZERO)
-            for index in range(whole, length):
+            for index in whole..length:
                 at = put(text, at, digits[index])
             return at
         at = put(text, at, digits[0])
         if length > 1:
             at = put(text, at, 46)
-            for index in range(1, length):
+            for index in 1..length:
                 at = put(text, at, digits[index])
         at = put(text, at, 101)
         at = put(text, at, point < 0 ? 45 : 43)

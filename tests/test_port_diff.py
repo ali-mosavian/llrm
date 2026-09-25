@@ -127,7 +127,7 @@ def test_a_modern_source_reaches_both_compilers_through_one_frontend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """--modern did not exist: the modern compile path had no instrument at all."""
-    source = tmp_path / "one.nbl"
+    source = tmp_path / "one.nib"
     source.write_text("fn main() -> i16:\n    return 0\n")
     source.with_suffix(".flags").write_text("--entry\nmain\n-O\ns\n")
     commands, frontends = [], []

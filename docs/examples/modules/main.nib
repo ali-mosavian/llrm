@@ -1,5 +1,5 @@
 # Modules: this file is `main`; `import shapes.geometry` reads
-# shapes/geometry.nbl beside it. Imported names stay qualified.
+# shapes/geometry.nib beside it. Imported names stay qualified.
 
 import shapes.geometry
 import report
