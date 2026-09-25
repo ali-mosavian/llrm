@@ -164,9 +164,26 @@ pub struct MemRef {
     /// The source language promises this access stays inside one object.
     /// Not part of equality or hashing, as Python's `compare=False`.
     pub inbounds: bool,
+    /// The value holding the offset of the object's first byte, as the
+    /// frontend promised it: the effective offset, `base` plus `addr`, is
+    /// that plus a non-negative offset inside the object, and the object ends
+    /// inside its segment. A weak reference: it keeps nothing alive, a pass
+    /// that renames values renames it, and one that cannot drops it. Not part
+    /// of equality or hashing.
+    pub origin: Option<Value>,
 }
 
 impl MemRef {
+    /// This reference with every value it names renamed by `value`.
+    pub fn with_values(&self, mut value: impl FnMut(Value) -> Value) -> Self {
+        Self {
+            base: self.base.map(&mut value),
+            segment: self.segment.map(&mut value),
+            origin: self.origin.map(&mut value),
+            ..self.clone()
+        }
+    }
+
     pub fn new(addr: Option<Addr>, width: u32) -> Self {
         Self {
             addr,
@@ -185,6 +202,7 @@ impl MemRef {
             provenance: None,
             volatile: false,
             inbounds: false,
+            origin: None,
         }
     }
 
@@ -2001,12 +2019,14 @@ pub(crate) fn frame_bounded(body: MirBody, pointers: bool) -> MirBody {
 fn rehomed(reference: &MemRef, namer: &mut Renamer, at: i64) -> MemRef {
     let base = reference.base.map(|value| namer.current(value, at));
     let segment = reference.segment.map(|value| namer.current(value, at));
-    if base == reference.base && segment == reference.segment {
+    if base == reference.base && segment == reference.segment && reference.origin.is_none() {
         reference.clone()
     } else {
         let mut renamed = reference.clone();
         renamed.base = base;
         renamed.segment = segment;
+        // Renaming here would invent a value where the origin has none.
+        renamed.origin = None;
         renamed
     }
 }
@@ -2562,7 +2582,12 @@ impl Repr for MemRef {
                 ("provenance", self.provenance.repr()),
                 ("volatile", self.volatile.repr()),
                 ("inbounds", self.inbounds.repr()),
-            ],
+            ]
+            .into_iter()
+            // Python's MemRef has no origin: spelled only where there is one.
+            .chain(self.origin.map(|origin| ("origin", origin.repr())))
+            .collect::<Vec<_>>()
+            .as_slice(),
         )
     }
 }

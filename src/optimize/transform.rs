@@ -3269,12 +3269,7 @@ pub(crate) fn _reparented(body: &MirBody, crossed: &crate::support::pyset::PySet
     }
 
     let value = |one: Value| -> Value { instead.get(&one).copied().unwrap_or(one) };
-    let cell = |one: &MemRef| -> MemRef {
-        let mut out = one.clone();
-        out.base = one.base.map(value);
-        out.segment = one.segment.map(value);
-        out
-    };
+    let cell = |one: &MemRef| -> MemRef { one.with_values(value) };
     let arg = |one: &Arg| -> Arg {
         match one {
             Arg::Held(held) if instead.contains_key(&held.value) => Arg::Held(Held {

@@ -806,7 +806,7 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds, origin }) => {
                 let type_ = self.types[type_id];
                 let pointer_type = self.value_types[base];
                 let parameter = self.parameter_numbers.get(base).copied();
@@ -825,6 +825,7 @@ impl<'a> _Scope<'a> {
                             provenance,
                             inbounds: *inbounds,
                             volatile: *volatile,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
                     }));
@@ -890,6 +891,7 @@ impl<'a> _Scope<'a> {
                             provenance,
                             inbounds: *inbounds,
                             volatile: *volatile,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -936,6 +938,7 @@ impl<'a> _Scope<'a> {
                             base_width: 2,
                             provenance,
                             inbounds: *inbounds,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -971,6 +974,7 @@ impl<'a> _Scope<'a> {
                         r#type: *type_id,
                         volatile: false,
                         inbounds: false,
+                        origin: None,
                     }),
                     before,
                 )

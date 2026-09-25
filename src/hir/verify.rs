@@ -149,9 +149,12 @@ fn _operand_type(
             }
             Ok(*r#type)
         }
-        model::Operand::IndirectPlace(model::IndirectPlace { base, r#type, .. }) => {
+        model::Operand::IndirectPlace(model::IndirectPlace { base, r#type, origin, .. }) => {
             if !values.contains_key(base) {
                 invalid!("unknown pointer value {base}");
+            }
+            if let Some(origin) = origin.filter(|origin| !values.contains_key(origin)) {
+                invalid!("unknown origin value {origin}");
             }
             Ok(*r#type)
         }
@@ -408,6 +411,13 @@ fn _function(
                 .collect::<Result<Vec<_>, _>>()?;
             if operand_types.iter().any(|one| !types.contains_key(one)) {
                 invalid!("{prefix}: instruction {} has an unknown operand type", instruction.id);
+            }
+            for operand in &instruction.operands {
+                if let model::Operand::IndirectPlace(model::IndirectPlace { origin: Some(origin), .. }) = operand {
+                    if types.get(&values[origin].r#type).is_none_or(|one| one.width != 2) {
+                        invalid!("{prefix}: origin value {origin} is not a word offset");
+                    }
+                }
             }
             for (index, operand) in instruction.operands.iter().enumerate() {
                 let type_id = operand_types[index];

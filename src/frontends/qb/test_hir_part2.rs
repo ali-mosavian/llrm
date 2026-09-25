@@ -917,3 +917,25 @@ fn test_for_bounds_survive_resume_statement_side_entries() {
     assert!(lowered(&source).iter().all(|function| mir::verify(&function.body).is_empty()));
     assert!(!object_bytes(&source, "FORRES.BAS").expect("emits").is_empty());
 }
+
+/// A zero-based dynamic array's element names the descriptor offset its
+/// frontend proved is the array's first byte; the fact reaches MIR.
+#[test]
+fn test_a_zero_based_element_reaches_mir_with_its_origin() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = written(&directory, "T.BAS", b"DEFINT A-Z\r\nSUB t\r\nDIM a(9)\r\nx = a(3)\r\nEND SUB\r\n");
+    let program = parsed(&source);
+    let lowered = lowered(&program);
+    let body = lowered
+        .iter()
+        .find(|one| one.name.rsplit('.').next().is_some_and(|name| name.eq_ignore_ascii_case("T")))
+        .expect("T is lowered");
+    let origins: Vec<mir::Value> = ops(body)
+        .iter()
+        .flat_map(|op| op.loads.iter().chain(&op.stores))
+        .filter_map(|reference| reference.origin)
+        .collect();
+    assert_eq!(origins.len(), 1, "{origins:?}");
+    let defined = ops(body).iter().any(|op| op.defines.contains(&origins[0]));
+    assert!(defined, "the origin names a value the body defines");
+}

@@ -172,6 +172,7 @@ pub(crate) fn substituted(op: &Op, swap: &BTreeMap<u32, Value>) -> Result<Op, Su
             .segment
             .map(|value| provider(value, swap))
             .transpose()?;
+        reference.origin = reference.origin.and_then(|value| provider(value, swap).ok());
         Ok(reference)
     }
 
@@ -297,7 +298,7 @@ pub(crate) fn renumbered(body: &MirBody, variable: u32) -> MirBody {
     }
 
     let named = |one: Value| swap.get(&one.id).copied().unwrap_or(one);
-    let reference = |one: &MemRef| MemRef { base: one.base.map(named), segment: one.segment.map(named), ..one.clone() };
+    let reference = |one: &MemRef| one.with_values(named);
     let operand = |one: &Arg| match one {
         Arg::Held(Held { value, width }) => Arg::Held(Held { value: named(*value), width: *width }),
         Arg::Cell(Cell { r#ref }) => Arg::Cell(Cell { r#ref: reference(r#ref) }),

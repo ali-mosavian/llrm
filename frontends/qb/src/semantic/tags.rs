@@ -26,9 +26,11 @@ pub(super) enum Tag {
     Release { descriptor: u32 },
     /// A load of one descriptor field.
     DescriptorField { descriptor: u32, field: Slot },
-    /// An element's address or offset from `descriptor`: the origin plus the
-    /// scaled subscripts, or the checked runtime call that computes both.
-    ElementOffset { descriptor: u32 },
+    /// An element's address or offset from `descriptor`: the descriptor's
+    /// offset at +0Ah plus the scaled subscripts, or the checked runtime call
+    /// that computes both. `origin` is that +0Ah value where the result is a
+    /// word offset or near pointer built on it.
+    ElementOffset { descriptor: u32, origin: Option<u32> },
     /// DEF SEG.
     SetSegment,
     /// A read of the DEF SEG segment, here or inside the runtime call.
@@ -38,10 +40,11 @@ pub(super) enum Tag {
     Invoke { arguments: Vec<Passing> },
 }
 
-/// The descriptor a DIM or REDIM fills, and each dimension's bounds.
+/// The descriptor a DIM or REDIM fills, and each dimension record's bounds
+/// in record order: B$DDIM fills record 0 from the pair pushed last.
 pub(super) struct Shape {
     pub descriptor: u32,
-    pub bounds: Vec<(Operand, Operand)>,
+    pub records: Vec<(Operand, Operand)>,
     pub element: u32,
 }
 
@@ -55,8 +58,8 @@ pub(super) enum Slot {
     Rank,
     /// The data offset at +0Ah, already less every lower bound's elements.
     Origin,
-    /// Dimension record `k`'s element count. Records run in reverse source
-    /// order: record 0 is the last source dimension.
+    /// Dimension record `k`'s element count; `Shape::records` says which
+    /// source dimension each record holds.
     Count(usize),
     /// Dimension record `k`'s lower bound.
     Lower(usize),
@@ -151,7 +154,7 @@ mod tests {
             })
             .collect();
         assert_eq!(shapes.len(), 1);
-        assert_eq!(shapes[0].bounds.iter().map(|(low, high)| (integer(low), integer(high))).collect::<Vec<_>>(), [
+        assert_eq!(shapes[0].records.iter().map(|(low, high)| (integer(low), integer(high))).collect::<Vec<_>>(), [
             (Some(0), Some(320))
         ]);
         let offset = insns
@@ -170,7 +173,7 @@ mod tests {
         let lower: Vec<Option<i64>> = procedure(&all, "s")
             .iter()
             .filter_map(|one| match &one.tag {
-                Some(Tag::Reallocate(shape)) => Some(integer(&shape.bounds[0].0)),
+                Some(Tag::Reallocate(shape)) => Some(integer(&shape.records[0].0)),
                 _ => None,
             })
             .collect();

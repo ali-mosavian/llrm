@@ -316,6 +316,11 @@ pub struct IndirectPlace {
     pub volatile: bool,
     /// The language promises the access stays inside one object.
     pub inbounds: bool,
+    /// The value holding the offset of that object's first byte, where the
+    /// frontend knows it: the pointer's offset plus `offset` is then that
+    /// value plus a non-negative offset inside the object, and the object
+    /// ends inside its segment.
+    pub origin: Option<i64>,
 }
 
 str_enum!(DescriptorField {

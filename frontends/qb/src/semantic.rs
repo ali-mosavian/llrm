@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
@@ -213,6 +214,9 @@ struct Function {
     error_handler_local: bool,
     external_entries: Vec<u32>,
     linkage: &'static str,
+    // Each element pointer whose offset is its array's first byte plus a
+    // non-negative in-object offset: the pointer's origin value.
+    origins: BTreeMap<u32, u32>,
 }
 
 struct Compiler {
@@ -325,7 +329,7 @@ pub fn compile_with_options(
     mbf: bool,
     alternate_math: bool,
 ) -> Result<String, SemanticError> {
-    Ok(built(
+    let mut compiler = built(
         module,
         module_name,
         dialect,
@@ -336,8 +340,9 @@ pub fn compile_with_options(
         unchecked_bounds,
         mbf,
         alternate_math,
-    )?
-    .json())
+    )?;
+    shapes::applied(&mut compiler);
+    Ok(compiler.json())
 }
 
 /// Every procedure of `module` as HIR, before emission.
@@ -1078,6 +1083,7 @@ impl Compiler {
             error_handler_local: self.error_handler_local,
             external_entries,
             linkage,
+            origins: BTreeMap::new(),
         });
     }
 
@@ -1615,7 +1621,8 @@ impl Compiler {
         }
         order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
         self.emit_call("B$DDIM", Vec::new(), operands, order, false);
-        self.tag_last(Tag::Allocate(Shape { descriptor, bounds, element }));
+        // Pushed last dimension first: the records run in source order.
+        self.tag_last(Tag::Allocate(Shape { descriptor, records: bounds, element }));
         Ok(())
     }
 
@@ -4068,7 +4075,7 @@ impl Compiler {
             let offset = self.value(INTEGER);
             let selector = self.value(INTEGER);
             self.emit_call("B$HARY", vec![offset, selector], operands, order, false);
-            self.tag_last(Tag::ElementOffset { descriptor });
+            self.tag_last(Tag::ElementOffset { descriptor, origin: None });
             let pointer_type = self.whole_pointer_type(element);
             let pointer = self.value(pointer_type);
             self.emit(
@@ -4147,7 +4154,7 @@ impl Compiler {
                 vec![offset],
                 vec![Operand::Value(adjusted), Operand::Value(bytes)],
             );
-            self.tag_last(Tag::ElementOffset { descriptor });
+            self.tag_last(Tag::ElementOffset { descriptor, origin: Some(adjusted) });
             let pointer = self.value(pointer_type);
             self.emit(
                 "concat",
@@ -4163,7 +4170,10 @@ impl Compiler {
                 vec![pointer],
                 vec![Operand::Value(data), Operand::Value(bytes)],
             );
-            self.tag_last(Tag::ElementOffset { descriptor });
+            // Only a near pointer is the +0Ah offset itself; a whole pointer
+            // is +0's offset and selector.
+            let origin = (address == "near").then_some(data);
+            self.tag_last(Tag::ElementOffset { descriptor, origin });
             pointer
         };
         Ok(pointer)
@@ -5062,7 +5072,9 @@ impl Compiler {
         let descriptor = self.descriptor_pointer(&variable)?;
         operands.push(Operand::Value(descriptor));
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
-        self.tag_last(Tag::Reallocate(Shape { descriptor, bounds, element }));
+        // Pushed in source order: the records run in reverse.
+        let records = bounds.into_iter().rev().collect();
+        self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
         Ok(())
     }
 
@@ -7628,7 +7640,7 @@ impl Compiler {
                         if operand_index != 0 {
                             out.push(',');
                         }
-                        operand_json(&mut out, operand);
+                        operand_json(&mut out, operand, &function.origins);
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -7642,7 +7654,7 @@ impl Compiler {
                     if index != 0 {
                         out.push(',');
                     }
-                    operand_json(&mut out, operand);
+                    operand_json(&mut out, operand, &function.origins);
                 }
                 out.push_str("],\"targets\":[");
                 numbers(&mut out, &terminator.targets);
@@ -8198,7 +8210,7 @@ fn numbers(out: &mut String, values: &[u32]) {
     }
 }
 
-fn operand_json(out: &mut String, operand: &Operand) {
+fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32>) {
     match operand {
         Operand::Value(value) => write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap(),
         Operand::Constant(type_id, Number::Integer(value)) => write!(
@@ -8218,7 +8230,7 @@ fn operand_json(out: &mut String, operand: &Operand) {
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand);
+                operand_json(out, operand, origins);
             }
             write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
         }
@@ -8233,7 +8245,7 @@ fn operand_json(out: &mut String, operand: &Operand) {
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand);
+                operand_json(out, operand, origins);
             }
             write!(
                 out,
@@ -8247,11 +8259,13 @@ fn operand_json(out: &mut String, operand: &Operand) {
             type_id,
             volatile,
             inbounds,
-        } => write!(
-            out,
-            "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}"
-        )
-        .unwrap(),
+        } => {
+            write!(out, "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            if let Some(origin) = origins.get(base).filter(|_| *inbounds) {
+                write!(out, "\"origin\":{origin},").unwrap();
+            }
+            write!(out, "\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}").unwrap();
+        }
     }
 }
 
