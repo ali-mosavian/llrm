@@ -1071,7 +1071,8 @@ impl Compiler {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        if self.dialect.explicit_declarations() {
+        // The prelude's warnings would name lines of a file the user never wrote.
+        if self.dialect.explicit_declarations() && !name.starts_with(PRELUDE_PREFIX) {
             self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
         }
         if id != 1 && self.dialect.zeroes_locals() {

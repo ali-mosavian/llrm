@@ -80,3 +80,10 @@ fn microsoft_profiles_read_f_before_a_string_as_the_name_f() {
     assert!(matches!(kinds(Dialect::VbDos).as_slice(), [TokenKind::Identifier(f), TokenKind::String(x), _] if f == "F" && x == "x"));
     assert!(matches!(kinds(Dialect::Quickr).as_slice(), [TokenKind::FormatString(_), _]));
 }
+
+#[test]
+fn the_f_string_prelude_adds_no_warnings() {
+    // QUICKR_REPR$ warned about POWER, under the user's file name.
+    let found = warnings("DIM d AS DOUBLE\nd = 1\nPRINT f\"{d} {d:.2f} {d:g} {d:e}\"\n");
+    assert!(found.is_empty(), "{found:?}");
+}

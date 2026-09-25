@@ -216,6 +216,7 @@ END FUNCTION
 FUNCTION QUICKR_REPR$ (BYVAL value AS DOUBLE, BYVAL narrow AS INTEGER)
     DIM magnitude AS DOUBLE, digits AS STRING, count AS INTEGER, power AS INTEGER, text AS STRING, back AS DOUBLE
     magnitude = ABS(value)
+    power = 0
     IF magnitude = 0 THEN
         text = "0.0"
     ELSE
