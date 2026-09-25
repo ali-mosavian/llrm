@@ -421,3 +421,33 @@ fn plain_floats_print_as_python_repr() {
     let source = "DIM s AS SINGLE, d AS DOUBLE\ns = 0.1\nd = 0.1#\nd = d + 0.2#\nPRINT f\"{s} {d} {-s}\"\n";
     assert_eq!(printed(source), "0.1 0.30000000000000004 -0.1\n");
 }
+
+/// The listing of procedure `name` in `source` compiled as `dialect`.
+fn procedure_listing(source: &str, dialect: &str, name: &str) -> String {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "frame.bas", source.as_bytes());
+    let program = qb_driver::parsed(&path, dialect, "vbdos", None, &[], "column-major", false, false, false, false, false)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let listing = super::test_hir::listing(&program);
+    super::test_hir::between(&listing, &format!("{name} proc far"), &format!("{name} endp")).to_owned()
+}
+
+#[test]
+fn quickr_procedures_frame_and_zero_fill_themselves() {
+    let source = "SUB s (x AS INTEGER)\nDIM a AS LONG, b AS DOUBLE\na = x\nb = a\nx = b\nEND SUB\n";
+    let own = procedure_listing(source, "quickr", "S");
+    assert!(!own.contains("B$ENRA") && !own.contains("B$EXSA"), "{own}");
+    // rep stosw over the locals, as the module body's inline frame does.
+    assert!(own.contains("0f3h,0abh"), "{own}");
+    // VBDOS keeps the runtime's frame.
+    assert!(procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
+}
+
+#[test]
+fn quickr_keeps_the_runtime_frame_where_the_runtime_needs_it() {
+    let strings = "SUB s\nDIM t AS STRING\nt = \"x\"\nEND SUB\n";
+    let handler = "SUB s\nDIM i AS INTEGER\nON LOCAL ERROR GOTO h\ni = 1\nEXIT SUB\nh:\nRESUME NEXT\nEND SUB\n";
+    for source in [strings, handler] {
+        assert!(procedure_listing(source, "quickr", "S").contains("B$ENRA"), "{source}");
+    }
+}

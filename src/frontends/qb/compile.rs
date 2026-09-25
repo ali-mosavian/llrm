@@ -938,6 +938,17 @@ fn _runtime_frame(
     ))
 }
 
+/// QuickrBASIC frames a procedure itself, zero-filling its locals inline,
+/// where the runtime needs no frame of its own: no error handler or RESUME
+/// target walks the runtime's frame chain to it, and no local STRING asks
+/// B$ENRA for a VBDOS string handle. The runtime's stack check goes with it.
+fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
+    program.dialect == model::Dialect::Quickr
+        && function.error_handler.is_none()
+        && function.external_entries.is_empty()
+        && _temporary_string_slots(module, function) == 0
+}
+
 /// Count frame-owned dynamic STRING descriptors for B$ENRA.
 ///
 /// Runtime-produced descriptors live on the runtime temporary chain and do
@@ -1558,7 +1569,13 @@ pub fn assembled(
         let mut final_body = _source_instructions(&final_.body);
         let module_body = function.name == "__main";
         let public = !module_body && function.linkage == model::FunctionLinkage::External;
-        if !module_body {
+        let mut native_reserve = 0;
+        if !module_body && _inline_frame(program, module, function) {
+            let initialize;
+            (final_body, initialize) = _initialize_frame(&final_body, reserve)?;
+            callees.extend(initialize);
+            native_reserve = reserve;
+        } else if !module_body {
             let (framed, runtime_frame) =
                 _runtime_frame(&final_body, reserve, program.runtime, _temporary_string_slots(module, function))?;
             final_body = framed;
@@ -1656,9 +1673,9 @@ pub fn assembled(
             // shell to reserve those bytes first shifts FR_BFRAME,
             // FR_CLOCALS, and FR_GOSUB away from their documented offsets;
             // ON ERROR then reads a spill as the local count and reports
-            // Out of stack space.  Every nonzero reserve selected the
-            // runtime-frame path above, so the native shell owns none.
-            reserve: 0,
+            // Out of stack space.  So the native shell reserves only for a
+            // QuickrBASIC inline frame, which has no runtime header.
+            reserve: native_reserve,
             callees,
             interrupt: None,
         });
