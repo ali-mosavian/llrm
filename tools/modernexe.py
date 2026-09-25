@@ -23,7 +23,7 @@ from qbopt.cfront import compile as cfront
 from qbopt.frontend.modern import compile as modern
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "runtime" / "modern"
+RUNTIME = ROOT / "runtime" / "nib"
 DEFAULT_JWASM = Path.home() / "work" / "other" / "d32x" / "toolchains" / "native" / "bin" / "jwasm"
 
 

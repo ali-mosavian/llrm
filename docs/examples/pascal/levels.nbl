@@ -1,0 +1,32 @@
+# Mixer levels: a Pascal assembly library measures, clamps and scales them,
+# calling back into the rule this program exports.
+
+@repr("c16", pack=1)
+struct Range:
+    low: i16
+    high: i16
+
+extern "pascal16":
+    fn span(values: *far i16, count: u16) -> Range
+    fn scale(value: i16, numerator: i16, denominator: i16) -> i16
+    fn clamp_all(values: *far mut i16, count: u16, low: i16, high: i16) -> void
+
+export "pascal16":
+    fn clamp(value: i16, low: i16, high: i16) -> i16:
+        if value < low:
+            return low
+        if value > high:
+            return high
+        return value
+
+fn main() -> i16:
+    let mut levels: i16[6] = [-40, 15, 70, 99, 140, 260]
+    unsafe:
+        let before = span(&levels, 6)
+        clamp_all(&mut levels, 6, 0, 100)
+        let after = span(&levels, 6)
+        print(f"{before.low}..{before.high} clamped to {after.low}..{after.high}")
+    for level in levels:
+        unsafe:
+            print(f"{level:3}% -> {scale(level, 255, 100):3}")
+    return 0

@@ -7,14 +7,21 @@ description = "Low Level Real Machine: compiler suite for 16-bit real-mode DOS w
 default-run = "llrm-qb"
 
 [dependencies]
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "instr_info", "nasm"] }
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "block_encoder", "op_code_info", "instr_info", "nasm"] }
 indexmap = "2"
 num-bigint = "0.4"
 num-traits = "0.2"
 rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
+
+[features]
+default = ["toolchain"]
+# Open Watcom's wccq, jwasm, jwlink and DOSBox-X, which build.rs bootstraps.
+toolchain = []
 
 [dev-dependencies]
 regex = "1"
@@ -32,12 +39,20 @@ name = "llrm-omf"
 path = "src/bin/llrm-omf.rs"
 
 [[bin]]
-name = "llrm-modern"
-path = "src/bin/llrm-modern.rs"
+name = "llrm-nib"
+path = "src/bin/llrm-nib.rs"
 
 [[bin]]
-name = "modernfront"
-path = "src/bin/modernfront.rs"
+name = "llrm-run"
+path = "src/bin/llrm-run.rs"
+
+[[bin]]
+name = "nibfront"
+path = "src/bin/nibfront.rs"
+
+[[bin]]
+name = "nib-lsp"
+path = "src/bin/nib-lsp.rs"
 
 
 # Release, bench and `test --release` inherit this; only a clean rebuilds all.

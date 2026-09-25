@@ -1,0 +1,59 @@
+# Owned strings (section 13): building, joining and comparing them, and
+# copying a view into one.
+
+import buffers
+
+# `text` with `count` more bytes after it; it may move.
+pub fn append_bytes(text: *near mut u8, bytes: *far u8, count: u16) -> *near mut u8:
+    unsafe:
+        let length = *buffers.length(text)
+        let grown = buffers.reserve(text, length + count, 1)
+        buffers.copy(grown.offset(length), bytes, count)
+        *buffers.length(grown) = length + count
+        grown[length + count] = 0
+        return grown
+
+# -1, 0 or 1 as `left` sorts before, with or after `right`, byte by byte.
+fn compare(left: *far u8, left_length: u16, right: *far u8, right_length: u16) -> i8:
+    let shorter = left_length < right_length ? left_length : right_length
+    unsafe:
+        for at in range(0, shorter):
+            if left[at] != right[at]:
+                return left[at] < right[at] ? -1 : 1
+    if left_length == right_length:
+        return 0
+    return left_length < right_length ? -1 : 1
+
+export "cdecl16":
+    @link_name("N$TAPP")
+    fn append(text: *near mut u8, more: *near mut u8) -> *near mut u8:
+        unsafe:
+            return append_bytes(text, more.far(), *buffers.length(more))
+
+    @link_name("N$TCAT")
+    fn concat(left: *near mut u8, right: *near mut u8) -> *near mut u8:
+        unsafe:
+            let length = *buffers.length(left)
+            let joined = buffers.allocate(length + *buffers.length(right), 1)
+            buffers.copy(joined, left.far(), length)
+            *buffers.length(joined) = length
+            return append(joined, right)
+
+    @link_name("N$TCMP")
+    fn compare_text(left: *near mut u8, right: *near mut u8) -> i8:
+        unsafe:
+            return compare(left.far(), *buffers.length(left), right.far(), *buffers.length(right))
+
+    # An owned copy of a `&string` view.
+    @link_name("N$VCPY")
+    fn view_copy(data: *far u8, length: u16) -> *near mut u8:
+        let copy = buffers.allocate(length, 1)
+        buffers.copy(copy, data, length)
+        unsafe:
+            copy[length] = 0
+            *buffers.length(copy) = length
+        return copy
+
+    @link_name("N$VCMP")
+    fn compare_views(left: *far u8, left_length: u16, right: *far u8, right_length: u16) -> i8:
+        return compare(left, left_length, right, right_length)

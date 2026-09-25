@@ -174,7 +174,7 @@ fn test_hir_data_relocations_are_typed_and_bounded() {
     let module = &source.modules[0];
     let literal = DataObject {
         readonly: true,
-        relocations: vec![DataRelocation { at: 2, target: 7, addend: 4, address: AddressKind::Near }],
+        relocations: vec![DataRelocation { at: 2, target: 7, addend: 4, address: AddressKind::Near, code: false }],
         ..DataObject::new(7, "$string7", vec![3, 0, 0, 0, 97, 98, 99])
     };
     let with = |object_: DataObject| Program {
@@ -183,7 +183,7 @@ fn test_hir_data_relocations_are_typed_and_bounded() {
     };
     verify(&with(literal.clone())).unwrap();
     let bad = DataObject {
-        relocations: vec![DataRelocation { at: 6, target: 7, addend: 0, address: AddressKind::Near }],
+        relocations: vec![DataRelocation { at: 6, target: 7, addend: 0, address: AddressKind::Near, code: false }],
         ..literal
     };
     assert!(verify(&with(bad)).unwrap_err().0.contains("relocation exceeds initializer"));
@@ -315,7 +315,7 @@ fn test_canonical_mir_dump_keeps_call_identity() {
     let void = Type::new(0, "void", TypeKind::Void, 0);
     let call_instruction = Instruction { callee: Some("TWICE&".to_owned()), ..instruction(1, Op::Call, &[], vec![]) };
     let block = returning(1, vec![call_instruction]);
-    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None };
+    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Pointer };
     let function = Function { calls: vec![call], ..Function::new(1, "caller", 0, vec![], vec![], vec![block], 1) };
     let source = vbdos(vec![Module::new(1, "calls", vec![void], vec![function])]);
     assert!(mir_text(&lower(&source).unwrap()[0]).contains("call TWICE&()"));
@@ -406,6 +406,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             cleanup: StackCleanup::Callee,
             distance: CallDistance::Far,
             callee: Some(1),
+            float_return: FloatReturn::Pointer,
         }],
         ..Function::new(1, "CALLER", 0, values(&[(1, 2)]), vec![], vec![returning(1, vec![read_call])], 1)
     };

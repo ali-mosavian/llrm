@@ -62,11 +62,15 @@ pub fn semantics(op: &Op) -> Option<Semantics> {
                     }
                 }
             }
-            if !matches!(name, "fstp" | "fistp") || op.stores.len() != 1 || !op.loads.is_empty() {
+            if !matches!(name, "fstp" | "fistp" | "fisttp") || op.stores.len() != 1 || !op.loads.is_empty() {
                 return None;
             }
-            let target = _format(op.stores[0].width, name == "fistp")?;
-            let rounding = if target == Format::Extended80 { Rounding::None } else { Rounding::Dynamic };
+            let target = _format(op.stores[0].width, name != "fstp")?;
+            let rounding = match (name, target) {
+                (_, Format::Extended80) => Rounding::None,
+                ("fisttp", _) => Rounding::TowardZero,
+                _ => Rounding::Dynamic,
+            };
             Some(Semantics::new(x87, target, Precision::Destination, rounding))
         }
         Some(OpCode::Operation(Operation::FloatArith)) => {

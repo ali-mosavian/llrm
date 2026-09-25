@@ -523,7 +523,7 @@ fn test_module_static_numeric_array_has_a_relocated_basic_descriptor() {
     );
 }
 
-/// QB nbody recomputed ``current * 16`` after C and modern had reduced it.
+/// QB nbody recomputed ``current * 16`` after C and Nib had reduced it.
 ///
 /// A proved array walk must carry the byte offset regardless of which source
 /// frontend formed the MIR.  One hundred iterations keep this witness as a

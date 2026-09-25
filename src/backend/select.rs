@@ -647,6 +647,11 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("cdq", "CDQ"),
         // PDS /Ot closes a procedure with it: `mov sp,bp` then `pop bp`.
         ("leave", "LEAVEW"),
+        // an interrupt handler's entry and exit
+        ("pushad", "PUSHAD"),
+        ("popad", "POPAD"),
+        ("cld", "CLD"),
+        ("iret", "IRETW"),
         // the x87 ones that take no operand at all
         ("fsqrt", "FSQRT"),
         ("fchs", "FCHS"),
@@ -1788,7 +1793,10 @@ pub fn emit(
     }
     if op == Operation::Return {
         if sources.is_empty() {
-            return if what.name.as_deref() == Some("ret") { bare("ret", at) } else { ret_far(0, at) };
+            return match what.name.as_deref() {
+                Some(name @ ("ret" | "iret")) => bare(name, at),
+                _ => ret_far(0, at),
+            };
         }
         return match &sources[0] {
             Loc::Imm(imm) => ret_far(imm.value, at),

@@ -144,8 +144,8 @@ They are still to be ported, from `tools/dump.py` and `tools/stages.py`.
 | 3 | `qbopt/optimize/wholestores.py` | 37 | `src/optimize/wholestores.rs` | ported (C path) | - |
 | 3 | `qbopt/analysis/peelsize.py` | 102 | `src/analysis/peelsize.rs` | ported (C path) | - |
 | 3 | `qbopt/optimize/canonical.py` | 80 | `src/optimize/canonical.rs` | ported (C path) | - |
-| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontends/modern/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
-| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontends/modern/driver.rs` | ported | test_modern_frontend |
+| 4 | `qbopt/frontend/modern/compile.py` | 187 | `src/frontends/nib/compile.rs` (+ `tools/modernstages.py` as `modernstages.rs`) | ported | test_farload, test_hir_execute, test_modern_frontend, test_modernstages |
+| 4 | `qbopt/frontend/modern/driver.py` | 53 | `src/frontends/nib/driver.rs` | ported | test_modern_frontend |
 | 4 | `qbopt/frontend/qb/__init__.py` | 23 | `src/frontends/qb/mod.rs` | ported | test_hir, test_modern_frontend, test_qb_frontend_command, test_qbstages |
 | 4 | `qbopt/frontend/qb/__main__.py` | 64 | `src/frontends/qb/main.rs` (`llrm-qb`) | ported | - |
 | 4 | `qbopt/frontend/qb/abi.py` | 1339 | `src/frontends/qb/abi.rs` | ported | test_hir |

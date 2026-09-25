@@ -1,0 +1,41 @@
+# Planetary figures in f64 and a thermometer's readings in f32. A float
+# prints as the shortest decimal that reads back as the same value.
+
+const G: f64 = 6.674e-11
+const SUN: f64 = 1.989e30
+const DAY: f64 = 86400.0
+
+struct Planet:
+    name: string
+    mass: f64      # kg
+    radius: f64    # m
+    orbit: f64     # m from the sun
+
+# Newton's method, from a guess at or above the root.
+fn root(x: f64) -> f64:
+    let mut guess = x > 1.0 ? x : 1.0
+    for _step in range(0, 80):
+        guess = (guess + x / guess) / 2.0
+    return guess
+
+fn report(p: &Planet) -> void:
+    let gravity = G * p.mass / (p.radius * p.radius)
+    let speed = root(G * SUN / p.orbit)
+    let year = 2.0 * 3.141592653589793 * p.orbit / speed / DAY
+    print(f"{p.name}: g {gravity} m/s2, orbit {speed} m/s, year {year} days")
+
+fn main() -> i16:
+    let planets: Planet[3] = [
+        Planet(name="Mercury", mass=3.301e23, radius=2.4397e6, orbit=5.791e10),
+        Planet(name="Earth", mass=5.972e24, radius=6.371e6, orbit=1.496e11),
+        Planet(name="Jupiter", mass=1.898e27, radius=6.9911e7, orbit=7.785e11),
+    ]
+    for p in planets:
+        report(p)
+    print(f"G {G}, sun {SUN} kg, one part in {1.0 / SUN}")
+    let readings: f32[4] = [21.5, 21.75, -3.2, 0.1]
+    let mut total: f32 = 0.0
+    for r in readings:
+        total += r
+    print(f"thermometer mean {total / 4.0} C, first {readings[0]}, zero {total * 0.0}")
+    return 0

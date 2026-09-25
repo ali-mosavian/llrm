@@ -17,7 +17,7 @@ program; [targets](docs/targets.md) has the evidence and current gaps.
 | --- | --- |
 | `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
 | `llrm-c` | C, through a patched Open Watcom front end (`owshim/`) |
-| `llrm-modern` | llrm's own language; see [the language](docs/modern-language.md) |
+| `llrm-nib` | llrm's own language; see [the language](docs/nib-language.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
 
 `llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
@@ -38,7 +38,7 @@ sudo apt install build-essential git autoconf automake libtool libpng-dev libpca
 cargo build --release
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
 target/release/llrm-c program.c --opt -o PROGRAM.OBJ
-target/release/llrm-modern program.mod -o PROGRAM.OBJ
+target/release/llrm-nib program.nbl -o PROGRAM.OBJ
 target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
 ```
 

@@ -9,8 +9,8 @@ from qbopt.frontend.modern import driver
 from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
-NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
-CONTROL = ROOT / "fixtures" / "modern" / "control.mod"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.nbl"
+CONTROL = ROOT / "fixtures" / "modern" / "control.nbl"
 
 
 def test_nbody_runs_from_source_through_hir_and_prints_fixed_values() -> None:
@@ -53,7 +53,7 @@ def test_internal_calls_run_through_the_same_hir_executor() -> None:
 
 def test_local_struct_copy_and_compound_assignment_have_value_semantics(tmp_path: Path) -> None:
     """A fieldwise store used to overwrite the source before a swapped field read."""
-    source = tmp_path / "struct_values.mod"
+    source = tmp_path / "struct_values.nbl"
     source.write_text(
         "struct point:\n"
         "    x: i16\n"
@@ -71,7 +71,7 @@ def test_local_struct_copy_and_compound_assignment_have_value_semantics(tmp_path
 
 def test_context_typed_struct_literals_support_named_and_positional_fields(tmp_path: Path) -> None:
     """Nested aggregate initializers once repeated every nominal struct name."""
-    source = tmp_path / "aggregate_literals.mod"
+    source = tmp_path / "aggregate_literals.nbl"
     source.write_text(
         "struct point:\n"
         "    x: i32\n"
@@ -94,7 +94,7 @@ def test_context_typed_struct_literals_support_named_and_positional_fields(tmp_p
 
 def test_fixed_array_descriptor_methods_are_intrinsic_values(tmp_path: Path) -> None:
     """Fixed arrays once had payload storage but no language-visible descriptor ABI."""
-    source = tmp_path / "array_descriptor.mod"
+    source = tmp_path / "array_descriptor.nbl"
     source.write_text(
         "fn describe() -> u16:\n"
         "    let values: [i16; 3] = [10, 20, 30]\n"
@@ -106,7 +106,7 @@ def test_fixed_array_descriptor_methods_are_intrinsic_values(tmp_path: Path) -> 
 
 def test_borrowed_array_metadata_comes_from_its_prefix_descriptor(tmp_path: Path) -> None:
     """An unsized `[i16]` view must recover all dimensions from its one pointer."""
-    source = tmp_path / "borrowed_descriptor.mod"
+    source = tmp_path / "borrowed_descriptor.nbl"
     source.write_text(
         "fn describe(values: &[i16]) -> u16:\n"
         "    return values.len() + values.capacity() + values.dim(0)\n"
@@ -120,7 +120,7 @@ def test_borrowed_array_metadata_comes_from_its_prefix_descriptor(tmp_path: Path
 
 def test_borrowed_fixed_array_parameters_point_at_and_mutate_payload(tmp_path: Path) -> None:
     """Array arguments must be direct data pointers, not copied payloads or descriptor pointers."""
-    source = tmp_path / "array_borrow.mod"
+    source = tmp_path / "array_borrow.nbl"
     source.write_text(
         "fn bump(values: &mut [u16]) -> void:\n"
         "    values[1] += values.len()\n"
@@ -135,7 +135,7 @@ def test_borrowed_fixed_array_parameters_point_at_and_mutate_payload(tmp_path: P
 
 def test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation(tmp_path: Path) -> None:
     """A borrowed struct-array element must remain a direct view through nested calls."""
-    source = tmp_path / "struct_array_borrow.mod"
+    source = tmp_path / "struct_array_borrow.nbl"
     source.write_text(
         "struct point:\n"
         "    x: i16\n"

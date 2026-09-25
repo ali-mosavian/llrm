@@ -1,6 +1,7 @@
 //! Target-independent support code.
 
 pub mod bits;
+pub mod codepage;
 pub mod debug;
 #[cfg(test)]
 pub mod testing;

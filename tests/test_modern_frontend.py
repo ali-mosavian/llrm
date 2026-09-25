@@ -21,12 +21,12 @@ from qbopt.frontend.qb import physicalize
 from qbopt.frontend.modern import compile as modern_compile
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "fixtures" / "modern" / "control.mod"
-PRIMITIVES = ROOT / "fixtures" / "modern" / "primitives.mod"
-NBODY = ROOT / "fixtures" / "modern" / "nbody.mod"
-SUM = ROOT / "fixtures" / "modern" / "sum.mod"
-FIXED = ROOT / "fixtures" / "modern" / "fixed.mod"
-SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.mod"
+FIXTURE = ROOT / "fixtures" / "modern" / "control.nbl"
+PRIMITIVES = ROOT / "fixtures" / "modern" / "primitives.nbl"
+NBODY = ROOT / "fixtures" / "modern" / "nbody.nbl"
+SUM = ROOT / "fixtures" / "modern" / "sum.nbl"
+FIXED = ROOT / "fixtures" / "modern" / "fixed.nbl"
+SUM_THREE = ROOT / "fixtures" / "modern" / "sum_three.nbl"
 STARTUP = ROOT / "runtime" / "modern" / "start.asm"
 RUNTIME = ROOT / "runtime" / "modern" / "rt.c"
 
@@ -73,7 +73,7 @@ def test_frontend_json_is_deterministic_and_replayable(tmp_path: Path) -> None:
 
 
 def test_type_error_is_reported_above_hir(tmp_path: Path) -> None:
-    source = tmp_path / "wrong.mod"
+    source = tmp_path / "wrong.nbl"
     source.write_text("fn wrong(value: i16) -> i16:\n    if value:\n        return 1\n    return 0\n")
     with pytest.raises(driver.FrontendError, match="expected bool"):
         driver.parsed(source)
@@ -364,7 +364,7 @@ def test_nbody_velocity_fields_are_stored_once_per_update() -> None:
 
 def test_counted_struct_loop_uses_its_record_width_as_the_byte_stride(tmp_path: Path) -> None:
     """The end-relative recurrence is an affine-loop rule, not a body/16 rule."""
-    source = tmp_path / "stride.mod"
+    source = tmp_path / "stride.nbl"
     source.write_text(
         """\
 struct sample:
@@ -416,7 +416,7 @@ def test_os_copies_no_loop_into_larger_code(tmp_path: Path) -> None:
     records come from a parameter and leave through `total`, so unrolling
     cannot fold them away.
     """
-    source = tmp_path / "stride.mod"
+    source = tmp_path / "stride.nbl"
     source.write_text(
         """\
 struct sample:
@@ -460,7 +460,7 @@ fn main() -> i16:
 
 def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
     """A local fixed array must reserve and initialize length/capacity before its payload."""
-    source = tmp_path / "array_descriptor.mod"
+    source = tmp_path / "array_descriptor.nbl"
     source.write_text(
         "fn main() -> i16:\n    var values: [i16; 3] = [10, 20, 30]\n    print(values.len())\n    return values[0]\n"
     )
@@ -480,7 +480,7 @@ def test_fixed_array_storage_has_a_prefix_descriptor(tmp_path: Path) -> None:
 
 def test_borrowed_array_call_builds_one_view_from_the_direct_payload(tmp_path: Path) -> None:
     """A slice view carries one direct payload pointer without a hidden length argument."""
-    source = tmp_path / "array_borrow.mod"
+    source = tmp_path / "array_borrow.nbl"
     source.write_text(
         "fn bump(values: &mut [u16]) -> void:\n"
         "    values[1] += 3\n"
@@ -523,12 +523,12 @@ def test_borrowed_array_call_builds_one_view_from_the_direct_payload(tmp_path: P
 
 
 def test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments(tmp_path: Path) -> None:
-    shared = tmp_path / "shared.mod"
+    shared = tmp_path / "shared.nbl"
     shared.write_text("fn bad(values: &[u16]) -> void:\n    values[0] = 2\n")
     with pytest.raises(driver.FrontendError, match="immutable"):
         driver.parsed(shared)
 
-    aliased = tmp_path / "aliased.mod"
+    aliased = tmp_path / "aliased.nbl"
     aliased.write_text(
         "fn use(left: &mut [u16], right: &[u16]) -> void:\n"
         "    left[0] += right[0]\n"
@@ -594,6 +594,63 @@ def test_three_array_initializer_keeps_the_fixed_frame_address_component() -> No
     assert initializers == cells
 
 
+def test_a_loop_whose_latch_copies_ends_on_its_branch() -> None:
+    """sum_three left the latch's copies in the exit edge, so the loop ran je out plus jmp back."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main", cpu="486"))
+    function = assembly.split("_sum_three proc far", 1)[1].split("_sum_three endp", 1)[0]
+    top = re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)
+
+    assert top is not None
+    assert "jmp" not in top.group(0)
+
+
+def test_three_views_past_the_index_pairs_step_their_own_pointers() -> None:
+    """sum_three indexed three bases off one counter, and word base+index holds two: two reloads a trip."""
+    assembly = masm.text(modern_compile.assembled(driver.parsed(SUM_THREE), entry="main", cpu="486"))
+    function = assembly.split("_sum_three proc far", 1)[1].split("_sum_three endp", 1)[0]
+    loop = re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function).group(0)
+
+    assert "[bp" not in loop
+    assert len(re.findall(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]", loop)) == 3
+
+
+COLUMN = """\
+fn column(m: &[i32, 2], j: i16) -> i32:
+    var total: i32 = 0
+    for k in 0..m.dim(0):
+        total += m[k, j]
+    return total
+
+fn main() -> i16:
+    var m: [i32; 4, 4] = [1; 4, 4]
+    column(&m, 1)
+    return 0
+"""
+
+
+def _column_loop(tmp_path: Path) -> str:
+    source = tmp_path / "column.nbl"
+    source.write_text(COLUMN)
+    assembly = masm.text(modern_compile.assembled(driver.parsed(source), entry="main", cpu="486"))
+    function = assembly.split("_column proc far", 1)[1].split("_column endp", 1)[0]
+    return function[function.index("L0_3:") : function.index("L0_5:")]
+
+
+def test_a_column_read_steps_a_pointer_by_its_runtime_stride(tmp_path: Path) -> None:
+    """`k * dim + j` had no pointer: strength could not multiply a runtime step, so every trip rebuilt it."""
+    loop = _column_loop(tmp_path)
+
+    assert "shl" not in loop and "[bp" not in loop
+
+
+def test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence(tmp_path: Path) -> None:
+    """Strength reduced the pointer's own step, leaving a lagging copy: `xchg` and `jmp` on every trip."""
+    loop = _column_loop(tmp_path)
+
+    assert re.search(r"\bjne L0_3\n", loop)
+    assert not re.search(r"\b(?:jmp|xchg)\b|mov \w\w, \w\w\n", loop)
+
+
 def test_runtime_bounded_array_loop_has_a_symbolic_count_proof() -> None:
     """A runtime descriptor extent is an exact trip count, not an unknown loop."""
     program = driver.parsed(SUM)
@@ -642,7 +699,7 @@ def test_runtime_bounded_array_control_respects_the_recurrence_period() -> None:
 
 
 def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path) -> None:
-    source = tmp_path / "sized_parameter.mod"
+    source = tmp_path / "sized_parameter.nbl"
     source.write_text("fn old(values: &[u16; 3]) -> void:\n    return\n")
 
     with pytest.raises(driver.FrontendError, match="omit the length"):
@@ -651,7 +708,7 @@ def test_borrowed_array_parameter_rejects_a_repeated_fixed_length(tmp_path: Path
 
 def test_scoped_array_range_is_one_descriptor_pointer_and_executes(tmp_path: Path) -> None:
     """An interior range cannot borrow the owner's prefix as its own descriptor."""
-    source = tmp_path / "slice.mod"
+    source = tmp_path / "slice.nbl"
     source.write_text(
         "fn sum(values: &[i16]) -> i16:\n"
         "    var total: i16 = 0\n"
@@ -675,7 +732,7 @@ def test_scoped_array_range_is_one_descriptor_pointer_and_executes(tmp_path: Pat
 
 
 def test_scoped_range_iteration_uses_only_the_selected_elements(tmp_path: Path) -> None:
-    source = tmp_path / "slice_loop.mod"
+    source = tmp_path / "slice_loop.nbl"
     source.write_text(
         "fn main() -> i16:\n"
         "    let values: [i16; 5] = [1, 2, 4, 8, 16]\n"
@@ -691,7 +748,7 @@ def test_scoped_range_iteration_uses_only_the_selected_elements(tmp_path: Path) 
 @pytest.mark.parametrize(("chosen", "total"), [("1:3", 5), ("1:", 9), (":3", 6), (":", 10)])
 def test_a_slice_is_spelled_as_in_python(tmp_path: Path, chosen: str, total: int) -> None:
     """Slices were `a..b`; the language spells them `a:b`, `a:`, `:b` and `:`."""
-    source = tmp_path / "python_slice.mod"
+    source = tmp_path / "python_slice.nbl"
     source.write_text(
         "fn sum(values: &[i16]) -> i16:\n"
         "    var total: i16 = 0\n"
@@ -707,7 +764,7 @@ def test_a_slice_is_spelled_as_in_python(tmp_path: Path, chosen: str, total: int
 
 
 def test_a_range_is_not_a_slice(tmp_path: Path) -> None:
-    source = tmp_path / "range_slice.mod"
+    source = tmp_path / "range_slice.nbl"
     source.write_text(
         "fn sum(values: &[i16]) -> i16:\n"
         "    return values[0]\n"
@@ -721,7 +778,7 @@ def test_a_range_is_not_a_slice(tmp_path: Path) -> None:
 
 
 def test_data_is_an_explicit_pointer_escape_hatch(tmp_path: Path) -> None:
-    source = tmp_path / "data.mod"
+    source = tmp_path / "data.nbl"
     source.write_text(
         "fn data(values: &[i16]) -> addr:\n"
         "    return values.data()\n"
@@ -739,7 +796,7 @@ def test_data_is_an_explicit_pointer_escape_hatch(tmp_path: Path) -> None:
 
 
 def test_string_descriptor_methods_and_value_iteration_need_no_runtime(tmp_path: Path) -> None:
-    source = tmp_path / "string_view.mod"
+    source = tmp_path / "string_view.nbl"
     source.write_text(
         "fn first(text: string) -> char:\n"
         "    for byte in text:\n"
@@ -761,7 +818,7 @@ def test_string_descriptor_methods_and_value_iteration_need_no_runtime(tmp_path:
 
 def test_return_inside_sequence_iteration_reaches_object_generation(tmp_path: Path) -> None:
     """`first` once left a dead increment block with non-dominating SSA values."""
-    source = tmp_path / "first.mod"
+    source = tmp_path / "first.nbl"
     source.write_text(
         "fn first(text: string) -> char:\n"
         "    for byte in text:\n"
@@ -780,7 +837,7 @@ def test_return_inside_sequence_iteration_reaches_object_generation(tmp_path: Pa
 
 
 def test_bounded_comprehension_materializes_and_generator_fuses(tmp_path: Path) -> None:
-    source = tmp_path / "comprehension.mod"
+    source = tmp_path / "comprehension.nbl"
     source.write_text(
         "fn main() -> i16:\n"
         "    let values: [i16; 4] = [1, 2, 3, 4]\n"
@@ -799,7 +856,7 @@ def test_bounded_comprehension_materializes_and_generator_fuses(tmp_path: Path) 
 
 
 def test_dictionary_comprehension_deduplicates_and_has_explicit_lookup(tmp_path: Path) -> None:
-    source = tmp_path / "dictionary.mod"
+    source = tmp_path / "dictionary.nbl"
     source.write_text(
         "fn main() -> i16:\n"
         "    let values: [i16; 4] = [1, 2, 1, 3]\n"
@@ -823,7 +880,7 @@ def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
     from qbopt.backend import cpu
     from qbopt.optimize import profit
 
-    source = tmp_path / "fixed.mod"
+    source = tmp_path / "fixed.nbl"
     source.write_text(
         "type fixed16 = fixed i32, fraction=16\n\n"
         "fn scaled(left: fixed16, right: fixed16) -> fixed16:\n"
@@ -841,7 +898,7 @@ def test_fixed_point_arithmetic_has_a_price(tmp_path: Path) -> None:
 
 
 def _returned(tmp_path: Path, text: str, entry: str = "value") -> object:
-    source = tmp_path / "program.mod"
+    source = tmp_path / "program.nbl"
     source.write_text(text)
     return execute.run(driver.parsed(source), entry).value
 
@@ -912,7 +969,7 @@ def test_a_repeat_literal_fills_a_fixed_array(tmp_path: Path) -> None:
 
 def test_a_repeat_literal_in_the_frame_is_one_string_fill(tmp_path: Path) -> None:
     """The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop."""
-    source = tmp_path / "frame_fill.mod"
+    source = tmp_path / "frame_fill.nbl"
     source.write_text(
         "fn value(k: i16) -> i32:\n"
         "    var a: [i32; 64] = [0; 64]\n"
@@ -930,7 +987,7 @@ def test_a_repeat_literal_in_the_frame_is_one_string_fill(tmp_path: Path) -> Non
 
 def test_a_fill_leaves_the_rest_of_its_function_priceable(tmp_path: Path) -> None:
     """FILL had no price, so any function holding one refused every unroll: the 4-trip sum stayed a loop."""
-    source = tmp_path / "priced_fill.mod"
+    source = tmp_path / "priced_fill.nbl"
     source.write_text(
         "fn value(v: &[i16]) -> i32:\n"
         "    var a: [i32; 64] = [0; 64]\n"
@@ -952,7 +1009,7 @@ def test_a_fill_leaves_the_rest_of_its_function_priceable(tmp_path: Path) -> Non
 
 def test_a_ranked_repeat_literal_at_os_is_one_string_fill(tmp_path: Path) -> None:
     """`[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged."""
-    source = tmp_path / "nested_fill.mod"
+    source = tmp_path / "nested_fill.nbl"
     source.write_text(
         "fn value(k: i16) -> i32:\n"
         "    var a: [i32; 8, 8] = [0; 8, 8]\n"
@@ -971,7 +1028,7 @@ def test_a_ranked_repeat_literal_at_os_is_one_string_fill(tmp_path: Path) -> Non
 
 def test_unroll_is_priced_against_the_loop_as_optimized(tmp_path: Path) -> None:
     """Unroll compared its settled copy with the loop mid-round: `b`'s fill became eight at -Os, not one."""
-    source = tmp_path / "priced_unroll.mod"
+    source = tmp_path / "priced_unroll.nbl"
     source.write_text(
         "type fix = fixed i32, fraction=8\n"
         "fn value(k: i16) -> fix:\n"
@@ -998,7 +1055,7 @@ def test_unroll_is_priced_against_the_loop_as_optimized(tmp_path: Path) -> None:
 
 
 def _settled(tmp_path: Path, text: str, options: Options) -> mir.MirBody:
-    source = tmp_path / "settled.mod"
+    source = tmp_path / "settled.nbl"
     source.write_text(text)
     program = driver.parsed(source)
     function = next(one for one in program.modules[0].functions if one.name == "value")
@@ -1033,7 +1090,7 @@ def test_an_unnamed_loop_is_priced_at_its_proven_trip_count(tmp_path: Path) -> N
 
 def test_a_new_counter_steps_where_no_condition_is_live(tmp_path: Path) -> None:
     """A rotated loop branches on flags its body set; the pointer step went between them: Unlowered."""
-    source = tmp_path / "struct_view.mod"
+    source = tmp_path / "struct_view.nbl"
     source.write_text(
         "struct sample:\n"
         "    tag: i16\n"
@@ -1056,7 +1113,7 @@ def test_a_new_counter_steps_where_no_condition_is_live(tmp_path: Path) -> None:
 
 def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
     """Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs."""
-    source = tmp_path / "unrolled_fill.mod"
+    source = tmp_path / "unrolled_fill.nbl"
     source.write_text(
         "fn value(k: i16) -> i32:\n"
         "    var a: [i32; 8, 8] = [0; 8, 8]\n"
@@ -1089,7 +1146,7 @@ def test_an_unrolled_fill_stores_to_fixed_frame_cells(tmp_path: Path) -> None:
     ],
 )
 def test_ill_formed_operators_conversions_and_repeats_are_rejected(tmp_path: Path, body: str) -> None:
-    source = tmp_path / "rejected.mod"
+    source = tmp_path / "rejected.nbl"
     source.write_text("fn value() -> i16:\n" + body)
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)
@@ -1110,7 +1167,7 @@ def test_a_repeat_value_reads_the_names_outside_the_new_binding(tmp_path: Path) 
 
 def test_not_is_not_an_operand_of_a_tighter_operator(tmp_path: Path) -> None:
     """`a + not b == c` parsed as `a + (not (b == c))`; Python rejects it, and so does the spec's ladder."""
-    source = tmp_path / "not.mod"
+    source = tmp_path / "not.nbl"
     source.write_text("fn value() -> bool:\n    return true == not false\n")
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)
@@ -1170,7 +1227,7 @@ def test_fixed_point_converts_explicitly_toward_zero(
 
 
 def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
-    source = tmp_path / "float_fixed.mod"
+    source = tmp_path / "float_fixed.nbl"
     source.write_text(
         "type fix = fixed i32, fraction=8\nfn value() -> i16:\n    let x: f64 = 1.5\n    return i16(fix(x))\n"
     )
@@ -1180,7 +1237,7 @@ def test_a_float_does_not_convert_to_fixed_point(tmp_path: Path) -> None:
 
 def test_ranked_arrays_index_fill_and_borrow_row_major() -> None:
     """Only rank one existed; `[T; 3, 3]`, `a[i, j]` and `&[T, 2]` were rejected."""
-    program = driver.parsed(ROOT / "fixtures" / "modern" / "ranked.mod")
+    program = driver.parsed(ROOT / "fixtures" / "modern" / "ranked.nbl")
     assert program.array_order is hir.ArrayOrder.ROW_MAJOR
     assert execute.run(program, "main").output == "15 106 162 42 9 3 4\n"
 
@@ -1198,7 +1255,7 @@ def test_ranked_arrays_index_fill_and_borrow_row_major() -> None:
     ],
 )
 def test_ranked_arrays_reject_the_wrong_rank_or_shape(tmp_path: Path, body: str) -> None:
-    source = tmp_path / "ranked_rejected.mod"
+    source = tmp_path / "ranked_rejected.nbl"
     source.write_text("fn first(values: &[i16]) -> i16:\n    return values[0]\nfn value() -> i16:\n" + body)
     with pytest.raises(driver.FrontendError):
         driver.parsed(source)

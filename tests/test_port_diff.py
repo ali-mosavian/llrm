@@ -127,7 +127,7 @@ def test_a_modern_source_reaches_both_compilers_through_one_frontend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """--modern did not exist: the modern compile path had no instrument at all."""
-    source = tmp_path / "one.mod"
+    source = tmp_path / "one.nbl"
     source.write_text("fn main() -> i16:\n    return 0\n")
     source.with_suffix(".flags").write_text("--entry\nmain\n-O\ns\n")
     commands, frontends = [], []
@@ -138,11 +138,11 @@ def test_a_modern_source_reaches_both_compilers_through_one_frontend(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(port_diff.subprocess, "run", run)
-    port_diff.run_modern(source, tmp_path / "work", Path("llrm-modern"), Path("modernfront"))
+    port_diff.run_modern(source, tmp_path / "work", Path("llrm-nib"), Path("nibfront"))
     stages, python, rust = commands
     assert stages[1].endswith("tools/modernstages.py") and stages[-2:] == ["-O", "s"]
     assert python[-4:] == rust[-4:] == ["--entry", "main", "-O", "s"]
-    assert frontends == ["modernfront"] * 3
+    assert frontends == ["nibfront"] * 3
 
 
 def test_an_earlier_runs_refusal_is_not_this_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

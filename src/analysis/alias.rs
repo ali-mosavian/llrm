@@ -823,6 +823,15 @@ fn _direct(op: &Op, values: &IndexMap<Value, Provenance>) -> Result<Option<Prove
     Ok(None)
 }
 
+/// Whether what `kind` writes is its operands. A call writes whatever its
+/// callee does, so a cell it writes holds an unknown pointer after it.
+fn _copies_operands(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Store | Kind::Copy | Kind::Arg | Kind::Fill | Kind::Fstore
+    )
+}
+
 /// `points_to` of a whole body with no caller context, solved once per body.
 pub(crate) fn pointers(body: &Rc<MirBody>) -> Result<Rc<PointsTo>, String> {
     let solved = super::manager::cached(body, (), || points_to(body, None, None).map(Rc::new));
@@ -896,6 +905,11 @@ pub fn points_to(
         .collect::<Vec<_>>();
     let tick = std::cell::Cell::new(0_u64);
     let touched = RefCell::new(HashMap::<Value, u64>::default());
+    // Every pointer stored anywhere in each object: what a cell of it may
+    // hold when its exact contents are not known.
+    let mut fields = HashMap::<MemoryObject, Provenance>::default();
+    // Objects a call or an unknown value may have written: no such bound.
+    let mut unbounded = HashSet::<MemoryObject>::default();
     let mut sent = HashMap::<i64, u64>::default();
     let mut visited = vec![None::<u64>; body.blocks.len()];
     loop {
@@ -991,12 +1005,28 @@ pub fn points_to(
                         pointer_values.insert(*result);
                     }
                 }
-                if !op.loads.is_empty() && op.defines.len() == 1 && pointer_values.contains(&op.defines[0]) {
+                // A call reads what escaped, but its result is not one of those
+                // cells' contents: it may be any pointer the callee makes.
+                if op.kind != Kind::Call
+                    && !op.loads.is_empty()
+                    && op.defines.len() == 1
+                    && pointer_values.contains(&op.defines[0])
+                {
                     let loaded = _union(
                         op.loads
                             .iter()
                             .map(|reference| _cell_key(reference).and_then(|key| state.get(&key))),
                     );
+                    let loaded = loaded.or_else(|| {
+                        let stored = op
+                            .loads
+                            .iter()
+                            .filter_map(|reference| _resolved_reference(reference, &values))
+                            .flat_map(|provenance| provenance.slices)
+                            .map(|one| (!unbounded.contains(&one.object)).then(|| fields.get(&one.object)).flatten())
+                            .collect::<Option<Vec<_>>>()?;
+                        (!stored.is_empty()).then(|| _union(stored.into_iter().map(Some).chain([Some(&*UNKNOWN)])))?
+                    });
                     if let Some(loaded) = loaded {
                         learn(&mut values, op.defines[0], loaded);
                     }
@@ -1009,11 +1039,32 @@ pub fn points_to(
                     for reference in &op.stores {
                         let mut keyed = reference.clone();
                         keyed.provenance = _resolved_reference(reference, &values);
+                        let pointer_stored = op.args.iter().any(|arg| matches!(arg, Arg::Held(held) if pointer_values.contains(&held.value)));
+                        let bounded = _copies_operands(op.kind) && (source.is_some() || !pointer_stored);
+                        if let (false, Some(targets)) = (bounded, &keyed.provenance) {
+                            for one in &targets.slices {
+                                if unbounded.insert(one.object.clone()) {
+                                    changed.set(true);
+                                }
+                            }
+                        }
+                        if let (Some(source), Some(targets), true) = (&source, &keyed.provenance, _copies_operands(op.kind)) {
+                            for one in &targets.slices {
+                                // Whole objects: stored offsets may shift each trip around a loop.
+                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)))?;
+                                if fields.get(&one.object) != Some(&grown) {
+                                    fields.insert(one.object.clone(), grown);
+                                    changed.set(true);
+                                }
+                            }
+                        }
                         let key = _cell_key(&keyed);
                         // Any possibly overlapping write invalidates prior cell
                         // contents; an exact pointer store then defines it.
                         _kill(&mut state, key.as_ref());
-                        if let (Some(key), Some(source)) = (key, &source) {
+                        if let (Some(key), Some(source), true) =
+                            (key, &source, _copies_operands(op.kind))
+                        {
                             state.insert(key, source.clone(), _key_place);
                         }
                     }
@@ -1194,9 +1245,14 @@ pub fn points_to(
                         let mut keyed = reference.clone();
                         keyed.provenance = _resolved_reference(reference, &values);
                         let key = _cell_key(&keyed);
+                        // A call may leave the cell as it was: what it held stays reachable.
+                        let kept = key
+                            .as_ref()
+                            .filter(|_| !_copies_operands(op.kind))
+                            .and_then(|key| cells.get(key).cloned());
                         _kill(&mut cells, key.as_ref());
-                        if let (Some(key), Some(source)) = (key, &source) {
-                            cells.insert(key, source.clone(), _key_place);
+                        if let (Some(key), Some(source)) = (key, _union([source.as_ref(), kept.as_ref()])) {
+                            cells.insert(key, source, _key_place);
                         }
                     }
                 }
@@ -1844,6 +1900,61 @@ mod tests {
         let facts = points_to(&made, None, None).unwrap();
         assert_eq!(facts.values[&loaded], facts.values[&root]);
         assert_eq!(facts.values[&joined], facts.values[&root]);
+    }
+
+    #[test]
+    fn test_a_call_writing_a_cell_leaves_its_contents_unknown() {
+        // A call given &local was taken to store exactly that pointer into
+        // local, so a heap pointer loaded back after it was "into local" and
+        // the loop reading through it was folded to garbage.
+        let (pointer, loaded) = (value(1), value(2));
+        let local = object(MemoryKind::Frame, named("caller", -2), Some(2));
+        let slot = with_provenance(2, one(&local, 0, 2));
+        let mut effect = call(1);
+        effect.args = vec![held(pointer, 2)];
+        effect.stores = vec![slot.clone()];
+        let made = body(
+            vec![MirBlock::new(
+                0,
+                vec![],
+                vec![effect, reload(2, loaded, &slot)],
+                vec![],
+            )],
+            &[pointer, loaded],
+            &[(pointer, one(&local, 0, 1))],
+        );
+
+        let facts = points_to(&made, None, None).unwrap();
+        assert_eq!(facts.values.get(&loaded), None);
+    }
+
+    #[test]
+    fn test_a_pointer_advanced_through_memory_reaches_a_fixed_point() {
+        // `*to++` in heap.c's copy_bytes: each pass stored one more offset
+        // into the cell, and llrm-c never finished.
+        let (start, loaded, advanced) = (value(1), value(2), value(3));
+        let target = object(MemoryKind::Global, segment(1), None);
+        let either = one(&object(MemoryKind::Frame, named("copy", -2), Some(2)), 0, 2)
+            .union(&one(&object(MemoryKind::Frame, named("copy", -4), Some(2)), 0, 2));
+        let slot = with_provenance(2, either);
+        let mut step = op(3, Operation::Binary, Kind::Add, vec![advanced], vec![loaded]);
+        step.args = vec![held(loaded, 2), Arg::Const(Const::new(1, 2))];
+        step.results = vec![held(advanced, 2)];
+        let made = body(
+            vec![MirBlock::new(
+                0,
+                vec![],
+                vec![spill(1, start, &slot), reload(2, loaded, &slot), step, spill(4, advanced, &slot)],
+                vec![],
+            )],
+            &[start, loaded, advanced],
+            &[(start, one(&target, 0, 1))],
+        );
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || sender.send(points_to(&made, None, None).map(|facts| facts.values[&loaded].clone())));
+        let loaded = receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates").unwrap();
+        assert!(loaded.slices.iter().any(|one| one.object == target));
     }
 
     #[test]

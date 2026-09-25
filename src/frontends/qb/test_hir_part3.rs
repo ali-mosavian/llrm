@@ -141,6 +141,7 @@ fn stack_call(operands: Vec<Operand>, callee: &str, order: Vec<i64>) -> (hir::In
         cleanup: hir::StackCleanup::Callee,
         distance: hir::CallDistance::Far,
         callee: None,
+        float_return: hir::FloatReturn::Pointer,
     };
     (instruction, call)
 }
@@ -923,6 +924,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
             body: last.body,
             reserve: 4,
             callees: last.callees,
+            interrupt: None,
         }],
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
@@ -1409,7 +1411,7 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
 
 // ---- tests/test_qb_frontend_command.py -----------------------------------
 
-/// Adding modern/freestanding to common HIR once made QB's driver advertise both.
+/// Adding nib/freestanding to common HIR once made QB's driver advertise both.
 #[test]
 fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
     let source = qb_driver::ROOT().join("not-read.bas");
@@ -1418,7 +1420,7 @@ fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
             .expect_err("refused")
             .0
     };
-    assert!(syntax("modern", "vbdos").contains("unknown QB dialect"));
+    assert!(syntax("nib", "vbdos").contains("unknown QB dialect"));
     assert!(syntax("vbdos", "freestanding").contains("unknown QB runtime"));
 }
 

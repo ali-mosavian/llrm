@@ -87,6 +87,8 @@ class AddressForm:
     use_cost: int = 0
     extension_cost: int = 0
     secondary: bool = False
+    # How many distinct bases one index can pair with at once; None is any.
+    partners: int | None = None
     # Compatibility for existing Python callers which used the old, easily
     # misread name.  Keep both views identical; production code says
     # ``secondary`` so its place in the selection order is explicit.

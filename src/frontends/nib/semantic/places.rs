@@ -1,0 +1,664 @@
+//! Places: where assignment and struct stores write.
+
+use super::*;
+
+impl<'a> FunctionCompiler<'a> {
+    pub(super) fn store_struct_expression(
+        &mut self,
+        destination: &StructView,
+        expression: &Expr,
+    ) -> Result<(), Diagnostic> {
+        let mut stores = Vec::new();
+        self.prepare_struct_stores(destination, expression, &mut stores)?;
+        self.emit_stores(stores, expression.span())
+    }
+
+    pub(super) fn prepare_struct_stores(
+        &mut self,
+        destination: &StructView,
+        expression: &Expr,
+        stores: &mut Vec<Store>,
+    ) -> Result<(), Diagnostic> {
+        if let Some((element, shape)) = self.types.array_of(destination.struct_id) {
+            return self.prepare_array_stores(destination, element, shape, expression, expression.span(), stores);
+        }
+        let layout = self
+            .types
+            .structure(destination.struct_id)
+            .cloned()
+            .expect("resolved struct type");
+        if let Expr::Zero(_) = expression {
+            stores.extend(self.zero_stores(destination, layout.copy));
+            return Ok(());
+        }
+        // A kept view is a copy of the descriptor of the view it is given.
+        if let Some((element, rank)) = self.types.kept_views.get(&destination.struct_id).copied() {
+            let pointer_type = self.types.slice_pointer(element, rank);
+            let writes = self.types.writable_views.contains(&destination.struct_id);
+            let (hir::Operand::Value(source), _) = self.borrow_argument(expression, writes, BindingType::Slice { element, rank }, pointer_type)? else {
+                unreachable!("a view is a descriptor pointer")
+            };
+            let target = self.kept_view_pointer(destination, element, rank);
+            self.copy_view(source, target, element, rank);
+            return Ok(());
+        }
+        if let Expr::Variant {
+            enum_name,
+            name,
+            arguments,
+            span,
+        } = expression
+        {
+            return self.prepare_variant_stores(
+                destination,
+                enum_name.as_deref(),
+                name,
+                arguments,
+                *span,
+                stores,
+            );
+        }
+        if let Some(call) = self.method_as_call(expression) {
+            return self.prepare_struct_stores(destination, &call, stores);
+        }
+        if let Expr::Call {
+            name,
+            arguments,
+            span,
+            ..
+        } = expression
+        {
+            let source = self.call_into(name, arguments, *span)?;
+            return self.prepare_struct_copy(destination, &source, stores);
+        }
+        if let Expr::Tuple(items, span) = expression {
+            let layout = self
+                .types
+                .structure(destination.struct_id)
+                .expect("resolved struct type")
+                .clone();
+            let literal = Self::tuple_literal(items, &layout, *span)?;
+            return self.prepare_struct_stores(destination, &literal, stores);
+        }
+        if let Expr::Try { operand, span } = expression {
+            let source = self.try_view(operand, *span)?;
+            return self.prepare_struct_copy(destination, &source, stores);
+        }
+        if let Expr::Conditional {
+            condition,
+            then,
+            otherwise,
+            span,
+        } = expression
+        {
+            let source =
+                self.conditional_view(condition, then, otherwise, destination.struct_id, *span)?;
+            return self.prepare_struct_copy(destination, &source, stores);
+        }
+        let Expr::StructLiteral { name, fields, span } = expression else {
+            let source = self.struct_view(expression, expression.span())?;
+            if source.struct_id != destination.struct_id {
+                let found = &self
+                    .types
+                    .structure(source.struct_id)
+                    .expect("resolved struct type")
+                    .name;
+                return Err(Diagnostic::new(
+                    expression.span(),
+                    format!("expected {}, found {found}", layout.name),
+                ));
+            }
+            self.prepare_struct_copy(destination, &source, stores)?;
+            return self.consume_aggregate(expression, &source, expression.span(), stores);
+        };
+        // A generic literal builds whichever instance is expected.
+        if self.types.template_of(name) != self.types.template_of(&layout.name) {
+            return Err(Diagnostic::new(
+                *span,
+                format!("expected {}, found {name}", layout.name),
+            ));
+        }
+        let mut seen = BTreeMap::new();
+        for (name, value, field_span) in fields {
+            if seen.insert(name, *field_span).is_some() {
+                return Err(Diagnostic::new(
+                    *field_span,
+                    format!("field {name:?} is initialized more than once"),
+                ));
+            }
+            let field = layout.fields.get(name).ok_or_else(|| {
+                Diagnostic::new(
+                    *field_span,
+                    format!("{} has no field {name:?}", layout.name),
+                )
+            })?;
+            self.prepare_field_store(destination, *field, value, *field_span, stores)?;
+        }
+        let missing: Vec<_> = layout
+            .fields
+            .keys()
+            .filter(|name| !seen.contains_key(*name))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            return Err(Diagnostic::new(
+                *span,
+                format!(
+                    "{} literal is missing fields: {}",
+                    layout.name,
+                    missing.join(", ")
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_field_store(
+        &mut self,
+        destination: &StructView,
+        field: FieldLayout,
+        value: &Expr,
+        span: Span,
+        stores: &mut Vec<Store>,
+    ) -> Result<(), Diagnostic> {
+        if let Some(shape) = field.shape {
+            let array = self.types.array(field.type_, shape);
+            let nested = StructView { struct_id: array, offset: destination.offset + field.offset, ..destination.clone() };
+            return self.prepare_array_stores(&nested, field.type_, shape, value, span, stores);
+        }
+        match field.type_ {
+            ElementType::Scalar(type_name) => {
+                let value = self.coerced(value, type_name)?;
+                self.consume(&value, span)?;
+                stores.push(Store::One(
+                    self.projected_place(destination, field.offset, type_name),
+                    required(value, span)?,
+                ));
+            }
+            ElementType::Struct(field_struct) => {
+                let nested = StructView {
+                    struct_id: field_struct,
+                    place: destination.place,
+                    pointer: destination.pointer,
+                    indices: destination.indices.clone(),
+                    offset: destination.offset + field.offset,
+                    mutable: destination.mutable,
+                    owner: destination.owner.clone(),
+                };
+                self.prepare_struct_stores(&nested, value, stores)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_struct_copy(
+        &mut self,
+        destination: &StructView,
+        source: &StructView,
+        stores: &mut Vec<Store>,
+    ) -> Result<(), Diagnostic> {
+        let copy = self
+            .types
+            .copy_units(ElementType::Struct(destination.struct_id));
+        for (offset, type_name, count) in copy {
+            if count > 1 {
+                let at = |view: &StructView| StructView { offset: view.offset + offset, ..view.clone() };
+                stores.push(Store::Run {
+                    destination: at(destination),
+                    element: ElementType::Scalar(type_name),
+                    count,
+                    source: RunSource::Cells(at(source)),
+                });
+                continue;
+            }
+            let value = self.value(type_name);
+            self.emit(
+                "load",
+                vec![value],
+                vec![self.projected_place(source, offset, type_name)],
+                None,
+            );
+            stores.push(Store::One(
+                self.projected_place(destination, offset, type_name),
+                hir::Operand::Value(value),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn projected_place(
+        &self,
+        view: &StructView,
+        field_offset: u32,
+        type_name: TypeName,
+    ) -> hir::Operand {
+        if let Some(pointer) = view.pointer {
+            hir::Operand::IndirectPlace {
+                base: pointer,
+                offset: view.offset + field_offset,
+                type_id: type_id(type_name),
+                inbounds: false,
+            }
+        } else {
+            hir::Operand::ProjectedPlace {
+                place: view.place,
+                indices: view.indices.clone(),
+                offset: view.offset + field_offset,
+                type_id: type_id(type_name),
+            }
+        }
+    }
+
+    pub(super) fn struct_expression_type(
+        &self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Option<u32>, Diagnostic> {
+        if let Some(call) = self.method_as_call(expression) {
+            return self.struct_expression_type(&call, span);
+        }
+        match expression {
+            Expr::StructLiteral { name, .. } if self.types.bits.contains_key(name) => Ok(None),
+            Expr::Tuple(items, _) => self
+                .tuple_elements(items, span)
+                .and_then(|elements| self.types.tuple_id(&elements))
+                .map(Some)
+                .ok_or_else(|| Diagnostic::new(span, "a tuple's element types must be known")),
+            Expr::StructLiteral { name, .. } => self
+                .types
+                .structs
+                .get(name)
+                .map(|one| Some(one.id))
+                .ok_or_else(|| Diagnostic::new(span, format!("unknown struct {name:?}"))),
+            // A function's name is a value of its type, not a place.
+            Expr::Name(name, _) if self.visible(name).is_none() && self.signatures.contains_key(name) => Ok(None),
+            Expr::Name(name, _) => Ok(match self.binding(name, span)?.type_ {
+                BindingType::Struct(struct_id) => Some(struct_id),
+                _ => None,
+            }),
+            Expr::Call { name, .. } => Ok(self.known_signature(name).and_then(|one| one.slot).filter(|one| self.types.array_of(*one).is_none())),
+            Expr::Unary { op: UnaryOp::Deref, operand, .. } => Ok(match self.expression_type_hint(operand).and_then(|one| self.types.raw_target(one)) {
+                Some(ElementType::Struct(struct_id)) => Some(struct_id),
+                _ => None,
+            }),
+            Expr::MethodCall {
+                receiver,
+                name,
+                arguments,
+                ..
+            } if name == "copy" && arguments.is_empty() => {
+                self.struct_expression_type(receiver, span)
+            }
+            Expr::Try { operand, .. } => self.try_struct_type(operand, span),
+            Expr::MethodCall { .. } if self.popped_struct_type(expression).is_some() => Ok(self.popped_struct_type(expression)),
+            Expr::Variant {
+                enum_name: Some(enum_name),
+                ..
+            } => Ok(
+                match self.types.enums.get(enum_name).map(|one| one.element) {
+                    Some(ElementType::Struct(struct_id)) => Some(struct_id),
+                    _ => None,
+                },
+            ),
+            Expr::Index { base, .. } => {
+                if let Expr::Name(name, _) = base.as_ref() {
+                    self.binding(name, span)?;
+                }
+                Ok(match self.indexed_hint(base) {
+                    Some(ElementType::Struct(struct_id)) => Some(struct_id),
+                    _ => None,
+                })
+            }
+            Expr::Member { base, field, .. } => {
+                let Some(struct_id) = self.struct_expression_type(base, span)? else {
+                    return Ok(None);
+                };
+                let layout = self
+                    .types
+                    .structure(struct_id)
+                    .expect("resolved struct type");
+                let field = layout.fields.get(field).ok_or_else(|| {
+                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
+                })?;
+                Ok(match field.type_ {
+                    ElementType::Struct(struct_id) if field.shape.is_none() => Some(struct_id),
+                    ElementType::Struct(_) | ElementType::Scalar(_) => None,
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub(super) fn assignment_target(
+        &mut self,
+        target: &AssignTarget,
+        span: Span,
+    ) -> Result<AssignmentPlace, Diagnostic> {
+        if let Some(owner) = borrows::written_owner(target) {
+            self.check_unborrowed(owner, span)?;
+        }
+        match target {
+            AssignTarget::Member { base, field } => {
+                self.check_mutable_fields(&Expr::Member { base: Box::new(base.clone()), field: field.clone(), span })?
+            }
+            AssignTarget::Index { base, .. } => self.check_mutable_fields(base)?,
+            AssignTarget::Name(_) | AssignTarget::Deref(_) => {}
+        }
+        match target {
+            AssignTarget::Deref(pointer) => {
+                let name = self.dereferenced(pointer, span)?;
+                self.assignment_target(&AssignTarget::Name(name), span)
+            }
+            AssignTarget::Member { base, field } if self.bits_type(base).is_some() => {
+                let outer = AssignTarget::of(base.clone())
+                    .map_err(|message| Diagnostic::new(span, message))?;
+                let packed = self.bits_type(base).expect("checked");
+                let field = self.types.bit_field(packed, field, span)?;
+                Ok(match self.assignment_target(&outer, span)? {
+                    AssignmentPlace::Scalar(place, packed) => AssignmentPlace::Bits {
+                        place,
+                        packed,
+                        field,
+                    },
+                    // A field of a nested bits struct is a narrower range of the outer one.
+                    AssignmentPlace::Bits {
+                        place,
+                        packed,
+                        field: parent,
+                    } => AssignmentPlace::Bits {
+                        place,
+                        packed,
+                        field: bits::BitField {
+                            low: parent.low + field.low,
+                            ..field
+                        },
+                    },
+                    AssignmentPlace::Struct(_) | AssignmentPlace::Array(..) => unreachable!("a bits value is a scalar"),
+                })
+            }
+            AssignTarget::Member { base, field } => {
+                let parent = self.struct_view(base, span)?;
+                if !parent.mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {:?} is immutable", parent.owner),
+                    ));
+                }
+                let layout = self
+                    .types
+                    .structure(parent.struct_id)
+                    .expect("resolved struct type");
+                let member = layout.fields.get(field).copied().ok_or_else(|| {
+                    Diagnostic::new(span, format!("{} has no field {field:?}", layout.name))
+                })?;
+                if let Some(shape) = member.shape {
+                    let array = self.types.array(member.type_, shape);
+                    let view = StructView { struct_id: array, offset: parent.offset + member.offset, mutable: true, ..parent };
+                    return Ok(AssignmentPlace::Array(view, member.type_, shape));
+                }
+                Ok(match member.type_ {
+                    ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
+                        self.projected_place(&parent, member.offset, type_name),
+                        type_name,
+                    ),
+                    ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
+                        struct_id,
+                        place: parent.place,
+                        pointer: parent.pointer,
+                        indices: parent.indices,
+                        offset: parent.offset + member.offset,
+                        mutable: true,
+                        owner: parent.owner,
+                    }),
+                })
+            }
+            AssignTarget::Name(name) => {
+                let binding = self.binding(name, span)?.clone();
+                if !binding.mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {name:?} is immutable"),
+                    ));
+                }
+                match binding.type_ {
+                    BindingType::Scalar(type_name) => {
+                        let destination = match binding.storage {
+                            Storage::Place(place) => hir::Operand::Place(place),
+                            Storage::ArrayView { place, index } => {
+                                hir::Operand::ArrayElement(place, vec![index])
+                            }
+                            Storage::Parameter(_) => {
+                                return Err(Diagnostic::new(span, "parameters are immutable"));
+                            }
+                            Storage::Reference(pointer) => hir::Operand::IndirectPlace {
+                                base: pointer,
+                                offset: 0,
+                                type_id: type_id(type_name),
+                                inbounds: false,
+                            },
+                            Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
+                            Storage::Lambda(_) => {
+                                return Err(Diagnostic::new(span, "a lambda cannot be assigned"));
+                            }
+                        };
+                        Ok(AssignmentPlace::Scalar(destination, type_name))
+                    }
+                    BindingType::Struct(struct_id) => {
+                        binding_view(struct_id, &binding.storage, true, name)
+                            .map(AssignmentPlace::Struct)
+                            .ok_or_else(|| Diagnostic::new(span, "parameters are immutable"))
+                    }
+                    BindingType::Array { .. } => {
+                        let (view, element, shape) = self.array_view(&Expr::Name(name.clone(), span), span)?.ok_or_else(|| Diagnostic::new(span, "whole array assignment is not supported"))?;
+                        Ok(AssignmentPlace::Array(view, element, shape))
+                    }
+                    BindingType::Slice { .. } => Err(Diagnostic::new(
+                        span,
+                        "whole array assignment is not supported",
+                    )),
+                }
+            }
+            AssignTarget::Index { base: Expr::Name(base, _), indices } if self.types.dictionary_parts(self.expression_type_hint(&Expr::Name(base.clone(), span)).unwrap_or(TypeName::Void)).is_some() => {
+                let entry = self.dictionary_entry(base, indices, span)?.expect("a dict");
+                let target = AssignTarget::of(entry).map_err(|message| Diagnostic::new(span, message))?;
+                self.assignment_target(&target, span)
+            }
+            AssignTarget::Index { base, indices } => {
+                if !matches!(base, Expr::Name(..)) && self.fixed_array_hint(base).is_none() {
+                    return Err(Diagnostic::new(span, "assignment target must be a named place or an array field"));
+                }
+                let (binding, base) = self.sequence_of(base)?;
+                if !binding.mutable {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {base:?} is immutable"),
+                    ));
+                }
+                if binding.type_ == BindingType::Scalar(TypeName::String) {
+                    return self.string_element_target(&base, indices, span);
+                }
+                let (element, at) = self.element_at(&binding, &base, indices, span)?;
+                Ok(match element {
+                    ElementType::Scalar(type_name) => {
+                        AssignmentPlace::Scalar(at.operand(type_id(type_name)), type_name)
+                    }
+                    ElementType::Struct(struct_id) => {
+                        let (place, pointer, indices) = at.parts();
+                        AssignmentPlace::Struct(StructView {
+                            struct_id,
+                            place,
+                            pointer,
+                            indices,
+                            offset: 0,
+                            mutable: true,
+                            owner: base.clone(),
+                        })
+                    }
+                })
+            }
+        }
+    }
+
+    pub(super) fn member_place(
+        &mut self,
+        base: &Expr,
+        field_name: &str,
+        span: Span,
+    ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
+        let view = self.struct_view(base, span)?;
+        let layout = self
+            .types
+            .structure(view.struct_id)
+            .expect("resolved struct type");
+        self.learn_member(span, field_name, &layout.name);
+        let field = layout.fields.get(field_name).copied().ok_or_else(|| {
+            Diagnostic::new(span, format!("{} has no field {field_name:?}", layout.name))
+        })?;
+        if field.shape.is_some() {
+            return Err(Diagnostic::new(span, format!("array field {field_name:?} is used through its elements or borrowed")));
+        }
+        let ElementType::Scalar(type_name) = field.type_ else {
+            return Err(Diagnostic::new(
+                span,
+                "a nested struct value must be used through one of its fields",
+            ));
+        };
+        Ok((
+            self.projected_place(&view, field.offset, type_name),
+            type_name,
+            view.mutable,
+            view.owner,
+        ))
+    }
+
+    pub(super) fn struct_view(&mut self, expression: &Expr, span: Span) -> Result<StructView, Diagnostic> {
+        // A reference to a struct, as a call returns one, views its target.
+        if let Some(ElementType::Struct(struct_id)) = self.expression_type_hint(expression).and_then(|one| self.types.referent(one)) {
+            if !matches!(expression, Expr::Name(..)) && self.types.array_of(struct_id).is_none() {
+                let value = self.expression(expression, None)?;
+                let pointer_type = self.types.pointer(struct_id, 0);
+                let pointer = self.materialized(required(value, span)?, pointer_type);
+                return Ok(StructView { struct_id, place: 0, pointer: Some(pointer), indices: Vec::new(), offset: 0, mutable: false, owner: format!("$reference{pointer}") });
+            }
+        }
+        match expression {
+            Expr::Unary { op: UnaryOp::Deref, operand, span } => {
+                let name = self.dereferenced(operand, *span)?;
+                self.struct_view(&Expr::Name(name, *span), *span)
+            }
+            Expr::Name(name, _) => {
+                let binding = self.binding(name, span)?.clone();
+                let BindingType::Struct(struct_id) = binding.type_ else {
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("binding {name:?} is not a struct"),
+                    ));
+                };
+                binding_view(struct_id, &binding.storage, binding.mutable, name)
+                    .ok_or_else(|| Diagnostic::new(span, "struct has no addressable storage"))
+            }
+            Expr::Index { base, indices, .. } => {
+                if let Some(value) = self.dictionary_value(base, indices, span)? {
+                    return self.struct_view(&value, span);
+                }
+                let (binding, name) = self.sequence_of(base)?;
+                let (element, at) = self.element_at(&binding, &name, indices, span)?;
+                let ElementType::Struct(struct_id) = element else {
+                    return Err(Diagnostic::new(span, "array element is not a struct"));
+                };
+                let (place, pointer, indices) = at.parts();
+                Ok(StructView {
+                    struct_id,
+                    place,
+                    pointer,
+                    indices,
+                    offset: 0,
+                    mutable: binding.mutable,
+                    owner: name.clone(),
+                })
+            }
+            Expr::Member {
+                base,
+                field,
+                span: member_span,
+            } => {
+                let parent = self.struct_view(base, *member_span)?;
+                let layout = self
+                    .types
+                    .structure(parent.struct_id)
+                    .expect("resolved struct type");
+                let field = layout.fields.get(field).copied().ok_or_else(|| {
+                    Diagnostic::new(
+                        *member_span,
+                        format!("{} has no field {field:?}", layout.name),
+                    )
+                })?;
+                let (ElementType::Struct(field_struct), None) = (field.type_, field.shape) else {
+                    return Err(Diagnostic::new(
+                        *member_span,
+                        "scalar or array field cannot be used as a struct",
+                    ));
+                };
+                Ok(StructView {
+                    struct_id: field_struct,
+                    place: parent.place,
+                    pointer: parent.pointer,
+                    indices: parent.indices,
+                    offset: parent.offset + field.offset,
+                    mutable: parent.mutable,
+                    owner: parent.owner,
+                })
+            }
+            Expr::Call {
+                name,
+                arguments,
+                span,
+                ..
+            } => {
+                let result = self.call_into(name, arguments, *span)?;
+                Ok(self.statement_temporary(result))
+            }
+            Expr::MethodCall { .. } if self.method_as_call(expression).is_some() => {
+                let call = self.method_as_call(expression).expect("checked");
+                self.struct_view(&call, span)
+            }
+            Expr::MethodCall { receiver, .. } if self.popped_struct_type(expression).is_some() => self.popped_struct(receiver, span),
+            // `.copy()`: the bytes, then a copy of each thing they own.
+            Expr::MethodCall {
+                receiver,
+                name,
+                arguments,
+                ..
+            } if name == "copy" && arguments.is_empty() => {
+                let source = self.struct_view(receiver, span)?;
+                self.check_copyable(ElementType::Struct(source.struct_id), span)?;
+                let copy = self.temporary(source.struct_id);
+                let mut stores = Vec::new();
+                self.prepare_struct_copy(&copy, &source, &mut stores)?;
+                self.emit_stores(stores, span)?;
+                self.each_owned(&copy, Owned::Duplicate);
+                Ok(self.statement_temporary(copy))
+            }
+            // A literal, variant, tuple or conditional: built in a temporary.
+            _ => match self.struct_expression_type(expression, span)? {
+                Some(struct_id) => {
+                    let view = self.temporary(struct_id);
+                    self.store_struct_expression(&view, expression)?;
+                    Ok(self.statement_temporary(view))
+                }
+                None => Err(Diagnostic::new(
+                    span,
+                    "expression is not an addressable struct",
+                )),
+            },
+        }
+    }
+
+    /// An aggregate that lives until the statement ends, then drops what it owns.
+    pub(super) fn statement_temporary(&mut self, view: StructView) -> StructView {
+        if self.element_needs_drop(ElementType::Struct(view.struct_id)) {
+            self.aggregate_temporaries.push(view.clone());
+        }
+        view
+    }
+}

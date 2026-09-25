@@ -854,7 +854,7 @@ mod tests {
         assert!(!pins.contains_key(&1) && !pins.contains_key(&2));
     }
 
-    /// Modern nbody could not allocate ``fixed_mul(x, x)``.
+    /// Nib nbody could not allocate ``fixed_mul(x, x)``.
     #[test]
     fn test_a_value_remains_live_at_unconstrained_occurrences_of_the_same_instruction() {
         let repeated = held(7, 4);

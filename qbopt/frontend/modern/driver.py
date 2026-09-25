@@ -26,7 +26,7 @@ def command() -> tuple[str, ...]:
         "--manifest-path",
         str(MANIFEST),
         "--bin",
-        "modernfront",
+        "nibfront",
         "--",
     )
 
@@ -43,11 +43,11 @@ def parsed(source: Path, *, dump: Path | None = None) -> hir.Program:
     except OSError as error:
         raise FrontendError(f"could not start modern frontend: {error}") from error
     if result.returncode:
-        message = result.stderr.strip() or f"modernfront exited with status {result.returncode}"
+        message = result.stderr.strip() or f"nibfront exited with status {result.returncode}"
         raise FrontendError(message)
     if dump is not None:
         dump.write_text(result.stdout)
     try:
         return hir.decode(result.stdout)
     except (ValueError, TypeError) as error:
-        raise FrontendError(f"modernfront emitted invalid HIR: {error}") from error
+        raise FrontendError(f"nibfront emitted invalid HIR: {error}") from error

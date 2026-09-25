@@ -24,7 +24,8 @@ address. Both inner and outer loops are eligible.
 Where the target has scaled addressing, a value read only as a far cell's
 address is not given a recurrence at all: `b + i*m` stays in the loop with
 `b` computed once, and lowering makes it the cell's `[base+index*scale]`.
-Every such address shares the counter, so the loop advances one register.
+Every such address shares the counter, so the loop advances one register,
+while the form's `partners` can hold every base beside it.
 A scale above one needs the counter as a dword, which is exact only while
 it cannot wrap and the address only while it is in bounds.
 
@@ -108,7 +109,8 @@ def reduced(
     if not found:
         return body
 
-    candidate_groups = {loop.header: _candidates(body, derived, scales) for loop, _basics, derived in found}
+    partners = next((form.partners for form in address_forms if not form.secondary), None)
+    candidate_groups = {loop.header: _candidates(body, derived, scales, partners) for loop, _basics, derived in found}
     replacement_credits = (
         _replacement_credits(body, found, candidate_groups, costs)
         | _control_credits(body, found, candidate_groups, costs)
@@ -346,7 +348,7 @@ def reduced(
                 if one.pointer is not None:
                     pointer_bindings.append((one.op, answer, shared[key]))
                 continue
-            if _times(one.of.step, one.by, width) is None:
+            if isinstance(one.of.step, mir.Cell):
                 continue
             if isinstance(one.by, mir.Cell):
                 if one.op.loads != (one.by.ref,) or one.by not in one.op.args:
@@ -358,7 +360,12 @@ def reduced(
                 one = replace(one, by=mir.Held(multiplier, width))
             stride = _times(one.of.step, one.by, width)
             if stride is None:
-                continue
+                taken += 1
+                product = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
+                ahead.setdefault(preheader, []).append(
+                    _made(mir.Kind.MUL, "imul", product, (one.of.step, one.by), preheader, one.op)
+                )
+                stride = mir.Held(product, width)
             taken += 1
             start = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
             step = mir.Value(id=start.id + 1, at=step_at, variable=taken, version=2)
@@ -407,11 +414,15 @@ def _candidates(
     body: MirBody,
     derived: list[induction.Derived],
     scales: frozenset[int],
+    partners: int | None = None,
 ) -> list[induction.Derived]:
+    # A counter's own step reads as the counter plus its stride.
+    steps = {(phi.result.id, value) for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     candidates = [
         one
         for one in derived
-        if _answer(body, one.op) is not None
+        if (answer := _answer(body, one.op)) is not None
+        and (one.of.value, answer) not in steps
         and (
             _multiplies(one, derived)
             or one.pointer is not None
@@ -423,7 +434,26 @@ def _candidates(
             and any(isinstance(offset, mir.Held) for offset, _ in one.offsets)
         )
     ]
-    return [one for one in candidates if not scales or not _indexed(body, one)]
+    if not scales:
+        return candidates
+    indexed = [one for one in candidates if _indexed(body, one)]
+    if not _paired(indexed, partners):
+        return candidates
+    dropped = {id(one) for one in indexed}
+    return [one for one in candidates if id(one) not in dropped]
+
+
+def _paired(indexed: list[induction.Derived], partners: int | None) -> bool:
+    """Whether these base-plus-counter addresses fit the native form's pairs at once.
+
+    Every pair must share one register, and the rest are its partners. Past
+    that, lowering reloads a base on every use.
+    """
+    if partners is None or not indexed:
+        return True
+    counters = {one.of.value for one in indexed}
+    bases = {offset for one in indexed for offset, _ in one.offsets if isinstance(offset, mir.Held)}
+    return len(counters) == 1 and len(bases) <= partners
 
 
 @dataclass(frozen=True, slots=True)
@@ -767,10 +797,11 @@ def _formula_set(
     if room is None:
         return [one for one in candidates if id(one.op) in selected]
 
-    def slots() -> int:
-        return len(selected.difference(free | credited))
-
     references = references or {}
+
+    def slots() -> int:
+        return len(selected.difference(free | credited)) - _released(candidates, selected, references)
+
     while slots() > room:
         overflow = slots() - room
         choices = []
@@ -838,6 +869,25 @@ def _formula_set(
         selected.remove(id(loser.op))
 
     return [one for one in candidates if id(one.op) in selected]
+
+
+def _released(
+    candidates: list[induction.Derived],
+    selected: set[int],
+    references: dict[int, int],
+) -> int:
+    """How many invariants die because every read of them is a carried formula.
+
+    A pointer carried in place of `base + counter` holds the register the base
+    held, so it adds no pressure.
+    """
+    reads: dict[mir.Value, int] = {}
+    for one in candidates:
+        if id(one.op) in selected:
+            bases = {offset.value for offset, _ in one.offsets if isinstance(offset, mir.Held)}
+            for value in bases.intersection(arg.value for arg in one.op.args if isinstance(arg, mir.Held)):
+                reads[value] = reads.get(value, 0) + 1
+    return sum(1 for value, count in reads.items() if references.get(value.id) == count)
 
 
 def _secondary_indexes(
@@ -1378,9 +1428,8 @@ def _times(step, by, width: int):
     """`step * by`, where that can be said without an operation.
 
     A step of one is the case BC writes -- `FOR i = 1 TO n` -- and then the
-    stride is the multiplier itself, whatever it is. Anything else needs a
-    multiply of two invariants, which belongs in the preheader beside the
-    first one and is not written yet.
+    stride is the multiplier itself, whatever it is. Anything else is None:
+    a multiply of two invariants, written in the preheader.
     """
     if isinstance(step, mir.Const) and step.n == 1:
         return by

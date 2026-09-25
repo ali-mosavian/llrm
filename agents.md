@@ -12,7 +12,7 @@ code and its tests are the specification. Rust is how it is written down,
 not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
 
 - The crate is `llrm`; every command is `llrm-*`.
-- Frontends live under `src/frontends/<lang>` (`c`, `qb`, `modern`, `bc`);
+- Frontends live under `src/frontends/<lang>` (`c`, `qb`, `nib`, `bc`);
   everything else mirrors `qbopt/`: `qbopt/<pkg>/<mod>.py` is
   `src/<pkg>/<mod>.rs`. Every Python function has a Rust function of the
   same name.
