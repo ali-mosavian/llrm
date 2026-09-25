@@ -19,3 +19,6 @@ mod test_hir_part2;
 
 #[cfg(test)]
 mod test_hir_part3;
+
+#[cfg(test)]
+mod test_quickr;

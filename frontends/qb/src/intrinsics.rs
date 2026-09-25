@@ -115,7 +115,7 @@ const fn dialect_bit(dialect: Dialect) -> u8 {
         Dialect::QBasic11 => QBASIC,
         Dialect::QuickBasic45 => QB45,
         Dialect::Pds71 => PDS,
-        Dialect::VbDos => VBDOS,
+        Dialect::VbDos | Dialect::Quickr => VBDOS,
     }
 }
 

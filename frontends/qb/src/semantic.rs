@@ -8162,6 +8162,7 @@ fn dialect_name(dialect: Dialect) -> &'static str {
         Dialect::QuickBasic45 => "qb45",
         Dialect::Pds71 => "pds71",
         Dialect::VbDos => "vbdos",
+        Dialect::Quickr => "quickr",
     }
 }
 

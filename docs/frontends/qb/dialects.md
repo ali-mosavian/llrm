@@ -108,3 +108,41 @@ in VBDOS-only behavior.
 QB Quake is a late integration corpus, not the specification. A construct
 first discovered there is reduced to a small dialect fixture before its
 implementation is changed.
+
+## QuickrBASIC (`quickr`)
+
+`quickr` is the one profile that is not a Microsoft compiler. It is the VBDOS
+profile plus the extensions below, and it pairs with the VBDOS runtime. The
+Microsoft profiles reject every extension, so the compatibility ladder stays
+faithful.
+
+### Sized integers
+
+| Spelling | Width | Range |
+|---|---|---|
+| `BYTE`, `UNSIGNED BYTE` | 1 | 0 to 255 |
+| `SIGNED BYTE` | 1 | -128 to 127 |
+| `INTEGER`, `SIGNED INTEGER` | 2 | -32768 to 32767 |
+| `UNSIGNED INTEGER` | 2 | 0 to 65535 |
+| `LONG`, `SIGNED LONG` | 4 | -2147483648 to 2147483647 |
+| `UNSIGNED LONG` | 4 | 0 to 4294967295 |
+
+`SIGNED` and `UNSIGNED` modify an integer type wherever `AS` takes one: `DIM`,
+`REDIM`, `COMMON`, `STATIC`, `SHARED`, parameters, `FUNCTION` results and
+`TYPE` fields. `BYTE` is unsigned, as in Visual Basic. `DEFBYTE` sets the
+default type of a letter range. There are no new suffixes.
+
+Arithmetic follows C. An operand narrower than `INTEGER` widens to `INTEGER`.
+Otherwise the result has the wider width, and it is unsigned when either
+operand of that width is unsigned. Comparison, `\`, `MOD` and conversion to
+floating point use the unsigned form for unsigned operands. A store narrows
+modulo the destination width. Constants outside the destination's range are a
+compile-time "Overflow".
+
+### Declarations
+
+`OPTION EXPLICIT` is always on: using a variable that no `DIM`, `REDIM`,
+`COMMON`, `STATIC`, `SHARED`, `CONST` or parameter declares is the error
+"Variable not defined". Reading a local variable on a path where nothing has
+assigned it is a warning. The program still compiles, and the variable reads
+as zero.

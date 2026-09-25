@@ -19,7 +19,7 @@ pub fn MANIFEST() -> PathBuf {
 }
 
 /// `DIALECTS`: the QB-family `hir.Dialect` values.
-pub const DIALECTS: [&str; 4] = ["qbasic11", "qb45", "pds71", "vbdos"];
+pub const DIALECTS: [&str; 5] = ["qbasic11", "qb45", "pds71", "vbdos", "quickr"];
 /// `RUNTIMES`: the QB-family `hir.RuntimeProfile` values.
 pub const RUNTIMES: [&str; 3] = ["qb45", "pds71", "vbdos"];
 /// `ARRAY_ORDERS`: every `hir.ArrayOrder` value.
