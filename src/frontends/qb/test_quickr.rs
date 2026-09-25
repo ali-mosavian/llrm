@@ -9,7 +9,7 @@ use super::test_hir::written;
 fn compiled(source: &str) -> Result<crate::hir::model::Program, String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "quickr.bas", source.as_bytes());
-    qb_driver::parsed(&path, "quickr", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("quickr", "vbdos"), None)
         .map_err(|error| error.to_string())
 }
 
@@ -87,7 +87,7 @@ fn byte_constant_out_of_range_is_an_overflow() {
 fn microsoft_profiles_reject_sized_integers() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"DIM u AS UNSIGNED INTEGER\nu = 1\n");
-    let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS has no UNSIGNED");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
@@ -192,7 +192,7 @@ fn every_declaring_statement_declares() {
 fn vbdos_still_declares_implicitly() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"x = 1\n");
-    qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect("VBDOS declares x");
 }
 
@@ -216,7 +216,7 @@ fn defuint_types_function_names() {
 fn microsoft_profiles_reject_defu_statements() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"DEFUINT A-Z\n");
-    let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS has no DEFUINT");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
@@ -253,7 +253,7 @@ fn conversion_constants_keep_the_overflow_rules() {
 fn microsoft_profiles_have_no_sized_conversions() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"FUNCTION cuint% (x AS INTEGER)\ncuint% = x + 1\nEND FUNCTION\n");
-    qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect("CUINT is an ordinary name in VBDOS");
 }
 
@@ -426,7 +426,7 @@ fn plain_floats_print_as_python_repr() {
 fn procedure_listing(source: &str, dialect: &str, name: &str) -> String {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "frame.bas", source.as_bytes());
-    let program = qb_driver::parsed(&path, dialect, "vbdos", None, &[], "column-major", false, false, false, false, false)
+    let program = qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, "vbdos"), None)
         .unwrap_or_else(|error| panic!("{error}"));
     let listing = super::test_hir::listing(&program);
     super::test_hir::between(&listing, &format!("{name} proc far"), &format!("{name} endp")).to_owned()
@@ -534,7 +534,7 @@ fn a_large_zeroed_block_is_one_fill() {
 fn module_listing(source: &str, dialect: &str) -> String {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "module.bas", source.as_bytes());
-    let program = qb_driver::parsed(&path, dialect, "vbdos", None, &[], "column-major", false, false, false, false, false)
+    let program = qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, "vbdos"), None)
         .unwrap_or_else(|error| panic!("{error}"));
     super::test_hir::listing(&program)
 }
@@ -564,7 +564,7 @@ fn a_private_procedure_on_the_runtime_frame_stays_far() {
 fn microsoft_profiles_reject_private() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "vbdos.bas", b"PRIVATE SUB s\nEND SUB\n");
-    let error = qb_driver::parsed(&path, "vbdos", "vbdos", None, &[], "column-major", false, false, false, false, false)
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
         .expect_err("VBDOS has no PRIVATE");
     assert!(error.to_string().contains("quickr"), "{error}");
 }

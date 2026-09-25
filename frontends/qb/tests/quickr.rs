@@ -1,12 +1,12 @@
 //! QuickrBASIC's use-before-definition warning.
 
-use qbfront::semantic::compile_with_warnings;
+use qbfront::semantic::{compile_with_warnings, Options};
 use qbfront::generated_parser::{lex, TokenKind};
 use qbfront::{parse, Dialect};
 
 fn warnings(source: &str) -> Vec<String> {
     let module = parse(source, Dialect::Quickr).expect("parses");
-    compile_with_warnings(&module, "t", Dialect::Quickr, "vbdos", false, false, false, false, false, false)
+    compile_with_warnings(&module, "t", Dialect::Quickr, "vbdos", &Options::default())
         .expect("compiles")
         .1
 }
@@ -53,7 +53,7 @@ fn module_code_warns_until_a_procedure_may_assign() {
 fn vbdos_does_not_warn() {
     let module = parse("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", Dialect::VbDos).expect("parses");
     let (_, found) =
-        compile_with_warnings(&module, "t", Dialect::VbDos, "vbdos", false, false, false, false, false, false)
+        compile_with_warnings(&module, "t", Dialect::VbDos, "vbdos", &Options::default())
             .expect("compiles");
     assert!(found.is_empty(), "{found:?}");
 }

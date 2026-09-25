@@ -1196,7 +1196,7 @@ impl Compiler {
             .map(|(target, type_id)| {
                 let id = self.next_instruction;
                 self.next_instruction += 1;
-                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None }
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None }
             })
             .collect();
         let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");

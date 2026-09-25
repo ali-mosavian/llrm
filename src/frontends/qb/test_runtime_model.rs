@@ -9,7 +9,7 @@ use super::test_hir::written;
 fn program_on(source: &str, dialect: &str, runtime: &str) -> crate::hir::model::Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "model.bas", source.as_bytes());
-    qb_driver::parsed(&path, dialect, runtime, None, &[], "column-major", false, false, false, false, false)
+    qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, runtime), None)
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
