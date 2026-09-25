@@ -1407,8 +1407,8 @@ mod tests {
     /// relocations emits every relocation explicitly.
     #[test]
     fn test_the_bc_frontend_uses_the_fresh_object_writer() {
-        let source = std::fs::read("fixtures/omf/hotlop-p-g2.obj").unwrap();
-        let got = bc_emitted("fixtures/omf/hotlop-p-g2.obj");
+        let source = std::fs::read("tests/fixtures/omf/hotlop-p-g2.obj").unwrap();
+        let got = bc_emitted("tests/fixtures/omf/hotlop-p-g2.obj");
         assert_eq!(got.outcome, crate::wholeseg::Emission::Lir);
         let records = omf::parse(&got.data).unwrap();
         assert_eq!(records[0].r#type, omf::THEADR);

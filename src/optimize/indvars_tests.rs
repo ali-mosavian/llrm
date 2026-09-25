@@ -525,7 +525,7 @@ fn emitted_insns(relative: &str) -> Vec<iced_x86::Instruction> {
 fn test_harr_reuses_an_existing_recurrence_for_termination() {
     use crate::support::testing;
     for (program, loop_count, increments, tag) in [("harr", 1, 1, "v-g3")] {
-        let result = testing::emitted_lir(format!("fixtures/omf/{program}-{tag}.obj"));
+        let result = testing::emitted_lir(format!("tests/fixtures/omf/{program}-{tag}.obj"));
         let blocks = testing::partitioned_bytes(&result.data);
         let incs = testing::instructions(&result.data).iter().filter(|one| one.mnemonic() == Mnemonic::Inc).count();
         let retained = loops::loops(&testing::graph(&blocks), None);
@@ -542,7 +542,7 @@ fn test_harr_reuses_an_existing_recurrence_for_termination() {
 #[test]
 #[ignore = "fails in Python too: StopIteration (no backward JNE)"]
 fn test_harr_initializes_the_reused_counter_before_its_exit_bound() {
-    let instructions = emitted_insns("fixtures/omf/harr-v-g3.obj");
+    let instructions = emitted_insns("tests/fixtures/omf/harr-v-g3.obj");
     let (branch_at, branch) = instructions
         .iter()
         .enumerate()
@@ -692,7 +692,7 @@ fn trip_counts(insns: &[iced_x86::Instruction]) -> Vec<i64> {
 fn test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone() {
     for (program, trips) in [("segld", vec![5, 20])] {
         for tag in ["p-g2", "q-o", "v-g3"] {
-            assert_eq!(trip_counts(&emitted_insns(&format!("fixtures/omf/{program}-{tag}.obj"))), trips, "{program}-{tag}");
+            assert_eq!(trip_counts(&emitted_insns(&format!("tests/fixtures/omf/{program}-{tag}.obj"))), trips, "{program}-{tag}");
         }
     }
 }

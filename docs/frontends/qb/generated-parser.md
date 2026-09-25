@@ -23,7 +23,7 @@ byte-for-byte from the pinned commit:
   module;
 - production inputs `grammar/qbasbnf.prs` and `grammar/peropcod.txt`; and
 - captured `prstab`, `prsirw`, `prsorw`, `prsstate`, and `prsrwt` goldens under
-  `fixtures/buildprs/qbasic-1.1`, used only to prove that the host generator
+  `tests/fixtures/buildprs/qbasic-1.1`, used only to prove that the host generator
   still describes the recovered tables.
 
 The crate build script uses those inputs plus
@@ -37,7 +37,7 @@ fails when a name is absent from the generated grammar or opcode catalog.
 ## Adapted, not copied
 
 The runtime parser boundary is implemented locally under
-`frontends/qb/src/generated_parser/`:
+`crates/qbfront/src/generated_parser/`:
 
 | qbasic-port reference | Local responsibility |
 |---|---|

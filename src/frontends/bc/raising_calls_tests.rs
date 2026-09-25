@@ -20,7 +20,7 @@ use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 use crate::support::testing::{self, nth, ops, width};
 
-const NBODY_STACK: &str = "fixtures/regressions/nbody-stack-p-g2.obj";
+const NBODY_STACK: &str = "tests/fixtures/regressions/nbody-stack-p-g2.obj";
 
 fn nbody() -> MirBody {
     nth(&testing::raised(NBODY_STACK), 0)
@@ -73,7 +73,7 @@ fn test_nbody_classified_divide_consumes_captured_values() {
 #[test]
 fn test_computed_divisions_are_values_not_runtime_calls() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let raised = testing::raised(format!("fixtures/omf/chain-{tag}.obj").to_lowercase());
+        let raised = testing::raised(format!("tests/fixtures/omf/chain-{tag}.obj").to_lowercase());
         let divisions: Vec<Op> =
             testing::all_ops(&raised).into_iter().filter(|op| op.kind == Kind::Divmod && !op.source_backed).collect();
         assert!(!divisions.is_empty(), "{tag}");
@@ -145,7 +145,7 @@ fn test_memory_argument_capture_requires_adjacent_pushes() {
     }
 }
 
-const NBODY: &str = "fixtures/bench/nbody-v-g3.obj";
+const NBODY: &str = "tests/fixtures/bench/nbody-v-g3.obj";
 
 /// NBODY kept Y damping's DVI4 because PITSNAP invented register arguments.
 #[test]
@@ -179,7 +179,7 @@ fn test_nbody_timer_does_not_keep_arithmetic_scratch_values_live() {
 fn test_long_division_setup_is_not_counted_as_stack_arguments() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         for name in ["lngmix", "lngmxx"] {
-            let path = format!("fixtures/omf/{name}-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/omf/{name}-{tag}.obj").to_lowercase();
             let found = testing::module(&path);
             let blocks = testing::blocks_of(&found);
             let body = testing::main_body(&found, &blocks);

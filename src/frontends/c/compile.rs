@@ -1041,7 +1041,7 @@ mod tests {
         use crate::analysis::consts::SOLVED;
         use crate::optimize::transform::HALVED;
 
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/loopaddr.cgs");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/loopaddr.cgs");
         let text = std::fs::read_to_string(path).unwrap();
         SOLVED.with(|solved| solved.set(0));
         HALVED.with(|halved| halved.set(0));
@@ -1051,7 +1051,7 @@ mod tests {
 
     /// The innermost loop's lines, from its label to its backward branch.
     fn innermost(fixture: &str) -> Vec<String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/c/{fixture}.cgs"));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let text = std::fs::read_to_string(path).unwrap();
         let built = assembled(&text, fixture, true, None, "486", &crate::model::passes::O2()).unwrap();
         let asm = crate::backend::masm::text(&built).unwrap();
@@ -1113,7 +1113,7 @@ mod tests {
     /// guessed nine in ten and read 1505 executed instructions instead of 1356.
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/crc.cgs");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/crc.cgs");
         let text = std::fs::read_to_string(path).unwrap();
         let dump = tempfile::tempdir().unwrap();
         assembled(&text, "crc", true, Some(dump.path()), "486", &crate::model::passes::O2()).unwrap();
@@ -1125,7 +1125,7 @@ mod tests {
     /// and ls linked against `strlen_`, Watcom's register-convention strlen.
     #[test]
     fn test_register_convention_is_refused() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/c/regs.cgs");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/regs.cgs");
         match assembled(&std::fs::read_to_string(path).unwrap(), "regs", false, None, "386", &crate::model::passes::O2()) {
             Err(CompileError::Unsupported(refused)) => {
                 assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
@@ -1134,15 +1134,15 @@ mod tests {
         }
     }
 
-    /// owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
+    /// toolchain/owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
     /// could be built on any other host and llrm-c refused every C file.
     #[test]
     fn test_wccq_built_here_records_the_committed_stream() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let source = root.join("fixtures/c/halve.c");
+        let source = root.join("tests/fixtures/c/halve.c");
         let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
         let recorded = super::recorded(&source, &[]).expect("wccq records halve.c");
-        let committed = std::fs::read_to_string(root.join("fixtures/c/halve.cgs")).unwrap();
+        let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 }

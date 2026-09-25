@@ -16,7 +16,7 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 | Tool | Input |
 | --- | --- |
 | `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
-| `llrm-c` | C, through a patched Open Watcom front end (`owshim/`) |
+| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`) |
 | `llrm-nib` | llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
 

@@ -79,7 +79,7 @@ fn applied(found: &Rc<Module>, body: &Rc<MirBody>, options: Options) -> Rc<MirBo
 /// FPDEEP's improvements previously required an out-of-band unroll wrapper.
 #[test]
 fn test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point() {
-    let found = testing::module("fixtures/omf/fpdeep-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/fpdeep-p-g2.obj");
     let original = testing::main_body(&found, &testing::blocks_of(&found));
     let changed = applied(&found, &original, Options::default());
     assert_eq!(changed.repetitions, vec![(0x66, 3)]);
@@ -91,7 +91,7 @@ fn test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point() {
 /// FPCSE computed its exact 487.5 sum ten times despite fitting the bounded expansion budget.
 #[test]
 fn test_fpcse_exact_ten_iteration_sum_folds_in_source_order() {
-    let found = testing::module("fixtures/omf/fpcse-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/fpcse-p-g2.obj");
     let original = testing::main_body(&found, &testing::blocks_of(&found));
     let changed = applied(&found, &original, Options::default());
     assert!(changed.repetitions.is_empty());

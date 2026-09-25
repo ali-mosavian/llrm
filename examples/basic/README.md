@@ -9,7 +9,7 @@ into its `Mean#`.
 Build the library on the host:
 
 ```text
-target/release/llrm-nib docs/examples/basic/sortlib.nib -o SORTLIB.OBJ -O2
+target/release/llrm-nib examples/basic/sortlib.nib -o SORTLIB.OBJ -O2
 ```
 
 Then, in DOS, with `SCORES.BAS`, `SORTLIB.BI` and `SORTLIB.OBJ` in one

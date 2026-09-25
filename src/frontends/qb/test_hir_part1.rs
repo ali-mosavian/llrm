@@ -118,7 +118,7 @@ fn test_lir_stage_formats_operandless_x87_store_as_intel() {
 #[test]
 #[ignore = "the Python original fails too: q45n01 now has no spill, so no B$ENRA/B$EXSA"]
 fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
-    let source = root().join("frontends/qb/compat/qb45/q45n01.bas");
+    let source = root().join("crates/qbfront/compat/qb45/q45n01.bas");
     let program = qb45(&source);
     let main = &program.modules[0].functions[0];
     let calls = hir_calls(main);
@@ -623,7 +623,7 @@ fn test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() {
 fn test_source_procedure_names_match_all_three_microsoft_omf_dialects() {
     let expected = set(&["REPORT", "TWICE"]);
     for fixture in ["procs-q-O-zi.obj", "procs-p-ot.obj", "procs-v-g3-zi.obj"] {
-        let read = omf::read(root().join("fixtures/omf").join(fixture.to_lowercase())).unwrap();
+        let read = omf::read(root().join("tests/fixtures/omf").join(fixture.to_lowercase())).unwrap();
         assert_eq!(omf::public_definitions(&read).unwrap().keys().cloned().collect::<BTreeSet<_>>(), expected);
         assert!(expected.is_subset(&omf::externals(&read).into_iter().collect()));
     }

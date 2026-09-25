@@ -320,7 +320,7 @@ pub fn sites(module: &Module, reached: &[Insn], blocks: &[Block]) -> Vec<CallSit
 // runtime's synthesis, so a site whose CF is read afterwards is left alone.
 // Where the high words are equal B$CPI4's OF is left from the low-word
 // compare and its jl/jge answer backwards; this cmp is right there and the
-// runtime is not (suite/cmpof.bas, configs.DIVERGES).
+// runtime is not (tests/suite/cmpof.bas, configs.DIVERGES).
 pub const SYNTHESISED: Flag = Flag(Flag::CF.0 | Flag::PF.0 | Flag::AF.0);
 
 pub static ABSORBED: LazyLock<IndexMap<&'static str, Code>> =

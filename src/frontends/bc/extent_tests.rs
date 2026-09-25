@@ -27,11 +27,11 @@ fn extents(name: &str) -> (Module, Partition) {
 #[test]
 fn test_registered_error_handler_has_independent_entry_and_emits() {
     for tag in ["p-g2", "q-O", "v-g3", "p-evt", "q-evt", "v-evt"] {
-        let found = loaded(fixture(&format!("fixtures/omf/divmod-{tag}.obj"))).unwrap();
+        let found = loaded(fixture(&format!("tests/fixtures/omf/divmod-{tag}.obj"))).unwrap();
         let result = partition(&found).unwrap();
         assert!(result.complete(), "{tag}");
         assert!(result.bodies.iter().any(|body| body.kind.value() == "error-handler"), "{tag}");
-        let emitted = testing::emitted(&testing::data(fixture(&format!("fixtures/omf/divmod-{tag}.obj"))));
+        let emitted = testing::emitted(&testing::data(fixture(&format!("tests/fixtures/omf/divmod-{tag}.obj"))));
         assert_eq!(emitted.outcome, Emission::Lir, "{tag}: {}", emitted.reason);
     }
 }
@@ -41,7 +41,7 @@ fn test_registered_error_handler_has_independent_entry_and_emits() {
 fn test_error_resume_fixture_keeps_registered_entry() {
     for tag in ["p-g2", "q-O", "v-g3", "p-evt", "q-evt", "v-evt"] {
         let emitted =
-            testing::emitted_with(&testing::data(fixture(&format!("fixtures/regressions/errent-{tag}.obj"))), true, false);
+            testing::emitted_with(&testing::data(fixture(&format!("tests/fixtures/regressions/errent-{tag}.obj"))), true, false);
         assert_eq!(emitted.outcome, Emission::Lir, "{tag}: {}", emitted.reason);
         let found = testing::loaded_bytes(&emitted.data).unwrap();
         let result = partition(&found).unwrap();
@@ -58,7 +58,7 @@ fn test_error_resume_fixture_keeps_registered_entry() {
 #[test]
 fn test_timer_handler_has_its_own_entry() {
     for (tag, entry) in [("p-evt", 0xFA), ("v-evt", 0xF0)] {
-        let found = loaded(fixture(&format!("fixtures/regressions/evtrap-{tag}.obj"))).unwrap();
+        let found = loaded(fixture(&format!("tests/fixtures/regressions/evtrap-{tag}.obj"))).unwrap();
         let result = partition(&found).unwrap();
         let handler = result.bodies.iter().find(|body| body.seed == entry).unwrap();
         assert_eq!(handler.kind.value(), "event-handler", "{tag}");
@@ -71,7 +71,7 @@ fn test_timer_handler_has_its_own_entry() {
 
 #[test]
 fn test_empty_statement_table_is_data_not_a_handler_instruction() {
-    let found = loaded(fixture("fixtures/regressions/evtrap-v-evt.obj")).unwrap();
+    let found = loaded(fixture("tests/fixtures/regressions/evtrap-v-evt.obj")).unwrap();
     let mapped = code_map(&found).unwrap();
     assert!(mapped.tables.contains(&(0x116, 0x118)));
     assert!(!mapped.starts.contains(&0x116));
@@ -81,7 +81,7 @@ fn test_empty_statement_table_is_data_not_a_handler_instruction() {
 /// ADDRM VBDOS refused OF_STA at 00bc when layout omitted trailing data.
 #[test]
 fn test_emission_preserves_the_empty_statement_table() {
-    let result = testing::emitted_lir("fixtures/omf/addrm-v-g3.obj");
+    let result = testing::emitted_lir("tests/fixtures/omf/addrm-v-g3.obj");
     let found = testing::loaded_bytes(&result.data).unwrap();
     assert!(statement_table(&found).is_some());
 }
@@ -90,7 +90,7 @@ fn test_emission_preserves_the_empty_statement_table() {
 #[test]
 fn test_emitted_statement_table_does_not_hide_code() {
     for tag in ["p-evt", "v-evt"] {
-        let result = testing::emitted_lir(format!("fixtures/omf/divmod-{tag}.obj"));
+        let result = testing::emitted_lir(format!("tests/fixtures/omf/divmod-{tag}.obj"));
         let found = testing::loaded_bytes(&result.data).unwrap();
         let mapped = code_map(&found);
         assert!(mapped.is_ok(), "{tag}: {mapped:?}");

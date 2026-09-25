@@ -141,7 +141,7 @@ fn test_two_negates_without_the_borrow_are_not_one_long_negate() {
 #[test]
 fn test_raised_longs_leave_no_consumer_without_a_producer() {
     for stem in ["negnot-q-O", "arith-v-g3"] {
-        for (_name, body) in testing::raised(format!("fixtures/omf/{stem}.obj").to_lowercase()).values {
+        for (_name, body) in testing::raised(format!("tests/fixtures/omf/{stem}.obj").to_lowercase()).values {
             let ops = || body.blocks.iter().flat_map(|block| &block.ops);
             let defined: BTreeSet<u32> = ops().flat_map(|op| &op.defines).map(|one| one.id).collect();
             let mut made = defined.clone();

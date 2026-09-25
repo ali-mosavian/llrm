@@ -387,7 +387,7 @@ full matrix.
 
 ## What the runtime does that an instruction does not
 
-Measured with `suite/divmod.bas`, which traps under `/X` and prints `ERR`:
+Measured with `tests/suite/divmod.bas`, which traps under `/X` and prints `ERR`:
 
 - `x \ 0` raises BASIC error 11. `idiv` traps with `#DE`.
 - `-2147483648 \ -1` raises **nothing at all** -- `B$DVI4` returns. `idiv`
@@ -492,9 +492,9 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   -- measured on qb-qrender, every one of its 201 has one.
 - **The emulator patch is driven by a linker symbol, not only at run time.**
   An object that does floating point carries `FIDRQQ` as an EXTDEF -- 13
-  references across qb-qrender, one in `suite/fpemu.bas`. The runtime pass
+  references across qb-qrender, one in `tests/suite/fpemu.bas`. The runtime pass
   could not move code out from under an already-patched site; here the moving
-  happens before LINK has resolved that symbol, and `suite/fpemu.bas`
+  happens before LINK has resolved that symbol, and `tests/suite/fpemu.bas`
   establishes that it is safe -- it moves all 27 of its sites and gets BC's
   own answers in all twelve configurations.
 

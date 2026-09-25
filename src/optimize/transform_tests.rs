@@ -693,7 +693,7 @@ mod corpus_tests {
     /// `add ax,[y]` served from a register used to say which register.
     #[test]
     fn test_a_served_read_names_the_value_and_not_a_register() {
-        let mut objects: Vec<_> = std::fs::read_dir(testing::path("fixtures/omf"))
+        let mut objects: Vec<_> = std::fs::read_dir(testing::path("tests/fixtures/omf"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.file_name().unwrap().to_str().unwrap().ends_with("-p-g2.obj"))
@@ -729,7 +729,7 @@ mod corpus_tests {
     /// lngmix's second divide never folded: two stores stood in its run.
     #[test]
     fn test_place_takes_a_store_out_of_a_push_run() {
-        let found = testing::module("fixtures/omf/lngmix-p-g2.obj");
+        let found = testing::module("tests/fixtures/omf/lngmix-p-g2.obj");
         let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
         let [(_, body)] = <[_; 1]>::try_from(raised.values).unwrap();
         let done = placed(&body, &found.dgroup.members, &found.calls).unwrap();
@@ -745,7 +745,7 @@ mod corpus_tests {
     /// argument it read through bp was one word off.
     #[test]
     fn test_place_keeps_the_frame_pointer_behind_the_push_that_saves_it() {
-        let found = testing::module("fixtures/omf/procs-p-ot.obj");
+        let found = testing::module("tests/fixtures/omf/procs-p-ot.obj");
         let raised = testing::raised_from(&found, &testing::blocks_of(&found), None);
         let body = raised.values.iter().find(|(name, _)| name.contains("REPORT")).unwrap().1.clone();
         let done = placed(&body, &found.dgroup.members, &found.calls).unwrap();
@@ -755,7 +755,7 @@ mod corpus_tests {
     /// 952 -> 930 bytes, no runtime divide: the second call folds around the store.
     #[test]
     fn test_both_lngmix_divides_absorb() {
-        let mut data = testing::data("fixtures/omf/lngmix-p-g2.obj");
+        let mut data = testing::data("tests/fixtures/omf/lngmix-p-g2.obj");
         for _ in 0..3 {
             data = crate::wholeseg::rebuilt(&data, true, true, None, false, false).unwrap().0;
         }

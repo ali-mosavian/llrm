@@ -57,7 +57,7 @@ fn test_a_clobber_ends_the_raised_selector_dependency() {
 #[ignore = "fails in Python too: assert 0 == 1 (no ES selector load)"]
 fn test_harr_reuses_one_selector_and_forwards_the_array_store() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let result = testing::emitted_lir(format!("fixtures/omf/harr-{tag}.obj").to_lowercase());
+        let result = testing::emitted_lir(format!("tests/fixtures/omf/harr-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
         let reached = blocks::instructions(&found).unwrap();
         let selectors: Vec<_> = reached.iter().map(|one| one.insn).filter(|one| one.op0_register() == Register::ES).collect();

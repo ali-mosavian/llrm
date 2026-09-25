@@ -331,7 +331,7 @@ fn applied(path: &str, options: Options) -> Rc<MirBody> {
 fn test_fpdeep_one_based_index_has_a_bounded_byte_offset() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         // Unrolled, i is a constant.
-        let body = applied(&format!("fixtures/omf/fpdeep-{tag}.obj").to_lowercase(), Options { unroll: false, ..Default::default() });
+        let body = applied(&format!("tests/fixtures/omf/fpdeep-{tag}.obj").to_lowercase(), Options { unroll: false, ..Default::default() });
         let known = bounded(&body).unwrap();
         let accesses: Vec<(i64, MemRef)> = body
             .blocks
@@ -355,7 +355,7 @@ fn test_fpdeep_one_based_index_has_a_bounded_byte_offset() {
 #[test]
 fn test_addrm_long_array_value_keeps_counter_bounds() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let body = applied(&format!("fixtures/omf/addrm-{tag}.obj").to_lowercase(), O2());
+        let body = applied(&format!("tests/fixtures/omf/addrm-{tag}.obj").to_lowercase(), O2());
         let known = bounded(&body).unwrap();
         let converted: Vec<(i64, Value)> = body
             .blocks
@@ -379,7 +379,7 @@ fn test_addrm_long_array_value_keeps_counter_bounds() {
 #[ignore = "fails in Python too: assert (set()) (no loop left at mir-widen)"]
 fn test_rngarm_writes_its_counter_only_after_the_loop() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let data = testing::data(format!("fixtures/regressions/rngarm-{tag}.obj").to_lowercase());
+        let data = testing::data(format!("tests/fixtures/regressions/rngarm-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&data).unwrap();
         let (result, states) = testing::emitted_mir(&data, "mir-widen", "");
         assert_eq!(result.outcome, Emission::Lir, "{tag}: {}", result.reason);

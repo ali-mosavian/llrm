@@ -83,7 +83,7 @@ fn test_following_cycle_keeps_complete_phi_edges() {
 fn test_compiled_early_exit_accumulator_is_closed() {
     use crate::model::passes::Options;
     use crate::support::testing;
-    let found = testing::module("fixtures/regressions/lcmerge-p-g2.obj");
+    let found = testing::module("tests/fixtures/regressions/lcmerge-p-g2.obj");
     let partition = testing::blocks_of(&found);
     let raised = testing::main_body(&found, &partition);
     let body = testing::applied(&found, Some(&partition), &raised, Options { lcssa: false, ..Options::default() });

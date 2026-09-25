@@ -13,7 +13,7 @@ pub fn source(module: &str) -> Option<&'static str> {
         "std.io" => Some(include_str!("std/io.nib")),
         "std.dos" => Some(include_str!("std/dos.nib")),
         "std.sort" => Some(include_str!("std/sort.nib")),
-        "std.os" => Some(include_str!("../../../runtime/nib/os.nib")),
+        "std.os" => Some(include_str!("runtime/os.nib")),
         "abi.basic" => Some(include_str!("abi/basic.nib")),
         "abi.qb45" => Some(include_str!("abi/qb45.nib")),
         "abi.pds71" => Some(include_str!("abi/pds71.nib")),
@@ -26,7 +26,7 @@ pub fn source(module: &str) -> Option<&'static str> {
 /// or the runtime's operating-system layer, which is not beside the program.
 pub fn imported(module: &str) -> Option<&'static str> {
     match module {
-        "os" => Some(include_str!("../../../runtime/nib/os.nib")),
+        "os" => Some(include_str!("runtime/os.nib")),
         _ => source(module),
     }
 }

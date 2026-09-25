@@ -22,7 +22,7 @@ fn _dispatch(body: &MirBody) -> (&MirBlock, &MirBlock) {
 #[test]
 fn test_real_dispatch_has_an_explicit_error_guard() {
     for tag in ["q-O", "p-g2", "v-g2", "v-g3"] {
-        let source = format!("fixtures/omf/jumps-{tag}.obj").to_lowercase();
+        let source = format!("tests/fixtures/omf/jumps-{tag}.obj").to_lowercase();
         let found = testing::loaded(&source).unwrap();
         let body = testing::nth(&testing::raised(&source), 0);
         let (normal, guard_block) = _dispatch(&body);
@@ -49,7 +49,7 @@ fn test_real_dispatch_has_an_explicit_error_guard() {
 #[test]
 fn test_dispatch_boundary_reaches_the_required_path() {
     // The real PDS READ witness raises Illegal function call for 256 and -1.
-    let source = "fixtures/regressions/dispatch-p-g2.obj";
+    let source = "tests/fixtures/regressions/dispatch-p-g2.obj";
     let found = testing::loaded(source).unwrap();
     let body = testing::nth(&testing::raised(source), 0);
     let (normal, guard) = _dispatch(&body);
@@ -78,7 +78,7 @@ fn test_dispatch_boundary_reaches_the_required_path() {
 #[ignore = "fails in Python too: assert not True (JUMPS' emitted object has no code map)"]
 fn test_guarded_dispatch_emits_instead_of_falling_back() {
     for tag in ["q-O", "p-g2", "v-g2", "v-g3"] {
-        let output = testing::emitted_lir(format!("fixtures/omf/jumps-{tag}.obj").to_lowercase());
+        let output = testing::emitted_lir(format!("tests/fixtures/omf/jumps-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&output.data).unwrap();
         let mapped = blocks::code_map(&found).unwrap();
         // JUMPS only dispatches 1..3: neither the error call nor its table is reachable.
@@ -91,7 +91,7 @@ fn test_guarded_dispatch_emits_instead_of_falling_back() {
 #[test]
 #[ignore = "fails in Python too: Unprintable: main (main): block leaves for (76, 87, 98, 109) with no instruction choosing"]
 fn test_read_data_error_witness_emits_native_dispatch() {
-    let source = "fixtures/regressions/dispatch-p-g2.obj";
+    let source = "tests/fixtures/regressions/dispatch-p-g2.obj";
     let raised = testing::raised(source);
     assert!(testing::all_ops(&raised).iter().any(|op| op.kind == Kind::Switch));
     let result = testing::emitted_lir(source);

@@ -21,7 +21,7 @@ use crate::wholeseg::{Emission, Watched};
 #[ignore = "fails in Python too: assert not [Loop(header=129, latches=frozenset({74}), ...)]"]
 fn test_production_ivarm_has_no_loop_and_stores_last_value() {
     for tag in ["q-o", "p-g2", "v-g3"] {
-        let result = testing::emitted(&testing::data(format!("fixtures/regressions/ivarm-{tag}.obj")));
+        let result = testing::emitted(&testing::data(format!("tests/fixtures/regressions/ivarm-{tag}.obj")));
         assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
         let decoded = testing::partitioned_bytes(&result.data);
         assert!(loops::loops(&testing::graph(&decoded), None).is_empty(), "{tag}");
@@ -50,7 +50,7 @@ fn test_specialized_main_and_legacy_procedure_emit_together() {
                 cloned.push(body.cloned);
             }
         };
-        let data = testing::data(format!("fixtures/regressions/ivproc-{tag}.obj"));
+        let data = testing::data(format!("tests/fixtures/regressions/ivproc-{tag}.obj"));
         let result = testing::emitted_watching(&data, Some(&mut watch));
         assert!(cloned.contains(&true) && cloned.contains(&false), "{tag}");
         assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
@@ -59,7 +59,7 @@ fn test_specialized_main_and_legacy_procedure_emit_together() {
 }
 
 fn original(tag: &str) -> (Rc<Module>, Rc<MirBody>) {
-    let found = testing::module(&format!("fixtures/regressions/ivarm-{tag}.obj"));
+    let found = testing::module(&format!("tests/fixtures/regressions/ivarm-{tag}.obj"));
     let body = testing::main_body(&found, &testing::blocks_of(&found));
     let options = Options { unroll: false, ..Options::default() };
     let how = transform::Applied { found: Some(found.clone()), options, ..Default::default() };

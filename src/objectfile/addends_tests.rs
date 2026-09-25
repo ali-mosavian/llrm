@@ -14,7 +14,7 @@ fn word(code: &[u8], at: i64) -> i64 {
 #[test]
 fn test_borland_indexed_array_address_includes_encoded_addend() {
     // Rebuilt d_faces drew zero triangles: 0CA0h in the instruction was lost.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/regressions/d_faces-borland.obj");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regressions/d_faces-borland.obj");
     let found = module::of(&omf::read(path).unwrap()).unwrap();
     let mapped = blocks::code_map(&found).unwrap();
     let original = fppatches::native_records(&found, &mapped.starts);

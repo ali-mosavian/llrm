@@ -28,8 +28,8 @@ positionless `GET`/`PUT`.
 
 ## Durable oracle
 
-`frontends/qb/fixtures/legacy_ast_goldens/accepted-cases.tsv` indexes 79
-human-readable AST snapshots. `frontends/qb/tests/generated_parser.rs` requires
+`crates/qbfront/fixtures/legacy_ast_goldens/accepted-cases.tsv` indexes 79
+human-readable AST snapshots. `crates/qbfront/tests/generated_parser.rs` requires
 every identity to parse and match its snapshot exactly. The snapshots are a
 frozen migration record and must never be regenerated from the production
 parser, because that would turn a regression into its own expected answer.

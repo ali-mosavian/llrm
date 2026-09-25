@@ -32,7 +32,7 @@ fn floor_division_rounds_down_and_remainder_keeps_the_dividends_sign() {
 
 #[test]
 fn loops_and_internal_calls_run() {
-    let source = include_str!("../../fixtures/nib/control.nib");
+    let source = include_str!("../../tests/fixtures/nib/control.nib");
     assert_eq!(value(source, "count", &[12]), Some(Number::Int(11)));
 }
 
@@ -59,7 +59,7 @@ fn print_captures_text_integers_floats_and_fixed() {
         execute(source, "main", &[]).output,
         "hi\n-5 0.30000000000000004\n"
     );
-    let fixed = include_str!("../../fixtures/nib/fixed.nib");
+    let fixed = include_str!("../../tests/fixtures/nib/fixed.nib");
     let executed = execute(fixed, "fixed_literals", &[]);
     assert_eq!(executed.output, "2.25\nfixed=2.25\n");
     assert_eq!(executed.value, Some(Number::Int(147_456)));
@@ -68,7 +68,7 @@ fn print_captures_text_integers_floats_and_fixed() {
 #[test]
 fn nbody_matches_the_python_reference() {
     let executed = execute(
-        include_str!("../../fixtures/nib/nbody.nib"),
+        include_str!("../../tests/fixtures/nib/nbody.nib"),
         "nbody",
         &[Number::Int(1)],
     );

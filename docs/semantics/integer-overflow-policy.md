@@ -15,7 +15,7 @@ MIR values; removing an overflow observer is not permission to invent a wider
 result. This change is specifically about explicit INTO sites, not a claim
 that every numeric runtime operation is already replaced.
 
-`fixtures/regressions/ovfpol.bas` evaluates 32767+1 with an error handler that
+`tests/fixtures/regressions/ovfpol.bas` evaluates 32767+1 with an error handler that
 prints ERR and the error number. Its three `ovfpol-*.obj` fixtures are real
 QB/PDS/VBDOS output with each named primary configuration plus `/D /X`.
 BC and BASIC-compatible output print `ERR 6` and `DONE`. Native output prints

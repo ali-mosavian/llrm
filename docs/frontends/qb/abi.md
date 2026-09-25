@@ -6,7 +6,7 @@ below are visible in the emitted instructions.
 
 ## Ordinary `BYREF`
 
-`suite/procs.bas` was compiled with VBDOS `/O /FPi /R /G3 /E /Zi`, PDS 7.1
+`tests/suite/procs.bas` was compiled with VBDOS `/O /FPi /R /G3 /E /Zi`, PDS 7.1
 `/O /FPi /G2 /Zi`, and QuickBASIC 4.5 `/O /FPi /Zi`. In all three `Twice&`
 loads one word from `[bp+6]`, treats it as a near address in DS, then reads the
 LONG at `[si]` and `[si+2]`. Each procedure returns with `retf 2`.
@@ -63,7 +63,7 @@ with the same source meaning.
 
 ## Array parameters
 
-`suite/arrprm.bas` was compiled from the same source in all three families.
+`tests/suite/arrprm.bas` was compiled from the same source in all three families.
 The caller passes one word: the address of the array descriptor. VBDOS and PDS
 materialize that address, store DS into descriptor word `+2`, push the address,
 and far-call the procedure. QuickBASIC pushes the relocated descriptor address

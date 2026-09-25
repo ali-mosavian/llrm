@@ -1,5 +1,18 @@
 # Source layout
 
+| Path | Holds |
+| --- | --- |
+| `src` | The `llrm` crate |
+| `src/frontends/nib/runtime` | Nib's runtime, compiled into `runtime.obj`; generated code calls it |
+| `src/frontends/nib/std`, `abi` | Modules Nib programs import |
+| `crates/qbfront` | The QB parser crate and its compatibility corpus |
+| `tests` | Integration tests, fixtures, and the BASIC suite |
+| `bench` | Benchmark programs |
+| `examples` | Nib, BASIC, Pascal and C interop programs |
+| `editors` | The Zed extension and tree-sitter grammar |
+| `toolchain` | What `build.rs` bootstraps: `wccq` (`owshim`), jwasm, jwlink, DOSBox-X |
+| `tools` | Developer tools; see `tools/readme.md` |
+
 The crate root holds pipeline orchestration: `src/flow.rs`, `src/rewrite.rs`
 and `src/wholeseg.rs`. Everything else is grouped by responsibility:
 
@@ -8,7 +21,7 @@ and `src/wholeseg.rs`. Everything else is grouped by responsibility:
 | `src/bin` | The `llrm-*` tools and `nibfront` |
 | `src/frontends/qb` | QB-family driver, HIR-to-MIR ABI, inline x87 |
 | `src/frontends/nib` | The llrm language: lexer, parser, semantics, HIR |
-| `src/frontends/c` | C through Open Watcom's front end (`owshim/`): its code-generator stream, raised to MIR |
+| `src/frontends/c` | C through Open Watcom's front end (`toolchain/owshim/`): its code-generator stream, raised to MIR |
 | `src/frontends/bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
 | `src/hir` | The common HIR: model, codec, verifier, lowering to MIR |
 | `src/objectfile` | OMF records, module metadata, relocation |
@@ -19,10 +32,6 @@ and `src/wholeseg.rs`. Everything else is grouped by responsibility:
 | `src/abi` | Runtime contracts and the adjacent `runtime.toml` data file |
 | `src/legacy` | Older lifting and call absorption still shared by raising |
 | `src/cycles` | Instruction-cost model |
-
-The QB parser is its own crate in `frontends/qb/` (`qbfront`). `qbopt/` is the
-Python predecessor; every Rust module mirrors its path there, and
-[the port map](../history/port-map.md) pairs them.
 
 This organization makes ownership visible; it does not claim the architectural
 migration is finished. Existing dependency cycles and machine-aware MIR

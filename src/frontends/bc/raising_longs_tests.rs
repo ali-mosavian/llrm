@@ -252,7 +252,7 @@ fn unary_and_scalar_widen_bc_long_negation_as_python_does() {
 /// UDTACC emitted two-word loads and ADD/ADC for y because its zero-offset access was unnamed.
 #[test]
 fn test_udtacc_second_field_is_a_whole_long() {
-    let body = nth(&testing::raised("fixtures/regressions/udtacc-p-g2.obj"), 0);
+    let body = nth(&testing::raised("tests/fixtures/regressions/udtacc-p-g2.obj"), 0);
     let load = ops(&body).into_iter().find(|op| op.at == 0xB1 && !op.loads.is_empty()).unwrap();
     assert_eq!(load.loads[0].width, 4);
     assert!(!ops(&body).iter().any(|op| op.kind == Kind::AddCarry));
@@ -261,7 +261,7 @@ fn test_udtacc_second_field_is_a_whole_long() {
 /// PITSNAP split its signed byte into two stores and reloaded it, raising NBODY cost by 20.
 #[test]
 fn test_nbody_timing_helper_stores_the_signed_whole_value() {
-    let body = nth(&testing::raised("fixtures/bench/nbody-v-g3.obj"), 1);
+    let body = nth(&testing::raised("tests/fixtures/bench/nbody-v-g3.obj"), 1);
     let stores: Vec<Op> =
         ops(&body).into_iter().filter(|op| [0x47B, 0x47E].contains(&op.at) && !op.stores.is_empty()).collect();
     assert_eq!(stores.len(), 1);
@@ -274,7 +274,7 @@ fn test_nbody_timing_helper_stores_the_signed_whole_value() {
 #[test]
 fn test_nbody_counter_seed_has_a_known_high_word() {
     use crate::analysis::consts::{self, Known};
-    let path = "fixtures/bench/nbody-v-g3.obj";
+    let path = "tests/fixtures/bench/nbody-v-g3.obj";
     let found = testing::loaded(path).unwrap();
     let raised = nth(&testing::raised(path), 0);
     for (seed, expected) in [(0, 0), (1, 0), (0x7FFF, 0), (0x8000, 0xFFFF), (-1, 0xFFFF)] {
@@ -301,7 +301,7 @@ fn test_nbody_counter_seed_has_a_known_high_word() {
 #[test]
 fn test_localp_signed_index_addition_is_a_whole_long() {
     for tag in ["q-O", "p-g2", "v-g3"] {
-        let ops = all_ops(&testing::raised(format!("fixtures/regressions/localp-{tag}.obj").to_lowercase()));
+        let ops = all_ops(&testing::raised(format!("tests/fixtures/regressions/localp-{tag}.obj").to_lowercase()));
         assert!(
             ops.iter().any(|op| op.kind == Kind::Add
                 && op.results.len() == 1
@@ -316,7 +316,7 @@ fn test_localp_signed_index_addition_is_a_whole_long() {
 /// branch join's unused flag phis must not change the optimizer's path.
 #[test]
 fn test_control_branch_updates_are_whole_longs_before_optimization() {
-    let raised = testing::raised("fixtures/parity/control-v-g3.obj");
+    let raised = testing::raised("tests/fixtures/parity/control-v-g3.obj");
     let body = &raised.values.iter().find(|(name, _)| name == "procedure PARITYCONTROL").unwrap().1;
     assert!(!ops(body).iter().any(|op| op.kind == Kind::AddCarry));
     let updates: Vec<Op> =
@@ -329,7 +329,7 @@ fn test_control_branch_updates_are_whole_longs_before_optimization() {
 #[test]
 fn test_negnot_raises_printed_long_negations() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let body = nth(&testing::raised(format!("fixtures/omf/negnot-{tag}.obj").to_lowercase()), 0);
+        let body = nth(&testing::raised(format!("tests/fixtures/omf/negnot-{tag}.obj").to_lowercase()), 0);
         let ops = ops(&body);
         assert!(!ops.iter().any(|op| op.kind == Kind::AddCarry), "{tag}");
         assert_eq!(ops.iter().filter(|op| op.kind == Kind::Neg && width(&op.results[0]) == 4).count(), 3, "{tag}");
@@ -339,14 +339,14 @@ fn test_negnot_raises_printed_long_negations() {
 /// ARITH /V fused ADD/ADC despite its final-word flags being visible at the machine exit, so fresh OMF emission refused it.
 #[test]
 fn test_event_arithmetic_keeps_a_pair_when_its_flags_cross_the_machine_exit() {
-    testing::emitted_lir("fixtures/omf/arith-p-evt.obj");
+    testing::emitted_lir("tests/fixtures/omf/arith-p-evt.obj");
 }
 
 /// ADDRM stored b(i) in two words and immediately reloaded the same long on every iteration.
 #[test]
 fn test_addrm_stores_and_reuses_the_signed_whole_value() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let found = testing::module(&format!("fixtures/omf/addrm-{tag}.obj").to_lowercase());
+        let found = testing::module(&format!("tests/fixtures/omf/addrm-{tag}.obj").to_lowercase());
         let blocks = testing::blocks_of(&found);
         let body = testing::main_body(&found, &blocks);
         assert!(ops(&body).iter().any(|op| op.stores.iter().any(|one| one.base.is_some() && one.width == 4)), "{tag}");
@@ -358,7 +358,7 @@ fn test_addrm_stores_and_reuses_the_signed_whole_value() {
 /// Nbody recomputed invariant position reads; hoisting four halves had increased spill cost.
 #[test]
 fn test_nbody_whole_position_loads_leave_the_inner_loop() {
-    let found = testing::module("fixtures/regressions/nbody-stack-p-g2.obj");
+    let found = testing::module("tests/fixtures/regressions/nbody-stack-p-g2.obj");
     let blocks = testing::blocks_of(&found);
     let body = testing::main_body(&found, &blocks);
     let sites: Vec<Op> = ops(&body).into_iter().filter(|op| [0x12D, 0x144].contains(&op.at) && !op.loads.is_empty()).collect();
@@ -381,13 +381,13 @@ fn test_nbody_whole_position_loads_leave_the_inner_loop() {
 /// a removed ADC's flag, left only on dead phis, became a caller input.
 #[test]
 fn test_removed_half_flags_do_not_become_machine_exit_inputs() {
-    testing::emitted_lir("fixtures/parity/control-v-g3.obj");
+    testing::emitted_lir("tests/fixtures/parity/control-v-g3.obj");
 }
 
 /// Long-pair recognition belongs to raising; the late machine-shaped pass must not exist.
 #[test]
 fn test_production_does_not_recognize_long_pairs_after_optimization() {
-    testing::emitted_lir("fixtures/omf/arith-p-g2.obj");
+    testing::emitted_lir("tests/fixtures/omf/arith-p-g2.obj");
 }
 
 /// Whether the emitted object pops anything: splitting a whole value through the stack.
@@ -400,7 +400,7 @@ fn pops(path: &str) -> bool {
 #[test]
 fn test_nots_stores_whole_unary_results_without_stack_splitting() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        assert!(!pops(&format!("fixtures/omf/nots-{tag}.obj").to_lowercase()), "{tag}");
+        assert!(!pops(&format!("tests/fixtures/omf/nots-{tag}.obj").to_lowercase()), "{tag}");
     }
 }
 
@@ -408,6 +408,6 @@ fn test_nots_stores_whole_unary_results_without_stack_splitting() {
 #[test]
 fn test_arith_passes_whole_results_without_splitting_them() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        assert!(!pops(&format!("fixtures/omf/arith-{tag}.obj").to_lowercase()), "{tag}");
+        assert!(!pops(&format!("tests/fixtures/omf/arith-{tag}.obj").to_lowercase()), "{tag}");
     }
 }

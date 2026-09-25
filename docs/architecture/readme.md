@@ -18,11 +18,11 @@ targets and their evidence belong in `docs/measurement/targets.md`.
 
 ```mermaid
 flowchart LR
-    QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>frontends/qb/"]
+    QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>crates/qbfront/"]
     Nib["Nib source"] --> NibFront["lexer, parser, semantics<br/>src/frontends/nib/"]
     QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>src/hir/"]
     NibFront -->|"common HIR"| Hir
-    C["C source"] --> Wcc["Open Watcom front end<br/>owshim/ capture"]
+    C["C source"] --> Wcc["Open Watcom front end<br/>toolchain/owshim/ capture"]
     Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>src/frontends/c/"]
     BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>src/frontends/bc/"]
 
@@ -593,7 +593,7 @@ one documented target without materially regressing another.
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
   Raw-MIR inventory (2026-09-10): 489 objects, 587 bodies, 465 natural
-  loops across `fixtures/omf` and `fixtures/bench`. Every loop already has
+  loops across `tests/fixtures/omf` and `tests/fixtures/bench`. Every loop already has
   a dedicated preheader and exits; only VBDOS PITSNAP in FPBENCH and NBODY
   has multiple latches. General canonicalization remains required, but is
   not the current arithmetic-kernel optimization blocker.
@@ -659,7 +659,7 @@ one documented target without materially regressing another.
   with downstream SSA merges where their values meet. Bypass phi inputs are
   repaired on their incoming edges; a direct use reachable without a defining
   exit is left unchanged rather than supplied an invented value.
-  Real PDS `fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
+  Real PDS `tests/fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
   paths and an accumulator use after their join. Its MIR gains two exit phis
   and one downstream merge; all five focused regressions pass, including a
   following cycle and a bypass join. Baseline and both native builds print
@@ -1203,7 +1203,7 @@ one documented target without materially regressing another.
   Floating point, traps, non-parameter memory, observed ABI-only results and
   multiply-called bodies remain conservative. The size bound receives only
   the selected CPU's numeric call cost; the transform sees no opcode or
-  register name. On `fixtures/c/choose.cgs`, the one-use `pick` and `which`
+  register name. On `tests/fixtures/c/choose.cgs`, the one-use `pick` and `which`
   bodies disappear and their six pushes, two calls and two cleanups vanish:
   the whole module falls from 93 bytes / 44 instructions to 48 bytes / 22
   instructions on every CPU profile. GCC 16.2's installed i686 compiler also

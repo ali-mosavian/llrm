@@ -98,7 +98,7 @@ fn indexed_fload(op: &Op) -> bool {
 #[test]
 fn test_fpdeep_reuses_proven_finite_array_loads() {
     for tag in ["q-O"] {
-        let path = format!("fixtures/omf/fpdeep-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/omf/fpdeep-{tag}.obj").to_lowercase();
         let (found, blocks, body) = main_of(&path);
         let body = testing::applied(&found, Some(&blocks), &body, O2());
         assert!(!testing::ops(&body).iter().any(indexed_fload), "{tag}");
@@ -130,7 +130,7 @@ fn test_fpdeep_reuses_proven_finite_array_loads() {
 #[test]
 fn test_array_reuse_requires_every_element_to_have_proven_integer_bounds() {
     for bits in [0x7F80_0000_i64, 0x7FC0_0000, 1] {
-        let (found, blocks, body) = main_of("fixtures/omf/fpdeep-p-g2.obj");
+        let (found, blocks, body) = main_of("tests/fixtures/omf/fpdeep-p-g2.obj");
         let first = body.blocks[0].ops[0].clone();
         assert_eq!(first.args, [Arg::Const(Const::new(0x4140_0000, 4))]);
         let mut changed = MirBody::clone(&body);
@@ -164,7 +164,7 @@ fn test_array_reuse_requires_every_element_to_have_proven_integer_bounds() {
 #[ignore = "fails in Python too: StopIteration (no indexed FLOAD once transformed)"]
 fn test_finite_array_proof_requires_known_aligned_nonwrapping_bytes() {
     for guard in [None, Some("missing"), Some("alignment"), Some("segment"), Some("wrap")] {
-        let (found, blocks, body) = main_of("fixtures/omf/fpdeep-p-g2.obj");
+        let (found, blocks, body) = main_of("tests/fixtures/omf/fpdeep-p-g2.obj");
         // Unrolled, i is a constant.
         let body = testing::applied(&found, Some(&blocks), &body, Options { unroll: false, ..Default::default() });
         let (block, index, op) = body
@@ -203,7 +203,7 @@ fn test_finite_array_proof_requires_known_aligned_nonwrapping_bytes() {
 #[test]
 fn test_computed_runtime_integer_uses_one_conversion() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let result = testing::emitted_lir(format!("fixtures/regressions/fpcalc-{tag}.obj").to_lowercase());
+        let result = testing::emitted_lir(format!("tests/fixtures/regressions/fpcalc-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
         assert!(!found.calls.values().any(|name| name == "B$FIL2"), "{tag}");
         let instructions: Vec<Insn> =
@@ -215,7 +215,7 @@ fn test_computed_runtime_integer_uses_one_conversion() {
 #[test]
 fn test_helper_conversion_respects_its_effect_contract() {
     for change in ["unknown", "writes", "control", "inputs"] {
-        let path = "fixtures/regressions/fpicse-p-g2.obj";
+        let path = "tests/fixtures/regressions/fpicse-p-g2.obj";
         let found = testing::loaded(path).unwrap();
         let mut contracts = runtime::for_module(&found, None).unwrap();
         for (at, rule) in contracts.iter_mut() {
@@ -243,7 +243,7 @@ fn test_helper_conversion_respects_its_effect_contract() {
 fn test_runtime_integer_conversion_is_shared_in_emitted_code() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         for (program, helper) in [("fpicse", "B$FILD"), ("fpi2cs", "B$FIL2")] {
-            let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/regressions/{program}-{tag}.obj").to_lowercase();
             let result = testing::emitted_lir(&path);
             let found = testing::loaded_bytes(&result.data).unwrap();
             assert!(!found.calls.values().any(|name| name == helper), "{path}");
@@ -265,7 +265,7 @@ fn test_runtime_integer_conversion_is_shared_in_emitted_code() {
 #[test]
 fn test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not() {
     for (format, expected) in [(Format::Binary32, 2)] {
-        let (found, _, body) = main_of("fixtures/omf/fpcsex-p-g2.obj");
+        let (found, _, body) = main_of("tests/fixtures/omf/fpcsex-p-g2.obj");
         let block = body.blocks.iter().find(|block| block.ops.iter().any(|op| op.kind == Kind::Fload)).unwrap();
         let rule = Semantics::new([format], Format::Extended80, Precision::Exact, Rounding::None);
         let loads: Vec<Op> = block

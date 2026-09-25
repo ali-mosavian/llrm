@@ -195,7 +195,7 @@ fn test_exact_pair_keeps_checks_and_refuses_observable_results() {
 #[test]
 #[ignore = "fails in Python too: AttributeError: 'Op' object has no attribute 'node'"]
 fn test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance() {
-    let body = testing::nth(&testing::raised_with("fixtures/omf/fpcse-p-g2.obj", true, false), 0);
+    let body = testing::nth(&testing::raised_with("tests/fixtures/omf/fpcse-p-g2.obj", true, false), 0);
     let check = testing::ops(&body).into_iter().find(|op| op.at == 0x7A).unwrap();
     assert_eq!(check.kind, Kind::Fcheck);
     assert!(check.name.is_empty() && check.node().is_some());
@@ -212,7 +212,7 @@ fn emitted(path: &str) -> Vec<iced_x86::Instruction> {
 #[test]
 fn test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic() {
     use iced_x86::Mnemonic;
-    let instructions = emitted("fixtures/omf/fpdeep-q-o.obj");
+    let instructions = emitted("tests/fixtures/omf/fpdeep-q-o.obj");
     let arithmetic = [Mnemonic::Fld, Mnemonic::Fmul, Mnemonic::Fmulp, Mnemonic::Fdiv, Mnemonic::Fdivp];
     assert!(!instructions.iter().any(|one| arithmetic.contains(&one.mnemonic())));
     assert!(!instructions.iter().any(|one| one.mnemonic() == Mnemonic::Wait));
@@ -221,11 +221,11 @@ fn test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic() {
 /// QB FPCSE falsely reported five overlapping bytes when entry 0x30 became source 0x35.
 #[test]
 fn test_qb_fpcse_preserves_entry_when_first_load_disappears() {
-    testing::emitted_lir("fixtures/omf/fpcse-q-o.obj");
+    testing::emitted_lir("tests/fixtures/omf/fpcse-q-o.obj");
 }
 
 /// QB FPCSE's constant result still ran three jumps through its empty loop header.
 #[test]
 fn test_collapsed_fpcse_has_no_empty_jump_trampoline() {
-    assert!(!emitted("fixtures/omf/fpcse-q-o.obj").iter().any(|one| one.mnemonic() == iced_x86::Mnemonic::Jmp));
+    assert!(!emitted("tests/fixtures/omf/fpcse-q-o.obj").iter().any(|one| one.mnemonic() == iced_x86::Mnemonic::Jmp));
 }

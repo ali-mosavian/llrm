@@ -21,7 +21,7 @@ use crate::optimize::transform;
 use crate::support::testing;
 
 fn raised(stem: &str) -> (Rc<Module>, Rc<Vec<Block>>, RaisedBodies) {
-    let found = testing::module(&format!("fixtures/omf/{}.obj", stem.to_lowercase()));
+    let found = testing::module(&format!("tests/fixtures/omf/{}.obj", stem.to_lowercase()));
     let blocks = testing::blocks_of(&found);
     let bodies = testing::raised_from(&found, &blocks, None);
     (found, blocks, bodies)
@@ -59,7 +59,7 @@ fn lowered(
 #[test]
 fn test_string_copy_keeps_its_implicit_address_registers() {
     // fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy.
-    let data = std::fs::read("fixtures/omf/fpdeep-p-g2.obj").unwrap();
+    let data = std::fs::read("tests/fixtures/omf/fpdeep-p-g2.obj").unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
     let mut contracts = runtime::for_module(&found, None).unwrap();
     let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
@@ -83,7 +83,7 @@ fn test_string_copy_keeps_its_implicit_address_registers() {
 #[test]
 fn test_a_procedure_hands_back_dx_ax() {
     // procs p-ot's TWICE& left its answer in bx and ax, and its callers read dx:ax.
-    let data = std::fs::read("fixtures/omf/procs-p-ot.obj").unwrap();
+    let data = std::fs::read("tests/fixtures/omf/procs-p-ot.obj").unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
     let mut contracts = runtime::for_module(&found, None).unwrap();
     let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
@@ -104,7 +104,7 @@ fn test_a_procedure_hands_back_dx_ax() {
 #[test]
 fn test_bcs_own_assignment_satisfies_every_requirement() {
     // The table is only worth having if the code it describes obeys it.
-    let mut fixtures: Vec<_> = std::fs::read_dir("fixtures/omf")
+    let mut fixtures: Vec<_> = std::fs::read_dir("tests/fixtures/omf")
         .unwrap()
         .map(|one| one.unwrap().path())
         .filter(|one| one.extension().is_some_and(|extension| extension == "obj"))
@@ -301,7 +301,7 @@ fn test_a_stores_address_is_the_value_that_computed_it() {
 #[test]
 #[ignore = "fails in Python too: ValueError: not enough values to unpack (expected 1, got 0)"]
 fn test_an_opaque_address_keeps_the_registers_it_is_written_in() {
-    let data = testing::data("fixtures/omf/hotlpx-p-g2.obj");
+    let data = testing::data("tests/fixtures/omf/hotlpx-p-g2.obj");
     let rebuilt = crate::rewrite::rewrite(&data, &crate::rewrite::Rewrite::new(false)).unwrap().0;
     let found = testing::loaded_bytes(&rebuilt).unwrap();
     let mut contracts = runtime::for_module(&found, None).unwrap();

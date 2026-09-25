@@ -549,7 +549,7 @@ fn test_nine_dimensional_loop_carries_its_pointer() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         // `r02-strength` is the first pass that has both the promoted
         // counter and its exact logical-test bound.
-        let data = testing::data(format!("fixtures/regressions/ndarr-{tag}.obj").to_lowercase());
+        let data = testing::data(format!("tests/fixtures/regressions/ndarr-{tag}.obj").to_lowercase());
         let (result, states) = testing::emitted_mir(&data, "mir-r02-strength", "");
         assert_eq!(result.outcome, Emission::Lir, "{tag}: {}", result.reason);
         let body = &states[0];
@@ -579,7 +579,7 @@ fn unrelocated_zero_displacements(path: &str) -> Vec<usize> {
 #[test]
 fn test_matrix_reduced_stride_keeps_its_multiplier_address() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        assert_eq!(unrelocated_zero_displacements(&format!("fixtures/omf/matrix-{tag}.obj").to_lowercase()), [0_usize; 0], "{tag}");
+        assert_eq!(unrelocated_zero_displacements(&format!("tests/fixtures/omf/matrix-{tag}.obj").to_lowercase()), [0_usize; 0], "{tag}");
     }
 }
 
@@ -587,7 +587,7 @@ fn test_matrix_reduced_stride_keeps_its_multiplier_address() {
 #[test]
 fn test_harr_hoisted_descriptor_read_keeps_its_address() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let bad = unrelocated_zero_displacements(&format!("fixtures/omf/harr-{tag}.obj").to_lowercase());
+        let bad = unrelocated_zero_displacements(&format!("tests/fixtures/omf/harr-{tag}.obj").to_lowercase());
         assert!(bad.is_empty(), "{tag}: unrelocated zero displacements: {bad:?}");
     }
 }
@@ -597,7 +597,7 @@ fn test_harr_hoisted_descriptor_read_keeps_its_address() {
 #[ignore = "fails in Python too: the stored source is not a loop phi"]
 fn test_harr_stored_row_plus_column_is_loop_carried() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let found = testing::module(&format!("fixtures/omf/harr-{tag}.obj").to_lowercase());
+        let found = testing::module(&format!("tests/fixtures/omf/harr-{tag}.obj").to_lowercase());
         let blocks = testing::blocks_of(&found);
         let result = testing::applied(&found, Some(&blocks), &testing::main_body(&found, &blocks), O2());
         let store = testing::ops(&result).into_iter().find(|op| op.stores.iter().any(|one| one.allocation.is_some())).unwrap();
@@ -614,7 +614,7 @@ fn test_harr_stored_row_plus_column_is_loop_carried() {
 #[test]
 fn test_harr_descriptor_offset_is_read_before_inner_loop_unless_written() {
     let changed = true;
-    let found = testing::module("fixtures/omf/harr-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/harr-p-g2.obj");
     let blocks = testing::blocks_of(&found);
     let mut built = MirBody::clone(&testing::main_body(&found, &blocks));
     let field = MemRef::new(Some(Addr { index: found.program_data.unwrap(), ..Addr::new(Space::Segment, 16) }), 2);
@@ -633,7 +633,7 @@ fn test_harr_descriptor_offset_is_read_before_inner_loop_unless_written() {
 #[test]
 #[ignore = "fails in Python too: no ADD of 2 feeds the header phi"]
 fn test_nested_address_advances_instead_of_recomputing_row_plus_column() {
-    let found = testing::module("fixtures/omf/nested-p-g2.obj");
+    let found = testing::module("tests/fixtures/omf/nested-p-g2.obj");
     let blocks = testing::blocks_of(&found);
     let result = testing::applied(&found, Some(&blocks), &testing::main_body(&found, &blocks), O2());
     let inner = result.blocks.iter().find(|block| block.at == 0x5A).unwrap();
@@ -777,7 +777,7 @@ fn test_dead_byte_transfer_cannot_span_a_surviving_jump() {
 #[test]
 fn test_nested_row_recurrences_remove_repeated_multiplication() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let result = testing::emitted_lir(format!("fixtures/omf/nested-{tag}.obj").to_lowercase());
+        let result = testing::emitted_lir(format!("tests/fixtures/omf/nested-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
         assert!(!blocks::instructions(&found).unwrap().iter().any(|one| one.insn.mnemonic() == Mnemonic::Imul), "{tag}");
     }

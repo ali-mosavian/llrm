@@ -430,7 +430,7 @@ mod tests {
 
     fn udtrng() -> (Rc<crate::objectfile::module::Module>, Rc<MirBody>) {
         use crate::support::testing;
-        let found = testing::module("fixtures/regressions/udtrng-p-g2.obj");
+        let found = testing::module("tests/fixtures/regressions/udtrng-p-g2.obj");
         let body = testing::main_body(&found, &testing::blocks_of(&found));
         (found, body)
     }
@@ -484,7 +484,7 @@ mod tests {
     fn test_only_established_terminal_contracts_remove_return_edges() {
         use crate::abi::runtime::{self, Control};
         use crate::support::testing;
-        let found = testing::module("fixtures/regressions/udtrng-p-g2.obj");
+        let found = testing::module("tests/fixtures/regressions/udtrng-p-g2.obj");
         let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
         let contracts = runtime::for_module(&found, None).unwrap();
         let original: Vec<_> = crate::frontends::bc::blocks::partition(&found, &mapped)
@@ -511,7 +511,7 @@ mod tests {
     fn test_bools_constant_program_is_one_live_block() {
         use crate::support::testing;
         for tag in ["q-o", "p-g2", "v-g3"] {
-            let (result, states) = testing::emitted_states(&testing::data(format!("fixtures/omf/bools-{tag}.obj")));
+            let (result, states) = testing::emitted_states(&testing::data(format!("tests/fixtures/omf/bools-{tag}.obj")));
             assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{}", result.reason);
             assert_eq!(states.last().unwrap().2.blocks.len(), 1, "{tag}");
         }
@@ -522,7 +522,7 @@ mod tests {
     fn test_localp_keeps_termination_after_interleaved_procedure() {
         use crate::support::testing;
         for tag in ["q-o", "p-g2", "v-g3"] {
-            let result = testing::emitted_lir(format!("fixtures/regressions/localp-{tag}.obj"));
+            let result = testing::emitted_lir(format!("tests/fixtures/regressions/localp-{tag}.obj"));
             let found = testing::loaded_bytes(&result.data).unwrap();
             let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
             let terminals: Vec<i64> =

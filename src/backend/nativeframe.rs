@@ -495,7 +495,7 @@ mod tests {
 
     /// `blocks.partition(module, code_map(module))` for r_walk, decoded here.
     fn partition() -> Vec<Block> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/regressions/r_walk-borland.obj");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regressions/r_walk-borland.obj");
         let records = omf::read(path).unwrap();
         let (seg, _, size) = omf::code_segment(&records).unwrap();
         let code = omf::segment_image(&records, seg, size);

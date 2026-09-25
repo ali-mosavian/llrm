@@ -4,7 +4,7 @@ use super::*;
 use crate::model::mir;
 use crate::support::testing::{self, overlapping};
 
-const PL_MOVE: &str = "fixtures/regressions/qrender-pl-move-v-g3.obj";
+const PL_MOVE: &str = "tests/fixtures/regressions/qrender-pl-move-v-g3.obj";
 
 /// The B$FCMP calls in PL_MOVE's MDL_ANGLEMOD, raised with `contracts`.
 fn angle_compares(found: &Module, contracts: Option<&mut IndexMap<i64, Contract>>) -> Vec<Op> {
@@ -130,7 +130,7 @@ fn test_selected_unknown_contract_keeps_program_data_live() {
 /// DIVMOD's handler writes `caught`; treating it as writing `a` left every constant divide live.
 #[test]
 fn test_resumable_handler_summary_invalidates_only_cells_the_handler_modifies() {
-    let path = "fixtures/omf/divmod-p-g2.obj";
+    let path = "tests/fixtures/omf/divmod-p-g2.obj";
     let found = testing::loaded(path).unwrap();
     let raised = testing::raised(path);
     let ops = |wanted: &str| -> Vec<Op> {

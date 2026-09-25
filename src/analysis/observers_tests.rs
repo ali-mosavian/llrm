@@ -15,7 +15,7 @@ use crate::model::mir::{Arg, Cell, FrameAddress, Held, Kind, MemRef, MirBlock, M
 use crate::objectfile::module::{Addr, Module, Space};
 use crate::support::testing;
 
-const NBODY: &str = "fixtures/bench/nbody-v-g3.obj";
+const NBODY: &str = "tests/fixtures/bench/nbody-v-g3.obj";
 
 fn x() -> MemRef {
     MemRef::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0x76) }), 4)
@@ -208,7 +208,7 @@ fn test_nbody_counts_its_inner_loop_in_one_register() {
 #[test]
 fn test_a_long_handed_to_a_sub_keeps_both_halves_stored() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let result = testing::emitted_lir(format!("fixtures/omf/procs-{}.obj", tag.to_lowercase()));
+        let result = testing::emitted_lir(format!("tests/fixtures/omf/procs-{}.obj", tag.to_lowercase()));
         let stores = testing::instructions(&result.data)
             .into_iter()
             .filter(|one| {

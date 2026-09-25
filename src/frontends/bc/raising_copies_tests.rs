@@ -136,7 +136,7 @@ fn _instruction(raw: &[u8]) -> Op {
 
 /// FPDEEP's `d = 12` copy, alone in one block, after `byte` (a direction flag setter) if any.
 fn _copy(byte: Option<u8>) -> (Module, RaisedBody) {
-    let path = "fixtures/omf/fpdeep-p-g2.obj";
+    let path = "tests/fixtures/omf/fpdeep-p-g2.obj";
     let found = testing::loaded(path).unwrap();
     let raised = mir::bodies(&found, &testing::partitioned(path), None, false, false).unwrap();
     let public = &raised.values[0].1;
@@ -333,7 +333,7 @@ fn test_copy_selects_without_clobbering_arithmetic_flags() {
 #[ignore = "fails in Python too: assert [] == ['fdivr', 'fmul']"]
 fn test_proven_copy_unlocks_strict_floating_cse() {
     let (found, body) = _copy(Some(0xfc));
-    let original = testing::nth(&testing::raised("fixtures/omf/fpdeep-p-g2.obj"), 0);
+    let original = testing::nth(&testing::raised("tests/fixtures/omf/fpdeep-p-g2.obj"), 0);
     let floating: Vec<Op> = testing::ops(&original).into_iter().filter(|op| (0x158..=0x174).contains(&op.at)).collect();
     let sequence: Vec<i64> = floating.iter().filter_map(|op| op.floating_origin.as_ref().map(|origin| origin.at)).collect();
     let floating = floating.into_iter().map(|mut op| {

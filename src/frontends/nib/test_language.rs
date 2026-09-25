@@ -170,7 +170,7 @@ fn main() -> i16:
 
 #[test]
 fn enums_match_exhaustively_on_tags_and_payloads() {
-    let source = include_str!("../../../docs/examples/shapes.nib");
+    let source = include_str!("../../../examples/shapes.nib");
     assert_eq!(
         output(source),
         "area 87\nmode 19 has 320 columns\ntext is 80\n"
@@ -181,7 +181,7 @@ fn enums_match_exhaustively_on_tags_and_payloads() {
 
 #[test]
 fn question_mark_returns_the_failure_and_nested_patterns_cover_every_error() {
-    let source = include_str!("../../../docs/examples/digits.nib");
+    let source = include_str!("../../../examples/digits.nib");
     assert_eq!(
         output(source),
         "1234\nempty\nnot a digit\ntoo big\nfirst even 8\n"
@@ -208,7 +208,7 @@ fn output_without_leaks(source: &str) -> String {
 
 #[test]
 fn strings_join_append_copy_on_write_and_every_owner_drops_its_buffer() {
-    let source = include_str!("../../../docs/examples/greeting.nib");
+    let source = include_str!("../../../examples/greeting.nib");
     assert_eq!(
         output_without_leaks(source),
         "hello, world!\nHELLO, WORLD!\nhello\n[ada: 42] has 7 chars\nada sorts first\nreset\n"
@@ -1084,7 +1084,7 @@ fn main() -> i16:
 fn string_views_borrow_ranges_and_temporaries_and_print_compare_and_copy() {
     let source = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/docs/examples/settings.nib"
+        "/examples/settings.nib"
     ))
     .expect("the example");
     assert_eq!(
@@ -1179,14 +1179,14 @@ fn main() -> i16:
 
 #[test]
 fn a_for_takes_an_iterator_from_iter_and_calls_next_until_none() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/dice.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/dice.nib")).expect("the example");
     assert_eq!(output_without_leaks(&source), "1: 10\n2: 14\n3:  8\n4:  8\n5: 13\n6:  7\nfirst six\n");
     assert!(refused(&source.replace("for face in dice:", "for face in &mut dice:")).contains("an iterator yields values"));
 }
 
 #[test]
 fn a_view_result_borrows_what_the_caller_lent_and_never_a_local() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/csv.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/csv.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "Ada   | pilot at level 7\nGrace | admiral at level 9\nLinus | (no role)\ntrue Grace\n"
@@ -1232,7 +1232,7 @@ fn a_float_outside_the_integer_it_converts_to_panics() {
 #[test]
 fn exports_are_declared_for_c_basic_and_assembler_callers() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pascal/levels.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/pascal/levels.nib")).expect("the example");
     let module = super::parse(super::lex(&source).expect("lexes")).expect("parses");
     let declared = |language| declarations(&module, "levels", language).expect("declares");
     let c = declared(Language::C);
@@ -1247,7 +1247,7 @@ fn exports_are_declared_for_c_basic_and_assembler_callers() {
 
 #[test]
 fn sequence_patterns_match_lengths_and_view_the_rest() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/sequences.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/sequences.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "empty\none 7\n1..4 around 2\n4 -1\nfirst at 1,2\nstarts 1, 2 then 2\ntrue false\n"
@@ -1429,7 +1429,7 @@ fn main() -> i16:
         "32767 none -32768 none\n0 none -32767\n32767 -32768 -32768 -30000 -32768\n255 0 4294967295 4294967295 4294967295\n"
     );
     assert_eq!(
-        output_without_leaks(include_str!("../../../docs/examples/meter.nib")),
+        output_without_leaks(include_str!("../../../examples/meter.nib")),
         "health 255\nhealth 0\ntrue 2100000000\nfalse 2100000000\nfalse 2100000000\n"
     );
     assert!(refused("fn i16.twice(self: i16) -> i16:\n    return self * 2\n\nfn main() -> i16:\n    return 0\n").contains("only the language defines i16's methods"));
@@ -1467,7 +1467,7 @@ fn main() -> i16:
 
 #[test]
 fn enumerate_zip_and_range_are_library_generators_yielding_references() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/laps.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/laps.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "lap 1: 62s\nlap 2: 58s\nlap 3: 60s\nlap 4: 57s\nfastest lap 4\nada made 10\nbob is 1 short\n\
@@ -1537,7 +1537,7 @@ fn fields_elements_and_views_are_places_like_names() {
     // `s.v.push`, `s.v[i]`, `for x in s.v`, `f(s.v)`, `let r = &v[1:]` and
     // `outer[0][1]` each failed: "array base must be a named binding",
     // "a borrow is valid only as a borrowed function argument", or a move.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/gradebook.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/gradebook.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "ada: 3 marks, first 71\nrecent 3, average 53\nbest 85\nweek 2 day 2: 5, week 1 has 3\n"
@@ -1551,7 +1551,7 @@ fn generic_structs_enums_and_methods_take_their_types_from_use() {
     // `Pair(first=1, ...)` was "unknown struct", `Maybe.yes(4)` "unknown
     // enum", `Result.ok()` of `Result[void, E]` wanted a payload, and a
     // generic type's method named an unknown `T`.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/generic_types.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/generic_types.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "ada 42 7 true\ntop 9\nstored 11\nfull at 12\nfull at 13\n200 -1\nfirst roll 4\nnothing held\n"
@@ -1594,7 +1594,7 @@ fn main() -> i16:
     assert!(refused(walked).contains("borrowed here"), "{}", refused(walked));
     // What may be done: return `&T` of a parameter, rename a reference,
     // and reseat a `let mut` view.
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/borrows.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/borrows.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "leader bob\nbest di with 58\nfirst cy\n[move]\n[north]\n[then]\n[east]\n"
@@ -1605,7 +1605,7 @@ fn main() -> i16:
 fn dicts_hash_their_keys_grow_and_lend_a_looked_up_key() {
     // `dict[K, V]` was "unknown type"; a lookup by a borrowed string moved
     // it, and `&s` had no `.hash()`: "array has no method".
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/tally.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/tally.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "6 words, the x3, owl x0\nhearts 2, distinct 2, queen true\n40 squares, 37 -> 1369\n"
@@ -1715,7 +1715,7 @@ fn a_question_mark_returns_before_its_statement_makes_a_place() {
 
 #[test]
 fn the_roster_example_prints_compares_and_builds_players() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/roster.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/roster.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "refused rating -3\nada (2150) master *\nbob (1505) expert\ncy (1620) expert\n3 above 1500, first ada at 2150\n"
@@ -1743,7 +1743,7 @@ fn a_local_fn_is_a_function_seen_to_the_end_of_its_block() {
 
 #[test]
 fn the_easing_example_slides_through_a_table_of_function_values() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/easing.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/easing.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "linear    0   8  16  24  32  40\nin        0   1   6  14  25  40\nout       0  14  25  33  38  40\nsmooth    0   3  12  27  36  40\nstep      0   0   0  20  20  40\n"
@@ -1798,7 +1798,7 @@ fn iter_on_a_sequence_is_an_iterator_that_keeps_its_view_borrowed() {
 
 #[test]
 fn the_readings_example_smooths_peeks_and_reports_generators() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/readings.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/readings.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "raw       12  15  11  30  28  27   9  10\navg3      12  18  23  28  21  15\nfirst pair averages 13\npeak of the rest: 29\n"
@@ -1867,7 +1867,7 @@ fn an_f32_prints_the_shortest_text_that_reads_back_as_it() {
 
 #[test]
 fn the_planets_example_prints_floats_as_the_shortest_text_that_reads_back() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/planets.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/planets.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "Mercury: g 3.7013390935421295 m/s2, orbit 47877.7475278498 m/s, year 87.96015390047978 days\n\
@@ -2089,7 +2089,7 @@ fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
 #[test]
 fn qb45_exports_are_declared_as_basic_procedures() {
     use super::declarations::{Language, declarations};
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/basic/sortlib.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/basic/sortlib.nib")).expect("the example");
     let module = super::modules::load(&source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
     let basic = declarations(&module, "sortlib", Language::Basic).expect("declares");
     assert!(basic.contains("DECLARE SUB SortScores (scores() AS INTEGER, count AS INTEGER)\nDECLARE SUB Upper (text AS STRING)\n"), "{basic}");
@@ -2983,7 +2983,7 @@ fn a_reference_field_read_as_a_value_reads_what_it_refers_to() {
 
 #[test]
 fn the_pipeline_example_streams_words_through_escaping_stages() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples/pipeline.nib")).expect("the example");
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/pipeline.nib")).expect("the example");
     assert_eq!(
         output_without_leaks(&source),
         "skipped x\nmean 12\nmean 18\nmean 23\nskipped err\nmean 28\nmean 21\nmean 15\nclosed feed\nskipped x\nalarm at 23\nclosed alarm\ndone\n"

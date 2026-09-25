@@ -1196,7 +1196,7 @@ fstp dword [bp-40h]           ; fstp dword [bp-44h]
 includes floating linker-patch records, so the difference is not a code
 speed metric). The stack-argument relocation and expanded-anchor tests
 fail with their fixes removed. The real Borland fixture and source are
-`fixtures/regressions/pl_trace-borland.obj` and `pl_trace.c`.
+`tests/fixtures/regressions/pl_trace-borland.obj` and `pl_trace.c`.
 
 With optimized `r_walk` and `pl_trace`, the 300-frame run completes at
 16.3181 FPS, 258 polygons, 809 triangles, matching camera and scene.
@@ -1225,7 +1225,7 @@ push di                          ; push di
 005c: wait
 ```
 
-`fixtures/regressions/r_walk-borland.obj` and `r_walk.c` were copied from the
+`tests/fixtures/regressions/r_walk-borland.obj` and `r_walk.c` were copied from the
 fresh main build above and qb-qrender main 1c9c30a, respectively. Four focused
 discovery/refusal tests pass; disabling private-call traversal makes the
 regression fail. No C optimization or C FPS gain is claimed.

@@ -43,7 +43,7 @@ fn test_call_exclusion_requires_whole_byte_range() {
 /// FPDEEP's copied DOUBLE needs integer literal reads, not only x87 reads.
 #[test]
 fn test_literal_bytes_are_available_to_scalar_loads() {
-    let found = load("fixtures/omf/fpdeep-p-g2.obj");
+    let found = load("tests/fixtures/omf/fpdeep-p-g2.obj");
     let segments = omf::segments(&found.records);
     let (_, segment, start, payload) = omf::ledata(&found.records)
         .into_iter()
@@ -79,7 +79,7 @@ fn test_literal_bytes_are_available_to_scalar_loads() {
 /// FPDEEP's DOUBLE shares a LEDATA record with relocated string descriptors.
 #[test]
 fn test_literal_relocation_exclusion_covers_the_whole_patch() {
-    let found = load("fixtures/omf/fpdeep-p-g2.obj");
+    let found = load("tests/fixtures/omf/fpdeep-p-g2.obj");
     let segment = omf::segments(&found.records)
         .iter()
         .position(|item| item.as_ref().is_some_and(|one| one.0 == "BC_CN"))
@@ -126,7 +126,7 @@ fn test_literal_relocation_exclusion_covers_the_whole_patch() {
     }
 }
 
-const FPCSE_Q: &str = "fixtures/omf/fpcse-q-o.obj";
+const FPCSE_Q: &str = "tests/fixtures/omf/fpcse-q-o.obj";
 
 /// B$CENP may enter a No RESUME handler before exit; noreturn does not mean no reads.
 #[test]
@@ -153,7 +153,7 @@ fn test_nonreturning_call_does_not_justify_narrowing_unknown_memory_reads() {
 #[test]
 #[ignore = "fails in Python too: no initial fact at [seg:9+0x0]"]
 fn test_fpbench_one_survives_unrelated_pointer_relocations() {
-    let body = testing::nth(&testing::raised("fixtures/bench/fpbench-v-g3.obj"), 0);
+    let body = testing::nth(&testing::raised("tests/fixtures/bench/fpbench-v-g3.obj"), 0);
     let reference = MemRef::new(Some(Addr { index: 9, ..Addr::new(Space::Segment, 0) }), 4);
     let initial: IndexMap<MemRef, Const> = body.initial.iter().cloned().collect();
     assert_eq!(initial[&reference], Const::new(0x3F800000, 4));
@@ -220,7 +220,7 @@ fn test_literal_entry_requires_unmodified_complete_loader_bytes() {
 #[test]
 fn test_fpdeep_mix_outputs_fold_across_string_prints() {
     for tag in ["q-O"] {
-        let data = testing::data(format!("fixtures/omf/fpdeep-{tag}.obj").to_lowercase());
+        let data = testing::data(format!("tests/fixtures/omf/fpdeep-{tag}.obj").to_lowercase());
         let (result, states) = testing::emitted_mir(&data, "mir-widen", "");
         assert_eq!(result.outcome, crate::wholeseg::Emission::Lir, "{tag}: {}", result.reason);
         let printed: std::collections::BTreeSet<_> = states

@@ -14,13 +14,13 @@ use crate::support::pyjson::{self, Json};
 use crate::support::testing::{self, nth, ops};
 use crate::wholeseg::Emission;
 
-const HARR: &str = "fixtures/regressions/harr-bounds-p-g2.obj";
+const HARR: &str = "tests/fixtures/regressions/harr-bounds-p-g2.obj";
 
 /// NDMAX grew to 9.7 KB because each native op was mistaken for the removed HARY call.
 #[test]
 fn test_native_array_arithmetic_keeps_allocation_dimension_constants() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let path = format!("fixtures/regressions/ndmax-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/regressions/ndmax-{tag}.obj").to_lowercase();
         let found = testing::loaded(&path).unwrap();
         let body = Rc::new(nth(&testing::raised(&path), 0));
         let facts = consts::known(&body, Some(&found.dgroup.members), Some(&found.calls), None, None);
@@ -42,7 +42,7 @@ fn test_native_array_arithmetic_keeps_allocation_dimension_constants() {
 /// /D ARRIDX printed 630 instead of 1260: INTO invented a new AX result allocated to BX.
 #[test]
 fn test_overflow_observation_has_no_normal_path_register_results() {
-    let path = "fixtures/regressions/arridx-bounds-p-g2.obj";
+    let path = "tests/fixtures/regressions/arridx-bounds-p-g2.obj";
     let found = testing::loaded(path).unwrap();
     let body = nth(&testing::raised_with(path, true, true), 0);
     let checks: Vec<Op> =
@@ -163,7 +163,7 @@ fn test_dynamic_address_uses_runtime_lower_bounds_and_correct_stride() {
 /// HUGELP may remove HARY's selector only when neither backedge nor exit observes it.
 #[test]
 fn test_selector_proof_checks_the_loop_exit_path() {
-    let path = "fixtures/regressions/hugelp-p-g2.obj";
+    let path = "tests/fixtures/regressions/hugelp-p-g2.obj";
     let found = testing::loaded(path).unwrap();
     let raised = testing::raised_with(path, false, true);
     let public = &raised.values[0].1;
@@ -260,7 +260,7 @@ fn retains_hary(found: &Module, body: &MirBody) -> bool {
 #[test]
 fn test_checked_access_proofs_reach_fixed_point() {
     for tag in ["p-g2", "q-O", "v-g3"] {
-        let path = format!("fixtures/regressions/ndmax-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/regressions/ndmax-{tag}.obj").to_lowercase();
         let found = testing::loaded(&path).unwrap();
         let mut sites: Vec<i64> = found.calls.iter().filter(|(_, name)| *name == "B$HARY").map(|(at, _)| *at).collect();
         sites.sort();
@@ -287,7 +287,7 @@ fn test_hary_supports_nine_and_sixty_dimensions() {
             if (tag, program) == ("v-g3", "ndarr") {
                 continue;
             }
-            let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/regressions/{program}-{tag}.obj").to_lowercase();
             let found = testing::loaded(&path).unwrap();
             assert!(hary_calls(&found) > 0, "{path}");
             assert!(!retains_hary(&found, &nth(&testing::raised(&path), 0)), "{path}");
@@ -306,7 +306,7 @@ fn test_array_checks_are_independent_of_numeric_semantics() {
     let basic_semantics = false;
     for tag in ["p-g2", "q-O", "v-g3"] {
         for bounds_checks in [false, true] {
-            let path = format!("fixtures/regressions/arridx-bounds-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/regressions/arridx-bounds-{tag}.obj").to_lowercase();
             let found = testing::loaded(&path).unwrap();
             let body = nth(&testing::raised_with(&path, basic_semantics, bounds_checks), 0);
             let calls = ops(&body)
@@ -331,7 +331,7 @@ fn test_array_checks_are_independent_of_numeric_semantics() {
 /// Numeric compatibility must not silently enable array checks or reuse unchecked output.
 #[test]
 fn test_bounds_policy_is_recorded_separately() {
-    let source = "fixtures/regressions/arridx-bounds-p-g2.obj";
+    let source = "tests/fixtures/regressions/arridx-bounds-p-g2.obj";
     let Some(library) = testing::runtime_library(source) else {
         return;
     };
@@ -357,7 +357,7 @@ fn test_bounds_policy_is_recorded_separately() {
 fn test_dynamic_far_address_arithmetic_is_native() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         for program in ["harr-bounds", "dynsz"] {
-            let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+            let path = format!("tests/fixtures/regressions/{program}-{tag}.obj").to_lowercase();
             let found = testing::loaded(&path).unwrap();
             let body = nth(&testing::raised(&path), 0);
             assert!(!retains_hary(&found, &body), "{path}");
@@ -378,7 +378,7 @@ fn test_dynamic_far_address_arithmetic_is_native() {
 fn test_huge_helper_becomes_whole_pointer_mir_and_emitted_accesses() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         let (program, count) = ("huge2", 10);
-        let path = format!("fixtures/regressions/{program}-{tag}.obj").to_lowercase();
+        let path = format!("tests/fixtures/regressions/{program}-{tag}.obj").to_lowercase();
         let found = testing::loaded(&path).unwrap();
         let ops = ops(&nth(&testing::raised(&path), 0));
         assert_eq!(ops.iter().filter(|op| op.kind == Kind::PtrOffset).count(), count, "{path}");

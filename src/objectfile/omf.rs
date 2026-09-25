@@ -1447,7 +1447,7 @@ mod tests {
     use super::*;
 
     fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/omf")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/omf")
     }
 
     /// The `obj` fixture: every committed OMF object, sorted by name.
@@ -1946,7 +1946,7 @@ mod tests {
     fn test_adding_pointer_dependency_keeps_existing_fixups() {
         for tag in ["p-g2", "q-O", "v-g3"] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("fixtures/regressions/huge2-{tag}.obj").to_lowercase());
+                .join(format!("tests/fixtures/regressions/huge2-{tag}.obj").to_lowercase());
             let records = read(path).unwrap();
             let before = externals(&records);
             let (added, index) = with_external(&records, "b$HugeShift").unwrap();

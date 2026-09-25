@@ -272,7 +272,7 @@ fn test_fresh_basic_object_does_not_predeclare_the_c_data_class() {
 /// PDFPA reached LINK, then BCL71ANR rejected the module during initialization.
 #[test]
 fn test_pds_alternate_math_module_header_records_the_measured_switch() {
-    let path = root().join("frontends/qb/compat/pds71/pdfpa.bas");
+    let path = root().join("crates/qbfront/compat/pds71/pdfpa.bas");
     let source =
         qb_driver::parsed(&path, &qb_driver::Frontend { alternate_math: true, ..qb_driver::Frontend::new("pds71", "pds71") }, None)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -577,7 +577,7 @@ end function
 /// Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was source-ordered.
 #[test]
 fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
-    let source = parsed_as(&root().join("frontends/qb/compat/qb45/q45a05.bas"), "qb45", "qb45");
+    let source = parsed_as(&root().join("crates/qbfront/compat/qb45/q45a05.bas"), "qb45", "qb45");
     let module = &source.modules[0];
     let main = &module.functions[0];
     let values = place(main, "VALUES");
@@ -595,7 +595,7 @@ fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
 /// first, 02 00 01 00, as its B$DDIM does.
 #[test]
 fn test_row_major_rank_two_descriptor_matches_bc_r() {
-    let path = root().join("frontends/qb/compat/qb45/q45a05.bas");
+    let path = root().join("crates/qbfront/compat/qb45/q45a05.bas");
     let source = qb_driver::parsed(&path, &qb_driver::Frontend { array_order: "row-major".into(), ..qb_driver::Frontend::new("qb45", "qb45") }, None)
         .expect("parses");
     let module = &source.modules[0];
@@ -874,7 +874,7 @@ fn test_on_error_registrations_follow_source_order() {
 /// Q45R35's post-ERROR statement vanished, leaving RESUME NEXT with no target.
 #[test]
 fn test_resume_next_retains_runtime_statement_entries() {
-    let source = parsed_as(&root().join("frontends/qb/compat/qb45/q45r35.bas"), "qb45", "qb45");
+    let source = parsed_as(&root().join("crates/qbfront/compat/qb45/q45r35.bas"), "qb45", "qb45");
     let main = &source.modules[0].functions[0];
     assert!(!main.external_entries.is_empty());
 
@@ -900,7 +900,7 @@ fn test_resume_next_retains_runtime_statement_entries() {
 /// and 0x36 instead of emitting an object for the bounds-error test.
 #[test]
 fn test_resume_statement_entries_are_optimizer_roots() {
-    let source = parsed_as(&root().join("frontends/qb/compat/qb45/q45er52.bas"), "qb45", "qb45");
+    let source = parsed_as(&root().join("crates/qbfront/compat/qb45/q45er52.bas"), "qb45", "qb45");
     let function = &source.modules[0].functions[0];
     let optimized = qb_compile::optimized(&source, function, &lowered(&source)[0], &O2()).expect("optimizes");
     let mut entries: Vec<i64> = Vec::new();

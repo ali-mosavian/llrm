@@ -1,6 +1,6 @@
 #!/bin/sh
 # Relink Open Watcom's 16-bit C front end against cgshim.c instead of its
-# code generator, as wccq in the directory given (default owshim/bin).
+# code generator, as wccq in the directory given (default toolchain/owshim/bin).
 #
 # Run by build.rs. OWROOT is an Open Watcom tree, cloned at OW_COMMIT and
 # bootstrapped here if absent.

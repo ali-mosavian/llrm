@@ -31,7 +31,7 @@ use crate::model::lir::{Insn, LirBlock};
 use crate::rewrite::{rewrite, Rewrite};
 
 fn fixtures() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir("fixtures/omf")
+    let mut found: Vec<PathBuf> = std::fs::read_dir("tests/fixtures/omf")
         .unwrap()
         .map(|one| one.unwrap().path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
@@ -64,7 +64,7 @@ fn finalised(output: &[u8]) -> bool {
 #[test]
 fn test_absorbed_division_survives_removed_call_result_pins() {
     for name in ["qb45", "pds-g2"] {
-        let data = std::fs::read(format!("fixtures/omf/{name}.obj")).unwrap();
+        let data = std::fs::read(format!("tests/fixtures/omf/{name}.obj")).unwrap();
         let (output, _) = rewrite(&data, &Rewrite::new(false)).unwrap();
         assert!(finalised(&output), "{name}");
     }
@@ -74,7 +74,7 @@ fn test_absorbed_division_survives_removed_call_result_pins() {
 #[test]
 fn test_a_loop_label_survives_coalescing_its_first_copy() {
     for name in ["hotlop", "press", "matrix", "jumps"] {
-        let data = std::fs::read(format!("fixtures/omf/{name}-p-g2.obj")).unwrap();
+        let data = std::fs::read(format!("tests/fixtures/omf/{name}-p-g2.obj")).unwrap();
         let (output, _) = rewrite(&data, &Rewrite::new(false)).unwrap();
         assert!(finalised(&output), "{name}");
     }
@@ -84,7 +84,7 @@ fn test_a_loop_label_survives_coalescing_its_first_copy() {
 #[test]
 fn test_split_edges_do_not_create_phantom_padding() {
     for tag in ["p-g2", "v-g3"] {
-        let result = default_emitted(&std::fs::read(format!("fixtures/omf/bools-{tag}.obj")).unwrap());
+        let result = default_emitted(&std::fs::read(format!("tests/fixtures/omf/bools-{tag}.obj")).unwrap());
         assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
         split::code_map(&parsed(&result.data)).unwrap();
     }
@@ -139,7 +139,7 @@ fn test_the_code_block_comes_after_every_extdef() {
 #[test]
 fn test_a_rewritten_operation_still_has_machine_operands() {
     for name in ["ivchan-q-o", "stride-p-g2"] {
-        let raw = std::fs::read(format!("fixtures/omf/{name}.obj")).unwrap();
+        let raw = std::fs::read(format!("tests/fixtures/omf/{name}.obj")).unwrap();
         assert_eq!(default_rebuilt(&raw).1, REBUILT, "{name}");
     }
 }
@@ -168,7 +168,7 @@ fn _unrelocated(data: &[u8]) -> Vec<String> {
 #[test]
 fn test_an_operation_a_pass_rewrote_keeps_its_relocation() {
     for name in ["stride-q-o", "ivchan-q-o"] {
-        let raw = std::fs::read(format!("fixtures/omf/{name}.obj")).unwrap();
+        let raw = std::fs::read(format!("tests/fixtures/omf/{name}.obj")).unwrap();
         let (out, why) = rebuilt(&raw, true, true, Some("drop_loads"), false, false).unwrap();
         assert_eq!(why, REBUILT);
         assert!(_unrelocated(&raw).is_empty(), "the fixture itself has one");
@@ -179,7 +179,7 @@ fn test_an_operation_a_pass_rewrote_keeps_its_relocation() {
 /// `rebuilt` says only whether it worked; `emitted` says which emitter.
 #[test]
 fn test_an_emission_says_which_emitter_produced_it() {
-    let got = default_emitted(&std::fs::read("fixtures/omf/hotlop-p-g2.obj").unwrap());
+    let got = default_emitted(&std::fs::read("tests/fixtures/omf/hotlop-p-g2.obj").unwrap());
     assert_eq!(got.outcome, Emission::Lir);
     assert!(got.reason == REBUILT && got.fallback_reason.is_none());
 }
@@ -188,7 +188,7 @@ fn test_an_emission_says_which_emitter_produced_it() {
 #[test]
 fn test_rebuilt_still_answers_exactly_what_it_used_to() {
     for name in ["hotlop-p-g2", "nots-q-o"] {
-        let raw = std::fs::read(format!("fixtures/omf/{name}.obj")).unwrap();
+        let raw = std::fs::read(format!("tests/fixtures/omf/{name}.obj")).unwrap();
         let (out, why) = default_rebuilt(&raw);
         let got = default_emitted(&raw);
         assert_eq!((out, why), (got.data, got.reason));
@@ -238,7 +238,7 @@ fn test_a_body_that_falls_back_is_not_reported_as_lir() {
 /// nothing had written. The entry block may not read a register it has not written.
 #[test]
 fn test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() {
-    let got = default_emitted(&std::fs::read("fixtures/omf/lngmix-p-g2.obj").unwrap());
+    let got = default_emitted(&std::fs::read("tests/fixtures/omf/lngmix-p-g2.obj").unwrap());
     assert_eq!(got.outcome, Emission::Lir, "it fell back: {}", got.reason);
     let after = parsed(&got.data);
     let mapped = split::code_map(&after).unwrap();
@@ -273,7 +273,7 @@ fn test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() {
 /// NBODY printed an unprintable error: a copied IN acquired XOR and a stray MOV opcode.
 #[test]
 fn test_nbody_port_read_does_not_copy_neighbor_instructions() {
-    let result = default_emitted(&std::fs::read("fixtures/bench/nbody-v-g3.obj").unwrap());
+    let result = default_emitted(&std::fs::read("tests/fixtures/bench/nbody-v-g3.obj").unwrap());
     assert_eq!(result.outcome, Emission::Lir, "{}", result.reason);
     let found = parsed(&result.data);
     let mapped = split::code_map(&found).unwrap();

@@ -30,8 +30,8 @@ fn dict<const N: usize>(items: [(&str, Json); N]) -> Json {
 /// The `declaration` fixture: two artifacts and a profile naming one symbol.
 fn declaration(directory: &Path) -> (PathBuf, Json) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = std::fs::read(root.join("fixtures/regressions/qrender-main-v-g3.obj")).unwrap();
-    let dependency = std::fs::read(root.join("fixtures/omf/hotlop-p-g2.obj")).unwrap();
+    let source = std::fs::read(root.join("tests/fixtures/regressions/qrender-main-v-g3.obj")).unwrap();
+    let dependency = std::fs::read(root.join("tests/fixtures/omf/hotlop-p-g2.obj")).unwrap();
     std::fs::write(directory.join("main.obj"), &source).unwrap();
     std::fs::write(directory.join("dependency.obj"), &dependency).unwrap();
     let document = dict([

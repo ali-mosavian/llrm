@@ -2195,11 +2195,11 @@ mod tests {
             .map(|(name, one)| format!("{name} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../fixtures/abi/runtime-contracts.txt")
+        let want: Vec<&str> = include_str!("../../tests/fixtures/abi/runtime-contracts.txt")
             .lines()
             .collect();
         assert_eq!(got, want);
-        let order: Vec<&str> = include_str!("../../fixtures/abi/runtime-contract-order.txt")
+        let order: Vec<&str> = include_str!("../../tests/fixtures/abi/runtime-contract-order.txt")
             .lines()
             .collect();
         assert_eq!(CONTRACTS.keys().collect::<Vec<_>>(), order);
@@ -2212,7 +2212,7 @@ mod tests {
             .map(|((name, family), one)| format!("{name} {family} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../fixtures/abi/runtime-variants.txt")
+        let want: Vec<&str> = include_str!("../../tests/fixtures/abi/runtime-variants.txt")
             .lines()
             .collect();
         assert_eq!(got, want);
@@ -2897,7 +2897,7 @@ mod tests {
     fn test_event_stub_near_call_has_no_register_arguments() {
         // ADDRM /V refused at 0048 before its first statement could execute.
         for tag in ["p-evt", "v-evt"] {
-            let found = loaded(&format!("fixtures/omf/addrm-{tag}.obj"));
+            let found = loaded(&format!("tests/fixtures/omf/addrm-{tag}.obj"));
             let routine = for_module(&found, None).unwrap()[&0x48].clone();
             assert_eq!(routine.inputs, Some(BTreeSet::new()), "{tag}");
             assert_eq!(routine.cleanup, Some(0), "{tag}");
@@ -2909,7 +2909,7 @@ mod tests {
     #[test]
     fn test_changed_event_stub_remains_unknown() {
         // Only instruction bytes: a relocated field's addend is folded into its fixup before recognition.
-        let found = loaded("fixtures/omf/addrm-p-evt.obj");
+        let found = loaded("tests/fixtures/omf/addrm-p-evt.obj");
         let width = |loc: i64| match loc {
             omf::LOC_OFF16 => 2,
             omf::LOC_PTR32 => 4,
@@ -2929,7 +2929,7 @@ mod tests {
 
     #[test]
     fn test_event_stub_requires_exact_relocation() {
-        let found = loaded("fixtures/omf/addrm-p-evt.obj");
+        let found = loaded("tests/fixtures/omf/addrm-p-evt.obj");
         for field in [0x34, 0x3E] {
             let fixup = omf::fixups(&found.records)
                 .into_iter()
@@ -2965,7 +2965,7 @@ mod tests {
 
     /// Every `B$` routine a committed OMF fixture calls.
     fn _runtime_targets() -> BTreeSet<String> {
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture("fixtures/omf"))
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture("tests/fixtures/omf"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))

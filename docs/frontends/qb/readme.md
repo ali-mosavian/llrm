@@ -32,7 +32,7 @@ from that table.
 
 QB intrinsic names are resolved during semantic analysis by a separate
 declarative catalogue in
-`frontends/qb/src/intrinsics.rs`. Each entry owns dialect availability, arity,
+`crates/qbfront/src/intrinsics.rs`. Each entry owns dialect availability, arity,
 result class, effects, and an exact lowering variant (`Sin`, `Cos`, `Tan`,
 `PointerOffset`, `PointerSegment`, `Floor`, and so on). Semantic analysis
 consults that one catalogue for both numeric and string expressions, then
@@ -245,7 +245,7 @@ one of these from another in scattered code.
 The current ownership layout is:
 
 ```text
-frontends/qb/                 Rust source frontend executable
+crates/qbfront/                 Rust source frontend executable
   grammar/                    recovered base grammar plus typed action schemas
   src/generated_parser/       generated tables, VBDOS-superset lexer, AST builder
   src/dialect_extensions.rs   declarative additions after QBasic 1.1
@@ -254,7 +254,7 @@ frontends/qb/                 Rust source frontend executable
 
 src/hir/                    language-neutral Python HIR decoder/verifier
 src/frontends/qb/            QB ABI, link plan, and HIR-to-MIR adapter
-frontends/qb/tests/           focused parser/semantic regressions
+crates/qbfront/tests/           focused parser/semantic regressions
 tests/test_hir.py             common-boundary and MIR-lowering tests
 ```
 

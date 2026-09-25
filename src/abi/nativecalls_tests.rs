@@ -19,7 +19,7 @@ use crate::support::hash::IndexMap;
 
 #[test]
 fn test_private_calls_and_explicit_pascal_cleanup_balance_recursive_body() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/regressions/r_walk-borland.obj");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/regressions/r_walk-borland.obj");
     let module = module::load(path).unwrap().unwrap();
     let partition = extent::partition(&module).unwrap();
     let mapped = blocks::code_map(&module).unwrap();
