@@ -20,8 +20,8 @@ impl std::error::Error for FrontendError {}
 
 /// The program at `source`. In process: `cargo run` of `nibfront` rebuilt
 /// this crate in release after every edit before the first parse.
-pub fn parsed(source: &Path, dump: Option<&Path>) -> Result<model::Program, FrontendError> {
-    let text = super::compile_file(source).map_err(|(path, error)| refused(&path, &error))?;
+pub fn parsed(source: &Path, frontend: &super::Frontend, dump: Option<&Path>) -> Result<model::Program, FrontendError> {
+    let text = super::compile_file(source, frontend).map_err(|(path, error)| refused(&path, &error))?;
     if let Some(dump) = dump {
         std::fs::write(dump, &text).map_err(|error| FrontendError(error.to_string()))?;
     }

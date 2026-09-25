@@ -70,7 +70,7 @@ fn main() -> ExitCode {
             Err((path, error)) => report(&path.display().to_string(), error),
         };
     }
-    match llrm::frontends::nib::compile_file(Path::new(&input)) {
+    match llrm::frontends::nib::compile_file(Path::new(&input), &Default::default()) {
         Ok(hir) => {
             print!("{hir}");
             ExitCode::SUCCESS

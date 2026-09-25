@@ -34,9 +34,16 @@ pub use error::Diagnostic;
 pub use lexer::lex;
 pub use parser::parse;
 
+/// What a build asks of the frontend beyond the source.
+#[derive(Clone, Debug, Default)]
+pub struct Frontend {
+    /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
+    pub unchecked_bounds: bool,
+}
+
 pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
     let tokens = lex(source)?;
-    compile_module(parse(tokens)?, module_name)
+    compile_module(parse(tokens)?, module_name, &Frontend::default())
 }
 
 /// `source`'s tokens, one `line:column kind` per line.
@@ -51,10 +58,10 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
-pub fn compile_file(path: &std::path::Path) -> Result<String, (std::path::PathBuf, Diagnostic)> {
+pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path)?;
     let sources = module.sources.clone();
-    compile_module(module, module_name(path)).map_err(|error| located(path, &sources, error))
+    compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
 }
 
 /// The `.H`, `.BI` or `.INC` declarations of the program at `path`'s exports.
@@ -108,8 +115,8 @@ fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathB
 }
 
 /// Type-checks a parsed module and lowers it to HIR.
-pub fn compile_module(module: syntax::Module, module_name: &str) -> Result<String, Diagnostic> {
-    semantic::compile(&prepared(module)?, module_name)
+pub fn compile_module(module: syntax::Module, module_name: &str, frontend: &Frontend) -> Result<String, Diagnostic> {
+    semantic::compile(&prepared(module)?, module_name, frontend)
 }
 
 /// The program whose main module is `source`, `read` giving each module it

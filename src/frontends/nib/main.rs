@@ -2,7 +2,7 @@
 //! executable, plus `tools/modernstages.py`'s `--dump DIR`.
 //!
 //! ```text
-//! llrm-nib SOURCE [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DIR] [--procedure-segments] [--used-by OBJ]...
+//! llrm-nib SOURCE [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds]
 //! ```
 //!
 //! Without `-o`, the object goes beside the source unless `--dump` is given.
@@ -21,7 +21,7 @@ use crate::backend::omfwrite::CodeLayout;
 use crate::flow;
 use crate::model::passes::{Options, O2};
 
-const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... source";
+const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] source";
 
 struct Arguments {
     source: PathBuf,
@@ -31,12 +31,14 @@ struct Arguments {
     dump: Option<PathBuf>,
     layout: CodeLayout,
     used_by: Vec<PathBuf>,
+    frontend: super::Frontend,
 }
 
 fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut source, mut output, mut entry, mut options, mut dump) = (None, None, "main".to_owned(), O2(), None);
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
+    let mut frontend = super::Frontend::default();
     let mut at = 0;
     while at < argv.len() {
         let argument = argv[at].as_str();
@@ -57,6 +59,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
+            "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "-O" => options = flow::level_option(&value("-O")?)?,
             _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -66,7 +69,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    Ok(Arguments { source, output, entry, options, dump, layout, used_by })
+    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend })
 }
 
 /// The symbols `objects` import.
@@ -90,14 +93,14 @@ pub fn main(argv: &[String]) -> i32 {
     };
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
-            nibstages::dumped(&args.source, dump, &args.options)?;
+            nibstages::dumped(&args.source, dump, &args.frontend, &args.options)?;
         }
         let output = match (&args.output, &args.dump) {
             (Some(output), _) => output.clone(),
             (None, None) => args.source.with_extension("obj"),
             (None, Some(_)) => return Ok(()),
         };
-        let mut program = driver::parsed(&args.source, None).map_err(|error| error.0)?;
+        let mut program = driver::parsed(&args.source, &args.frontend, None).map_err(|error| error.0)?;
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }

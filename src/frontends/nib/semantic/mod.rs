@@ -1268,19 +1268,24 @@ fn parameter_kind(
     }
 }
 
-pub fn compile(module: &Module, module_name: &str) -> Result<String, Diagnostic> {
-    Ok(program(module, module_name, None)?.json())
+pub fn compile(module: &Module, module_name: &str, frontend: &super::Frontend) -> Result<String, Diagnostic> {
+    Ok(program(module, module_name, None, frontend)?.json())
 }
 
 /// Type-checks `module` as `compile` does: what the checker learned of the
 /// names it spells, and the first error.
 pub fn check(module: &Module) -> (Vec<Fact>, Result<(), Diagnostic>) {
     let facts = RefCell::new(Vec::new());
-    let checked = program(module, "", Some(&facts)).map(drop);
+    let checked = program(module, "", Some(&facts), &super::Frontend::default()).map(drop);
     (facts.into_inner(), checked)
 }
 
-fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>>) -> Result<hir::Program, Diagnostic> {
+fn program(
+    module: &Module,
+    module_name: &str,
+    facts: Option<&RefCell<Vec<Fact>>>,
+    frontend: &super::Frontend,
+) -> Result<hir::Program, Diagnostic> {
     let mut types = TypeRegistry::new();
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
@@ -1384,6 +1389,7 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
                 &mut literals,
                 &mut types,
                 facts,
+                frontend.unchecked_bounds,
             )?
             .compile(function)?,
         );
@@ -1415,6 +1421,7 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
                 &mut literals,
                 &mut types,
                 facts,
+                frontend.unchecked_bounds,
             )?
             .compile(&function)?,
         );
@@ -1515,6 +1522,7 @@ struct FunctionCompiler<'a> {
     hidden: Vec<std::ops::Range<usize>>,
     /// How many `unsafe:` blocks enclose the statement compiled.
     unsafe_depth: u32,
+    unchecked_bounds: bool,
     next_value: u32,
     next_place: u32,
     /// Numbers the hidden names the compiler binds.
@@ -1562,6 +1570,7 @@ impl<'a> FunctionCompiler<'a> {
         literals: &'a mut LiteralPool,
         types: &'a mut TypeRegistry,
         facts: Option<&'a RefCell<Vec<Fact>>>,
+        unchecked_bounds: bool,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -1584,6 +1593,7 @@ impl<'a> FunctionCompiler<'a> {
             consumers: Vec::new(),
             hidden: Vec::new(),
             unsafe_depth: 0,
+            unchecked_bounds,
             next_value: 1,
             next_place: 1,
             next_hidden: 1,
