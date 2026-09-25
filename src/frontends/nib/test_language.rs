@@ -939,8 +939,7 @@ fn main() -> i16:
 
 #[test]
 fn foreign_calls_and_raw_pointers_are_unsafe_and_only_abi_safe_types_cross() {
-    let source = "\
-@repr(\"c16\", pack=1)
+    let source = "@repr(\"c16\", pack=1)
 struct Packet:
     kind: u8
     length: i16
@@ -949,8 +948,8 @@ struct Loose:
     kind: u8
     length: i16
 
-extern \"cdecl16\":
-    fn send(packet: *far Packet) -> i16
+@extern(\"cdecl16\")
+fn send(packet: *far Packet) -> i16
 
 fn main() -> i16:
     let packet = Packet(kind=1, length=2)
@@ -2017,17 +2016,17 @@ fn refused_with_imports(source: &str) -> String {
 
 #[test]
 fn a_library_for_basic_refuses_the_nib_runtime_and_misplaced_adapters() {
-    let library = "import abi.qb45 as qb\n\nexport \"qb45\":\n    fn Show(value: qb.Ref[i16]) -> void:\n        BODY\n";
+    let library = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn Show(value: qb.Ref[i16]) -> void:\n    BODY\n";
     let printing = refused_with_imports(&library.replace("BODY", "print(value)"));
     assert!(printing.contains("Nib runtime (N$PI2)") && printing.contains("qb45"), "{printing}");
     // An index outside `unsafe:` is checked, and the check panics through the runtime.
-    let checked = "import abi.qb45 as qb\n\nexport \"qb45\":\n    fn First(values: qb.ArrayRef[i16]) -> i16:\n        return values[0]\n";
+    let checked = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn First(values: qb.ArrayRef[i16]) -> i16:\n    return values[0]\n";
     assert!(refused_with_imports(checked).contains("N$EBND"), "{}", refused_with_imports(checked));
     let other = library.replace("\"qb45\"", "\"pds71\"").replace("BODY", "return");
     assert!(refused_with_imports(&other).contains("qb45.Ref, which only a qb45 export or extern takes"), "{}", refused_with_imports(&other));
     let plain = "import abi.qb45 as qb\n\nfn show(value: qb.Ref[i16]) -> void:\n    return\n";
     assert!(refused_with_imports(plain).contains("only a qb45 export or extern"), "{}", refused_with_imports(plain));
-    let text = "import abi.qb45 as qb\n\nexport \"qb45\":\n    fn Name(text: qb.StringRef) -> string:\n        return \"\"\n";
+    let text = "import abi.qb45 as qb\n\n@export(\"qb45\")\nfn Name(text: qb.StringRef) -> string:\n    return \"\"\n";
     assert!(refused_with_imports(text).contains("cannot cross to qb45"), "{}", refused_with_imports(text));
 }
 

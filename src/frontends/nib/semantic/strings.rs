@@ -5,7 +5,7 @@ use crate::abi::nib as rt;
 use super::*;
 
 impl FunctionCompiler<'_> {
-    /// `+` joins; a comparison orders by bytes.
+    /// `+` joins; a comparison orders by bytes, as views of both.
     pub(super) fn string_binary(
         &mut self,
         operation: BinaryOp,
@@ -16,23 +16,21 @@ impl FunctionCompiler<'_> {
         if right.type_name != TypeName::String {
             return Err(type_mismatch(span, TypeName::String, right.type_name));
         }
-        let (left, right) = (required(left, span)?, required(right, span)?);
-        if operation == BinaryOp::Add {
-            let joined = self
-                .emit_builtin(rt::TEXT_CONCAT, vec![left, right])
-                .expect("a string");
-            let joined = self.temporary_owned(joined, TypeName::String);
-            return Ok(TypedOperand {
-                operand: Some(joined),
-                type_name: TypeName::String,
-            });
+        if operation != BinaryOp::Add {
+            let compare = comparison(operation)
+                .ok_or_else(|| Diagnostic::new(span, "strings support '+' and comparisons"))?;
+            let views = vec![self.text_view(left, span)?, self.text_view(right, span)?];
+            return self.views_ordered(compare, views);
         }
-        let compare = comparison(operation)
-            .ok_or_else(|| Diagnostic::new(span, "strings support '+' and comparisons"))?;
-        let order = self
-            .emit_builtin(rt::TEXT_COMPARE, vec![left, right])
-            .expect("an order");
-        self.ordered(compare, order)
+        let (left, right) = (required(left, span)?, required(right, span)?);
+        let joined = self
+            .emit_builtin(rt::TEXT_CONCAT, vec![left, right])
+            .expect("a string");
+        let joined = self.temporary_owned(joined, TypeName::String);
+        Ok(TypedOperand {
+            operand: Some(joined),
+            type_name: TypeName::String,
+        })
     }
 
     /// A comparison where either side is a `&string` view: both are compared
@@ -49,27 +47,32 @@ impl FunctionCompiler<'_> {
         }
         let compare = comparison(operation)
             .ok_or_else(|| Diagnostic::new(span, "string views support comparisons"))?;
-        let mut parts = Vec::new();
+        let mut views = Vec::new();
         for side in [left, right] {
-            let descriptor = match self.view_of(side)? {
-                Some((descriptor, ..)) => descriptor,
+            views.push(match self.view_of(side)? {
+                Some((descriptor, ..)) => hir::Operand::Value(descriptor),
                 None => {
-                    let element = ElementType::Scalar(TypeName::Char);
-                    let pointer = self.types.slice_pointer(element, 1);
-                    let (hir::Operand::Value(descriptor), _) =
-                        self.value_view(side, element, pointer)?
-                    else {
-                        unreachable!("a view is a value")
-                    };
-                    descriptor
+                    let value = self.expression(side, None)?;
+                    self.text_view(value, side.span())?
                 }
-            };
-            parts.extend(self.view_parts(descriptor));
+            });
         }
+        self.views_ordered(compare, views).map(Some)
+    }
+
+    /// A `&string` view of the string `value`: its descriptor pointer.
+    fn text_view(&mut self, value: TypedOperand, span: Span) -> Result<hir::Operand, Diagnostic> {
+        let element = ElementType::Scalar(TypeName::Char);
+        let pointer = self.types.slice_pointer(element, 1);
+        Ok(self.operand_view(value, element, pointer, span)?.0)
+    }
+
+    /// Whether the runtime's order of the two `views` satisfies `compare`.
+    fn views_ordered(&mut self, compare: &'static str, views: Vec<hir::Operand>) -> Result<TypedOperand, Diagnostic> {
         let order = self
-            .emit_builtin(rt::VIEW_COMPARE, parts)
+            .emit_builtin(rt::VIEW_COMPARE, views)
             .expect("an order");
-        self.ordered(compare, order).map(Some)
+        self.ordered(compare, order)
     }
 
     /// Whether the runtime's -1, 0, or 1 `order` satisfies `compare`.
@@ -101,8 +104,7 @@ impl FunctionCompiler<'_> {
     ) -> Result<Option<TypedOperand>, Diagnostic> {
         if let (true, "copy", []) = (self.is_char_view(receiver), name, arguments) {
             let (descriptor, ..) = self.view_of(receiver)?.expect("a view");
-            let parts = self.view_parts(descriptor).to_vec();
-            let copy = self.emit_builtin(rt::VIEW_COPY, parts).expect("a string");
+            let copy = self.emit_builtin(rt::VIEW_COPY, vec![hir::Operand::Value(descriptor)]).expect("a string");
             let copy = self.temporary_owned(copy, TypeName::String);
             return Ok(Some(TypedOperand {
                 operand: Some(copy),
@@ -150,12 +152,6 @@ impl FunctionCompiler<'_> {
             )),
             _ => Ok(None),
         }
-    }
-
-    /// A `&string` view's far data pointer and length, as the runtime takes them.
-    pub(super) fn view_parts(&mut self, descriptor: u32) -> [hir::Operand; 2] {
-        let (data, length) = self.view_parts_of(descriptor, ElementType::Scalar(TypeName::Char));
-        [hir::Operand::Value(data), length]
     }
 
     /// A one-dimensional view's far data pointer and length.

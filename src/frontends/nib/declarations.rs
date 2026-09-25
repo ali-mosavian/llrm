@@ -32,7 +32,7 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).map(|export| (function, export.abi)))
+        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?))))
         .collect();
     // The compiler's own modules declare theirs for the compiler.
     let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();

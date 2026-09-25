@@ -1,4 +1,4 @@
-# VB-DOS's side of `export "vbdos":` and `extern "vbdos":` (section
+# VB-DOS's side of `@export("vbdos")` and `@extern("vbdos")` (section
 # 15). BASIC passes an argument by reference: a near pointer to the
 # variable, or to its string or array descriptor. Each adapter is that
 # pointer, and borrows what it points to.
@@ -24,16 +24,15 @@ pub struct StringDescriptor:
     mut first: u16
     mut second: u16
 
-extern "pascal16":
-    @link_name("STRINGADDRESS")
-    pub fn string_data(text: *near StringDescriptor) -> *far mut char
-    @link_name("STRINGLENGTH")
-    pub fn string_length(text: *near StringDescriptor) -> u16
-    @link_name("STRINGASSIGN")
-    fn assign(data: *far mut char, length: u16, target: *far mut StringDescriptor, target_length: u16) -> void
-    # A copy of a string on BASIC's temporaries.
-    @link_name("B$SCPY")
-    fn copied(text: *near StringDescriptor) -> *near StringDescriptor
+@extern("pascal16", name="STRINGADDRESS")
+pub fn string_data(text: *near StringDescriptor) -> *far mut char
+@extern("pascal16", name="STRINGLENGTH")
+pub fn string_length(text: *near StringDescriptor) -> u16
+@extern("pascal16", name="STRINGASSIGN")
+fn assign(data: *far mut char, length: u16, target: *far mut StringDescriptor, target_length: u16) -> void
+# A copy of a string on BASIC's temporaries.
+@extern("pascal16", name="B$SCPY")
+fn copied(text: *near StringDescriptor) -> *near StringDescriptor
 
 var result: StringDescriptor = StringDescriptor(first=0, second=0)
 

@@ -172,7 +172,7 @@ mod tests {
         // A library had no listing, so the runtime's code could not be read.
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("lib.nbl");
-        std::fs::write(&source, "export \"cdecl16\":\n    fn twice(value: i16) -> i16:\n        return value * 2\n").expect("writes");
+        std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
         let output = dumped(&source, &directory.path().join("dump"), &O2()).expect("dumps");
         let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");
         assert!(listing.contains("_twice"), "{listing}");

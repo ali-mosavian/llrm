@@ -11,10 +11,10 @@ const WAIT: u16 = 36
 var ticks: u16 = 0
 var previous: extern "interrupt16" fn() -> void = 0
 
-export "interrupt16":
-    fn tick() -> void:
-        ticks += 1
-        dos.chain(previous)
+@export("interrupt16")
+fn tick() -> void:
+    ticks += 1
+    dos.chain(previous)
 
 fn main() -> i16:
     previous = dos.vector(TIMER)

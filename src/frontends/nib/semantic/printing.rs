@@ -115,8 +115,7 @@ impl<'a> FunctionCompiler<'a> {
                 return Err(Diagnostic::new(expression.span(), "only a &string view prints"));
             }
             self.field(format, TypeName::String, expression.span())?;
-            let parts = self.view_parts(descriptor).to_vec();
-            self.emit_builtin(rt::PRINT_VIEW, parts);
+            self.emit_builtin(rt::PRINT_VIEW, vec![hir::Operand::Value(descriptor)]);
             return Ok(());
         }
         let value = self.expression(expression, None)?;

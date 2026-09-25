@@ -51,11 +51,3 @@
   (visibility)? @context
   "type" @context
   name: (_) @name) @item
-
-(extern_block
-  "extern" @context
-  abi: (_) @name) @item
-
-(export_block
-  "export" @context
-  abi: (_) @name) @item

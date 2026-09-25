@@ -77,11 +77,11 @@ pub fn imports(tokens: &[Token]) -> Result<Vec<Import>, Diagnostic> {
     Ok(imports)
 }
 
-/// One item of an `extern` or `export` block.
-struct Foreign<T> {
-    public: bool,
+/// What `@extern("abi", name="symbol")` or `@export(...)` gives a function.
+struct Foreign {
+    imported: bool,
+    abi: Option<Abi>,
     symbol: Option<String>,
-    item: T,
 }
 
 struct Parser {
@@ -127,46 +127,38 @@ impl Parser {
                 imports.push(self.import()?);
                 continue;
             }
-            if matches!(self.peek().kind, TokenKind::Extern) {
-                for (exported, declared) in self.extern_block()? {
-                    if exported {
-                        public.insert(declared.function.name.clone());
-                    }
-                    externs.push(declared);
+            let attributes = self.attributes()?;
+            let foreign = foreign(&attributes)?;
+            // `@repr` takes a struct, `@extern` a function header and `@export` a function.
+            let next = if matches!(self.peek().kind, TokenKind::Pub) { self.tokens.get(self.at + 1) } else { Some(self.peek()) }.map(|one| &one.kind);
+            let header = matches!(next, Some(TokenKind::Fn)) || matches!(next, Some(TokenKind::Identifier(distance)) if distance == "far" || distance == "near");
+            for attribute in &attributes {
+                let applies = match attribute.name.as_str() {
+                    "repr" => matches!(next, Some(TokenKind::Struct)),
+                    "extern" => header,
+                    "export" => matches!(next, Some(TokenKind::Fn)),
+                    _ => false,
+                };
+                if !applies {
+                    return Err(Diagnostic::new(attribute.span, format!("@{} does not apply here", attribute.name)));
                 }
-                continue;
             }
-            if matches!(self.peek().kind, TokenKind::Export) {
-                let (abi, defined) = self.foreign_block(|parser| parser.function())?;
-                for Foreign { public: exported, symbol, item: function } in defined {
-                    if exported {
-                        public.insert(function.name.clone());
-                    }
-                    let symbol = symbol.unwrap_or_else(|| abi.symbol(&function.name));
+            // `pub` names the declaration that follows, whichever kind it is.
+            let exported = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
+            if let Some(Foreign { imported, abi, symbol }) = foreign {
+                let function = if imported { self.foreign_header()? } else { self.function()? };
+                if exported {
+                    public.insert(function.name.clone());
+                }
+                let symbol = symbol.unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| abi.symbol(&function.name)));
+                if let (true, Some(abi)) = (imported, abi) {
+                    externs.push(Extern { abi, symbol, function });
+                } else {
                     exports.insert(function.name.clone(), Export { abi, symbol });
                     functions.push(function);
                 }
                 continue;
             }
-            let attributes = self.attributes()?;
-            // Only a struct takes one, `@repr`.
-            let struct_next = matches!(self.peek().kind, TokenKind::Struct)
-                || (matches!(self.peek().kind, TokenKind::Pub)
-                    && matches!(
-                        self.tokens.get(self.at + 1).map(|one| &one.kind),
-                        Some(TokenKind::Struct)
-                    ));
-            if let Some(attribute) = attributes
-                .iter()
-                .find(|one| one.name != "repr" || !struct_next)
-            {
-                return Err(Diagnostic::new(
-                    attribute.span,
-                    format!("@{} does not apply here", attribute.name),
-                ));
-            }
-            // `pub` names the declaration that follows, whichever kind it is.
-            let exported = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
             let name = match self.peek().kind.clone() {
                 TokenKind::Type => {
                     fixed_types.push(self.fixed_type()?);
@@ -311,7 +303,11 @@ impl Parser {
             .take(|kind| matches!(kind, TokenKind::At))
             .map(|one| one.span)
         {
-            let (name, _) = self.identifier("expected an attribute name after '@'")?;
+            let name = if self.take(|kind| matches!(kind, TokenKind::Extern)).is_some() {
+                "extern".to_owned()
+            } else {
+                self.identifier("expected an attribute name after '@'")?.0
+            };
             let arguments = if matches!(self.peek().kind, TokenKind::LeftParen) {
                 match self.call(Expr::Name(name.clone(), at), Vec::new())? {
                     Expr::Call { arguments, .. } => arguments,
@@ -330,52 +326,26 @@ impl Parser {
         Ok(attributes)
     }
 
-    /// `extern "abi":` and the headers of the functions it imports.
-    fn extern_block(&mut self) -> Result<Vec<(bool, Extern)>, Diagnostic> {
-        let (abi, declared) = self.foreign_block(|parser| {
-            // `far fn`, the default: a far call to another code segment.
-            if let TokenKind::Identifier(distance) = &parser.peek().kind {
-                match distance.as_str() {
-                    "far" => {
-                        parser.bump();
-                    }
-                    "near" => {
-                        return Err(Diagnostic::new(
-                            parser.peek().span,
-                            "a near foreign function would share this code segment; declare it far",
-                        ));
-                    }
-                    _ => {}
+    /// The header of a function `@extern` imports: `far fn`, the default, is a
+    /// far call to another code segment.
+    fn foreign_header(&mut self) -> Result<Function, Diagnostic> {
+        if let TokenKind::Identifier(distance) = &self.peek().kind {
+            match distance.as_str() {
+                "far" => {
+                    self.bump();
                 }
-            }
-            let function = parser.function_header()?;
-            parser.line_end()?;
-            Ok(function)
-        })?;
-        Ok(declared
-            .into_iter()
-            .map(|one| {
-                let symbol = one.symbol.unwrap_or_else(|| abi.symbol(&one.item.name));
-                (one.public, Extern { abi, symbol, function: one.item })
-            })
-            .collect())
-    }
-
-    /// A foreign function's `@link_name("symbol")`, its only attribute.
-    fn link_name(&mut self) -> Result<Option<String>, Diagnostic> {
-        let mut symbol = None;
-        for attribute in self.attributes()? {
-            match (attribute.name.as_str(), attribute.arguments.as_slice()) {
-                ("link_name", [Expr::String(name, _)]) => symbol = Some(String::from_utf8_lossy(name).into_owned()),
-                _ => {
+                "near" => {
                     return Err(Diagnostic::new(
-                        attribute.span,
-                        format!("@{} does not apply to a foreign function", attribute.name),
+                        self.peek().span,
+                        "a near foreign function would share this code segment; declare it far",
                     ));
                 }
+                _ => {}
             }
         }
-        Ok(symbol)
+        let function = self.function_header()?;
+        self.line_end()?;
+        Ok(function)
     }
 
     /// `"abi"`, a foreign ABI's name.
@@ -384,52 +354,7 @@ impl Parser {
         let TokenKind::String(abi) = token.kind else {
             return Err(Diagnostic::new(token.span, "expected an ABI name, as \"cdecl16\""));
         };
-        let name = String::from_utf8_lossy(&abi).into_owned();
-        Abi::named(&name).ok_or_else(|| {
-            Diagnostic::new(
-                token.span,
-                format!("ABI {name:?} is not supported yet; use cdecl16, pascal16, interrupt16, qb45, pds71 or vbdos"),
-            )
-        })
-    }
-
-    /// `extern "abi":` or `export "abi":` and the items `item` parses in it.
-    fn foreign_block<T>(
-        &mut self,
-        mut item: impl FnMut(&mut Self) -> Result<T, Diagnostic>,
-    ) -> Result<(Abi, Vec<Foreign<T>>), Diagnostic> {
-        self.bump();
-        let abi = self.abi()?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Colon),
-            "expected ':' after the ABI name",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Newline),
-            "expected newline before block",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Indent),
-            "expected an indented block",
-        )?;
-        let mut items = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
-            if self
-                .take(|kind| matches!(kind, TokenKind::Newline))
-                .is_some()
-            {
-                continue;
-            }
-            // `@link_name`, then `pub`: other modules of the program may name it too.
-            let symbol = self.link_name()?;
-            let public = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
-            items.push(Foreign { public, symbol, item: item(self)? });
-        }
-        self.expect(
-            |kind| matches!(kind, TokenKind::Dedent),
-            "unterminated block",
-        )?;
-        Ok((abi, items))
+        abi_named(&abi, token.span)
     }
 
     /// `import a.b` or `import a.b as c`.
@@ -2371,6 +2296,47 @@ struct Attribute {
     name: String,
     arguments: Vec<Expr>,
     span: Span,
+}
+
+/// The ABI `name` spells.
+fn abi_named(name: &[u8], span: Span) -> Result<Abi, Diagnostic> {
+    let name = String::from_utf8_lossy(name).into_owned();
+    Abi::named(&name).ok_or_else(|| {
+        Diagnostic::new(
+            span,
+            format!("ABI {name:?} is not supported yet; use cdecl16, pascal16, interrupt16, qb45, pds71 or vbdos"),
+        )
+    })
+}
+
+/// What `@extern("abi", name="symbol")` or `@export("abi", name="symbol")` gives, if either is there.
+/// `@export` may leave out the ABI: Nib code calls the function by its own convention.
+fn foreign(attributes: &[Attribute]) -> Result<Option<Foreign>, Diagnostic> {
+    let mut found = None;
+    for attribute in attributes.iter().filter(|one| one.name == "extern" || one.name == "export") {
+        if found.is_some() {
+            return Err(Diagnostic::new(attribute.span, "a function has one @extern or @export"));
+        }
+        let imported = attribute.name == "extern";
+        let usage = || Diagnostic::new(attribute.span, format!("@{} takes an ABI and name=\"symbol\"", attribute.name));
+        let (abi, named) = match attribute.arguments.as_slice() {
+            [Expr::String(abi, span), named @ ..] => (Some(abi_named(abi, *span)?), named),
+            named => (None, named),
+        };
+        let symbol = match named {
+            [] => None,
+            [Expr::NamedArgument { name, value, .. }] if name == "name" => match value.as_ref() {
+                Expr::String(symbol, _) => Some(String::from_utf8_lossy(symbol).into_owned()),
+                _ => return Err(usage()),
+            },
+            _ => return Err(usage()),
+        };
+        if imported && abi.is_none() {
+            return Err(usage());
+        }
+        found = Some(Foreign { imported, abi, symbol });
+    }
+    Ok(found)
 }
 
 /// The field alignment `@repr("c16", pack=N)` sets, if the attributes give one.

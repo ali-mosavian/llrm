@@ -323,7 +323,7 @@ fn compound_assignment_evaluates_an_index_once() {
 
 #[test]
 fn print_runtime_variants_use_short_byte_width_names() {
-    let names: Vec<_> = print_builtins().into_iter().map(|(name, _)| name).collect();
+    let names: Vec<_> = print_builtins(&mut TypeRegistry::new()).into_iter().map(|(name, _)| name).collect();
     assert_eq!(
         names,
         [

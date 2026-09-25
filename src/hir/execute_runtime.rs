@@ -234,13 +234,6 @@ impl Machine<'_> {
                 };
                 Some(Scalar::Address(self.append(&target, &more)?))
             }
-            rt::TEXT_COMPARE => {
-                let (Some(left), Some(right)) = (pointer(&arguments[0])?, pointer(&arguments[1])?)
-                else {
-                    return fail(format!("{} of null", rt::TEXT_COMPARE));
-                };
-                Some(Scalar::Int(text(&left)?.cmp(&text(&right)?) as i128))
-            }
             rt::DICT_RESERVE => {
                 let Some(table) = pointer(&arguments[0])? else {
                     return fail(format!("{} of null", rt::DICT_RESERVE));
@@ -252,14 +245,11 @@ impl Machine<'_> {
             rt::ERROR_SHIFT => return self.panic("shift count out of range"),
             rt::ERROR_CONVERT => return self.panic("float outside the integer type"),
             rt::VIEW_COMPARE => {
-                let (left, right) = (
-                    view_bytes(&arguments[0], &arguments[1])?,
-                    view_bytes(&arguments[2], &arguments[3])?,
-                );
+                let (left, right) = (descriptor_bytes(&arguments[0])?, descriptor_bytes(&arguments[1])?);
                 Some(Scalar::Int(left.cmp(&right) as i128))
             }
             rt::VIEW_COPY => {
-                let bytes = view_bytes(&arguments[0], &arguments[1])?;
+                let bytes = descriptor_bytes(&arguments[0])?;
                 Some(Scalar::Address(self.allocate(
                     &bytes,
                     bytes.len(),
@@ -401,6 +391,24 @@ pub(super) fn view_bytes(data: &Scalar, length: &Scalar) -> Outcome<Vec<u8>> {
         .get(start..start + length)
         .map(<[u8]>::to_vec)
         .ok_or_else(|| ExecutionError("view outside its buffer".into()))
+}
+
+/// A `&string` view's bytes, by the far pointer to its descriptor: the
+/// length at 0 and the far data pointer at 4.
+pub(super) fn descriptor_bytes(descriptor: &Scalar) -> Outcome<Vec<u8>> {
+    let Some(at) = pointer(descriptor)? else {
+        return fail("a view of null");
+    };
+    let (length, data) = {
+        let cells = at.memory.borrow();
+        let start = at.offset as usize;
+        let length = cells.bytes.get(start..start + 2).map(|word| u16::from_le_bytes([word[0], word[1]]));
+        (length, cells.pointers.get(&(at.offset + 4, 4)).cloned())
+    };
+    match (length, data) {
+        (Some(length), Some(data)) => view_bytes(&Scalar::Address(data), &Scalar::Int(i128::from(length))),
+        _ => fail("a view descriptor outside its storage"),
+    }
 }
 
 /// `N$PS`'s bytes: a string's, by its descriptor.

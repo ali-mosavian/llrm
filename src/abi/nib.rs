@@ -36,7 +36,6 @@ pub const BUFFER_CLONE: &str = "N$BCLN";
 
 pub const TEXT_CONCAT: &str = "N$TCAT";
 pub const TEXT_APPEND: &str = "N$TAPP";
-pub const TEXT_COMPARE: &str = "N$TCMP";
 
 pub const VIEW_COPY: &str = "N$VCPY";
 pub const VIEW_COMPARE: &str = "N$VCMP";

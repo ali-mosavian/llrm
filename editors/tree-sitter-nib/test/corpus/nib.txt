@@ -155,8 +155,6 @@ fn b() -> i16:
 
 --------------------------------------------------------------------------------
 
-
-
 (source_file
   (function_definition
     (identifier)
@@ -167,7 +165,8 @@ fn b() -> i16:
         (identifier)
         (call_expression
           (identifier)
-          (arguments (MISSING ")"))))
+          (arguments
+            (MISSING ")"))))
       (return_statement
         (integer))))
   (function_definition
@@ -177,3 +176,50 @@ fn b() -> i16:
     (block
       (return_statement
         (integer)))))
+
+================================================================================
+Foreign functions
+================================================================================
+
+@extern("cdecl16", name="_draw")
+pub far fn draw(count: u16) -> void
+
+@export("cdecl16")
+fn weight(value: i16) -> i16:
+    return value
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_signature
+    (attribute
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (keyword_argument
+          (identifier)
+          (string
+            (string_content)))))
+    (visibility)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (primitive_type)))
+    (primitive_type))
+  (function_definition
+    (attribute
+      (identifier)
+      (arguments
+        (string
+          (string_content))))
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (primitive_type)))
+    (primitive_type)
+    (block
+      (return_statement
+        (identifier)))))

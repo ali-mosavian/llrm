@@ -1313,8 +1313,10 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
         }
         let mut signature = signature(&mut types, function, index as u32 + 1)?;
         if let Some(export) = module.exports.get(&function.name) {
-            signature.abi = export.abi;
-            foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
+            if let Some(abi) = export.abi {
+                signature.abi = abi;
+                foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
+            }
             signature.exported = true;
             signature.name = export.symbol.clone();
         } else {
@@ -1339,10 +1341,11 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
         .map(|signature| signature.callable(&mut types))
         .collect();
     let mut builtin_ids = BTreeMap::new();
-    let routines = print_builtins()
+    let routines: Vec<_> = print_builtins(&mut types)
         .into_iter()
         .map(|(name, parameters)| (name, parameters, TypeName::Void))
-        .chain(runtime::routines());
+        .chain(runtime::routines(&mut types))
+        .collect();
     // The runtime defines the routines it exports, and its own code calls those.
     let defined: BTreeMap<String, u32> = signatures.values().map(|one| (one.name.clone(), one.id)).collect();
     for (name, parameters, result) in routines {
@@ -1356,7 +1359,7 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
             id,
             name: name.into(),
             result_type: (result != TypeName::Void).then(|| type_id(result)),
-            parameter_types: parameters.into_iter().map(type_id).collect(),
+            parameter_types: parameters,
             defined: false,
         });
     }
@@ -1427,10 +1430,10 @@ fn program(module: &Module, module_name: &str, facts: Option<&RefCell<Vec<Fact>>
     Ok(program)
 }
 
-fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
+fn print_builtins(types: &mut TypeRegistry) -> Vec<(&'static str, Vec<u32>)> {
     let mut out = vec![
         (rt::PRINT_NEWLINE, Vec::new()),
-        (print_name(TypeName::String), vec![TypeName::String]),
+        (print_name(TypeName::String), runtime::scalars(&[TypeName::String])),
     ];
     for type_name in [
         TypeName::Bool,
@@ -1444,16 +1447,15 @@ fn print_builtins() -> Vec<(&'static str, Vec<TypeName>)> {
         TypeName::F32,
         TypeName::F64,
     ] {
-        out.push((print_name(type_name), vec![type_name]));
+        out.push((print_name(type_name), runtime::scalars(&[type_name])));
     }
     // These are formatting boundaries, not arithmetic helpers. They receive
     // the signed raw storage value followed by its fractional-bit count and
     // write canonical base-10 integer.fraction text. The formatter keeps one
     // digit after the point and trims any further trailing zeroes.
-    out.push((rt::PRINT_Q2, vec![TypeName::I16, TypeName::U8]));
-    out.push((rt::PRINT_Q4, vec![TypeName::I32, TypeName::U8]));
-    // A `&string` view: its far data and length.
-    out.push((rt::PRINT_VIEW, vec![TypeName::Addr, TypeName::U16]));
+    out.push((rt::PRINT_Q2, runtime::scalars(&[TypeName::I16, TypeName::U8])));
+    out.push((rt::PRINT_Q4, runtime::scalars(&[TypeName::I32, TypeName::U8])));
+    out.push((rt::PRINT_VIEW, vec![runtime::text_view(types)]));
     out
 }
 

@@ -5,16 +5,18 @@ struct CPoint:
     x: i16
     y: i16
 
-extern "cdecl16":
-    fn checksum(data: *far u8, count: u16) -> u16
-    fn weighted_sum(values: *far i16, count: u16) -> i32
-    fn centroid(points: *far CPoint, count: u16, out: *far mut CPoint) -> void
+@extern("cdecl16")
+fn checksum(data: *far u8, count: u16) -> u16
+@extern("cdecl16")
+fn weighted_sum(values: *far i16, count: u16) -> i32
+@extern("cdecl16")
+fn centroid(points: *far CPoint, count: u16, out: *far mut CPoint) -> void
 
-export "cdecl16":
-    fn weight(value: i16) -> i16:
-        if value < 0:
-            return -value * 3
-        return value
+@export("cdecl16")
+fn weight(value: i16) -> i16:
+    if value < 0:
+        return -value * 3
+    return value
 
 fn main() -> i16:
     let bytes: u8[4] = [0x51, 0x42, 0x2A, 0x07]

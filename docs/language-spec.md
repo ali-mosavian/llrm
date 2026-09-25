@@ -1557,14 +1557,16 @@ runtime is written in the language itself (`runtime/nib/*.nbl`); only
 startup and the DOS calls are assembly. Each routine is a code segment of
 its own, so a program links only the routines it reaches. As BC's are, its
 routines are named
-`M$`, a letter for the group, then the operation:
+`N$`, a letter for the group, then the operation. They are Nib functions
+called by Nib's own convention, so a `&string` reaches one as the far pointer
+to its descriptor:
 
 | Group | Routines | Used for |
 |---|---|---|
 | P print | `N$PI1` to `N$PU4`, `N$PR4`, `N$PR8`, `N$PQ2`, `N$PQ4`, `N$PB`, `N$PC`, `N$PS`, `N$PV`, `N$PN`; `N$PFLD` sets the field; `N$PBEG` and `N$PEND` print into a new string | `print` and f-strings: one set of formatters writing to a sink |
 | B buffer | `N$BRES` reserve, `N$BGRW` grow, `N$BSHR` shrink, `N$BCLN` copy, `N$BDRP` free | strings and vecs |
-| T text | `N$TCAT` join, `N$TAPP` append, `N$TCMP` compare | owned strings |
-| V view | `N$VCPY` copy, `N$VCMP` compare | `&string` views |
+| T text | `N$TCAT` join, `N$TAPP` append | owned strings |
+| V view | `N$VCPY` copy, `N$VCMP` compare | `&string` views, and owned strings compared through views of them |
 | D dict | `N$DRES` room for one more entry | dicts |
 | E error | `N$EBND` bounds, `N$ESHF` shift, `N$ECNV` conversion, `N$EKEY` key, `N$EDIV` divide fault | panics |
 | O system | `N$OOPN` open, `N$OCRE` create, `N$OREA` read, `N$OWRI` write, `N$OCLO` close, `N$OEXT` exit, `N$OMEM` more memory, `N$OGIV` get and `N$OSIV` set an interrupt vector, `N$OVEC` put them back, `N$OCHN` enter a handler | DOS, in assembly |
@@ -1629,7 +1631,7 @@ pub fn load(path: &string) -> Result[Image, LoadError]:
 ```
 
 `pub` permits another source module to name a declaration. It does not create
-an unmangled foreign symbol. `export` is the separate operation that exposes a
+an unmangled foreign symbol. `@export` is the separate operation that exposes a
 declaration through a foreign ABI.
 
 Top level may contain declarations and constant initializers only. There are no
@@ -1716,7 +1718,7 @@ Interop separates three independent properties:
 
 1. `@repr` defines byte layout.
 2. Pointer types define address space.
-3. `extern` or `export` defines the calling ABI.
+3. `@extern` or `@export` defines the calling ABI.
 
 ```text
 @repr("c16", pack=1)
@@ -1724,13 +1726,12 @@ struct CPoint:
     x: i16
     y: i16
 
-extern "cdecl16":
-    @link_name("_draw_points")
-    far fn draw_points(points: *far CPoint, count: u16) -> void
+@extern("cdecl16", name="_draw_points")
+far fn draw_points(points: *far CPoint, count: u16) -> void
 
-export "cdecl16":
-    fn weight(value: i16) -> i16:
-        return value * 2
+@export("cdecl16")
+fn weight(value: i16) -> i16:
+    return value * 2
 
 fn main() -> i16:
     let corners: CPoint[2] = [CPoint(x=0, y=0), CPoint(x=8, y=4)]
@@ -1739,11 +1740,12 @@ fn main() -> i16:
     return 0
 ```
 
-`extern` imports a symbol; `export` exposes one under its own name, never
-qualified by its module. Foreign calls and taking a raw pointer are unsafe:
-they appear only in an `unsafe:` block. A `*mut` pointer is taken with `&mut`.
-`@link_name` gives a function's object symbol, and `pub` on an `extern`
-lets other modules call it.
+`@extern("abi")` on a function header imports a symbol; `@export("abi")` on a
+function exposes one under the function's own name, never qualified by its
+module. Either takes `name="symbol"` to give the object symbol instead, and
+`pub` on an imported function lets other modules call it. Foreign calls and
+taking a raw pointer are unsafe: they appear only in an `unsafe:` block. A
+`*mut` pointer is taken with `&mut`.
 [docs/examples/interop](examples/interop) links a C library both ways.
 `pascal16` is the convention of QuickBASIC and Turbo Pascal libraries: its
 symbols are upper case, arguments are pushed first to last, and the callee
@@ -1834,7 +1836,7 @@ module, a scoped borrow of what the pointer points to:
 | `qb.ArrayRef[T, N]` | `name() AS T` | `&mut [T, N]`, the last subscript first |
 
 Retaining, resizing, or taking ownership requires an explicit copy. An
-`extern` passes an adapter as the near pointer it is: `&mut total` is a
+`@extern` function takes an adapter as the near pointer it is: `&mut total` is a
 `qb.Ref[i16]`. A library for BASIC runs on BASIC's stack, in DGROUP, so a
 near pointer reaches its locals as well as its module variables.
 

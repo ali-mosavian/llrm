@@ -1,5 +1,5 @@
-//! Foreign interoperability: functions an `extern "cdecl16":` block imports,
-//! functions an `export` block exposes, and the `unsafe` blocks that call
+//! Foreign interoperability: functions `@extern` imports, functions
+//! `@export` exposes through a foreign ABI, and the `unsafe` blocks that call
 //! them. Nib functions already follow cdecl16
 //! -- far calls, arguments pushed right to left, the caller cleaning up --
 //! so a foreign call differs only in its symbol and what may cross it.

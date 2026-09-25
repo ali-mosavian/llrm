@@ -1103,47 +1103,6 @@
     }
   },
   {
-    "type": "export_block",
-    "named": true,
-    "fields": {
-      "abi": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "string",
-            "named": true
-          }
-        ]
-      },
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "export_list",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "export_list",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "function_definition",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "expression_statement",
     "named": true,
     "fields": {},
@@ -1156,32 +1115,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "extern_block",
-    "named": true,
-    "fields": {
-      "abi": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "string",
-            "named": true
-          }
-        ]
-      },
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "extern_list",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -1205,21 +1138,6 @@
       "types": [
         {
           "type": "function_type",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "extern_list",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "function_signature",
           "named": true
         }
       ]
@@ -2503,15 +2421,11 @@
           "named": true
         },
         {
-          "type": "export_block",
-          "named": true
-        },
-        {
-          "type": "extern_block",
-          "named": true
-        },
-        {
           "type": "function_definition",
+          "named": true
+        },
+        {
+          "type": "function_signature",
           "named": true
         },
         {
@@ -3298,11 +3212,11 @@
   },
   {
     "type": "char",
-    "named": false
+    "named": true
   },
   {
     "type": "char",
-    "named": true
+    "named": false
   },
   {
     "type": "clobbers",
@@ -3332,10 +3246,6 @@
   {
     "type": "escape_sequence",
     "named": true
-  },
-  {
-    "type": "export",
-    "named": false
   },
   {
     "type": "extern",
