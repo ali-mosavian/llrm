@@ -161,7 +161,9 @@ as zero.
 A procedure frames itself with `push bp`, `mov bp,sp` and `sub sp`, in place
 of `B$ENRA` and `B$EXSA`. Its HIR stores zero at entry to each local some path
 reads before assigning: every aggregate, and each number the use-before-def
-analysis cannot prove written first. The frame is otherwise not cleared. It
+analysis cannot prove written first. The frame is otherwise not cleared. The
+backend lays those locals out as one block just below BP, and a block of 16
+bytes or more is cleared with one `rep stosd` rather than a store per word. It
 keeps the runtime's frame when the runtime needs one: when it has an error
 handler or RESUME target, which the runtime reaches through its frame chain,
 or a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An

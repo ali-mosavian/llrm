@@ -462,3 +462,70 @@ fn locals_read_before_assignment_start_at_zero() {
         PRINT a; d; u; p.x; p.y\nd = 5: p.x = 7\nEND SUB\n";
     assert_eq!(printed(source), " 2  0  0  0  0 \n 2  0  0  0  0 \n");
 }
+
+fn quickr_program(source: &str) -> crate::hir::model::Program {
+    compiled(source).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Each local of procedure `name` after the backend's layout: (name, low, high).
+fn frame_after_layout(source: &str, name: &str) -> Vec<(String, i64, i64)> {
+    let program = quickr_program(source);
+    let laid_out = super::zero_fill::laid_out(&program, |module, function| {
+        !super::compile::_inline_frame(&program, module, function)
+    });
+    let module = &laid_out.modules[0];
+    let widths: std::collections::HashMap<i64, i64> = module.types.iter().map(|one| (one.id, one.width)).collect();
+    let function = module.functions.iter().find(|one| one.name == name).expect("the procedure");
+    let mut frame: Vec<_> = function
+        .places
+        .iter()
+        .filter(|one| one.storage == crate::hir::model::Storage::Local)
+        .map(|one| (one.name.clone(), one.offset, one.offset + one.extent.unwrap_or(widths[&one.r#type])))
+        .collect();
+    frame.sort_by_key(|one| -one.2);
+    frame
+}
+
+#[test]
+fn zeroed_locals_are_one_block_below_bp() {
+    // Declared interleaved, zeroed and written-first locals used to alternate.
+    let source = "SUB s\nDIM a AS LONG, b AS LONG, c AS INTEGER, d AS DOUBLE, e(2) AS INTEGER\n\
+        b = 1\nd = 2\nPRINT a; b; c; d; e(1)\nEND SUB\n";
+    let frame = frame_after_layout(source, "S");
+    let names: Vec<&str> = frame.iter().map(|one| one.0.as_str()).collect();
+    let zeroed = ["A", "C", "E$descriptor"];
+    let split = names.iter().position(|name| !zeroed.contains(name)).expect("written-first locals");
+    assert!(names[..split].iter().all(|name| zeroed.contains(name)), "{frame:?}");
+    assert!(names[split..].iter().all(|name| !zeroed.contains(name)), "{frame:?}");
+    // Contiguous from BP down, and no two locals share bytes.
+    assert_eq!(frame[0].2, 0, "{frame:?}");
+    for pair in frame.windows(2) {
+        assert!(pair[1].2 <= pair[0].1, "{frame:?}");
+    }
+    assert!(frame[..split].windows(2).all(|pair| pair[0].1 - pair[1].2 <= 1), "{frame:?}");
+}
+
+#[test]
+fn a_runtime_framed_procedure_keeps_no_zero_stores() {
+    // B$ENRA zero-fills this frame already: the stores were redundant.
+    let source = "SUB s\nDIM t AS STRING, a AS LONG\nPRINT a; t\nEND SUB\n";
+    let program = quickr_program(source);
+    let laid_out = super::zero_fill::laid_out(&program, |module, function| {
+        !super::compile::_inline_frame(&program, module, function)
+    });
+    let entry = |program: &crate::hir::model::Program| {
+        let function = program.modules[0].functions.iter().find(|one| one.name == "S").expect("S");
+        function.blocks.iter().find(|block| block.id == function.entry).expect("entry").instructions.len()
+    };
+    assert!(entry(&laid_out) < entry(&program));
+}
+
+#[test]
+fn a_large_zeroed_block_is_one_fill() {
+    let large = "SUB s\nDIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\nPRINT a; b; c\nEND SUB\n";
+    let code = procedure_listing(large, "quickr", "S");
+    assert!(code.contains("rep stosd") && code.contains("mov cx, 6"), "{code}");
+    // Below FILL_BYTES the stores stay: the fill's setup would be larger.
+    let small = procedure_listing("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", "quickr", "S");
+    assert!(!small.contains("stos"), "{small}");
+}

@@ -942,7 +942,7 @@ fn _runtime_frame(
 /// it, where the runtime needs no frame of its own: no error handler or RESUME
 /// target walks the runtime's frame chain to it, and no local STRING asks
 /// B$ENRA for a VBDOS string handle. The runtime's stack check goes with it.
-fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
+pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
     program.dialect == model::Dialect::Quickr
         && function.error_handler.is_none()
         && function.external_entries.is_empty()
@@ -1410,6 +1410,8 @@ pub fn assembled(
 ) -> Result<masm::Module, CompileError> {
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
+    let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
+    let program = &laid_out;
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
@@ -1436,6 +1438,13 @@ pub fn assembled(
     let empty_occurrences = IndexMap::default();
     for (function, body) in functions.iter().copied().zip(&semantic) {
         let handler_at = _handler_at(function);
+        let zeroed;
+        let body = if _inline_frame(program, module, function) {
+            zeroed = super::zero_fill::filled(body);
+            &zeroed
+        } else {
+            body
+        };
         _observe(&mut observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
         let body = optimized(program, function, body, options)?;
         _observe(&mut observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;

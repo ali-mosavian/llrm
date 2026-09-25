@@ -7,6 +7,7 @@ pub mod inline_x87;
 pub mod main;
 pub mod qbstages;
 pub mod stage_text;
+mod zero_fill;
 
 #[cfg(test)]
 mod test_hir;
