@@ -816,7 +816,7 @@ mod decided_tests {
         ];
         std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
         let program =
-            qb_driver::parsed(&basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false)
+            qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None)
                 .unwrap();
         let lowered = crate::hir::lower::lower(&program).unwrap();
         let (function, body) = program.modules[0]

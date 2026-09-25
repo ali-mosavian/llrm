@@ -222,14 +222,7 @@ struct Function {
 struct Compiler {
     dialect: Dialect,
     runtime: String,
-    row_major: bool,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    // LBOUND/UBOUND read the descriptor without checking it is allocated
-    // or the dimension in range, as unchecked subscripts do.
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
+    options: Options,
     module_name: String,
     types: Vec<Type>,
     variables: BTreeMap<String, Variable>,
@@ -303,18 +296,25 @@ pub fn compile_with_array_order(
     runtime: &str,
     row_major: bool,
 ) -> Result<String, SemanticError> {
-    compile_with_options(
-        module,
-        module_name,
-        dialect,
-        runtime,
-        row_major,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    compile_with_options(module, module_name, dialect, runtime, &Options { row_major, ..Options::default() })
+}
+
+/// How BC was told to compile the module.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    /// /R.
+    pub row_major: bool,
+    /// /Ah.
+    pub huge_arrays: bool,
+    /// /D: every element through B$HARY.
+    pub checked_arrays: bool,
+    /// LBOUND/UBOUND read the descriptor without checking it is allocated
+    /// or the dimension in range, as unchecked subscripts do.
+    pub unchecked_bounds: bool,
+    /// /MBF.
+    pub mbf: bool,
+    /// /FPa.
+    pub alternate_math: bool,
 }
 
 pub fn compile_with_options(
@@ -322,56 +322,24 @@ pub fn compile_with_options(
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
-    row_major: bool,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
+    options: &Options,
 ) -> Result<String, SemanticError> {
-    let mut compiler = built(
-        module,
-        module_name,
-        dialect,
-        runtime,
-        row_major,
-        huge_arrays,
-        checked_arrays,
-        unchecked_bounds,
-        mbf,
-        alternate_math,
-    )?;
+    let mut compiler = built(module, module_name, dialect, runtime, options)?;
     shapes::applied(&mut compiler);
     Ok(compiler.json())
 }
 
 /// Every procedure of `module` as HIR, before emission.
-#[allow(clippy::too_many_arguments)]
 fn built(
     module: &Module,
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
-    row_major: bool,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
+    options: &Options,
 ) -> Result<Compiler, SemanticError> {
     let module = outline_module_gosubs(module)?;
     let module = &module;
-    let mut compiler = Compiler::new(
-        module_name,
-        dialect,
-        runtime,
-        row_major,
-        huge_arrays,
-        checked_arrays,
-        unchecked_bounds,
-        mbf,
-        alternate_math,
-    );
+    let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -466,7 +434,7 @@ fn built(
                         // selector at +2 and adjusted offset at +0Ah.
                         descriptor_data: if parameter_type == STRING {
                             "near"
-                        } else if compiler.huge_arrays {
+                        } else if compiler.options.huge_arrays {
                             "split_huge"
                         } else {
                             "split_far"
@@ -887,12 +855,7 @@ impl Compiler {
         module_name: &str,
         dialect: Dialect,
         runtime: &str,
-        row_major: bool,
-        huge_arrays: bool,
-        checked_arrays: bool,
-        unchecked_bounds: bool,
-        mbf: bool,
-        alternate_math: bool,
+        options: Options,
     ) -> Self {
         let types = vec![
             scalar(VOID, "void", "void", 0, None, "none"),
@@ -908,12 +871,7 @@ impl Compiler {
         Self {
             dialect,
             runtime: runtime.into(),
-            row_major,
-            huge_arrays,
-            checked_arrays,
-            unchecked_bounds,
-            mbf,
-            alternate_math,
+            options,
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),
@@ -1617,7 +1575,7 @@ impl Compiler {
             records.iter().rev().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
         let allocation = if element == STRING {
             0x8000
-        } else if self.huge_arrays {
+        } else if self.options.huge_arrays {
             0x0200
         } else {
             0x0100
@@ -1635,7 +1593,7 @@ impl Compiler {
     /// order, the first under /R. B$DDIM, B$HARY and the adjusted offset at
     /// +0Ah all run records in this order; LBOUND counts back from the rank.
     fn record_dimensions(&self, rank: usize) -> Vec<usize> {
-        if self.row_major {
+        if self.options.row_major {
             (0..rank).collect()
         } else {
             (0..rank).rev().collect()
@@ -1768,7 +1726,7 @@ impl Compiler {
                     // first MOD_TEX record through selector zero/DGROUP.
                     descriptor_data: if element == STRING {
                         "near"
-                    } else if self.huge_arrays {
+                    } else if self.options.huge_arrays {
                         "split_huge"
                     } else {
                         "split_far"
@@ -1830,7 +1788,7 @@ impl Compiler {
                     descriptor_place: Some(descriptor_place),
                     descriptor_data: if element == STRING {
                         "near"
-                    } else if self.huge_arrays {
+                    } else if self.options.huge_arrays {
                         "split_huge"
                     } else {
                         "split_far"
@@ -3789,9 +3747,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
+                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.checked_arrays {
+                    let address = if self.options.checked_arrays {
                         "checked"
                     } else {
                         variable.descriptor_data
@@ -3881,9 +3839,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
+                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.checked_arrays {
+                    let address = if self.options.checked_arrays {
                         "checked"
                     } else {
                         variable.descriptor_data
@@ -4227,7 +4185,7 @@ impl Compiler {
         upper: bool,
     ) -> Result<Operand, SemanticError> {
         let result = self.compiler_temporary("$bound", INTEGER)?;
-        let checked = !self.unchecked_bounds;
+        let checked = !self.options.unchecked_bounds;
         // Every allocated array has a first dimension.
         let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
         let read = self.new_block();
@@ -4914,8 +4872,8 @@ impl Compiler {
                 let (target, callee) = match lowering {
                     Lowering::PackInteger => (INTEGER, "B$FMKI"),
                     Lowering::PackLong => (LONG, "B$FMKL"),
-                    Lowering::PackSingle => (SINGLE, if self.mbf { "B$FMSF" } else { "B$FMKS" }),
-                    Lowering::PackDouble => (DOUBLE, if self.mbf { "B$FMDF" } else { "B$FMKD" }),
+                    Lowering::PackSingle => (SINGLE, if self.options.mbf { "B$FMSF" } else { "B$FMKS" }),
+                    Lowering::PackDouble => (DOUBLE, if self.options.mbf { "B$FMDF" } else { "B$FMKD" }),
                     _ => unreachable!("matched binary packer"),
                 };
                 let (operand, type_id) = self.expression(&arguments[0])?;
@@ -5822,7 +5780,7 @@ impl Compiler {
             let descriptor = self.string_descriptor(&arguments[0])?;
             let single = intrinsic.lowering == Lowering::UnpackSingle;
             let type_id = if single { SINGLE } else { DOUBLE };
-            let callee = match (self.mbf, single) {
+            let callee = match (self.options.mbf, single) {
                 (false, true) => "B$FCVS",
                 (false, false) => "B$FCVD",
                 (true, true) => "B$MCVS",
@@ -7857,8 +7815,8 @@ impl Compiler {
             out,
             "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\"}}\n",
             self.runtime,
-            if self.row_major { "row-major" } else { "column-major" },
-            if self.alternate_math {
+            if self.options.row_major { "row-major" } else { "column-major" },
+            if self.options.alternate_math {
                 "alternate"
             } else {
                 "inline"

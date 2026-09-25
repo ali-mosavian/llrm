@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::support::hash::IndexMap;
 
 use super::compile::{self as qb_compile, Stage, StageValue};
-use super::driver::parsed;
+use super::driver::{parsed, Frontend};
 use super::stage_text;
 use crate::backend::masm;
 use crate::hir::{codec, dump, model};
@@ -360,40 +360,13 @@ fn _emitted_asm(program: &model::Program, module: &masm::Module, pretty: bool) -
     Ok(if pretty { _display_assembly(&result) } else { result })
 }
 
-/// The frontend options `dumped` takes, as `tools/qbstages.py` spells them.
-#[derive(Clone, Debug, Default)]
-pub struct Frontend {
-    pub dialect: String,
-    pub runtime: String,
-    pub array_order: String,
-    pub huge_arrays: bool,
-    pub checked_arrays: bool,
-    pub unchecked_bounds: bool,
-    pub mbf: bool,
-    pub alternate_math: bool,
-    pub includes: Vec<PathBuf>,
-}
-
 fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Options) -> Result<PathBuf, String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
-    let program = parsed(
-        source,
-        &frontend.dialect,
-        &frontend.runtime,
-        None,
-        &frontend.includes,
-        &frontend.array_order,
-        frontend.huge_arrays,
-        frontend.checked_arrays,
-        frontend.unchecked_bounds,
-        frontend.mbf,
-        frontend.alternate_math,
-    )
-    .map_err(|error| error.0)?;
+    let program = parsed(source, frontend, None).map_err(|error| error.0)?;
     let functions: Vec<&model::Function> = program.modules.iter().flat_map(|module| &module.functions).collect();
     write(&output.join("00-input.bas"), &_source_text(source)?)?;
     let numbers: IndexMap<*const model::Function, usize> =

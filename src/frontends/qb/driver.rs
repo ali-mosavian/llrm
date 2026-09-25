@@ -92,46 +92,62 @@ pub fn build_release() -> Result<PathBuf, FrontendError> {
     Err(FrontendError("cargo build did not report the qbfront executable".into()))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn _options(
-    source: &Path,
-    dialect: &str,
-    runtime: &str,
-    include_dirs: &[PathBuf],
-    array_order: &str,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
-) -> Result<Vec<String>, FrontendError> {
-    if !DIALECTS.contains(&dialect) {
+/// How qbfront compiles a source: its options, as BC's switches name them.
+#[derive(Clone, Debug)]
+pub struct Frontend {
+    pub dialect: String,
+    pub runtime: String,
+    pub array_order: String,
+    pub huge_arrays: bool,
+    pub checked_arrays: bool,
+    pub unchecked_bounds: bool,
+    pub mbf: bool,
+    pub alternate_math: bool,
+    pub includes: Vec<PathBuf>,
+}
+
+impl Frontend {
+    /// `dialect` on `runtime`, column-major, every switch off.
+    pub fn new(dialect: &str, runtime: &str) -> Self {
+        Self {
+            dialect: dialect.into(),
+            runtime: runtime.into(),
+            array_order: "column-major".into(),
+            huge_arrays: false,
+            checked_arrays: false,
+            unchecked_bounds: false,
+            mbf: false,
+            alternate_math: false,
+            includes: Vec::new(),
+        }
+    }
+}
+
+fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendError> {
+    let Frontend { dialect, runtime, array_order, .. } = frontend;
+    if !DIALECTS.contains(&dialect.as_str()) {
         return Err(FrontendError(format!("unknown QB dialect '{dialect}'")));
     }
-    if !RUNTIMES.contains(&runtime) {
+    if !RUNTIMES.contains(&runtime.as_str()) {
         return Err(FrontendError(format!("unknown QB runtime '{runtime}'")));
     }
-    if !ARRAY_ORDERS.contains(&array_order) {
+    if !ARRAY_ORDERS.contains(&array_order.as_str()) {
         return Err(FrontendError(format!("unknown QB array order '{array_order}'")));
     }
     let mut out: Vec<String> =
-        vec!["--dialect".into(), dialect.into(), "--runtime".into(), runtime.into(), "--array-order".into(), array_order.into()];
-    if huge_arrays {
-        out.push("--huge-arrays".into());
+        vec!["--dialect".into(), dialect.clone(), "--runtime".into(), runtime.clone(), "--array-order".into(), array_order.clone()];
+    for (on, flag) in [
+        (frontend.huge_arrays, "--huge-arrays"),
+        (frontend.checked_arrays, "--checked-arrays"),
+        (frontend.unchecked_bounds, "--unchecked-bounds"),
+        (frontend.mbf, "--mbf"),
+        (frontend.alternate_math, "--alternate-math"),
+    ] {
+        if on {
+            out.push(flag.into());
+        }
     }
-    if checked_arrays {
-        out.push("--checked-arrays".into());
-    }
-    if unchecked_bounds {
-        out.push("--unchecked-bounds".into());
-    }
-    if mbf {
-        out.push("--mbf".into());
-    }
-    if alternate_math {
-        out.push("--alternate-math".into());
-    }
-    for directory in include_dirs {
+    for directory in &frontend.includes {
         out.push("--include".into());
         out.push(directory.display().to_string());
     }
@@ -161,61 +177,14 @@ fn _run(arguments: Vec<String>) -> Result<String, FrontendError> {
 }
 
 /// Run only source loading and parsing, independently of semantic HIR support.
-#[allow(clippy::too_many_arguments)]
-pub fn syntax_checked(
-    source: &Path,
-    dialect: &str,
-    runtime: &str,
-    include_dirs: &[PathBuf],
-    array_order: &str,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
-) -> Result<(), FrontendError> {
+pub fn syntax_checked(source: &Path, frontend: &Frontend) -> Result<(), FrontendError> {
     let mut arguments = vec!["--syntax".to_owned()];
-    arguments.extend(_options(
-        source,
-        dialect,
-        runtime,
-        include_dirs,
-        array_order,
-        huge_arrays,
-        checked_arrays,
-        unchecked_bounds,
-        mbf,
-        alternate_math,
-    )?);
+    arguments.extend(_options(source, frontend)?);
     _run(arguments).map(|_| ())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn parsed(
-    source: &Path,
-    dialect: &str,
-    runtime: &str,
-    dump: Option<&Path>,
-    include_dirs: &[PathBuf],
-    array_order: &str,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
-) -> Result<model::Program, FrontendError> {
-    let stdout = _run(_options(
-        source,
-        dialect,
-        runtime,
-        include_dirs,
-        array_order,
-        huge_arrays,
-        checked_arrays,
-        unchecked_bounds,
-        mbf,
-        alternate_math,
-    )?)?;
+pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result<model::Program, FrontendError> {
+    let stdout = _run(_options(source, frontend)?)?;
     if let Some(dump) = dump {
         if let Some(parent) = dump.parent() {
             std::fs::create_dir_all(parent).map_err(|error| FrontendError(error.to_string()))?;

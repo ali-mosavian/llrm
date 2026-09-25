@@ -252,7 +252,7 @@ pub(super) fn applied(compiler: &mut Compiler) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Compiler, Instruction};
+    use super::super::{built, Compiler, Instruction, Options};
     use super::*;
     use crate::{parse, Dialect};
 
@@ -262,7 +262,7 @@ mod tests {
 
     fn applied_in(source: &str, row_major: bool) -> Compiler {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", row_major, false, false, false, false, false)
+        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
         applied(&mut compiler);
         compiler

@@ -115,18 +115,15 @@ fn main() -> ExitCode {
                     .file_stem()
                     .and_then(|one| one.to_str())
                     .unwrap_or("module");
-                match qbfront::semantic::compile_with_options(
-                    &module,
-                    name,
-                    dialect,
-                    &runtime,
+                let options = qbfront::semantic::Options {
                     row_major,
                     huge_arrays,
                     checked_arrays,
                     unchecked_bounds,
                     mbf,
                     alternate_math,
-                ) {
+                };
+                match qbfront::semantic::compile_with_options(&module, name, dialect, &runtime, &options) {
                     Ok(hir) => {
                         print!("{hir}");
                         ExitCode::SUCCESS

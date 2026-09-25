@@ -274,7 +274,7 @@ fn test_fresh_basic_object_does_not_predeclare_the_c_data_class() {
 fn test_pds_alternate_math_module_header_records_the_measured_switch() {
     let path = root().join("frontends/qb/compat/pds71/pdfpa.bas");
     let source =
-        qb_driver::parsed(&path, "pds71", "pds71", None, &[], "column-major", false, false, false, false, true)
+        qb_driver::parsed(&path, &qb_driver::Frontend { alternate_math: true, ..qb_driver::Frontend::new("pds71", "pds71") }, None)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let records = records(&source, "PDFPA.BAS");
     let code = code(&records);
@@ -596,7 +596,7 @@ fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
 #[test]
 fn test_row_major_rank_two_descriptor_matches_bc_r() {
     let path = root().join("frontends/qb/compat/qb45/q45a05.bas");
-    let source = qb_driver::parsed(&path, "qb45", "qb45", None, &[], "row-major", false, false, false, false, false)
+    let source = qb_driver::parsed(&path, &qb_driver::Frontend { array_order: "row-major".into(), ..qb_driver::Frontend::new("qb45", "qb45") }, None)
         .expect("parses");
     let module = &source.modules[0];
     let values = place(&module.functions[0], "VALUES");

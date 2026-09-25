@@ -103,7 +103,7 @@ pub(super) enum Passing {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{built, Instruction, Number};
+    use super::super::{built, Instruction, Number, Options};
     use super::*;
     use crate::{parse, Dialect};
 
@@ -114,7 +114,7 @@ mod tests {
 
     fn tagged_checked(source: &str, checked: bool) -> Vec<(String, Vec<Instruction>)> {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", false, false, checked, false, false, false)
+        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { checked_arrays: checked, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
         compiler
             .functions
@@ -170,7 +170,7 @@ mod tests {
     /// The constants each call to `callee` pushes, first pushed first.
     fn pushed(source: &str, row_major: bool, huge: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", row_major, huge, false, false, false, false)
+        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, huge_arrays: huge, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
         let mut found = Vec::new();
         for function in &compiler.functions {

@@ -30,7 +30,7 @@ pub(super) fn written(directory: &tempfile::TempDir, name: &str, bytes: &[u8]) -
 
 /// `qb_driver.parsed(source, dialect=..., runtime=...)` with every other default.
 pub(super) fn parsed_as(source: &Path, dialect: &str, runtime: &str) -> Program {
-    qb_driver::parsed(source, dialect, runtime, None, &[], "column-major", false, false, false, false, false)
+    qb_driver::parsed(source, &qb_driver::Frontend::new(dialect, runtime), None)
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 

@@ -43,7 +43,7 @@ fn compat(path: &str) -> std::path::PathBuf {
 
 /// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., unchecked_bounds=...)`.
 fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, huge: bool, unchecked: bool) -> hir::Program {
-    qb_driver::parsed(source, dialect, runtime, None, &[], array_order, huge, false, unchecked, false, false)
+    qb_driver::parsed(source, &qb_driver::Frontend { array_order: array_order.into(), huge_arrays: huge, unchecked_bounds: unchecked, ..qb_driver::Frontend::new(dialect, runtime) }, None)
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
@@ -1416,7 +1416,7 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
 fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
     let source = qb_driver::ROOT().join("not-read.bas");
     let syntax = |dialect: &str, runtime: &str| {
-        qb_driver::syntax_checked(&source, dialect, runtime, &[], "column-major", false, false, false, false, false)
+        qb_driver::syntax_checked(&source, &qb_driver::Frontend::new(dialect, runtime))
             .expect_err("refused")
             .0
     };

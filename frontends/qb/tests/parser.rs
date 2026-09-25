@@ -1,4 +1,4 @@
-use qbfront::semantic::{compile_with_array_order, compile_with_options};
+use qbfront::semantic::{compile_with_array_order, compile_with_options, Options};
 use qbfront::syntax::{Binary, ExitTarget, Expr, Literal, Procedure, Statement, TypeName};
 use qbfront::{compile, parse, Dialect};
 
@@ -974,31 +974,9 @@ fn huge_array_option_uses_the_measured_hary_contract() {
         Dialect::Pds71,
     )
     .unwrap();
-    let ordinary = compile_with_options(
-        &module,
-        "ordinary",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    let ordinary = compile_with_options(&module, "ordinary", Dialect::Pds71, "pds71", &Options { ..Options::default() })
     .unwrap();
-    let huge = compile_with_options(
-        &module,
-        "huge",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        true,
-        false,
-        false,
-        false,
-        false,
-    )
+    let huge = compile_with_options(&module, "huge", Dialect::Pds71, "pds71", &Options { huge_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
     assert!(huge.contains("\"callee\":\"B$HARY\""));
@@ -1012,31 +990,9 @@ fn checked_array_option_routes_static_access_through_hary() {
     // PDRTC printed its no-error sentinel when /D was dropped and the
     // out-of-range static-array store was lowered as unchecked arithmetic.
     let module = parse("dim a(1) as integer\na(2) = 7\n", Dialect::Pds71).unwrap();
-    let ordinary = compile_with_options(
-        &module,
-        "ordinary",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    let ordinary = compile_with_options(&module, "ordinary", Dialect::Pds71, "pds71", &Options { ..Options::default() })
     .unwrap();
-    let checked = compile_with_options(
-        &module,
-        "checked",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        false,
-        true,
-        false,
-        false,
-        false,
-    )
+    let checked = compile_with_options(&module, "checked", Dialect::Pds71, "pds71", &Options { checked_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
     assert!(checked.contains("\"callee\":\"B$HARY\""));
@@ -1880,31 +1836,9 @@ fn mbf_option_remaps_pack_and_unpack_as_one_audited_mode() {
         Dialect::Pds71,
     )
     .unwrap();
-    let ordinary = compile_with_options(
-        &module,
-        "ieee",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    let ordinary = compile_with_options(&module, "ieee", Dialect::Pds71, "pds71", &Options { ..Options::default() })
     .unwrap();
-    let mbf = compile_with_options(
-        &module,
-        "mbf",
-        Dialect::Pds71,
-        "pds71",
-        false,
-        false,
-        false,
-        false,
-        true,
-        false,
-    )
+    let mbf = compile_with_options(&module, "mbf", Dialect::Pds71, "pds71", &Options { mbf: true, ..Options::default() })
     .unwrap();
     for callee in ["B$FMKS", "B$FMKD", "B$FCVS", "B$FCVD"] {
         assert!(ordinary.contains(&format!("\"callee\":\"{callee}\"")));
