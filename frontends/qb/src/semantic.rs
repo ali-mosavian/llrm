@@ -315,6 +315,9 @@ pub struct Options {
     pub mbf: bool,
     /// /FPa.
     pub alternate_math: bool,
+    /// Nothing outside the module calls its procedures: they get internal
+    /// linkage, and no PUBDEF, so such a call fails to link.
+    pub whole_program: bool,
 }
 
 pub fn compile_with_options(
@@ -524,7 +527,7 @@ fn built(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported {
+            if procedure.exported && !compiler.options.whole_program {
                 "external"
             } else {
                 "internal"

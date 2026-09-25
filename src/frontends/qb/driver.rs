@@ -103,6 +103,8 @@ pub struct Frontend {
     pub unchecked_bounds: bool,
     pub mbf: bool,
     pub alternate_math: bool,
+    /// Nothing outside the source calls its procedures: `--whole-program`.
+    pub whole_program: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -118,6 +120,7 @@ impl Frontend {
             unchecked_bounds: false,
             mbf: false,
             alternate_math: false,
+            whole_program: false,
             includes: Vec::new(),
         }
     }
@@ -142,6 +145,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
         (frontend.unchecked_bounds, "--unchecked-bounds"),
         (frontend.mbf, "--mbf"),
         (frontend.alternate_math, "--alternate-math"),
+        (frontend.whole_program, "--whole-program"),
     ] {
         if on {
             out.push(flag.into());

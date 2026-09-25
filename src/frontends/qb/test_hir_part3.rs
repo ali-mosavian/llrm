@@ -1100,6 +1100,19 @@ fn test_identity_phi_edge_survives_control_flow_threading() {
     assert!(!object_bytes(&source, "ENTPHI.BAS").expect("emits").is_empty());
 }
 
+/// `--whole-program` never reached qbfront, so every SUB stayed public.
+#[test]
+fn test_whole_program_procedures_are_not_public() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "WHOLE.BAS", b"DECLARE SUB s ()\nCALL s\nSUB s\nEND SUB\n");
+    let public = |whole_program| {
+        let frontend = qb_driver::Frontend { whole_program, ..qb_driver::Frontend::new("qb45", "qb45") };
+        listing(&qb_driver::parsed(&source, &frontend, None).expect("parses")).contains("public S\n")
+    };
+    assert!(public(false));
+    assert!(!public(true));
+}
+
 /// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on every array.
 #[test]
 fn test_a_constant_on_the_left_of_a_comparison_still_encodes() {

@@ -261,8 +261,12 @@ mod tests {
     }
 
     fn applied_in(source: &str, row_major: bool) -> Compiler {
+        applied_with(source, &Options { row_major, ..Options::default() })
+    }
+
+    fn applied_with(source: &str, options: &Options) -> Compiler {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, ..Options::default() })
+        let mut compiler = built(&module, "T", Dialect::VbDos, "vbdos", options)
             .unwrap_or_else(|error| panic!("{}", error.message));
         applied(&mut compiler);
         compiler
@@ -381,15 +385,25 @@ mod tests {
         assert_eq!(originated(function(&compiler, "t")), 1);
     }
 
+    const PASSED: &str =
+        "DEFINT A-Z\nDECLARE SUB t (q())\nREDIM a(1, 4)\nCALL t(a())\nx = a(1, 2)\nSUB t (q())\nx = q(1, 2)\nEND SUB\n";
+
     /// A SUB is public: another module may hand its parameter any array, and
     /// its REDIM reaches this module's array through the argument.
     #[test]
     fn test_a_public_procedures_array_parameter_has_no_shape() {
-        let compiler = applied_to(
-            "DEFINT A-Z\nDECLARE SUB t (q())\nREDIM a(1, 4)\nCALL t(a())\nx = a(1, 2)\nSUB t (q())\nx = q(1, 2)\nEND SUB\n",
-        );
+        let compiler = applied_to(PASSED);
         assert!(counts(function(&compiler, "t")).is_empty());
         assert!(counts(function(&compiler, "__main")).is_empty());
+    }
+
+    /// Every SUB was public, so no array parameter had a shape even when the
+    /// module was the whole program.
+    #[test]
+    fn test_a_whole_programs_array_parameter_has_its_arguments_shape() {
+        let compiler = applied_with(PASSED, &Options { whole_program: true, ..Options::default() });
+        let t = function(&compiler, "t");
+        assert_eq!((counts(t), originated(t)), (vec![2], 1));
     }
 
     #[test]
