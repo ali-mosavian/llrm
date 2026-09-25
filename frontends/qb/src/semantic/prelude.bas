@@ -2,29 +2,15 @@
 ' f-strings. Every name here begins QUICKR_, which programs cannot use.
 ' The compiler parses each format spec; these only lay the value out.
 
-' The floor of a non-negative value. INT goes through a 32-bit integer, so
-' it cannot. Storing value + 2 ^ 52 in a DOUBLE rounds it to a whole number.
-FUNCTION QUICKR_FLOOR# (BYVAL value AS DOUBLE)
-    DIM whole AS DOUBLE
-    IF value >= 4503599627370496# THEN
-        whole = value
-    ELSE
-        whole = value + 4503599627370496#
-        whole = whole - 4503599627370496#
-        IF whole > value THEN whole = whole - 1
-    END IF
-    QUICKR_FLOOR# = whole
-END FUNCTION
-
 ' The digits of a whole, non-negative value below 2 ^ 53 in base 2 to 16.
 FUNCTION QUICKR_RADIX$ (BYVAL value AS DOUBLE, BYVAL radix AS INTEGER, BYVAL upper AS INTEGER)
     DIM digits AS STRING, alphabet AS STRING, rest AS DOUBLE, quotient AS DOUBLE
     alphabet = "0123456789abcdef"
     IF upper THEN alphabet = UCASE$(alphabet)
-    rest = QUICKR_FLOOR#(value)
+    rest = INT(value)
     digits = ""
     DO
-        quotient = QUICKR_FLOOR#(rest / radix)
+        quotient = INT(rest / radix)
         digits = MID$(alphabet, CINT(rest - quotient * radix) + 1, 1) + digits
         rest = quotient
     LOOP WHILE rest > 0
@@ -71,7 +57,7 @@ FUNCTION QUICKR_EXACT$ (BYVAL value AS DOUBLE, dot AS INTEGER)
         mantissa = mantissa / 2
         twos = twos + 1
     LOOP
-    DO WHILE mantissa <> QUICKR_FLOOR#(mantissa)
+    DO WHILE mantissa <> INT(mantissa)
         mantissa = mantissa * 2
         twos = twos - 1
     LOOP

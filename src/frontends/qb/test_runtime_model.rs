@@ -74,3 +74,27 @@ fn floats_print_as_measured() {
     assert_eq!(printed("DIM x AS SINGLE\nx = 2.5\nPRINT x * 2\n"), " 5 \n");
 }
 
+
+#[test]
+fn int_floors_beyond_long() {
+    // INT went through a LONG: INT(4000000000#) printed -294967296.
+    let source = "DIM a AS DOUBLE, b AS DOUBLE\na = 4000000000#: b = -4000000000.5#\nPRINT INT(a); INT(b); INT(2.5#); INT(-2.5#)\n";
+    assert_eq!(printed(source), " 4000000000 -4000000001  2 -3 \n");
+}
+
+#[test]
+fn fix_truncates_toward_zero() {
+    // FIX(2.3) was 3 and FIX(-2.3) was -3: both corrections applied at once.
+    let source = "DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE, d AS DOUBLE, e AS DOUBLE\n\
+        a = 2.3#: b = 2.7#: c = -2.3#: d = -2.7#: e = -4000000000.5#\n\
+        PRINT FIX(a); FIX(b); FIX(c); FIX(d); FIX(e)\n";
+    assert_eq!(printed(source), " 2  2 -2 -2 -4000000000 \n");
+}
+
+#[test]
+fn convert_rounds_to_nearest_even() {
+    // The executor truncated CONVERT, where the x87 rounds: CLNG(2.7) read 2.
+    let source = "DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\na = 2.7#: b = 2.5#: c = 3.5#\nPRINT CLNG(a); CINT(b); CINT(c)\n";
+    assert_eq!(printed(source), " 3  2  4 \n");
+}
+

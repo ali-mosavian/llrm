@@ -5968,21 +5968,19 @@ impl Compiler {
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail("FIX requires a numeric argument");
             }
-            // For nearest-rounded integer n, trunc(x) is
-            // n + (x < n ? -1 : 0) - (x > n ? -1 : 0).
-            let rounded = self.value(LONG);
-            self.emit("convert", vec![rounded], vec![operand.clone()]);
-            let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
-            let below = self.value(BOOLEAN);
-            self.emit("lt", vec![below], vec![operand.clone(), integral.clone()]);
-            let below = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
-            let above = self.value(BOOLEAN);
-            self.emit("gt", vec![above], vec![operand, integral.clone()]);
-            let above = self.convert(Operand::Value(above), BOOLEAN, type_id)?;
-            let adjusted = self.value(type_id);
-            self.emit("fadd", vec![adjusted], vec![integral, below]);
+            // trunc(x) is floor(x), plus one where x is negative and not
+            // whole: -1 AND -1 is -1 in QB, and subtracting it adds one.
+            let (floor, _) = self.floor_float(operand.clone(), type_id)?;
+            let zero = self.floating_literal("0", type_id)?;
+            let negative = self.value(BOOLEAN);
+            self.emit("lt", vec![negative], vec![operand.clone(), zero]);
+            let fractional = self.value(BOOLEAN);
+            self.emit("lt", vec![fractional], vec![floor.clone(), operand]);
+            let both = self.value(BOOLEAN);
+            self.emit("and", vec![both], vec![Operand::Value(negative), Operand::Value(fractional)]);
+            let adjustment = self.convert(Operand::Value(both), BOOLEAN, type_id)?;
             let result = self.value(type_id);
-            self.emit("fsub", vec![result], vec![Operand::Value(adjusted), above]);
+            self.emit("fsub", vec![result], vec![floor, adjustment]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::PortIn {
@@ -6187,13 +6185,13 @@ impl Compiler {
         operand: Operand,
         type_id: u32,
     ) -> Result<(Operand, u32), SemanticError> {
-        // INT is floor, while x87's current conversion rounds to nearest.
-        // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
-        // Express the correction in ordinary HIR so optimization sees every
-        // value. QB booleans are -1/0 and supply that correction.
-        let rounded = self.value(LONG);
-        self.emit("convert", vec![rounded], vec![operand.clone()]);
-        let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
+        // INT is floor, while x87's current rounding is to nearest. For
+        // rounded n, floor(x) is n + (x < n ? -1 : 0). FROUND keeps n a
+        // float: through a LONG, INT(4000000000#) wrapped to -294967296.
+        // QB booleans are -1/0 and supply the correction.
+        let rounded = self.value(type_id);
+        self.emit("fround", vec![rounded], vec![operand.clone()]);
+        let integral = Operand::Value(rounded);
         let below = self.value(BOOLEAN);
         self.emit("lt", vec![below], vec![operand, integral.clone()]);
         let correction = self.convert(Operand::Value(below), BOOLEAN, type_id)?;

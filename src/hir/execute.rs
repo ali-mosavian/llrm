@@ -773,7 +773,12 @@ impl<'p> Machine<'p> {
                     }
                 }
             }
-            Op::Copy | Op::Convert => vec![args[0].clone()],
+            // CONVERT rounds as the x87 does by default: to nearest, ties to even.
+            Op::Convert => vec![match (&args[0], activation.layout.value_types[&instruction.results[0]].kind) {
+                (Scalar::Float(value), TypeKind::Integer | TypeKind::Boolean) => Scalar::Float(value.round_ties_even()),
+                (other, _) => other.clone(),
+            }],
+            Op::Copy => vec![args[0].clone()],
             Op::ZeroExtend => vec![Scalar::Int(unsigned(args[0].whole()?, operand_type(0)?))],
             Op::SignExtend => vec![Scalar::Int(wrap(
                 args[0].whole()?,
@@ -917,7 +922,7 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(ordered(op, left.cmp(&right)))]
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 => {
+            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
                 let value = args[0].float()?;
                 let result = match op {
                     Op::Fabs => value.abs(),
@@ -925,6 +930,7 @@ impl<'p> Machine<'p> {
                     Op::Fsin => value.sin(),
                     Op::Fcos => value.cos(),
                     Op::Fatan => value.atan(),
+                    Op::Fround => value.round_ties_even(),
                     Op::Flog2 => value.log2(),
                     _ => value.exp2(),
                 };
