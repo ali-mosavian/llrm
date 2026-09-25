@@ -16,10 +16,12 @@ use crate::optimize::transform;
 /// Direct port of `qbopt/optimize/ivshare.py:shared`.
 pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
     let mut definitions: BTreeMap<u32, &Op> = BTreeMap::new();
+    let mut made: BTreeMap<Value, &Op> = BTreeMap::new();
     for block in &body.blocks {
         for op in &block.ops {
             for value in &op.defines {
                 definitions.insert(value.id, op);
+                made.insert(*value, op);
             }
         }
     }
@@ -37,7 +39,7 @@ pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
             if let Some(twin) = twin {
                 return Rc::new(_replacing(body, header_index, derived, twin, derived.start.width()));
             }
-            let Some((base, offset, seed)) = _offset(&counters, derived, &definitions) else {
+            let Some((base, offset, seed)) = _offset(&counters, derived, &definitions, &made) else {
                 continue;
             };
             let width = derived.start.width();
@@ -107,20 +109,20 @@ pub(crate) fn shared(body: &Rc<MirBody>) -> Rc<MirBody> {
 
 /// Another counter stepping as `derived` does a constant distance behind it, the distance, and a seed.
 ///
-/// Two starts are that far apart when both are one root plus a constant:
+/// Two starts are that far apart when `induction::distance` says so:
 /// `add source,c` over the other's start, or strength reduction's `a[i].x`
-/// and `a[i].y`, starting 4 apart from the same or no root. Otherwise the
-/// canonical counter is the lower id, so the pair converges.
+/// and `a[i].y`, starting 4 apart. Otherwise the canonical counter is the
+/// lower id, so the pair converges.
 fn _offset<'a, 'b>(
     counters: &'a OrderedMap<u32, Affine>,
     derived: &Affine,
     definitions: &BTreeMap<u32, &'b Op>,
+    made: &BTreeMap<Value, &'b Op>,
 ) -> Option<(&'a Affine, Const, Option<&'b Op>)> {
     if !matches!(derived.step, AffineOperand::Const(_)) {
         return None;
     }
     let width = derived.start.width();
-    let (root, at) = induction::anchored(&derived.start.as_arg(), definitions, width, None);
     let seed = match &derived.start {
         AffineOperand::Held(start) => definitions.get(&start.value.id).copied(),
         AffineOperand::Const(_) => None,
@@ -138,12 +140,13 @@ fn _offset<'a, 'b>(
         if !direct.contains(&one.start.as_arg()) && one.value > derived.value {
             continue;
         }
-        let (other_root, other_at) = induction::anchored(&one.start.as_arg(), definitions, width, None);
-        if one.start.width() != width || other_root != root {
+        if one.start.width() != width {
             continue;
         }
-        let distance = &at - other_at;
-        return Some((one, Const::new(masked(&distance, width), width), seed));
+        let Some(distance) = induction::distance(&derived.start.as_arg(), &one.start.as_arg(), made, width) else {
+            continue;
+        };
+        return Some((one, Const::new(distance, width), seed));
     }
     None
 }

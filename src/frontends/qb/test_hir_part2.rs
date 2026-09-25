@@ -646,8 +646,10 @@ fn test_dynamic_directive_makes_a_bounded_numeric_array_runtime_owned() {
     assert!(!module.data.iter().any(|one| one.readonly && one.name == "VALUES$descriptor"));
     assert_eq!(calls, ["B$DDIM", "B$RDIM"]);
     let listing = listing(&source);
-    assert!(listing.contains("+2]") && listing.contains("+10]"));
-    assert!(listing.contains("mov dword ptr es:[bx], 7"));
+    // Through the allocation's selector; its origin is the constant 0, so +0Ah is not read.
+    let slot = |offset: &str| regex::Regex::new(&format!(r"\+{offset}\b")).unwrap().is_match(&listing);
+    assert!(slot("2") && !slot("10"), "{listing}");
+    assert!(listing.contains("mov dword ptr es:[bx], 7") || listing.contains("mov dword ptr es:[0], 7"), "{listing}");
 }
 
 /// COM_TOKENIZE passed a huge-pointer element to SASS, which reported string-space corruption.

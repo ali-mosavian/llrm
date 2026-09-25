@@ -5019,17 +5019,24 @@ impl Compiler {
         let mut bounds = Vec::new();
         for bound in &declaration.bounds {
             let lower = match &bound.lower {
-                Some(lower) => {
-                    let (value, type_id) = self.expression(lower)?;
-                    self.convert(value, type_id, INTEGER)?
-                }
+                Some(lower) => self.bound(lower)?,
                 None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
             };
-            let (upper, upper_type) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, upper_type, INTEGER)?;
+            let upper = self.bound(&bound.upper)?;
             bounds.push((lower, upper));
         }
         Ok(bounds)
+    }
+
+    /// One array bound as an INTEGER; a constant one, `-50` included, as a constant.
+    fn bound(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Ok((_, Number::Integer(value))) = self.constant(expression) {
+            if i16::try_from(value).is_ok() {
+                return Ok(Operand::Constant(INTEGER, Number::Integer(value)));
+            }
+        }
+        let (value, type_id) = self.expression(expression)?;
+        self.convert(value, type_id, INTEGER)
     }
 
     fn redim(&mut self, declaration: &Declaration) -> Result<(), SemanticError> {

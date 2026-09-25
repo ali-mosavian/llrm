@@ -1359,6 +1359,105 @@ fn _difference(
     (root == other).then(|| masked(&(ahead - behind), width))
 }
 
+/// `arg` as terms times coefficients, through copies, adds, subtracts,
+/// increments and decrements. A constant is a term; `headers` stay terms.
+/// A value no rule expands is a term too when `opaque`, else None.
+pub(crate) fn linear(
+    arg: &Arg,
+    made: &BTreeMap<Value, &Op>,
+    headers: &BTreeSet<Value>,
+    width: u32,
+    opaque: bool,
+    visiting: &BTreeSet<Value>,
+    cached: &mut IndexMap<Arg, IndexMap<Arg, BigInt>>,
+) -> Option<IndexMap<Arg, BigInt>> {
+    let held = match arg {
+        Arg::Const(constant) if constant.width == width => None,
+        Arg::Held(held) if held.width == width => Some(held),
+        _ => return None,
+    };
+    let Some(held) =
+        held.filter(|held| !headers.contains(&held.value) && made.contains_key(&held.value))
+    else {
+        return Some(IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
+    };
+    if visiting.contains(&held.value) {
+        return None;
+    }
+    if let Some(found) = cached.get(arg) {
+        return Some(found.clone());
+    }
+    let op = made[&held.value];
+    // Not `op.merges`. That is the two-address tie -- which use shares a
+    // register with which definition -- and it says nothing about whether
+    // the operation is a linear function of its own arguments. BC writes
+    // every accumulator as a two-address `add`, so refusing on it refused
+    // every accumulator there is: hotlpx's `s = s + (n*k) + i` linearised
+    // to None, so the sum had no exit value and the loop could not go.
+    let term = || opaque.then(|| IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
+    if op.results != [arg.clone()] || !op.loads.is_empty() || !op.stores.is_empty() {
+        return term();
+    }
+    let parts = if op.kind == Kind::Copy && op.args.len() == 1 {
+        vec![(op.args[0].clone(), BigInt::from(1))]
+    } else if matches!(op.kind, Kind::Add | Kind::Sub) && op.args.len() == 2 {
+        vec![
+            (op.args[0].clone(), BigInt::from(1)),
+            (
+                op.args[1].clone(),
+                BigInt::from(if op.kind == Kind::Sub { -1 } else { 1 }),
+            ),
+        ]
+    } else if matches!(op.kind, Kind::Increment | Kind::Decrement) && op.args.len() == 1 {
+        vec![
+            (op.args[0].clone(), BigInt::from(1)),
+            (
+                Arg::Const(Const::new(1, width)),
+                BigInt::from(if op.kind == Kind::Decrement { -1 } else { 1 }),
+            ),
+        ]
+    } else {
+        return term();
+    };
+    let mut result = IndexMap::<Arg, BigInt>::default();
+    let mut deeper = visiting.clone();
+    deeper.insert(held.value);
+    for (source, coefficient) in parts {
+        let terms = linear(&source, made, headers, width, opaque, &deeper, cached)?;
+        for (term, factor) in terms {
+            let entry = result.entry(term).or_insert_with(|| BigInt::from(0));
+            *entry += &coefficient * factor;
+        }
+    }
+    let kept = result
+        .into_iter()
+        .filter(|(_, factor)| *factor != BigInt::from(0))
+        .collect::<IndexMap<_, _>>();
+    cached.insert(arg.clone(), kept.clone());
+    Some(kept)
+}
+
+/// How far `one` lies above `other`, where their terms other than constants agree.
+///
+/// Strength reduction starts `a[i].x` at `n + (m + 600)` and `a[i].y` at
+/// `n + (m + 606)`: no single root, but 6 apart.
+pub(crate) fn distance(one: &Arg, other: &Arg, made: &BTreeMap<Value, &Op>, width: u32) -> Option<BigInt> {
+    let terms_of = |arg: &Arg| linear(arg, made, &BTreeSet::new(), width, true, &BTreeSet::new(), &mut IndexMap::default());
+    let mut terms = terms_of(one)?;
+    for (term, factor) in terms_of(other)? {
+        *terms.entry(term).or_insert_with(|| BigInt::from(0)) -= factor;
+    }
+    let mut apart = BigInt::from(0);
+    for (term, factor) in terms {
+        match term {
+            Arg::Const(constant) => apart += &constant.n * factor,
+            _ if factor == BigInt::from(0) => {}
+            _ => return None,
+        }
+    }
+    Some(masked(&apart, width))
+}
+
 /// `arg` as a root value plus a constant, through copies and constant adds; a number has no root.
 ///
 /// Two values with one root are a constant apart, which is how a loop from

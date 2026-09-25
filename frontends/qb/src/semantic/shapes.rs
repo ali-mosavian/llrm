@@ -7,6 +7,10 @@
 //! replace their descriptor reads, and a zero-based array's descriptor offset
 //! is its first byte, which each element access records as its origin.
 //!
+//! B$DDIM puts a far array's data at offset 0 of its own segment and never
+//! moves it within that segment, so where every allocation is far with
+//! constant bounds, the adjusted offset at +0Ah is a constant too.
+//!
 //! A descriptor another module can reach -- an external place, or an array
 //! parameter of an externally callable procedure -- has no fact, nor has one
 //! handed to a callee this module does not define.
@@ -33,12 +37,14 @@ struct Known {
     unknown: bool,
     zero_based: bool,
     counts: Option<Vec<i64>>,
+    origin: Option<i64>,
     allocations: usize,
 }
 
 impl Known {
-    /// Fold in one allocation's per-record bounds.
-    fn merged(&mut self, records: &[(Operand, Operand)]) {
+    /// Fold in one allocation's per-record bounds and, for a far one, its
+    /// adjusted offset.
+    fn merged(&mut self, records: &[(Operand, Operand)], origin: Option<i64>) {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
@@ -49,11 +55,14 @@ impl Known {
             .map(|(lower, upper)| Some(constant(upper)? - constant(lower)? + 1))
             .collect();
         if self.allocations == 0 {
-            (self.zero_based, self.counts) = (zero_based, counts);
+            (self.zero_based, self.counts, self.origin) = (zero_based, counts, origin);
         } else {
             self.zero_based &= zero_based;
             if self.counts != counts {
                 self.counts = None;
+            }
+            if self.origin != origin {
+                self.origin = None;
             }
         }
         self.allocations += 1;
@@ -63,6 +72,31 @@ impl Known {
     fn proven(&self) -> bool {
         !self.unknown && self.allocations != 0
     }
+}
+
+/// The adjusted offset B$DDIM or B$RDIM leaves at +0Ah for these arguments,
+/// where the allocation is far: its data starts at offset 0.
+///
+/// The runtime runs the records in order, `adjustment * count - lower`, then
+/// scales by the element size and keeps the low word.
+fn far_origin(operands: &[Operand], records: &[(Operand, Operand)]) -> Option<i64> {
+    const FAR: i64 = 1;
+    let constant = |operand: &Operand| match operand {
+        Operand::Constant(_, Number::Integer(value)) => Some(*value),
+        _ => None,
+    };
+    let [.., size, flags, _descriptor] = operands else {
+        return None;
+    };
+    if (constant(flags)? >> 8) & 3 != FAR {
+        return None;
+    }
+    let mut adjustment = 0_i64;
+    for (lower, upper) in records {
+        let (lower, upper) = (constant(lower)?, constant(upper)?);
+        adjustment = adjustment * (upper - lower + 1) - lower;
+    }
+    Some(((adjustment * constant(size)?) as i16).into())
 }
 
 /// Union-find over descriptor identities.
@@ -138,7 +172,8 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         .flat_map(|function| function.places.iter().map(move |place| (function, place)))
         .filter_map(|(function, place)| Some((identity(function, place), compiler.static_shapes.get(&place.id)?.as_slice())))
         .collect();
-    let mut shapes: Vec<(Identity, &[(Operand, Operand)])> = statics.into_iter().collect();
+    let mut shapes: Vec<(Identity, &[(Operand, Operand)], Option<i64>)> =
+        statics.into_iter().map(|(identity, records)| (identity, records, None)).collect();
     let mut handed: Vec<Identity> = Vec::new();
     for function in &compiler.functions {
         let pointers = pointers(function);
@@ -153,7 +188,7 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
         for one in function.blocks.iter().flat_map(|block| &block.instructions) {
             match &one.tag {
                 Some(Tag::Allocate(shape) | Tag::Reallocate(shape)) => match pointers.get(&shape.descriptor) {
-                    Some(identity) => shapes.push((*identity, &shape.records)),
+                    Some(identity) => shapes.push((*identity, &shape.records, far_origin(&one.operands, &shape.records))),
                     // An allocation of a descriptor with no identity could be any.
                     None => return (classes, BTreeMap::new()),
                 },
@@ -197,14 +232,14 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
     }
     // A descriptor handed on with no DIM, REDIM or static bounds here has
     // no known shape.
-    let allocated: Vec<Identity> = shapes.iter().map(|(identity, _)| *identity).collect();
+    let allocated: Vec<Identity> = shapes.iter().map(|(identity, ..)| *identity).collect();
     unknown.extend(handed.into_iter().filter(|identity| {
         !matches!(identity, Identity::Parameter(..)) && !allocated.contains(identity)
     }));
     let mut out: BTreeMap<Identity, Known> = BTreeMap::new();
-    for (identity, records) in shapes {
+    for (identity, records, origin) in shapes {
         let root = classes.root(identity);
-        out.entry(root).or_default().merged(records);
+        out.entry(root).or_default().merged(records, origin);
     }
     for identity in unknown {
         let root = classes.root(identity);
@@ -240,6 +275,13 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         };
                         one.op = "copy";
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(count))];
+                    }
+                    Some(Tag::DescriptorField { descriptor, field: Slot::Origin }) if one.op == "load" => {
+                        let Some(origin) = fact(descriptor).and_then(|fact| fact.origin) else {
+                            continue;
+                        };
+                        one.op = "copy";
+                        one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(origin))];
                     }
                     Some(Tag::ElementOffset { descriptor, origin: Some(origin) }) => {
                         if fact(descriptor).is_some_and(|fact| fact.zero_based) {
@@ -384,6 +426,41 @@ mod tests {
     fn test_a_dim_and_a_redim_fill_the_same_records() {
         let compiler = applied_to("DEFINT A-Z\nSUB t\nDIM a(1, 4)\nREDIM a(1, 4)\nx = a(1, 2)\nEND SUB\n");
         assert_eq!(counts(function(&compiler, "t")), [2]);
+    }
+
+    /// The constants each +0Ah read became.
+    fn origins(function: &Function) -> Vec<i64> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| matches!(one.tag, Some(Tag::DescriptorField { field: Slot::Origin, .. })))
+            .filter_map(|one| match (one.op, one.operands.as_slice()) {
+                ("copy", [Operand::Constant(_, Number::Integer(origin))]) => Some(*origin),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Worked by hand: a(i, j) is at ((j - 2) * 4 + i - 1) * 2, so +0Ah holds -(2 * 4 + 1) * 2.
+    #[test]
+    fn test_a_far_arrays_adjusted_offset_is_its_bounds_alone() {
+        let one = applied_to("DEFINT A-Z\nSUB t\nREDIM a(-50 TO 50)\nx = a(3)\nEND SUB\n");
+        assert_eq!(origins(function(&one, "t")), [100]);
+        let two = applied_to("DEFINT A-Z\nSUB t\nREDIM a(1 TO 4, 2 TO 5)\nx = a(3, 4)\nEND SUB\n");
+        assert_eq!(origins(function(&two, "t")), [-18]);
+    }
+
+    /// A near string array's data moves within DGROUP, and allocations that
+    /// disagree share no offset.
+    #[test]
+    fn test_a_near_or_disagreeing_arrays_adjusted_offset_is_read() {
+        let near = applied_to("DEFINT A-Z\nSUB t\nREDIM a$(-1 TO 3)\nx$ = a$(2)\nEND SUB\n");
+        assert!(origins(function(&near, "t")).is_empty());
+        let disagreeing = applied_to(
+            "DEFINT A-Z\nREDIM SHARED a(9)\nSUB s\nREDIM a(5 TO 10)\nEND SUB\nSUB t\nx = a(6)\nEND SUB\n",
+        );
+        assert!(origins(function(&disagreeing, "t")).is_empty());
     }
 
     #[test]

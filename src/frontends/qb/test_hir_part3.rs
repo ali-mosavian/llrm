@@ -327,11 +327,13 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through `[e..+e..*2]`, its shift gone
-    // and the upper halves zeroed once before the loop.
+    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
+    // shift gone and the upper halves zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    assert!(body.contains("*2]") && body.contains("movzx") && !body.contains("shl"), "{body}");
+    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
+    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
@@ -616,7 +618,7 @@ fn test_pds_huge_array_uses_measured_ddim_and_hary_abi() {
     let text = mir_text(&physical.lowered);
 
     assert!(text.contains("v2 <- copy 65534:2"));
-    assert!(text.contains("arg v2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2"));
+    assert!(text.contains("arg -2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2"));
     assert!(text.contains("arg 2:2\n  arg 514:2"));
     assert_eq!(text.matches("call B$HARY(").count(), 10);
     assert!(has_hary_pair(&text));
@@ -1870,4 +1872,49 @@ fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
     for one in loops.iter().filter(|one| !one.contains("call")) {
         assert!(!one.contains("push") && !one.contains("pop"), "{one}");
     }
+}
+
+#[test]
+fn test_merged_fields_share_one_pointer() {
+    // Merged, the six fields' starts differed by constants below a sum, so each
+    // kept its own pointer and four lived in the frame: 18 instructions for 9.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/general/PARTICLE.BAS");
+    let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("ADVANCE proc").expect("ADVANCE proc");
+    let end = text.find("ADVANCE endp").expect("ADVANCE endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("[bp"), "{body}");
+}
+
+/// Two far arrays copied and cleared, one element a trip.
+const SHIFT: &[u8] = b"DEFINT A-Z\r\nDECLARE SUB Shift ()\r\n'$DYNAMIC\r\nDIM SHARED f1(32000&) AS INTEGER\r\nDIM SHARED f2(32000&) AS INTEGER\r\nShift\r\nPRINT f2(5)\r\nSUB Shift\r\nFOR x = 0 TO 32000\r\nf2(x) = f1(x)\r\nf1(x) = 0\r\nNEXT\r\nEND SUB\r\n";
+
+#[test]
+fn test_a_counter_crossing_the_sign_bit_still_counts_to_zero() {
+    // With the far origin constant, the byte offset itself is the counter and
+    // runs 0 to 64000; the signed wrap kept `cmp bx, 0FA02h` in every trip.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SHIFT.BAS", SHIFT);
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("SHIFT proc").expect("SHIFT proc");
+    let end = text.find("SHIFT endp").expect("SHIFT endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_cell_based_on_a_named_objects_address_is_that_object() {
+    // A SHARED array's descriptor was read through a register holding its
+    // relocated address: `mov bx, offset ...` then `[bx+2]`, costing a base
+    // register, rematerialized inside DRAWBOB's loop.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SHIFT.BAS", SHIFT);
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("SHIFT proc").expect("SHIFT proc");
+    let end = text.find("SHIFT endp").expect("SHIFT endp");
+    assert!(!text[start..end].contains("offset"), "{}", &text[start..end]);
 }

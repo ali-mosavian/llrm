@@ -74,7 +74,7 @@ pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interv
 ///
 /// A 16-bit address wraps; summed through 32-bit registers it does not. The
 /// two agree for a cell whose start is its object's first byte (a symbol, or
-/// the far origin the frontend names) when every partial sum of the offset
+/// the far origin the frontend names, or offset 0 of its own segment) when every partial sum of the offset
 /// added to that start, as the affine operations computing it would be cut
 /// anywhere, is a non-negative integer below 64K: each register then holds
 /// its partial sum exactly, zero extension is the identity, and the object
@@ -135,14 +135,20 @@ fn _exact_cell(
     let offset = match addr.space {
         Space::Segment | Space::External => Some(base),
         Space::Far | Space::Literal => {
+            // Where the base is not `origin + offset`, its whole sum must be
+            // exact: a constant origin has folded into the arithmetic.
+            let whole = || {
+                _exact_sum(base, at, made, arrived, scoped, 16)
+                    .is_some_and(|(low, high)| low + addr.disp >= 0 && high + addr.disp < 1 << 16)
+            };
             let Some(origin) = reference.origin else {
-                return false;
+                return whole();
             };
             if origin == base {
                 None
             } else {
                 let Some((op, _)) = made.get(&base) else {
-                    return false;
+                    return whole();
                 };
                 let held: Vec<Value> = op
                     .args
@@ -155,7 +161,7 @@ fn _exact_cell(
                 match (op.kind, held.as_slice()) {
                     (Kind::Add | Kind::PtrOffset, [left, right]) if *left == origin => Some(*right),
                     (Kind::Add | Kind::PtrOffset, [left, right]) if *right == origin => Some(*left),
-                    _ => return false,
+                    _ => return whole(),
                 }
             }
         }

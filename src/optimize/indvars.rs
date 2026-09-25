@@ -1029,16 +1029,22 @@ pub(crate) fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<Mir
             let Some(proof) = induction::controlling(body, &loop_, counter, &facts) else {
                 continue;
             };
-            if proof.posttested || proof.last.is_none() {
+            // Every rebased use is exact modulo the width, so a counter that wraps
+            // signed still counts to zero; only a narrower compare needs no wrap.
+            let Some(count) = proof.count.clone().filter(|_| !proof.posttested) else {
+                continue;
+            };
+            if proof.last.is_none() && proof.width() != width {
                 continue;
             }
             if proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne {
                 continue; // counts to zero already
             }
             let (compare_index, compare) = (proof.compare.operation_index(), proof.compare_in(body));
-            let start = proof.first.clone().expect("a last has a first");
+            let start = induction::_signed(&Arg::Const(seeded.clone()), &IndexMap::default(), seeded.width)
+                .expect("a constant is known");
             let step = proof.step.clone();
-            let final_ = proof.last.as_ref().expect("checked") + &step;
+            let final_ = &start + count * &step;
             let offsets = _offsets(
                 phi.result,
                 &readers,
