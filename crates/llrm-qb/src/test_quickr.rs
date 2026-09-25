@@ -857,3 +857,31 @@ fn functions_return_records() {
         FUNCTION norm1& (v AS Point)\nRETURN ABS(v.x) + ABS(v.y)\nEND FUNCTION\n";
     assert_eq!(printed(source), " 3  4  6  9 \n 103  4  3 \n 9  0 \n");
 }
+
+#[test]
+fn functions_return_arrays() {
+    let source = "DIM a() AS LONG, b() AS LONG, w() AS STRING\n\
+        a() = squares(4)\nPRINT UBOUND(a); a(3)\n\
+        b() = a()\nb(3) = 0\nPRINT a(3); b(3); UBOUND(b)\n\
+        a() = doubled(a())\nPRINT a(2); UBOUND(a)\n\
+        w() = words\nPRINT w(0); w(1)\n\
+        FOR EACH v AS LONG IN squares(3)\nPRINT v;\nNEXT\nPRINT\n\
+        FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
+        FOR EACH i AS INTEGER IN RANGE(n + 1)\nr(i) = i * i\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FUNCTION doubled (x() AS LONG) AS LONG()\nDIM r() AS LONG\nr() = x()\n\
+        FOR EACH i AS INTEGER IN RANGE(UBOUND(r) + 1)\nr(i) = r(i) * 2\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FUNCTION words AS STRING()\nDIM r() AS STRING\nREDIM r(1) AS STRING\nr(0) = \"hi\": r(1) = \"yo\"\nRETURN r()\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 4  9 \n 9  0  4 \n 8  4 \nhiyo\n 0  1  4  9 \n");
+}
+
+#[test]
+fn array_assignment_errors() {
+    for (source, message) in [
+        ("DIM a(3) AS LONG, b() AS LONG\na() = b()\n", "static"),
+        ("DIM a() AS LONG, b() AS INTEGER\nREDIM b(1) AS INTEGER\na() = b()\n", "different types"),
+        ("DIM x AS (INTEGER)\n", ""),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}

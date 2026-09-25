@@ -20,6 +20,8 @@ pub enum TypeName {
     Integral { width: u8, signed: bool },
     /// QuickrBASIC's `AS (t1, t2, …)`, a FUNCTION's several results.
     Tuple(Vec<TypeName>),
+    /// QuickrBASIC's `AS t()`, a FUNCTION's array result.
+    Array(Box<TypeName>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

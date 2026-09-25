@@ -260,3 +260,14 @@ BYREF parameter the caller points at a zeroed temporary, so fields the
 FUNCTION does not set are zero. Assigning the FUNCTION's name, or a field of
 it, sets the result, and a call can stand anywhere a record can:
 `p = make(1, 2)`, `make(1, 2).x`, or an argument.
+
+### Array values
+
+Arrays are values. `a() = b()` redimensions dynamic array `a` to `b`'s
+bounds and copies each element. A FUNCTION `AS t()` returns an array: it
+compiles as a SUB with a hidden BYREF array parameter. `a() = f(…)` erases
+`a` and passes it as that parameter, so the result is built in place with no
+copy; when the arguments name `a`, the result goes to a temporary first.
+`RETURN r()` copies `r` into the result. `FOR EACH x IN f(…)` iterates a
+returned array. Only one-dimensional arrays are copied, and the target of an
+array assignment must be dynamic: `DIM a() AS LONG`.

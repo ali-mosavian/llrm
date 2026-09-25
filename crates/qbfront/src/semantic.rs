@@ -623,7 +623,7 @@ fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
 
 fn tuple_misplaced() -> SemanticError {
     SemanticError {
-        message: "a tuple type is only a FUNCTION's result".into(),
+        message: "a tuple or array type is only a FUNCTION's result".into(),
     }
 }
 
@@ -645,7 +645,7 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
         })
         .collect();
     let detached = |result: &mut TypeName| match result {
-        TypeName::Tuple(_) => true,
+        TypeName::Tuple(_) | TypeName::Array(_) => true,
         TypeName::Named(name) => dialect.record_results() && records.contains(canonical(name)),
         _ => false,
     };
@@ -654,9 +654,10 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
         let Some(result) = procedure.result.take_if(detached) else {
             continue;
         };
-        let types = match &result {
-            TypeName::Tuple(types) => types.clone(),
-            record => vec![record.clone()],
+        let (types, array) = match &result {
+            TypeName::Tuple(types) => (types.clone(), false),
+            TypeName::Array(element) => (vec![element.as_ref().clone()], true),
+            record => (vec![record.clone()], false),
         };
         let span = procedure.span;
         procedure.kind = ProcedureKind::Sub;
@@ -665,11 +666,11 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
                 declaration: Declaration {
                     name: format!("{RESULT}{index}"),
                     type_name: Some(type_name.clone()),
-                    array: false,
+                    array,
                     bounds: Vec::new(),
                     fixed_length: None,
                     shared: false,
-                    dynamic: false,
+                    dynamic: array,
                     span,
                 },
                 by_value: false,
@@ -681,6 +682,11 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
             TypeName::Tuple(_) => Expr::Apply {
                 name: TUPLE.into(),
                 arguments: targets.collect(),
+                span,
+            },
+            TypeName::Array(_) => Expr::Apply {
+                name: format!("{RESULT}0"),
+                arguments: Vec::new(),
                 span,
             },
             _ => targets.next().expect("one result"),
@@ -722,6 +728,40 @@ fn retarget(statements: &mut [Statement], name: &str, targets: &Expr) {
                 }
             }
         }
+    }
+}
+
+/// Whether `expression` names `name` anywhere.
+fn mentions(expression: &Expr, name: &str) -> bool {
+    let within = |expression: &Expr| mentions(expression, name);
+    match expression {
+        Expr::Omitted(_) | Expr::Literal(..) => false,
+        Expr::Name(found, _) => canonical(found) == canonical(name),
+        Expr::Apply {
+            name: found,
+            arguments,
+            ..
+        } => canonical(found) == canonical(name) || arguments.iter().any(within),
+        Expr::Index { base, indices, .. } => within(base) || indices.iter().any(within),
+        Expr::Field { base, .. } => within(base),
+        Expr::Unary { operand, .. } => within(operand),
+        Expr::Binary { left, right, .. } => within(left) || within(right),
+        Expr::Conditional {
+            condition,
+            then,
+            otherwise,
+            ..
+        } => within(condition) || within(then) || within(otherwise),
+        Expr::In {
+            needle, haystack, ..
+        } => {
+            within(needle)
+                || match haystack {
+                    Haystack::Values(values) => values.iter().any(within),
+                    Haystack::Container(container) => within(container),
+                }
+        }
+        Expr::Chain { first, rest, .. } => within(first) || rest.iter().any(|(_, one)| within(one)),
     }
 }
 
@@ -2327,7 +2367,12 @@ impl Compiler {
             Some(TypeName::Single) => "!",
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
-            Some(TypeName::Named(_) | TypeName::Integral { .. } | TypeName::Tuple(_)) => "",
+            Some(
+                TypeName::Named(_)
+                | TypeName::Integral { .. }
+                | TypeName::Tuple(_)
+                | TypeName::Array(_),
+            ) => "",
             None => type_suffix(type_id),
         };
         format!("{}{suffix}", name.to_ascii_uppercase())
@@ -2575,6 +2620,13 @@ impl Compiler {
                     value,
                     span,
                 } if name == TUPLE => self.tuple_assignment(arguments, value, *span)?,
+                Statement::Assign {
+                    target: Expr::Apply { name, arguments, .. },
+                    value,
+                    span,
+                } if arguments.is_empty() && self.dialect.array_values() && self.array(name).is_ok() => {
+                    self.array_assignment(name, value, *span)?
+                }
                 Statement::Assign { target, value, span } if augmented_op(value).is_some() => {
                     let (op, operand) = augmented_op(value).expect("guard matched");
                     if !self.dialect.augmented_assignment() {
@@ -3996,8 +4048,21 @@ impl Compiler {
             span,
         };
         let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
-        let (index, first, last, step, element) = if let Some(array) = self.array_name(iterable) {
-            let array = &array.to_owned();
+        let returned = match self.array_call(iterable) {
+            Some((name, _)) => {
+                let element = match &self.detached_results[canonical(name)] {
+                    TypeName::Array(element) => self.resolve_type(Some(element))?,
+                    _ => unreachable!("an array call"),
+                };
+                let temporary = self.hidden_array(element, span)?;
+                self.array_assignment(&temporary, iterable, span)?;
+                Some(temporary)
+            }
+            None => None,
+        };
+        let named = returned.as_deref().or(self.array_name(iterable)).map(str::to_owned);
+        let (index, first, last, step, element) = if let Some(array) = named {
+            let array = &array;
             let (_, index) = self.hidden(INTEGER)?;
             let whole = Expr::Name(array.clone(), span);
             let element = apply(array, vec![index.clone()]);
@@ -6005,6 +6070,132 @@ impl Compiler {
         passed.extend(results.iter().cloned());
         self.call(name, &passed, false)?;
         Ok(results)
+    }
+
+    /// `a() = f(…)` moves: `a` is erased and the FUNCTION `AS t()` fills it
+    /// through its hidden parameter, or fills a temporary when its
+    /// arguments name `a`. `a() = b()` copies.
+    fn array_assignment(&mut self, target: &str, value: &Expr, span: Span) -> Result<(), SemanticError> {
+        let whole = |name: &str| Expr::Apply {
+            name: name.into(),
+            arguments: Vec::new(),
+            span,
+        };
+        let variable = self.array(target)?;
+        if variable
+            .descriptor_place
+            .is_some_and(|place| self.static_shapes.contains_key(&place))
+        {
+            return self.fail(format!("{target} is static; assign only to a dynamic array"));
+        }
+        if let Some((name, arguments)) = self.array_call(value) {
+            if arguments.iter().any(|argument| mentions(argument, target)) {
+                let element = variable.element.expect("an array has an element type");
+                let temporary = self.hidden_array(element, span)?;
+                let mut passed = arguments.to_vec();
+                passed.push(whole(&temporary));
+                self.call(name, &passed, false)?;
+                self.array_copy(target, &temporary, span)?;
+                return self.statement_list(&[Statement::Erase(vec![whole(&temporary)])]);
+            }
+            self.statement_list(&[Statement::Erase(vec![whole(target)])])?;
+            let mut passed = arguments.to_vec();
+            passed.push(whole(target));
+            self.call(name, &passed, false)?;
+            return Ok(());
+        }
+        let Some(source) = self.array_name(value) else {
+            return self.fail("an array takes an array or a FUNCTION AS t()");
+        };
+        let source = source.to_owned();
+        self.array_copy(target, &source, span)
+    }
+
+    /// Redimensions one-dimensional `target` to `source`'s bounds and
+    /// copies each element.
+    fn array_copy(&mut self, target: &str, source: &str, span: Span) -> Result<(), SemanticError> {
+        if canonical(target) == canonical(source) {
+            return Ok(());
+        }
+        let element = self.array(source)?.element.expect("an array has an element type");
+        if self.array(target)?.element != Some(element) {
+            return self.fail(format!("{source} and {target} hold different types"));
+        }
+        let (type_name, fixed_length) = self.element_type_name(element);
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: name.into(),
+            arguments,
+            span,
+        };
+        let upper = apply("UBOUND", vec![Expr::Name(source.into(), span)]);
+        self.redim(&Declaration {
+            name: target.into(),
+            type_name: Some(type_name),
+            array: true,
+            bounds: vec![crate::syntax::Bound {
+                lower: None,
+                upper: upper.clone(),
+            }],
+            fixed_length,
+            shared: false,
+            dynamic: true,
+            span,
+        })?;
+        let (_, index) = self.hidden(INTEGER)?;
+        let zero = Expr::Literal(Literal::Integer(0, TypeName::Integer), span);
+        let copy = Statement::Assign {
+            target: apply(target, vec![index.clone()]),
+            value: apply(source, vec![index.clone()]),
+            span,
+        };
+        self.for_statement(&index, &zero, &upper, None, &[copy])
+    }
+
+    /// The TypeName, and fixed length, that declare `element`.
+    fn element_type_name(&self, element: u32) -> (TypeName, Option<Expr>) {
+        let span = Span { line: 0, start: 0, end: 0 };
+        if let Some(width) = self.string_width(element) {
+            let fixed = (width > 0)
+                .then(|| Expr::Literal(Literal::Integer(width as i64, TypeName::Integer), span));
+            return (TypeName::String, fixed);
+        }
+        match self.udts.iter().find(|(_, udt)| udt.type_id == element) {
+            Some((name, _)) => (TypeName::Named(name.clone()), None),
+            None => (type_name(element), None),
+        }
+    }
+
+    /// A dynamic array of `element` no source can name.
+    fn hidden_array(&mut self, element: u32, span: Span) -> Result<String, SemanticError> {
+        let name = format!("{EACH}HELD{}", self.next_place);
+        let (type_name, fixed_length) = self.element_type_name(element);
+        self.declare_as(
+            &Declaration {
+                name: name.clone(),
+                type_name: Some(type_name),
+                array: true,
+                bounds: Vec::new(),
+                fixed_length,
+                shared: false,
+                dynamic: true,
+                span,
+            },
+            self.implicit_storage,
+        )?;
+        Ok(name)
+    }
+
+    /// A call of a FUNCTION `AS t()`: its name and arguments.
+    fn array_call<'e>(&self, expression: &'e Expr) -> Option<(&'e str, &'e [Expr])> {
+        let (name, arguments) = match expression {
+            Expr::Apply {
+                name, arguments, ..
+            } => (name, arguments.as_slice()),
+            Expr::Name(name, _) => (name, &[][..]),
+            _ => return None,
+        };
+        matches!(self.detached_results.get(canonical(name)), Some(TypeName::Array(_)))
+            .then_some((name.as_str(), arguments))
     }
 
     /// A call of a FUNCTION `AS record`: its name and arguments.
@@ -9051,7 +9242,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
                 message: format!("user-defined type {name} is not attached yet"),
             })
         }
-        TypeName::Tuple(_) => return Err(tuple_misplaced()),
+        TypeName::Tuple(_) | TypeName::Array(_) => return Err(tuple_misplaced()),
     })
 }
 

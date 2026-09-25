@@ -83,6 +83,11 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// Whole-array assignment and FUNCTIONs `AS t()`.
+    pub fn array_values(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

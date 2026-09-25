@@ -888,9 +888,6 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
 }
 
 fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
-    if let Some(integral) = signed_type(state) {
-        return Some(integral);
-    }
     if state.python_expressions && consume_named(state, "tkLParen") {
         let mut types = vec![declaration_type(state)?];
         while consume_named(state, "tkComma") {
@@ -898,6 +895,21 @@ fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
         }
         return (consume_named(state, "tkRParen") && types.len() > 1).then_some(TypeName::Tuple(types));
     }
+    let element = match signed_type(state) {
+        Some(integral) => integral,
+        None => plain_declaration_type(state)?,
+    };
+    if state.python_expressions
+        && at_named(state, "tkLParen")
+        && matches!(state.tokens.get(state.at + 1), Some(Token { kind: TokenKind::Reserved(id), .. }) if *id == named("tkRParen"))
+    {
+        state.at += 2;
+        return Some(TypeName::Array(Box::new(element)));
+    }
+    Some(element)
+}
+
+fn plain_declaration_type(state: &mut ParseState) -> Option<TypeName> {
     let token = state.token()?.clone();
     let type_name = match token.kind {
         TokenKind::Reserved(id) if id == named("tkINTEGER") => TypeName::Integer,
