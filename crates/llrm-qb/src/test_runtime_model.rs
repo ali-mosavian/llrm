@@ -107,3 +107,35 @@ fn a_bare_function_name_assigns_its_result() {
         FUNCTION greet$\ngreet = \"hi\"\nEND FUNCTION\n";
     assert_eq!(printed(source), " 39 hi\n");
 }
+
+#[test]
+fn a_dim_inside_a_loop_declares_its_type() {
+    // The declaration pass skipped block bodies, so y stayed SINGLE: 2.6.
+    let source = "FOR i% = 1 TO 1\nDIM y AS INTEGER\ny = 2.6\nPRINT y\nNEXT\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 3 \n");
+}
+
+#[test]
+fn bounds_of_a_static_array_run_in_the_model() {
+    // The segment word of the descriptor's far pointer read as 0, so the
+    // model took the "not allocated" path into an unmodelled B$LBND.
+    let source = "DIM a(1 TO 3) AS INTEGER\nPRINT LBOUND(a); UBOUND(a)\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 1  3 \n");
+}
+
+#[test]
+fn len_of_a_concatenation_is_its_length() {
+    // LEN took a string it could not name as a place for a variable to size.
+    let source = "a$ = \"ab\"\nPRINT LEN(a$ + \"cde\")\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 5 \n");
+}
+
+#[test]
+fn dynamic_arrays_run_in_the_model() {
+    // The model had no B$DDIM, B$RDIM or B$ERAS, nor the selector:offset
+    // arithmetic their elements use: any dynamic array stopped the run.
+    let source = "DIM a() AS INTEGER, b() AS LONG\nREDIM a(1 TO 3) AS INTEGER\na(3) = 7\n\
+        PRINT a(3); LBOUND(a); UBOUND(a)\nERASE a\nREDIM a(5) AS INTEGER\nPRINT a(3)\n\
+        REDIM b(1 TO 2, 3 TO 4) AS LONG\nb(2, 4) = 5: b(1, 3) = 9\nPRINT b(2, 4) + b(1, 3); UBOUND(b, 2)\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), " 7  1  3 \n 0 \n 14  4 \n");
+}

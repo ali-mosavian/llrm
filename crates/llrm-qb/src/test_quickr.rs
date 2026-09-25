@@ -575,3 +575,313 @@ fn the_prelude_is_private_to_each_module() {
     let listing = module_listing("DIM d AS DOUBLE\nd = 1\nPRINT f\"{d:.2f}\"\n", "quickr");
     assert!(!listing.contains("public QUICKR"), "{listing}");
 }
+
+#[test]
+fn augmented_assignment_applies_each_operator() {
+    let source = "DIM n AS LONG, d AS DOUBLE, f AS INTEGER\n\
+        n = 7: n += 5: n -= 2: n *= 3: n \\= 4: n MOD= 5: n ^= 2: PRINT n\n\
+        d = 1: d /= 4: PRINT d\n\
+        f = 12: f AND= 10: f OR= 1: f XOR= 3: PRINT f\n";
+    // (7+5-2)*3 = 30; 30\4 = 7; 7 MOD 5 = 2; 2^2 = 4. 12 AND 10 = 8, OR 1 = 9, XOR 3 = 10.
+    assert_eq!(printed(source), " 4 \n .25 \n 10 \n");
+}
+
+#[test]
+fn augmented_assignment_appends_to_strings_and_fields() {
+    let source = "TYPE P\nx AS INTEGER\nEND TYPE\nDIM s AS STRING, p AS P\n\
+        s = \"ab\": s += \"cd\": p.x = 1: p.x += 41\nPRINT s; p.x\n";
+    assert_eq!(printed(source), "abcd 42 \n");
+}
+
+#[test]
+fn augmented_assignment_evaluates_its_target_once() {
+    // As `a(tick) = a(tick) + 5` the index function would run twice.
+    let source = "DIM SHARED hits AS INTEGER\nDIM a(3) AS INTEGER\nhits = 0\n\
+        a(tick%) += 5\nPRINT hits; a(1)\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 1  5 \n");
+}
+
+#[test]
+fn augmented_assignment_works_in_a_one_line_if() {
+    let source = "DIM t AS INTEGER\nt = 10\nIF t > 5 THEN t += 1 ELSE t -= 1\nIF t < 5 THEN t += 100 ELSE t -= 3\nPRINT t\n";
+    assert_eq!(printed(source), " 8 \n");
+}
+
+#[test]
+fn augmented_assignment_takes_a_conditional_value() {
+    // The rewrite ended the value at the conditional's ELSE: a syntax error.
+    let source = "DIM t AS INTEGER\nt = 1\nt += 10 IF t > 0 ELSE 20\nIF t > 5 THEN t -= 1 IF t > 9 ELSE 2 ELSE t = 0\nPRINT t\n";
+    assert_eq!(printed(source), " 10 \n");
+}
+
+#[test]
+fn microsoft_profiles_reject_augmented_assignment() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"x = 1\nx += 1\n");
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no +=");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}
+
+#[test]
+fn break_and_continue_act_on_the_innermost_loop() {
+    // CONTINUE in a FOR must still step the counter, or the loop never ends.
+    let source = "DIM i AS INTEGER, j AS INTEGER, n AS INTEGER\n\
+        FOR i = 1 TO 6\nIF i MOD 2 = 0 THEN CONTINUE\nIF i = 5 THEN BREAK\n\
+        FOR j = 1 TO 9\nIF j = 2 THEN BREAK\nn += 1\nNEXT\nPRINT i;\nNEXT\nPRINT n; i\n";
+    assert_eq!(printed(source), " 1  3  2  5 \n");
+}
+
+#[test]
+fn continue_reaches_each_kind_of_loop_test() {
+    let source = "DIM i AS INTEGER, s AS INTEGER\n\
+        WHILE i < 5\ni += 1\nIF i = 2 THEN CONTINUE\ns += i\nWEND\n\
+        i = 0\nDO\ni += 1\nIF i = 4 THEN CONTINUE\ns += 10\nLOOP UNTIL i >= 4\n\
+        i = 0\nDO WHILE i < 3\ni += 1\nIF i = 1 THEN CONTINUE\ns += 100\nLOOP\n\
+        i = 0\nDO\ni += 1\nIF i < 3 THEN CONTINUE\nIF i = 4 THEN BREAK\ns += 1000\nLOOP\n\
+        PRINT s\n";
+    assert_eq!(printed(source), " 1243 \n");
+}
+
+#[test]
+fn break_outside_a_loop_is_an_error() {
+    let error = compiled("BREAK\n").expect_err("no loop");
+    assert!(error.to_string().contains("outside a loop"), "{error}");
+}
+
+#[test]
+fn quickr_reserves_break_and_continue() {
+    for source in ["DIM break AS INTEGER\n", "SUB continue\nEND SUB\n"] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.to_string().contains("reserved"), "{error}");
+    }
+}
+
+#[test]
+fn for_each_counts_through_range() {
+    // Assigning the variable must not steer the loop: it is a copy.
+    let source = "FOR EACH i AS INTEGER IN RANGE(3)\nPRINT i;\ni = 10\nNEXT\nPRINT\n\
+        FOR EACH i AS INTEGER IN RANGE(10, 0, -3)\nPRINT i;\nNEXT\nPRINT\n\
+        FOR EACH i IN RANGE(2, 4)\nPRINT i;\nNEXT\nPRINT i\n\
+        FOR EACH i IN RANGE(0)\nPRINT \"never\"\nNEXT\n";
+    assert_eq!(printed(source), " 0  1  2 \n 10  7  4  1 \n 2  3  3 \n");
+}
+
+#[test]
+fn for_each_evaluates_range_bounds_once() {
+    let source = "DIM SHARED hits AS INTEGER\n\
+        FOR EACH i AS INTEGER IN RANGE(1, 6, by%)\nNEXT\nPRINT hits; i\n\
+        FUNCTION by%\nhits += 1\nby% = 2\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 1  5 \n");
+}
+
+#[test]
+fn for_each_copies_array_elements() {
+    let source = "TYPE P\nx AS INTEGER\nEND TYPE\n\
+        DIM a(2) AS INTEGER, ps(2) AS P\na(0) = 5: a(1) = 6: a(2) = 7\n\
+        FOR EACH v AS INTEGER IN a()\nv = v * 10\nPRINT v;\nNEXT\nPRINT a(0)\n\
+        ps(1).x = 4\nFOR EACH p AS P IN ps\nPRINT p.x;\nNEXT\nPRINT\n";
+    assert_eq!(printed(source), " 50  60  70  5 \n 0  4  0 \n");
+}
+
+#[test]
+fn for_each_walks_a_copy_of_a_string() {
+    let source = "DIM s AS STRING, n AS INTEGER\ns = \"abc\"\n\
+        FOR EACH c AS STRING IN s + \"d\"\nIF c = \"b\" THEN CONTINUE\nPRINT c;\nNEXT\nPRINT\n\
+        FOR EACH c IN s\ns = \"\"\nn += 1\nNEXT\nPRINT n\n";
+    assert_eq!(printed(source), "acd\n 3 \n");
+}
+
+#[test]
+fn for_each_errors() {
+    for (source, message) in [
+        ("FOR EACH i AS INTEGER IN RANGE(2)\nNEXT\nFOR EACH i AS LONG IN RANGE(2)\nNEXT\n", "another type"),
+        ("FOR EACH d AS DOUBLE IN RANGE(2)\nNEXT\n", "integer variable"),
+        ("FOR EACH i IN RANGE(2)\nNEXT\n", "not defined"),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
+
+#[test]
+fn microsoft_profiles_keep_each_a_name() {
+    let source = "FOR each = 1 TO 2\nPRINT each;\nNEXT\n";
+    assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), " 1  2 ");
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"DIM a(2)\nFOR EACH v IN a()\nNEXT\n");
+    let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no FOR EACH");
+    assert!(error.to_string().contains("quickr"), "{error}");
+}
+
+#[test]
+fn quickr_arrays_start_at_zero() {
+    let source = "DIM a(3) AS INTEGER\nPRINT LBOUND(a); UBOUND(a)\n";
+    assert_eq!(printed(source), " 0  3 \n");
+    for source in [
+        "DIM a(1 TO 3) AS INTEGER\n",
+        "OPTION BASE 1\n",
+        "SUB s\nIF 1 THEN\nREDIM b(2 TO 4) AS INTEGER\nEND IF\nEND SUB\n",
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains("start at 0"), "{source}: {error}");
+    }
+}
+
+#[test]
+fn conditional_expressions_choose_one_arm() {
+    let source = "DIM SHARED hits AS INTEGER\nDIM n AS INTEGER, s AS STRING, d AS DOUBLE\nn = 5\n\
+        PRINT 1 IF n > 3 ELSE 2; 10 IF n > 9 ELSE 20 IF n > 4 ELSE 30\n\
+        d = 1 IF n = 0 ELSE 2.5\nPRINT d\n\
+        s = \"big\" IF n > 3 ELSE \"small\"\nPRINT s; LEN(\"x\" IF n < 0 ELSE \"yy\")\n\
+        IF n > 3 THEN s = \"a\" IF n > 4 ELSE \"b\" ELSE s = \"c\"\n\
+        n = tick% IF n > 100 ELSE 7\nPRINT s; n; hits\n\
+        PRINT f\"{n IF n IN (6, 7) ELSE -n}\"\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    // f-string fields are parsed apart from their line, and took none of these.
+    assert_eq!(printed(source), " 1  20 \n 2.5 \nbig 2 \na 7  0 \n7\n");
+}
+
+#[test]
+fn chained_comparisons_hold_each_operand_once() {
+    // Parenthesized, a comparison is a value again, as in QB.
+    let source = "DIM SHARED hits AS INTEGER\nDIM a AS INTEGER, b AS INTEGER\na = 1: b = 5\n\
+        PRINT 0 < a < b; a < b < 3; 1 <= a <= 1 < b\n\
+        PRINT (a < b) < 0; a < b < 0\n\
+        PRINT 5 < tick% < 10; 9 < 1 < tick%; hits\n\
+        PRINT a = 1 AND b = 5; \"x\" = \"x\" AND a = 1\n\
+        FUNCTION tick%\nhits += 1\ntick% = 7\nEND FUNCTION\n";
+    // A comparison after AND starts a new operand, not a chain.
+    assert_eq!(printed(source), "-1  0 -1 \n-1  0 \n-1  0  1 \n-1 -1 \n");
+}
+
+#[test]
+fn in_searches_lists_strings_and_arrays() {
+    let source = "DIM SHARED hits AS INTEGER\nDIM x AS INTEGER, w AS STRING, v(2) AS INTEGER\n\
+        x = 3: w = \"bc\": v(1) = 3\n\
+        PRINT x IN (1, 2, 3); x NOT IN (1, 2, 3); w IN \"abcd\"; \"z\" IN \"abc\"; x IN v(); 4 IN v; x NOT IN v()\n\
+        PRINT w IN (\"a\", \"bc\"); x IN (3, tick%); hits\n\
+        FUNCTION tick%\nhits += 1\ntick% = 1\nEND FUNCTION\n";
+    assert_eq!(printed(source), "-1  0 -1  0 -1  0  0 \n-1 -1  0 \n");
+}
+
+#[test]
+fn microsoft_profiles_keep_qb_expressions() {
+    // QB compares the first comparison's -1 or 0 with the third operand.
+    let source = "PRINT 3 < 2 < 1\n";
+    assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), "-1 \n");
+    assert_eq!(printed(source), " 0 \n");
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"x = 1 IF 1 ELSE 2\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no conditional expression");
+}
+
+#[test]
+fn return_gives_a_function_its_value() {
+    let source = "PRINT fib&(10); greet$(\"ann\"); find%(49); find%(50); sign%(-4); pick%(0)\n\
+        FUNCTION fib&(n AS INTEGER)\nIF n < 2 THEN RETURN n\nRETURN fib&(n - 1) + fib&(n - 2)\nEND FUNCTION\n\
+        FUNCTION greet$(who AS STRING)\nRETURN \"hi \" + who\nEND FUNCTION\n\
+        FUNCTION find%(x AS INTEGER)\nFOR EACH i AS INTEGER IN RANGE(10)\nIF i * i = x THEN RETURN i\nNEXT\nRETURN -1\nEND FUNCTION\n\
+        FUNCTION sign%(n AS INTEGER)\nRETURN 1 IF n > 0 ELSE -1 IF n < 0 ELSE 0\nEND FUNCTION\n\
+        FUNCTION pick%(n AS INTEGER)\nIF n THEN RETURN 1 ELSE RETURN 2\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 55 hi ann 7 -1 -1  2 \n");
+}
+
+#[test]
+fn a_bare_return_still_ends_a_gosub() {
+    let source = "GOSUB inner\nPRINT g%\nEND\ninner:\nPRINT \"in\";\nRETURN\n\
+        FUNCTION g%\nRETURN 5\nEND FUNCTION\n";
+    assert_eq!(printed(source), "in 5 \n");
+}
+
+#[test]
+fn microsoft_profiles_return_only_from_gosub() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"FUNCTION f%\nRETURN 1 + 2\nEND FUNCTION\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS returns no value");
+}
+
+#[test]
+fn tuple_assignment_evaluates_every_value_first() {
+    let source = "DIM a AS INTEGER, b AS INTEGER, i AS INTEGER, s AS STRING, t AS STRING, v(2) AS INTEGER\n\
+        a = 1: b = 2: s = \"x\": t = \"y\"\n\
+        a, b = b, a\ns, t = t, s\nv(0), v(1) = a + 10, a\ni, v(i) = 2, 7\n\
+        PRINT a; b; s; t; v(0); v(1); v(2)\n";
+    assert_eq!(printed(source), " 2  1 yx 12  2  7 \n");
+}
+
+#[test]
+fn functions_return_tuples() {
+    let source = "DIM q AS INTEGER, r AS INTEGER, w AS STRING, n AS LONG\n\
+        q, r = divmod(17, 5)\nPRINT q; r\n\
+        w, n = named(3)\nPRINT w; n\nw, n = named(1)\nPRINT w; n\n\
+        q, r = pair\nPRINT q; r\n\
+        FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)\nRETURN a \\ b, a MOD b\nEND FUNCTION\n\
+        FUNCTION named (k AS INTEGER) AS (STRING, LONG)\nIF k > 2 THEN RETURN \"big\", k * 100000\nRETURN \"small\", k\nEND FUNCTION\n\
+        FUNCTION pair AS (INTEGER, INTEGER)\nRETURN divmod(9, 4)\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 3  2 \nbig 300000 \nsmall 1 \n 2  1 \n");
+}
+
+#[test]
+fn tuple_errors() {
+    for (source, message) in [
+        ("DIM a AS INTEGER, b AS INTEGER\na, b = 1, 2, 3\n", "2 targets for 3 values"),
+        ("DIM t AS (INTEGER, INTEGER)\n", "only a FUNCTION's result"),
+        ("DIM a AS INTEGER, b AS INTEGER\na, b = LEN(\"x\")\n", "several values"),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"a = 1: b = 2\na, b = b, a\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no tuples");
+}
+
+#[test]
+fn functions_return_records() {
+    // maybe() sets x only on its first call: the second must see zero, not
+    // the 9 its caller's temporary held from the first.
+    let source = "TYPE Point\nx AS INTEGER\ny AS INTEGER\nEND TYPE\n\
+        DIM p AS Point, q AS Point\n\
+        p = make(3, 4)\nPRINT p.x; p.y; make(5, 6).y; norm1&(make(-2, 7))\n\
+        q = moved(p)\nPRINT q.x; q.y; p.x\n\
+        FOR EACH i AS INTEGER IN RANGE(2)\nq = maybe(i)\nPRINT q.x;\nNEXT\nPRINT\n\
+        FUNCTION make (a AS INTEGER, b AS INTEGER) AS Point\nDIM r AS Point\nr.x = a: r.y = b\nRETURN r\nEND FUNCTION\n\
+        FUNCTION moved (s AS Point) AS Point\nmoved = s\nmoved.x = s.x + 100\nEND FUNCTION\n\
+        FUNCTION maybe (k AS INTEGER) AS Point\nIF k = 0 THEN maybe.x = 9\nEND FUNCTION\n\
+        FUNCTION norm1& (v AS Point)\nRETURN ABS(v.x) + ABS(v.y)\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 3  4  6  9 \n 103  4  3 \n 9  0 \n");
+}
+
+#[test]
+fn functions_return_arrays() {
+    let source = "DIM a() AS LONG, b() AS LONG, w() AS STRING\n\
+        a() = squares(4)\nPRINT UBOUND(a); a(3)\n\
+        b() = a()\nb(3) = 0\nPRINT a(3); b(3); UBOUND(b)\n\
+        a() = doubled(a())\nPRINT a(2); UBOUND(a)\n\
+        w() = words\nPRINT w(0); w(1)\n\
+        FOR EACH v AS LONG IN squares(3)\nPRINT v;\nNEXT\nPRINT\n\
+        FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
+        FOR EACH i AS INTEGER IN RANGE(n + 1)\nr(i) = i * i\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FUNCTION doubled (x() AS LONG) AS LONG()\nDIM r() AS LONG\nr() = x()\n\
+        FOR EACH i AS INTEGER IN RANGE(UBOUND(r) + 1)\nr(i) = r(i) * 2\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FUNCTION words AS STRING()\nDIM r() AS STRING\nREDIM r(1) AS STRING\nr(0) = \"hi\": r(1) = \"yo\"\nRETURN r()\nEND FUNCTION\n";
+    assert_eq!(printed(source), " 4  9 \n 9  0  4 \n 8  4 \nhiyo\n 0  1  4  9 \n");
+}
+
+#[test]
+fn array_assignment_errors() {
+    for (source, message) in [
+        ("DIM a(3) AS LONG, b() AS LONG\na() = b()\n", "static"),
+        ("DIM a() AS LONG, b() AS INTEGER\nREDIM b(1) AS INTEGER\na() = b()\n", "different types"),
+        ("DIM x AS (INTEGER)\n", ""),
+    ] {
+        let error = compiled(source).expect_err(source);
+        assert!(error.contains(message), "{source}: {error}");
+    }
+}
