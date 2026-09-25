@@ -369,10 +369,10 @@ pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Optio
     let program = parsed(source, frontend, None).map_err(|error| error.0)?;
     let functions: Vec<&model::Function> = program.modules.iter().flat_map(|module| &module.functions).collect();
     write(&output.join("00-input.bas"), &_source_text(source)?)?;
-    let numbers: IndexMap<*const model::Function, usize> =
-        functions.iter().enumerate().map(|(number, function)| (*function as *const _, number + 1)).collect();
-    let mut next_machine_stage: IndexMap<*const model::Function, usize> =
-        functions.iter().map(|function| (*function as *const _, 8)).collect();
+    // By id: compilation may pass a rewritten copy of the program.
+    let numbers: IndexMap<i64, usize> =
+        functions.iter().enumerate().map(|(number, function)| (function.id, number + 1)).collect();
+    let mut next_machine_stage: IndexMap<i64, usize> = functions.iter().map(|function| (function.id, 8)).collect();
 
     let mut observe = |event: &Stage| -> Result<(), String> {
         if event.name == "hir" {
@@ -390,7 +390,7 @@ pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Optio
         let Some(function) = event.function else {
             return Err(format!("stage {} has no source function", event.name));
         };
-        let key = function as *const model::Function;
+        let key = function.id;
         let number = numbers[&key];
         let stem = format!("{number:02}-{}", function.name);
         let mir = |value: StageValue| match value {

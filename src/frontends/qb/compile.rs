@@ -938,6 +938,56 @@ fn _runtime_frame(
     ))
 }
 
+/// QuickrBASIC frames a procedure itself, its HIR zeroing what locals need
+/// it, where the runtime needs no frame of its own: no error handler or RESUME
+/// target walks the runtime's frame chain to it, and no local STRING asks
+/// B$ENRA for a VBDOS string handle. The runtime's stack check goes with it.
+pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
+    program.dialect == model::Dialect::Quickr
+        && function.error_handler.is_none()
+        && function.external_entries.is_empty()
+        && _temporary_string_slots(module, function) == 0
+}
+
+/// QuickrBASIC calls a module-internal procedure near where it frames
+/// itself, as the C frontend does for a near function: no other module can
+/// call it, and every caller shares its code segment. One on the runtime's
+/// frame stays far, whose chain is only known to hold far returns.
+fn _near_procedures(program: &model::Program) -> model::Program {
+    let mut program = program.clone();
+    if program.dialect != model::Dialect::Quickr {
+        return program;
+    }
+    for index in 0..program.modules.len() {
+        let original = program.modules[index].clone();
+        let near: BTreeSet<&str> = original
+            .functions
+            .iter()
+            .filter(|function| {
+                function.name != "__main"
+                    && function.linkage == model::FunctionLinkage::Internal
+                    && _inline_frame(&program, &original, function)
+            })
+            .map(|function| function.name.as_str())
+            .collect();
+        let callables: BTreeSet<i64> =
+            original.callables.iter().filter(|one| near.contains(one.name.as_str())).map(|one| one.id).collect();
+        for function in &mut program.modules[index].functions {
+            if near.contains(function.name.as_str()) {
+                if let Some(abi) = function.abi.as_mut() {
+                    abi.distance = model::CallDistance::Near;
+                }
+            }
+            for call in &mut function.calls {
+                if call.callee.is_some_and(|callee| callables.contains(&callee)) {
+                    call.distance = model::CallDistance::Near;
+                }
+            }
+        }
+    }
+    program
+}
+
 /// Count frame-owned dynamic STRING descriptors for B$ENRA.
 ///
 /// Runtime-produced descriptors live on the runtime temporary chain and do
@@ -1399,6 +1449,8 @@ pub fn assembled(
 ) -> Result<masm::Module, CompileError> {
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
+    let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
+    let program = &_near_procedures(&laid_out);
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
@@ -1425,6 +1477,13 @@ pub fn assembled(
     let empty_occurrences = IndexMap::default();
     for (function, body) in functions.iter().copied().zip(&semantic) {
         let handler_at = _handler_at(function);
+        let zeroed;
+        let body = if _inline_frame(program, module, function) {
+            zeroed = super::zero_fill::filled(body);
+            &zeroed
+        } else {
+            body
+        };
         _observe(&mut observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
         let body = optimized(program, function, body, options)?;
         _observe(&mut observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;
@@ -1558,7 +1617,11 @@ pub fn assembled(
         let mut final_body = _source_instructions(&final_.body);
         let module_body = function.name == "__main";
         let public = !module_body && function.linkage == model::FunctionLinkage::External;
-        if !module_body {
+        let mut native_reserve = 0;
+        if !module_body && _inline_frame(program, module, function) {
+            // The frontend's own stores zero the locals that need it.
+            native_reserve = reserve;
+        } else if !module_body {
             let (framed, runtime_frame) =
                 _runtime_frame(&final_body, reserve, program.runtime, _temporary_string_slots(module, function))?;
             final_body = framed;
@@ -1649,16 +1712,16 @@ pub fn assembled(
         procedures.push(masm::Procedure {
             name: if module_body { "$QB$MAIN".to_owned() } else { _object_name(&function.name) },
             public,
-            far: true,
+            far: function.abi.as_ref().is_none_or(|abi| abi.distance != model::CallDistance::Near),
             body: final_body,
             // B$ENRA, when present, owns both the ten-byte runtime header
             // and the CX bytes of locals below BP.  Asking masm's native
             // shell to reserve those bytes first shifts FR_BFRAME,
             // FR_CLOCALS, and FR_GOSUB away from their documented offsets;
             // ON ERROR then reads a spill as the local count and reports
-            // Out of stack space.  Every nonzero reserve selected the
-            // runtime-frame path above, so the native shell owns none.
-            reserve: 0,
+            // Out of stack space.  So the native shell reserves only for a
+            // QuickrBASIC inline frame, which has no runtime header.
+            reserve: native_reserve,
             callees,
             interrupt: None,
         });

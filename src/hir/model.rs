@@ -67,6 +67,7 @@ str_enum!(Dialect {
     Qb45("QB45") = "qb45",
     Pds71("PDS71") = "pds71",
     Vbdos("VBDOS") = "vbdos",
+    Quickr("QUICKR") = "quickr",
     Nib("NIB") = "nib",
 });
 
@@ -428,6 +429,8 @@ str_enum!(Op {
     Fatan("FATAN") = "fatan",
     Flog2("FLOG2") = "flog2",
     Fexp2("FEXP2") = "fexp2",
+    // A float rounded to an integral float as the environment rounds: x87 FRNDINT.
+    Fround("FROUND") = "fround",
     // An I/O port: port_in reads a byte from operands[0]; port_out writes
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",

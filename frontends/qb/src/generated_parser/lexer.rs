@@ -18,10 +18,23 @@ pub enum TokenKind {
     Integer(i64, Option<char>),
     Real(String, Option<char>),
     String(String),
+    /// QuickrBASIC's `f"…"`.
+    FormatString(Vec<FormatSegment>),
     Comparison(Binary),
     Period,
     ArrayDynamic,
     ArrayStatic,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FormatSegment {
+    Text(String),
+    /// `{expression}` or `{expression:spec}`, the expression already lexed.
+    Field {
+        tokens: Vec<Token>,
+        spec: Option<String>,
+        span: Span,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +81,9 @@ pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
                     let value = line[content..at].to_string();
                     at += 1;
                     TokenKind::String(value)
+                }
+                b'f' | b'F' if dialect.format_strings() && bytes.get(at + 1) == Some(&b'"') => {
+                    format_string(&line, &mut at, line_index, dialect)?
                 }
                 b'&' => based_integer(&line, &mut at, span)?,
                 b'0'..=b'9' if start > 0 && bytes[start - 1] == b'.' => {
@@ -169,6 +185,92 @@ pub fn lex(source: &str, dialect: Dialect) -> Result<Vec<Token>, LexError> {
         });
     }
     Ok(out)
+}
+
+/// `f"…"` from its `f`: literal text, `{{` and `}}` for braces, and
+/// `{expression[:spec]}` fields. A field cannot hold a string literal: its
+/// quote would end the f-string, as BASIC has no escape for one.
+fn format_string(
+    line: &str,
+    at: &mut usize,
+    line_index: usize,
+    dialect: Dialect,
+) -> Result<TokenKind, LexError> {
+    let bytes = line.as_bytes();
+    let span = |start, end| Span {
+        line: line_index,
+        start,
+        end,
+    };
+    let start = *at;
+    *at += 2;
+    let mut segments = Vec::new();
+    let mut text = String::new();
+    let mut text_from = *at;
+    let flush = |text: &mut String, segments: &mut Vec<FormatSegment>| {
+        if !text.is_empty() {
+            segments.push(FormatSegment::Text(std::mem::take(text)));
+        }
+    };
+    loop {
+        let Some(&byte) = bytes.get(*at) else {
+            return Err(error(span(start, *at), "unterminated string"));
+        };
+        let doubled = bytes.get(*at + 1) == Some(&byte);
+        match byte {
+            b'"' => {
+                text.push_str(&line[text_from..*at]);
+                *at += 1;
+                break;
+            }
+            b'{' | b'}' if doubled => {
+                text.push_str(&line[text_from..=*at]);
+                *at += 2;
+                text_from = *at;
+            }
+            b'}' => return Err(error(span(*at, *at + 1), "single '}' in an f-string")),
+            b'{' => {
+                text.push_str(&line[text_from..*at]);
+                flush(&mut text, &mut segments);
+                let open = *at + 1;
+                let close = line[open..].find(['}', '"']).map_or(bytes.len(), |one| one + open);
+                if bytes.get(close) != Some(&b'}') {
+                    return Err(error(
+                        span(*at, close),
+                        "unterminated f-string field; a field cannot hold a string",
+                    ));
+                }
+                let field = &line[open..close];
+                let (expression, spec) = match field.split_once(':') {
+                    Some((expression, spec)) => (expression, Some(spec.to_owned())),
+                    None => (field, None),
+                };
+                if expression.trim().is_empty() {
+                    return Err(error(span(*at, close + 1), "empty f-string field"));
+                }
+                if spec.as_deref().is_some_and(|spec| spec.contains('{')) {
+                    return Err(error(span(*at, close + 1), "nested f-string fields are not supported"));
+                }
+                let mut tokens = lex(expression, dialect).map_err(|inner| {
+                    error(span(open + inner.span.start, open + inner.span.end), inner.message)
+                })?;
+                tokens.pop(); // lex's end-of-line token
+                for token in &mut tokens {
+                    token.span = span(open + token.span.start, open + token.span.end);
+                }
+                segments.push(FormatSegment::Field {
+                    tokens,
+                    spec,
+                    span: span(*at, close + 1),
+                });
+                *at = close + 1;
+                text_from = *at;
+            }
+            _ => *at += 1,
+        }
+    }
+    flush(&mut text, &mut segments);
+    Ok(TokenKind::FormatString(segments))
 }
 
 fn error(span: Span, message: impl Into<String>) -> LexError {

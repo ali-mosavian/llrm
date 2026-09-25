@@ -49,3 +49,27 @@ identity = "vbdos.cdecl_sub"
 action = "CdeclSub"
 pattern = "token:tkDECLARE, token:tkSUB, capture:identifier, token:tkCDECL"
 tail = "function_signature"
+
+[[extension]]
+identity = "quickr.defbyte"
+action = "DefByte"
+pattern = "keyword:DEFBYTE"
+tail = "letter_ranges"
+
+[[extension]]
+identity = "quickr.defubyte"
+action = "DefUnsignedByte"
+pattern = "keyword:DEFUBYTE"
+tail = "letter_ranges"
+
+[[extension]]
+identity = "quickr.defuint"
+action = "DefUnsignedInteger"
+pattern = "keyword:DEFUINT"
+tail = "letter_ranges"
+
+[[extension]]
+identity = "quickr.defulng"
+action = "DefUnsignedLong"
+pattern = "keyword:DEFULNG"
+tail = "letter_ranges"

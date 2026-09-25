@@ -6,6 +6,8 @@ pub enum Dialect {
     QuickBasic45,
     Pds71,
     VbDos,
+    /// QuickrBASIC: VBDOS plus sized integers and mandatory declarations.
+    Quickr,
 }
 
 impl Dialect {
@@ -15,7 +17,34 @@ impl Dialect {
             "qb45" | "quickbasic45" => Some(Self::QuickBasic45),
             "pds71" | "pds" => Some(Self::Pds71),
             "vbdos" | "vb" => Some(Self::VbDos),
+            "quickr" | "quickrbasic" => Some(Self::Quickr),
             _ => None,
         }
+    }
+
+    /// `BYTE`, `SIGNED` and `UNSIGNED` integer types.
+    pub fn sized_integers(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `f"…"` is a format string, not the name `f` before a string.
+    pub fn format_strings(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// A procedure's locals start at zero through explicit stores, not
+    /// through the runtime's frame.
+    pub fn zeroes_locals(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `PRIVATE SUB` and `PRIVATE FUNCTION`.
+    pub fn private_procedures(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `OPTION EXPLICIT` holds for every module.
+    pub fn explicit_declarations(self) -> bool {
+        self == Self::Quickr
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
@@ -7,7 +8,7 @@ use crate::syntax::{
 };
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
-use super::lexer::{lex, Token, TokenKind};
+use super::lexer::{lex, FormatSegment, Token, TokenKind};
 use super::tables::{self, AstAction, ExternalAction, StatementShape};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,7 +26,7 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let tokens = lex(source, dialect).map_err(ParseError::from)?;
+    let (tokens, private_at) = without_private(lex(source, dialect).map_err(ParseError::from)?);
     let mut state = ParseState::new(tokens);
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -38,6 +39,7 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
         let procedures_before = state.procedures.len();
         let open_before = state.open_procedure;
         let action_before = state.sink.actions.len();
+        let private = private_at.contains(&state.at);
         let extension = recognize_statement(&state.tokens[state.at..]);
         let result = if let Some(found) = extension {
             let keyword_span = state.tokens[state.at].span;
@@ -53,6 +55,7 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                         .push(Statement::OptionExplicit(keyword_span));
                     ParseResult::GoodSyntax
                 }
+                ExtensionAction::DefType { type_name, .. } => def_type_list(&mut state, type_name),
                 ExtensionAction::OnLocalError { label, .. } => {
                     state.statements.push(Statement::OnError {
                         label,
@@ -138,6 +141,12 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
                 );
             }
         }
+        if private {
+            match state.procedures.get_mut(procedures_before) {
+                Some(procedure) if !procedure.declaration => procedure.private = true,
+                _ => return error(&state, "PRIVATE must begin a SUB or FUNCTION definition"),
+            }
+        }
         let mut body_added = false;
         if let Some(index) = open_before {
             if state.open_procedure == Some(index)
@@ -175,13 +184,46 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
     if state.open_procedure.is_some() {
         return error(&state, "procedure has no matching END");
     }
+    let format_strings = state
+        .tokens
+        .iter()
+        .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
     Ok(ParseOutput {
         module: Module {
             statements: state.statements,
             procedures: state.procedures,
+            format_strings,
         },
         actions: state.sink.actions,
     })
+}
+
+/// `PRIVATE SUB` and `PRIVATE FUNCTION`: the grammar parses an ordinary
+/// header, so PRIVATE leaves the stream and where its SUB or FUNCTION now
+/// stands marks the procedure that statement creates.
+fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
+    let separator = |token: &Token| {
+        matches!(token.kind, TokenKind::Reserved(id) if id == named("tkNewLine") || id == named("tkColon"))
+    };
+    let header = |token: Option<&Token>| {
+        token.is_some_and(|token| {
+            matches!(token.kind, TokenKind::Reserved(id) if id == named("tkSUB") || id == named("tkFUNCTION"))
+        })
+    };
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut marked = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let starts = kept.last().is_none_or(separator);
+        if starts
+            && matches!(&token.kind, TokenKind::Identifier(word) if word == "PRIVATE")
+            && header(tokens.get(index + 1))
+        {
+            marked.insert(kept.len());
+            continue;
+        }
+        kept.push(token.clone());
+    }
+    (kept, marked)
 }
 
 fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
@@ -447,14 +489,54 @@ fn literal_string(state: &mut ParseState) -> ParseResult {
     let Some(token) = state.token().cloned() else {
         return ParseResult::NotFound;
     };
-    let TokenKind::String(value) = token.kind else {
-        return ParseResult::NotFound;
+    let expression = match token.kind {
+        TokenKind::String(value) => Expr::Literal(Literal::String(value), token.span),
+        TokenKind::FormatString(segments) => match format_string(&segments, token.span) {
+            Ok(expression) => expression,
+            Err(result) => return result,
+        },
+        _ => return ParseResult::NotFound,
     };
     state.at += 1;
-    state
-        .expressions
-        .push(Expr::Literal(Literal::String(value), token.span));
+    state.expressions.push(expression);
     ParseResult::GoodSyntax
+}
+
+/// The name of the conversion an f-string field makes. No source name can
+/// spell it, so no program can call or shadow it.
+pub const FORMAT_FIELD: &str = "$FSTRING";
+
+/// `f"…"` as the concatenation of its text and its converted fields, a
+/// field's spec passed to the conversion as a string.
+fn format_string(segments: &[FormatSegment], span: Span) -> Result<Expr, ParseResult> {
+    let mut parts = Vec::new();
+    for segment in segments {
+        parts.push(match segment {
+            FormatSegment::Text(text) => Expr::Literal(Literal::String(text.clone()), span),
+            FormatSegment::Field { tokens, spec, span } => {
+                let mut field = ParseState::new(tokens.clone());
+                let value = expression(&mut field, 0)?;
+                if field.at != tokens.len() {
+                    return Err(ParseResult::BadSyntax);
+                }
+                let mut arguments = vec![value];
+                arguments.extend(spec.iter().map(|spec| Expr::Literal(Literal::String(spec.clone()), *span)));
+                Expr::Apply {
+                    name: FORMAT_FIELD.into(),
+                    arguments,
+                    span: *span,
+                }
+            }
+        });
+    }
+    let mut parts = parts.into_iter();
+    let first = parts.next().unwrap_or(Expr::Literal(Literal::String(String::new()), span));
+    Ok(parts.fold(first, |left, right| Expr::Binary {
+        op: Binary::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+        span,
+    }))
 }
 
 fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: bool) -> ParseResult {
@@ -535,6 +617,9 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
 }
 
 fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
+    if let Some(integral) = signed_type(state) {
+        return Some(integral);
+    }
     let token = state.token()?.clone();
     let type_name = match token.kind {
         TokenKind::Reserved(id) if id == named("tkINTEGER") => TypeName::Integer,
@@ -551,6 +636,27 @@ fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
     };
     state.at += 1;
     Some(type_name)
+}
+
+/// `SIGNED`/`UNSIGNED` followed by `BYTE`, `INTEGER` or `LONG`.  Both words
+/// stay identifiers elsewhere, so a TYPE may still be named `SIGNED`.
+fn signed_type(state: &mut ParseState) -> Option<TypeName> {
+    let TokenKind::Identifier(modifier) = &state.token()?.kind else {
+        return None;
+    };
+    let signed = match modifier.as_str() {
+        "SIGNED" => true,
+        "UNSIGNED" => false,
+        _ => return None,
+    };
+    let width = match &state.tokens.get(state.at + 1)?.kind {
+        TokenKind::Identifier(name) if name == "BYTE" => 1,
+        TokenKind::Reserved(id) if *id == named("tkINTEGER") => 2,
+        TokenKind::Reserved(id) if *id == named("tkLONG") => 4,
+        _ => return None,
+    };
+    state.at += 2;
+    Some(TypeName::Integral { width, signed })
 }
 
 fn suffix_type(name: &str) -> Option<TypeName> {
@@ -925,6 +1031,7 @@ fn extension_procedure(
         declaration: true,
         is_static,
         exported: true,
+        private: false,
         module_scope: false,
         span,
     });
@@ -1027,6 +1134,7 @@ fn synthesize_statement(
             declaration: header.declaration,
             is_static,
             exported: !inline_def_fn,
+            private: false,
             module_scope: def_fn,
             span: header.span,
         };
@@ -2217,6 +2325,7 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             token.span,
         )),
         TokenKind::String(value) => Ok(Expr::Literal(Literal::String(value), token.span)),
+        TokenKind::FormatString(segments) => format_string(&segments, token.span),
         TokenKind::Identifier(name) => name_or_apply(state, name, token.span),
         TokenKind::Reserved(id) if id == named("tkLParen") => {
             let value = expression(state, 0)?;

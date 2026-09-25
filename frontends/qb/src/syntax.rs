@@ -16,6 +16,8 @@ pub enum TypeName {
     Double,
     String,
     Named(String),
+    /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
+    Integral { width: u8, signed: bool },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,6 +92,8 @@ pub struct Procedure {
     pub declaration: bool,
     pub is_static: bool,
     pub exported: bool,
+    /// QuickrBASIC's PRIVATE: callable only within its module.
+    pub private: bool,
     /// DEF FN and an outlined module GOSUB run in the module's variable
     /// scope; SUB and FUNCTION see only what is SHARED.
     pub module_scope: bool,
@@ -397,4 +401,6 @@ pub enum CaseItem {
 pub struct Module {
     pub statements: Vec<Statement>,
     pub procedures: Vec<Procedure>,
+    /// Some expression is an f-string, which needs the QuickrBASIC prelude.
+    pub format_strings: bool,
 }

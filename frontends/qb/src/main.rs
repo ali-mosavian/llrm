@@ -127,8 +127,11 @@ fn main() -> ExitCode {
                     alternate_math,
                     whole_program,
                 };
-                match qbfront::semantic::compile_with_options(&module, name, dialect, &runtime, &options) {
-                    Ok(hir) => {
+                match qbfront::semantic::compile_with_warnings(&module, name, dialect, &runtime, &options) {
+                    Ok((hir, warnings)) => {
+                        for warning in warnings {
+                            eprintln!("{input}: {warning}");
+                        }
                         print!("{hir}");
                         ExitCode::SUCCESS
                     }

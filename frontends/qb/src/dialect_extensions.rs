@@ -11,7 +11,7 @@ use crate::generated_parser::tables::{
     ExtensionPatternToken, ExtensionTail, GeneratedExtensionAction, DIALECT_EXTENSIONS,
 };
 use crate::generated_parser::{Token, TokenKind};
-use crate::syntax::Span;
+use crate::syntax::{Span, TypeName};
 
 /// A dialect statement after the generated table has matched its full prefix.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +26,11 @@ pub struct ExtensionMatch {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExtensionAction {
     OptionExplicit {
+        span: Span,
+    },
+    /// `DEFBYTE` and the `DEFU*` statements, before their letter ranges.
+    DefType {
+        type_name: TypeName,
         span: Span,
     },
     OnLocalError {
@@ -78,6 +83,10 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
         let span = statement_span(&tokens[..spec.pattern.len()]);
         let action = match spec.action {
             GeneratedExtensionAction::OptionExplicit => ExtensionAction::OptionExplicit { span },
+            GeneratedExtensionAction::DefByte => def_integral(1, true, span),
+            GeneratedExtensionAction::DefUnsignedByte => def_integral(1, false, span),
+            GeneratedExtensionAction::DefUnsignedInteger => def_integral(2, false, span),
+            GeneratedExtensionAction::DefUnsignedLong => def_integral(4, false, span),
             GeneratedExtensionAction::OnLocalError => ExtensionAction::OnLocalError {
                 label: captured_label(spec.pattern, &tokens[..spec.pattern.len()])
                     .expect("validated label capture matched a source label"),
@@ -128,6 +137,13 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
         });
     }
     None
+}
+
+fn def_integral(width: u8, signed: bool, span: Span) -> ExtensionAction {
+    ExtensionAction::DefType {
+        type_name: TypeName::Integral { width, signed },
+        span,
+    }
 }
 
 fn ends_statement(token: Option<&Token>) -> bool {

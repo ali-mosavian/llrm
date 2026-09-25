@@ -81,6 +81,7 @@ pub fn run_limited(
         })
         .collect();
     let value = match machine.invoke(entry, arguments) {
+        Err(_) if machine.ended => None,
         Err(_) if machine.panicked.is_some() => {
             return Ok(Executed {
                 output: machine.output,
@@ -327,6 +328,10 @@ struct Machine<'p> {
     panicked: Option<String>,
     /// Open files by DOS handle, less the five DOS opens for every program.
     files: Vec<Option<std::fs::File>>,
+    /// The QB console's cursor column, for PRINT's comma and TAB.
+    column: usize,
+    /// A QB END stopped the program.
+    ended: bool,
 }
 
 impl<'p> Machine<'p> {
@@ -349,7 +354,22 @@ impl<'p> Machine<'p> {
                     })),
                 )
             })
-            .collect();
+            .collect::<HashMap<i64, Memory>>();
+        // A near or far relocation stores its target's address in the cell.
+        for object in &module.data {
+            for relocation in object.relocations.iter().filter(|one| !one.code) {
+                let width = match relocation.address {
+                    model::AddressKind::Near => 2,
+                    model::AddressKind::Far => 4,
+                    _ => continue,
+                };
+                let Some(target) = data.get(&relocation.target).cloned() else {
+                    continue;
+                };
+                let address = Address { memory: target, offset: relocation.addend, length: None, capacity: None };
+                data[&object.id].borrow_mut().pointers.insert((relocation.at, width), address);
+            }
+        }
         Ok(Self {
             program,
             types: module.types.iter().map(|one| (one.id, one)).collect(),
@@ -367,6 +387,8 @@ impl<'p> Machine<'p> {
             sink: None,
             field: None,
             files: Vec::new(),
+            column: 0,
+            ended: false,
         })
     }
 
@@ -432,9 +454,15 @@ impl<'p> Machine<'p> {
                 )
             })
             .collect();
+        let frame = memory(layout.size);
+        if self.program.dialect == model::Dialect::Quickr {
+            // QuickrBASIC zeroes locals with its own stores, not the runtime's
+            // frame: anything else a local holds is garbage.
+            frame.borrow_mut().bytes.fill(0xCC);
+        }
         let mut activation = Activation {
             name: &function.name,
-            frame: memory(layout.size),
+            frame,
             layout,
             values,
             locals,
@@ -596,6 +624,11 @@ impl<'p> Machine<'p> {
                 activation.frame.clone(),
                 place.offset - activation.layout.base,
             ),
+            // A static backed by a data object, such as a float literal,
+            // holds that object's bytes and keeps them across calls.
+            Storage::Static if self.data.contains_key(&place.symbol) => {
+                (self.data[&place.symbol].clone(), place.offset)
+            }
             _ => (activation.locals[&place.id].clone(), 0),
         };
         let array = self.types[&place.r#type];
@@ -746,7 +779,12 @@ impl<'p> Machine<'p> {
                     }
                 }
             }
-            Op::Copy | Op::Convert => vec![args[0].clone()],
+            // CONVERT rounds as the x87 does by default: to nearest, ties to even.
+            Op::Convert => vec![match (&args[0], activation.layout.value_types[&instruction.results[0]].kind) {
+                (Scalar::Float(value), TypeKind::Integer | TypeKind::Boolean) => Scalar::Float(value.round_ties_even()),
+                (other, _) => other.clone(),
+            }],
+            Op::Copy => vec![args[0].clone()],
             Op::ZeroExtend => vec![Scalar::Int(unsigned(args[0].whole()?, operand_type(0)?))],
             Op::SignExtend => vec![Scalar::Int(wrap(
                 args[0].whole()?,
@@ -859,6 +897,22 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(equal == (op == Op::Eq))]
             }
+            Op::StringEq | Op::StringNe | Op::StringLt | Op::StringLe | Op::StringGt | Op::StringGe => {
+                let order = Self::qb_string_order(&args[0], &args[1])?;
+                let op = match op {
+                    Op::StringEq => Op::Eq,
+                    Op::StringNe => Op::Ne,
+                    Op::StringLt => Op::Lt,
+                    Op::StringLe => Op::Le,
+                    Op::StringGt => Op::Gt,
+                    _ => Op::Ge,
+                };
+                vec![truth(match op {
+                    Op::Eq => order.is_eq(),
+                    Op::Ne => order.is_ne(),
+                    _ => ordered(op, order),
+                })]
+            }
             Op::Lt | Op::Le | Op::Gt | Op::Ge => {
                 let order = compare(&args)?;
                 vec![truth(order.is_some_and(|one| ordered(op, one)))]
@@ -874,7 +928,7 @@ impl<'p> Machine<'p> {
                 };
                 vec![truth(ordered(op, left.cmp(&right)))]
             }
-            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 => {
+            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
                 let value = args[0].float()?;
                 let result = match op {
                     Op::Fabs => value.abs(),
@@ -882,6 +936,7 @@ impl<'p> Machine<'p> {
                     Op::Fsin => value.sin(),
                     Op::Fcos => value.cos(),
                     Op::Fatan => value.atan(),
+                    Op::Fround => value.round_ties_even(),
                     Op::Flog2 => value.log2(),
                     _ => value.exp2(),
                 };
@@ -911,6 +966,9 @@ impl<'p> Machine<'p> {
             return self.invoke(name, arguments);
         }
         if let Some(result) = self.runtime(name, &arguments)? {
+            return Ok(result);
+        }
+        if let Some(result) = self.qb_runtime(name, &arguments)? {
             return Ok(result);
         }
         if name == rt::PRINT_FIELD {
@@ -1079,6 +1137,9 @@ fn store(where_: &Location<'_>, value: Scalar) -> Outcome<()> {
 
 #[path = "execute_runtime.rs"]
 mod runtime;
+
+#[path = "execute_qb.rs"]
+mod qb;
 
 #[cfg(test)]
 #[path = "execute_tests.rs"]

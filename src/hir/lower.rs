@@ -37,7 +37,7 @@ fn _FORMATS(evaluation: model::FloatEvaluation) -> floating::Format {
 }
 
 const _BINARY_FLOAT: [model::Op; 4] = [model::Op::Fadd, model::Op::Fsub, model::Op::Fmul, model::Op::Fdiv];
-const _UNARY_FLOAT: [model::Op; 8] = [
+const _UNARY_FLOAT: [model::Op; 9] = [
     model::Op::Fneg,
     model::Op::Fabs,
     model::Op::Fsqrt,
@@ -46,6 +46,7 @@ const _UNARY_FLOAT: [model::Op; 8] = [
     model::Op::Fatan,
     model::Op::Flog2,
     model::Op::Fexp2,
+    model::Op::Fround,
 ];
 
 #[allow(non_snake_case)]
@@ -56,6 +57,7 @@ fn _X87_INTRINSICS(op: model::Op) -> Option<&'static str> {
         model::Op::Fatan => Some("fatan"),
         model::Op::Flog2 => Some("flog2"),
         model::Op::Fexp2 => Some("fexp2"),
+        model::Op::Fround => Some("fround"),
         _ => None,
     }
 }

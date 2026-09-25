@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod assignment;
+mod format_spec;
 mod shapes;
 mod tags;
 
@@ -23,6 +25,11 @@ const BOOLEAN: u32 = 5;
 const STRING: u32 = 6;
 const ANY: u32 = 7;
 const BYTE: u32 = 8;
+// QuickrBASIC's sized integers. Its signed `BYTE` is SIGNED_BYTE; the
+// PEEK/POKE cell BYTE doubles as its UNSIGNED BYTE.
+const SIGNED_BYTE: u32 = 9;
+const UNSIGNED_INTEGER: u32 = 10;
+const UNSIGNED_LONG: u32 = 11;
 // BASCOM's declarative scanner reserves eight dimension records for an
 // array whose rank is not present in its declaration.  This is an ABI storage
 // rule, distinct from the language's 60-index parser ceiling.
@@ -249,6 +256,8 @@ struct Compiler {
     exits: Vec<(ExitTarget, u32)>,
     return_block: Option<u32>,
     result_place: Option<(u32, u32)>,
+    /// The FUNCTION being compiled, without its suffix.
+    result_name: Option<String>,
     error_handler: Option<u32>,
     error_handler_local: bool,
     error_handlers: BTreeSet<u32>,
@@ -281,6 +290,9 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
+    /// The source line of each load in the function being built.
+    load_lines: BTreeMap<u32, usize>,
+    warnings: Vec<String>,
 }
 
 pub fn compile(
@@ -323,6 +335,7 @@ pub struct Options {
     pub whole_program: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn compile_with_options(
     module: &Module,
     module_name: &str,
@@ -330,9 +343,20 @@ pub fn compile_with_options(
     runtime: &str,
     options: &Options,
 ) -> Result<String, SemanticError> {
+    compile_with_warnings(module, module_name, dialect, runtime, options).map(|(hir, _)| hir)
+}
+
+/// [`compile_with_options`], plus the warnings the program earns.
+pub fn compile_with_warnings(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    options: &Options,
+) -> Result<(String, Vec<String>), SemanticError> {
     let mut compiler = built(module, module_name, dialect, runtime, options)?;
     shapes::applied(&mut compiler);
-    Ok(compiler.json())
+    Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
 
 /// Every procedure of `module` as HIR, before emission.
@@ -343,7 +367,11 @@ fn built(
     runtime: &str,
     options: &Options,
 ) -> Result<Compiler, SemanticError> {
-    let module = outline_module_gosubs(module)?;
+    check_private(module, dialect)?;
+    let mut module = outline_module_gosubs(module)?;
+    if module.format_strings {
+        add_prelude(&mut module)?;
+    }
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
     compiler.record_default_types(module)?;
@@ -501,6 +529,7 @@ fn built(
             };
             let place = compiler.declare_as(&declaration, "local")?;
             compiler.result_place = Some((place, result_type));
+            compiler.result_name = Some(canonical(&procedure.name).into());
         }
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
@@ -530,7 +559,7 @@ fn built(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported && !compiler.options.whole_program {
+            if procedure.exported && !procedure.private && !compiler.options.whole_program {
                 "external"
             } else {
                 "internal"
@@ -538,6 +567,32 @@ fn built(
         );
     }
     Ok(compiler)
+}
+
+/// Procedures every name of which begins this belong to the prelude.
+const PRELUDE_PREFIX: &str = "QUICKR_";
+
+/// PRIVATE is QuickrBASIC's; a Microsoft profile has no such procedure.
+fn check_private(module: &Module, dialect: Dialect) -> Result<(), SemanticError> {
+    match module.procedures.iter().find(|one| one.private) {
+        Some(procedure) if !dialect.private_procedures() => Err(SemanticError {
+            message: format!("{}: PRIVATE needs the quickr profile", procedure.name),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Appends QuickrBASIC's prelude, the BASIC that f-strings call.
+fn add_prelude(module: &mut Module) -> Result<(), SemanticError> {
+    if let Some(taken) = module.procedures.iter().find(|one| one.name.starts_with(PRELUDE_PREFIX)) {
+        return Err(SemanticError {
+            message: format!("{}: names beginning {PRELUDE_PREFIX} are reserved", taken.name),
+        });
+    }
+    let prelude = crate::parse(include_str!("semantic/prelude.bas"), Dialect::Quickr)
+        .expect("the prelude parses");
+    module.procedures.extend(prelude.procedures);
+    Ok(())
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -841,6 +896,7 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             declaration: false,
             is_static: false,
             exported: false,
+            private: false,
             module_scope: true,
             span,
         });
@@ -873,6 +929,9 @@ impl Compiler {
             scalar(STRING, "string", "opaque", 4, None, "none"),
             scalar(ANY, "any", "opaque", 0, None, "none"),
             scalar(BYTE, "$byte", "integer", 1, Some(false), "none"),
+            scalar(SIGNED_BYTE, "signed byte", "integer", 1, Some(true), "none"),
+            scalar(UNSIGNED_INTEGER, "unsigned integer", "integer", 2, Some(false), "none"),
+            scalar(UNSIGNED_LONG, "unsigned long", "integer", 4, Some(false), "none"),
         ];
         Self {
             dialect,
@@ -926,10 +985,11 @@ impl Compiler {
             exits: Vec::new(),
             return_block: None,
             result_place: None,
+            result_name: None,
             error_handler: None,
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
-            next_type: 9,
+            next_type: 12,
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -955,6 +1015,8 @@ impl Compiler {
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
+            load_lines: BTreeMap::new(),
+            warnings: Vec::new(),
         }
     }
 
@@ -983,6 +1045,7 @@ impl Compiler {
         self.exits.clear();
         self.return_block = None;
         self.result_place = None;
+        self.result_name = None;
         self.error_handler = None;
         self.error_handler_local = false;
         self.error_handlers.clear();
@@ -1009,6 +1072,7 @@ impl Compiler {
     ) {
         self.prune_unreachable(&parameters);
         let retained: BTreeSet<u32> = self.blocks.iter().map(|block| block.id).collect();
+        let load_lines = std::mem::take(&mut self.load_lines);
         let external_entries: Vec<u32> = self
             .statement_entries
             .iter()
@@ -1019,6 +1083,13 @@ impl Compiler {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        // The prelude's warnings would name lines of a file the user never wrote.
+        if self.dialect.explicit_declarations() && !name.starts_with(PRELUDE_PREFIX) {
+            self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
+        }
+        if id != 1 && self.dialect.zeroes_locals() {
+            self.zero_locals(&external_entries);
+        }
         let table = self
             .data
             .iter_mut()
@@ -1050,6 +1121,86 @@ impl Compiler {
             linkage,
             origins: BTreeMap::new(),
         });
+    }
+
+    /// Warn once per source variable a path reads before assigning: a
+    /// procedure's locals, or in module code the module's variables.
+    fn warn_unassigned_reads(
+        &mut self,
+        module_code: bool,
+        entries: &[u32],
+        load_lines: &BTreeMap<u32, usize>,
+    ) {
+        let storage = if module_code { "module" } else { "local" };
+        let names: BTreeMap<u32, &str> = self
+            .places
+            .iter()
+            .filter(|place| {
+                place.storage == storage
+                    && !place.name.starts_with('$')
+                    && (integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE))
+            })
+            .map(|place| (place.id, place.name.as_str()))
+            .collect();
+        let tracked = names.keys().copied().collect();
+        // A user procedure may assign any variable the module shares.
+        let assigns_all = if module_code {
+            self.calls
+                .iter()
+                .filter(|call| call.callee.is_some())
+                .map(|call| call.instruction)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries);
+        let warnings: Vec<String> = reads
+            .into_iter()
+            .map(|(place, instruction)| {
+                format!(
+                    "line {}: warning: {} is read before it is assigned",
+                    load_lines.get(&instruction).copied().unwrap_or(0),
+                    names[&place].split('`').next().unwrap_or_default()
+                )
+            })
+            .collect();
+        self.warnings.extend(warnings);
+    }
+
+    /// Stores zero, at entry, to each local some path could read before
+    /// assigning: every aggregate (descriptors, records, strings), and each
+    /// numeric scalar the assignment analysis cannot prove written first.
+    fn zero_locals(&mut self, entries: &[u32]) {
+        let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
+        let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
+        let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
+        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries)
+            .into_iter()
+            .map(|(place, _)| place)
+            .collect();
+        let mut stores = Vec::new();
+        for place in locals.iter().filter(|place| !scalar(place) || unassigned.contains(&place.id)) {
+            if integral(place.type_id) {
+                stores.push((Operand::Place(place.id), place.type_id));
+                continue;
+            }
+            // By words, which also writes a float's +0.0.
+            for offset in (0..place.extent).step_by(2) {
+                let type_id = if offset + 1 < place.extent { INTEGER } else { BYTE };
+                let target = Operand::Projection { place: place.id, indices: Vec::new(), offset, type_id };
+                stores.push((target, type_id));
+            }
+        }
+        let instructions: Vec<Instruction> = stores
+            .into_iter()
+            .map(|(target, type_id)| {
+                let id = self.next_instruction;
+                self.next_instruction += 1;
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None }
+            })
+            .collect();
+        let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");
+        entry.instructions.splice(0..0, instructions);
     }
 
     fn prune_unreachable(&mut self, parameters: &[u32]) {
@@ -1275,6 +1426,12 @@ impl Compiler {
 
     fn resolve_type(&self, type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         match type_name.unwrap_or(&TypeName::Single) {
+            TypeName::Named(name) if name == "BYTE" && self.dialect.sized_integers() => {
+                Ok(SIGNED_BYTE)
+            }
+            TypeName::Integral { .. } if !self.dialect.sized_integers() => {
+                self.fail("SIGNED and UNSIGNED types need the quickr profile")
+            }
             TypeName::Named(name) => self
                 .udts
                 .get(canonical(name))
@@ -1341,7 +1498,16 @@ impl Compiler {
 
     fn typed_name(&self, name: &str) -> Result<String, SemanticError> {
         let type_id = self.named_type(name, None)?;
-        Ok(format!("{name}{}", type_suffix(type_id)))
+        // A DEFBYTE or DEFU* name has no suffix; mark its key with one no
+        // source name can spell so it cannot meet an AS-declared namesake.
+        let marker = match type_id {
+            BYTE => "`byte",
+            SIGNED_BYTE => "`sbyte",
+            UNSIGNED_INTEGER => "`uint",
+            UNSIGNED_LONG => "`ulng",
+            other => type_suffix(other),
+        };
+        Ok(format!("{name}{marker}"))
     }
 
     /// A declaration without AS or suffix declares its DEFtype-named variable.
@@ -1969,7 +2135,7 @@ impl Compiler {
             Some(TypeName::Single) => "!",
             Some(TypeName::Double) => "#",
             Some(TypeName::String) => "$",
-            Some(TypeName::Named(_)) => "",
+            Some(TypeName::Named(_) | TypeName::Integral { .. }) => "",
             None => type_suffix(type_id),
         };
         format!("{}{suffix}", name.to_ascii_uppercase())
@@ -2510,7 +2676,7 @@ impl Compiler {
                         let (suffix, operand) = if self.string_syntax(&item.value) {
                             ("SD", self.string_descriptor(&item.value)?)
                         } else {
-                            let (operand, type_id) = self.expression(&item.value)?;
+                            let (operand, type_id) = self.numeric_argument(&item.value)?;
                             match type_id {
                                 INTEGER | BOOLEAN | BYTE => {
                                     ("I2", self.convert(operand, type_id, INTEGER)?)
@@ -2556,6 +2722,14 @@ impl Compiler {
                         .iter()
                         .map(|destination| self.destination(destination))
                         .collect::<Result<Vec<_>, _>>()?;
+                    let staged = resolved_destinations
+                        .into_iter()
+                        .map(|(place, type_id)| self.staged_destination(place, type_id))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let resolved_destinations: Vec<_> = staged
+                        .iter()
+                        .map(|(place, type_id, _)| (place.clone(), *type_id))
+                        .collect();
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
                         let file = self.convert(file, file_type, INTEGER)?;
@@ -2645,6 +2819,9 @@ impl Compiler {
                         };
                         self.emit_runtime_call(callee, Vec::new(), operands);
                     }
+                    for (place, type_id, original) in staged {
+                        self.unstage(place, type_id, original)?;
+                    }
                     self.emit_runtime_call("B$PEOS", Vec::new(), Vec::new());
                 }
                 Statement::Data { values, .. } => {
@@ -2657,7 +2834,8 @@ impl Compiler {
                 Statement::Read { destinations, .. } => {
                     for destination in destinations {
                         let (place, type_id) = self.destination(destination)?;
-                        let address = self.far_address(place, type_id);
+                        let (place, type_id, original) = self.staged_destination(place, type_id)?;
+                        let address = self.far_address(place.clone(), type_id);
                         let (callee, operands) = match type_id {
                             INTEGER | BOOLEAN | BYTE => ("B$RDI2", vec![Operand::Value(address)]),
                             LONG => ("B$RDI4", vec![Operand::Value(address)]),
@@ -2676,6 +2854,7 @@ impl Compiler {
                             _ => return self.fail("READ destination has an unsupported type"),
                         };
                         self.emit_runtime_call(callee, Vec::new(), operands);
+                        self.unstage(place, type_id, original)?;
                     }
                 }
                 Statement::OnError { label, local, .. } => {
@@ -3421,9 +3600,20 @@ impl Compiler {
         body: &[Statement],
     ) -> Result<(), SemanticError> {
         let (destination, counter_type) = self.destination(counter)?;
-        if !matches!(counter_type, INTEGER | LONG | SINGLE | DOUBLE) {
+        if counter_type == BOOLEAN || !(integral(counter_type) || matches!(counter_type, SINGLE | DOUBLE)) {
             return self.fail("FOR counter is not numeric");
         }
+        // An unsigned counter still counts down: its STEP keeps a sign.
+        let step_type = if unsigned(counter_type) {
+            integer_type(integer_width(counter_type), true)
+        } else {
+            counter_type
+        };
+        let (at_most, at_least) = if unsigned(counter_type) {
+            ("beloweq", "aboveeq")
+        } else {
+            ("le", "ge")
+        };
         let (start_value, start_type) = self.expression(start)?;
         let start_value = self.convert(start_value, start_type, counter_type)?;
         self.emit("store", Vec::new(), vec![destination.clone(), start_value]);
@@ -3435,12 +3625,12 @@ impl Compiler {
             Vec::new(),
             vec![Operand::Place(end_place), end_value],
         );
-        let (step_value, step_type) = match step {
+        let (step_value, step_type_of_source) = match step {
             Some(step) => self.expression(step)?,
             None => (Operand::Constant(INTEGER, Number::Integer(1)), INTEGER),
         };
-        let step_value = self.convert(step_value, step_type, counter_type)?;
-        let step_place = self.compiler_temporary("$forStep", counter_type)?;
+        let step_value = self.convert(step_value, step_type_of_source, step_type)?;
+        let step_place = self.compiler_temporary("$forStep", step_type)?;
         self.emit(
             "store",
             Vec::new(),
@@ -3454,13 +3644,13 @@ impl Compiler {
         let done_block = self.new_block();
         self.terminate("jump", Vec::new(), vec![test_block])?;
         self.select_block(test_block);
-        let step_value = self.value(counter_type);
+        let step_value = self.value(step_type);
         self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
         let direction = self.value(BOOLEAN);
-        let zero = if matches!(counter_type, SINGLE | DOUBLE) {
-            self.floating_literal("0.0", counter_type)?
+        let zero = if matches!(step_type, SINGLE | DOUBLE) {
+            self.floating_literal("0.0", step_type)?
         } else {
-            Operand::Constant(counter_type, Number::Integer(0))
+            Operand::Constant(step_type, Number::Integer(0))
         };
         self.emit(
             "ge",
@@ -3479,7 +3669,7 @@ impl Compiler {
         self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
-            "le",
+            at_most,
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
@@ -3495,7 +3685,7 @@ impl Compiler {
         self.emit("load", vec![end_value], vec![Operand::Place(end_place)]);
         let within = self.value(BOOLEAN);
         self.emit(
-            "ge",
+            at_least,
             vec![within],
             vec![counter_value, Operand::Value(end_value)],
         );
@@ -3511,8 +3701,9 @@ impl Compiler {
         self.exits.pop();
         if self.block_open() {
             let counter_value = self.load_destination(counter)?;
-            let step_value = self.value(counter_type);
+            let step_value = self.value(step_type);
             self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
+            let step_value = self.convert(Operand::Value(step_value), step_type, counter_type)?;
             let advanced = self.value(counter_type);
             self.emit(
                 if matches!(counter_type, SINGLE | DOUBLE) {
@@ -3521,7 +3712,7 @@ impl Compiler {
                     "add"
                 },
                 vec![advanced],
-                vec![counter_value, Operand::Value(step_value)],
+                vec![counter_value, step_value],
             );
             self.emit(
                 "store",
@@ -3738,6 +3929,14 @@ impl Compiler {
                 if self.constants.contains_key(canonical(name)) {
                     return self.fail(format!("constant {name} is not assignable"));
                 }
+                // Inside FUNCTION f&, a bare f names the result, as f& does.
+                if let (Some((place, type_id)), Some(result), None) =
+                    (self.result_place, &self.result_name, suffix(name))
+                {
+                    if canonical(name) == result {
+                        return Ok((Operand::Place(place), type_id));
+                    }
+                }
                 let variable = self.variable(name)?;
                 let operand = if let Some(base) = variable.indirect {
                     Operand::Indirect {
@@ -3784,7 +3983,7 @@ impl Compiler {
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
-                    let (mut operand, type_id) = self.expression(index)?;
+                    let (mut operand, type_id) = self.subscript(index)?;
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
@@ -3867,7 +4066,7 @@ impl Compiler {
                 }
                 let mut indices = Vec::new();
                 for index in arguments {
-                    let (mut operand, type_id) = self.expression(index)?;
+                    let (mut operand, type_id) = self.subscript(index)?;
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
@@ -4123,9 +4322,15 @@ impl Compiler {
     }
 
     /// An array subscript's value and numeric type.
+    /// An array subscript. A sized integer widens to INTEGER or LONG.
     fn subscript(&mut self, index: &Expr) -> Result<(Operand, u32), SemanticError> {
         let line = index.span().line;
-        let (index, index_type) = self.expression(index)?;
+        let (mut index, mut index_type) = self.expression(index)?;
+        if sized_integer(index_type) {
+            let widened = if integer_width(index_type) == 1 { INTEGER } else { LONG };
+            index = self.convert(index, index_type, widened)?;
+            index_type = widened;
+        }
         if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
             return self.fail(format!(
                 "line {} array subscript is {} rather than numeric",
@@ -4755,6 +4960,9 @@ impl Compiler {
                     ));
                 }
             }
+            if intrinsic.is_some_and(|one| one.lowering == Lowering::FormatField) {
+                return self.format_field(arguments);
+            }
             let runtime = intrinsic.and_then(|intrinsic| match intrinsic.lowering {
                 Lowering::RuntimeString(callee) => Some(callee),
                 Lowering::Character => Some("B$FCHR"),
@@ -4851,7 +5059,7 @@ impl Compiler {
                 return Ok(Operand::Value(result));
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::StringNumber) {
-                let (mut operand, type_id) = self.expression(&arguments[0])?;
+                let (mut operand, type_id) = self.numeric_argument(&arguments[0])?;
                 let callee = match type_id {
                     INTEGER | BOOLEAN | BYTE => "B$STI2",
                     LONG => "B$STI4",
@@ -5146,9 +5354,13 @@ impl Compiler {
                 Ok((Operand::Value(result), type_id))
             }
             Expr::Unary { op, operand, .. } => {
-                let (operand, type_id) = self.expression(operand)?;
+                let (mut operand, mut type_id) = self.expression(operand)?;
                 if matches!(op, Unary::Positive | Unary::Grouped) {
                     return Ok((operand, type_id));
+                }
+                if integer_width(type_id) == 1 {
+                    operand = self.convert(operand, type_id, INTEGER)?;
+                    type_id = INTEGER;
                 }
                 let operation = match op {
                     Unary::Negative if matches!(type_id, SINGLE | DOUBLE) => "fneg",
@@ -5156,7 +5368,7 @@ impl Compiler {
                     Unary::Not => "not",
                     Unary::Positive | Unary::Grouped => unreachable!(),
                 };
-                if *op == Unary::Not && !matches!(type_id, INTEGER | LONG | BOOLEAN) {
+                if *op == Unary::Not && !integral(type_id) {
                     return self.fail("NOT requires an integral operand");
                 }
                 let result = self.value(type_id);
@@ -5167,6 +5379,175 @@ impl Compiler {
                 op, left, right, ..
             } => self.binary(*op, left, right),
         }
+    }
+
+    /// An f-string field's text: a string as it is, a number as Python's
+    /// `str()` writes it, or either laid out by its format spec.
+    fn format_field(&mut self, arguments: &[Expr]) -> Result<Operand, SemanticError> {
+        use format_spec::{Class, Layout};
+        let value = &arguments[0];
+        let span = value.span();
+        let spec = match arguments.get(1) {
+            Some(Expr::Literal(Literal::String(spec), _)) => Some(spec.as_str()),
+            _ => None,
+        };
+        let text = |text: String| Expr::Literal(Literal::String(text), span);
+        let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: format!("{PRELUDE_PREFIX}{name}"),
+            arguments,
+            span,
+        };
+        let class = if self.string_syntax(value) {
+            Class::Text
+        } else {
+            // Evaluated once, into a name the prelude call can take.
+            let (operand, type_id) = self.expression(value)?;
+            if !(integral(type_id) || matches!(type_id, SINGLE | DOUBLE)) || type_id == BOOLEAN {
+                return self.fail("an f-string field is not a string or a number");
+            }
+            let place = self.hold_value(operand, type_id)?;
+            return self.format_number(place, type_id, spec.unwrap_or_default(), span);
+        };
+        let Some(spec) = spec else {
+            return self.string_descriptor(value);
+        };
+        let layout = format_spec::parse(spec)
+            .and_then(|spec| format_spec::layout(&spec, class))
+            .or_else(|message| self.fail(message))?;
+        let Layout::Text { fill, align, width, precision } = layout else {
+            unreachable!("a string's layout is text")
+        };
+        self.string_descriptor(&apply(
+            "TEXT$",
+            vec![
+                value.clone(),
+                text(fill.into()),
+                text(align.into()),
+                integer(width.into()),
+                integer(precision.into()),
+            ],
+        ))
+    }
+
+    /// A number, held in `place`, laid out by `spec`.
+    fn format_number(
+        &mut self,
+        place: Expr,
+        type_id: u32,
+        spec: &str,
+        span: Span,
+    ) -> Result<Operand, SemanticError> {
+        use format_spec::{Class, Layout};
+        let class = if integral(type_id) { Class::Integer } else { Class::Float };
+        let text = |text: String| Expr::Literal(Literal::String(text), span);
+        let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: format!("{PRELUDE_PREFIX}{name}"),
+            arguments,
+            span,
+        };
+        let layout = format_spec::parse(spec)
+            .and_then(|spec| format_spec::layout(&spec, class))
+            .or_else(|message| self.fail(message))?;
+        let call = match layout {
+            Layout::Text { .. } => unreachable!("a number's layout is numeric"),
+            Layout::Plain { sign, fill, align, width, separator } => {
+                let repr = apply("REPR$", vec![place, integer(-i64::from(type_id == SINGLE))]);
+                apply(
+                    "NUMERIC$",
+                    vec![
+                        repr,
+                        text(sign.into()),
+                        text(fill.into()),
+                        text(align.into()),
+                        integer(width.into()),
+                        text(separator),
+                    ],
+                )
+            }
+            Layout::Format { kind, sign, alternate, zeroless, fill, align, width, separator, precision } => apply(
+                "FORMAT$",
+                vec![
+                    place,
+                    text(kind),
+                    text(sign.into()),
+                    integer(-i64::from(alternate)),
+                    integer(-i64::from(zeroless)),
+                    text(fill.into()),
+                    text(align.into()),
+                    integer(width.into()),
+                    text(separator),
+                    integer(precision.into()),
+                ],
+            ),
+        };
+        self.string_descriptor(&call)
+    }
+
+    /// `operand` stored in a fresh variable, as a name only the compiler
+    /// can spell, so an expression built around it evaluates it once.
+    fn hold_value(&mut self, operand: Operand, type_id: u32) -> Result<Expr, SemanticError> {
+        let place = self.compiler_temporary("$held", type_id)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
+        let name = format!("$HELD{place}");
+        self.variables.insert(
+            name.clone(),
+            Variable {
+                place,
+                type_id,
+                element: None,
+                bounds: Vec::new(),
+                indirect: None,
+                descriptor: None,
+                descriptor_place: None,
+                descriptor_data: "none",
+            },
+        );
+        Ok(Expr::Name(name, crate::syntax::Span { line: 0, start: 0, end: 0 }))
+    }
+
+    /// A numeric value for a runtime routine or intrinsic, which knows only
+    /// Microsoft's types: a sized integer widens to one holding its value.
+    fn numeric_argument(&mut self, expression: &Expr) -> Result<(Operand, u32), SemanticError> {
+        let (operand, type_id) = self.expression(expression)?;
+        if !sized_integer(type_id) {
+            return Ok((operand, type_id));
+        }
+        let widened = microsoft_type(type_id);
+        Ok((self.convert(operand, type_id, widened)?, widened))
+    }
+
+    /// Where a runtime reader writes `place`: the place itself, or for a sized
+    /// integer a Microsoft-typed temporary that [`Self::unstage`] stores back.
+    #[allow(clippy::type_complexity)]
+    fn staged_destination(
+        &mut self,
+        place: Operand,
+        type_id: u32,
+    ) -> Result<(Operand, u32, Option<(Operand, u32)>), SemanticError> {
+        if !sized_integer(type_id) {
+            return Ok((place, type_id, None));
+        }
+        let staged_type = microsoft_type(type_id);
+        let staged = self.temporary(staged_type)?;
+        Ok((Operand::Place(staged), staged_type, Some((place, type_id))))
+    }
+
+    fn unstage(
+        &mut self,
+        staged: Operand,
+        staged_type: u32,
+        original: Option<(Operand, u32)>,
+    ) -> Result<(), SemanticError> {
+        let Some((place, type_id)) = original else {
+            return Ok(());
+        };
+        let value = self.value(staged_type);
+        self.emit("load", vec![value], vec![staged]);
+        let value = self.convert(Operand::Value(value), staged_type, type_id)?;
+        self.emit("store", Vec::new(), vec![place, value]);
+        Ok(())
     }
 
     fn builtin(
@@ -5327,7 +5708,7 @@ impl Compiler {
                 Lowering::ToDouble => DOUBLE,
                 _ => unreachable!(),
             };
-            let (operand, source) = self.expression(&arguments[0])?;
+            let (operand, source) = self.numeric_argument(&arguments[0])?;
             if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
                 return self.fail(format!("{name} requires a numeric argument"));
             }
@@ -5336,6 +5717,14 @@ impl Compiler {
             }
             let converted = self.convert(operand, source, target)?;
             return Ok(Some((converted, target)));
+        }
+        if let Lowering::ToIntegral { width, signed } = intrinsic.lowering {
+            let (operand, source) = self.expression(&arguments[0])?;
+            if !(integral(source) || matches!(source, SINGLE | DOUBLE)) {
+                return self.fail(format!("{name} requires a numeric argument"));
+            }
+            let target = integer_type(width.into(), signed);
+            return Ok(Some((self.convert(operand, source, target)?, target)));
         }
         if matches!(
             intrinsic.lowering,
@@ -5356,7 +5745,7 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
-            let (mut operand, mut type_id) = self.expression(&arguments[0])?;
+            let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if intrinsic.lowering == Lowering::Abs && matches!(type_id, INTEGER | LONG | BOOLEAN) {
                 // Signed absolute value without control flow: (x xor sign)-sign.
                 // As on the target integer instructions, MIN wraps to itself.
@@ -5404,7 +5793,7 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Sign {
-            let (operand, type_id) = self.expression(&arguments[0])?;
+            let (operand, type_id) = self.numeric_argument(&arguments[0])?;
             if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | BYTE) {
                 return self.fail("SGN requires a numeric argument");
             }
@@ -5435,7 +5824,7 @@ impl Compiler {
             intrinsic.lowering,
             Lowering::Sin | Lowering::Cos | Lowering::Tan
         ) {
-            let (mut operand, mut type_id) = self.expression(&arguments[0])?;
+            let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN) {
                 operand = self.convert(operand, type_id, SINGLE)?;
                 type_id = SINGLE;
@@ -5468,7 +5857,7 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::Atan {
-            let (mut operand, mut type_id) = self.expression(&arguments[0])?;
+            let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN) {
                 operand = self.convert(operand, type_id, SINGLE)?;
                 type_id = SINGLE;
@@ -5481,7 +5870,7 @@ impl Compiler {
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if matches!(intrinsic.lowering, Lowering::Log | Lowering::Exp) {
-            let (mut operand, mut type_id) = self.expression(&arguments[0])?;
+            let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN | BYTE) {
                 operand = self.convert(operand, type_id, SINGLE)?;
                 type_id = SINGLE;
@@ -5627,7 +6016,7 @@ impl Compiler {
                     }
                 }
             }
-            let (operand, type_id) = self.expression(&arguments[0])?;
+            let (operand, type_id) = self.numeric_argument(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN) {
                 return Ok(Some((operand, type_id)));
             }
@@ -5637,28 +6026,26 @@ impl Compiler {
             return self.floor_float(operand, type_id).map(Some);
         }
         if intrinsic.lowering == Lowering::Truncate {
-            let (operand, type_id) = self.expression(&arguments[0])?;
+            let (operand, type_id) = self.numeric_argument(&arguments[0])?;
             if matches!(type_id, INTEGER | LONG | BOOLEAN | BYTE) {
                 return Ok(Some((operand, type_id)));
             }
             if !matches!(type_id, SINGLE | DOUBLE) {
                 return self.fail("FIX requires a numeric argument");
             }
-            // For nearest-rounded integer n, trunc(x) is
-            // n + (x < n ? -1 : 0) - (x > n ? -1 : 0).
-            let rounded = self.value(LONG);
-            self.emit("convert", vec![rounded], vec![operand.clone()]);
-            let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
-            let below = self.value(BOOLEAN);
-            self.emit("lt", vec![below], vec![operand.clone(), integral.clone()]);
-            let below = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
-            let above = self.value(BOOLEAN);
-            self.emit("gt", vec![above], vec![operand, integral.clone()]);
-            let above = self.convert(Operand::Value(above), BOOLEAN, type_id)?;
-            let adjusted = self.value(type_id);
-            self.emit("fadd", vec![adjusted], vec![integral, below]);
+            // trunc(x) is floor(x), plus one where x is negative and not
+            // whole: -1 AND -1 is -1 in QB, and subtracting it adds one.
+            let (floor, _) = self.floor_float(operand.clone(), type_id)?;
+            let zero = self.floating_literal("0", type_id)?;
+            let negative = self.value(BOOLEAN);
+            self.emit("lt", vec![negative], vec![operand.clone(), zero]);
+            let fractional = self.value(BOOLEAN);
+            self.emit("lt", vec![fractional], vec![floor.clone(), operand]);
+            let both = self.value(BOOLEAN);
+            self.emit("and", vec![both], vec![Operand::Value(negative), Operand::Value(fractional)]);
+            let adjustment = self.convert(Operand::Value(both), BOOLEAN, type_id)?;
             let result = self.value(type_id);
-            self.emit("fsub", vec![result], vec![Operand::Value(adjusted), above]);
+            self.emit("fsub", vec![result], vec![floor, adjustment]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if intrinsic.lowering == Lowering::PortIn {
@@ -5863,13 +6250,13 @@ impl Compiler {
         operand: Operand,
         type_id: u32,
     ) -> Result<(Operand, u32), SemanticError> {
-        // INT is floor, while x87's current conversion rounds to nearest.
-        // For rounded integer n, floor(x) is n + (x < n ? -1 : 0).
-        // Express the correction in ordinary HIR so optimization sees every
-        // value. QB booleans are -1/0 and supply that correction.
-        let rounded = self.value(LONG);
-        self.emit("convert", vec![rounded], vec![operand.clone()]);
-        let integral = self.convert(Operand::Value(rounded), LONG, type_id)?;
+        // INT is floor, while x87's current rounding is to nearest. For
+        // rounded n, floor(x) is n + (x < n ? -1 : 0). FROUND keeps n a
+        // float: through a LONG, INT(4000000000#) wrapped to -294967296.
+        // QB booleans are -1/0 and supply the correction.
+        let rounded = self.value(type_id);
+        self.emit("fround", vec![rounded], vec![operand.clone()]);
+        let integral = Operand::Value(rounded);
         let below = self.value(BOOLEAN);
         self.emit("lt", vec![below], vec![operand, integral.clone()]);
         let correction = self.convert(Operand::Value(below), BOOLEAN, type_id)?;
@@ -6342,7 +6729,9 @@ impl Compiler {
         }
         let (mut left_operand, mut left_type) = self.expression(left)?;
         let (mut right_operand, mut right_type) = self.expression(right)?;
-        let narrow_divmod = matches!(op, Binary::Modulo | Binary::IntegerDivide)
+        let sized = sized_integer(left_type) || sized_integer(right_type);
+        let narrow_divmod = !sized
+            && matches!(op, Binary::Modulo | Binary::IntegerDivide)
             && !matches!(left_type, SINGLE | DOUBLE | LONG)
             && !matches!(right_type, SINGLE | DOUBLE | LONG);
         let integral = matches!(
@@ -6355,7 +6744,18 @@ impl Compiler {
                 | Binary::Modulo
                 | Binary::IntegerDivide
         );
-        if integral {
+        if integral && sized {
+            // QB still rounds a floating operand to LONG; C's conversions
+            // choose the rest.
+            if matches!(left_type, SINGLE | DOUBLE) {
+                left_operand = self.convert(left_operand, left_type, LONG)?;
+                left_type = LONG;
+            }
+            if matches!(right_type, SINGLE | DOUBLE) {
+                right_operand = self.convert(right_operand, right_type, LONG)?;
+                right_type = LONG;
+            }
+        } else if integral {
             // QB rounds floating operands before every integral/logical
             // operator. Any floating operand selects LONG evaluation; BYTE is
             // promoted to INTEGER. Keep both conversions explicit in HIR.
@@ -6411,6 +6811,8 @@ impl Compiler {
                 Binary::Divide => "fdiv",
                 _ => binary_name(op),
             }
+        } else if unsigned(common) {
+            unsigned_name(op)
         } else {
             binary_name(op)
         };
@@ -6783,8 +7185,7 @@ impl Compiler {
         if from == to {
             return Ok(operand);
         }
-        let numeric =
-            |type_id| matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | BYTE);
+        let numeric = |type_id| integral(type_id) || matches!(type_id, SINGLE | DOUBLE);
         let allowed = numeric(from) && numeric(to);
         if !allowed {
             return self.fail(format!(
@@ -6793,7 +7194,12 @@ impl Compiler {
                 self.name(to)
             ));
         }
-        if let Operand::Constant(_, Number::Integer(value)) = operand {
+        if let Operand::Constant(_, Number::Integer(mut value)) = operand {
+            if unsigned(to) && integral(from) && integer_width(from) == integer_width(to) {
+                // `&HFFFF` is INTEGER -1: to an unsigned type of its width it
+                // is the bit pattern it spells.
+                value = narrow(value, to);
+            }
             if let Some(range) = integer_range(to) {
                 if !range.contains(&value) {
                     return self.fail("Math overflow");
@@ -6801,12 +7207,12 @@ impl Compiler {
                 return Ok(Operand::Constant(to, Number::Integer(value)));
             }
         }
-        if to == BYTE && matches!(from, SINGLE | DOUBLE) {
+        if integer_width(to) == 1 && matches!(from, SINGLE | DOUBLE) {
             // BC rounds to INTEGER (B$FIS2) and keeps the low byte.
             let integer = self.convert(operand, from, INTEGER)?;
-            return self.convert(integer, INTEGER, BYTE);
+            return self.convert(integer, INTEGER, to);
         }
-        if matches!(from, INTEGER | LONG | BOOLEAN | BYTE) && matches!(to, SINGLE | DOUBLE) {
+        if integral(from) && matches!(to, SINGLE | DOUBLE) {
             let place = self.temporary(from)?;
             self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
             let result = self.value(to);
@@ -6829,6 +7235,9 @@ impl Compiler {
         let key = self.variable_key(name);
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
+        }
+        if self.dialect.explicit_declarations() {
+            return self.fail(format!("Variable not defined: {name}"));
         }
         let declaration = Declaration {
             name: key.clone(),
@@ -7224,6 +7633,9 @@ impl Compiler {
     fn emit(&mut self, op: &'static str, results: Vec<u32>, operands: Vec<Operand>) {
         let id = self.next_instruction;
         self.next_instruction += 1;
+        if op == "load" {
+            self.load_lines.insert(id, self.current_source_line);
+        }
         self.blocks[self.current_block]
             .instructions
             .push(Instruction {
@@ -7881,6 +8293,7 @@ fn type_id(type_name: Option<&TypeName>) -> Result<u32, SemanticError> {
         TypeName::Single => SINGLE,
         TypeName::Double => DOUBLE,
         TypeName::String => STRING,
+        TypeName::Integral { width, signed } => integer_type(*width as usize, *signed),
         TypeName::Named(name) => {
             return Err(SemanticError {
                 message: format!("user-defined type {name} is not attached yet"),
@@ -7896,6 +8309,10 @@ fn type_name(type_id: u32) -> TypeName {
         SINGLE => TypeName::Single,
         DOUBLE => TypeName::Double,
         STRING => TypeName::String,
+        BYTE | SIGNED_BYTE | UNSIGNED_INTEGER | UNSIGNED_LONG => TypeName::Integral {
+            width: integer_width(type_id) as u8,
+            signed: !unsigned(type_id),
+        },
         _ => unreachable!(),
     }
 }
@@ -7957,8 +8374,12 @@ fn dotted_name(expression: &Expr) -> Option<String> {
 
 fn narrow(value: i64, type_id: u32) -> i64 {
     match type_id {
+        BYTE => value as u8 as i64,
+        SIGNED_BYTE => value as i8 as i64,
         INTEGER => value as i16 as i64,
+        UNSIGNED_INTEGER => value as u16 as i64,
         LONG => value as i32 as i64,
+        UNSIGNED_LONG => value as u32 as i64,
         _ => value,
     }
 }
@@ -7966,8 +8387,11 @@ fn narrow(value: i64, type_id: u32) -> i64 {
 fn integer_range(type_id: u32) -> Option<std::ops::RangeInclusive<i64>> {
     match type_id {
         BYTE => Some(0..=u8::MAX as i64),
+        SIGNED_BYTE => Some(i8::MIN as i64..=i8::MAX as i64),
         INTEGER => Some(i16::MIN as i64..=i16::MAX as i64),
+        UNSIGNED_INTEGER => Some(0..=u16::MAX as i64),
         LONG => Some(i32::MIN as i64..=i32::MAX as i64),
+        UNSIGNED_LONG => Some(0..=u32::MAX as i64),
         _ => None,
     }
 }
@@ -8098,6 +8522,60 @@ fn constant_binary(
     Ok((common, Number::Integer(narrow(value, common))))
 }
 
+fn integral(type_id: u32) -> bool {
+    matches!(
+        type_id,
+        BOOLEAN | BYTE | SIGNED_BYTE | INTEGER | UNSIGNED_INTEGER | LONG | UNSIGNED_LONG
+    )
+}
+
+/// Only QuickrBASIC source can hold one; BYTE is also BC's PEEK/POKE cell.
+fn sized_integer(type_id: u32) -> bool {
+    matches!(type_id, BYTE | SIGNED_BYTE | UNSIGNED_INTEGER | UNSIGNED_LONG)
+}
+
+fn unsigned(type_id: u32) -> bool {
+    matches!(type_id, BYTE | UNSIGNED_INTEGER | UNSIGNED_LONG)
+}
+
+fn integer_width(type_id: u32) -> usize {
+    match type_id {
+        BYTE | SIGNED_BYTE => 1,
+        LONG | UNSIGNED_LONG => 4,
+        _ => 2,
+    }
+}
+
+fn integer_type(width: usize, signed: bool) -> u32 {
+    match (width, signed) {
+        (1, false) => BYTE,
+        (1, true) => SIGNED_BYTE,
+        (2, false) => UNSIGNED_INTEGER,
+        (4, false) => UNSIGNED_LONG,
+        (4, true) => LONG,
+        _ => INTEGER,
+    }
+}
+
+/// The Microsoft type that holds every value of `type_id`, for runtime
+/// routines that only know INTEGER, LONG, SINGLE and DOUBLE.
+fn microsoft_type(type_id: u32) -> u32 {
+    match type_id {
+        BYTE | SIGNED_BYTE | BOOLEAN => INTEGER,
+        UNSIGNED_INTEGER => LONG,
+        UNSIGNED_LONG => DOUBLE,
+        other => other,
+    }
+}
+
+/// C's usual arithmetic conversions over two integer types: both widen to
+/// at least INTEGER, then to the wider width, unsigned if either is.
+fn common_integer(left: u32, right: u32) -> u32 {
+    let width = integer_width(left).max(integer_width(right)).max(2);
+    let unsigned_at = |type_id| unsigned(type_id) && integer_width(type_id) == width;
+    integer_type(width, !(unsigned_at(left) || unsigned_at(right)))
+}
+
 fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> {
     if matches!(
         op,
@@ -8108,8 +8586,7 @@ fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> 
             | Binary::Imp
             | Binary::Modulo
             | Binary::IntegerDivide
-    ) && (!matches!(left, INTEGER | LONG | BOOLEAN)
-        || !matches!(right, INTEGER | LONG | BOOLEAN))
+    ) && (!integral(left) || !integral(right))
     {
         return Err(SemanticError {
             message: "integral operator has a floating operand".into(),
@@ -8126,11 +8603,21 @@ fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> 
         DOUBLE
     } else if left == SINGLE || right == SINGLE {
         SINGLE
-    } else if left == LONG || right == LONG {
-        LONG
     } else {
-        INTEGER
+        common_integer(left, right)
     })
+}
+
+fn unsigned_name(op: Binary) -> &'static str {
+    match op {
+        Binary::Less => "below",
+        Binary::LessEqual => "beloweq",
+        Binary::Greater => "above",
+        Binary::GreaterEqual => "aboveeq",
+        Binary::Modulo => "urem",
+        Binary::IntegerDivide => "udiv",
+        other => binary_name(other),
+    }
 }
 
 fn binary_name(op: Binary) -> &'static str {
@@ -8162,6 +8649,7 @@ fn dialect_name(dialect: Dialect) -> &'static str {
         Dialect::QuickBasic45 => "qb45",
         Dialect::Pds71 => "pds71",
         Dialect::VbDos => "vbdos",
+        Dialect::Quickr => "quickr",
     }
 }
 

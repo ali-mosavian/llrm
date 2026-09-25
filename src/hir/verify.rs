@@ -46,7 +46,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
 }
 
 const _PLACES: [model::Op; 3] = [model::Op::Load, model::Op::Store, model::Op::Address];
-const _FLOAT: [model::Op; 12] = [
+const _FLOAT: [model::Op; 13] = [
     model::Op::Fadd,
     model::Op::Fsub,
     model::Op::Fmul,
@@ -59,6 +59,7 @@ const _FLOAT: [model::Op; 12] = [
     model::Op::Fatan,
     model::Op::Flog2,
     model::Op::Fexp2,
+    model::Op::Fround,
 ];
 const _INTEGER: [model::Op; 19] = [
     model::Op::Add,

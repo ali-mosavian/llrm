@@ -22,6 +22,7 @@ fn _CODE(name: &str) -> Option<Vec<u8>> {
         "fatan" => "d9e8d9f3",     // fld1; fpatan
         "flog2" => "d9e8d9c9d9f1", // fld1; fxch; fyl2x
         "fexp2" => "d9c0d9fcd9c9d8e1d9f0d9e8dec1d9fdddd9",
+        "fround" => "d9fc", // frndint
         _ => return None,
     };
     Some((0..hex.len()).step_by(2).map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()).collect())

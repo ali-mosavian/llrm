@@ -108,3 +108,88 @@ in VBDOS-only behavior.
 QB Quake is a late integration corpus, not the specification. A construct
 first discovered there is reduced to a small dialect fixture before its
 implementation is changed.
+
+## QuickrBASIC (`quickr`)
+
+`quickr` is the one profile that is not a Microsoft compiler. It is the VBDOS
+profile plus the extensions below, and it pairs with the VBDOS runtime. The
+Microsoft profiles reject every extension, so the compatibility ladder stays
+faithful.
+
+### Sized integers
+
+| Spelling | Width | Range |
+|---|---|---|
+| `BYTE`, `SIGNED BYTE` | 1 | -128 to 127 |
+| `UNSIGNED BYTE` | 1 | 0 to 255 |
+| `INTEGER`, `SIGNED INTEGER` | 2 | -32768 to 32767 |
+| `UNSIGNED INTEGER` | 2 | 0 to 65535 |
+| `LONG`, `SIGNED LONG` | 4 | -2147483648 to 2147483647 |
+| `UNSIGNED LONG` | 4 | 0 to 4294967295 |
+
+`SIGNED` and `UNSIGNED` modify an integer type wherever `AS` takes one: `DIM`,
+`REDIM`, `COMMON`, `STATIC`, `SHARED`, parameters, `FUNCTION` results and
+`TYPE` fields. Every plain type is signed and `UNSIGNED` makes it unsigned.
+`DEF{,U}{BYTE,INT,LNG}` set the default type of a letter range, and
+`C{,U}{BYTE,INT,LNG}` convert to the type they name, as `DEFINT` and `CINT` do.
+There are no new suffixes.
+
+Arithmetic follows C. An operand narrower than `INTEGER` widens to `INTEGER`.
+Otherwise the result has the wider width, and it is unsigned when either
+operand of that width is unsigned. Comparison, `\`, `MOD` and conversion to
+floating point use the unsigned form for unsigned operands. A store narrows
+modulo the destination width. A constant outside the destination's range is
+a compile-time overflow, except that a signed constant becomes the bit pattern
+it spells in an unsigned type of its width: `&HFFFF` fills an
+`UNSIGNED INTEGER`. A `FOR` loop over an unsigned counter keeps a signed
+`STEP`.
+
+`PRINT`, `INPUT`, `READ`, `STR$` and the numeric intrinsics see a sized integer
+as the Microsoft type that holds its values: `INTEGER` for the bytes, `LONG`
+for `UNSIGNED INTEGER` and `DOUBLE` for `UNSIGNED LONG`.
+
+### Declarations
+
+`OPTION EXPLICIT` is always on: using a variable that no `DIM`, `REDIM`,
+`COMMON`, `STATIC`, `SHARED`, `CONST` or parameter declares is the error
+"Variable not defined". Reading a local variable on a path where nothing has
+assigned it is a warning. The program still compiles, and the variable reads
+as zero.
+
+### Procedure frames
+
+A procedure frames itself with `push bp`, `mov bp,sp` and `sub sp`, in place
+of `B$ENRA` and `B$EXSA`. Its HIR stores zero at entry to each local some path
+reads before assigning: every aggregate, and each number the use-before-def
+analysis cannot prove written first. The frame is otherwise not cleared. The
+backend lays those locals out as one block just below BP, and a block of 16
+bytes or more is cleared with one `rep stosd` rather than a store per word. It
+keeps the runtime's frame when the runtime needs one: when it has an error
+handler or RESUME target, which the runtime reaches through its frame chain,
+or a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An
+inline frame has no runtime stack check, and `B$EXSA` no longer polls events
+when such a procedure returns.
+
+### Private procedures
+
+`PRIVATE SUB` and `PRIVATE FUNCTION` define a procedure only its own module can
+call: it has no public symbol, so a call from another module fails at LINK. One
+that frames itself is near: its callers use `call` and it returns with `ret`,
+its parameters starting at `[bp+4]`. One on the runtime's frame stays far. The
+f-string prelude is private, so modules that each use f-strings link together.
+
+### F-strings
+
+`f"…"` (or `F"…"`) is a string expression. `{expression}` inserts a value,
+`{expression:spec}` formats it with Python's format-spec mini-language, and
+`{{` and `}}` are literal braces. A field cannot hold a string literal, since
+BASIC has no escape for the quote that would end the f-string. Under the
+Microsoft profiles, `f"x"` is still the name `f` followed by a string.
+
+A value prints as Python's `str()` would print it: a float as the shortest
+text that reads back as the same SINGLE or DOUBLE. The compiler checks each
+spec against its value's type and reports Python's errors. The formatting
+itself is BASIC, in `frontends/qb/src/semantic/prelude.bas`, which the
+compiler adds to programs that use f-strings. Its procedures reserve names
+beginning `QUICKR_`. Numbers are formatted from their exact decimal
+expansion, so `f`, `e`, `g` and `%` match Python digit for digit.

@@ -19,7 +19,7 @@ pub fn MANIFEST() -> PathBuf {
 }
 
 /// `DIALECTS`: the QB-family `hir.Dialect` values.
-pub const DIALECTS: [&str; 4] = ["qbasic11", "qb45", "pds71", "vbdos"];
+pub const DIALECTS: [&str; 5] = ["qbasic11", "qb45", "pds71", "vbdos", "quickr"];
 /// `RUNTIMES`: the QB-family `hir.RuntimeProfile` values.
 pub const RUNTIMES: [&str; 3] = ["qb45", "pds71", "vbdos"];
 /// `ARRAY_ORDERS`: every `hir.ArrayOrder` value.
@@ -177,6 +177,8 @@ fn _run(arguments: Vec<String>) -> Result<String, FrontendError> {
         };
         return Err(FrontendError(message));
     }
+    // Warnings: the program still compiled.
+    eprint!("{}", String::from_utf8_lossy(&result.stderr));
     Ok(String::from_utf8_lossy(&result.stdout).into_owned())
 }
 
