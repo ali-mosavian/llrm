@@ -53,7 +53,7 @@ impl Dialect {
         self == Self::Quickr
     }
 
-    /// `FOR EACH item IN iterable`.
+    /// `FOR item IN iterable`.
     pub fn for_each(self) -> bool {
         self == Self::Quickr
     }

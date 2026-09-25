@@ -210,9 +210,9 @@ The target's subscripts are evaluated once, so `a(f()) += 1` calls `f` once.
 next iteration: a `FOR` steps its counter first, and a `DO … LOOP WHILE` runs
 its test. Both names are reserved.
 
-### FOR EACH
+### FOR … IN
 
-`FOR EACH x IN iterable … NEXT` runs its body once per element, with `x`
+`FOR x IN iterable … NEXT` runs its body once per element, with `x`
 holding a copy: assigning `x` changes neither the iterable nor the iteration.
 `AS type` declares `x`, and several loops may declare it with the same type.
 Without it, an undeclared `x` takes the type of the elements: an array's
@@ -272,6 +272,6 @@ bounds and copies each element. A FUNCTION `AS t()` returns an array: it
 compiles as a SUB with a hidden BYREF array parameter. `a() = f(…)` erases
 `a` and passes it as that parameter, so the result is built in place with no
 copy; when the arguments name `a`, the result goes to a temporary first.
-`RETURN r()` copies `r` into the result. `FOR EACH x IN f(…)` iterates a
+`RETURN r()` copies `r` into the result. `FOR x IN f(…)` iterates a
 returned array. Only one-dimensional arrays are copied, and the target of an
 array assignment must be dynamic: `DIM a() AS LONG`.

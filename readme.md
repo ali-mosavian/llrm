@@ -22,11 +22,11 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 
 QuickrBASIC (`--dialect quickr`) is VBDOS BASIC extended, linked against the VBDOS
 runtime. It adds sized and unsigned integers, mandatory declarations, f-strings,
-PRIVATE procedures, `+=`, BREAK/CONTINUE, FOR EACH, `a IF c ELSE b`, IN, chained
+PRIVATE procedures, `+=`, BREAK/CONTINUE, `FOR x IN`, `a IF c ELSE b`, IN, chained
 comparisons, `RETURN value`, tuples, and record and array results. See
 [the dialects](docs/frontends/qb/dialects.md).
 
-`FOR EACH x [AS type] IN …` walks a one-dimensional array (`a()`), `RANGE(stop)` or
+`FOR x [AS type] IN …` walks a one-dimensional array (`a()`), `RANGE(stop)` or
 `RANGE(start, stop[, step])`, the characters of a string, or the array a FUNCTION
 `AS t()` returns. `x` is a copy of each element, and BREAK, CONTINUE and EXIT FOR
 work as in any loop.
@@ -34,7 +34,7 @@ work as in any loop.
 ```basic
 DIM q AS INTEGER, r AS INTEGER, parity AS STRING
 q, r = divmod(17, 5)
-FOR EACH i AS INTEGER IN RANGE(q)
+FOR i IN RANGE(q)
     parity = "even" IF i MOD 2 = 0 ELSE "odd"
     PRINT f"{i}: {parity}"
 NEXT

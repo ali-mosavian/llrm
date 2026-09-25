@@ -661,17 +661,17 @@ fn quickr_reserves_break_and_continue() {
 #[test]
 fn for_each_counts_through_range() {
     // Assigning the variable must not steer the loop: it is a copy.
-    let source = "FOR EACH i AS INTEGER IN RANGE(3)\nPRINT i;\ni = 10\nNEXT\nPRINT\n\
-        FOR EACH i AS INTEGER IN RANGE(10, 0, -3)\nPRINT i;\nNEXT\nPRINT\n\
-        FOR EACH i IN RANGE(2, 4)\nPRINT i;\nNEXT\nPRINT i\n\
-        FOR EACH i IN RANGE(0)\nPRINT \"never\"\nNEXT\n";
+    let source = "FOR i AS INTEGER IN RANGE(3)\nPRINT i;\ni = 10\nNEXT\nPRINT\n\
+        FOR i AS INTEGER IN RANGE(10, 0, -3)\nPRINT i;\nNEXT\nPRINT\n\
+        FOR i IN RANGE(2, 4)\nPRINT i;\nNEXT\nPRINT i\n\
+        FOR i IN RANGE(0)\nPRINT \"never\"\nNEXT\n";
     assert_eq!(printed(source), " 0  1  2 \n 10  7  4  1 \n 2  3  3 \n");
 }
 
 #[test]
 fn for_each_evaluates_range_bounds_once() {
     let source = "DIM SHARED hits AS INTEGER\n\
-        FOR EACH i AS INTEGER IN RANGE(1, 6, by%)\nNEXT\nPRINT hits; i\n\
+        FOR i AS INTEGER IN RANGE(1, 6, by%)\nNEXT\nPRINT hits; i\n\
         FUNCTION by%\nhits += 1\nby% = 2\nEND FUNCTION\n";
     assert_eq!(printed(source), " 1  5 \n");
 }
@@ -680,24 +680,24 @@ fn for_each_evaluates_range_bounds_once() {
 fn for_each_copies_array_elements() {
     let source = "TYPE P\nx AS INTEGER\nEND TYPE\n\
         DIM a(2) AS INTEGER, ps(2) AS P\na(0) = 5: a(1) = 6: a(2) = 7\n\
-        FOR EACH v AS INTEGER IN a()\nv = v * 10\nPRINT v;\nNEXT\nPRINT a(0)\n\
-        ps(1).x = 4\nFOR EACH p AS P IN ps\nPRINT p.x;\nNEXT\nPRINT\n";
+        FOR v AS INTEGER IN a()\nv = v * 10\nPRINT v;\nNEXT\nPRINT a(0)\n\
+        ps(1).x = 4\nFOR p AS P IN ps\nPRINT p.x;\nNEXT\nPRINT\n";
     assert_eq!(printed(source), " 50  60  70  5 \n 0  4  0 \n");
 }
 
 #[test]
 fn for_each_walks_a_copy_of_a_string() {
     let source = "DIM s AS STRING, n AS INTEGER\ns = \"abc\"\n\
-        FOR EACH c AS STRING IN s + \"d\"\nIF c = \"b\" THEN CONTINUE\nPRINT c;\nNEXT\nPRINT\n\
-        FOR EACH c IN s\ns = \"\"\nn += 1\nNEXT\nPRINT n\n";
+        FOR c AS STRING IN s + \"d\"\nIF c = \"b\" THEN CONTINUE\nPRINT c;\nNEXT\nPRINT\n\
+        FOR c IN s\ns = \"\"\nn += 1\nNEXT\nPRINT n\n";
     assert_eq!(printed(source), "acd\n 3 \n");
 }
 
 #[test]
 fn for_each_errors() {
     for (source, message) in [
-        ("FOR EACH i AS INTEGER IN RANGE(2)\nNEXT\nFOR EACH i AS LONG IN RANGE(2)\nNEXT\n", "another type"),
-        ("FOR EACH d AS DOUBLE IN RANGE(2)\nNEXT\n", "integer variable"),
+        ("FOR i AS INTEGER IN RANGE(2)\nNEXT\nFOR i AS LONG IN RANGE(2)\nNEXT\n", "another type"),
+        ("FOR d AS DOUBLE IN RANGE(2)\nNEXT\n", "integer variable"),
     ] {
         let error = compiled(source).expect_err(source);
         assert!(error.contains(message), "{source}: {error}");
@@ -709,9 +709,9 @@ fn microsoft_profiles_keep_each_a_name() {
     let source = "FOR each = 1 TO 2\nPRINT each;\nNEXT\n";
     assert_eq!(super::test_runtime_model::printed_on(source, "vbdos", "vbdos"), " 1  2 ");
     let directory = tempfile::tempdir().expect("creates a directory");
-    let path = written(&directory, "vbdos.bas", b"DIM a(2)\nFOR EACH v IN a()\nNEXT\n");
+    let path = written(&directory, "vbdos.bas", b"DIM a(2)\nFOR v IN a()\nNEXT\n");
     let error = qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
-        .expect_err("VBDOS has no FOR EACH");
+        .expect_err("VBDOS has no FOR … IN");
     assert!(error.to_string().contains("quickr"), "{error}");
 }
 
@@ -783,7 +783,7 @@ fn return_gives_a_function_its_value() {
     let source = "PRINT fib&(10); greet$(\"ann\"); find%(49); find%(50); sign%(-4); pick%(0)\n\
         FUNCTION fib&(n AS INTEGER)\nIF n < 2 THEN RETURN n\nRETURN fib&(n - 1) + fib&(n - 2)\nEND FUNCTION\n\
         FUNCTION greet$(who AS STRING)\nRETURN \"hi \" + who\nEND FUNCTION\n\
-        FUNCTION find%(x AS INTEGER)\nFOR EACH i AS INTEGER IN RANGE(10)\nIF i * i = x THEN RETURN i\nNEXT\nRETURN -1\nEND FUNCTION\n\
+        FUNCTION find%(x AS INTEGER)\nFOR i AS INTEGER IN RANGE(10)\nIF i * i = x THEN RETURN i\nNEXT\nRETURN -1\nEND FUNCTION\n\
         FUNCTION sign%(n AS INTEGER)\nRETURN 1 IF n > 0 ELSE -1 IF n < 0 ELSE 0\nEND FUNCTION\n\
         FUNCTION pick%(n AS INTEGER)\nIF n THEN RETURN 1 ELSE RETURN 2\nEND FUNCTION\n";
     assert_eq!(printed(source), " 55 hi ann 7 -1 -1  2 \n");
@@ -849,7 +849,7 @@ fn functions_return_records() {
         DIM p AS Point, q AS Point\n\
         p = make(3, 4)\nPRINT p.x; p.y; make(5, 6).y; norm1&(make(-2, 7))\n\
         q = moved(p)\nPRINT q.x; q.y; p.x\n\
-        FOR EACH i AS INTEGER IN RANGE(2)\nq = maybe(i)\nPRINT q.x;\nNEXT\nPRINT\n\
+        FOR i AS INTEGER IN RANGE(2)\nq = maybe(i)\nPRINT q.x;\nNEXT\nPRINT\n\
         FUNCTION make (a AS INTEGER, b AS INTEGER) AS Point\nDIM r AS Point\nr.x = a: r.y = b\nRETURN r\nEND FUNCTION\n\
         FUNCTION moved (s AS Point) AS Point\nmoved = s\nmoved.x = s.x + 100\nEND FUNCTION\n\
         FUNCTION maybe (k AS INTEGER) AS Point\nIF k = 0 THEN maybe.x = 9\nEND FUNCTION\n\
@@ -864,11 +864,11 @@ fn functions_return_arrays() {
         b() = a()\nb(3) = 0\nPRINT a(3); b(3); UBOUND(b)\n\
         a() = doubled(a())\nPRINT a(2); UBOUND(a)\n\
         w() = words\nPRINT w(0); w(1)\n\
-        FOR EACH v AS LONG IN squares(3)\nPRINT v;\nNEXT\nPRINT\n\
+        FOR v AS LONG IN squares(3)\nPRINT v;\nNEXT\nPRINT\n\
         FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
-        FOR EACH i AS INTEGER IN RANGE(n + 1)\nr(i) = i * i\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FOR i AS INTEGER IN RANGE(n + 1)\nr(i) = i * i\nNEXT\nRETURN r()\nEND FUNCTION\n\
         FUNCTION doubled (x() AS LONG) AS LONG()\nDIM r() AS LONG\nr() = x()\n\
-        FOR EACH i AS INTEGER IN RANGE(UBOUND(r) + 1)\nr(i) = r(i) * 2\nNEXT\nRETURN r()\nEND FUNCTION\n\
+        FOR i AS INTEGER IN RANGE(UBOUND(r) + 1)\nr(i) = r(i) * 2\nNEXT\nRETURN r()\nEND FUNCTION\n\
         FUNCTION words AS STRING()\nDIM r() AS STRING\nREDIM r(1) AS STRING\nr(0) = \"hi\": r(1) = \"yo\"\nRETURN r()\nEND FUNCTION\n";
     assert_eq!(printed(source), " 4  9 \n 9  0  4 \n 8  4 \nhiyo\n 0  1  4  9 \n");
 }
@@ -890,12 +890,12 @@ fn for_each_infers_its_variable_type() {
     // LONG elements and bounds must not be squeezed into an INTEGER.
     let source = "TYPE P\nx AS INTEGER\nEND TYPE\n\
         DIM a(1) AS LONG, pts(1) AS P, big AS LONG\na(0) = 100000: pts(1).x = 7: big = 70000\n\
-        FOR EACH v IN a()\nPRINT v;\nNEXT\nPRINT\n\
-        FOR EACH p IN pts()\nPRINT p.x;\nNEXT\nPRINT\n\
-        FOR EACH c IN \"ab\"\nPRINT c + \"!\";\nNEXT\nPRINT\n\
-        FOR EACH i IN RANGE(big - 2, big)\nPRINT i;\nNEXT\nPRINT\n\
-        FOR EACH j IN RANGE(2)\nPRINT j;\nNEXT\nFOR EACH j IN RANGE(1)\nPRINT j;\nNEXT\nPRINT j\n\
-        FOR EACH s IN squares(2)\nPRINT s;\nNEXT\nPRINT\n\
+        FOR v IN a()\nPRINT v;\nNEXT\nPRINT\n\
+        FOR p IN pts()\nPRINT p.x;\nNEXT\nPRINT\n\
+        FOR c IN \"ab\"\nPRINT c + \"!\";\nNEXT\nPRINT\n\
+        FOR i IN RANGE(big - 2, big)\nPRINT i;\nNEXT\nPRINT\n\
+        FOR j IN RANGE(2)\nPRINT j;\nNEXT\nFOR j IN RANGE(1)\nPRINT j;\nNEXT\nPRINT j\n\
+        FOR s IN squares(2)\nPRINT s;\nNEXT\nPRINT\n\
         FUNCTION squares (n AS INTEGER) AS LONG()\nDIM r() AS LONG\nREDIM r(n) AS LONG\n\
         r(n) = 99999\nRETURN r()\nEND FUNCTION\n";
     assert_eq!(
@@ -906,6 +906,6 @@ fn for_each_infers_its_variable_type() {
 
 #[test]
 fn for_each_inference_needs_something_to_iterate() {
-    let error = compiled("FOR EACH x IN 5\nNEXT\n").expect_err("5 is not iterable");
+    let error = compiled("FOR x IN 5\nNEXT\n").expect_err("5 is not iterable");
     assert!(error.contains("nothing here to iterate"), "{error}");
 }

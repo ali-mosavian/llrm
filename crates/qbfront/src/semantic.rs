@@ -260,8 +260,8 @@ struct Compiler {
     /// CONTINUE target is made when first needed, so a loop without one
     /// steps its counter at the end of the body as before.
     loops: Vec<(u32, Option<u32>)>,
-    /// Variables a FOR EACH `AS` declared in this scope, which a later
-    /// FOR EACH may declare again with the same type.
+    /// Variables a `FOR x AS t IN` declared in this scope, which a later
+    /// one may declare again with the same type.
     each_declared: BTreeSet<String>,
     /// Each FUNCTION `AS (…)` or `AS record`, now a SUB, by name: its
     /// result type.
@@ -1936,7 +1936,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// `FOR EACH x IN iterable` with `x` undeclared declares it with the
+    /// `FOR x IN iterable` with `x` undeclared declares it with the
     /// type of the iterable's elements.
     fn declare_each_item(
         &mut self,
@@ -1968,7 +1968,7 @@ impl Compiler {
         } else if self.string_syntax(iterable) {
             (Some(TypeName::String), None)
         } else {
-            return self.fail(format!("FOR EACH {name}: nothing here to iterate"));
+            return self.fail(format!("FOR {name} IN: nothing here to iterate"));
         };
         self.each_declared.insert(self.variable_key(name));
         self.declare_as(
@@ -2821,10 +2821,10 @@ impl Compiler {
                     ..
                 } if name == EACH => {
                     if !self.dialect.for_each() {
-                        return self.fail("FOR EACH needs the quickr profile");
+                        return self.fail("FOR … IN needs the quickr profile");
                     }
                     let [iterable] = arguments.as_slice() else {
-                        return self.fail("FOR EACH takes one iterable");
+                        return self.fail("FOR … IN takes one iterable");
                     };
                     self.for_each(counter, iterable, body)?
                 }
@@ -4117,7 +4117,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// `FOR EACH item IN iterable` as a FOR over a hidden index, which copies
+    /// `FOR item IN iterable` as a FOR over a hidden index, which copies
     /// each element into `item` before the body: assigning `item` changes
     /// neither the iterable nor the iteration.
     fn for_each(
@@ -4127,7 +4127,7 @@ impl Compiler {
         body: &[Statement],
     ) -> Result<(), SemanticError> {
         let Expr::Name(item_name, span) = item else {
-            return self.fail("FOR EACH needs a variable");
+            return self.fail("FOR … IN needs a variable");
         };
         let span = *span;
         let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
@@ -4158,7 +4158,7 @@ impl Compiler {
         } else if let Some(arguments) = self.range_arguments(iterable) {
             let item_type = self.variable(item_name)?.type_id;
             if !integral(item_type) || item_type == BOOLEAN {
-                return self.fail("FOR EACH over RANGE needs an integer variable");
+                return self.fail("FOR … IN RANGE needs an integer variable");
             }
             // Each bound is evaluated once, in order; STEP is read twice.
             let mut held = Vec::new();
