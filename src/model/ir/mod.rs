@@ -110,6 +110,10 @@ pub struct Mem {
     pub index: Option<Held>,
     pub scale: i64,
     pub index_through: iced_x86::Register,
+    /// Lowering proved (`ranges::exact_offsets`) that this address names the
+    /// same byte summed through 32-bit registers: its start is the object's,
+    /// and every partial sum of its offset is a non-negative 16-bit integer.
+    pub exact: bool,
 }
 
 impl Mem {
@@ -126,6 +130,7 @@ impl Mem {
             index: None,
             scale: 1,
             index_through: iced_x86::Register::None,
+            exact: false,
         }
     }
 }

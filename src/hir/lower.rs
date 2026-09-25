@@ -113,11 +113,30 @@ fn _pieces(function: &model::Function) -> _Pieces {
         .collect()
 }
 
+/// What lowering knows of a module's data symbols: which have their address
+/// held elsewhere, and how many bytes each holds.
+pub(crate) struct _Symbols {
+    escaped: BTreeSet<i64>,
+    sizes: IndexMap<i64, i64>,
+}
+
+impl _Symbols {
+    fn new(module: &model::Module) -> Self {
+        let sizes = module
+            .data
+            .iter()
+            .filter(|one| one.linkage != model::DataLinkage::External)
+            .map(|one| (one.id, one.bytes.len() as i64))
+            .collect();
+        Self { escaped: escape::escaped(module), sizes }
+    }
+}
+
 /// `width` bytes from `place`'s start, in the objects holding them.
 fn _provenance(
     place: &model::Place,
     width: i64,
-    escaped: &BTreeSet<i64>,
+    symbols: &_Symbols,
     pieces: &_Pieces,
 ) -> Result<Provenance, InvalidHIR> {
     if _space(place) == Space::Frame {
@@ -139,33 +158,39 @@ fn _provenance(
         }
         return Ok(Provenance { slices, restrict: BTreeSet::new() });
     }
-    _one(_global(place, escaped), 0, width)
+    _one(_global(place, symbols), place.offset, place.offset + width)
 }
 
-fn _global(place: &model::Place, escaped: &BTreeSet<i64>) -> MemoryObject {
-    let identity = Identity::Tuple(vec![Identity::Storage(place.storage), Identity::Int(place.id)]);
+/// The symbol `place` names part of: one object in every function, whose
+/// offsets are the symbol's.
+fn _global(place: &model::Place, symbols: &_Symbols) -> MemoryObject {
+    let identity = Identity::Int(place.symbol);
     let private = matches!(place.storage, model::Storage::Static | model::Storage::Module | model::Storage::External)
-        && !escaped.contains(&place.symbol);
+        && !symbols.escaped.contains(&place.symbol);
     MemoryObject {
         identity: Some(identity),
-        extent: place.extent,
+        extent: symbols.sizes.get(&place.symbol).copied(),
         addressed: !private,
         captured: !private,
         ..MemoryObject::new(MemoryKind::Global)
     }
 }
 
-/// The objects code outside `module` reaches by name only: no pointer holds
-/// them, yet any callee this module cannot see may read or write them.
-pub fn named_externals(module: &model::Module) -> BTreeSet<MemoryObject> {
-    let escaped = escape::escaped(module);
+/// The objects code outside `module` reaches by name only, with that name:
+/// no pointer holds them, yet any callee this module cannot see may read or
+/// write them.
+pub fn named_externals(module: &model::Module) -> Vec<(String, MemoryObject)> {
+    let symbols = _Symbols::new(module);
+    let name = |symbol: i64| module.data.iter().find(|one| one.id == symbol).map(|one| one.name.clone());
     module
         .functions
         .iter()
         .flat_map(|function| &function.places)
         .filter(|place| place.storage == model::Storage::External)
-        .map(|place| _global(place, &escaped))
-        .filter(|object_| !object_.addressed)
+        .filter_map(|place| Some((name(place.symbol)?, _global(place, &symbols))))
+        .filter(|(_, object_)| !object_.addressed)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -200,12 +225,12 @@ fn _addr(space: Space, disp: i64, index: i64) -> Addr {
 fn _ref(
     place: &model::Place,
     type_: &model::Type,
-    escaped: &BTreeSet<i64>,
+    symbols: &_Symbols,
     pieces: &_Pieces,
 ) -> Result<MemRef, InvalidHIR> {
     let space = _space(place);
     let index = if space == Space::Frame { 0 } else { place.symbol };
-    let provenance = _provenance(place, type_.width, escaped, pieces)?;
+    let provenance = _provenance(place, type_.width, symbols, pieces)?;
     Ok(MemRef {
         space: Some(space),
         provenance: Some(provenance),
@@ -234,7 +259,7 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
             .filter(|one| one.linkage == model::DataLinkage::External)
             .map(|one| (one.id, one.name.clone()))
             .collect();
-        let escaped = escape::escaped(module);
+        let symbols = _Symbols::new(module);
         for function in &module.functions {
             out.push(_function(
                 &module.name,
@@ -242,7 +267,7 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
                 &types,
                 &externals,
                 program.array_order,
-                &escaped,
+                &symbols,
             )?);
         }
     }
@@ -433,7 +458,7 @@ struct _Scope<'a> {
     function: &'a model::Function,
     types: &'a IndexMap<i64, &'a model::Type>,
     array_order: model::ArrayOrder,
-    escaped: &'a BTreeSet<i64>,
+    symbols: &'a _Symbols,
     values: IndexMap<i64, mir::Value>,
     value_types: IndexMap<i64, &'a model::Type>,
     integer_ranges: mir::OrderedMap<mir::Value, mir::IntegerRange>,
@@ -617,7 +642,7 @@ impl<'a> _Scope<'a> {
             ))),
             model::Operand::PlaceRef(model::PlaceRef { place }) => {
                 let type_ = self.types[&self.places[place].r#type];
-                Ok(Arg::Cell(Cell { r#ref: _ref(self.places[place], type_, self.escaped, &self.pieces)? }))
+                Ok(Arg::Cell(Cell { r#ref: _ref(self.places[place], type_, self.symbols, &self.pieces)? }))
             }
             model::Operand::ArrayElement(model::ArrayElement { place: place_id, indices }) => {
                 let place = self.places[place_id];
@@ -671,7 +696,7 @@ impl<'a> _Scope<'a> {
                 let provenance = _provenance(
                     place,
                     place.extent.filter(|one| *one != 0).unwrap_or(array.width),
-                    self.escaped,
+                    self.symbols,
                     &self.pieces,
                 )?;
                 let r#ref = MemRef {
@@ -699,7 +724,7 @@ impl<'a> _Scope<'a> {
                 let provenance = _provenance(
                     place,
                     place.extent.filter(|one| *one != 0).unwrap_or(root.width),
-                    self.escaped,
+                    self.symbols,
                     &self.pieces,
                 )?;
                 if indices.is_empty() {
@@ -781,7 +806,7 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds, origin }) => {
                 let type_ = self.types[type_id];
                 let pointer_type = self.value_types[base];
                 let parameter = self.parameter_numbers.get(base).copied();
@@ -800,6 +825,7 @@ impl<'a> _Scope<'a> {
                             provenance,
                             inbounds: *inbounds,
                             volatile: *volatile,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
                     }));
@@ -865,6 +891,7 @@ impl<'a> _Scope<'a> {
                             provenance,
                             inbounds: *inbounds,
                             volatile: *volatile,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -911,6 +938,7 @@ impl<'a> _Scope<'a> {
                             base_width: 2,
                             provenance,
                             inbounds: *inbounds,
+                            origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
                         },
                     }));
@@ -946,6 +974,7 @@ impl<'a> _Scope<'a> {
                         r#type: *type_id,
                         volatile: false,
                         inbounds: false,
+                        origin: None,
                     }),
                     before,
                 )
@@ -1687,7 +1716,7 @@ fn _function(
     types: &IndexMap<i64, &model::Type>,
     externals: &IndexMap<i64, String>,
     array_order: model::ArrayOrder,
-    escaped: &BTreeSet<i64>,
+    symbols: &_Symbols,
 ) -> Result<Lowered, InvalidHIR> {
     let values: IndexMap<i64, mir::Value> = function
         .values
@@ -1733,7 +1762,7 @@ fn _function(
         function,
         types,
         array_order,
-        escaped,
+        symbols,
         values,
         value_types,
         integer_ranges: mir::OrderedMap::new(),

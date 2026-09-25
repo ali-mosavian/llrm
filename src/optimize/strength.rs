@@ -149,6 +149,7 @@ pub(crate) fn reduced(
 
     let reads = _Reads::of(body);
     let partners = address_forms.iter().find(|form| !form.secondary).and_then(|form| form.partners);
+    let address_registers = address_forms.iter().find(|form| !form.secondary).and_then(AddressForm::address_registers);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
     for (loop_, _basics, derived) in &found {
         candidate_groups.insert(loop_.header, _candidates(&reads, derived, scales, partners));
@@ -219,6 +220,7 @@ pub(crate) fn reduced(
             &BTreeSet::new(),
             &BTreeSet::new(),
             costs,
+            None,
             None,
         );
         let mut widened = BTreeMap::<u32, Option<Vec<(OpOccurrence, Op)>>>::new();
@@ -301,6 +303,7 @@ pub(crate) fn reduced(
             &replacement_credits,
             costs,
             Some(&references),
+            address_registers,
         );
         let mut indexes = BTreeMap::<OpOccurrence, (i64, AddressForm)>::new();
         for one in &candidates {
@@ -1284,7 +1287,10 @@ fn _replacement_credits(
 /// Carry every address of a shared product, or carry the product and keep
 /// the cheap additions; never some of each. `free` leaves are indexed
 /// memory forms and consume no recurrence. `credited` formulas replace
-/// their source control recurrence and add no net pressure.
+/// their source control recurrence and add no net pressure. At most
+/// `address_registers` pointers take a released base's register; past them
+/// a base was reloaded per use, and its pointer is a spilled recurrence.
+#[allow(clippy::too_many_arguments)]
 fn _formula_set(
     body: &MirBody,
     candidates: &[Derived],
@@ -1293,6 +1299,7 @@ fn _formula_set(
     credited: &BTreeSet<OpOccurrence>,
     costs: &OperationCosts,
     references: Option<&BTreeMap<u32, i64>>,
+    address_registers: Option<i64>,
 ) -> Vec<Derived> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let held_result = |op: &Op| match op.results.first() {
@@ -1361,7 +1368,7 @@ fn _formula_set(
             .iter()
             .filter(|one| !free.contains(one) && !credited.contains(one))
             .count() as i64
-            - _released(body, candidates, selected, references)
+            - _released(body, candidates, selected, references).min(address_registers.unwrap_or(i64::MAX))
     };
     while slots(&selected) > room {
         let overflow = slots(&selected) - room;
@@ -1640,7 +1647,24 @@ fn _start(body: &MirBody, into: Value, one: &Derived, preheader: i64) -> Op {
 /// Initialize scale * start plus invariant offsets once, before the loop.
 ///
 /// Not `counted`, the offsets alone: the base an index is added to.
-fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: bool) -> Vec<Op> {
+pub(crate) fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: bool) -> Vec<Op> {
+    let mut number = 0;
+    let mut temporary = || {
+        number += 1;
+        Value { id: into.id + 1 + number, at: preheader, flags: false, variable: into.variable + number, version: 1 }
+    };
+    starts_through(body, into, one, preheader, counted, &mut temporary)
+}
+
+/// `_starts`, with each temporary it needs taken from `temporary`.
+pub(crate) fn starts_through(
+    body: &MirBody,
+    into: Value,
+    one: &Derived,
+    preheader: i64,
+    counted: bool,
+    temporary: &mut dyn FnMut() -> Value,
+) -> Vec<Op> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     let beside = op_at(one.op);
     let unit = matches!(&one.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
@@ -1661,25 +1685,17 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
         return vec![_start(body, into, one, preheader)];
     }
     let width = _width(beside);
-    let count = _start_temporary_count(one, counted);
-    let mut temporaries = (0..count).map(|number| Value {
-        id: into.id + 2 + number,
-        at: preheader,
-        flags: false,
-        variable: into.variable + 1 + number,
-        version: 1,
-    });
     let mut current = None;
     let mut operations = Vec::new();
     if counted {
-        let temporary = temporaries.next().expect("counted");
+        let temporary = temporary();
         operations.push(_start(body, temporary, one, preheader));
         current = Some(temporary);
     }
     for (index, (offset, coefficient)) in one.offsets.iter().enumerate() {
         let mut offset = offset.clone();
         if *coefficient != BigInt::from(1_u8) {
-            let product = temporaries.next().expect("counted");
+            let product = temporary();
             operations.push(_made(
                 Kind::Mul,
                 "imul",
@@ -1697,7 +1713,7 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
             });
         }
         let result = if one.pointer.is_some() || index != one.offsets.len() - 1 {
-            temporaries.next().expect("counted")
+            temporary()
         } else {
             into
         };
@@ -1751,7 +1767,7 @@ fn _starts(body: &MirBody, into: Value, one: &Derived, preheader: i64, counted: 
 ///
 /// A pointer result cannot reuse `into` for its final offset sum; each
 /// product and intermediate sum is counted directly.
-fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
+pub(crate) fn _start_temporary_count(one: &Derived, counted: bool) -> u32 {
     let unit = matches!(&one.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
     let direct_pointer = one.pointer.is_some() && unit && one.offsets.is_empty();
     if direct_pointer || one.pointer.is_none() && one.offsets.is_empty() {

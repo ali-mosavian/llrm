@@ -215,7 +215,7 @@ fn test_intervals_are_not_built_per_block_per_loop() {
     lines.push(format!("PRINT {}", (0..10).map(|k| format!("s{k} + x{k}")).collect::<Vec<_>>().join(" + ")));
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program =
-        qb_driver::parsed(&basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false).unwrap();
+        qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
     MAPPED.with(|mapped| mapped.set(0));
     SEEN.with(|seen| seen.set(0));
     qb_compile::object_bytes(&program, Path::new("LOOPS.BAS"), None, &O2()).unwrap();

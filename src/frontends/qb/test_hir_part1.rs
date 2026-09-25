@@ -39,12 +39,7 @@ fn lowered(program: &model::Program) -> Vec<hir::Lowered> {
 
 /// `namespace["dumped"](source, output, dialect=..., runtime=..., includes=())`.
 fn dumped(source: &std::path::Path, output: &std::path::Path, dialect: &str, runtime: &str) {
-    let frontend = qbstages::Frontend {
-        dialect: dialect.into(),
-        runtime: runtime.into(),
-        array_order: "column-major".into(),
-        ..Default::default()
-    };
+    let frontend = super::driver::Frontend::new(dialect, runtime);
     qbstages::dumped(source, output, &frontend, &O2()).expect("dumps");
 }
 
@@ -303,7 +298,7 @@ fn test_hir_lowering_honors_qb_multidimensional_array_order() {
 
     let mut factors: BTreeMap<&str, Vec<BigInt>> = BTreeMap::new();
     for order in ["column-major", "row-major"] {
-        let program = super::driver::parsed(&basic, "vbdos", "vbdos", None, &[], order, false, false, false, false, false)
+        let program = super::driver::parsed(&basic, &super::driver::Frontend { array_order: order.into(), ..super::driver::Frontend::new("vbdos", "vbdos") }, None)
             .expect("parses");
         let body = lowered(&program).remove(0).body;
         factors.insert(

@@ -1,5 +1,6 @@
 //! Ports of `qbopt/optimize`.
 
+pub(crate) mod affine;
 pub(crate) mod algebraic;
 pub(crate) mod canonical;
 pub(crate) mod counting;

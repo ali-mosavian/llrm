@@ -51,6 +51,11 @@ class Label:
 
 
 @dataclass(frozen=True, slots=True)
+class Object(Label):
+    """A label heading data a writer drops when nothing names it: up to the next Object."""
+
+
+@dataclass(frozen=True, slots=True)
 class Fill:
     size: int
     byte: int | None  # None: uninitialised

@@ -903,9 +903,20 @@ fn test_loaded_scaled_add_preserves_a_shifted_value_live_into_a_successor() {
 }
 
 #[test]
-fn test_scaled_address_requires_dead_flags_and_exact_allocated_operands() {
-    // HOTLPX's LEA must retain low-word arithmetic without losing flags or owned bytes.
-    for guard in ["none", "dword", "carry", "zero_shift", "wrong_source", "same", "stack", "relocation"] {
+fn test_affine_address_folds_the_longest_prefix_with_dead_flags() {
+    // HOTLPX's `mov bx,cx; shl bx,2; add bx,cx; shl bx,1` keeps its last shift:
+    // only a prefix whose flags nothing reads becomes one LEA; a zero-count
+    // shift keeps the flags; `mov`+`shl bx,2` alone would need a longer
+    // base-less form; ESP cannot be an index.
+    for (guard, expected, scale) in [
+        ("none", vec!["lea", "shl"], 4),
+        ("dword", vec!["lea", "shl"], 4),
+        ("carry", vec!["mov", "shl", "add", "adc"], 0),
+        ("zero_shift", vec!["mov", "shl", "add", "shl"], 0),
+        ("other_source", vec!["lea", "shl"], 4),
+        ("same", vec!["mov", "shl", "add", "shl"], 0),
+        ("stack", vec!["mov", "shl", "add", "shl"], 0),
+    ] {
         let width = if guard == "dword" { 4 } else { 2 };
         let dest = rl(if width == 4 { Register::EBX } else { Register::BX }, width);
         let mut source = rl(if width == 4 { Register::ECX } else { Register::CX }, width);
@@ -916,40 +927,108 @@ fn test_scaled_address_requires_dead_flags_and_exact_allocated_operands() {
             source = rl(Register::SP, width);
         }
         let make = |at: i64, kind: Operation, name: &str, sources: Vec<Loc>| {
-            insn(at, Some((at, at)), Some(sem(kind, name, vec![dest.clone()], sources)), vec![], vec![])
+            Arc::new(insn(at, Some((at, at)), Some(sem(kind, name, vec![dest.clone()], sources)), vec![], vec![]))
         };
-        let mut copy = make(0, Operation::Move, "mov", vec![source.clone()]);
-        let shift = make(1, Operation::Binary, "shl", vec![dest.clone(), im(2, 1)]);
-        let mut add = make(2, Operation::Binary, "add", vec![dest.clone(), source.clone()]);
-        let mut last = make(3, Operation::Binary, "shl", vec![dest.clone(), im(2, 1)]);
-        if guard == "carry" {
-            last.what.as_mut().unwrap().name = Some("adc".to_owned());
+        let mut added = source.clone();
+        if guard == "other_source" {
+            added = rl(Register::DX, 2);
         }
-        if guard == "zero_shift" {
-            last.what.as_mut().unwrap().sources = vec![dest.clone(), im(0, 1)];
-        }
-        if guard == "wrong_source" {
-            add.what.as_mut().unwrap().sources = vec![dest.clone(), rl(Register::DX, 2)];
-        }
-        if guard == "relocation" {
-            copy.symbol = Some(true);
-        }
-        let parts = [Arc::new(copy), Arc::new(shift), Arc::new(add), Arc::new(last)];
-        let result = _scaled_address(&parts, false, "386").unwrap();
-        if !["none", "dword"].contains(&guard) {
-            assert!(result.is_none(), "{guard}");
-            continue;
-        }
-        let result = result.unwrap();
-        assert_eq!(result.what.as_ref().unwrap().dests, [dest]);
-        let Loc::Address(address) = &result.what.as_ref().unwrap().sources[0] else { panic!("not an address") };
-        assert_eq!(address.scale, 4);
-        let mask = (1u64 << (8 * width)) - 1;
-        for bits in [0u64, 1, 0x1234_FFFF, 0x8000_8000, 0xFFFF_FFFF] {
-            let original = (((bits & mask) << 2) + (bits & mask)) & mask;
-            assert_eq!((bits + bits * 4) & mask, original);
+        let (last, count) = match guard {
+            "carry" => ("adc", 1),
+            "zero_shift" => ("shl", 0),
+            _ => ("shl", 1),
+        };
+        let insns = vec![
+            make(0, Operation::Move, "mov", vec![source.clone()]),
+            make(1, Operation::Binary, "shl", vec![dest.clone(), im(2, 1)]),
+            make(2, Operation::Binary, "add", vec![dest.clone(), added]),
+            make(3, Operation::Binary, last, vec![dest.clone(), im(count, 1)]),
+        ];
+        let input = body("affine", 0, vec![block(0, insns, vec![])]);
+
+        let result = addresses(&input, "386").unwrap();
+
+        assert_eq!(names(&result.blocks[0].insns), expected, "{guard}");
+        if let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() {
+            assert_eq!(address.scale, scale, "{guard}");
+            assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().dests, [dest], "{guard}");
         }
     }
+}
+
+#[test]
+fn test_affine_address_folds_a_copy_offset_and_shift() {
+    // deedlines' PLASMA kept `mov bx,dx; sub bx,-640; shl bx,1` per pixel once
+    // regthrash moved the copy ahead of the SUB: bx = dx*2 + 1280.
+    let (bx, dx) = (rl(Register::BX, 2), rl(Register::DX, 2));
+    let make = |at: i64, kind: Operation, name: &str, sources: Vec<Loc>| {
+        Arc::new(insn(at, Some((at, at)), Some(sem(kind, name, vec![bx.clone()], sources)), vec![], vec![]))
+    };
+    let insns = vec![
+        make(0, Operation::Move, "mov", vec![dx.clone()]),
+        make(1, Operation::Binary, "sub", vec![bx.clone(), im(-640, 2)]),
+        make(2, Operation::Binary, "shl", vec![bx.clone(), im(1, 1)]),
+        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![])),
+    ];
+    let input = body("plasma", 0, vec![block(0, insns, vec![])]);
+
+    let result = addresses(&input, "386").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["lea", "cmp"]);
+    let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() else {
+        panic!("not an address")
+    };
+    assert_eq!((address.through, address.index, address.scale, address.offset), (Register::EDX, Register::EDX, 1, 1280));
+}
+
+#[test]
+fn test_affine_address_ignores_an_identity_read_only_before_it() {
+    // Coalescing gave PLASMA's `sub` the identity dx held before it; counting
+    // that earlier read as a later one refused the fold.
+    let (bx, dx) = (rl(Register::BX, 2), rl(Register::DX, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![im(7, 2)])), vec![5], vec![])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Compare, "cmp", vec![], vec![dx.clone(), im(0, 2)])), vec![], vec![5])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![dx])), vec![8], vec![5])),
+        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Binary, "sub", vec![bx.clone()], vec![bx.clone(), im(-640, 2)])), vec![5], vec![5])),
+        Arc::new(insn(4, Some((4, 4)), Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])), vec![8], vec![8])),
+        Arc::new(insn(5, Some((5, 5)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])), vec![], vec![8])),
+    ];
+    let input = body("reach", 0, vec![block(0, insns, vec![])]);
+
+    let result = addresses(&input, "386").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["mov", "cmp", "lea", "cmp"]);
+}
+
+#[test]
+fn test_affine_address_sees_flags_dead_past_its_block() {
+    // Flags were taken as live at every block end, so a chain ending a block
+    // stayed `mov`+`shl` though its successor overwrote them.
+    let (bx, dx) = (rl(Register::BX, 2), rl(Register::DX, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![bx.clone()], vec![dx])), vec![], vec![])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "shl", vec![bx.clone()], vec![bx.clone(), im(1, 1)])), vec![], vec![])),
+    ];
+    let next = vec![Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])), vec![], vec![]))];
+    let input = body("edge", 0, vec![block(0, insns, vec![1]), block(1, next, vec![])]);
+
+    let result = addresses(&input, "386").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["lea"]);
+}
+
+#[test]
+fn test_lea_of_a_frame_cell_is_decoded() {
+    // `lea ax,[bp-18]` read as touching every lane kept all upper halves live
+    // across the B$ERAS calls after a loop.
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-18), 2) });
+    let lea = insn(0, Some((0, 0)), Some(sem(Operation::Address, "lea", vec![rl(Register::AX, 2)], vec![cell])), vec![], vec![]);
+
+    let (reads, writes) = _register_effects(&lea, false, true).expect("decoded");
+
+    assert!(reads.is_subset(&_lanes(Register::EBP)));
+    assert!(_lanes(Register::AX).is_subset(&writes) && writes.and(&_lanes(Register::EBX)).is_empty());
 }
 
 #[test]

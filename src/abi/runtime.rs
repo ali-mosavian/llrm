@@ -1584,6 +1584,22 @@ pub fn named_only(name: &str, family: &str) -> bool {
     WRITERS.keys().any(|&(cell, of)| cell == name && of == family)
 }
 
+/// The named-only cells runtime routine `routine` writes: those whose
+/// `WRITERS` list it. None when it may run the program's own code, which
+/// writes anything.
+pub fn named_writes(routine: &str, family: &str) -> Option<Vec<&'static str>> {
+    if ENTERS_USER_CODE.contains(routine) {
+        return None;
+    }
+    Some(
+        WRITERS
+            .iter()
+            .filter(|((_, of), writers)| *of == family && writers.contains(routine))
+            .map(|((cell, _), _)| *cell)
+            .collect(),
+    )
+}
+
 /// The per-site map for a whole module, from the object itself.
 ///
 /// One place, because the raise and the lowering must be handed the same

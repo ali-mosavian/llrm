@@ -53,7 +53,7 @@ fn elements_program(directory: &tempfile::TempDir, elements: usize) -> PathBuf {
 }
 
 fn compiled(basic: &Path) -> Vec<u8> {
-    let program = qb_driver::parsed(basic, "qb45", "qb45", None, &[], "column-major", false, false, false, false, false)
+    let program = qb_driver::parsed(basic, &qb_driver::Frontend::new("qb45", "qb45"), None)
         .unwrap_or_else(|error| panic!("{}: {error}", basic.display()));
     qb_compile::object_bytes(&program, Path::new(basic.file_name().expect("a file")), None, &O2()).expect("compiles")
 }

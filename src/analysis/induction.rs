@@ -2215,4 +2215,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "counted_loops_tests.rs"]
-mod counted_loops_tests;
+pub(crate) mod counted_loops_tests;

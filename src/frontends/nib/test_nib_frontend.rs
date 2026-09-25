@@ -1037,7 +1037,7 @@ fn test_a_new_counter_steps_where_no_condition_is_live() {
     let body = &assembly[assembly.find("_total proc").unwrap()..assembly.find("_total endp").unwrap()];
 
     assert!(
-        Regex::new(r"add (?:si|di|bx), 10\n    add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne").unwrap().is_match(body)
+        Regex::new(r"add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne").unwrap().is_match(body)
     );
 }
 

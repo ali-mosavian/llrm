@@ -1,6 +1,7 @@
 //! Ports of `qbopt/backend`.
 
 pub mod addressforms;
+pub mod affine;
 pub mod addressvalues;
 pub mod allocate;
 pub mod arithmetic;
@@ -11,6 +12,7 @@ pub mod constrain;
 pub mod copyprop;
 pub mod copysink;
 pub mod cpu;
+pub mod datagroup;
 pub mod division;
 pub mod farcall;
 pub mod farload;
@@ -40,6 +42,7 @@ pub mod pointers;
 pub mod prologue;
 pub mod regthrash;
 pub mod rmw;
+pub mod exactaddress;
 pub mod executed;
 pub mod schedule;
 pub mod select;
@@ -50,4 +53,5 @@ pub mod storecombine;
 pub mod target;
 pub mod timing;
 pub mod twoaddr;
+pub mod upperzero;
 pub mod verify;

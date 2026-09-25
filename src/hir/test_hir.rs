@@ -50,7 +50,7 @@ fn vbdos(modules: Vec<Module>) -> Program {
 }
 
 fn indirect(base: i64, offset: i64, r#type: i64) -> model::Operand {
-    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, inbounds: false })
+    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, inbounds: false, origin: None })
 }
 
 fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
@@ -437,7 +437,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
     };
     let source = vbdos(vec![module.clone()]);
 
-    let bodies = callmemory::annotated(&module, &module.functions, &lower(&source).unwrap(), None).unwrap();
+    let bodies = callmemory::annotated(&module, &module.functions, &lower(&source).unwrap(), None, None).unwrap();
     let call = ops(&bodies[0].body).into_iter().find(|one| one.kind == mir::Kind::Call).unwrap();
 
     assert!(call.memory_complete);

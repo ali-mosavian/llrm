@@ -15,6 +15,7 @@ fn main() -> ExitCode {
     let mut unchecked_bounds = false;
     let mut mbf = false;
     let mut alternate_math = false;
+    let mut whole_program = false;
     let mut syntax = false;
     let mut include_dirs = Vec::new();
     let mut dump_source = None;
@@ -52,6 +53,8 @@ fn main() -> ExitCode {
             mbf = true;
         } else if argument == "--alternate-math" {
             alternate_math = true;
+        } else if argument == "--whole-program" {
+            whole_program = true;
         } else if argument == "--array-order" {
             let Some(value) = arguments.next() else {
                 eprintln!("qbfront: --array-order requires column-major or row-major");
@@ -84,7 +87,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--whole-program] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -115,18 +118,16 @@ fn main() -> ExitCode {
                     .file_stem()
                     .and_then(|one| one.to_str())
                     .unwrap_or("module");
-                match qbfront::semantic::compile_with_options(
-                    &module,
-                    name,
-                    dialect,
-                    &runtime,
+                let options = qbfront::semantic::Options {
                     row_major,
                     huge_arrays,
                     checked_arrays,
                     unchecked_bounds,
                     mbf,
                     alternate_math,
-                ) {
+                    whole_program,
+                };
+                match qbfront::semantic::compile_with_options(&module, name, dialect, &runtime, &options) {
                     Ok(hir) => {
                         print!("{hir}");
                         ExitCode::SUCCESS

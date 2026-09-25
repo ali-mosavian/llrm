@@ -274,7 +274,7 @@ fn test_fresh_basic_object_does_not_predeclare_the_c_data_class() {
 fn test_pds_alternate_math_module_header_records_the_measured_switch() {
     let path = root().join("frontends/qb/compat/pds71/pdfpa.bas");
     let source =
-        qb_driver::parsed(&path, "pds71", "pds71", None, &[], "column-major", false, false, false, false, true)
+        qb_driver::parsed(&path, &qb_driver::Frontend { alternate_math: true, ..qb_driver::Frontend::new("pds71", "pds71") }, None)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let records = records(&source, "PDFPA.BAS");
     let code = code(&records);
@@ -587,6 +587,25 @@ fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
     assert_eq!(
         relocations(descriptor),
         [(0, values.symbol, values.offset, "far"), (10, values.symbol, values.offset - 6, "near")]
+    );
+}
+
+/// The static descriptor kept its records last dimension first under /R, and
+/// biased +0Ah for them, but BC /R reverses the dimensions: record 0 holds the
+/// first, 02 00 01 00, as its B$DDIM does.
+#[test]
+fn test_row_major_rank_two_descriptor_matches_bc_r() {
+    let path = root().join("frontends/qb/compat/qb45/q45a05.bas");
+    let source = qb_driver::parsed(&path, &qb_driver::Frontend { array_order: "row-major".into(), ..qb_driver::Frontend::new("qb45", "qb45") }, None)
+        .expect("parses");
+    let module = &source.modules[0];
+    let values = place(&module.functions[0], "VALUES");
+    let descriptor = module.data.iter().find(|one| one.name == "VALUES$descriptor").expect("descriptor");
+
+    assert_eq!(data_bytes(descriptor, 8, 22), hex("02 40 00 00 02 00 02 00 01 00 03 00 01 00"));
+    assert_eq!(
+        relocations(descriptor),
+        [(0, values.symbol, values.offset, "far"), (10, values.symbol, values.offset - 8, "near")]
     );
 }
 
@@ -916,4 +935,26 @@ fn test_for_bounds_survive_resume_statement_side_entries() {
     let source = parsed_as(&basic, "vbdos", "vbdos");
     assert!(lowered(&source).iter().all(|function| mir::verify(&function.body).is_empty()));
     assert!(!object_bytes(&source, "FORRES.BAS").expect("emits").is_empty());
+}
+
+/// A zero-based dynamic array's element names the descriptor offset its
+/// frontend proved is the array's first byte; the fact reaches MIR.
+#[test]
+fn test_a_zero_based_element_reaches_mir_with_its_origin() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = written(&directory, "T.BAS", b"DEFINT A-Z\r\nSUB t\r\nDIM a(9)\r\nx = a(3)\r\nEND SUB\r\n");
+    let program = parsed(&source);
+    let lowered = lowered(&program);
+    let body = lowered
+        .iter()
+        .find(|one| one.name.rsplit('.').next().is_some_and(|name| name.eq_ignore_ascii_case("T")))
+        .expect("T is lowered");
+    let origins: Vec<mir::Value> = ops(body)
+        .iter()
+        .flat_map(|op| op.loads.iter().chain(&op.stores))
+        .filter_map(|reference| reference.origin)
+        .collect();
+    assert_eq!(origins.len(), 1, "{origins:?}");
+    let defined = ops(body).iter().any(|op| op.defines.contains(&origins[0]));
+    assert!(defined, "the origin names a value the body defines");
 }

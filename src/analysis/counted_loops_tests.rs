@@ -33,17 +33,17 @@ fn constant(n: i64, width: u32) -> Arg {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Shape {
+pub(crate) struct Shape {
     posttested: bool,
     stepped: bool,
     mirrored: bool,
     width: u32,
     zero_test: bool,
     unobserved: bool,
-    split: bool,
+    pub(crate) split: bool,
 }
 
-fn shaped(shape: &str) -> Shape {
+pub(crate) fn shaped(shape: &str) -> Shape {
     Shape { posttested: shape != "pre", stepped: shape == "post-stepped", width: 1, ..Shape::default() }
 }
 
@@ -52,7 +52,7 @@ fn shaped(shape: &str) -> Shape {
 /// `_loop` in the Python: a `start` of None is `GIVEN`, live in; an
 /// unobserved `i` is read only by its test and step; `split` puts a
 /// post-tested loop's test in a latch block of its own.
-fn _loop(start: Option<i64>, bound: i64, test: Kind, step: i64, shape: Shape) -> MirBody {
+pub(crate) fn _loop(start: Option<i64>, bound: i64, test: Kind, step: i64, shape: Shape) -> MirBody {
     let width = shape.width;
     let mut serial = 0;
     let mut value = |at: i64, flags: bool| {

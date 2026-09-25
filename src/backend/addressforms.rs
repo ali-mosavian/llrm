@@ -181,9 +181,10 @@ pub fn indexed(
     exposed: &BTreeSet<u32>,
     address_forms: &[AddressForm],
     costs: Option<&OperationCosts>,
-) -> Result<(IndexMap<u32, FoldedForm>, BTreeSet<u32>, BTreeSet<u32>), String> {
+) -> Result<(IndexMap<u32, FoldedForm>, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>), String> {
     let default = OperationCosts::default();
     let costs = costs.unwrap_or(&default);
+    let exact = ranges::exact_offsets(body)?;
     let made: IndexMap<u32, &Op> = body
         .blocks
         .iter()
@@ -560,7 +561,7 @@ pub fn indexed(
                 }
             }
         }
-        let scoped = ranges::dominated_edges(body)?;
+        let scoped = ranges::scoped(body)?;
         for product in made.values() {
             if !plain(product, product.kind) || !matches!(product.kind, Kind::Mul | Kind::Shl) {
                 continue;
@@ -675,9 +676,10 @@ pub fn indexed(
                             // pointer that designates its object.  Any execution
                             // whose scaled offset exceeds the 16-bit segment is
                             // already undefined, so the wider address need agree
-                            // only on the defined range.  Untyped/BASIC accesses
-                            // retain their explicit 16-bit wrapping semantics.
-                            || &fact.high * scale > BigInt::from(0xFFFF) && !typed_access
+                            // only on the defined range.  Any other access
+                            // wraps at 16 bits, so its wider sum must be exact.
+                            || !typed_access
+                                && !exact.contains(&address.value.id)
                     }) {
                         safe = false;
                         break;
@@ -696,7 +698,13 @@ pub fn indexed(
                 }
                 candidates.push((addition, base_args[0], address));
             }
-            if !safe {
+            // `promote` widens a value by rewriting its definition, which it
+            // can do for a load or a copy only: a phi or an arithmetic result
+            // keeps its word form.
+            let promotable = |value: &mir::Value| {
+                made.get(&value.id).is_some_and(|op| matches!(op.kind, Kind::Load | Kind::Copy))
+            };
+            if !safe || !promotable(&source.value) || !candidates.iter().all(|(_, base, _)| promotable(&base.value)) {
                 continue;
             }
             // The word definitions themselves are promoted below after far
@@ -784,7 +792,7 @@ pub fn indexed(
             break;
         }
     }
-    Ok((forms, folded, promoted))
+    Ok((forms, folded, promoted, exact))
 }
 
 /// Make selected word definitions usable as dword address components.
@@ -920,17 +928,16 @@ pub fn promote(
     Ok(out)
 }
 
-/// `what` with every folded far address written as its cell's base and index.
-pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>) -> Option<Semantics> {
+/// `what` with every folded far address written as its cell's base and index,
+/// and each cell whose address `exact` names marked exact.
+pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact: &BTreeSet<u32>) -> Option<Semantics> {
     let what = what?;
-    if forms.is_empty() {
-        return Some(what.clone());
-    }
-
     let operand = |arg: &Loc| -> Loc {
         let Loc::Mem(cell) = arg else {
             return arg.clone();
         };
+        let cell = &ir::Mem { exact: cell.base.is_some_and(|base| exact.contains(&base.value)), ..cell.clone() };
+        let arg = &Loc::Mem(cell.clone());
         let Some(form) = cell.base.and_then(|base| forms.get(&base.value)) else {
             return arg.clone();
         };
@@ -1122,7 +1129,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 2, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (_forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let (_forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert_eq!(folded, set(&[address.id]));
     }
@@ -1138,7 +1145,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 4, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[address.id]));
@@ -1158,7 +1165,7 @@ mod tests {
         let load = load(2, Operation::Move, "mov", Kind::Load, loaded, 2, &r#ref);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![add, load], vec![])]);
 
-        let (_forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let (_forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         assert!(!folded.contains(&address.id));
     }
@@ -1194,7 +1201,7 @@ mod tests {
             vec![MirBlock::new(0, vec![], vec![shift, add, load], vec![])],
         );
 
-        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
 
         let expected: IndexMap<u32, FoldedForm> = [(
             address.id,
@@ -1245,7 +1252,7 @@ mod tests {
             0,
             vec![MirBlock::new(0, vec![], vec![made, add, load], vec![])],
         );
-        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
         let what = Semantics {
             name: Some("mov".to_owned()),
             dests: vec![Loc::Held(ir::Held {
@@ -1256,7 +1263,7 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
 
-        let changed = scaled(Some(&what), &forms);
+        let changed = scaled(Some(&what), &forms, &BTreeSet::new());
 
         assert_eq!(folded, set(&[frame.id, address.id]));
         let changed = changed.expect("changed");
@@ -1344,8 +1351,8 @@ mod tests {
             )],
         );
 
-        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
-        let changed = scaled(Some(&fld(cell_of(element.id, 8))), &forms);
+        let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
+        let changed = scaled(Some(&fld(cell_of(element.id, 8))), &forms, &BTreeSet::new());
 
         assert_eq!(folded, set(&[frame.id, end.id, element.id]));
         let changed = changed.expect("changed");
@@ -1362,7 +1369,7 @@ mod tests {
         let add = add_constant(2, derived, frame, 14);
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![made, add], vec![])]);
 
-        let (forms, folded, _promoted) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[derived.id]), &[], None).unwrap();
+        let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[derived.id]), &[], None).unwrap();
 
         assert_eq!(forms, IndexMap::default());
         assert_eq!(folded, set(&[]));
@@ -1433,7 +1440,7 @@ mod tests {
         );
 
         let target = cpu::profile("386").unwrap();
-        let (forms, folded, promoted) = indexed(
+        let (forms, folded, promoted, _) = indexed(
             &Rc::new(MirBody::clone(&body)),
             &set(&[]),
             &target.address_forms,

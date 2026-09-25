@@ -55,18 +55,21 @@ pub fn thrashed(body: LirBody) -> LirBody {
     body
 }
 
-/// `body` with one block's copy thrashed, or None where Python returns `body` itself.
+/// `body` with one copy thrashed in each block that has one, or None.
+///
+/// A rename leaves its block's live-in as it was, so every block is judged
+/// against the same exit liveness.
 fn _once(body: &LirBody) -> Option<LirBody> {
     let exits = liveness::dead_at_exit(body);
     let mut blocks = body.blocks.clone();
-    for index in 0..blocks.len() {
-        let done = _block(&blocks[index], exits[&blocks[index].at].clone());
-        if let Some(done) = done {
-            blocks[index] = done;
-            return Some(body.with_blocks(blocks));
+    let mut changed = false;
+    for block in &mut blocks {
+        if let Some(done) = _block(block, exits[&block.at].clone()) {
+            *block = done;
+            changed = true;
         }
     }
-    None
+    changed.then(|| body.with_blocks(blocks))
 }
 
 /// Per instruction, the register lanes dead once it has run.
@@ -286,7 +289,7 @@ mod tests {
     use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register};
     use crate::support::hash::IndexMap;
 
-    use super::thrashed;
+    use super::{_plain_copy, thrashed, ROUNDS};
     use crate::backend::{select, verify};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -424,6 +427,36 @@ mod tests {
         let result = thrashed(body);
         let start = HashMap::from_iter([(Register::ECX, 5), (Register::EDX, 7)]);
         assert_eq!(_run(&result.blocks[0], &start)[&Register::EDX], 12);
+    }
+
+    #[test]
+    fn test_every_block_is_thrashed_past_the_round_limit() {
+        // One rename per body per round stopped after ROUNDS blocks: deedlines'
+        // PLASMA loop kept `mov bx,dx; sub bx,k; shl bx,1` once earlier blocks
+        // had used the budget.
+        let (ecx, edx) = (_reg(Register::ECX), _reg(Register::EDX));
+        let count = ROUNDS as i64 + 1;
+        let tail = _body(vec![], Register::EDX).blocks[1].clone();
+        let mut blocks: Vec<LirBlock> = (0..count)
+            .map(|at| {
+                let insns = vec![
+                    Arc::new(_insn(100 * at, "mov", Operation::Move, vec![ecx.clone()], vec![Loc::Imm(Imm {
+                        value: at,
+                        width: 4,
+                        address: None,
+                    })])),
+                    Arc::new(_insn(100 * at + 1, "mov", Operation::Move, vec![edx.clone()], vec![ecx.clone()])),
+                ];
+                LirBlock { succ: vec![if at + 1 == count { 1 } else { at + 2 }], ..LirBlock::new(if at == 0 { 0 } else { at + 1 }, insns) }
+            })
+            .collect();
+        blocks.push(tail);
+        let body = LirBody::new("thrash", 0, blocks, IndexMap::default(), IndexMap::default());
+
+        let result = thrashed(body);
+
+        let copies = result.blocks.iter().flat_map(|block| &block.insns).filter(|one| _plain_copy(one).is_some()).count();
+        assert_eq!(copies, 0);
     }
 
     #[test]

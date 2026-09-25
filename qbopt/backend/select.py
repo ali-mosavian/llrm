@@ -258,15 +258,22 @@ _WORD_INDEXES = frozenset({Register.SI, Register.DI})
 
 
 def _scaled_operand(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
-    """`[base+index*scale+disp]`, for a cell no fixup names.
+    """`[base+index*scale+disp]`.
 
     A word index is 16-bit addressing, `[bx+si]`, which wraps the way the
     word arithmetic it replaces does; a dword index is 32-bit addressing.
-    A relocated address carries a 16-bit fixup a 32-bit displacement field
-    would not hold, so only a far cell or a literal one.
+    A relocated cell carries a 16-bit fixup, so it takes only the word form,
+    `[bx|bp+si|di+disp16]`.
     """
     addr = what.addr
-    if addr is None or addr.space not in (Space.FAR, Space.LITERAL) or what.index_through == Register.NONE:
+    if addr is None or what.index_through == Register.NONE:
+        return None
+    if addr.space in (Space.SEGMENT, Space.EXTERNAL):
+        if what.scale != 1 or what.through not in _WORD_BASES or what.index_through not in _WORD_INDEXES:
+            return None
+        operand = MemoryOperand(base=what.through, index=what.index_through, displ=0, displ_size=2, seg=addr.segment)
+        return operand, True
+    if addr.space not in (Space.FAR, Space.LITERAL):
         return None
     if addr.space is Space.FAR and addr.segment == Register.NONE:
         return None

@@ -70,6 +70,160 @@ pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interv
     Cow::Owned(covered)
 }
 
+/// The values that address cells whose offset every wider sum names exactly.
+///
+/// A 16-bit address wraps; summed through 32-bit registers it does not. The
+/// two agree for a cell whose start is its object's first byte (a symbol, or
+/// the far origin the frontend names) when every partial sum of the offset
+/// added to that start, as the affine operations computing it would be cut
+/// anywhere, is a non-negative integer below 64K: each register then holds
+/// its partial sum exactly, zero extension is the identity, and the object
+/// ending inside its segment keeps the total there. The language's promise
+/// that the access stays inside its object (`inbounds`) is what places the
+/// start. A value is exact only if every cell it addresses is.
+pub(crate) fn exact_offsets(body: &Rc<MirBody>) -> Result<BTreeSet<u32>, String> {
+    let scoped = scoped(body)?;
+    let mut made: IndexMap<Value, (&Op, i64)> = IndexMap::default();
+    let mut arrived: IndexMap<Value, i64> = IndexMap::default();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            arrived.insert(phi.result, block.at);
+        }
+        for op in &block.ops {
+            for result in &op.results {
+                if let Arg::Held(held) = result {
+                    made.insert(held.value, (op, block.at));
+                }
+            }
+        }
+    }
+    let mut verdict: IndexMap<u32, bool> = IndexMap::default();
+    for block in &body.blocks {
+        for op in &block.ops {
+            for arg in op.args.iter().chain(&op.results) {
+                let Arg::Cell(cell) = arg else {
+                    continue;
+                };
+                let Some(base) = cell.r#ref.base else {
+                    continue;
+                };
+                let exact = _exact_cell(&cell.r#ref, base, block.at, &made, &arrived, &scoped);
+                *verdict.entry(base.id).or_insert(true) &= exact;
+            }
+        }
+    }
+    Ok(verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect())
+}
+
+type Facts = IndexMap<i64, IndexMap<Value, Interval>>;
+
+fn _exact_cell(
+    reference: &MemRef,
+    base: Value,
+    at: i64,
+    made: &IndexMap<Value, (&Op, i64)>,
+    arrived: &IndexMap<Value, i64>,
+    scoped: &Facts,
+) -> bool {
+    let Some(addr) = reference.addr else {
+        return false;
+    };
+    if !reference.inbounds || reference.base_width != 2 {
+        return false;
+    }
+    // The part of the address that is an offset into the object.
+    let offset = match addr.space {
+        Space::Segment | Space::External => Some(base),
+        Space::Far | Space::Literal => {
+            let Some(origin) = reference.origin else {
+                return false;
+            };
+            if origin == base {
+                None
+            } else {
+                let Some((op, _)) = made.get(&base) else {
+                    return false;
+                };
+                let held: Vec<Value> = op
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        Arg::Held(held) => Some(held.value),
+                        _ => None,
+                    })
+                    .collect();
+                match (op.kind, held.as_slice()) {
+                    (Kind::Add | Kind::PtrOffset, [left, right]) if *left == origin => Some(*right),
+                    (Kind::Add | Kind::PtrOffset, [left, right]) if *right == origin => Some(*left),
+                    _ => return false,
+                }
+            }
+        }
+        _ => return false,
+    };
+    let (low, high) = match offset {
+        Some(offset) => match _exact_sum(offset, at, made, arrived, scoped, 16) {
+            Some(bounds) => bounds,
+            None => return false,
+        },
+        None => (0, 0),
+    };
+    low + addr.disp >= 0 && high + addr.disp < 1 << 16
+}
+
+/// The integer range of `value`, where it and every affine partial sum
+/// computing it is a non-negative 16-bit integer; leaves read at `at`.
+fn _exact_sum(
+    value: Value,
+    at: i64,
+    made: &IndexMap<Value, (&Op, i64)>,
+    arrived: &IndexMap<Value, i64>,
+    scoped: &Facts,
+    depth: usize,
+) -> Option<(i64, i64)> {
+    // Past the depth, a node is unproven, not a leaf: a later pass may still
+    // see through it.
+    if depth == 0 {
+        return None;
+    }
+    let inside = |bounds: (i64, i64)| (bounds.0 >= 0 && bounds.1 < 1 << 16).then_some(bounds);
+    let operand = |arg: &Arg| match arg {
+        Arg::Held(held) if held.width == 2 => _exact_sum(held.value, at, made, arrived, scoped, depth.checked_sub(1)?),
+        Arg::Const(constant) => i64::try_from(&constant.n).ok().map(|n| (n, n)),
+        _ => None,
+    };
+    if let Some((op, _)) = made.get(&value).filter(|(op, _)| {
+        op.loads.is_empty() && !crate::model::mir::partial(op) && op.results.len() == 1
+    }) {
+        let affine = match (op.kind, op.args.as_slice()) {
+            (Kind::Copy, [one]) => Some(operand(one)),
+            (Kind::Add, [left, right]) => Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 + r.0, l.1 + r.1))),
+            (Kind::Sub, [left, right @ Arg::Const(_)]) => {
+                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 - r.1, l.1 - r.0)))
+            }
+            (Kind::Mul, [left, right @ Arg::Const(_)]) | (Kind::Mul, [right @ Arg::Const(_), left]) => {
+                Some(operand(left).zip(operand(right)).filter(|(_, r)| r.0 >= 0).map(|(l, r)| (l.0 * r.0, l.1 * r.0)))
+            }
+            (Kind::Shl, [left, Arg::Const(count)]) => {
+                let count = i64::try_from(&count.n).ok().filter(|count| (0..16).contains(count));
+                Some(operand(left).zip(count).map(|(l, count)| (l.0 << count, l.1 << count)))
+            }
+            _ => None,
+        };
+        if let Some(bounds) = affine {
+            return bounds.and_then(inside);
+        }
+    }
+    // A leaf: whatever it is, it is read in this block.
+    let defined = made.get(&value).map(|(_, block)| *block).or_else(|| arrived.get(&value).copied());
+    let fact = scoped
+        .get(&at)
+        .and_then(|known| known.get(&value))
+        .or_else(|| defined.and_then(|block| scoped.get(&block)).and_then(|known| known.get(&value)))?;
+    let bounds = (i64::try_from(&fact.low).ok()?, i64::try_from(&fact.high).ok()?);
+    (fact.width == 2).then_some(bounds).and_then(inside)
+}
+
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
 ///
 /// Direct port of `qbopt.analysis.ranges:on_edge`.
@@ -270,7 +424,15 @@ pub(crate) fn _computed(
     // Every other kind answers None below, whatever its operands.
     if !matches!(
         op.kind,
-        Kind::SignExtend | Kind::Copy | Kind::Increment | Kind::Decrement | Kind::Shl | Kind::Add | Kind::Sub | Kind::Mul
+        Kind::SignExtend
+            | Kind::Copy
+            | Kind::Increment
+            | Kind::Decrement
+            | Kind::Shl
+            | Kind::Add
+            | Kind::Sub
+            | Kind::Mul
+            | Kind::And
     ) {
         return None;
     }
@@ -281,6 +443,17 @@ pub(crate) fn _computed(
         },
         _ => _operand(arg, known, facts).map(Cow::Owned),
     };
+    if op.kind == Kind::And {
+        // A non-negative mask bounds the result whatever the other operand holds.
+        let high = op
+            .args
+            .iter()
+            .filter_map(operand)
+            .filter(|mask| mask.width == result.width && mask.low >= BigInt::from(0_u8))
+            .map(|mask| mask.high.clone())
+            .min()?;
+        return Some(Interval { low: BigInt::from(0_u8), high, width: result.width });
+    }
     let args = op.args.iter().map(operand).collect::<Option<Vec<_>>>()?;
     if args.is_empty() {
         return None;
@@ -379,8 +552,13 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
     let predecessors = loops::predecessors(&body.blocks);
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
+        let proofs = induction::counted_unless_stopped(body, &loop_, Some(&facts), false);
+        // A header that tests before the trip also sees the exit value; one
+        // tested after it sees only the trip's.
         let mut inside = loop_.body.iter().copied().collect::<PySet<i64>>();
-        inside.discard(&loop_.header);
+        if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
+            inside.discard(&loop_.header);
+        }
         let mut known: IndexMap<Value, Interval> = IndexMap::default();
         let header = body
             .blocks
@@ -394,7 +572,7 @@ pub(crate) fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value
             .collect::<IndexMap<_, _>>();
         let counters = induction::basics(body, &loop_).values().cloned().collect::<Vec<_>>();
         let mut trips = BTreeSet::new();
-        for proof in induction::counted_unless_stopped(body, &loop_, Some(&facts), false) {
+        for proof in proofs {
             if let Some((low, high)) = proof.span() {
                 known.insert(proof.phi_in(body).result, Interval { low, high, width: proof.counter.start.width() });
                 trips.insert(proof.count.expect("a span has a count") - 1_u8);
@@ -562,6 +740,30 @@ pub(crate) fn dominated_edges(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexM
         .iter()
         .filter_map(|block| known.get(&block.at).filter(|scoped| !scoped.is_empty()).map(|scoped| (block.at, scoped.clone())))
         .collect())
+}
+
+/// Every interval known at each block: a loop's counters and what they
+/// compute, narrowed by the branch edges that dominate it.
+pub(crate) fn scoped(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interval>>, String> {
+    let mut result = bounded(body)?;
+    for (at, edges) in dominated_edges(body)? {
+        let known = result.entry(at).or_default();
+        for (value, interval) in edges {
+            match known.get(&value) {
+                Some(loop_) if loop_.width == interval.width => {
+                    let low = loop_.low.clone().max(interval.low.clone());
+                    let high = loop_.high.clone().min(interval.high.clone());
+                    if low <= high {
+                        known.insert(value, Interval { low, high, width: interval.width });
+                    }
+                }
+                _ => {
+                    known.insert(value, interval);
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Every value `consts` knows, as the singleton interval an alias query reads.

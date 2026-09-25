@@ -20,17 +20,21 @@ use crate::support::hash::IndexMap;
 use crate::backend::layout;
 use crate::backend::masm;
 use crate::backend::select;
+use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::objectfile::module::{Addr, Module, SourceMap};
 use crate::objectfile::omf;
 use crate::support::pyrepr::{self, Repr};
 
-/// OMF locations: offset16, segment base, ptr16:16.
+/// OMF locations: offset16, segment base, ptr16:16, and the offset32 a
+/// 32-bit address's displacement takes.
 pub const OFFSET: i64 = 1;
 pub const BASE: i64 = 2;
 pub const POINTER: i64 = 3;
-pub static WIDE: LazyLock<IndexMap<i64, usize>> = LazyLock::new(|| IndexMap::from_iter([(OFFSET, 2), (BASE, 2), (POINTER, 4)]));
+pub const OFFSET32: i64 = 9;
+pub static WIDE: LazyLock<IndexMap<i64, usize>> =
+    LazyLock::new(|| IndexMap::from_iter([(OFFSET, 2), (BASE, 2), (POINTER, 4), (OFFSET32, 4)]));
 pub static CLASSES: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("_DATA", "DATA"), ("_BSS", "BSS"), ("CONST", "CONST")]));
 /// DGROUP, the only group.
@@ -208,6 +212,24 @@ impl Segment {
 /// `struct.pack_into("<H", buffer, at, value)` of a value already masked.
 fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
+}
+
+/// `value` into the `WIDE[loc]` bytes of a relocated field at `at`.
+fn pack_field(buffer: &mut [u8], at: usize, loc: i64, value: i64) {
+    if loc == OFFSET32 {
+        buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+    } else {
+        pack_into(buffer, at, value & 0xFFFF);
+    }
+}
+
+/// A relocated field's value.
+fn field(buffer: &[u8], at: usize, loc: i64) -> i64 {
+    if loc == OFFSET32 {
+        i64::from(u32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
+    } else {
+        i64::from(u16::from_le_bytes([buffer[at], buffer[at + 1]]))
+    }
 }
 
 /// Write a complete fresh object for the BC-object frontend.
@@ -836,9 +858,13 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
     let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
-            Loc::Mem(ir::Mem { addr: Some(addr), .. }) | Loc::Address(ir::Address { addr: Some(addr), .. })
+            Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
                 if matches!(addr.space, Space::Segment | Space::External) =>
             {
+                let wide = [through, index_through].into_iter().any(|one| target::width_of(*one) == Some(4));
+                (made.displacement_at, if wide { OFFSET32 } else { OFFSET }, addr.disp, addr)
+            }
+            Loc::Address(ir::Address { addr: Some(addr), .. }) if matches!(addr.space, Space::Segment | Space::External) => {
                 (made.displacement_at, OFFSET, addr.disp, addr)
             }
             Loc::Imm(ir::Imm { address: Some(addr), .. }) if addr.space == Space::Group => {
@@ -850,7 +876,7 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
-        pack_into(&mut code, at, addend & 0xFFFF);
+        pack_field(&mut code, at, loc, addend);
         let name = names
             .get(&(addr.space, addr.index))
             .unwrap_or_else(|| panic!("KeyError: ({}, {})", addr.space.repr(), addr.index));
@@ -1076,16 +1102,16 @@ pub fn _subrecord(
         (method, datum, grouped) = (GROUP_TARGET, GROUP, true);
     } else if let Some(&(seg, at)) = symbols.get(name) {
         (method, datum, grouped) = (SEGMENT_TARGET, seg as i64 + 1, segments[seg].grouped);
-        if (one.loc == OFFSET || one.loc == POINTER) && !one.relative {
+        if (one.loc == OFFSET || one.loc == POINTER || one.loc == OFFSET32) && !one.relative {
             let image = &mut segments[segment].image;
-            let addend = u16::from_le_bytes([image[one.at], image[one.at + 1]]) as i64;
-            pack_into(image, one.at, (addend + at as i64) & 0xFFFF);
+            let addend = field(image, one.at, one.loc);
+            pack_field(image, one.at, one.loc, addend + at as i64);
         }
     } else {
         let index = *externs.get(name).unwrap_or_else(|| panic!("KeyError: {}", pyrepr::string(name)));
         (method, datum, grouped) = (EXTERNAL_TARGET, index, kinds[name] == "byte");
     }
-    if one.loc == OFFSET && grouped && !one.relative {
+    if (one.loc == OFFSET || one.loc == OFFSET32) && grouped && !one.relative {
         return Ok([vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(GROUP)?, omf::as_index(datum)?].concat());
     }
     Ok([vec![TARGET_FRAME << 4 | 4 | method], omf::as_index(datum)?].concat())
@@ -1391,6 +1417,26 @@ mod tests {
         };
         assert!(fixupps(&omf::parse(&source).unwrap()).iter().any(|lead| lead & 0x80 == 0));
         assert!(fixupps(&records).iter().all(|lead| lead & 0x80 != 0));
+    }
+
+    /// A 32-bit symbolic address carries a disp32; an OFFSET fixup relocated
+    /// only its low word and left the high word of the addend in place.
+    #[test]
+    fn test_a_wide_symbolic_address_takes_an_offset32_fixup() {
+        let cell = ir::Mem {
+            addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
+            index: Some(ir::Held { value: 1, width: 4 }),
+            index_through: Register::ESI,
+            scale: 2,
+            ..ir::Mem::new(None, 2)
+        };
+        let what = semantics(Operation::Move, "mov", vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })], vec![Loc::Mem(cell)]);
+        let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);
+
+        let piece = _encoded(&what, &names).unwrap();
+
+        let [fixup] = piece.fixups.as_slice() else { panic!("{:?}", piece.fixups) };
+        assert_eq!((fixup.loc, fixup.at + 4, field(&piece.code, fixup.at, fixup.loc)), (OFFSET32, piece.code.len(), 1280));
     }
 
     /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused.

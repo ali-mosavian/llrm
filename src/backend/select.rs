@@ -191,12 +191,23 @@ pub fn _assemble(made: &Instruction, at: u64, symbolic: bool) -> Option<Emitted>
     })
 }
 
-/// How many bytes the displacement needs.
-pub fn _displacement_size(base: Register, value: i64) -> u32 {
-    if value == 0 && base != Register::BP {
+/// How many bytes the displacement needs. 32-bit addressing has no 16-bit
+/// displacement, and without a base it always carries a 32-bit one.
+pub fn _displacement_size(base: Register, index: Register, value: i64) -> u32 {
+    let wide = [base, index].into_iter().any(|one| width_of(one) == Some(4));
+    if base == Register::None {
+        return if wide { 4 } else { 2 };
+    }
+    if value == 0 && ir::root(base) != Register::EBP {
         return 0;
     }
-    if (-128..=127).contains(&value) { 1 } else { 2 }
+    if (-128..=127).contains(&value) {
+        1
+    } else if wide {
+        4
+    } else {
+        2
+    }
 }
 
 fn memory_operand(base: Register, index: Register, scale: i64, displ: i64, displ_size: u32, seg: Register) -> MemoryOperand {
@@ -215,7 +226,7 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
             let wide = if what.disp_width != 0 {
                 what.disp_width
             } else {
-                _displacement_size(what.through, what.offset)
+                _displacement_size(what.through, Register::None, what.offset)
             };
             return Some((memory_operand(what.through, Register::None, 1, what.offset, wide, Register::None), false));
         }
@@ -224,9 +235,11 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
     match addr.space {
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
-            // allocation put it.
+            // allocation put it. The relocation fills the displacement, which
+            // a 32-bit base carries in four bytes.
             let base = if what.base.is_some() { what.through } else { addr.base };
-            Some((memory_operand(base, Register::None, 1, 0, 2, addr.segment), true))
+            let wide = if width_of(base) == Some(4) { 4 } else { 2 };
+            Some((memory_operand(base, Register::None, 1, 0, wide, addr.segment), true))
         }
         Space::Frame if addr.base == Register::None => {
             let index = what.index_through;
@@ -239,7 +252,7 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
                     index,
                     1,
                     addr.disp,
-                    _displacement_size(Register::BP, addr.disp),
+                    _displacement_size(Register::BP, Register::None, addr.disp),
                     Register::None,
                 ),
                 false,
@@ -252,7 +265,7 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
             }
             let base = if what.base.is_some() { what.through } else { addr.base };
             Some((
-                memory_operand(base, Register::None, 1, addr.disp, _displacement_size(base, addr.disp), addr.segment),
+                memory_operand(base, Register::None, 1, addr.disp, _displacement_size(base, Register::None, addr.disp), addr.segment),
                 false,
             ))
         }
@@ -260,7 +273,7 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
             // Two bytes without a base: 16-bit mod=00 r/m=110 is the
             // direct-address form, and mod=01 would mean `[bp+disp8]`.
             let base = if what.base.is_some() { what.through } else { addr.base };
-            let wide = if base == Register::None { 2 } else { _displacement_size(base, addr.disp) };
+            let wide = _displacement_size(base, Register::None, addr.disp);
             Some((memory_operand(base, Register::None, 1, addr.disp, wide, addr.segment), false))
         }
         _ => None,
@@ -270,10 +283,26 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
 pub const _WORD_BASES: [Register; 2] = [Register::BX, Register::BP];
 pub const _WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
 
-/// `[base+index*scale+disp]`, for a cell no fixup names.
+/// `[base+index*scale+disp]`. A relocated cell takes only the word form,
+/// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
 pub fn _scaled_operand(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
     let addr = what.addr?;
-    if !matches!(addr.space, Space::Far | Space::Literal) || what.index_through == Register::None {
+    if what.index_through == Register::None {
+        return None;
+    }
+    if matches!(addr.space, Space::Segment | Space::External) {
+        let word = what.scale == 1
+            && _WORD_BASES.contains(&what.through)
+            && _WORD_INDEXES.contains(&what.index_through);
+        if word {
+            return Some((memory_operand(what.through, what.index_through, 1, 0, 2, addr.segment), true));
+        }
+        // The 67h form: any 32-bit base, a scaled index, a relocated disp32.
+        let wide = width_of(what.index_through) == Some(4)
+            && (what.through == Register::None || width_of(what.through) == Some(4));
+        return wide.then(|| (memory_operand(what.through, what.index_through, what.scale, 0, 4, addr.segment), true));
+    }
+    if !matches!(addr.space, Space::Far | Space::Literal) {
         return None;
     }
     if addr.space == Space::Far && addr.segment == Register::None {
@@ -285,18 +314,10 @@ pub fn _scaled_operand(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
         if what.scale != 1 || !_WORD_BASES.contains(&base) {
             return None;
         }
-        let size = _displacement_size(base, disp);
+        let size = _displacement_size(base, what.index_through, disp);
         return Some((memory_operand(base, what.index_through, 1, disp, size, segment), false));
     }
-    let size = if base == Register::None {
-        4
-    } else if disp == 0 && base != Register::EBP {
-        0
-    } else if (-128..=127).contains(&disp) {
-        1
-    } else {
-        4
-    };
+    let size = _displacement_size(base, what.index_through, disp);
     Some((memory_operand(base, what.index_through, what.scale, disp, size, segment), false))
 }
 
@@ -904,7 +925,7 @@ pub fn address_of(into: Register, cell: &ir::Address, at: u64) -> Option<Emitted
     if cell.through == Register::None && cell.index == Register::None {
         return None;
     }
-    let size = if cell.disp_width != 0 { cell.disp_width } else { _displacement_size(cell.through, cell.offset) };
+    let size = if cell.disp_width != 0 { cell.disp_width } else { _displacement_size(cell.through, cell.index, cell.offset) };
     let r#where = memory_operand(cell.through, cell.index, cell.scale, cell.offset, size, Register::None);
     // No address to name, so the displacement is arithmetic and not a symbol.
     _assemble(&raised(create_reg_mem(code, into, r#where)), at, false)
@@ -1200,6 +1221,7 @@ pub static FAR_LOADS: LazyLock<IndexMap<Register, (&'static str, &'static str)>>
         (Register::ES, ("les", "LES_R16_M1616")),
         (Register::FS, ("lfs", "LFS_R16_M1616")),
         (Register::GS, ("lgs", "LGS_R16_M1616")),
+        (Register::DS, ("lds", "LDS_R16_M1616")),
     ])
 });
 
@@ -1756,10 +1778,15 @@ pub fn emit(
         };
     }
     if op == Operation::Address && dests.len() == 1 && sources.len() == 1 {
-        if let (Some(into), Loc::Address(cell)) = (reg_of(&dests[0]), &sources[0]) {
-            return address_of(into, cell, at);
-        }
-        return None;
+        return match (reg_of(&dests[0]), &sources[0]) {
+            (Some(into), Loc::Address(cell)) => address_of(into, cell, at),
+            (Some(into), Loc::Mem(cell)) => {
+                let code = _code(&format!("LEA_R{}_M", width_of(into)? * 8))?;
+                let (built, relocated) = operand_of(cell)?;
+                _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
+            }
+            _ => None,
+        };
     }
     if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
         return fill(name, at, sources.len() == 4);

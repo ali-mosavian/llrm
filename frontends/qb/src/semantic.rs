@@ -3,12 +3,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod shapes;
+mod tags;
+
 use crate::dialect::Dialect;
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Literal, Module, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
+use tags::{Passing, Shape, Slot, Tag};
 
 const VOID: u32 = 0;
 const INTEGER: u32 = 1;
@@ -96,6 +100,7 @@ struct Instruction {
     results: Vec<u32>,
     operands: Vec<Operand>,
     callee: Option<String>,
+    tag: Option<Tag>,
 }
 
 struct CallAbi {
@@ -209,19 +214,15 @@ struct Function {
     error_handler_local: bool,
     external_entries: Vec<u32>,
     linkage: &'static str,
+    // Each element pointer whose offset is its array's first byte plus a
+    // non-negative in-object offset: the pointer's origin value.
+    origins: BTreeMap<u32, u32>,
 }
 
 struct Compiler {
     dialect: Dialect,
     runtime: String,
-    row_major: bool,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    // LBOUND/UBOUND read the descriptor without checking it is allocated
-    // or the dimension in range, as unchecked subscripts do.
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
+    options: Options,
     module_name: String,
     types: Vec<Type>,
     variables: BTreeMap<String, Variable>,
@@ -231,6 +232,9 @@ struct Compiler {
     udts: BTreeMap<String, Udt>,
     pointer_types: BTreeMap<(u32, &'static str), u32>,
     functions: Vec<Function>,
+    // Each static array's descriptor place and its records' bounds: fixed,
+    // since REDIM refuses a static array.
+    static_shapes: BTreeMap<u32, Vec<(Operand, Operand)>>,
     data: Vec<DataObject>,
     values: Vec<(u32, u32)>,
     places: Vec<Place>,
@@ -295,18 +299,28 @@ pub fn compile_with_array_order(
     runtime: &str,
     row_major: bool,
 ) -> Result<String, SemanticError> {
-    compile_with_options(
-        module,
-        module_name,
-        dialect,
-        runtime,
-        row_major,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
+    compile_with_options(module, module_name, dialect, runtime, &Options { row_major, ..Options::default() })
+}
+
+/// How BC was told to compile the module.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    /// /R.
+    pub row_major: bool,
+    /// /Ah.
+    pub huge_arrays: bool,
+    /// /D: every element through B$HARY.
+    pub checked_arrays: bool,
+    /// LBOUND/UBOUND read the descriptor without checking it is allocated
+    /// or the dimension in range, as unchecked subscripts do.
+    pub unchecked_bounds: bool,
+    /// /MBF.
+    pub mbf: bool,
+    /// /FPa.
+    pub alternate_math: bool,
+    /// Nothing outside the module calls its procedures: they get internal
+    /// linkage, and no PUBDEF, so such a call fails to link.
+    pub whole_program: bool,
 }
 
 pub fn compile_with_options(
@@ -314,26 +328,24 @@ pub fn compile_with_options(
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
-    row_major: bool,
-    huge_arrays: bool,
-    checked_arrays: bool,
-    unchecked_bounds: bool,
-    mbf: bool,
-    alternate_math: bool,
+    options: &Options,
 ) -> Result<String, SemanticError> {
+    let mut compiler = built(module, module_name, dialect, runtime, options)?;
+    shapes::applied(&mut compiler);
+    Ok(compiler.json())
+}
+
+/// Every procedure of `module` as HIR, before emission.
+fn built(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    options: &Options,
+) -> Result<Compiler, SemanticError> {
     let module = outline_module_gosubs(module)?;
     let module = &module;
-    let mut compiler = Compiler::new(
-        module_name,
-        dialect,
-        runtime,
-        row_major,
-        huge_arrays,
-        checked_arrays,
-        unchecked_bounds,
-        mbf,
-        alternate_math,
-    );
+    let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -428,7 +440,7 @@ pub fn compile_with_options(
                         // selector at +2 and adjusted offset at +0Ah.
                         descriptor_data: if parameter_type == STRING {
                             "near"
-                        } else if compiler.huge_arrays {
+                        } else if compiler.options.huge_arrays {
                             "split_huge"
                         } else {
                             "split_far"
@@ -518,14 +530,14 @@ pub fn compile_with_options(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported {
+            if procedure.exported && !compiler.options.whole_program {
                 "external"
             } else {
                 "internal"
             },
         );
     }
-    Ok(compiler.json())
+    Ok(compiler)
 }
 
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
@@ -849,12 +861,7 @@ impl Compiler {
         module_name: &str,
         dialect: Dialect,
         runtime: &str,
-        row_major: bool,
-        huge_arrays: bool,
-        checked_arrays: bool,
-        unchecked_bounds: bool,
-        mbf: bool,
-        alternate_math: bool,
+        options: Options,
     ) -> Self {
         let types = vec![
             scalar(VOID, "void", "void", 0, None, "none"),
@@ -870,12 +877,7 @@ impl Compiler {
         Self {
             dialect,
             runtime: runtime.into(),
-            row_major,
-            huge_arrays,
-            checked_arrays,
-            unchecked_bounds,
-            mbf,
-            alternate_math,
+            options,
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),
@@ -885,6 +887,7 @@ impl Compiler {
             udts: BTreeMap::new(),
             pointer_types: BTreeMap::new(),
             functions: Vec::new(),
+            static_shapes: BTreeMap::new(),
             data: vec![
                 DataObject {
                     id: 1,
@@ -1045,6 +1048,7 @@ impl Compiler {
             error_handler_local: self.error_handler_local,
             external_entries,
             linkage,
+            origins: BTreeMap::new(),
         });
     }
 
@@ -1556,43 +1560,56 @@ impl Compiler {
             vec![descriptor],
             vec![Operand::Place(descriptor_place)],
         );
-        let mut operands = Vec::new();
-        for bound in &declaration.bounds {
-            let lower = if let Some(lower) = &bound.lower {
-                let (lower, type_id) = self.expression(lower)?;
-                self.convert(lower, type_id, INTEGER)?
-            } else {
-                Operand::Constant(INTEGER, Number::Integer(self.option_base))
-            };
-            let (upper, type_id) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, type_id, INTEGER)?;
-            operands.push(lower);
-            operands.push(upper);
-        }
+        let bounds = self.bounds(declaration)?;
+        let (operands, records) = self.dimensioned(bounds, element, descriptor);
+        self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
+        Ok(())
+    }
+
+    /// B$DDIM's or B$RDIM's operands for `bounds`, and the bounds in
+    /// descriptor record order. The runtime fills record 0 from the pair
+    /// pushed last.
+    fn dimensioned(
+        &self,
+        bounds: Vec<(Operand, Operand)>,
+        element: u32,
+        descriptor: u32,
+    ) -> (Vec<Operand>, Vec<(Operand, Operand)>) {
+        let rank = bounds.len() as i64;
+        let records = self.descriptor_records(&bounds);
+        let mut operands: Vec<Operand> =
+            records.iter().rev().flat_map(|(lower, upper)| [lower.clone(), upper.clone()]).collect();
+        let allocation = if element == STRING {
+            0x8000
+        } else if self.options.huge_arrays {
+            0x0200
+        } else {
+            0x0100
+        };
         operands.extend([
             Operand::Constant(INTEGER, Number::Integer(self.width(element) as i64)),
-            Operand::Constant(
-                INTEGER,
-                Number::Integer(
-                    declaration.bounds.len() as i64
-                        | if element == STRING {
-                            0x8000
-                        } else if self.huge_arrays {
-                            0x0200
-                        } else {
-                            0x0100
-                        },
-                ),
-            ),
+            Operand::Constant(INTEGER, Number::Integer(rank | allocation)),
             Operand::Value(descriptor),
         ]);
-        let mut order = Vec::new();
-        for dimension in (0..declaration.bounds.len()).rev() {
-            order.extend([2 * dimension, 2 * dimension + 1]);
+        (operands, records)
+    }
+
+    /// The source dimension each descriptor record holds, record 0 first.
+    /// Record 0 is the slowest-varying dimension: the last in column-major
+    /// order, the first under /R. B$DDIM, B$HARY and the adjusted offset at
+    /// +0Ah all run records in this order; LBOUND counts back from the rank.
+    fn record_dimensions(&self, rank: usize) -> Vec<usize> {
+        if self.options.row_major {
+            (0..rank).collect()
+        } else {
+            (0..rank).rev().collect()
         }
-        order.extend(2 * declaration.bounds.len()..2 * declaration.bounds.len() + 3);
-        self.emit_call("B$DDIM", Vec::new(), operands, order, false);
-        Ok(())
+    }
+
+    /// Per-dimension `bounds` in descriptor record order.
+    fn descriptor_records<T: Clone>(&self, bounds: &[T]) -> Vec<T> {
+        self.record_dimensions(bounds.len()).into_iter().map(|dimension| bounds[dimension].clone()).collect()
     }
 
     fn declare_as(
@@ -1716,7 +1733,7 @@ impl Compiler {
                     // first MOD_TEX record through selector zero/DGROUP.
                     descriptor_data: if element == STRING {
                         "near"
-                    } else if self.huge_arrays {
+                    } else if self.options.huge_arrays {
                         "split_huge"
                     } else {
                         "split_far"
@@ -1778,7 +1795,7 @@ impl Compiler {
                     descriptor_place: Some(descriptor_place),
                     descriptor_data: if element == STRING {
                         "near"
-                    } else if self.huge_arrays {
+                    } else if self.options.huge_arrays {
                         "split_huge"
                     } else {
                         "split_far"
@@ -1889,6 +1906,11 @@ impl Compiler {
             });
             if local_descriptor {
                 self.data_offset += descriptor_extent;
+            } else {
+                let constant = |value: i64| Operand::Constant(INTEGER, Number::Integer(value));
+                let records = self.descriptor_records(&bounds);
+                self.static_shapes
+                    .insert(descriptor, records.iter().map(|(low, high)| (constant(*low), constant(*high))).collect());
             }
             if self.data_offset > 65536 {
                 return self.fail(format!(
@@ -1973,28 +1995,21 @@ impl Compiler {
 
         bytes[12..14].copy_from_slice(&(element_width as u16).to_le_bytes());
         // Q45A05's QB 4.5 BC_CN bytes are 03 00 01 00 then
-        // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3). B$LBND/B$UBND
-        // count backward from AD_cDims, so the ABI stores dimensions in
-        // reverse source order regardless of /R element ordering.
-        for (dimension, (low, high)) in bounds.iter().rev().enumerate() {
-            let at = 14 + 4 * dimension;
+        // 02 00 01 00 for source bounds (1 TO 2, 1 TO 3); BC /R stores
+        // 02 00 01 00 first.
+        let records = self.descriptor_records(bounds);
+        for (record, (low, high)) in records.iter().enumerate() {
+            let at = 14 + 4 * record;
             let count = (high - low + 1) as u16;
             bytes[at..at + 2].copy_from_slice(&count.to_le_bytes());
             bytes[at + 2..at + 4].copy_from_slice(&(*low as u16).to_le_bytes());
         }
-        let ordered_bounds: Vec<_> = if self.row_major {
-            bounds.iter().rev().collect()
-        } else {
-            bounds.iter().collect()
-        };
-        let reversed_bounds: Vec<_> = bounds.iter().rev().collect();
+        // B$DDIM's bias: the element number of the lower bounds.
         let mut lower_linear = None;
-        for (dimension, (lower, _)) in ordered_bounds.into_iter().enumerate() {
-            lower_linear = Some(if let Some(previous) = lower_linear {
-                let (count_lower, count_upper) = reversed_bounds[dimension];
-                previous * (count_upper - count_lower + 1) + lower
-            } else {
-                *lower
+        for (lower, upper) in &records {
+            lower_linear = Some(match lower_linear {
+                Some(previous) => previous * (upper - lower + 1) + lower,
+                None => *lower,
             });
         }
         let lower_bias = lower_linear.unwrap_or(0) * element_width as i64;
@@ -2194,6 +2209,7 @@ impl Compiler {
                             Vec::new(),
                             vec![Operand::Value(descriptor)],
                         );
+                        self.tag_last(Tag::Release { descriptor });
                     }
                 }
                 Statement::Assign { target, value, .. } => {
@@ -2332,12 +2348,14 @@ impl Compiler {
                         // directly instead of hiding it behind a runtime call.
                         let place = self.def_segment_place();
                         self.emit("store", Vec::new(), vec![Operand::Place(place), value]);
+                        self.tag_last(Tag::SetSegment);
                     } else {
                         // rt/rtinit.asm's B$DSG0 is the distinct bare-DEF-SEG
                         // operation: copy DS into b$seg. HIR has no machine
                         // segment-register value, so retain the audited runtime
                         // call rather than inventing an ordinary integer load.
                         self.emit_runtime_call("B$DSG0", Vec::new(), Vec::new());
+                        self.tag_last(Tag::SetSegment);
                     }
                 }
                 Statement::Open {
@@ -3013,6 +3031,7 @@ impl Compiler {
                         let segment_place = self.def_segment_place();
                         let segment = self.value(INTEGER);
                         self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+                        self.tag_last(Tag::ReadSegment);
                         let pointer_type = self.far_pointer_type(BYTE);
                         let pointer = self.value(pointer_type);
                         self.emit(
@@ -3740,9 +3759,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
+                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.checked_arrays {
+                    let address = if self.options.checked_arrays {
                         "checked"
                     } else {
                         variable.descriptor_data
@@ -3832,9 +3851,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.checked_arrays) {
+                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.checked_arrays {
+                    let address = if self.options.checked_arrays {
                         "checked"
                     } else {
                         variable.descriptor_data
@@ -3923,22 +3942,14 @@ impl Compiler {
         let array_pointer = self.value(array_pointer_type);
         self.emit("address", vec![array_pointer], vec![location]);
 
-        let dimensions: Vec<_> = if self.row_major {
-            indices.iter().zip(array.bounds.iter()).collect()
-        } else {
-            indices.iter().zip(array.bounds.iter()).rev().collect()
-        };
+        let dimensions: Vec<_> = self
+            .record_dimensions(indices.len())
+            .into_iter()
+            .map(|dimension| (&indices[dimension], &array.bounds[dimension]))
+            .collect();
         let mut linear = None;
         for (index, (lower, upper)) in dimensions {
-            let line = index.span().line;
-            let (mut index, mut index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                return self.fail(format!(
-                    "line {} array subscript is {} rather than numeric",
-                    line,
-                    self.name(index_type)
-                ));
-            }
+            let (mut index, mut index_type) = self.subscript(index)?;
             if matches!(index_type, SINGLE | DOUBLE | BYTE) {
                 index = self.convert(index, index_type, INTEGER)?;
                 index_type = INTEGER;
@@ -4013,21 +4024,13 @@ impl Compiler {
         }
         if matches!(address, "split_huge" | "checked") {
             // PDS /Ah and /D do not inline descriptor arithmetic. BC evaluates
-            // source subscripts, pushes them last-to-first followed by rank,
-            // supplies the near descriptor in BX, and B$HARY returns ES:BX.
+            // source subscripts, pushes them so record 0's is last, then the
+            // rank, supplies the near descriptor in BX, and B$HARY returns ES:BX.
             // Keep both returned words explicit until CONCAT makes the whole
             // pointer consumed by the element load/store.
             let mut operands = Vec::new();
             for index in indices {
-                let line = index.span().line;
-                let (index, index_type) = self.expression(index)?;
-                if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                    return self.fail(format!(
-                        "line {} array subscript is {} rather than numeric",
-                        line,
-                        self.name(index_type)
-                    ));
-                }
+                let (index, index_type) = self.subscript(index)?;
                 operands.push(self.convert(index, index_type, INTEGER)?);
             }
             operands.push(Operand::Constant(
@@ -4035,11 +4038,12 @@ impl Compiler {
                 Number::Integer(indices.len() as i64),
             ));
             operands.push(Operand::Value(descriptor));
-            let mut order: Vec<_> = (0..indices.len()).rev().collect();
+            let mut order: Vec<_> = self.record_dimensions(indices.len()).into_iter().rev().collect();
             order.extend(indices.len()..indices.len() + 2);
             let offset = self.value(INTEGER);
             let selector = self.value(INTEGER);
             self.emit_call("B$HARY", vec![offset, selector], operands, order, false);
+            self.tag_last(Tag::ElementOffset { descriptor, origin: None });
             let pointer_type = self.whole_pointer_type(element);
             let pointer = self.value(pointer_type);
             self.emit(
@@ -4059,39 +4063,14 @@ impl Compiler {
         } else {
             LONG
         };
-        let mut linear: Option<Operand> = None;
-        let ordered: Vec<_> = if self.row_major {
-            indices.iter().rev().collect()
-        } else {
-            indices.iter().collect()
-        };
-        for (dimension, index) in ordered.into_iter().enumerate() {
-            let line = index.span().line;
-            let (index, index_type) = self.expression(index)?;
-            if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
-                return self.fail(format!(
-                    "line {} array subscript is {} rather than numeric",
-                    line,
-                    self.name(index_type)
-                ));
-            }
-            let index = self.convert(index, index_type, offset_type)?;
-            linear = Some(if let Some(previous) = linear {
-                let count = self.descriptor_field(descriptor, 14 + 4 * dimension, INTEGER);
-                let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
-                let multiplied = self.value(offset_type);
-                self.emit("mul", vec![multiplied], vec![previous, count]);
-                let combined = self.value(offset_type);
-                self.emit(
-                    "add",
-                    vec![combined],
-                    vec![Operand::Value(multiplied), index],
-                );
-                Operand::Value(combined)
-            } else {
-                index
-            });
+        // Evaluate every subscript, in source order, before reading any
+        // descriptor field: a subscript can call a function that REDIMs.
+        let mut subscripts = Vec::new();
+        for index in indices {
+            let (index, index_type) = self.subscript(index)?;
+            subscripts.push(self.convert(index, index_type, offset_type)?);
         }
+        let linear = Some(self.element_number(descriptor, &subscripts, offset_type)?);
         let bytes = self.value(offset_type);
         self.emit(
             "mul",
@@ -4118,6 +4097,7 @@ impl Compiler {
                 vec![offset],
                 vec![Operand::Value(adjusted), Operand::Value(bytes)],
             );
+            self.tag_last(Tag::ElementOffset { descriptor, origin: Some(adjusted) });
             let pointer = self.value(pointer_type);
             self.emit(
                 "concat",
@@ -4133,9 +4113,55 @@ impl Compiler {
                 vec![pointer],
                 vec![Operand::Value(data), Operand::Value(bytes)],
             );
+            // Only a near pointer is the +0Ah offset itself; a whole pointer
+            // is +0's offset and selector.
+            let origin = (address == "near").then_some(data);
+            self.tag_last(Tag::ElementOffset { descriptor, origin });
             pointer
         };
         Ok(pointer)
+    }
+
+    /// An array subscript's value and numeric type.
+    fn subscript(&mut self, index: &Expr) -> Result<(Operand, u32), SemanticError> {
+        let line = index.span().line;
+        let (index, index_type) = self.expression(index)?;
+        if !matches!(index_type, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
+            return self.fail(format!(
+                "line {} array subscript is {} rather than numeric",
+                line,
+                self.name(index_type)
+            ));
+        }
+        Ok((index, index_type))
+    }
+
+    /// The element number of `subscripts`, one per source dimension, from
+    /// the descriptor's counts: record 0's subscript is the most significant.
+    /// The lower bounds are already in the adjusted offset at +0Ah.
+    fn element_number(
+        &mut self,
+        descriptor: u32,
+        subscripts: &[Operand],
+        offset_type: u32,
+    ) -> Result<Operand, SemanticError> {
+        let mut linear: Option<Operand> = None;
+        for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
+            let subscript = subscripts[dimension].clone();
+            linear = Some(match linear {
+                None => subscript,
+                Some(previous) => {
+                    let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+                    let count = self.convert(Operand::Value(count), INTEGER, offset_type)?;
+                    let multiplied = self.value(offset_type);
+                    self.emit("mul", vec![multiplied], vec![previous, count]);
+                    let combined = self.value(offset_type);
+                    self.emit("add", vec![combined], vec![Operand::Value(multiplied), subscript]);
+                    Operand::Value(combined)
+                }
+            });
+        }
+        Ok(linear.expect("an element has a subscript"))
     }
 
     fn descriptor_data_pointer(
@@ -4171,7 +4197,7 @@ impl Compiler {
         upper: bool,
     ) -> Result<Operand, SemanticError> {
         let result = self.compiler_temporary("$bound", INTEGER)?;
-        let checked = !self.unchecked_bounds;
+        let checked = !self.options.unchecked_bounds;
         // Every allocated array has a first dimension.
         let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
         let read = self.new_block();
@@ -4213,7 +4239,8 @@ impl Compiler {
             _ => self.terminate("jump", Vec::new(), vec![read])?,
         }
 
-        // Dimensions are stored last first: dimension d is entry cDims - d.
+        // As B$LBND: dimension d reads record cDims - d, which under /R holds
+        // source dimension cDims + 1 - d, as in BC.
         self.select_block(read);
         let entry = self.value(INTEGER);
         self.emit("sub", vec![entry], vec![rank, dimension.clone()]);
@@ -4336,6 +4363,9 @@ impl Compiler {
                 inbounds: false,
             }],
         );
+        if let Some(field) = Slot::at(offset) {
+            self.tag_last(Tag::DescriptorField { descriptor, field });
+        }
         self.descriptor_fields.insert(key, value);
         value
     }
@@ -4854,8 +4884,8 @@ impl Compiler {
                 let (target, callee) = match lowering {
                     Lowering::PackInteger => (INTEGER, "B$FMKI"),
                     Lowering::PackLong => (LONG, "B$FMKL"),
-                    Lowering::PackSingle => (SINGLE, if self.mbf { "B$FMSF" } else { "B$FMKS" }),
-                    Lowering::PackDouble => (DOUBLE, if self.mbf { "B$FMDF" } else { "B$FMKD" }),
+                    Lowering::PackSingle => (SINGLE, if self.options.mbf { "B$FMSF" } else { "B$FMKS" }),
+                    Lowering::PackDouble => (DOUBLE, if self.options.mbf { "B$FMDF" } else { "B$FMKD" }),
                     _ => unreachable!("matched binary packer"),
                 };
                 let (operand, type_id) = self.expression(&arguments[0])?;
@@ -4929,7 +4959,7 @@ impl Compiler {
     fn byref_string_argument(
         &mut self,
         expression: &Expr,
-    ) -> Result<(Operand, bool), SemanticError> {
+    ) -> Result<(Operand, Passing), SemanticError> {
         // A genuine dynamic STRING lvalue already owns a stable descriptor,
         // so ordinary BYREF aliasing passes that descriptor directly. A
         // literal, fixed string, concatenation, or string-function result is
@@ -4958,7 +4988,8 @@ impl Compiler {
         };
         if let Some((place, type_id)) = lvalue {
             if self.string_width(type_id) == Some(0) {
-                return Ok((self.near_string_address(place), false));
+                let passing = self.passed(&place);
+                return Ok((self.near_string_address(place), passing));
             }
         }
 
@@ -4966,7 +4997,26 @@ impl Compiler {
         let temporary = self.owned_string_temporary()?;
         let destination = self.near_string_address(Operand::Place(temporary));
         self.emit_runtime_call("B$SASS", Vec::new(), vec![source, destination.clone()]);
-        Ok((destination, true))
+        Ok((destination, Passing::Temporary))
+    }
+
+    /// Each dimension's lower and upper bound, evaluated where the DIM or
+    /// REDIM runs.
+    fn bounds(&mut self, declaration: &Declaration) -> Result<Vec<(Operand, Operand)>, SemanticError> {
+        let mut bounds = Vec::new();
+        for bound in &declaration.bounds {
+            let lower = match &bound.lower {
+                Some(lower) => {
+                    let (value, type_id) = self.expression(lower)?;
+                    self.convert(value, type_id, INTEGER)?
+                }
+                None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
+            };
+            let (upper, upper_type) = self.expression(&bound.upper)?;
+            let upper = self.convert(upper, upper_type, INTEGER)?;
+            bounds.push((lower, upper));
+        }
+        Ok(bounds)
     }
 
     fn redim(&mut self, declaration: &Declaration) -> Result<(), SemanticError> {
@@ -4974,6 +5024,9 @@ impl Compiler {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
         let variable = self.array(&declaration.name)?;
+        if variable.descriptor_place.is_some_and(|place| self.static_shapes.contains_key(&place)) {
+            return self.fail(format!("{} is static: array already dimensioned", declaration.name));
+        }
         let element = variable.element.expect("an array has an element type");
         let inferred = suffix(&declaration.name);
         let selected = declaration.type_name.as_ref().or(inferred.as_ref());
@@ -4994,30 +5047,11 @@ impl Compiler {
                 declaration.name
             ));
         }
-        let mut operands = Vec::new();
-        for bound in &declaration.bounds {
-            let lower = match &bound.lower {
-                Some(lower) => {
-                    let (value, type_id) = self.expression(lower)?;
-                    self.convert(value, type_id, INTEGER)?
-                }
-                None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
-            };
-            let (upper, upper_type) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, upper_type, INTEGER)?;
-            operands.push(lower);
-            operands.push(upper);
-        }
-        operands.push(Operand::Constant(
-            INTEGER,
-            Number::Integer(self.width(element) as i64),
-        ));
-        operands.push(Operand::Constant(
-            INTEGER,
-            Number::Integer((declaration.bounds.len() | (1 << 8)) as i64),
-        ));
-        operands.push(Operand::Value(self.descriptor_pointer(&variable)?));
+        let bounds = self.bounds(declaration)?;
+        let descriptor = self.descriptor_pointer(&variable)?;
+        let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
+        self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
         Ok(())
     }
 
@@ -5639,6 +5673,7 @@ impl Compiler {
             let offset = self.unsigned_word(&arguments[0])?;
             let segment = self.value(INTEGER);
             self.emit("load", vec![segment], vec![Operand::Place(segment_place)]);
+            self.tag_last(Tag::ReadSegment);
             let pointer_type = self.far_pointer_type(BYTE);
             let pointer = self.value(pointer_type);
             self.emit(
@@ -5760,7 +5795,7 @@ impl Compiler {
             let descriptor = self.string_descriptor(&arguments[0])?;
             let single = intrinsic.lowering == Lowering::UnpackSingle;
             let type_id = if single { SINGLE } else { DOUBLE };
-            let callee = match (self.mbf, single) {
+            let callee = match (self.options.mbf, single) {
                 (false, true) => "B$FCVS",
                 (false, false) => "B$FCVD",
                 (true, true) => "B$MCVS",
@@ -5953,6 +5988,7 @@ impl Compiler {
             let offset = self.unsigned_word(offset)?;
             let length = self.unsigned_word(length)?;
             self.emit_runtime_call("B$BSAV", Vec::new(), vec![path, offset, length]);
+            self.tag_last(Tag::ReadSegment);
             return Ok(());
         }
 
@@ -5971,6 +6007,7 @@ impl Compiler {
                 Operand::Constant(INTEGER, Number::Integer(supplied)),
             ],
         );
+        self.tag_last(Tag::ReadSegment);
         Ok(())
     }
 
@@ -5997,6 +6034,7 @@ impl Compiler {
             ));
         }
         let mut operands = Vec::new();
+        let mut passing = Vec::new();
         let mut string_cleanups = Vec::new();
         let mut byref_copybacks = Vec::new();
         for (argument, (parameter_type, by_value, segmented, array)) in
@@ -6010,6 +6048,7 @@ impl Compiler {
                 if *parameter_type != ANY && argument_type != *parameter_type {
                     return self.fail(format!("SEG argument type does not match {name}"));
                 }
+                passing.push(self.passed(&place));
                 if let Operand::Indirect {
                     base, offset: 0, ..
                 } = &place
@@ -6051,21 +6090,26 @@ impl Compiler {
                 }
                 let descriptor = self.descriptor_pointer(&variable)?;
                 operands.push(Operand::Value(descriptor));
+                passing.push(Passing::Array(descriptor));
             } else if *parameter_type == STRING && self.string_syntax(argument) {
                 // A source STRING formal receives a near descriptor address.
                 // A BYREF formal must outlive any consuming string operation
                 // inside the callee, so non-lvalues are first copied to an
                 // owned descriptor. BYVAL retains the expression descriptor.
                 operands.push(if *by_value {
+                    passing.push(Passing::Value);
                     self.string_descriptor(argument)?
                 } else {
-                    let (operand, cleanup) = self.byref_string_argument(argument)?;
+                    let (operand, passed) = self.byref_string_argument(argument)?;
+                    let cleanup = passed == Passing::Temporary;
+                    passing.push(passed);
                     if cleanup {
                         string_cleanups.push(operand.clone());
                     }
                     operand
                 });
             } else if *by_value {
+                passing.push(Passing::Value);
                 let (operand, argument_type) = self.expression(argument)?;
                 let operand = self.convert(operand, argument_type, *parameter_type)?;
                 if matches!(*parameter_type, SINGLE | DOUBLE) {
@@ -6081,8 +6125,12 @@ impl Compiler {
                 }
             } else {
                 let (place, argument_type) = match self.destination(argument) {
-                    Ok(place) => place,
+                    Ok(place) => {
+                        passing.push(self.passed(&place.0));
+                        place
+                    }
                     Err(_) => {
+                        passing.push(Passing::Temporary);
                         // BASIC materializes an addressable temporary when a
                         // BYREF actual is an expression rather than a place.
                         let (value, type_id) = self.expression(argument)?;
@@ -6151,6 +6199,7 @@ impl Compiler {
                             self.emit("address", vec![address], vec![Operand::Place(temporary)]);
                             operands.push(Operand::Value(address));
                             byref_copybacks.push((original, temporary, *parameter_type));
+                            *passing.last_mut().expect("this argument's passing") = Passing::Copied(base);
                         } else if offset == 0 {
                             operands.push(Operand::Value(base));
                         } else {
@@ -6225,6 +6274,7 @@ impl Compiler {
             signature.cdecl,
             Some(signature.symbol),
         );
+        self.tag_last(Tag::Invoke { arguments: passing });
         // Pascal evaluates actuals left-to-right but BC copies aliased far
         // fields back from the last formal to the first.
         for (destination, temporary, type_id) in byref_copybacks.into_iter().rev() {
@@ -7182,7 +7232,27 @@ impl Compiler {
                 results,
                 operands,
                 callee: None,
+                tag: None,
             });
+    }
+
+    /// Record what the instruction just emitted meant.
+    fn tag_last(&mut self, tag: Tag) {
+        let last = self.blocks[self.current_block]
+            .instructions
+            .last_mut()
+            .expect("an instruction was just emitted");
+        last.tag = Some(tag);
+    }
+
+    /// What passing `place` by reference hands the callee.
+    fn passed(&self, place: &Operand) -> Passing {
+        match place {
+            Operand::Place(place) => Passing::Variable(*place),
+            Operand::Element(place, _) | Operand::Projection { place, .. } => Passing::Element(*place),
+            Operand::Indirect { base, .. } => Passing::Pointer(*base),
+            Operand::Value(_) | Operand::Constant(..) => Passing::Value,
+        }
     }
 
     fn emit_runtime_call(&mut self, callee: &str, results: Vec<u32>, operands: Vec<Operand>) {
@@ -7213,6 +7283,7 @@ impl Compiler {
                 results: vec![result],
                 operands: vec![left, right],
                 callee: Some("B$SCMP".into()),
+                tag: None,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7253,6 +7324,7 @@ impl Compiler {
                 results,
                 operands,
                 callee: Some(callee.into()),
+                tag: None,
             });
         self.invalidate_descriptor_cache();
     }
@@ -7449,6 +7521,7 @@ impl Compiler {
                 let pointer = self.value(pointer_type);
                 self.emit("address", vec![pointer], vec![Operand::Place(*place)]);
                 self.emit_runtime_call(callee, Vec::new(), vec![Operand::Value(pointer)]);
+                self.tag_last(Tag::Release { descriptor: pointer });
             }
         }
         Ok(())
@@ -7544,7 +7617,7 @@ impl Compiler {
                         if operand_index != 0 {
                             out.push(',');
                         }
-                        operand_json(&mut out, operand);
+                        operand_json(&mut out, operand, &function.origins);
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -7558,7 +7631,7 @@ impl Compiler {
                     if index != 0 {
                         out.push(',');
                     }
-                    operand_json(&mut out, operand);
+                    operand_json(&mut out, operand, &function.origins);
                 }
                 out.push_str("],\"targets\":[");
                 numbers(&mut out, &terminator.targets);
@@ -7757,8 +7830,8 @@ impl Compiler {
             out,
             "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\"}}\n",
             self.runtime,
-            if self.row_major { "row-major" } else { "column-major" },
-            if self.alternate_math {
+            if self.options.row_major { "row-major" } else { "column-major" },
+            if self.options.alternate_math {
                 "alternate"
             } else {
                 "inline"
@@ -8114,7 +8187,7 @@ fn numbers(out: &mut String, values: &[u32]) {
     }
 }
 
-fn operand_json(out: &mut String, operand: &Operand) {
+fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32>) {
     match operand {
         Operand::Value(value) => write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap(),
         Operand::Constant(type_id, Number::Integer(value)) => write!(
@@ -8134,7 +8207,7 @@ fn operand_json(out: &mut String, operand: &Operand) {
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand);
+                operand_json(out, operand, origins);
             }
             write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
         }
@@ -8149,7 +8222,7 @@ fn operand_json(out: &mut String, operand: &Operand) {
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand);
+                operand_json(out, operand, origins);
             }
             write!(
                 out,
@@ -8163,11 +8236,13 @@ fn operand_json(out: &mut String, operand: &Operand) {
             type_id,
             volatile,
             inbounds,
-        } => write!(
-            out,
-            "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}"
-        )
-        .unwrap(),
+        } => {
+            write!(out, "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            if let Some(origin) = origins.get(base).filter(|_| *inbounds) {
+                write!(out, "\"origin\":{origin},").unwrap();
+            }
+            write!(out, "\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}").unwrap();
+        }
     }
 }
 

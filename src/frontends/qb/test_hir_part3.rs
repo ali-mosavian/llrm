@@ -43,7 +43,7 @@ fn compat(path: &str) -> std::path::PathBuf {
 
 /// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., unchecked_bounds=...)`.
 fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, huge: bool, unchecked: bool) -> hir::Program {
-    qb_driver::parsed(source, dialect, runtime, None, &[], array_order, huge, false, unchecked, false, false)
+    qb_driver::parsed(source, &qb_driver::Frontend { array_order: array_order.into(), huge_arrays: huge, unchecked_bounds: unchecked, ..qb_driver::Frontend::new(dialect, runtime) }, None)
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
@@ -312,6 +312,58 @@ fn test_string_fre_emits_the_measured_vbdos_runtime_call() {
     let basic = written(&directory, "FRESTR.BAS", b"dim available as long\r\navailable = fre(\"\")\r\n");
     let source = parsed_as(&basic, "vbdos", "vbdos");
     assert!(externals(&source, "FRESTR.BAS").iter().any(|one| one == "B$FRSD"));
+}
+
+/// A masked subscript of a zero-based far array was folded into a scaled
+/// 32-bit address whose index `promote` cannot widen: "secondary address
+/// values have no definition".
+#[test]
+fn test_a_masked_far_subscript_compiles() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "MASKED.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t (f)\r\nt 3\r\nSUB t (f)\r\nDIM s(511), u(319)\r\nFOR x = 0 TO 319\r\nu(x) = s((x + f) AND 511)\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = parsed_as(&basic, "qb45", "qb45");
+    object_bytes(&program, "MASKED.BAS").expect("compiles");
+    // The proven-exact `s(i)` addresses through `[e..+e..*2]`, its shift gone
+    // and the upper halves zeroed once before the loop.
+    let text = listing(&program);
+    let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
+    assert!(body.contains("*2]") && body.contains("movzx") && !body.contains("shl"), "{body}");
+}
+
+/// The main body of `source`'s listing.
+fn main_listing(name: &str, source: &[u8]) -> String {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, name, source);
+    let program = parsed_as(&basic, "qb45", "qb45");
+    object_bytes(&program, name).expect("compiles");
+    let text = listing(&program);
+    text[text.find("$QB$MAIN proc").expect("main")..text.find("$QB$MAIN endp").expect("main end")].to_owned()
+}
+
+/// A static array's proven-exact subscript kept its shift and read the
+/// symbol through a 16-bit register: no 32-bit symbolic form or fixup.
+#[test]
+fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
+    let body = main_listing(
+        "STATIC.BAS",
+        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * 3) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
+    );
+    assert!(body.contains("S%[e") && !body.contains("shl"), "{body}");
+}
+
+/// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
+/// 128K past the element.
+#[test]
+fn test_a_negative_static_subscript_stays_16_bit() {
+    let body = main_listing(
+        "NEGATIVE.BAS",
+        b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
+    );
+    assert!(!body.contains("[e"), "{body}");
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
@@ -973,7 +1025,7 @@ fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
             1,
             hir::Op::Load,
             vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false })],
+            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
         )],
     );
     let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
@@ -1020,7 +1072,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
                     1,
                     hir::Op::Load,
                     vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false })],
+                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
                 )],
             )],
             1,
@@ -1041,7 +1093,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
     };
     let program = vbdos(module.clone());
 
-    let bodies = qb_compile::_alias_annotated(&module, &module.functions, &lower(&program).unwrap()).expect("annotates");
+    let bodies = qb_compile::_alias_annotated(&module, &module.functions, &lower(&program).unwrap(), program.runtime.value()).expect("annotates");
     let call = ops(&bodies[0].body).into_iter().find(|one| one.kind == Kind::Call).expect("the call");
 
     assert!(call.memory_complete);
@@ -1098,6 +1150,19 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
 fn test_identity_phi_edge_survives_control_flow_threading() {
     let source = parsed_with(&fixture("entphi.bas"), "vbdos", "vbdos", "row-major", false, false);
     assert!(!object_bytes(&source, "ENTPHI.BAS").expect("emits").is_empty());
+}
+
+/// `--whole-program` never reached qbfront, so every SUB stayed public.
+#[test]
+fn test_whole_program_procedures_are_not_public() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "WHOLE.BAS", b"DECLARE SUB s ()\nCALL s\nSUB s\nEND SUB\n");
+    let public = |whole_program| {
+        let frontend = qb_driver::Frontend { whole_program, ..qb_driver::Frontend::new("qb45", "qb45") };
+        listing(&qb_driver::parsed(&source, &frontend, None).expect("parses")).contains("public S\n")
+    };
+    assert!(public(false));
+    assert!(!public(true));
 }
 
 /// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on every array.
@@ -1416,7 +1481,7 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
 fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
     let source = qb_driver::ROOT().join("not-read.bas");
     let syntax = |dialect: &str, runtime: &str| {
-        qb_driver::syntax_checked(&source, dialect, runtime, &[], "column-major", false, false, false, false, false)
+        qb_driver::syntax_checked(&source, &qb_driver::Frontend::new(dialect, runtime))
             .expect_err("refused")
             .0
     };
@@ -1434,7 +1499,7 @@ fn optimized_sub(text: &str, name: &str) -> String {
     let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let (index, function) = function_named(&source, name);
     let module = &source.modules[0];
-    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"))
+    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"), source.runtime.value())
         .expect("annotates");
     mir_text(&optimized(&source, function, &bodies[index]))
 }
@@ -1487,6 +1552,96 @@ SUB b\r\nDEF SEG\r\nEND SUB\r\n";
     assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, true]);
 }
 
+/// Every runtime call counted as a DEF SEG, so PLASMA's POKE reloaded b$seg
+/// after INKEY$ and never saw &HA000. Only b$seg's listed writers write it.
+#[test]
+fn test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\na\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nk$ = INKEY$\r\nPOKE 3, 4\r\nb\r\nPOKE 5, 6\r\nEND SUB\r\n\
+SUB b\r\nPRINT \"b\"\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(text, "A")), [false, false, false]);
+}
+
+/// Code this module cannot see may run DEF SEG: another module's SUB, or an
+/// error handler entered from inside a runtime call. Keeping the segment
+/// across either POKEs the wrong memory.
+#[test]
+fn test_a_poke_after_code_that_may_run_def_seg_reloads_its_segment() {
+    let elsewhere = "DECLARE SUB a ()\r\nDECLARE SUB other ()\r\na\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nother\r\nPOKE 3, 4\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(elsewhere, "A")), [false, true]);
+    let handled = "DECLARE SUB a ()\r\nON ERROR GOTO fail\r\na\r\nEND\r\nfail:\r\nDEF SEG = 0\r\nRESUME NEXT\r\n\
+SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nk$ = INKEY$\r\nPOKE 3, 4\r\nEND SUB\r\n";
+    assert_eq!(far_selectors_loaded(&optimized_sub(handled, "A")), [false, true]);
+}
+
+/// Each function names b$seg through its own place. Keeping one object per
+/// name lost the caller's, so fractaleffect's DEF SEG before fracline, which
+/// PEEKs through it, was deleted as a dead store.
+#[test]
+fn test_a_def_seg_before_a_sub_that_peeks_is_kept() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr(10)\r\na\r\n\
+SUB a\r\narr(1) = 2\r\nDEF SEG = &HA000\r\nb\r\nDEF SEG = 0\r\nb\r\nEND SUB\r\n\
+SUB b\r\nPRINT PEEK(1)\r\nEND SUB\r\n";
+    assert!(optimized_sub(text, "A").contains("<- -24576:2"));
+}
+
+/// Each function numbered its own places, and a global's object was named by
+/// that number, so b read a different b$seg than a wrote. a's DEF SEG before
+/// calling b was deleted as dead, and b POKEd through a stale segment.
+#[test]
+fn test_a_global_is_one_object_in_every_function() {
+    let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr%(100)\r\na\r\n\
+SUB a\r\nn% = 5\r\nDEF SEG = VARSEG(arr%(0))\r\nb\r\nDEF SEG = &HA000\r\nPOKE 1, n%\r\nEND SUB\r\n\
+SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
+    let stores = regex::Regex::new(r"cell\(global\d+:[?\d]+\[0:2:1/1\]\):2 <-").expect("a pattern");
+    let optimized = optimized_sub(text, "A");
+    assert_eq!(stores.find_iter(&optimized).count(), 2, "{optimized}");
+}
+
+#[test]
+fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
+    // CYCLEBLOBS stepped one pointer per term; five spilled, each an
+    // `add [bp-N],2` per pixel where its invariant base cost nothing.
+    let text = optimized_sub(SEVEN_TERMS, "T");
+    let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
+    let steps = body.lines().filter(|line| line.trim_start().starts_with('v') && line.ends_with(" add 2:2")).count();
+    assert!(steps <= 1, "{steps} pointer steps\n{text}");
+}
+
+const SEVEN_TERMS: &str = "DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED sp(8000), f(700), xp(7), yy(7), cd(2000)\r\nt\r\nSUB t\r\n\
+DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2) + f(x - xp(2))) + \
+sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
+sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
+
+/// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
+/// pixel: seven subtracts and seven multiplies of the counter, where one
+/// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
+#[test]
+fn test_affine_terms_of_one_counter_share_its_scaled_value() {
+    let text = optimized_sub(SEVEN_TERMS, "T");
+    let counter = &regex::Regex::new(r"f\d+ <- (v\d+):2 sub -?\d+:2").expect("a pattern").captures(&text).unwrap_or_else(|| panic!("{text}"))[1];
+    let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
+    let reads = body
+        .lines()
+        .filter(|line| line.trim_start().starts_with('v') && line.contains(&format!("{counter}:2 ")) && !line.contains(" add 1:2"));
+    assert_eq!(reads.count(), 1, "{text}");
+}
+
+/// A POKE into VGA memory counted as reaching a local array's descriptor, so
+/// PLASMA reloaded three descriptors per pixel: the store carried provenance,
+/// and provenance never asked where its segment points.
+#[test]
+fn test_a_poke_to_video_memory_leaves_a_local_arrays_descriptor_hoisted() {
+    let text = optimized_sub(
+        "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nblit\r\nSUB blit\r\nDIM a(320)\r\nDEF SEG = &HA000\r\n\
+FOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE x, a(x)\r\nNEXT x\r\nNEXT y\r\nEND SUB\r\n",
+        "BLIT",
+    );
+    let row = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the POKE's block");
+    assert!(!row.contains("load cell(frame"), "{text}");
+}
+
 /// A POKE into VGA memory counted as reaching every global, so the row loop
 /// reloaded yy() and xp() per pixel. A segment the machine keeps no program
 /// data in reaches none.
@@ -1496,4 +1651,34 @@ fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
     let row = text.split("\n  jump").find(|block| block.contains("cell(far+")).expect("the POKE's block");
     let invariant = row.lines().filter(|line| line.contains("<- load") && !line.contains("]+v")).collect::<Vec<_>>();
     assert!(invariant.is_empty(), "{text}");
+}
+
+/// PLASMA read three local arrays and VRAM with three selector registers, so
+/// one register took two of them and was reloaded for each every pixel. The
+/// data segment register is the fourth, with the data group reached through
+/// the stack segment while it holds one.
+#[test]
+fn test_a_loop_out_of_selectors_holds_one_in_the_data_segment() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "T.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED k\r\nt\r\nSUB t\r\nDIM a(320), b(320), c(128, 128)\r\n\
+DEF SEG = &HA000\r\nFOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE o, c((a(x) + k) AND 127, (b(x) + y) AND 127)\r\n\
+o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let text = listing(&parsed_as(&source, "qb45", "qb45"));
+    let function = between(&text, "T proc", "T endp");
+    let lines = function.lines().collect::<Vec<_>>();
+    let store = lines.iter().position(|line| line.contains("mov") && line.contains("byte ptr") && line.contains(":[")).expect("the POKE");
+    let top = lines[..store].iter().rposition(|line| line.ends_with(':')).expect("the loop's label");
+    let label = lines[top].trim_end_matches(':');
+    let bottom = store + lines[store..].iter().position(|line| line.trim_start().starts_with('j') && line.ends_with(label)).expect("the back edge");
+    let inner = lines[top..=bottom].join("\n");
+    assert!(!regex::Regex::new(r"\bl[efg]s\b|pushw\s+-?\d+\n\s+pop\s+[efg]s").unwrap().is_match(&inner), "{inner}");
+    // While the data segment register holds a selector, the data group is
+    // reached through the stack segment.
+    if regex::Regex::new(r"pop\s+ds|mov\s+ds,|\blds\b").unwrap().is_match(&inner) {
+        assert!(inner.lines().filter(|line| line.contains("K%")).all(|line| line.contains("ss:K%")), "{inner}");
+    }
 }
