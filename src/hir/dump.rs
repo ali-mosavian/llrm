@@ -187,6 +187,15 @@ pub fn mir_text(lowered: &Lowered) -> String {
         let successors = block.succ.iter().map(|one| names.block(*one)).collect::<Vec<_>>().join(", ");
         let successors = if successors.is_empty() { "-".to_owned() } else { successors };
         lines.push(format!("{} -> {successors}", names.block(block.at)));
+        for phi in &block.phis {
+            let incoming = phi
+                .incoming
+                .iter()
+                .map(|(at, value)| format!("{}: {}", names.block(*at), names.value(*value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("  {} <- phi({incoming})", names.value(phi.result)));
+        }
         for op in &block.ops {
             let operation = _operation(op, &mut names);
             let target = op.target.map_or_else(String::new, |target| format!(" -> {}", names.block(target)));

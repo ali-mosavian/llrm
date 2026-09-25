@@ -1650,8 +1650,8 @@ sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
-    let counter = &regex::Regex::new(r"f\d+ <- (v\d+):2 sub -?\d+:2").expect("a pattern").captures(&text).unwrap_or_else(|| panic!("{text}"))[1];
     let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
+    let counter = &regex::Regex::new(r"(v\d+) <- phi\(").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))[1];
     let reads = body
         .lines()
         .filter(|line| line.trim_start().starts_with('v') && line.contains(&format!("{counter}:2 ")) && !line.contains(" add 1:2"));
