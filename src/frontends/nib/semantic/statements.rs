@@ -432,6 +432,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Statement::Expr(expression) => {
+                // Checked before its shape, so what it names is learned and its own error comes first.
+                self.expression(expression, None)?;
                 if !matches!(
                     expression,
                     Expr::Call { .. } | Expr::MethodCall { .. } | Expr::Try { .. }
@@ -441,7 +443,6 @@ impl<'a> FunctionCompiler<'a> {
                         "only a function call may be used as an expression statement",
                     ));
                 }
-                self.expression(expression, None)?;
             }
             Statement::Return {
                 value: Some(expression),

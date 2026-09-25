@@ -96,7 +96,14 @@ fn member(loaded: &Loaded, text: &str, facts: &[Fact], line: usize, column: usiz
         }
         _ => None,
     })?;
-    // A linked name is qualified by its module's.
+    let (module, owner) = declaring(loaded, owner);
+    let declaration = index::find(&loaded.modules[&module], &format!("{owner}.{name}"))?;
+    Some(Target::Declaration { module, declaration })
+}
+
+/// The module declaring the type the checker names `owner`, and its name there:
+/// a linked name is qualified by its module's.
+pub fn declaring<'o>(loaded: &Loaded, owner: &'o str) -> (String, &'o str) {
     let module = loaded
         .modules
         .keys()
@@ -104,7 +111,6 @@ fn member(loaded: &Loaded, text: &str, facts: &[Fact], line: usize, column: usiz
         .max_by_key(|module| module.len())
         .cloned()
         .unwrap_or_default();
-    let owner = if module.is_empty() { owner.as_str() } else { &owner[module.len() + 1..] };
-    let declaration = index::find(&loaded.modules[&module], &format!("{owner}.{name}"))?;
-    Some(Target::Declaration { module, declaration })
+    let owner = if module.is_empty() { owner } else { &owner[module.len() + 1..] };
+    (module, owner)
 }
