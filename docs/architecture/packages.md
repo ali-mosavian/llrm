@@ -1,10 +1,12 @@
 # llrm packages
 
-A package is a library of compiled modules that programs import without
-recompiling: an OMF `.LIB` whose objects each carry a module's code for the
-linker and its interface for the compiler. Importing costs reading interfaces
-and linking; only the importing program's own functions, and the generic
-instances it makes, go through the optimizer. Versions, a registry and
+A module is one source file, compiled to one OMF object that carries its
+code for the linker and its interface for the compiler. A package is a
+collection of modules: an OMF `.LIB` of their objects.
+
+Programs import a package without recompiling it. Importing costs reading
+interfaces and linking; only the importing program's own functions, and the
+generic instances it makes, go through the optimizer. Versions, a registry and
 dependency resolution come later, on top of this format.
 
 ## What a module holds
