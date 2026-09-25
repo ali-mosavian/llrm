@@ -1779,7 +1779,7 @@ pub struct Lowering<'a> {
     _sites: IndexMap<u32, Object>,
     _address_forms: IndexMap<u32, (ir::Held, num_bigint::BigInt)>,
     _indexed: IndexMap<u32, addressforms::FoldedForm>,
-    _exact: IndexMap<u32, i64>,
+    _exact: BTreeSet<u32>,
     _folded: BTreeSet<u32>,
     _address_promoted: BTreeSet<u32>,
     _next: u32,

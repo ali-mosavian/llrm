@@ -13,7 +13,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::{
-    copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
+    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
     target,
 };
 use crate::frontends::bc::declen;
@@ -148,7 +148,7 @@ impl LIRTransform for Peephole {
             &transferred(&commuted(&constants(&pushes(&body)))),
             &self.cpu,
         )?)))));
-        let body = crate::backend::scaledindex::scaled_indexes(&body, &self.cpu)?;
+        let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
         let body = increments(&body);
@@ -2235,6 +2235,12 @@ pub(crate) fn _loses_live_definition(parts: &[Arc<Insn>], combined: &Insn, after
         .flat_map(|one| one.defines.iter().copied())
         .filter(|value| !combined.defines.contains(value))
         .collect();
+    _read_before_redefined(&eliminated, after, live_out)
+}
+
+/// Whether `after`, or the block's successors past it, read any of
+/// `eliminated` before redefining it.
+pub(crate) fn _read_before_redefined(eliminated: &BTreeSet<u32>, after: &[Arc<Insn>], live_out: &BTreeSet<u32>) -> bool {
     let reads = |one: &Insn, value: u32| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value);
     eliminated.iter().any(|value| {
         let mut redefined: Option<Option<i64>> = None;
@@ -2565,119 +2571,65 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
     Ok(body.with_blocks(blocks))
 }
 
-/// One register's multiple, as an affine chain computes it.
-type Terms = Vec<(Register, i64)>;
-
-/// The 67h address naming `terms` plus `disp`, if one does.
-/// `scales` are the index scales the target's 32-bit address form takes.
-fn _affine_form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Option<Address> {
-    let at = |through: Register, index: Register, scale: i64| {
-        (index != Register::ESP && scales.contains(&scale))
-            .then_some(Address { through, index, scale, offset: disp, ..Address::new(None) })
-    };
-    match *terms {
-        [(only, 1)] => Some(Address { through: only, offset: disp, ..Address::new(None) }),
-        [(only, scale)] => at(only, only, scale - 1).or_else(|| at(Register::None, only, scale)),
-        [(base, 1), (index, scale)] | [(index, scale), (base, 1)] => {
-            at(base, index, scale).or_else(|| at(index, base, 1).filter(|_| scale == 1))
-        }
-        _ => None,
-    }
-}
-
 /// `mov z,y` and the arithmetic after it that only rewrites z, as one 67h LEA.
 ///
-/// Each step keeps z an affine sum of registers: `add`/`sub` of a constant,
-/// `inc`/`dec`, `shl` by a constant, `add z,z` and `add z,w`. The longest
-/// prefix whose flags are dead (`dead`), whose sum an address names, and
-/// which the target prices no dearer in cycles or bytes becomes one LEA. A
-/// word result keeps only the low sixteen bits, which the upper halves of
+/// Each step keeps z an affine sum of registers (`affine::step`). The
+/// longest prefix whose flags are dead (`dead`), whose sum an address names,
+/// and which the target prices no dearer in cycles or bytes becomes one LEA.
+/// A word result keeps only the low sixteen bits, which the upper halves of
 /// the registers read cannot reach. Returns the instructions consumed.
 fn _affine_address(
     parts: &[Arc<Insn>],
     dead: &HashSet<usize>,
     cpu: &Profile,
 ) -> Result<Option<(usize, Arc<Insn>)>, String> {
-    let plain = |one: &Insn| {
-        one.what.is_some()
-            && one.clobbers.is_empty()
-            && one.clobbers_high.is_empty()
-            && one.spread.is_empty()
-            && one.group.is_none()
-            && !one.frame_adjust
-    };
-    let Some(copy) = parts.first().filter(|one| plain(one)) else {
+    let Some(copy) = parts.first() else {
         return Ok(None);
     };
     let Some(wide) = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
         return Ok(None);
     };
-    let copied = copy.what.as_ref().expect("checked plain");
-    let (dest, source) = match (copied.op, copied.name.as_deref(), copied.dests.as_slice(), copied.sources.as_slice()) {
-        (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Reg(source)]) => (*dest, *source),
-        _ => return Ok(None),
+    let Some((dest, affine::Step::Copy(source), mut old)) = affine::step(copy, cpu) else {
+        return Ok(None);
     };
-    let register = |one: &Reg| one.width == dest.width && target::WIDTHS.contains_key(&one.register);
     let z = full32(dest.register);
-    if ![2, 4].contains(&dest.width) || !register(&dest) || !register(&source) || full32(source.register) == z {
+    if full32(source.register) == z {
         return Ok(None);
     }
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
-    let (mut terms, mut disp): (Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut old = cpu.operations.r#move;
+    let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
     let mut best: Option<(usize, Address, i64)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
-        if !plain(one) {
-            break;
-        }
-        let what = one.what.as_ref().expect("checked plain");
-        let [Loc::Reg(written)] = what.dests.as_slice() else {
+        let Some((written, step, cost)) = affine::step(one, cpu) else {
             break;
         };
-        if *written != dest {
+        if written != dest {
             break;
         }
-        let first = what.sources.first();
-        if first.is_some_and(|first| *first != Loc::Reg(dest)) {
-            break;
-        }
-        match (what.op, what.name.as_deref(), &what.sources[1..]) {
-            (Operation::Binary, Some(name @ ("add" | "sub")), [Loc::Imm(Imm { value, address: None, .. })]) => {
-                disp = wrapped(if name == "add" { disp + value } else { disp - value });
-                old += cpu.operations.add;
+        match step {
+            affine::Step::Add(value) => disp = wrapped(disp + value),
+            affine::Step::Scale(factor) => {
+                terms.iter_mut().for_each(|term| term.1 *= factor);
+                disp = wrapped(disp * factor);
             }
-            (Operation::Unary, Some(name @ ("inc" | "dec")), []) => {
-                disp = wrapped(if name == "inc" { disp + 1 } else { disp - 1 });
-                old += cpu.operations.add;
-            }
-            (Operation::Binary, Some("shl" | "sal"), [Loc::Imm(Imm { value: count @ 1..=3, address: None, .. })]) => {
-                terms.iter_mut().for_each(|term| term.1 <<= count);
-                disp = wrapped(disp << count);
-                old += cpu.operations.shift;
-            }
-            (Operation::Binary, Some("add"), [Loc::Reg(other)]) if *other == dest => {
-                terms.iter_mut().for_each(|term| term.1 *= 2);
-                disp = wrapped(disp * 2);
-                old += cpu.operations.add;
-            }
-            (Operation::Binary, Some("add"), [Loc::Reg(other)]) if register(other) => {
+            affine::Step::AddRegister(other) => {
                 let root = full32(other.register);
                 match terms.iter_mut().find(|term| term.0 == root) {
                     Some(term) => term.1 += 1,
                     None => terms.push((root, 1)),
                 }
-                old += cpu.operations.add;
             }
-            _ => break,
+            affine::Step::Copy(_) => break,
         }
+        old += cost;
         if terms.len() > 2 || terms.iter().any(|term| term.1 > 9) {
             break;
         }
         if !dead.contains(&id(one)) {
             continue;
         }
-        if let Some(address) = _affine_form(&terms, disp, &wide.scales) {
+        if let Some(address) = affine::form(&terms, disp, &wide.scales) {
             best = Some((at, address, old));
         }
     }

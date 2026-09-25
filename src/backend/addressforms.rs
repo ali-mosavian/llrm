@@ -181,9 +181,10 @@ pub fn indexed(
     exposed: &BTreeSet<u32>,
     address_forms: &[AddressForm],
     costs: Option<&OperationCosts>,
-) -> Result<(IndexMap<u32, FoldedForm>, BTreeSet<u32>, BTreeSet<u32>, IndexMap<u32, i64>), String> {
+) -> Result<(IndexMap<u32, FoldedForm>, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>), String> {
     let default = OperationCosts::default();
     let costs = costs.unwrap_or(&default);
+    let exact = ranges::exact_offsets(body)?;
     let made: IndexMap<u32, &Op> = body
         .blocks
         .iter()
@@ -678,7 +679,7 @@ pub fn indexed(
                             // only on the defined range.  Any other access
                             // wraps at 16 bits, so its wider sum must be exact.
                             || !typed_access
-                                && !cells.iter().all(|cell| ranges::unwrapped(cell, base_args[0].value, fact, scale))
+                                && !exact.contains(&address.value.id)
                     }) {
                         safe = false;
                         break;
@@ -791,89 +792,7 @@ pub fn indexed(
             break;
         }
     }
-    let exact = exact_scales(body, &forms, &made)?;
     Ok((forms, folded, promoted, exact))
-}
-
-/// Each folded `[base+index]` address whose parts sum exactly when widened,
-/// and the scale that made the index from its source. `ranges::unwrapped`
-/// proves it for every cell the address reaches.
-fn exact_scales(
-    body: &Rc<MirBody>,
-    forms: &IndexMap<u32, FoldedForm>,
-    made: &IndexMap<u32, &Op>,
-) -> Result<IndexMap<u32, i64>, String> {
-    let mut named: IndexMap<u32, mir::Value> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.phis.iter().map(|phi| phi.result))
-        .map(|value| (value.id, value))
-        .collect();
-    named.extend(made.values().flat_map(|op| op.defines.iter()).map(|value| (value.id, *value)));
-    let mut cells: IndexMap<u32, Vec<(i64, &mir::MemRef)>> = IndexMap::default();
-    for block in &body.blocks {
-        for op in &block.ops {
-            for arg in op.args.iter().chain(&op.results) {
-                if let Arg::Cell(cell) = arg {
-                    if let Some(base) = cell.r#ref.base {
-                        cells.entry(base.id).or_default().push((block.at, &cell.r#ref));
-                    }
-                }
-            }
-        }
-    }
-    let scoped = ranges::scoped(body)?;
-    let mut exact = IndexMap::default();
-    for (address, form) in forms {
-        let FoldedForm::Indexed((IndexedBase::Held(base), index, 1)) = form else {
-            continue;
-        };
-        let (Some(base), Some(reached)) = (named.get(&base.value), cells.get(address)) else {
-            continue;
-        };
-        let product = made.get(&index.value).filter(|op| {
-            matches!(op.kind, Kind::Mul | Kind::Shl)
-                && op.loads.is_empty()
-                && !mir::partial(op)
-                && op.results.len() == 1
-                && matches!(op.results[0], Arg::Held(held) if held.value.id == index.value)
-        });
-        let (source, scale) = match product {
-            Some(op) => {
-                let source = op.args.iter().find_map(|arg| match arg {
-                    Arg::Held(held) if held.width == index.width => Some(held.value),
-                    _ => None,
-                });
-                let amount = op.args.iter().find_map(|arg| match arg {
-                    Arg::Const(constant) => i64::try_from(&constant.n).ok(),
-                    _ => None,
-                });
-                let scale = match (op.kind, amount) {
-                    (Kind::Mul, Some(amount)) if amount > 0 => amount,
-                    (Kind::Shl, Some(amount)) if (0..16).contains(&amount) => 1 << amount,
-                    _ => continue,
-                };
-                let Some(source) = source else {
-                    continue;
-                };
-                (source, scale)
-            }
-            None => match named.get(&index.value) {
-                Some(value) => (*value, 1),
-                None => continue,
-            },
-        };
-        let proven = reached.iter().all(|(at, cell)| {
-            scoped
-                .get(at)
-                .and_then(|known| known.get(&source))
-                .is_some_and(|interval| ranges::unwrapped(cell, *base, interval, scale))
-        });
-        if proven {
-            exact.insert(*address, scale);
-        }
-    }
-    Ok(exact)
 }
 
 /// Make selected word definitions usable as dword address components.
@@ -1010,17 +929,15 @@ pub fn promote(
 }
 
 /// `what` with every folded far address written as its cell's base and index,
-/// and the scale `exact` proved it from.
-pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact: &IndexMap<u32, i64>) -> Option<Semantics> {
+/// and each cell whose address `exact` names marked exact.
+pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact: &BTreeSet<u32>) -> Option<Semantics> {
     let what = what?;
-    if forms.is_empty() {
-        return Some(what.clone());
-    }
-
     let operand = |arg: &Loc| -> Loc {
         let Loc::Mem(cell) = arg else {
             return arg.clone();
         };
+        let cell = &ir::Mem { exact: cell.base.is_some_and(|base| exact.contains(&base.value)), ..cell.clone() };
+        let arg = &Loc::Mem(cell.clone());
         let Some(form) = cell.base.and_then(|base| forms.get(&base.value)) else {
             return arg.clone();
         };
@@ -1068,7 +985,6 @@ pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact
             }
             IndexedBase::Held(base) => {
                 let mut changed = cell.clone();
-                changed.exact_scale = cell.base.and_then(|address| exact.get(&address.value)).copied();
                 changed.base = Some(base);
                 changed.index = index;
                 changed.scale = scale;
@@ -1347,7 +1263,7 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
 
-        let changed = scaled(Some(&what), &forms, &IndexMap::default());
+        let changed = scaled(Some(&what), &forms, &BTreeSet::new());
 
         assert_eq!(folded, set(&[frame.id, address.id]));
         let changed = changed.expect("changed");
@@ -1436,7 +1352,7 @@ mod tests {
         );
 
         let (forms, folded, _promoted, _) = indexed(&Rc::new(MirBody::clone(&body)), &set(&[]), &[], None).unwrap();
-        let changed = scaled(Some(&fld(cell_of(element.id, 8))), &forms, &IndexMap::default());
+        let changed = scaled(Some(&fld(cell_of(element.id, 8))), &forms, &BTreeSet::new());
 
         assert_eq!(folded, set(&[frame.id, end.id, element.id]));
         let changed = changed.expect("changed");

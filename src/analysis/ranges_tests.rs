@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge, unwrapped};
+use super::{_computed, _recurrence_span, Interval, bounded, covering, on_edge};
 use crate::analysis::induction::counted_loops_tests::{_loop, shaped};
 use crate::model::passes::{O2, Options};
 use crate::support::testing;
@@ -227,28 +227,6 @@ fn test_a_posttested_header_knows_its_counter() {
     let counter = body.blocks[1].phis[0].result;
     let known = bounded(&Rc::new(body)).unwrap();
     assert_eq!(known.get(&1).and_then(|facts| facts.get(&counter)), Some(&interval(0, 9, 1)));
-}
-
-/// A 32-bit sum of a 16-bit address is exact only from the object's origin
-/// and while the scaled index stays inside the address width.
-#[test]
-fn test_an_address_is_unwrapped_only_from_its_origin_and_in_range() {
-    let (origin, other) = (value(1, 0), value(2, 0));
-    let reference = MemRef {
-        base_width: 2,
-        inbounds: true,
-        origin: Some(origin),
-        ..MemRef::new(Some(Addr::new(Space::Far, 0)), 2)
-    };
-    assert!(unwrapped(&reference, origin, &interval(0, 511, 2), 2));
-    assert!(!unwrapped(&reference, other, &interval(0, 511, 2), 2));
-    assert!(!unwrapped(&reference, origin, &interval(0, 32768, 2), 2));
-    assert!(!unwrapped(&reference, origin, &interval(-1, 511, 2), 2));
-    assert!(!unwrapped(&MemRef { inbounds: false, ..reference.clone() }, origin, &interval(0, 511, 2), 2));
-    // `DIM a(-10 TO 10)`: a displacement covering a negative index still
-    // zero-extends it, -1 to 0FFFFh, past the segment.
-    let displaced = MemRef { addr: Some(Addr::new(Space::Far, 20)), ..reference.clone() };
-    assert!(!unwrapped(&displaced, origin, &interval(-10, 10, 2), 2));
 }
 
 #[test]

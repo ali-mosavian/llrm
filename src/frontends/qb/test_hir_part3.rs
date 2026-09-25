@@ -334,6 +334,38 @@ fn test_a_masked_far_subscript_compiles() {
     assert!(body.contains("*2]") && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
+/// The main body of `source`'s listing.
+fn main_listing(name: &str, source: &[u8]) -> String {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, name, source);
+    let program = parsed_as(&basic, "qb45", "qb45");
+    object_bytes(&program, name).expect("compiles");
+    let text = listing(&program);
+    text[text.find("$QB$MAIN proc").expect("main")..text.find("$QB$MAIN endp").expect("main end")].to_owned()
+}
+
+/// A static array's proven-exact subscript kept its shift and read the
+/// symbol through a 16-bit register: no 32-bit symbolic form or fixup.
+#[test]
+fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
+    let body = main_listing(
+        "STATIC.BAS",
+        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * 3) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
+    );
+    assert!(body.contains("S%[e") && !body.contains("shl"), "{body}");
+}
+
+/// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
+/// 128K past the element.
+#[test]
+fn test_a_negative_static_subscript_stays_16_bit() {
+    let body = main_listing(
+        "NEGATIVE.BAS",
+        b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
+    );
+    assert!(!body.contains("[e"), "{body}");
+}
+
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
 #[test]
 fn test_dynamic_array_walk_keeps_far_pointer_halves_defined() {

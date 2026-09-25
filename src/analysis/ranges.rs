@@ -70,21 +70,158 @@ pub(crate) fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interv
     Cow::Owned(covered)
 }
 
-/// Whether `reference`, based at `base` plus `index * scale`, names the same
-/// byte when its address is summed wider than its address width.
+/// The values that address cells whose offset every wider sum names exactly.
 ///
-/// It does when `base` is the reference's origin, `index` is never negative
-/// (the wider sum zero-extends it), and `index * scale` plus the displacement
-/// cannot leave the address width: the wrapped in-object offset then equals
-/// the unwrapped one, and origin plus an in-object offset cannot pass the
-/// segment's end.
-pub(crate) fn unwrapped(reference: &MemRef, base: Value, index: &Interval, scale: i64) -> bool {
-    if !reference.inbounds || reference.origin != Some(base) || index.width != reference.base_width {
+/// A 16-bit address wraps; summed through 32-bit registers it does not. The
+/// two agree for a cell whose start is its object's first byte (a symbol, or
+/// the far origin the frontend names) when every partial sum of the offset
+/// added to that start, as the affine operations computing it would be cut
+/// anywhere, is a non-negative integer below 64K: each register then holds
+/// its partial sum exactly, zero extension is the identity, and the object
+/// ending inside its segment keeps the total there. The language's promise
+/// that the access stays inside its object (`inbounds`) is what places the
+/// start. A value is exact only if every cell it addresses is.
+pub(crate) fn exact_offsets(body: &Rc<MirBody>) -> Result<BTreeSet<u32>, String> {
+    let scoped = scoped(body)?;
+    let mut made: IndexMap<Value, (&Op, i64)> = IndexMap::default();
+    let mut arrived: IndexMap<Value, i64> = IndexMap::default();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            arrived.insert(phi.result, block.at);
+        }
+        for op in &block.ops {
+            for result in &op.results {
+                if let Arg::Held(held) = result {
+                    made.insert(held.value, (op, block.at));
+                }
+            }
+        }
+    }
+    let mut verdict: IndexMap<u32, bool> = IndexMap::default();
+    for block in &body.blocks {
+        for op in &block.ops {
+            for arg in op.args.iter().chain(&op.results) {
+                let Arg::Cell(cell) = arg else {
+                    continue;
+                };
+                let Some(base) = cell.r#ref.base else {
+                    continue;
+                };
+                let exact = _exact_cell(&cell.r#ref, base, block.at, &made, &arrived, &scoped);
+                *verdict.entry(base.id).or_insert(true) &= exact;
+            }
+        }
+    }
+    Ok(verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect())
+}
+
+type Facts = IndexMap<i64, IndexMap<Value, Interval>>;
+
+fn _exact_cell(
+    reference: &MemRef,
+    base: Value,
+    at: i64,
+    made: &IndexMap<Value, (&Op, i64)>,
+    arrived: &IndexMap<Value, i64>,
+    scoped: &Facts,
+) -> bool {
+    let Some(addr) = reference.addr else {
+        return false;
+    };
+    if !reference.inbounds || reference.base_width != 2 {
         return false;
     }
-    let disp = BigInt::from(reference.addr.map_or(0, |address| address.disp));
-    let limit = BigInt::from(1_u8) << (8 * reference.base_width);
-    index.low >= BigInt::from(0_u8) && &index.low * scale + &disp >= BigInt::from(0_u8) && &index.high * scale + &disp < limit
+    // The part of the address that is an offset into the object.
+    let offset = match addr.space {
+        Space::Segment | Space::External => Some(base),
+        Space::Far | Space::Literal => {
+            let Some(origin) = reference.origin else {
+                return false;
+            };
+            if origin == base {
+                None
+            } else {
+                let Some((op, _)) = made.get(&base) else {
+                    return false;
+                };
+                let held: Vec<Value> = op
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        Arg::Held(held) => Some(held.value),
+                        _ => None,
+                    })
+                    .collect();
+                match (op.kind, held.as_slice()) {
+                    (Kind::Add | Kind::PtrOffset, [left, right]) if *left == origin => Some(*right),
+                    (Kind::Add | Kind::PtrOffset, [left, right]) if *right == origin => Some(*left),
+                    _ => return false,
+                }
+            }
+        }
+        _ => return false,
+    };
+    let (low, high) = match offset {
+        Some(offset) => match _exact_sum(offset, at, made, arrived, scoped, 16) {
+            Some(bounds) => bounds,
+            None => return false,
+        },
+        None => (0, 0),
+    };
+    low + addr.disp >= 0 && high + addr.disp < 1 << 16
+}
+
+/// The integer range of `value`, where it and every affine partial sum
+/// computing it is a non-negative 16-bit integer; leaves read at `at`.
+fn _exact_sum(
+    value: Value,
+    at: i64,
+    made: &IndexMap<Value, (&Op, i64)>,
+    arrived: &IndexMap<Value, i64>,
+    scoped: &Facts,
+    depth: usize,
+) -> Option<(i64, i64)> {
+    // Past the depth, a node is unproven, not a leaf: a later pass may still
+    // see through it.
+    if depth == 0 {
+        return None;
+    }
+    let inside = |bounds: (i64, i64)| (bounds.0 >= 0 && bounds.1 < 1 << 16).then_some(bounds);
+    let operand = |arg: &Arg| match arg {
+        Arg::Held(held) if held.width == 2 => _exact_sum(held.value, at, made, arrived, scoped, depth.checked_sub(1)?),
+        Arg::Const(constant) => i64::try_from(&constant.n).ok().map(|n| (n, n)),
+        _ => None,
+    };
+    if let Some((op, _)) = made.get(&value).filter(|(op, _)| {
+        op.loads.is_empty() && !crate::model::mir::partial(op) && op.results.len() == 1
+    }) {
+        let affine = match (op.kind, op.args.as_slice()) {
+            (Kind::Copy, [one]) => Some(operand(one)),
+            (Kind::Add, [left, right]) => Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 + r.0, l.1 + r.1))),
+            (Kind::Sub, [left, right @ Arg::Const(_)]) => {
+                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 - r.1, l.1 - r.0)))
+            }
+            (Kind::Mul, [left, right @ Arg::Const(_)]) | (Kind::Mul, [right @ Arg::Const(_), left]) => {
+                Some(operand(left).zip(operand(right)).filter(|(_, r)| r.0 >= 0).map(|(l, r)| (l.0 * r.0, l.1 * r.0)))
+            }
+            (Kind::Shl, [left, Arg::Const(count)]) => {
+                let count = i64::try_from(&count.n).ok().filter(|count| (0..16).contains(count));
+                Some(operand(left).zip(count).map(|(l, count)| (l.0 << count, l.1 << count)))
+            }
+            _ => None,
+        };
+        if let Some(bounds) = affine {
+            return bounds.and_then(inside);
+        }
+    }
+    // A leaf: whatever it is, it is read in this block.
+    let defined = made.get(&value).map(|(_, block)| *block).or_else(|| arrived.get(&value).copied());
+    let fact = scoped
+        .get(&at)
+        .and_then(|known| known.get(&value))
+        .or_else(|| defined.and_then(|block| scoped.get(&block)).and_then(|known| known.get(&value)))?;
+    let bounds = (i64::try_from(&fact.low).ok()?, i64::try_from(&fact.high).ok()?);
+    (fact.width == 2).then_some(bounds).and_then(inside)
 }
 
 /// Signed comparison facts on one CFG edge; `None` means that edge is impossible.
