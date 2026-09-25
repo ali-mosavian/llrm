@@ -95,6 +95,31 @@ fn count(argument: &Scalar) -> Outcome<usize> {
     usize::try_from(value).map_err(|_| super::ExecutionError(format!("Illegal function call: {value}")))
 }
 
+/// `VAL`: blanks are skipped anywhere, and the number is the longest
+/// prefix that reads as one, `&H` and `&O` included.
+fn value(bytes: &[u8]) -> f64 {
+    let text: String = bytes.iter().filter(|one| !matches!(one, b' ' | b'\t' | b'\n')).map(|one| *one as char).collect();
+    let upper = text.to_ascii_uppercase();
+    for (prefix, radix) in [("&H", 16), ("&O", 8), ("&", 8)] {
+        if let Some(digits) = upper.strip_prefix(prefix) {
+            let digits: String = digits.chars().take_while(|one| one.is_digit(radix)).collect();
+            return i64::from_str_radix(&digits, radix).map_or(0.0, |one| one as f64);
+        }
+    }
+    let mut end = 0;
+    let mut best = 0.0;
+    while end < upper.len() {
+        end += 1;
+        let candidate = upper[..end].replace('D', "E");
+        if let Ok(parsed) = candidate.parse::<f64>() {
+            best = parsed;
+        } else if !candidate.ends_with(['E', '+', '-', '.']) {
+            break;
+        }
+    }
+    best
+}
+
 /// `%.{digits}g` with BASIC's spelling: no zero before the point, and `E`
 /// or `D` exponents with a sign and at least two digits.
 fn float_text(value: f64, digits: usize, exponent: char) -> String {
@@ -235,6 +260,11 @@ impl Machine<'_> {
             "B$STI2" | "B$STI4" | "B$STR4" | "B$STR8" => {
                 Some(temporary(number_text(name, &arguments[0])?.as_bytes())?)
             }
+            "B$FVAL" => {
+                let accumulator = memory(8);
+                accumulator.borrow_mut().bytes.copy_from_slice(&value(&text(0)?).to_le_bytes());
+                Some(Scalar::Address(Address { memory: accumulator, offset: 0, length: None, capacity: None }))
+            }
             "B$SCMP" => Some(Scalar::Int(text(0)?.cmp(&text(1)?) as i128)),
             "B$PEOS" => None,
             "B$FTAB" => {
@@ -301,5 +331,14 @@ mod tests {
         assert_eq!(number_text("B$STR8", &Scalar::Float(-0.5)).unwrap(), "-.5");
         assert_eq!(number_text("B$STR4", &Scalar::Float(1e7)).unwrap(), " 1E+07");
         assert_eq!(number_text("B$STR8", &Scalar::Float(1e16)).unwrap(), " 1D+16");
+    }
+
+    #[test]
+    fn val_reads_the_longest_number() {
+        assert_eq!(value(b" -12 .5x"), -12.5);
+        assert_eq!(value(b"+04"), 4.0);
+        assert_eq!(value(b"1D3"), 1000.0);
+        assert_eq!(value(b"&HFF"), 255.0);
+        assert_eq!(value(b"abc"), 0.0);
     }
 }

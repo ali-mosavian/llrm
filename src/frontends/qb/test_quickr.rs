@@ -300,3 +300,124 @@ fn f_string_errors() {
         assert!(error.contains(message), "{source}: {error}");
     }
 }
+
+/// Each field's expected text is what Python's own `format()` gives.
+const FORMAT_CASES: &[(&str, &str, &str, &str)] = &[
+        ("LONG", "42", "", "42"),
+        ("LONG", "-42", "5", "  -42"),
+        ("LONG", "42", "<5", "42   "),
+        ("LONG", "42", "^6", "  42  "),
+        ("LONG", "42", "*^7", "**42***"),
+        ("LONG", "-42", "=6", "-   42"),
+        ("LONG", "-42", "06", "-00042"),
+        ("LONG", "42", "+", "+42"),
+        ("LONG", "42", " ", " 42"),
+        ("LONG", "1234567", ",", "1,234,567"),
+        ("LONG", "1234567", "_", "1_234_567"),
+        ("LONG", "1234", "010,", "00,001,234"),
+        ("LONG", "255", "x", "ff"),
+        ("LONG", "255", "#X", "0XFF"),
+        ("LONG", "255", "#010b", "0b11111111"),
+        ("LONG", "255", "o", "377"),
+        ("LONG", "65535", "#_x", "0xffff"),
+        ("LONG", "65", "c", "A"),
+        ("LONG", "-7", "n", "-7"),
+        ("LONG", "3", ".2f", "3.00"),
+        ("LONG", "3", "e", "3.000000e+00"),
+        ("LONG", "-255", "#x", "-0xff"),
+        ("UNSIGNED LONG", "4000000000#", ",", "4,000,000,000"),
+        ("UNSIGNED LONG", "4000000000#", "x", "ee6b2800"),
+        ("DOUBLE", "3.14159#", ".2f", "3.14"),
+        ("DOUBLE", "-3.14159#", "+.3f", "-3.142"),
+        ("DOUBLE", "2.5#", ".0f", "2"),
+        ("DOUBLE", "3.5#", ".0f", "4"),
+        ("DOUBLE", "0.125#", ".2f", "0.12"),
+        ("DOUBLE", "2.675#", ".2f", "2.67"),
+        ("DOUBLE", "1234567.891#", ",.2f", "1,234,567.89"),
+        ("DOUBLE", "0.5#", "%", "50.000000%"),
+        ("DOUBLE", "0.1234#", ".1%", "12.3%"),
+        ("DOUBLE", "12345.678#", "e", "1.234568e+04"),
+        ("DOUBLE", "12345.678#", ".2E", "1.23E+04"),
+        ("DOUBLE", "0.000123#", ".3e", "1.230e-04"),
+        ("DOUBLE", "12345.678#", "g", "12345.7"),
+        ("DOUBLE", "0.0001#", "g", "0.0001"),
+        ("DOUBLE", "0.00001#", "g", "1e-05"),
+        ("DOUBLE", "123456789#", "g", "1.23457e+08"),
+        ("DOUBLE", "100#", "g", "100"),
+        ("DOUBLE", "100#", "#g", "100.000"),
+        ("DOUBLE", "1.5#", ".3", "1.5"),
+        ("DOUBLE", "1234.5#", ".3", "1.23e+03"),
+        ("DOUBLE", "1#", ".3", "1.0"),
+        ("DOUBLE", "-0.0001#", "z.2f", "0.00"),
+        ("DOUBLE", "-2.5#", "10.1f", "      -2.5"),
+        ("DOUBLE", "-2.5#", "<10.1f", "-2.5      "),
+        ("DOUBLE", "-2.5#", "010.1f", "-0000002.5"),
+        ("DOUBLE", "0.25#", "", "0.25"),
+        ("DOUBLE", "0.25#", "8", "    0.25"),
+        ("DOUBLE", "-0.25#", "+", "-0.25"),
+        ("DOUBLE", "1234.5#", ",", "1,234.5"),
+        ("DOUBLE", "3#", "#.0f", "3."),
+        ("DOUBLE", "3#", "#.0e", "3.e+00"),
+        ("DOUBLE", "0#", "e", "0.000000e+00"),
+        ("DOUBLE", "1D+100", ".2e", "1.00e+100"),
+        ("DOUBLE", "9.9999#", ".2f", "10.00"),
+        ("DOUBLE", "9.9999#", ".2e", "1.00e+01"),
+        ("STRING", "\"hi\"", "", "hi"),
+        ("STRING", "\"hi\"", "5", "hi   "),
+        ("STRING", "\"hi\"", ">5", "   hi"),
+        ("STRING", "\"hi\"", "^6", "  hi  "),
+        ("STRING", "\"hello\"", ".3", "hel"),
+        ("STRING", "\"hi\"", "-<6", "hi----"),
+        ("STRING", "\"hi\"", "05", "hi000"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "6.02D+23", "+_.2%", "+60_200_000_000_000_001_459_617_792.00%"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "6.02D+23", "#,f", "601,999,999,999,999,995,805,696.000000"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "6.02D+23", " 7,.5F", " 601,999,999,999,999,995,805,696.00000"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "1000000000000000.0#", "0^#", "1000000000000000.0"),
+        // Found by a 400-case comparison with Python.
+        ("LONG", "255", "=-#3.0g", "3.e+02"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "-5687.276487884854#", "-=_", "-5_687.276487884854"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "0.0#", " 10", "       0.0"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "6.02D+23", ".0%", "60200000000000001459617792%"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "0.0#", "0<1", "0.0"),
+        // Found by a 400-case comparison with Python.
+        ("LONG", "958510", "#1g", "958510."),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "0.1D0+0.2D0", "", "0.30000000000000004"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "1D+16", "", "1e+16"),
+        // Found by a 400-case comparison with Python.
+        ("DOUBLE", "1D-05", "", "1e-05"),
+];
+
+#[test]
+fn f_string_specs_format_as_python_does() {
+    let mut source = String::new();
+    let mut expected = String::new();
+    for (index, (type_name, value, spec, text)) in FORMAT_CASES.iter().enumerate() {
+        source += &format!("DIM v{index} AS {type_name}\nv{index} = {value}\nPRINT f\"[{{v{index}:{spec}}}]\"\n");
+        expected += &format!("[{text}]\n");
+    }
+    let printed = printed(&source);
+    for ((case, want), got) in FORMAT_CASES.iter().zip(expected.lines()).zip(printed.lines()) {
+        assert_eq!(got, want, "{case:?}");
+    }
+    assert_eq!(printed.lines().count(), FORMAT_CASES.len());
+}
+
+
+
+
+#[test]
+fn plain_floats_print_as_python_repr() {
+    // STR$ gave " .1" and 15 digits; repr is the shortest text that reads back.
+    let source = "DIM s AS SINGLE, d AS DOUBLE\ns = 0.1\nd = 0.1#\nd = d + 0.2#\nPRINT f\"{s} {d} {-s}\"\n";
+    assert_eq!(printed(source), "0.1 0.30000000000000004 -0.1\n");
+}

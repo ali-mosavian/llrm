@@ -155,3 +155,19 @@ for `UNSIGNED INTEGER` and `DOUBLE` for `UNSIGNED LONG`.
 "Variable not defined". Reading a local variable on a path where nothing has
 assigned it is a warning. The program still compiles, and the variable reads
 as zero.
+
+### F-strings
+
+`f"…"` (or `F"…"`) is a string expression. `{expression}` inserts a value,
+`{expression:spec}` formats it with Python's format-spec mini-language, and
+`{{` and `}}` are literal braces. A field cannot hold a string literal, since
+BASIC has no escape for the quote that would end the f-string. Under the
+Microsoft profiles, `f"x"` is still the name `f` followed by a string.
+
+A value prints as Python's `str()` would print it: a float as the shortest
+text that reads back as the same SINGLE or DOUBLE. The compiler checks each
+spec against its value's type and reports Python's errors. The formatting
+itself is BASIC, in `frontends/qb/src/semantic/prelude.bas`, which the
+compiler adds to programs that use f-strings. Its procedures reserve names
+beginning `QUICKR_`. Numbers are formatted from their exact decimal
+expansion, so `f`, `e`, `g` and `%` match Python digit for digit.

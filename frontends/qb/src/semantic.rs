@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod assignment;
+mod format_spec;
 mod shapes;
 mod tags;
 
@@ -5316,26 +5317,129 @@ impl Compiler {
     }
 
     /// An f-string field's text: a string as it is, a number as Python's
-    /// `str()` writes it.
+    /// `str()` writes it, or either laid out by its format spec.
     fn format_field(&mut self, arguments: &[Expr]) -> Result<Operand, SemanticError> {
-        if arguments.len() == 2 {
-            return self.fail("f-string format specs are not supported yet");
-        }
+        use format_spec::{Class, Layout};
         let value = &arguments[0];
-        if self.string_syntax(value) {
-            return self.string_descriptor(value);
-        }
         let span = value.span();
-        let text = Expr::Apply {
-            name: "STR$".into(),
-            arguments: vec![value.clone()],
+        let spec = match arguments.get(1) {
+            Some(Expr::Literal(Literal::String(spec), _)) => Some(spec.as_str()),
+            _ => None,
+        };
+        let text = |text: String| Expr::Literal(Literal::String(text), span);
+        let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: format!("{PRELUDE_PREFIX}{name}"),
+            arguments,
             span,
         };
-        self.string_descriptor(&Expr::Apply {
-            name: format!("{PRELUDE_PREFIX}NUMBER$"),
-            arguments: vec![text],
+        let class = if self.string_syntax(value) {
+            Class::Text
+        } else {
+            // Evaluated once, into a name the prelude call can take.
+            let (operand, type_id) = self.expression(value)?;
+            if !(integral(type_id) || matches!(type_id, SINGLE | DOUBLE)) || type_id == BOOLEAN {
+                return self.fail("an f-string field is not a string or a number");
+            }
+            let place = self.hold_value(operand, type_id)?;
+            return self.format_number(place, type_id, spec.unwrap_or_default(), span);
+        };
+        let Some(spec) = spec else {
+            return self.string_descriptor(value);
+        };
+        let layout = format_spec::parse(spec)
+            .and_then(|spec| format_spec::layout(&spec, class))
+            .or_else(|message| self.fail(message))?;
+        let Layout::Text { fill, align, width, precision } = layout else {
+            unreachable!("a string's layout is text")
+        };
+        self.string_descriptor(&apply(
+            "TEXT$",
+            vec![
+                value.clone(),
+                text(fill.into()),
+                text(align.into()),
+                integer(width.into()),
+                integer(precision.into()),
+            ],
+        ))
+    }
+
+    /// A number, held in `place`, laid out by `spec`.
+    fn format_number(
+        &mut self,
+        place: Expr,
+        type_id: u32,
+        spec: &str,
+        span: Span,
+    ) -> Result<Operand, SemanticError> {
+        use format_spec::{Class, Layout};
+        let class = if integral(type_id) { Class::Integer } else { Class::Float };
+        let text = |text: String| Expr::Literal(Literal::String(text), span);
+        let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+        let apply = |name: &str, arguments: Vec<Expr>| Expr::Apply {
+            name: format!("{PRELUDE_PREFIX}{name}"),
+            arguments,
             span,
-        })
+        };
+        let layout = format_spec::parse(spec)
+            .and_then(|spec| format_spec::layout(&spec, class))
+            .or_else(|message| self.fail(message))?;
+        let call = match layout {
+            Layout::Text { .. } => unreachable!("a number's layout is numeric"),
+            Layout::Plain { sign, fill, align, width, separator } => {
+                let repr = apply("REPR$", vec![place, integer(-i64::from(type_id == SINGLE))]);
+                apply(
+                    "NUMERIC$",
+                    vec![
+                        repr,
+                        text(sign.into()),
+                        text(fill.into()),
+                        text(align.into()),
+                        integer(width.into()),
+                        text(separator),
+                    ],
+                )
+            }
+            Layout::Format { kind, sign, alternate, zeroless, fill, align, width, separator, precision } => apply(
+                "FORMAT$",
+                vec![
+                    place,
+                    text(kind),
+                    text(sign.into()),
+                    integer(-i64::from(alternate)),
+                    integer(-i64::from(zeroless)),
+                    text(fill.into()),
+                    text(align.into()),
+                    integer(width.into()),
+                    text(separator),
+                    integer(precision.into()),
+                ],
+            ),
+        };
+        self.string_descriptor(&call)
+    }
+
+    /// `operand` stored in a fresh variable, as a name only the compiler
+    /// can spell, so an expression built around it evaluates it once.
+    fn hold_value(&mut self, operand: Operand, type_id: u32) -> Result<Expr, SemanticError> {
+        let place = self.compiler_temporary("$held", type_id)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(place), operand]);
+        let name = format!("$HELD{place}");
+        self.variables.insert(
+            name.clone(),
+            Variable {
+                place,
+                type_id,
+                element: None,
+                bounds: Vec::new(),
+                indirect: None,
+                descriptor: None,
+                descriptor_place: None,
+                descriptor_data: "none",
+            },
+        );
+        Ok(Expr::Name(name, crate::syntax::Span { line: 0, start: 0, end: 0 }))
     }
 
     /// A numeric value for a runtime routine or intrinsic, which knows only
