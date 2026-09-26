@@ -8,7 +8,6 @@ use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Convention, Home, Unselected};
 use crate::backend::{addressvalues, frame, masm};
 use crate::flow;
-use crate::support::hash::IndexMap;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
 
@@ -32,6 +31,8 @@ fn selected(text: &str, name: &str, convention: &Convention) -> Result<isel::Sel
 
 /// The procedure's instructions, through every machine phase.
 fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
+    let parsed = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names = crate::backend::globals::names(&parsed).expect("names");
     let isel::Selected { body, calls, far } = selected(text, name, convention).expect("selects");
     let mut body = flow::verified(body, "isel", true).expect("verified");
     let frame = Rc::new(RefCell::new(frame::of(&body, Some(&calls), "", None).expect("a frame")));
@@ -59,7 +60,7 @@ fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
         masm::Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None };
     let module = masm::Module {
         code: "T_TEXT".to_owned(),
-        names: IndexMap::default(),
+        names,
         externs: Vec::new(),
         publics: Vec::new(),
         data: Vec::new(),
@@ -465,6 +466,68 @@ define i32 @f(i16 %a) {
             "shld edx, eax, 16",
             "pop bp",
             "retf",
+        ]
+    );
+}
+
+#[test]
+fn test_near_globals_are_symbols() {
+    let text = "@count = internal global i16 5
+@table = internal global [3 x i16] [i16 1, i16 2, i16 3]
+define i16 @f(i16 %i) {
+  %c = load i16, ptr @count
+  %d = add i16 %c, 1
+  store i16 %d, ptr @count
+  %e = load i16, ptr getelementptr inbounds ([3 x i16], ptr @table, i16 0, i16 2)
+  %p = getelementptr inbounds [3 x i16], ptr @table, i16 0, i16 %i
+  %v = load i16, ptr %p
+  %s = add i16 %e, %v
+  ret i16 %s
+}
+";
+    let got = listing(text, "f", &cdecl(1));
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "push si",
+            "L0_0:",
+            "mov bx, word ptr [bp+6]",
+            "add word ptr count, 1",
+            "mov ax, word ptr table+4",
+            "shl bx, 1",
+            "mov si, offset table",
+            "add si, bx",
+            "add ax, word ptr [si]",
+            "pop si",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
+
+/// An initializer's bytes, and a relocation for each address in it: near,
+/// far, a far pointer's offset word, and its segment.
+#[test]
+fn test_initializers_are_bytes_and_relocations() {
+    use crate::backend::masm::{Datum, Label, Pointer};
+    let text = "@far = internal addrspace(1) global [2 x i8] c\"HI\"
+@rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)) }
+";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names = crate::backend::globals::names(&module).expect("names");
+    let rec = module.named("rec").expect("@rec");
+    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
+    assert_eq!(
+        crate::backend::globals::datums(&module, rec, &names).expect("data"),
+        [
+            Datum::Label(Label { name: "rec".to_owned() }),
+            Datum::Bytes(vec![7, 0, 0xFE, 0xFF]),
+            pointer("rec", 3, false),
+            pointer("far", 0, true),
+            pointer("far", 1, false),
+            Datum::SegmentWord("far".to_owned()),
         ]
     );
 }

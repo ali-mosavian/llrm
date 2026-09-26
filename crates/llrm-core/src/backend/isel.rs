@@ -59,6 +59,8 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 enum Pointer {
     Frame(i64),
     Based { base: Held, offset: i64 },
+    /// A near global's symbol, and a displacement from it.
+    Global { space: Space, index: i64, offset: i64 },
 }
 
 pub fn selected(module: &Module, name: &str, convention: &Convention, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
@@ -400,9 +402,15 @@ impl Selector<'_, '_> {
             out.push(insn(at, what));
             return Ok(held);
         }
-        let Operand::Value(value) = operand else { return refuse("a global's address") };
-        match self.folded(value)? {
-            None => Ok(Held { value: self.value(value), width }),
+        let pointer = match operand {
+            Operand::Value(value) => self.folded(value)?,
+            _ => Some(self.global(operand)?),
+        };
+        match pointer {
+            None => {
+                let Operand::Value(value) = operand else { unreachable!("a constant is folded") };
+                Ok(Held { value: self.value(value), width })
+            }
             Some(pointer) => {
                 let held = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(pointer, held)));
@@ -422,12 +430,16 @@ impl Selector<'_, '_> {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
+            Pointer::Global { space, index, offset } => {
+                let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
+                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])
+            }
         }
     }
 
     /// Where a pointer operand points.
     fn pointer(&mut self, operand: Operand) -> Result<Pointer, Unselected> {
-        let Operand::Value(value) = operand else { return refuse("a constant address") };
+        let Operand::Value(value) = operand else { return self.global(operand) };
         if let Some(pointer) = self.folded(value)? {
             return Ok(pointer);
         }
@@ -453,12 +465,19 @@ impl Selector<'_, '_> {
             return Ok(None);
         }
         let offset = offset as i64;
-        let pointer = match self.pointer(instruction.operands[0])? {
-            Pointer::Frame(disp) => Pointer::Frame(disp + offset),
-            Pointer::Based { base, offset: was } => Pointer::Based { base, offset: was + offset },
-        };
+        let pointer = self.pointer(instruction.operands[0])?.moved(offset);
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
+    }
+
+    /// A near global's address, and a constant displacement from it.
+    fn global(&self, operand: Operand) -> Result<Pointer, Unselected> {
+        let Operand::Constant(id) = operand else { unreachable!("a constant") };
+        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(Unselected)?;
+        if self.module.global(global).address_space != 0 {
+            return refuse("a far global");
+        }
+        Ok(Pointer::Global { space: crate::backend::globals::space(self.module, global), index: i64::from(global.0), offset })
     }
 
     /// A GEP's indices, each a constant or `None`.
@@ -517,10 +536,7 @@ impl Selector<'_, '_> {
         let start = match self.pointer(instruction.operands[0])? {
             Pointer::Based { base, offset: 0 } if offset == 0 => base,
             pointer => {
-                let moved = match pointer {
-                    Pointer::Frame(disp) => Pointer::Frame(disp + offset as i64),
-                    Pointer::Based { base, offset: was } => Pointer::Based { base, offset: was + offset as i64 },
-                };
+                let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(moved, start)));
                 start
@@ -569,6 +585,7 @@ impl Selector<'_, '_> {
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
             Pointer::Frame(disp) => frame(disp, width),
+            Pointer::Global { space, index, offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
         }
     }
@@ -851,6 +868,16 @@ impl Selector<'_, '_> {
         match self.function.value(condition).def {
             ValueDef::Instruction(inst) if self.fused.contains(&inst) => Some(inst),
             _ => None,
+        }
+    }
+}
+
+impl Pointer {
+    fn moved(self, by: i64) -> Pointer {
+        match self {
+            Pointer::Frame(disp) => Pointer::Frame(disp + by),
+            Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
+            Pointer::Global { space, index, offset } => Pointer::Global { space, index, offset: offset + by },
         }
     }
 }
