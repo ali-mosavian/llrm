@@ -274,6 +274,12 @@ impl<'m> Machine<'m> {
                 let product = self.binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 self.binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
             }
+            // In the argument's own precision.
+            Intrinsic::Unary(function) => match argument(0) {
+                Val::Float(FloatKind::Float, bits) => Val::Float(FloatKind::Float, u64::from((function.apply(f64::from(f32::from_bits(bits as u32))) as f32).to_bits())),
+                Val::Float(FloatKind::Double, bits) => Val::Float(FloatKind::Double, function.apply(f64::from_bits(bits)).to_bits()),
+                _ => Val::Poison,
+            },
             Intrinsic::LRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {

@@ -296,18 +296,17 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         }
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
-        if matches!(instruction.op, Op::Convert | Op::Truncate) {
-            let from = tables.types[&operand_type(&instruction.operands[0], &values, &places)];
-            let to = tables.types[&values[&instruction.results[0]]];
-            if from.kind == TypeKind::Float && matches!(to.kind, TypeKind::Integer | TypeKind::Boolean) {
-                let types = &mut module.context.types;
-                let (from, to) = (value_type(types, from)?, value_type(types, to)?);
-                let name = rounding(types, from, to);
-                if let Entry::Vacant(slot) = tables.callees.entry(name) {
-                    let ty = function_type(types, to, vec![from]);
-                    let global = module.add_function(slot.key(), ty, Linkage::External)?;
-                    slot.insert(module.reference(global));
-                }
+        if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first()) {
+            let types = &mut module.context.types;
+            let from = value_type(types, tables.types[&operand_type(operand, &values, &places)]);
+            let to = value_type(types, tables.types[&values[result]]);
+            if let (Ok(from), Ok(to)) = (from, to)
+                && let Some(name) = intrinsic(types, instruction.op, from, to)
+                && let Entry::Vacant(slot) = tables.callees.entry(name)
+            {
+                let ty = function_type(types, to, vec![from]);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
             }
         }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call) else { continue };
@@ -329,11 +328,28 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
     Ok(())
 }
 
-/// The intrinsic that rounds a `from` to a `to` as BASIC does: to nearest,
-/// ties to even, the machine's default.
-fn rounding(types: &Types, from: TypeId, to: TypeId) -> String {
-    let bits = if matches!(types.get(from), Type::Float(FloatKind::Float)) { 32 } else { 64 };
-    format!("llvm.lrint.i{}.f{bits}", types.int_bits(to).expect("an integer"))
+/// The intrinsic a HIR instruction from a `from` to a `to` calls, if any:
+/// a float function, or a float converted to an integer, which rounds as
+/// the machine's default mode does, to nearest, ties to even.
+fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> {
+    let float = match types.get(from) {
+        Type::Float(FloatKind::Float) => "f32",
+        Type::Float(FloatKind::Double) => "f64",
+        _ => return None,
+    };
+    let function = match op {
+        Op::Convert | Op::Truncate => return types.int_bits(to).map(|bits| format!("llvm.lrint.i{bits}.{float}")),
+        Op::Fabs => "fabs",
+        Op::Fsqrt => "sqrt",
+        Op::Fsin => "sin",
+        Op::Fcos => "cos",
+        Op::Fatan => "atan",
+        Op::Flog2 => "log2",
+        Op::Fexp2 => "exp2",
+        Op::Fround => "rint",
+        _ => return None,
+    };
+    Some(format!("llvm.{function}.{float}"))
 }
 
 /// An operand's HIR type: a place's is what it holds.
@@ -684,6 +700,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let result = self.b.gep(byte, base, &[offset], Flags::default(), "");
                 self.define(instruction, result);
             }
+            Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
+                let value = self.value(&instruction.operands[0])?;
+                let ty = self.result_type(instruction.results[0])?;
+                let result = self.intrinsic(op, value, ty)?.ok_or_else(|| format!("{op} of a non-float"))?;
+                self.define(instruction, result);
+            }
             Op::Fneg => {
                 let value = self.value(&instruction.operands[0])?;
                 let result = self.b.fneg(value, "");
@@ -706,6 +728,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             other => return Err(format!("HIR {other}")),
         }
         Ok(())
+    }
+
+    /// The call of the intrinsic `op` from `value` to `to` makes, declared
+    /// before the body.
+    fn intrinsic(&mut self, op: Op, value: Value, to: TypeId) -> Emit<Option<Value>> {
+        let from = self.b.type_of(value);
+        let Some(name) = intrinsic(&self.b.context.types, op, from, to) else { return Ok(None) };
+        let callee = Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+        let ty = function_type(&mut self.b.context.types, to, vec![from]);
+        Ok(self.b.call(ty, callee, &[value], ""))
     }
 
     /// A shift count at the shifted value's width.
@@ -736,12 +768,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Type::Int(_), Type::Float(_)) => CastOp::UIToFP,
             (Type::Float(FloatKind::Float), Type::Float(FloatKind::Double)) => CastOp::FPExt,
             (Type::Float(FloatKind::Double), Type::Float(FloatKind::Float)) => CastOp::FPTrunc,
-            (Type::Float(_), Type::Int(_)) => {
-                let name = rounding(types, from, to);
-                let callee = Value::Constant(self.tables.callees[&name]);
-                let ty = function_type(&mut self.b.context.types, to, vec![from]);
-                return Ok(self.b.call(ty, callee, &[value], "").expect("an integer"));
-            }
+            (Type::Float(_), Type::Int(_)) => return Ok(self.intrinsic(Op::Convert, value, to)?.expect("a rounding")),
             (a, b) => return Err(format!("a conversion from {a:?} to {b:?}")),
         };
         Ok(self.b.cast(op, value, to, ""))

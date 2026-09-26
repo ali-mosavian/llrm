@@ -15,12 +15,42 @@ pub enum Intrinsic {
     /// `llvm.{s,u}{max,min}`.
     MinMax { signed: bool, max: bool },
     FMulAdd,
+    /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
+    Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
     MemSet,
     LifetimeStart,
     LifetimeEnd,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatFunction {
+    Fabs,
+    Sqrt,
+    Sin,
+    Cos,
+    Atan,
+    Log2,
+    Exp2,
+    /// Rounds to an integral float as the rounding mode says.
+    Rint,
+}
+
+impl FloatFunction {
+    pub fn apply(self, x: f64) -> f64 {
+        match self {
+            Self::Fabs => x.abs(),
+            Self::Sqrt => x.sqrt(),
+            Self::Sin => x.sin(),
+            Self::Cos => x.cos(),
+            Self::Atan => x.atan(),
+            Self::Log2 => x.log2(),
+            Self::Exp2 => x.exp2(),
+            Self::Rint => x.round_ties_even(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -66,6 +96,12 @@ const fn overflow(name: &'static str, op: BinaryOp, signed: bool) -> Spec {
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
+const FLOAT: &[(Slot, &[&str])] = &[(Slot::Any(0), &[])];
+
+const fn unary(name: &'static str, function: FloatFunction) -> Spec {
+    arithmetic(name, Intrinsic::Unary(function), Slot::Any(0), FLOAT, Kind::Float)
+}
+
 const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
     arithmetic(name, Intrinsic::MinMax { signed, max }, Slot::Any(0), INTS, Kind::Int)
 }
@@ -73,7 +109,7 @@ const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 15] = [
+const TABLE: [Spec; 23] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -85,6 +121,14 @@ const TABLE: [Spec; 15] = [
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
     arithmetic("llvm.fmuladd", Intrinsic::FMulAdd, Slot::Any(0), &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])], Kind::Float),
+    unary("llvm.fabs", FloatFunction::Fabs),
+    unary("llvm.sqrt", FloatFunction::Sqrt),
+    unary("llvm.sin", FloatFunction::Sin),
+    unary("llvm.cos", FloatFunction::Cos),
+    unary("llvm.atan", FloatFunction::Atan),
+    unary("llvm.log2", FloatFunction::Log2),
+    unary("llvm.exp2", FloatFunction::Exp2),
+    unary("llvm.rint", FloatFunction::Rint),
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,
