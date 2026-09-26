@@ -126,3 +126,143 @@ b3:
 "
     );
 }
+
+/// A condition folded to a constant leaves a branch that goes one way, a
+/// block nothing reaches, and a chain of blocks that only jump: isel then
+/// jumped through each (T060's `value`, 71 executed instructions for 65).
+#[test]
+fn test_simplifycfg_folds_a_constant_branch_and_joins_the_chain() {
+    let text = "define i16 @f(i16 %x) {
+b1:
+  br i1 true, label %b3, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %0 = phi i16 [ %x, %b1 ], [ 0, %b2 ]
+  br label %b4
+
+b4:
+  %1 = add i16 %0, 1
+  br label %b5
+
+b5:
+  ret i16 %1
+}
+";
+    assert_eq!(
+        optimized(text),
+        "define i16 @f(i16 %x) {
+b1:
+  %0 = add i16 %x, 1
+  ret i16 %0
+}
+"
+    );
+}
+
+/// A block that only jumps is bypassed; the phi after it takes each of its
+/// predecessors in its place.
+#[test]
+fn test_simplifycfg_bypasses_a_forwarding_block() {
+    let text = "define i16 @f(i1 %c, i1 %d, i16 %x) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br i1 %d, label %b4, label %b5
+
+b3:
+  br label %b5
+
+b4:
+  br label %b5
+
+b5:
+  %0 = phi i16 [ 1, %b2 ], [ 2, %b3 ], [ 3, %b4 ]
+  ret i16 %0
+}
+";
+    assert_eq!(
+        optimized(text),
+        "define i16 @f(i1 %c, i1 %d, i16 %x) {
+b1:
+  br i1 %c, label %b2, label %b5
+
+b2:
+  br i1 %d, label %b4, label %b5
+
+b4:
+  br label %b5
+
+b5:
+  %0 = phi i16 [ 1, %b2 ], [ 2, %b1 ], [ 3, %b4 ]
+  ret i16 %0
+}
+"
+    );
+}
+
+/// T048 ran two more instructions per iteration of its first loop once
+/// simplifycfg bypassed that loop's exit block: the second loop's phi
+/// inputs were then made in the first loop's header. A loop's exit into a
+/// block with phis stays.
+#[test]
+fn test_simplifycfg_keeps_a_loop_exit_before_phis() {
+    let text = "define i16 @f(i16 %n) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %1, %b3 ]
+  %c = icmp slt i16 %0, %n
+  br i1 %c, label %b3, label %b4
+
+b3:
+  %1 = add i16 %0, 1
+  br label %b2
+
+b4:
+  br label %b5
+
+b5:
+  %2 = phi i16 [ 0, %b4 ], [ %3, %b5 ]
+  %3 = add i16 %2, 3
+  %d = icmp slt i16 %3, 9
+  br i1 %d, label %b5, label %b6
+
+b6:
+  ret i16 %3
+}
+";
+    assert!(optimized(text).contains("b4:\n  br label %b5"), "{}", optimized(text));
+}
+
+/// nbody ran 201 more instructions once simplifycfg bypassed an inner
+/// loop's preheader: its counter's start moved into the outer header. A
+/// block leading into a loop's header stays.
+#[test]
+fn test_simplifycfg_keeps_a_loop_preheader() {
+    let text = "define i16 @f(i16 %n, i1 %p) {
+b1:
+  br i1 %p, label %b5, label %b4
+
+b5:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b5 ], [ %1, %b3 ]
+  %1 = add i16 %0, 1
+  %c = icmp slt i16 %1, %n
+  br i1 %c, label %b3, label %b4
+
+b3:
+  br label %b2
+
+b4:
+  ret i16 %n
+}
+";
+    assert!(optimized(text).contains("b5:\n  br label %b2"), "{}", optimized(text));
+}

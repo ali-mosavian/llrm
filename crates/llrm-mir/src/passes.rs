@@ -42,6 +42,17 @@ impl Analysis for Dominators {
     }
 }
 
+/// LLVM's `LoopAnalysis`.
+pub struct Loops;
+
+impl Analysis for Loops {
+    type Result = crate::loops::LoopInfo;
+    const NAME: &'static str = "loops";
+    fn run(_: &Context, _: &DataLayout, function: &Function) -> crate::loops::LoopInfo {
+        crate::loops::LoopInfo::new(function, &DominatorTree::new(function))
+    }
+}
+
 /// Which analyses a pass left true.
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
