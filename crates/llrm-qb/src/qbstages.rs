@@ -364,7 +364,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Options) -> Result<PathBuf, String> {
+pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Options, route: qb_compile::Route) -> Result<PathBuf, String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let program = parsed(source, frontend, None).map_err(|error| error.0)?;
     let functions: Vec<&model::Function> = program.modules.iter().flat_map(|module| &module.functions).collect();
@@ -437,6 +437,6 @@ pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Optio
         write(&path, &text)
     };
 
-    qb_compile::object_bytes(&program, source, Some(&mut observe), options).map_err(|error| error.to_string())?;
+    qb_compile::object_bytes_by(&program, source, Some(&mut observe), options, route).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())
 }

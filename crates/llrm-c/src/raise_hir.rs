@@ -2202,6 +2202,7 @@ impl<'a> _Raise<'a> {
                 caller_cleanup: if caller_pops { pushed } else { 0 },
                 i386: true,
                 direct_writes: None,
+                flags_result: false,
                 direct_reads: None,
             },
         );
@@ -2338,6 +2339,7 @@ impl<'a> _Raise<'a> {
                 caller_cleanup: 0,
                 i386: false,
                 direct_writes: None,
+                flags_result: false,
                 direct_reads: None,
             },
         );

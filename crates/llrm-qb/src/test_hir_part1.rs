@@ -40,7 +40,7 @@ fn lowered(program: &model::Program) -> Vec<hir::Lowered> {
 /// `namespace["dumped"](source, output, dialect=..., runtime=..., includes=())`.
 fn dumped(source: &std::path::Path, output: &std::path::Path, dialect: &str, runtime: &str) {
     let frontend = super::driver::Frontend::new(dialect, runtime);
-    qbstages::dumped(source, output, &frontend, &O2()).expect("dumps");
+    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered).expect("dumps");
 }
 
 fn machine(

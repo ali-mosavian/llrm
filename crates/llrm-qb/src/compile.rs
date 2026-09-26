@@ -18,7 +18,9 @@ use super::abi::{physicalize, AbiError};
 use super::inline_x87::finalized;
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::backend::{addressvalues, frame, lower, masm, omfwrite};
+use llrm_core::abi::qb::HirAbi;
+use llrm_core::backend::assemble::{self, Abi};
+use llrm_core::backend::{addressvalues, frame, globals, lower, masm, omfwrite};
 use llrm_core::flow;
 use llrm_core::hir::lower::Lowered;
 use llrm_core::hir::{self, callmemory, model};
@@ -1463,11 +1465,217 @@ fn _checked(error: flow::Checked) -> CompileError {
     })
 }
 
+/// A function in machine form by the lowered route: its semantic MIR
+/// optimized, physicalized, lowered and through the machine phases.
+#[allow(clippy::too_many_arguments)]
+fn _lowered_machine(
+    program: &model::Program,
+    module: &model::Module,
+    function: &model::Function,
+    body: &Lowered,
+    options: &Options,
+    observer: &mut Option<&mut StageObserver<'_>>,
+    pool: &Rc<RefCell<Pool>>,
+    empty_occurrences: &IndexMap<u32, Vec<(i64, i64)>>,
+) -> Result<Machined, CompileError> {
+    let handler_at = _handler_at(function);
+    let zeroed;
+    let body = if _inline_frame(program, module, function) {
+        zeroed = super::zero_fill::filled(body);
+        &zeroed
+    } else {
+        body
+    };
+    _observe(observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
+    let body = _optimized(program, function, body, options, observer, "source-")?;
+    _observe(observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;
+    let mut physical = physicalize(program, function, &body)?;
+    _observe(observer, "physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
+    // ABI physicalization is still MIR production: it introduces concrete
+    // parameter loads, return extracts, call arguments, and frame copies.
+    // Feed those operations through the same fixed point as source MIR so
+    // code quality cannot depend on whether a frontend expressed work
+    // before or during ABI adaptation.
+    physical.lowered = _optimized(program, function, &physical.lowered, options, observer, "physical-")?;
+    _observe(observer, "optimized-physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
+    let ordinary_entry = physical.lowered.body.entry;
+    let ordinary_block = physical.lowered.body.block(ordinary_entry);
+    let ordinary_fallback = ordinary_block.filter(|block| block.succ.len() == 1).map(|block| block.succ[0]);
+    let external_entries = _external_entries(function, handler_at);
+    let (machine_body, temporary_root) = _machine_side_entry(&physical.lowered.body, &external_entries)?;
+    let machine_body =
+        rotate::entered(&Rc::new(machine_body)).map_err(|error| CompileError::Value(error.to_string()))?;
+    let rotated = Lowered { body: mir::MirBody::clone(&machine_body), ..physical.lowered.clone() };
+    _observe(observer, "rotated-mir", StageValue::Lowered(&rotated), Some(function), None)?;
+    let low = lower::lowered(
+        &body.name,
+        &machine_body,
+        Some(&physical.calls),
+        BTreeSet::new(),
+        Some(&physical.contracts),
+        ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+        lower::Lowered {
+            occurrences: Some(empty_occurrences),
+            hints: Some(&physical.hints),
+            pointer_model: Some(physical.pointer_model.clone()),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| CompileError::Value(error.0))?;
+    let mut low = flow::verified(low, "lower", true).map_err(|error| CompileError::Value(error.0))?;
+    low.source_order = function.error_handler.is_some();
+    _observe(observer, "initial-lir", StageValue::Lir(&low), Some(function), None)?;
+    let temporary_blocks: BTreeSet<i64> = if temporary_root.is_some() {
+        let physical_blocks: BTreeSet<i64> = physical.lowered.body.blocks.iter().map(|block| block.at).collect();
+        low.blocks.iter().map(|block| block.at).filter(|at| !physical_blocks.contains(at)).collect()
+    } else {
+        BTreeSet::new()
+    };
+    let owned_frame = frame::of(&low, Some(&physical.calls), program.runtime.value(), None)
+        .map_err(|error| CompileError::Value(error.0))?;
+    let owned_frame = Rc::new(RefCell::new(owned_frame));
+    let mut in_ssa = true;
+    let mut phases = flow::machine(
+        &IndexMap::default(),
+        Some(Rc::clone(&owned_frame)),
+        Some(Rc::clone(pool)),
+        Some(&physical.calls),
+        true,
+        ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+    )?;
+    for phase in phases.iter_mut() {
+        // masm.Procedure owns a native BP frame and reserves the complete
+        // local/spill extent. The shared Prologue pass is for an already
+        // existing BC/runtime frame and would reserve the spill tail twice.
+        if phase.class_name() == "Prologue" {
+            continue;
+        }
+        if phase.class_name() == "PhiElimination" {
+            in_ssa = false;
+        }
+        low = flow::checked(low, phase.as_mut(), in_ssa).map_err(_checked)?;
+        _observe(observer, &format!("machine:{}", phase.name()), StageValue::Lir(&low), Some(function), None)?;
+    }
+    let low = _drop_machine_side_entry(&low, &temporary_blocks, ordinary_entry, ordinary_fallback)?;
+    let final_ = finalized(&low, function.abi.as_ref().map_or(0, |abi| abi.parameter_bytes))?;
+    let reserve = {
+        let frame = owned_frame.borrow();
+        -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)
+    };
+    Ok(Machined {
+        body: final_.body,
+        callees: final_.callees,
+        calls: physical.calls,
+        far_calls: physical.far_calls,
+        reserve,
+        source_instructions: body.source_instructions.clone().unwrap_or_default(),
+    })
+}
+
+/// The rich route's module: the HIR emitted as MIR and optimized, each
+/// data object's global, and how its calls link.
+struct Rich {
+    mir: llrm_mir::Module,
+    data: std::collections::HashMap<i64, llrm_mir::GlobalId>,
+    abi: HirAbi,
+}
+
+impl Rich {
+    fn new(program: &model::Program, module: &model::Module) -> Result<Self, CompileError> {
+        // What the post-selection passes do not yet place in rich-MIR code.
+        if !_read_data_lines(module)?.is_empty() {
+            return emission("DATA statements are not selected from the rich MIR yet");
+        }
+        if !_statement_metadata(module)?.is_empty() {
+            return emission("a statement table is not selected from the rich MIR yet");
+        }
+        if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
+            return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
+        }
+        let mut emitted = hir::mir::emit(program).swap_remove(0);
+        if let Some((name, why)) = emitted.refused.first() {
+            return emission(format!("@{name}: {why}"));
+        }
+        llrm_mir::transforms::optimized(&mut emitted.module).map_err(CompileError::Value)?;
+        let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
+        Ok(Rich { mir: emitted.module, data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
+    }
+
+    fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
+        let cpu = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
+        let target = assemble::Target { cpu, runtime: program.runtime.value(), basic: true };
+        let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
+        let machined = assemble::machined(&self.mir, &function.name, &contracts, pool, &target).map_err(CompileError::Value)?;
+        let final_ = finalized(&machined.body, machined.popped)?;
+        // A runtime routine is called by its own name.
+        let calls = machined
+            .calls
+            .into_iter()
+            .map(|(at, name)| (at, name.strip_prefix(hir::mir::RUNTIME).map_or_else(|| name.clone(), str::to_owned)))
+            .collect();
+        Ok(Machined {
+            body: final_.body,
+            callees: final_.callees,
+            calls,
+            far_calls: machined.far,
+            reserve: machined.reserve,
+            source_instructions: IndexMap::default(),
+        })
+    }
+
+    /// Each symbol selected code names, keyed as isel keys a global, by its
+    /// MIR id: a data object's as `qb` names it, anything else as it links;
+    /// and the pool's entries `pool` keys.
+    fn names(&self, qb: &Names, pool: impl Iterator<Item = i64>) -> Names {
+        let mut names = hir::lower::symbol_names();
+        let objects: std::collections::HashMap<llrm_mir::GlobalId, i64> = self.data.iter().map(|(&object, &global)| (global, object)).collect();
+        for (at, global) in self.mir.globals.iter().enumerate() {
+            let id = llrm_mir::GlobalId(at as u32);
+            let object = objects.get(&id).and_then(|object| qb.get(&(Space::Segment, *object)).or_else(|| qb.get(&(Space::External, *object))));
+            let name = object.cloned().unwrap_or_else(|| self.abi.linked(global.name.as_deref().unwrap_or_default()));
+            names.insert((globals::space(&self.mir, id), i64::from(id.0)), name);
+        }
+        names.extend(pool.map(|id| ((Space::Segment, id), qb[&(Space::Segment, id)].clone())));
+        names
+    }
+}
+
+/// Which middle and back end a module's functions reach machine form by.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Route {
+    /// HIR lowered to the semantic MIR, physicalized, then lowered to LIR.
+    Lowered,
+    /// HIR emitted as the rich MIR, optimized, then selected by isel.
+    Selected,
+}
+
 /// Compile one QB HIR module to the shared assembly model.
 pub fn assembled(
     program: &model::Program,
+    observer: Option<&mut StageObserver<'_>>,
+    options: &Options,
+) -> Result<masm::Module, CompileError> {
+    assembled_by(program, observer, options, Route::Lowered)
+}
+
+/// A function in machine form, as either route makes it: its LIR with
+/// returns cleaned, the inline code its x87 intrinsics became, each call's
+/// callee and which are far, the bytes its frame reserves, and where each
+/// source statement's code begins.
+struct Machined {
+    body: lir::LirBody,
+    callees: IndexMap<i64, masm::Callee>,
+    calls: IndexMap<i64, String>,
+    far_calls: BTreeSet<i64>,
+    reserve: i64,
+    source_instructions: IndexMap<i64, i64>,
+}
+
+pub fn assembled_by(
+    program: &model::Program,
     mut observer: Option<&mut StageObserver<'_>>,
     options: &Options,
+    route: Route,
 ) -> Result<masm::Module, CompileError> {
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
@@ -1478,12 +1686,20 @@ pub fn assembled(
     }
     let module = &program.modules[0];
     let graphics = _graphics_dependencies(module);
-    let semantic = hir::lower::lower(program).map_err(|error| CompileError::Value(error.0))?;
     let functions: Vec<&model::Function> = module.functions.iter().collect();
-    if semantic.len() != functions.len() {
-        return emission("HIR lowering did not preserve the function table");
-    }
-    let semantic = _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?;
+    let rich = match route {
+        Route::Selected => Some(Rich::new(program, module)?),
+        Route::Lowered => None,
+    };
+    let semantic = if rich.is_some() {
+        Vec::new()
+    } else {
+        let semantic = hir::lower::lower(program).map_err(|error| CompileError::Value(error.0))?;
+        if semantic.len() != functions.len() {
+            return emission("HIR lowering did not preserve the function table");
+        }
+        _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?
+    };
 
     let callable_names: IndexMap<&str, String> =
         module.callables.iter().map(|one| (one.name.as_str(), _object_name(&one.name))).collect();
@@ -1497,95 +1713,21 @@ pub fn assembled(
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
     let mut referenced_calls: BTreeSet<String> = BTreeSet::new();
     let empty_occurrences = IndexMap::default();
-    let pool = Rc::new(RefCell::new(Pool::new(module.data.iter().map(|one| one.id + 1).max().unwrap_or(0))));
-    for (function, body) in functions.iter().copied().zip(&semantic) {
-        let handler_at = _handler_at(function);
-        let zeroed;
-        let body = if _inline_frame(program, module, function) {
-            zeroed = super::zero_fill::filled(body);
-            &zeroed
-        } else {
-            body
+    // Pool keys follow every data object's and, on the rich route, every global's.
+    let pool_start = module.data.iter().map(|one| one.id + 1).max().unwrap_or(0).max(rich.as_ref().map_or(0, |rich| rich.mir.globals.len() as i64));
+    let pool = Rc::new(RefCell::new(Pool::new(pool_start)));
+    for (index, function) in functions.iter().copied().enumerate() {
+        let machined = match &rich {
+            Some(rich) => rich.machined(program, function, &pool)?,
+            None => _lowered_machine(program, module, function, &semantic[index], options, &mut observer, &pool, &empty_occurrences)?,
         };
-        _observe(&mut observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
-        let body = _optimized(program, function, body, options, &mut observer, "source-")?;
-        _observe(&mut observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;
-        let mut physical = physicalize(program, function, &body)?;
-        _observe(&mut observer, "physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
-        // ABI physicalization is still MIR production: it introduces concrete
-        // parameter loads, return extracts, call arguments, and frame copies.
-        // Feed those operations through the same fixed point as source MIR so
-        // code quality cannot depend on whether a frontend expressed work
-        // before or during ABI adaptation.
-        physical.lowered = _optimized(program, function, &physical.lowered, options, &mut observer, "physical-")?;
-        _observe(&mut observer, "optimized-physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
-        let ordinary_entry = physical.lowered.body.entry;
-        let ordinary_block = physical.lowered.body.block(ordinary_entry);
-        let ordinary_fallback = ordinary_block.filter(|block| block.succ.len() == 1).map(|block| block.succ[0]);
-        let external_entries = _external_entries(function, handler_at);
-        let (machine_body, temporary_root) = _machine_side_entry(&physical.lowered.body, &external_entries)?;
-        let machine_body =
-            rotate::entered(&Rc::new(machine_body)).map_err(|error| CompileError::Value(error.to_string()))?;
-        let rotated = Lowered { body: mir::MirBody::clone(&machine_body), ..physical.lowered.clone() };
-        _observe(&mut observer, "rotated-mir", StageValue::Lowered(&rotated), Some(function), None)?;
-        let low = lower::lowered(
-            &body.name,
-            &machine_body,
-            Some(&physical.calls),
-            BTreeSet::new(),
-            Some(&physical.contracts),
-            ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
-            lower::Lowered {
-                occurrences: Some(&empty_occurrences),
-                hints: Some(&physical.hints),
-                pointer_model: Some(physical.pointer_model.clone()),
-                ..Default::default()
-            },
-        )
-        .map_err(|error| CompileError::Value(error.0))?;
-        let mut low = flow::verified(low, "lower", true).map_err(|error| CompileError::Value(error.0))?;
-        low.source_order = function.error_handler.is_some();
-        _observe(&mut observer, "initial-lir", StageValue::Lir(&low), Some(function), None)?;
-        let temporary_blocks: BTreeSet<i64> = if temporary_root.is_some() {
-            let physical_blocks: BTreeSet<i64> = physical.lowered.body.blocks.iter().map(|block| block.at).collect();
-            low.blocks.iter().map(|block| block.at).filter(|at| !physical_blocks.contains(at)).collect()
-        } else {
-            BTreeSet::new()
-        };
-        let owned_frame = frame::of(&low, Some(&physical.calls), program.runtime.value(), None)
-            .map_err(|error| CompileError::Value(error.0))?;
-        let owned_frame = Rc::new(RefCell::new(owned_frame));
-        let mut in_ssa = true;
-        let mut phases = flow::machine(
-            &IndexMap::default(),
-            Some(Rc::clone(&owned_frame)),
-            Some(Rc::clone(&pool)),
-            Some(&physical.calls),
-            true,
-            ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
-        )?;
-        for phase in phases.iter_mut() {
-            // masm.Procedure owns a native BP frame and reserves the complete
-            // local/spill extent. The shared Prologue pass is for an already
-            // existing BC/runtime frame and would reserve the spill tail twice.
-            if phase.class_name() == "Prologue" {
-                continue;
-            }
-            if phase.class_name() == "PhiElimination" {
-                in_ssa = false;
-            }
-            low = flow::checked(low, phase.as_mut(), in_ssa).map_err(_checked)?;
-            _observe(&mut observer, &format!("machine:{}", phase.name()), StageValue::Lir(&low), Some(function), None)?;
-        }
-        let low = _drop_machine_side_entry(&low, &temporary_blocks, ordinary_entry, ordinary_fallback)?;
-        let final_ = finalized(&low, function.abi.as_ref().map_or(0, |abi| abi.parameter_bytes))?;
-        let mut callees = final_.callees.clone();
+        let mut callees = machined.callees.clone();
         let mut resume_blocks: IndexMap<i64, i64> = IndexMap::default();
         let mut data_markers: IndexMap<i64, i64> = IndexMap::default();
         let mut restore_markers: IndexMap<i64, i64> = IndexMap::default();
         let mut error_registrations: IndexMap<i64, (Option<Addr>, bool)> = IndexMap::default();
         let mut error_labels: IndexMap<i64, i64> = IndexMap::default();
-        for (at, name) in &physical.calls {
+        for (at, name) in &machined.calls {
             let object_name: String;
             if name.starts_with("$QB$RESA:") {
                 let target_block = _parsed_target(name, "$QB$RESA:", "invalid RESUME target marker")?;
@@ -1632,13 +1774,10 @@ pub fn assembled(
                 object_name = callable_names.get(name.as_str()).cloned().unwrap_or_else(|| name.clone());
             }
             referenced_calls.insert(object_name.clone());
-            callees.insert(*at, masm::Callee::new(object_name, physical.far_calls.contains(at)));
+            callees.insert(*at, masm::Callee::new(object_name, machined.far_calls.contains(at)));
         }
-        let reserve = {
-            let frame = owned_frame.borrow();
-            -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)
-        };
-        let mut final_body = _source_instructions(&final_.body);
+        let reserve = machined.reserve;
+        let mut final_body = _source_instructions(&machined.body);
         let module_body = function.name == "__main";
         let public = !module_body && function.linkage == model::FunctionLinkage::External;
         let mut native_reserve = 0;
@@ -1679,11 +1818,10 @@ pub fn assembled(
             callees.extend(exits);
             referenced_calls.insert("B$CENP".to_owned());
         }
-        let final_body = _drop_resume_successors(&final_body, &physical.calls);
+        let final_body = _drop_resume_successors(&final_body, &machined.calls);
         let procedure_number = procedures.len();
         let statement_blocks = _statement_table_blocks(function);
-        let empty = IndexMap::default();
-        let source_instructions = body.source_instructions.as_ref().unwrap_or(&empty);
+        let source_instructions = &machined.source_instructions;
         let all_rows: Vec<(i64, i64, i64)> = statement_metadata
             .iter()
             .filter(|(function_id, _, instruction, _)| {
@@ -1754,6 +1892,9 @@ pub fn assembled(
     statement_targets.sort();
     procedures.push(_statement_procedure(&statement_targets));
     let (mut names, data_by_segment) = _data(module, &pool.borrow())?;
+    if let Some(rich) = &rich {
+        names = rich.names(&names, pool.borrow().entries().map(|(_, id)| id));
+    }
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
     if data_keys.values().any(|key| code_names[key].is_empty()) {
         return emission("one or more DATA rows have no final code label");
@@ -1924,7 +2065,17 @@ pub fn object_bytes(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = omfwrite::live(&assembled(program, observer, options)?)
+    object_bytes_by(program, source, observer, options, Route::Lowered)
+}
+
+pub fn object_bytes_by(
+    program: &model::Program,
+    source: &Path,
+    observer: Option<&mut StageObserver<'_>>,
+    options: &Options,
+    route: Route,
+) -> Result<Vec<u8>, CompileError> {
+    let module = omfwrite::live(&assembled_by(program, observer, options, route)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     // Build the same semantic segments as backend.omfwrite.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record

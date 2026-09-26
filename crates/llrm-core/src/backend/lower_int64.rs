@@ -53,6 +53,7 @@ fn _helper(name: &str, inputs: BTreeSet<Reg>, clobbers: BTreeSet<Reg>) -> runtim
         // Not a separately called 386 routine: `clobbers` describes the inline bytes exactly.
         i386: false,
         direct_writes: None,
+        flags_result: false,
         direct_reads: None,
     }
 }

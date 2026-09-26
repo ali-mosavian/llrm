@@ -359,3 +359,35 @@ fn a_promise_becomes_its_parameters_attributes() {
     let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
     assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) %1)"), "{text}");
 }
+
+/// A string comparison compares its callee's sign with zero; it was
+/// refused, and with it every procedure of qbdemo that compares strings.
+#[test]
+fn a_string_comparison_compares_its_callees_sign() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    compare.callee = Some("B$SCMP".to_owned());
+    function.blocks[0].instructions = vec![compare];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%2 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
+}
+
+/// A port read and write are calls of the target's port intrinsics, the
+/// port a word; they were refused, and with them every procedure that
+/// sets the palette.
+#[test]
+fn ports_are_the_targets_intrinsics() {
+    let mut function = difference();
+    let read = Instruction::new(1, Op::PortIn, vec![3], vec![Operand::value_ref(1)]);
+    let write = Instruction::new(2, Op::PortOut, vec![], vec![Operand::value_ref(1), Operand::value_ref(3)]);
+    function.blocks[0].instructions = vec![read, write];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%2 = call i16 @llrm.ia16.in.i16(i16 %0)\n  call void @llrm.ia16.out.i16(i16 %0, i16 %2)"), "{text}");
+}

@@ -34,6 +34,8 @@ pub struct Emitted {
     pub module: Module,
     /// Each refused global's name, and why.
     pub refused: Vec<(String, String)>,
+    /// Each HIR data object's global, by the object's id.
+    pub data: HashMap<i64, GlobalId>,
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
@@ -102,9 +104,11 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
     };
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let mut defined = Vec::new();
+    let mut data = HashMap::new();
     for object in &hir.data {
         let layout = data_type(&mut module.context.types, object, &objects);
         let global = declare_data(&mut module, object, layout.as_ref().ok().copied());
+        data.insert(object.id, global);
         match layout {
             Ok(_) => defined.push((object, global)),
             Err(why) => refused.push((object.name.clone(), why)),
@@ -155,7 +159,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
             refused.push((function.name.clone(), why));
         }
     }
-    Emitted { module, refused }
+    Emitted { module, refused, data }
 }
 
 /// A data object's type: its bytes, with each relocation a pointer, a
@@ -422,7 +426,18 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
                 slot.insert(module.reference(global));
             }
         }
-        let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call) else { continue };
+        if let Some(called) = called(instruction.op) {
+            let types = &mut module.context.types;
+            let hir = |operand| tables.types[&operand_type(operand, &values, &places)];
+            let (parameters, returns) = called_type(types, instruction.operands.iter().map(hir).collect(), instruction.results.first().map(|one| tables.types[&values[one]]))?;
+            let name = called_name(types, called, parameters.last().copied(), returns);
+            if let Entry::Vacant(slot) = tables.callees.entry(name) {
+                let ty = function_type(types, returns, parameters);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
+        let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call || three_way(instruction.op).is_some()) else { continue };
         let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
             Some(site) => {
                 let abi = convention(site.cleanup, site.distance)?;
@@ -445,6 +460,8 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let types = &mut module.context.types;
         let parameters = instruction.operands.iter().map(|one| value_type(types, tables.types[&operand_type(one, &values, &places)])).collect::<Emit<_>>()?;
         let returns = match instruction.results.first() {
+            // A comparison's callee returns the sign of the first against the second.
+            Some(_) if three_way(instruction.op).is_some() => types.int(16),
             Some(result) => value_type(types, tables.types[&values[result]])?,
             None => types.void(),
         };
@@ -481,6 +498,38 @@ fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> 
         _ => return None,
     };
     Some(format!("llvm.{function}.{float}"))
+}
+
+/// The target intrinsic a HIR instruction is a call of, its operands the
+/// arguments: an I/O port's.
+fn called(op: Op) -> Option<&'static str> {
+    const CALLED: [(Op, &str); 2] = [(Op::PortIn, "llrm.ia16.in"), (Op::PortOut, "llrm.ia16.out")];
+    CALLED.iter().find(|&&(one, _)| one == op).map(|&(_, name)| name)
+}
+
+/// The parameters and result of a `called` intrinsic: a port is a word,
+/// the data as HIR types it.
+fn called_type(types: &mut Types, operands: Vec<&model::Type>, result: Option<&model::Type>) -> Emit<(Vec<TypeId>, TypeId)> {
+    let mut parameters = operands.into_iter().map(|one| value_type(types, one)).collect::<Emit<Vec<_>>>()?;
+    parameters[0] = types.int(16);
+    let returns = match result {
+        Some(one) => value_type(types, one)?,
+        None => types.void(),
+    };
+    Ok((parameters, returns))
+}
+
+/// `called` mangled by its data's type: what it returns, or its last argument.
+fn called_name(types: &Types, called: &str, last: Option<TypeId>, returns: TypeId) -> String {
+    let data = if types.is_void(returns) { last.expect("a written value") } else { returns };
+    format!("{called}.i{}", types.int_bits(data).unwrap_or(0))
+}
+
+/// The comparison a string comparison makes of its callee's sign with zero.
+fn three_way(op: Op) -> Option<Op> {
+    const THREE_WAY: [(Op, Op); 6] =
+        [(Op::StringEq, Op::Eq), (Op::StringNe, Op::Ne), (Op::StringLt, Op::Lt), (Op::StringLe, Op::Le), (Op::StringGt, Op::Gt), (Op::StringGe, Op::Ge)];
+    THREE_WAY.iter().find(|&&(one, _)| one == op).map(|&(_, compared)| compared)
 }
 
 /// An operand's HIR type: a place's is what it holds.
@@ -778,8 +827,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.define(instruction, result);
             return Ok(());
         }
-        if let Some((signed, unsigned, float)) = comparison(op) {
-            let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
+        if let Some((signed, unsigned, float)) = comparison(three_way(op).unwrap_or(op)) {
+            let [mut a, mut b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
+            if three_way(op).is_some() {
+                let callee = instruction.callee.as_deref().ok_or("a string comparison without a callee")?;
+                let i16 = self.b.context.types.int(16);
+                a = self.call(callee, &[a, b], i16).ok_or("a comparison's callee returns nothing")?;
+                b = self.b.int(16, 0);
+            }
             let is_float = matches!(self.b.context.types.get(self.b.type_of(a)), Type::Float(_));
             let truth = match (is_float, instruction.op) {
                 (true, _) => self.b.fcmp(float, a, b, ""),
@@ -790,6 +845,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // BASIC's truth is all ones.
             let result = self.b.cast(CastOp::SExt, truth, ty, "");
             self.define(instruction, result);
+            return Ok(());
+        }
+        if let Some(called) = called(op) {
+            let mut arguments = self.operands(instruction)?;
+            let i16 = self.b.context.types.int(16);
+            arguments[0] = self.convert(arguments[0], false, i16)?;
+            let returns = match instruction.results.first() {
+                Some(&result) => self.result_type(result)?,
+                None => self.b.context.types.void(),
+            };
+            let name = called_name(&self.b.context.types, called, arguments.last().map(|&one| self.b.type_of(one)), returns);
+            let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
+            let ty = function_type(&mut self.b.context.types, returns, parameters);
+            let callee = Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+            if let Some(result) = self.b.call(ty, callee, &arguments, "") {
+                self.define(instruction, result);
+            }
             return Ok(());
         }
         match op {
@@ -924,17 +996,22 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Some(&result) => self.result_type(result)?,
                     None => self.b.context.types.void(),
                 };
-                let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
-                let ty = function_type(&mut self.b.context.types, returns, parameters);
-                let convention = self.tables.conventions[callee];
-                let callee = Value::Constant(self.tables.callees[callee]);
-                if let Some(result) = self.b.call_as(convention, ty, callee, &arguments, "") {
+                if let Some(result) = self.call(callee, &arguments, returns) {
                     self.define(instruction, result);
                 }
             }
             other => return Err(format!("HIR {other}")),
         }
         Ok(())
+    }
+
+    /// A call of the declared `callee` by its convention.
+    fn call(&mut self, callee: &str, arguments: &[Value], returns: TypeId) -> Option<Value> {
+        let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
+        let ty = function_type(&mut self.b.context.types, returns, parameters);
+        let convention = self.tables.conventions[callee];
+        let callee = Value::Constant(self.tables.callees[callee]);
+        self.b.call_as(convention, ty, callee, arguments, "")
     }
 
     /// The call of the intrinsic `op` from `value` to `to` makes, declared

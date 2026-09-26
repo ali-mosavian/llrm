@@ -5,7 +5,9 @@
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math]
 //!         [--mbf] [--whole-program] [--array-merging] [--include DIR]... [--mir] [-o OUTPUT] [-O {s,2}] [--dump DIR]
-//!         [--machine TOML]
+//!         [--machine TOML] [--isel]
+//!
+//! `--isel` compiles through the rich MIR and instruction selection.
 //! ```
 
 use std::path::PathBuf;
@@ -20,7 +22,7 @@ use llrm_core::model::passes::{Options, O2};
 const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
 [--array-order {column-major,row-major}] [--dump-hir DUMP_HIR] [--huge-arrays] [--checked-arrays] \
 [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
-[--dump DUMP] [--machine MACHINE] source";
+[--dump DUMP] [--machine MACHINE] [--isel] source";
 
 pub(super) struct Arguments {
     pub(super) source: PathBuf,
@@ -30,12 +32,14 @@ pub(super) struct Arguments {
     pub(super) output: Option<PathBuf>,
     pub(super) options: Options,
     pub(super) dump: Option<PathBuf>,
+    pub(super) route: compile::Route,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
     let mut frontend = Frontend::new("vbdos", "vbdos");
     let (mut dump_hir, mut mir, mut output, mut options, mut dump) = (None, false, None, O2(), None);
+    let mut route = compile::Route::Lowered;
     let mut at = 0;
     while at < argv.len() {
         let argument = argv[at].as_str();
@@ -72,6 +76,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--array-merging" => frontend.array_merging = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--mir" => mir = true,
+            "--isel" => route = compile::Route::Selected,
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--machine" => {
@@ -90,7 +95,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     if mir && output.is_some() {
         return Err("--mir and --output cannot be used together".into());
     }
-    Ok(Arguments { source, frontend, dump_hir, mir, output, options, dump })
+    Ok(Arguments { source, frontend, dump_hir, mir, output, options, dump, route })
 }
 
 pub fn main(argv: &[String]) -> i32 {
@@ -103,11 +108,11 @@ pub fn main(argv: &[String]) -> i32 {
     };
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
-            qbstages::dumped(&args.source, dump, &args.frontend, &args.options)?;
+            qbstages::dumped(&args.source, dump, &args.frontend, &args.options, args.route)?;
         }
         let program = parsed(&args.source, &args.frontend, args.dump_hir.as_deref()).map_err(|error| error.0)?;
         if let Some(output) = &args.output {
-            let bytes = compile::object_bytes(&program, &args.source, None, &args.options).map_err(|error| error.to_string())?;
+            let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route).map_err(|error| error.to_string())?;
             std::fs::write(output, bytes).map_err(|error| error.to_string())?;
         } else if args.mir {
             for body in lower::lower(&program).map_err(|error| error.to_string())? {

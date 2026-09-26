@@ -2291,3 +2291,19 @@ z = y * 320\r\nPRINT x, y, z\r\nEND SUB\r\n";
     assert!(!listing.contains("fild") && !listing.contains("fiadd"), "{listing}");
     assert!(listing.contains("fld1") && listing.contains("fadd dword ptr") && !listing.contains("320"), "{listing}");
 }
+
+/// A module through the rich MIR and isel: a string comparison branches on
+/// the flags B$SCMP leaves, and ports are `in` and `out`.
+#[test]
+fn test_a_module_compiles_through_the_rich_mir() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let source = tmp.path().join("RICH.BAS");
+    std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
+    let program = parsed_as(&source, "qb45", "qb45");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let fade = between(&text, "FADE proc", "endp");
+    let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
+    assert!(fade[call..].lines().nth(1).is_some_and(|line| line.trim().starts_with('j')), "{fade}");
+    assert!(fade.contains("in al, dx") && fade.contains("out dx, al"), "{fade}");
+}

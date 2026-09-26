@@ -23,6 +23,10 @@ pub enum Intrinsic {
     MemSet,
     LifetimeStart,
     LifetimeEnd,
+    /// An I/O port's value, read: a target intrinsic, as `llvm.x86.*` are.
+    PortIn,
+    /// A value written to an I/O port.
+    PortOut,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,11 +81,15 @@ struct Spec {
     returns: Slot,
     parameters: &'static [(Slot, &'static [&'static str])],
     attrs: &'static [&'static str],
-    memory: (Option<&'static str>, &'static str),
+    memory: &'static [(Option<&'static str>, &'static str)],
 }
 
 const PURE: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "speculatable", "willreturn"];
-const NO_MEMORY: (Option<&str>, &str) = (None, "none");
+const NO_MEMORY: &[(Option<&str>, &str)] = &[(None, "none")];
+/// A device may read any memory a port write starts it on, as DMA does,
+/// and a port's own state is no memory the program can name.
+const PORT_MEMORY: &[(Option<&str>, &str)] = &[(None, "read"), (Some("inaccessiblemem"), "readwrite")];
+const PORT_ATTRS: &[&str] = &["nocallback", "nofree", "nounwind", "willreturn"];
 const INTS: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[])];
 
 const fn arithmetic(name: &'static str, intrinsic: Intrinsic, returns: Slot, parameters: &'static [(Slot, &'static [&'static str])], kind: Kind) -> Spec {
@@ -109,7 +117,7 @@ const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 23] = [
+const TABLE: [Spec; 25] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -145,7 +153,7 @@ const TABLE: [Spec; 23] = [
         returns: Slot::Void,
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Int(8), &[]), (Slot::Any(1), &[]), (Slot::Int(1), &["immarg"])],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
-        memory: (Some("argmem"), "write"),
+        memory: &[(Some("argmem"), "write")],
     },
     Spec {
         name: "llvm.lifetime.start",
@@ -154,7 +162,7 @@ const TABLE: [Spec; 23] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: (Some("argmem"), "readwrite"),
+        memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {
         name: "llvm.lifetime.end",
@@ -163,7 +171,25 @@ const TABLE: [Spec; 23] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: (Some("argmem"), "readwrite"),
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llrm.ia16.in",
+        intrinsic: Intrinsic::PortIn,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Int(16), &[])],
+        attrs: PORT_ATTRS,
+        memory: PORT_MEMORY,
+    },
+    Spec {
+        name: "llrm.ia16.out",
+        intrinsic: Intrinsic::PortOut,
+        overloads: &[Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Int(16), &[]), (Slot::Any(0), &[])],
+        attrs: PORT_ATTRS,
+        memory: PORT_MEMORY,
     },
 ];
 
@@ -178,9 +204,10 @@ pub(crate) fn declare(function: &mut Function, name: &str) {
     }
 }
 
-/// Whether `name` is in LLVM's reserved namespace.
+/// Whether `name` is in LLVM's reserved namespace, or llrm's own for
+/// its target's intrinsics.
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -213,8 +240,7 @@ impl Intrinsic {
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
         let mut attrs = flags(spec.attrs);
-        let (location, access) = spec.memory;
-        attrs.push(Attribute::Memory(vec![(location.map(str::to_owned), access.to_owned())]));
+        attrs.push(Attribute::Memory(spec.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect()));
         (attrs, spec.parameters.iter().map(|(_, one)| flags(one)).collect())
     }
 

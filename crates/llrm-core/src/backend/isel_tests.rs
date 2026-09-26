@@ -1024,7 +1024,6 @@ b1:
             "add ebx, eax",
             "adc edx, ecx",
             "shrd ebx, edx, 10",
-            "sar edx, 10",
             "shld edx, ebx, 16",
             "mov ax, bx",
             "pop bp",
@@ -1036,7 +1035,6 @@ b1:
         [
             "push bp",
             "mov bp, sp",
-            "push si",
             "L1_0:",
             "mov ebx, dword ptr [bp+6]",
             "mov eax, ebx",
@@ -1046,18 +1044,124 @@ b1:
             "mov eax, edx",
             "sar eax, 31",
             "shr eax, 22",
-            "xor esi, esi",
             "add eax, ebx",
-            "mov ecx, edx",
-            "adc ecx, esi",
             "and eax, 4294966272",
             "sub ebx, eax",
-            "sbb edx, ecx",
             "shld edx, ebx, 16",
             "mov ax, bx",
-            "pop si",
             "pop bp",
             "retf",
         ]
     );
+}
+
+/// A float phi's constant input is loaded as any float constant is: taken
+/// for an address, it refused `an address of no global` and left deedlines'
+/// CREATEOBJECT and qbdemo's FRACLINE unselected.
+#[test]
+fn test_a_float_phi_takes_a_constant_input() {
+    let text = "define double @f(i16 %n) addrspace(1) {
+entry:
+  %c = icmp sgt i16 %n, 0
+  br i1 %c, label %more, label %done
+more:
+  br label %done
+done:
+  %x = phi double [ 0.0, %entry ], [ 1.0, %more ]
+  ret double %x
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "fldz", "or ax, ax", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
+    );
+}
+
+/// A far pointer's i16 is its offset word, as LLVM truncates a ptrtoint: it
+/// refused, and left oimad's main and qbdemo's BENCHMARK unselected.
+#[test]
+fn test_a_far_pointer_as_a_word_is_its_offset() {
+    let text = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+  %o = ptrtoint ptr addrspace(1) %p to i16
+  ret i16 %o
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, word ptr [bp+6]".to_owned()), "{got:?}");
+}
+
+/// Float equality holds only when ordered: `fcom` leaves unordered as
+/// equal with PF set, so oeq is `sete` and `setnp`, une `setne` or `setp`.
+#[test]
+fn test_float_equality_is_equal_and_ordered() {
+    let text = "define i1 @eq(double %a, double %b) addrspace(1) {
+  %c = fcmp oeq double %a, %b
+  ret i1 %c
+}
+define i1 @ne(double %a, double %b) addrspace(1) {
+  %c = fcmp une double %a, %b
+  ret i1 %c
+}
+";
+    let compared = ["push bp", "mov bp, sp", "fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "fnstsw ax", "sahf"];
+    let answered = |name: &str| listing(text, name).into_iter().filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':')).collect::<Vec<_>>();
+    assert_eq!(answered("eq"), ["sete al", "setnp bl", "and al, bl", "pop bp", "retf"]);
+    assert_eq!(answered("ne"), ["setne al", "setp bl", "or al, bl", "pop bp", "retf"]);
+}
+
+/// A port below 256 is an immediate, any other is in dx; the byte is in al.
+#[test]
+fn test_ports_are_in_and_out() {
+    let text = "declare i8 @llrm.ia16.in.i8(i16)
+declare void @llrm.ia16.out.i8(i16, i8)
+define void @f(i16 %port) addrspace(1) {
+  %v = call i8 @llrm.ia16.in.i8(i16 96)
+  call void @llrm.ia16.out.i8(i16 968, i8 %v)
+  call void @llrm.ia16.out.i8(i16 %port, i8 %v)
+  ret void
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "in al, 96", "mov dx, 968", "out dx, al", "mov dx, bx", "out dx, al", "pop bp", "retf"]
+    );
+}
+
+/// B$SCMP's result is the flags: its compare with zero is the call itself.
+#[test]
+fn test_a_flags_result_is_read_where_its_call_leaves_it() {
+    let text = "declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+define i16 @f(ptr %a, ptr %b) addrspace(1) {
+entry:
+  %s = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp sgt i16 %s, 0
+  br i1 %c, label %greater, label %other
+greater:
+  ret i16 1
+other:
+  ret i16 0
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
+    assert_eq!(got[call + 1], "jg L0_3", "{got:?}");
+}
+
+/// A float function no x87 instruction is stays one operation on st(0),
+/// which the frontend's finalizer spells.
+#[test]
+fn test_log2_exp2_and_atan_are_single_x87_operations() {
+    let text = "declare double @llvm.log2.f64(double)
+declare double @llvm.exp2.f64(double)
+declare double @llvm.atan.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.log2.f64(double %x)
+  %b = call double @llvm.exp2.f64(double %a)
+  %c = call double @llvm.atan.f64(double %b)
+  ret double %c
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let names: Vec<String> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()).filter(|what| what.op == crate::model::ir::Operation::FloatUnary).filter_map(|what| what.name.clone()).collect();
+    assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }

@@ -276,6 +276,8 @@ pub struct Contract {
     // handler summarization stops at the transfer and consumes these instead.
     pub direct_writes: Option<Memory>,
     pub direct_reads: Option<Memory>,
+    // Its result is the flags, as `cmp result, 0` would leave them: no register holds it.
+    pub flags_result: bool,
 }
 
 impl Repr for Contract {
@@ -319,6 +321,17 @@ impl Repr for Contract {
     }
 }
 
+/// Routines whose result is the flags, and the source that says so.
+const FLAGS_RESULTS: [(&str, &str); 1] = [(
+    "B$SCMP",
+    "rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF",
+)];
+
+/// Whether `name`'s result is the flags.
+pub fn flags_result(name: &str) -> bool {
+    FLAGS_RESULTS.iter().any(|&(routine, _)| routine == name)
+}
+
 pub fn worst(name: &str) -> Contract {
     Contract {
         name: name.to_owned(),
@@ -339,6 +352,7 @@ pub fn worst(name: &str) -> Contract {
         caller_cleanup: 0,
         i386: false,
         direct_writes: None,
+        flags_result: flags_result(name),
         direct_reads: None,
     }
 }
@@ -1903,6 +1917,7 @@ fn _print(name: &str, cleanup: i64) -> Contract {
         caller_cleanup: 0,
         i386: false,
         direct_writes: None,
+        flags_result: false,
         direct_reads: None,
     }
 }
@@ -1967,6 +1982,7 @@ fn _read(name: &str) -> Contract {
         caller_cleanup: 0,
         i386: false,
         direct_writes: None,
+        flags_result: false,
         direct_reads: None,
     }
 }
@@ -2059,6 +2075,7 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
             } else {
                 None
             },
+            flags_result: flags_result(&name),
             direct_reads: if row.contains_key("direct_reads") {
                 Some(Memory::from_name(string("direct_reads")?)?)
             } else {

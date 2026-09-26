@@ -129,6 +129,47 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
     }
 }
 
+/// The conditions of the flags that answer a comparison: one, both of two,
+/// or either of two.
+#[derive(Clone, Copy, Debug)]
+enum Test {
+    One(&'static str),
+    Both(&'static str, &'static str),
+    Either(&'static str, &'static str),
+}
+
+/// How `fcom`'s answer, in the flags as sahf leaves it, decides each float
+/// predicate, as LLVM's x87 lowering does: whether the operands are
+/// compared the other way, and the conditions. Its flags are an unsigned
+/// compare's, and unordered sets ZF, PF and CF: `a > b` is `ja`, false
+/// when unordered, and a less-than compares the other way to stay false.
+const FLOAT_CONDITIONS: [(FloatPredicate, bool, Test); 6] = [
+    (FloatPredicate::Ogt, false, Test::One("ja")),
+    (FloatPredicate::Oge, false, Test::One("jae")),
+    (FloatPredicate::Olt, true, Test::One("ja")),
+    (FloatPredicate::Ole, true, Test::One("jae")),
+    (FloatPredicate::Oeq, false, Test::Both("je", "jnp")),
+    (FloatPredicate::Une, false, Test::Either("jne", "jp")),
+];
+
+fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
+    FLOAT_CONDITIONS.iter().find(|(one, _, _)| *one == predicate).map(|&(_, swapped, test)| (swapped, test))
+}
+
+/// The x87 operation on st(0) each float function is. One no x87
+/// instruction is -- `fatan`, `flog2`, `fexp2` -- a frontend's finalizer
+/// spells as the sequence that computes it.
+const FLOAT_FUNCTIONS: [(FloatFunction, &str); 8] = [
+    (FloatFunction::Fabs, "fabs"),
+    (FloatFunction::Sqrt, "fsqrt"),
+    (FloatFunction::Rint, "frndint"),
+    (FloatFunction::Sin, "fsin"),
+    (FloatFunction::Cos, "fcos"),
+    (FloatFunction::Atan, "fatan"),
+    (FloatFunction::Log2, "flog2"),
+    (FloatFunction::Exp2, "fexp2"),
+];
+
 /// The width of a float value in LIR: x87's extended precision.
 const FLOAT: u32 = 10;
 
@@ -192,6 +233,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mu
         calls: IndexMap::default(),
         far: BTreeSet::new(),
         reachable: BTreeSet::new(),
+        flagged: BTreeSet::new(),
         pool,
     };
     let body = selector.body(name, &convention)?;
@@ -230,6 +272,8 @@ struct Selector<'m, 'c, 'p> {
     far: BTreeSet<i64>,
     /// The blocks execution can reach.
     reachable: BTreeSet<BlockId>,
+    /// Calls whose result is the flags their contract says they leave.
+    flagged: BTreeSet<ValueId>,
     /// Where a float constant is loaded from, as LLVM's constant pool.
     pool: &'p mut Pool,
 }
@@ -354,8 +398,11 @@ impl Selector<'_, '_, '_> {
     fn fuse(&mut self, block: BlockId, inst: InstId) {
         let function = self.function;
         let instruction = function.instruction(inst);
-        if !matches!(instruction.opcode, Opcode::ICmp(_) | Opcode::FCmp(_)) {
-            return;
+        match instruction.opcode {
+            Opcode::ICmp(_) => {}
+            // A branch reads one condition of the flags.
+            Opcode::FCmp(predicate) if float_conditions(predicate).is_some_and(|(_, test)| matches!(test, Test::One(_))) => {}
+            _ => return,
         }
         let result = instruction.result.expect("a comparison's value");
         if let [only] = function.users(result)
@@ -536,6 +583,9 @@ impl Selector<'_, '_, '_> {
 
     /// An operand in a register, made there if it is not one already.
     fn held(&mut self, operand: Operand, ty: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Held, Unselected> {
+        if self.is_float(ty) {
+            return self.float(operand, at, out);
+        }
         let width = self.width(ty)?;
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
@@ -618,7 +668,7 @@ impl Selector<'_, '_, '_> {
     /// A near global's address, and a constant displacement from it.
     fn global(&self, operand: Operand) -> Result<Pointer, Unselected> {
         let Operand::Constant(id) = operand else { unreachable!("a constant") };
-        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(Unselected)?;
+        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         if self.module.global(global).address_space != 0 {
             return refuse("a far global");
         }
@@ -843,6 +893,8 @@ impl Selector<'_, '_, '_> {
                 let joined = Held { value: self.value(result), width: 4 };
                 self.joined(joined, offset, selector, at, out);
             }
+            // Truncated, as LLVM's is: segment:offset's low word.
+            (CastOp::PtrToInt, Type::Int(16)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
             _ => return refuse(format!("{op:?} of a far pointer")),
         }
         Ok(())
@@ -1090,10 +1142,18 @@ impl Selector<'_, '_, '_> {
             Opcode::ICmp(_) | Opcode::FCmp(_) if self.fused.contains(&inst) => {}
             // SETcc, as LLVM selects a comparison it keeps as a value.
             Opcode::ICmp(_) | Opcode::FCmp(_) => {
-                let code = self.compare(inst, at, out)?;
+                let test = self.compare(inst, at, out)?;
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: 1 };
-                let name = format!("set{}", &code[1..]);
-                out.push(insn(at, semantics(Operation::Unary, &name, vec![Loc::Held(result)], vec![])));
+                let set = |code: &str, into: Held| insn(at, semantics(Operation::Unary, &format!("set{}", &code[1..]), vec![Loc::Held(into)], vec![]));
+                match test {
+                    Test::One(code) => out.push(set(code, result)),
+                    Test::Both(a, b) | Test::Either(a, b) => {
+                        let (first, second) = (self.fresh_held(1), self.fresh_held(1));
+                        out.extend([set(a, first), set(b, second)]);
+                        let join = if matches!(test, Test::Both(..)) { "and" } else { "or" };
+                        out.push(insn(at, semantics(Operation::Binary, join, vec![Loc::Held(result)], vec![Loc::Held(first), Loc::Held(second)])));
+                    }
+                }
             }
             Opcode::Br => match operands[..] {
                 [Operand::Block(target)] => {
@@ -1104,7 +1164,10 @@ impl Selector<'_, '_, '_> {
                 }
                 [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
                     let code = match self.fused_compare(condition) {
-                        Some(compare) => self.compare(compare, at, out)?,
+                        Some(compare) => match self.compare(compare, at, out)? {
+                            Test::One(code) => code,
+                            _ => unreachable!("only a one-condition compare is fused"),
+                        },
                         None => {
                             let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
                             let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
@@ -1173,14 +1236,7 @@ impl Selector<'_, '_, '_> {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
                 Some(Intrinsic::Unary(function)) => {
-                    let name = match function {
-                        FloatFunction::Fabs => "fabs",
-                        FloatFunction::Sqrt => "fsqrt",
-                        FloatFunction::Rint => "frndint",
-                        FloatFunction::Sin => "fsin",
-                        FloatFunction::Cos => "fcos",
-                        other => return refuse(format!("{other:?}")),
-                    };
+                    let Some(&(_, name)) = FLOAT_FUNCTIONS.iter().find(|(one, _)| *one == function) else { return refuse(format!("{function:?}")) };
                     let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
                     out.push(insn(at, semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)])));
@@ -1191,6 +1247,7 @@ impl Selector<'_, '_, '_> {
                     let result = instruction.result.expect("lrint's value");
                     self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
+                Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
         }
@@ -1237,7 +1294,14 @@ impl Selector<'_, '_, '_> {
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
-        if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
+        if contract.flags_result {
+            if let Some(value) = instruction.result {
+                if !function.users(value).iter().all(|one| matches!(function.instruction(one.user).opcode, Opcode::ICmp(_))) {
+                    return refuse(format!("@{name}'s flags read other than by a comparison"));
+                }
+                self.flagged.insert(value);
+            }
+        } else if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
@@ -1332,7 +1396,7 @@ impl Selector<'_, '_, '_> {
 
     /// `cmp` of a comparison's operands, a constant second; the predicate
     /// that holds of them as ordered.
-    fn compare(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<&'static str, Unselected> {
+    fn compare(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
         let instruction = self.function.instruction(inst);
         if let Opcode::FCmp(predicate) = instruction.opcode {
             return self.float_compare(predicate, inst, at, out);
@@ -1344,29 +1408,62 @@ impl Selector<'_, '_, '_> {
             std::mem::swap(&mut a, &mut b);
             predicate = swapped(predicate);
         }
+        // A call's flags are its result compared with zero.
+        if let Operand::Value(value) = a
+            && self.flagged.contains(&value)
+        {
+            if self.constant(b, 2) != Some(0) || !self.flags_reach(value, inst) {
+                return refuse("a call's flags read apart from its compare with zero");
+            }
+            return Ok(Test::One(condition_code(predicate)));
+        }
         let a = Loc::Held(self.held(a, ty, at, out)?);
         let b = self.source(b, ty, at, out)?;
         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
-        Ok(condition_code(predicate))
+        Ok(Test::One(condition_code(predicate)))
     }
 
-    /// `fcom`, its answer in the flags as sahf leaves it, as an unsigned
-    /// compare's: `a > b` is `ja`, and false when unordered. A less-than
-    /// compares the other way, as LLVM's x87 lowering does, so that it is
-    /// false when unordered too.
-    fn float_compare(&mut self, predicate: FloatPredicate, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<&'static str, Unselected> {
-        let instruction = self.function.instruction(inst);
-        let (a, b) = (instruction.operands[0], instruction.operands[1]);
-        let ((a, b), code) = match predicate {
-            FloatPredicate::Ogt => ((a, b), "ja"),
-            FloatPredicate::Oge => ((a, b), "jae"),
-            FloatPredicate::Olt => ((b, a), "ja"),
-            FloatPredicate::Ole => ((b, a), "jae"),
-            other => return refuse(format!("fcmp {other:?}")),
+    /// Whether the flags `value`'s call leaves are still those the compare
+    /// `inst` reads: it follows the call, and the branch reading it follows it.
+    fn flags_reach(&self, value: ValueId, inst: InstId) -> bool {
+        let function = self.function;
+        let ValueDef::Instruction(call) = function.value(value).def else { return false };
+        let Some(block) = function.parent(call) else { return false };
+        let instructions = function.block(block).instructions();
+        let Some(at) = instructions.iter().position(|&one| one == call) else { return false };
+        instructions.get(at + 1) == Some(&inst) && (!self.fused.contains(&inst) || instructions.get(at + 2) == function.terminator(block).as_ref())
+    }
+
+    /// A port read or written: `in` or `out`, a port below 256 immediate,
+    /// any other in a register, as the machine's constraints pin them.
+    fn port(&mut self, reading: bool, inst: InstId, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let function = self.function;
+        let type_of = |operand| function.operand_type(&self.module.context, operand).expect("a typed argument");
+        let port = match self.constant(arguments[0], 2) {
+            Some(port) if (0..256).contains(&port) => Loc::Imm(Imm { value: port, width: 1, address: None }),
+            _ => Loc::Held(self.held(arguments[0], type_of(arguments[0]), at, out)?),
         };
+        let what = if reading {
+            let instruction = function.instruction(inst);
+            let result = Held { value: self.value(instruction.result.expect("a port's value")), width: self.width(instruction.ty)? };
+            semantics(Operation::Barrier, "in", vec![Loc::Held(result)], vec![port])
+        } else {
+            let value = self.held(arguments[1], type_of(arguments[1]), at, out)?;
+            semantics(Operation::Barrier, "out", vec![], vec![port, Loc::Held(value)])
+        };
+        out.push(insn(at, what));
+        Ok(())
+    }
+
+    /// `fcom` of a float comparison's operands, in the order its row in
+    /// `FLOAT_CONDITIONS` compares them; the conditions that answer it.
+    fn float_compare(&mut self, predicate: FloatPredicate, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
+        let instruction = self.function.instruction(inst);
+        let Some((swapped, test)) = float_conditions(predicate) else { return refuse(format!("fcmp {predicate:?}")) };
+        let (a, b) = if swapped { (instruction.operands[1], instruction.operands[0]) } else { (instruction.operands[0], instruction.operands[1]) };
         let (a, b) = (self.float(a, at, out)?, self.float(b, at, out)?);
         out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), Loc::Held(b)])));
-        Ok(code)
+        Ok(test)
     }
 
     /// A float operand, in an x87 register.

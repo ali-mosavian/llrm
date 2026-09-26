@@ -190,6 +190,7 @@ fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Ve
         // It names no 32-bit register, so it keeps every high half.
         i386: false,
         direct_writes: None,
+        flags_result: false,
         direct_reads: None,
     };
     Ok((contract, inputs, outputs))

@@ -36,7 +36,8 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
-    let mut pool = Pool::new(module.globals.len() as i64);
+    let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
+    let target = Target { cpu, runtime: "", basic: false };
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -44,8 +45,8 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Selected { body, convention, calls, far } = isel::selected(module, name, &contracts, &mut pool).map_err(unselected)?;
-                let (body, reserve) = machine(body, &calls, cpu, convention.popped)?;
+                let Machined { body, reserve, calls, far, popped } = machined(module, name, &contracts, &pool, &target)?;
+                let body = masm::cleaned_returns(&addressvalues::converted(&body), popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
                     // A global of this module is called by the name it is defined or declared as.
@@ -72,7 +73,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             _ => {}
         }
     }
-    for (bytes, id) in pool.entries() {
+    for (bytes, id) in pool.borrow().entries() {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
@@ -96,14 +97,37 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     })
 }
 
-/// A selected body through the machine phases, returning `popped` bytes;
-/// and the bytes its frame reserves below BP.
-fn machine(body: LirBody, calls: &IndexMap<i64, String>, cpu: &Profile, popped: i64) -> Result<(LirBody, i64), String> {
+/// What the machine a frontend compiles for is: its processor, the
+/// runtime family whose frame it calls into, and whether floats keep
+/// BASIC's semantics.
+pub struct Target<'t> {
+    pub cpu: &'t Profile,
+    pub runtime: &'t str,
+    pub basic: bool,
+}
+
+/// A function selected and through the machine phases, as llc's
+/// per-function pipeline: its LIR, returns not yet cleaned, the bytes its
+/// frame reserves below BP, each call's callee by the call's `at` and
+/// which are far, and the bytes it pops.
+pub struct Machined {
+    pub body: LirBody,
+    pub reserve: i64,
+    pub calls: IndexMap<i64, String>,
+    pub far: BTreeSet<i64>,
+    pub popped: i64,
+}
+
+/// `name` of `module` selected and run through the machine phases, float
+/// constants in `pool`.
+pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
+    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut());
+    let Selected { body, convention, calls, far } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
-    let frame = Rc::new(RefCell::new(frame::of(&body, Some(calls), "", None).map_err(|error| error.0)?));
+    let frame = Rc::new(RefCell::new(frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), None, Some(calls), false, ProfileOrName::Profile(cpu))? {
+    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu))? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -119,7 +143,7 @@ fn machine(body: LirBody, calls: &IndexMap<i64, String>, cpu: &Profile, popped: 
             println!("{}", crate::tools::stages::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
     }
-    let body = masm::cleaned_returns(&addressvalues::converted(&body), popped)?;
     let frame = frame.borrow();
-    Ok((body, -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)))
+    let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
+    Ok(Machined { body, reserve, calls, far, popped: convention.popped })
 }

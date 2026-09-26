@@ -310,6 +310,7 @@ impl<'m> Machine<'m> {
                 void
             }
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => void,
+            Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
         })
     }
 
