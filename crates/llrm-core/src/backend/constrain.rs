@@ -91,6 +91,7 @@ pub fn constrained(
         let mut carried: IndexMap<(u32, Register), Held> = IndexMap::default();
         for one in &block.insns {
             let mut one = Arc::clone(one);
+            let start = insns.len();
             // CSE may feed several ABI slots from one value.
             let mut inputs: Vec<(Held, Register)> = Vec::new();
             let mut slots: IndexMap<(u32, u32, Register), Held> = IndexMap::default();
@@ -132,7 +133,9 @@ pub fn constrained(
                 .filter(|(value, register)| !_already_there(&pinned, *value, *register, _declared(&widths, &one, *value)))
                 .collect();
             if wanted.is_empty() && given.is_empty() {
-                carried.retain(|(value, root), kept| !_disturbs(&one, *value, kept, *root, &pins));
+                for one in insns[start..].iter().map(|one| &**one).chain([&*one]) {
+                    carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+                }
                 insns.push(one);
                 continue;
             }
@@ -146,6 +149,7 @@ pub fn constrained(
             let mut sources: Vec<Loc> = what.as_ref().map_or_else(Vec::new, |what| what.sources.clone());
             let mut defines = one.defines.clone();
             let mut uses = one.uses.clone();
+            let mut added: IndexMap<(u32, Register), Held> = IndexMap::default();
             let mut ordered: Vec<(u32, (Register, Vec<(&'static str, usize)>))> = wanted.into_iter().collect();
             ordered.sort_by_key(|(value, _got)| *value);
             for (value, (register, places)) in ordered {
@@ -162,7 +166,7 @@ pub fn constrained(
                     continue;
                 }
                 if read_only {
-                    carried.insert(key, held);
+                    added.insert(key, held);
                 }
                 if places.is_empty() {
                     // No occurrence to rewrite: the instruction reads this in a
@@ -251,6 +255,11 @@ pub fn constrained(
                     )
                 })
                 .collect();
+            // The copies in front of it, this one's own among them, can displace an older one.
+            for one in &insns[start..] {
+                carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
+            }
+            carried.extend(added);
             for one in std::iter::once(&made).chain(after.iter().map(|one| &**one)) {
                 carried.retain(|(value, root), kept| !_disturbs(one, *value, kept, *root, &pins));
             }
@@ -835,6 +844,17 @@ mod tests {
         let what =
             semantics(Operation::Multiply, "imul", vec![held(low, 2), held(high, 2)], vec![held(low, 2), held(by, 2)]);
         _insn(what, &[low, high], &[low, by], 0x100)
+    }
+
+    /// The second cwd's copy of 2 into ax displaced the first's copy of 1,
+    /// which the third reused: two ax pins overlapped and allocation refused.
+    #[test]
+    fn test_a_copy_displaced_from_its_register_is_not_reused() {
+        let at = |at: i64, one: Insn| Insn { at, covers: Some((at, at + 2)), ..one };
+        let constant = |value: u32, at: i64| _insn(semantics(Operation::Move, "mov", vec![held(value, 2)], vec![imm(7, 2)]), &[value], &[], at);
+        let body = _body(vec![constant(1, 0x100), constant(2, 0x102), at(0x104, _extend(1, 8)), at(0x106, _extend(2, 9)), at(0x108, _extend(1, 10))]);
+        let (got, pins) = constrained(&body, None).unwrap();
+        allocated(&got, &pins);
     }
 
     fn _shape(body: &LirBody) -> Vec<String> {
