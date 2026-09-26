@@ -162,9 +162,21 @@ impl Builder<'_> {
     /// A call through `callee` of type `function_type`; its result, unless
     /// `void`.
     pub fn call(&mut self, function_type: TypeId, callee: Operand, arguments: &[Operand], name: &str) -> Option<Operand> {
+        self.call_as(0, function_type, callee, arguments, name)
+    }
+
+    /// A call by calling convention `convention`, which must be the callee's.
+    pub fn call_as(&mut self, convention: u32, function_type: TypeId, callee: Operand, arguments: &[Operand], name: &str) -> Option<Operand> {
         let Type::Function { returns, .. } = self.context.types.get(function_type) else { panic!("a function type") };
         let returns = *returns;
-        let info = CallInfo { function_type, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); arguments.len()], attrs: Vec::new(), tail: Default::default() };
+        let info = CallInfo {
+            function_type,
+            calling_convention: convention,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); arguments.len()],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
         let operands = arguments.iter().copied().chain([callee]).collect();
         self.emit(Opcode::Call(Box::new(info)), returns, operands, Flags::default(), name)
     }

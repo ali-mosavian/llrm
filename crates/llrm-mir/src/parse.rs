@@ -367,6 +367,26 @@ impl Parser {
         }
     }
 
+    /// `ccc`, `fastcc` and their kin, `cc N` or `ccN`; C's when none is written.
+    fn calling_convention(&mut self) -> Parsed<u32> {
+        let Token::Word(word) = self.peek().clone() else { return Ok(0) };
+        if let Some(&(_, number)) = crate::opcode::CONVENTIONS.iter().find(|(name, _)| *name == word) {
+            self.next();
+            return Ok(number);
+        }
+        if word == "cc" {
+            self.next();
+            return u32::try_from(self.unsigned()?).or_else(|_| self.fail("a calling convention is too large"));
+        }
+        match word.strip_prefix("cc").map(str::parse::<u32>) {
+            Some(Ok(number)) => {
+                self.next();
+                Ok(number)
+            }
+            _ => Ok(0),
+        }
+    }
+
     fn address_space(&mut self) -> Parsed<u32> {
         if !self.eat_word("addrspace") {
             return Ok(0);
@@ -434,6 +454,7 @@ impl Parser {
     fn function(&mut self, define: bool) -> Parsed<()> {
         self.next();
         let linkage = self.linkage();
+        let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
         let returns = self.ty()?;
         let Token::Global(name) = self.next() else {
@@ -444,6 +465,7 @@ impl Parser {
         let void = self.module.context.types.void();
         let mut function = Function::new(returns, void);
         function.return_attrs = return_attrs;
+        function.calling_convention = calling_convention;
         let mut local = Local {
             function,
             values: HashMap::new(),
@@ -1375,9 +1397,11 @@ impl Parser {
                     if word == "call" {
                         flags = self.flags(&fast);
                     }
+                    let calling_convention = self.calling_convention()?;
                     let return_attrs = self.attributes(false)?;
+                    let space = self.address_space()?;
                     let written = self.ty()?;
-                    let pointer = self.module.context.types.ptr(0);
+                    let pointer = self.module.context.types.ptr(space);
                     let callee = self.value(local, pointer)?;
                     self.expect_punct('(')?;
                     let mut operands = Vec::new();
@@ -1398,7 +1422,7 @@ impl Parser {
                         _ => self.module.context.types.intern(Type::Function { returns: written, parameters: argument_types, variadic: false }),
                     };
                     let (returns, _, _) = self.module.signature(function_type);
-                    let info = Box::new(CallInfo { function_type, return_attrs, argument_attrs, attrs, tail });
+                    let info = Box::new(CallInfo { function_type, calling_convention, return_attrs, argument_attrs, attrs, tail });
                     if word == "call" {
                         operands.push(callee);
                         (Opcode::Call(info), returns, operands)

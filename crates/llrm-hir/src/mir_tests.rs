@@ -24,7 +24,35 @@ fn a_function_becomes_its_llvm_ir() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.ends_with("define i16 @\"DIFF%\"(i16 %0, i16 %1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
+    // With no ABI of its own, a procedure is far and C's.
+    assert!(text.ends_with("define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
+}
+
+/// A call carries its callee's calling convention, and a far callee lives
+/// in code address space 1: BASIC's pops its own arguments, pushed left to
+/// right; a near C one is in address space 0.
+#[test]
+fn a_call_repeats_its_callees_convention() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, ProcedureAbi, StackCleanup};
+    let mut function = difference();
+    function.abi = Some(ProcedureAbi { cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer });
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]);
+    call.callee = Some("B$NEAR".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
+    function.calls = vec![site(vec![1, 0])];
+    let emitted = emit(&program(function.clone())).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("define cc1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
+    assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
+
+    function.calls = vec![site(vec![0, 1])];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "a call to B$NEAR pushing [0, 1]".to_owned())]);
 }
 
 /// A refused internal function was left `declare internal`, which LLVM

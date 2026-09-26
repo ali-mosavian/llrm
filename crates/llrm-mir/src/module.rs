@@ -97,6 +97,8 @@ pub struct Function {
     pub return_attrs: Vec<Attribute>,
     pub attrs: Vec<Attribute>,
     pub personality: Option<ConstantId>,
+    /// LLVM's calling convention number; 0 is C's.
+    pub calling_convention: u32,
     pub(crate) void: TypeId,
     pub(crate) parameters: Vec<ValueId>,
     pub(crate) values: Vec<ValueData>,
@@ -120,6 +122,7 @@ impl Function {
             return_attrs: Vec::new(),
             attrs: Vec::new(),
             personality: None,
+            calling_convention: 0,
             void,
             parameters: Vec::new(),
             values: Vec::new(),
