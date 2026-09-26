@@ -36,7 +36,7 @@ pub fn optimized(
     if Rc::ptr_eq(&candidate, body) {
         return Ok(unchanged());
     }
-    let (candidate, changes) = mir::transformed(body, candidate);
+    let (candidate, specializing) = mir::transformed(body, candidate);
     let Optimized {
         registers,
         call_registers,
@@ -87,7 +87,7 @@ pub fn optimized(
             watch(name, state);
         }
     }
-    let mut records = vec![mir::Stage { name: "unswitch".to_owned(), changes }];
+    let mut records = vec![mir::Stage { name: "unswitch".to_owned(), ..specializing }];
     records.extend(done.stages);
     Ok(mir::Transformed { body: done.body, stages: records })
 }

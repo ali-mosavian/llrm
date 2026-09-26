@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::support::hash::{HashMap, HashSet};
 
-use super::{MirBody, Op, OpId, next_id, python_padded_hex};
+use super::{MirBody, Op, OpId, Relanded, Retired, next_id, python_padded_hex, relanded, stripped};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Disposition {
@@ -29,11 +29,20 @@ pub struct TransformChange {
     pub disposition: Disposition,
 }
 
-/// One pass's changes, under the stage name dumps use.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// One pass's changes, under the stage name dumps use, and where the bytes
+/// of what it deleted or moved land.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Stage {
     pub name: String,
     pub changes: Vec<TransformChange>,
+    pub retired: Vec<Retired>,
+    pub relanded: Vec<Relanded>,
+}
+
+impl Stage {
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.retired.is_empty() && self.relanded.is_empty()
+    }
 }
 
 /// A pipeline's result: the body, and what each stage did to reach it.
@@ -107,12 +116,19 @@ fn identify(body: Rc<MirBody>) -> (Rc<MirBody>, Vec<(u32, Option<u32>)>) {
     (Rc::new(body), fresh)
 }
 
-/// `after`, what a pass made of `before`, with its operations identified,
-/// and what the pass did to each.
-pub fn transformed(before: &MirBody, after: Rc<MirBody>) -> (Rc<MirBody>, Vec<TransformChange>) {
+/// `after`, what a pass made of `before`, with its operations identified
+/// and its tombstones stripped, and what the pass did: the stage, unnamed.
+pub fn transformed(before: &MirBody, after: Rc<MirBody>) -> (Rc<MirBody>, Stage) {
     let (after, fresh) = identify(after);
+    let (after, mut retired) = match stripped(&after) {
+        Some((body, retired)) => (Rc::new(body), retired),
+        None => (after, Vec::new()),
+    };
+    let gone: HashSet<u32> = retired.iter().map(|one| one.id).collect();
+    let (deleted, relanded) = relanded(before, &after, &gone);
+    retired.extend(deleted);
     let changes = changes(before, &after, &fresh);
-    (after, changes)
+    (after, Stage { name: String::new(), changes, retired, relanded })
 }
 
 fn changes(before: &MirBody, after: &MirBody, fresh: &[(u32, Option<u32>)]) -> Vec<TransformChange> {

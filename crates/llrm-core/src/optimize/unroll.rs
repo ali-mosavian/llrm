@@ -255,8 +255,8 @@ pub fn optimized(
         if Rc::ptr_eq(&candidate, &body) {
             return Ok(crate::model::mir::Transformed { body, stages });
         }
-        let (candidate, changes) = crate::model::mir::transformed(&body, candidate);
-        stages.push(crate::model::mir::Stage { name: "unroll-accepted".to_owned(), changes });
+        let (candidate, stage) = crate::model::mir::transformed(&body, candidate);
+        stages.push(crate::model::mir::Stage { name: "unroll-accepted".to_owned(), ..stage });
         if let Some(watch) = watch.as_deref_mut() {
             watch("unroll-accepted", &candidate);
         }

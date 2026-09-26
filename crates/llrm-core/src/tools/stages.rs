@@ -746,6 +746,7 @@ pub fn main(argv: &[String]) -> Result<i32, String> {
         write(step, "lir", stage, &lir_stage(stage, bodies))?;
         step += 1;
     }
+    std::fs::write(args.dump.join("emitted.obj"), &got.data).map_err(|error| error.to_string())?;
     let mut emitted = format!("=== emitted ({}, {} bytes)\n  --- {route}\n", got.reason, got.data.len());
     _asm(&mut emitted, &got.data)?;
     write(step, "asm", "emitted", &emitted)?;
