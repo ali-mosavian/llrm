@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::module::{BlockId, Function, InstId};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DominatorTree {
     /// Each reachable block's immediate dominator; the entry's is itself.
     idom: HashMap<BlockId, BlockId>,

@@ -213,6 +213,12 @@ semantics with poison, memory laid out as the datalayout says, and
 undefined behaviour reported rather than run. On every fixture that states
 its answer it agrees with `lli`.
 
+Then the pass manager (`llrm_mir::passes`): function passes over a module,
+analyses cached per function until a pass's `PreservedAnalyses` drops
+them, and each pass's changes returned as a stage for the ledger. Its
+instruments are LLVM's `-verify-each` and `-verify-analysis-invalidation`,
+which recomputes every analysis a pass kept.
+
 ### 4. Raise into MIR beside the old MIR
 
 - The QB raise and the C and Nib frontends also build a MIR module. Nothing

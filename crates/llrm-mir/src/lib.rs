@@ -11,6 +11,7 @@ pub mod lexer;
 pub mod module;
 pub mod opcode;
 pub mod parse;
+pub mod passes;
 pub mod print;
 pub mod types;
 pub mod verify;
@@ -29,5 +30,7 @@ pub use types::{FloatKind, Type, TypeId, Types};
 mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
+#[cfg(test)]
+mod pass_tests;
 #[cfg(test)]
 mod tests;
