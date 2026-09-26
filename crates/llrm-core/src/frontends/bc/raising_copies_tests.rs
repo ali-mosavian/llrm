@@ -317,7 +317,7 @@ fn test_copy_selects_without_clobbering_arithmetic_flags() {
     let mut low = lowered(&scalar(body, &found));
     let frame = crate::backend::frame::of(&low, Some(&IndexMap::default()), "", None).unwrap();
     let frame = Rc::new(std::cell::RefCell::new(frame));
-    for mut stage in crate::flow::machine(&IndexMap::default(), Some(frame), Some(&IndexMap::default()), false, "386").unwrap() {
+    for mut stage in crate::flow::machine(&IndexMap::default(), Some(frame), None, Some(&IndexMap::default()), false, "386").unwrap() {
         low = stage.transform(low).unwrap();
     }
     for op in low.insns() {
@@ -349,7 +349,7 @@ fn test_proven_copy_unlocks_strict_floating_cse() {
     let body = raising_literals::initialized(scalar(body, &found), &found, None).unwrap();
     let result = crate::optimize::transform::subexpressions(&Rc::new(body.body), &found.dgroup.members, false).unwrap();
     assert_eq!(testing::ops(&result).iter().filter(|op| op.kind == Kind::Fload).count(), 1);
-    let low = crate::backend::floatalloc::allocated(&lowered(&result), None, false, "386").unwrap();
+    let low = crate::backend::floatalloc::allocated(&lowered(&result), None, None, false, "386").unwrap();
     let memory_arithmetic: Vec<String> = low
         .insns()
         .iter()

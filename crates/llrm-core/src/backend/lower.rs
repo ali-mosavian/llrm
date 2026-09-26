@@ -192,10 +192,6 @@ fn _unordered(test: Kind) -> Option<Kind> {
     }
 }
 
-fn _integers(format: Format) -> bool {
-    matches!(format, Format::Signed16 | Format::Signed32 | Format::Signed64)
-}
-
 /// Where an operation with no node of its own returns values and a call
 /// delivers them, by position: every x86 C convention's AX, then DX.
 pub const _RETURNED: [Register; 2] = [Register::EAX, Register::EDX];
@@ -212,10 +208,10 @@ fn _instruction(op: &Op) -> Result<Option<(Operation, &'static str)>, Unlowered>
             return Err(Unlowered("unsigned 64-bit floating store needs target-specific expansion".into()));
         }
         if op.kind == Kind::Fload {
-            return Ok(Some((Operation::FloatLoad, if _integers(floating.inputs[0]) { "fild" } else { "fld" })));
+            return Ok(Some((Operation::FloatLoad, if floating.inputs[0].integer() { "fild" } else { "fld" })));
         }
         if op.kind == Kind::Fstore {
-            if !_integers(floating.result) {
+            if !floating.result.integer() {
                 return Ok(Some((Operation::FloatStore, "fstp")));
             }
             // Toward zero is fisttp, which a 387 lacks: FloatAlloc spells it for one.

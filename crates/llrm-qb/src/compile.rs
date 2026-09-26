@@ -16,6 +16,7 @@ use llrm_core::support::hash::{IndexMap, IndexSet};
 
 use super::abi::{physicalize, AbiError};
 use super::inline_x87::finalized;
+use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::backend::{addressvalues, frame, lower, masm, omfwrite};
 use llrm_core::flow;
@@ -161,7 +162,7 @@ fn _bytes_of(values: &[i64]) -> Vec<u8> {
 type Names = IndexMap<(Space, i64), String>;
 
 #[allow(clippy::type_complexity)]
-fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
+fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
     let mut names: Names = llrm_core::hir::lower::symbol_names();
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
     let internal: IndexMap<i64, &model::DataObject> = module
@@ -240,6 +241,11 @@ fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Da
         if cursor != object_.bytes.len() as i64 {
             items.push(masm::Datum::Bytes(_bytes_of(&object_.bytes[cursor as usize..])));
         }
+    }
+    for (bytes, id) in pool.entries() {
+        let label = format!("{}$D{id}", _object_name(&module.name));
+        names.insert((Space::Segment, id), label.clone());
+        grouped["BC_CN"].extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     Ok((names, grouped))
 }
@@ -1491,6 +1497,7 @@ pub fn assembled(
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
     let mut referenced_calls: BTreeSet<String> = BTreeSet::new();
     let empty_occurrences = IndexMap::default();
+    let pool = Rc::new(RefCell::new(Pool::new(module.data.iter().map(|one| one.id + 1).max().unwrap_or(0))));
     for (function, body) in functions.iter().copied().zip(&semantic) {
         let handler_at = _handler_at(function);
         let zeroed;
@@ -1552,6 +1559,7 @@ pub fn assembled(
         let mut phases = flow::machine(
             &IndexMap::default(),
             Some(Rc::clone(&owned_frame)),
+            Some(Rc::clone(&pool)),
             Some(&physical.calls),
             true,
             ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
@@ -1745,7 +1753,7 @@ pub fn assembled(
 
     statement_targets.sort();
     procedures.push(_statement_procedure(&statement_targets));
-    let (mut names, data_by_segment) = _data(module)?;
+    let (mut names, data_by_segment) = _data(module, &pool.borrow())?;
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
     if data_keys.values().any(|key| code_names[key].is_empty()) {
         return emission("one or more DATA rows have no final code label");

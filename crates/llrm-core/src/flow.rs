@@ -10,6 +10,7 @@ use crate::support::hash::IndexMap;
 use iced_x86::Register;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::{
     allocate, coalesce, farcall, floatalloc, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
@@ -25,6 +26,7 @@ use crate::optimize::transform;
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
     frame: Option<Rc<RefCell<Frame>>>,
+    pool: Option<Rc<RefCell<Pool>>>,
     calls: Option<&IndexMap<i64, String>>,
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
@@ -42,7 +44,7 @@ pub fn machine<'a>(
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
-        Box::new(floatalloc::FloatAlloc::new(frame.clone(), basic_semantics, target)?),
+        Box::new(floatalloc::FloatAlloc::new(frame.clone(), pool, basic_semantics, target)?),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target))?),

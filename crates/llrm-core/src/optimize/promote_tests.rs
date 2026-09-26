@@ -1069,3 +1069,25 @@ fn test_a_float_store_with_excess_precision_reaches_later_loads_as_a_value() {
         assert_eq!(loads == 0, forwarded, "{precision:?}: {:?}", result.blocks[0].ops);
     }
 }
+
+/// A conversion reads its cell in the cell's own integer format: QB's
+/// `x - 1` stored 1 to a frame temporary for `fild`, and promotion refused
+/// the cell as both integer and float, so every literal stayed in memory.
+#[test]
+fn test_an_integer_cell_a_conversion_reads_is_promoted() {
+    use crate::model::floating::{Format, Precision, Rounding, Semantics};
+    let r#ref = MemRef::new(Some(Addr::new(Space::Frame, -2)), 2);
+    let fload = |at: i64, result: Value| Op {
+        kind: Kind::Fload,
+        floating: Some(Semantics::new([Format::Signed16], Format::Extended80, Precision::Exact, Rounding::None)),
+        args: vec![cell(&r#ref)],
+        results: vec![held(result, 10)],
+        loads: vec![r#ref.clone()],
+        ..op(at, Operation::FloatLoad, "fild", vec![result], vec![])
+    };
+    let body = one_block(vec![store(2, vec![], constant(1, 2), &r#ref), fload(4, value(2, 4)), fload(6, value(3, 6))]);
+    let result = plain(&body);
+    let conversions: Vec<&Op> = result.blocks[0].ops.iter().filter(|one| one.kind == Kind::Fload).collect();
+    assert_eq!(conversions.len(), 2, "{:?}", result.blocks[0].ops);
+    assert!(conversions.iter().all(|one| one.loads.is_empty() && matches!(one.args[0], Arg::Held(Held { width: 2, .. }))), "{conversions:?}");
+}

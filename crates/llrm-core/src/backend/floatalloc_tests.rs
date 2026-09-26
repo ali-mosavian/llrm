@@ -78,11 +78,11 @@ fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
 
 /// As the pipeline runs it: phis are copies by now.
 fn run(body: &LirBody) -> LirBody {
-    allocated(&phielim::eliminated(body).unwrap(), None, true, "386").unwrap()
+    allocated(&phielim::eliminated(body).unwrap(), None, None, true, "386").unwrap()
 }
 
 fn with_frame(body: &LirBody, frame: &mut Frame) -> LirBody {
-    allocated(&phielim::eliminated(body).unwrap(), Some(frame), true, "386").unwrap()
+    allocated(&phielim::eliminated(body).unwrap(), Some(frame), None, true, "386").unwrap()
 }
 
 fn arith(name: &str, d: f64, s: f64) -> f64 {
@@ -605,7 +605,7 @@ fn test_a_pinned_conversion_result_survives_lowering_into_floatalloc() {
     let options = lower::Lowered { hints: Some(&hints), ..Default::default() };
     let low = lower::lowered("pinned", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", options)
         .unwrap();
-    let allocated = allocated(&low, Some(&mut Frame::new(-10)), false, "386").unwrap();
+    let allocated = allocated(&low, Some(&mut Frame::new(-10)), None, false, "386").unwrap();
     let result = Loc::Held(Held { value: integer.id, width: 4 });
     assert!(allocated.insns().iter().any(|one| one
         .what
@@ -698,7 +698,7 @@ fn test_floating_bridge_never_reads_an_unestablished_slot() {
             blocks.push(block(48, vec![], vec![0, 16]));
         }
         body.blocks = blocks;
-        let result = allocated(&body, Some(&mut Frame::new(-10)), true, "386");
+        let result = allocated(&body, Some(&mut Frame::new(-10)), None, true, "386");
         assert!(matches!(result, Err(Raised::Unlowered(_))), "{defect}: {result:?}");
     }
 }
@@ -783,7 +783,7 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
         body.entry = if boundary == "entry" { 24 } else { 0 };
         body.blocks = blocks;
         if boundary == "entry" {
-            assert!(matches!(allocated(&body, None, true, "386"), Err(Raised::Unlowered(_))), "{boundary}");
+            assert!(matches!(allocated(&body, None, None, true, "386"), Err(Raised::Unlowered(_))), "{boundary}");
             continue;
         }
         let allocated = run(&body);
@@ -947,7 +947,7 @@ fn test_last_register_operand_is_consumed_without_reversing_arithmetic() {
 #[test]
 fn test_missing_float_is_not_created_by_an_exchange() {
     let body = _body(vec![fchs(2, 1)]);
-    let Err(Raised::Unlowered(error)) = allocated(&body, None, true, "386") else { panic!() };
+    let Err(Raised::Unlowered(error)) = allocated(&body, None, None, true, "386") else { panic!() };
     assert!(error.0.contains("unavailable"));
 }
 
@@ -997,7 +997,7 @@ fn test_x87_memory_operand_follows_the_selected_cpu_cost() {
     }
     let slow_memory = cpu::Profile { name: "test-x87".to_owned(), _costs: costs.into_iter().collect(), ..base.clone() };
 
-    let result = allocated(&body, None, true, &slow_memory).unwrap();
+    let result = allocated(&body, None, None, true, &slow_memory).unwrap();
 
     let insns = result.insns();
     let multiply = what(insns.iter().find(|one| name(one).starts_with("fmul")).unwrap());
@@ -1012,7 +1012,7 @@ fn test_x87_memory_operand_matches_each_public_cpu_cost() {
     for profile in cpu::names() {
         let (body, _) = _memory_operand_body();
         let target = cpu::profile(profile).unwrap();
-        let result = allocated(&body, None, true, target).unwrap();
+        let result = allocated(&body, None, None, true, target).unwrap();
         let insns = result.insns();
         let multiply = what(insns.iter().find(|one| name(one).starts_with("fmul")).unwrap());
         let folded = multiply.sources.iter().any(|arg| matches!(arg, Loc::Mem(_)));
@@ -1041,7 +1041,7 @@ fn test_profitable_multiuse_float_home_is_retained_for_the_selected_cpu() {
             _store(right_out, right_product),
         ]);
         let target = cpu::profile(profile).unwrap();
-        let result = allocated(&body, None, true, target).unwrap();
+        let result = allocated(&body, None, None, true, target).unwrap();
         let cost = |form: &str| target.cost(form).unwrap();
         let (load, multiply, memory_multiply) = (cost("x87_load"), cost("x87_mul"), cost("x87_mul_m"));
         let retain_cost = 2 * load + 3 * multiply;
@@ -1209,6 +1209,32 @@ fn test_exact_float_constants_need_no_frame() {
             let emitted = select::emit(what(&insns[0]), 0, None, false, false, None).unwrap();
             assert_eq!(emitted.code, encoded);
         }
+    }
+}
+
+/// Any other integer constant is a readonly datum in its narrowest exact
+/// format, as GCC's constant pool: QB's `x * 320` stored 320 to a frame
+/// temporary at every use and read it back with a 16-cycle `fild`.
+#[test]
+fn test_an_integer_constant_loads_from_the_pool() {
+    use crate::backend::constpool::Pool;
+    // A 16-bit immediate is its bits: 0xffff is -1.
+    for (value, width, bytes) in [
+        (320, 2, 320f32.to_le_bytes().to_vec()),
+        (0xffff, 2, (-1f32).to_le_bytes().to_vec()),
+        (16_777_217, 4, 16_777_217f64.to_le_bytes().to_vec()),
+    ] {
+        let constant = sem(Operation::FloatLoad, "fild", vec![st(0)], vec![Loc::Imm(Imm { value, width, address: None })]);
+        let instruction = Arc::new(Insn::new(0, Some((0, 2)), Some(constant), vec![], vec![]));
+        let body = LirBody::new("constant", 0, vec![LirBlock::new(0, vec![instruction])], IndexMap::default(), IndexMap::default());
+        let mut pool = Pool::new(7);
+        let allocated = allocated(&body, None, Some(&mut pool), true, "386").unwrap();
+        let insns = allocated.insns();
+        assert_eq!(insns.len(), 1, "{insns:?}");
+        assert_eq!(name(&insns[0]), "fld");
+        let Loc::Mem(cell) = &what(&insns[0]).sources[0] else { panic!("{insns:?}") };
+        assert_eq!((cell.addr.map(|addr| (addr.space, addr.index)), cell.width), (Some((Space::Segment, 7)), bytes.len() as u32));
+        assert_eq!(pool.entries().collect::<Vec<_>>(), [(bytes.as_slice(), 7)]);
     }
 }
 

@@ -42,6 +42,11 @@ impl Format {
             Self::Unsigned64 => "unsigned64",
         }
     }
+
+    /// A two's complement or unsigned integer, not a float.
+    pub const fn integer(self) -> bool {
+        matches!(self, Self::Signed16 | Self::Signed32 | Self::Signed64 | Self::Unsigned64)
+    }
 }
 
 impl fmt::Display for Format {

@@ -175,7 +175,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()
@@ -448,7 +448,7 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()

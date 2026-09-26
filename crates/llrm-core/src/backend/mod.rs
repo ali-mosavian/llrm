@@ -17,6 +17,7 @@ pub mod datagroup;
 pub mod division;
 pub mod farcall;
 pub mod farload;
+pub mod constpool;
 pub mod floatalloc;
 pub mod floatregions;
 pub mod inline_asm;

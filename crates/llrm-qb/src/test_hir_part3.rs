@@ -103,7 +103,7 @@ fn machine(
 /// `floatalloc.allocated(machine, frame.of(machine, calls))`.
 fn float_allocated(body: &lir::LirBody, calls: &IndexMap<i64, String>) -> lir::LirBody {
     let mut owned = frame::of(body, Some(calls), "", None).expect("frames");
-    floatalloc::allocated(body, Some(&mut owned), true, "386").expect("allocates")
+    floatalloc::allocated(body, Some(&mut owned), None, true, "386").expect("allocates")
 }
 
 fn loc_width(one: &Loc) -> u32 {
@@ -2277,4 +2277,16 @@ SUB m (xp!, yp!, zp!)\r\nFOR i = 0 TO n - 1\r\nx(i) = x(i) + xp\r\ny(i) = y(i) +
     let end = start + text[start..].find(" endp").expect("M endp");
     let body = backward_loop(&text[start..end]);
     assert!(!regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&body), "{body}");
+}
+
+/// Float constants load as GCC's do: 1 is `fld1`, and 320 a readonly
+/// single. Each literal was stored to a frame temporary at its use and
+/// read back by `fild`, as BC does.
+#[test]
+fn test_an_integer_literal_in_a_float_expression_is_a_constant() {
+    let source = "DEFDBL A-Z\r\nDECLARE SUB f (a, b)\r\nf 1.5, 2\r\nSUB f (a, b)\r\nx = a * .5 + 3\r\ny = x - 1\r\n\
+z = y * 320\r\nPRINT x, y, z\r\nEND SUB\r\n";
+    let listing = procedure_listing("CONSTANT.BAS", source.as_bytes(), "F");
+    assert!(!listing.contains("fild") && !listing.contains("fiadd"), "{listing}");
+    assert!(listing.contains("fld1") && listing.contains("fadd dword ptr") && !listing.contains("320"), "{listing}");
 }

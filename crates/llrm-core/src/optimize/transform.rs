@@ -3015,6 +3015,39 @@ pub fn _constant_operands(
             }
         }
     }
+    // A known integer converted is a float constant; the target places it.
+    if op.kind == Kind::Fload
+        && op.floating.as_ref().is_some_and(|rule| rule.inputs[0].integer())
+        && op.args.len() == 1
+        && op.stores.is_empty()
+        && !op.barrier()
+    {
+        let (constant, read) = match &op.args[0] {
+            Arg::Held(held) => (
+                facts
+                    .get(&held.value)
+                    .filter(|fact| fact.width >= held.width)
+                    .map(|fact| Const::new(consts::masked(&fact.n, held.width), held.width)),
+                None,
+            ),
+            Arg::Cell(cell) if op.loads == [cell.r#ref.clone()] => {
+                (consts::_cell(memory, &cell.r#ref).map(|fact| Const::new(fact.n, cell.r#ref.width)), Some(&cell.r#ref))
+            }
+            _ => (None, None),
+        };
+        let Some(constant) = constant else { return op.clone() };
+        let mut result = op.clone();
+        if let Arg::Held(held) = &op.args[0] {
+            result.uses.retain(|value| *value != held.value || op.merges.contains_key(value));
+        }
+        if read.is_some() {
+            result.loads = Vec::new();
+            result.source_backed = false;
+            result.raised = None;
+        }
+        result.args = vec![Arg::Const(constant)];
+        return result;
+    }
     if !matches!(
         op.kind,
         Kind::Add

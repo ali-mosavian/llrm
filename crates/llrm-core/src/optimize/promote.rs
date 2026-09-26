@@ -1106,7 +1106,17 @@ pub fn _cell(op: &Op) -> Option<MemRef> {
 /// A store whose value a later read of its cell may take as it was: every
 /// integer store, and a float store the frontend lets keep its precision.
 pub(crate) fn _stores_value(op: &Op) -> bool {
-    op.kind == Kind::Store || _forwards_float(op)
+    op.kind == Kind::Store || _forwards_float(op) || (op.kind == Kind::Fstore && _converts_integer(op))
+}
+
+/// A conversion whose memory side is an integer: `fild` reads, and `fistp`
+/// writes, the cell in its own integer format.
+fn _converts_integer(op: &Op) -> bool {
+    op.floating.as_ref().is_some_and(|rule| match op.kind {
+        Kind::Fload => rule.inputs[0].integer(),
+        Kind::Fstore => rule.result.integer(),
+        _ => false,
+    })
 }
 
 fn _forwards_float(op: &Op) -> bool {
@@ -1121,7 +1131,7 @@ fn _float_cells(body: &MirBody, blocked: &BTreeSet<Slice>) -> (HashSet<Key>, Has
     let mut refused = HashSet::default();
     let mut integer = HashSet::default();
     for op in body.blocks.iter().flat_map(|block| &block.ops) {
-        let float = matches!(op.kind, Kind::Fload | Kind::Fstore);
+        let float = matches!(op.kind, Kind::Fload | Kind::Fstore) && !_converts_integer(op);
         for key in op.loads.iter().chain(&op.stores).filter_map(|one| _key(one, blocked)) {
             if float {
                 if op.kind == Kind::Fstore && !_forwards_float(op) {
@@ -1626,7 +1636,9 @@ pub fn _instead(
         return None;
     }
     // A float cell holds a value at its register precision, not its bytes.
-    let float = matches!(op.kind, Kind::Fload | Kind::Fstore);
+    // A conversion keeps its operation: only its memory side is the cell.
+    let conversion = _converts_integer(op);
+    let float = matches!(op.kind, Kind::Fload | Kind::Fstore) && !conversion;
     let held_width = |args: &[Arg]| {
         args.iter()
             .find_map(|one| match one {
@@ -1651,6 +1663,14 @@ pub fn _instead(
             ..Value::new(fresh, op.at)
         };
         let width = held_width(&op.args);
+        if conversion {
+            return Some(Op {
+                defines: std::iter::once(into).chain(op.defines.iter().copied()).collect(),
+                stores: vec![],
+                results: vec![Arg::Held(Held { value: into, width })],
+                ..op.clone()
+            });
+        }
         return Some(moved(Op {
             kind: Kind::Copy,
             name: "mov".to_owned(),
@@ -1702,7 +1722,7 @@ pub fn _instead(
             }
         }
         return Some(moved(Op {
-            kind: if matches!(op.kind, Kind::Load | Kind::Fload) {
+            kind: if op.kind == Kind::Load || (op.kind == Kind::Fload && !conversion) {
                 Kind::Copy
             } else {
                 op.kind

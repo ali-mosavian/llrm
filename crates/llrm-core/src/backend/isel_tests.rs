@@ -1,5 +1,6 @@
 use crate::abi::qb::HirAbi;
 use crate::backend::assemble::{self, Abi};
+use crate::backend::constpool::Pool;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
@@ -16,7 +17,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
-    isel::selected(&parsed(text), name, &contracts)
+    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0))
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -722,8 +723,8 @@ define i16 @f() addrspace(1) {
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
 /// both valid MIR, which isel refused: "a branch on a constant", "a float
-/// constant operand". A branch on a constant jumps; a float constant is
-/// its bits, loaded from a stack temporary.
+/// constant operand". A branch on a constant jumps; a float constant loads
+/// from the pool in its narrowest exact format, as LLVM's does.
 #[test]
 fn test_a_constant_condition_and_a_float_constant_select() {
     let text = "define i16 @f() addrspace(1) {
@@ -742,10 +743,9 @@ b3:
     assert_eq!(
         listing(text, "f"),
         [
-            "push bp", "mov bp, sp", "sub sp, 22", "L0_0:", "fnstcw word ptr [bp-20]", "mov ax, word ptr [bp-20]", "or ax, 3072", "mov word ptr [bp-22], ax", "L0_1:",
-            "mov dword ptr [bp-8], 0", "mov dword ptr [bp-4], 1073217536", "mov dword ptr [bp-16], 0", "mov dword ptr [bp-12], 1073741824",
-            "fld qword ptr [bp-8]", "fadd qword ptr [bp-16]", "fldcw word ptr [bp-22]", "fistp word ptr [bp-18]", "fldcw word ptr [bp-20]",
-            "mov ax, word ptr [bp-18]", "leave", "retf",
+            "push bp", "mov bp, sp", "sub sp, 6", "L0_0:", "fnstcw word ptr [bp-4]", "mov ax, word ptr [bp-4]", "or ax, 3072", "mov word ptr [bp-6], ax", "L0_1:",
+            "fld dword ptr $K1", "fadd dword ptr $K2", "fldcw word ptr [bp-6]", "fistp word ptr [bp-2]", "fldcw word ptr [bp-4]",
+            "mov ax, word ptr [bp-2]", "leave", "retf",
         ]
     );
 }

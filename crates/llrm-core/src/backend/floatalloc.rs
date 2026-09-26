@@ -15,6 +15,7 @@ use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::allocate::{Live, live};
 use crate::backend::floatregions::{Raised, boundary};
 use crate::backend::spillplacement::{self, Border, Constraint};
+use crate::backend::constpool::{self, Pool};
 use crate::backend::frame::Frame;
 use crate::backend::lower::Unlowered;
 use crate::backend::select;
@@ -70,7 +71,7 @@ fn cell_of(load: &Insn) -> &Mem {
 }
 
 /// x87 reads integers from memory, for named values and physical stack slots.
-fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>) -> Result<LirBody, Raised> {
+fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Option<&mut Pool>) -> Result<LirBody, Raised> {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -92,6 +93,14 @@ fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>) -> Result<LirBo
                             sources: Vec::new(),
                             ..what
                         });
+                        insns.push(Arc::new(made));
+                        continue;
+                    }
+                    if let (Loc::Imm(Imm { value, width, .. }), Some(pool)) = (&what.sources[0], pool.as_deref_mut()) {
+                        let value = if *width == 2 { *value as i16 as i32 } else { *value as i32 };
+                        let cell = pool.cell(constpool::narrowest(f64::from(value)));
+                        let mut made = (*one).clone();
+                        made.what = Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
                         continue;
                     }
@@ -1712,11 +1721,12 @@ fn _floating_values(body: &LirBody) -> HashSet<u32> {
 pub fn allocated<'a>(
     body: &LirBody,
     mut frame: Option<&mut Frame>,
+    pool: Option<&mut Pool>,
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<LirBody, Raised> {
     let target = targets::profile(cpu).map_err(Raised::Value)?;
-    let loaded = _integer_loads(body, frame.as_deref_mut())?;
+    let loaded = _integer_loads(body, frame.as_deref_mut(), pool)?;
     let mut body = _integer_stores(&loaded, frame.as_deref_mut(), basic_semantics)?;
     let floating = _floating_values(&body);
     if floating.is_empty() {
@@ -1822,6 +1832,7 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
 /// Python holds the one mutable frame every machine phase shares.
 pub struct FloatAlloc<'a> {
     pub frame: Option<Rc<RefCell<Frame>>>,
+    pub pool: Option<Rc<RefCell<Pool>>>,
     pub basic_semantics: bool,
     pub cpu: &'a Profile,
 }
@@ -1829,10 +1840,11 @@ pub struct FloatAlloc<'a> {
 impl<'a> FloatAlloc<'a> {
     pub fn new(
         frame: Option<Rc<RefCell<Frame>>>,
+        pool: Option<Rc<RefCell<Pool>>>,
         basic_semantics: bool,
         cpu: impl Into<ProfileOrName<'a>>,
     ) -> Result<Self, String> {
-        Ok(Self { frame, basic_semantics, cpu: targets::profile(cpu)? })
+        Ok(Self { frame, pool, basic_semantics, cpu: targets::profile(cpu)? })
     }
 }
 
@@ -1847,7 +1859,8 @@ impl LIRTransform for FloatAlloc<'_> {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         let mut frame = self.frame.as_ref().map(|frame| frame.borrow_mut());
-        allocated(&body, frame.as_deref_mut(), self.basic_semantics, self.cpu).map_err(|error| error.to_string())
+        let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
+        allocated(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics, self.cpu).map_err(|error| error.to_string())
     }
 }
 
