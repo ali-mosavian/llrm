@@ -40,8 +40,8 @@ fn a_refused_function_is_an_external_declaration() {
 }
 
 /// BC's string layout: a far payload whose word 1 is its own near offset,
-/// a near descriptor with the payload's offset and the segment word's
-/// address, and a far pointer to the descriptor.
+/// a segment word, a near descriptor with the payload's offset and the
+/// segment word's address, and a far pointer to the descriptor.
 #[test]
 fn relocated_data_becomes_pointers_in_its_initializer() {
     use crate::model::{AddressKind, DataObject, DataRelocation};
@@ -58,7 +58,7 @@ fn relocated_data_becomes_pointers_in_its_initializer() {
     program.modules[0].data = vec![payload, segment, descriptor, far];
 
     let emitted = emit(&program).remove(0);
-    assert_eq!(emitted.refused, [("segment".to_owned(), "a segment relocation in its data".to_owned())]);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     let globals: Vec<&str> = text.lines().filter(|line| line.starts_with('@')).collect();
@@ -66,7 +66,7 @@ fn relocated_data_becomes_pointers_in_its_initializer() {
         globals,
         [
             "@payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @payload, i16 4) to i16), [4 x i8] c\"\\02\\00HI\" }>",
-            "@segment = external global [2 x i8]",
+            "@segment = internal global ptr addrspace(2) addrspacecast (ptr addrspace(1) @payload to ptr addrspace(2))",
             "@descriptor = internal global <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @payload, i16 2) to i16), ptr @segment }>",
             "@far = internal global ptr addrspace(1) addrspacecast (ptr @descriptor to ptr addrspace(1))",
         ]

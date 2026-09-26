@@ -76,6 +76,7 @@ The complete list; everything else is LLVM's.
 | Variables BASIC zeroes | explicit stores or `zeroinitializer`; `alloca` is uninitialized |
 | String space and dynamic arrays, which the runtime moves | reached through their descriptors; no pointer into them lives across a call that may allocate |
 | Near and far pointers | `ptr` and `ptr addrspace(1)`; datalayout `p:16:16-p1:32:16:16:16`, a far pointer indexing by 16 bits; its integer form is segment:offset, so a near offset into far data is `ptrtoint` to `i16` |
+| Segments | `ptr addrspace(2)`, datalayout `p2:16:16`: `addrspacecast` from a far pointer gives its segment, one back gives segment:0; address spaces' casts are the memory model's to define |
 | Huge-array address arithmetic | an intrinsic; segment arithmetic has no LLVM form |
 | An object's fixed layout | the datalayout, struct types, globals and their initializers |
 | A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!alias.scope`, `!tbaa` |
