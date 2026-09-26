@@ -75,7 +75,7 @@ The complete list; everything else is LLVM's.
 | An alternate entry sharing a frame | a master function taking an entry selector, and a thin function per entry, as flang lowers `ENTRY` |
 | Variables BASIC zeroes | explicit stores or `zeroinitializer`; `alloca` is uninitialized |
 | String space and dynamic arrays, which the runtime moves | reached through their descriptors; no pointer into them lives across a call that may allocate |
-| Near and far pointers | `ptr` and `ptr addrspace(1)`; datalayout `p:16:16-p1:32:16:16:16`, a far pointer indexing by 16 bits |
+| Near and far pointers | `ptr` and `ptr addrspace(1)`; datalayout `p:16:16-p1:32:16:16:16`, a far pointer indexing by 16 bits; its integer form is segment:offset, so a near offset into far data is `ptrtoint` to `i16` |
 | Huge-array address arithmetic | an intrinsic; segment arithmetic has no LLVM form |
 | An object's fixed layout | the datalayout, struct types, globals and their initializers |
 | A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!alias.scope`, `!tbaa` |
