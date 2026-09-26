@@ -1,7 +1,8 @@
 .model medium
 .386
 .dosseg
-.stack 512
+; Nib keeps arrays in the frame: 4 KB, as Open Watcom gives a DOS program.
+.stack 4096
 
 extrn _main:far
 extrn N$EDIV:far
