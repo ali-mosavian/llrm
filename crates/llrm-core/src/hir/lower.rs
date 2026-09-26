@@ -1008,18 +1008,9 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::DescriptorPlace(model::DescriptorPlace { base, field, r#type: type_id }) => {
+            model::Operand::DescriptorPlace(descriptor @ model::DescriptorPlace { base, r#type: type_id, .. }) => {
                 let pointer_type = self.value_types[base];
-                let pointee = pointer_type.element.map(|element| self.types[&element]);
-                let scoped_view = pointee
-                    .is_some_and(|pointee| pointee.kind == model::TypeKind::Opaque && pointee.name.starts_with("$slice["));
-                let offset = if scoped_view {
-                    if *field == model::DescriptorField::Length { 0 } else { 2 }
-                } else if *field == model::DescriptorField::Length {
-                    -4
-                } else {
-                    -2
-                };
+                let offset = descriptor.offset(pointer_type.element.map(|element| self.types[&element]));
                 self.operand(
                     &model::Operand::IndirectPlace(model::IndirectPlace {
                         base: *base,

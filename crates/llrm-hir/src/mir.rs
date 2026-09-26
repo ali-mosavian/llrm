@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{
     BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
     Linkage, Module, Operand as Value, Type, TypeId, Types,
@@ -71,6 +72,7 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
 
 struct Tables<'h> {
     array_order: model::ArrayOrder,
+    layout: DataLayout,
     types: HashMap<i64, &'h model::Type>,
     callables: HashMap<&'h str, &'h model::Callable>,
     /// Each data object's global, by its id: a place's symbol.
@@ -84,6 +86,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder) -> Emitted {
     let mut refused = Vec::new();
     let mut tables = Tables {
         array_order,
+        layout: DataLayout::parse(DATALAYOUT).expect("llrm's layout"),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
@@ -488,7 +491,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
                 Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile))
             }
-            Operand::DescriptorPlace(_) => Err("a string descriptor field".to_owned()),
+            Operand::DescriptorPlace(one) => {
+                let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
+                let pointee = self.tables.types[&self.value_types[&one.base]].element.map(|element| self.tables.types[&element]);
+                let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
+                Ok((self.offset(base, one.offset(pointee), false), ty, false))
+            }
             Operand::ValueRef(_) | Operand::Constant(_) => Err("a value where a place belongs".to_owned()),
         }
     }
@@ -529,10 +537,19 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         if self.tables.array_order == model::ArrayOrder::ColumnMajor {
             dimensions.reverse();
         }
+        // An index is the pointer's index width, as C promotes one: a
+        // narrower one a GEP would sign-extend.
+        let space = match self.b.context.types.get(self.b.type_of(base)) {
+            Type::Pointer(space) => *space,
+            _ => 0,
+        };
+        let bits = self.tables.layout.pointer(space).index_bits;
+        let width = self.b.context.types.int(bits);
         let mut linear: Option<Value> = None;
-        for (index, &(lower, upper)) in dimensions {
-            let index = self.value(index)?;
-            let bits = self.b.context.types.int_bits(self.b.type_of(index)).ok_or("a non-integer index")?;
+        for (operand, &(lower, upper)) in dimensions {
+            let index = self.value(operand)?;
+            let signed = self.operand_hir_type(operand).signed != Some(false);
+            let index = self.convert(index, signed, width)?;
             let first = self.b.int(bits, i128::from(lower));
             let adjusted = self.b.binary(BinaryOp::Sub, index, first, Flags::default(), "");
             linear = Some(match linear {
@@ -698,6 +715,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let base = self.b.cast(CastOp::AddrSpaceCast, segment, ty, "");
                 let byte = self.b.context.types.int(8);
                 let result = self.b.gep(byte, base, &[offset], Flags::default(), "");
+                self.define(instruction, result);
+            }
+            Op::FixedMul | Op::FixedDiv => {
+                let [a, b, _] = self.operands(instruction)?[..] else { return Err(format!("{op} without three operands")) };
+                let fraction = match &instruction.operands[2] {
+                    Operand::Constant(model::Constant { value: Number::Int(n), .. }) => i128::from(*n),
+                    Operand::Constant(model::Constant { value: Number::Float(x), .. }) => *x as i128,
+                    _ => return Err(format!("{op} by a variable fraction")),
+                };
+                let ty = self.b.type_of(a);
+                let bits = self.b.context.types.int_bits(ty).ok_or("fixed point of a non-integer")?;
+                let wide = self.b.context.types.int(bits * 2);
+                let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
+                let fraction = self.b.int(bits * 2, fraction);
+                let result = if op == Op::FixedMul {
+                    let product = self.b.binary(BinaryOp::Mul, a, b, Flags::default(), "");
+                    self.b.binary(BinaryOp::AShr, product, fraction, Flags::default(), "")
+                } else {
+                    let dividend = self.b.binary(BinaryOp::Shl, a, fraction, Flags::default(), "");
+                    self.b.binary(BinaryOp::SDiv, dividend, b, Flags::default(), "")
+                };
+                let result = self.b.cast(CastOp::Trunc, result, ty, "");
                 self.define(instruction, result);
             }
             Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {
