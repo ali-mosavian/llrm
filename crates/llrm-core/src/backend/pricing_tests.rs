@@ -79,6 +79,25 @@ fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
     assert_eq!(got, expected);
 }
 
+/// Homebrew's ndisasm 3.01 printed `D1EB` as `shr bx,0x0`, so the D1 shifts
+/// priced as `shift_ri` on macOS: B$DVI4's loop scored 12 on the 386, not 16.
+#[test]
+fn test_shifts_by_one_decode_the_same_on_every_host() {
+    let (_, _, _, det) = report("loop", DVI4_LOOP);
+    let kinds: Vec<(&str, &str)> = det.iter().map(|d| (d.0.as_str(), d.1)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("shr bx,1", "shift_r1"),
+            ("rcr cx,1", "shift_r1"),
+            ("shr dx,1", "shift_r1"),
+            ("rcr ax,1", "shift_r1"),
+            ("or bx,bx", "alu_rr"),
+            ("jne 0", "jcc"),
+        ]
+    );
+}
+
 /// Python's `report()` over every case: count, alone, bulk and notes.
 const PYTHON: &str = "\
 and: BC halves| 6 [8, 8, 10, 7, 7, 9, 11] [8.0, 8.0, 2.0, 1.5, 2.0, 2.0, 1.5] []

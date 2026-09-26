@@ -17,9 +17,9 @@
 //! bit read is a stall. Costs live in `timings` and are approximate.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
-use std::process::Command;
 use std::sync::LazyLock;
+
+use iced_x86::{Decoder, DecoderOptions, Formatter, NasmFormatter};
 
 use crate::timings::{
     ARCHS, COST, INORDER, ISSUE, LATENCY, LCP_STALL, PARTIAL_STALL, PREFIX,
@@ -52,43 +52,32 @@ fn _fromhex(hexs: &str) -> Vec<u8> {
         .collect()
 }
 
-/// `^[0-9A-F]+\s+([0-9A-F]+)\s+(\S+)\s*(.*)$`, the row regex.
-fn _row(line: &str) -> Option<Row> {
-    let b = line.as_bytes();
-    let hex = |c: u8| c.is_ascii_digit() || (b'A'..=b'F').contains(&c);
-    let space = |c: u8| c.is_ascii_whitespace();
-    let run = |mut i: usize, keep: &dyn Fn(u8) -> bool| {
-        while i < b.len() && keep(b[i]) {
-            i += 1;
-        }
-        i
-    };
-    let address = run(0, &hex);
-    let gap = run(address, &space);
-    let raw = run(gap, &hex);
-    let second = run(raw, &space);
-    let mnemonic = run(second, &|c| !space(c));
-    if address == 0 || gap == address || raw == gap || second == raw || mnemonic == second {
-        return None;
-    }
-    Some((
-        line[gap..raw].to_owned(),
-        line[second..mnemonic].to_lowercase(),
-        line[mnemonic..].trim().to_lowercase(),
-    ))
-}
-
+/// ndisasm's text for 16-bit code, decoded in process: the installed ndisasm
+/// is not an instrument, 3.01 prints `shr bx,1` as `shr bx,0x0`.
 pub fn disasm(hexs: &str) -> Vec<Row> {
     let b = _fromhex(hexs);
-    let mut f = tempfile::Builder::new().suffix(".bin").tempfile().expect("a temporary file");
-    f.write_all(&b).expect("the temporary file written");
-    let out = Command::new("ndisasm")
-        .args(["-b", "16"])
-        .arg(f.path())
-        .output()
-        .expect("FileNotFoundError: ndisasm");
-    let out = String::from_utf8_lossy(&out.stdout).into_owned();
-    out.lines().filter_map(_row).collect()
+    let mut decoder = Decoder::new(16, &b, DecoderOptions::NONE);
+    let mut formatter = NasmFormatter::new();
+    let options = formatter.options_mut();
+    options.set_hex_prefix("0x");
+    options.set_hex_suffix("");
+    options.set_uppercase_hex(false);
+    options.set_small_hex_numbers_in_decimal(true);
+    options.set_add_leading_zero_to_hex_numbers(false);
+    options.set_branch_leading_zeros(false);
+    options.set_show_branch_size(false);
+    options.set_space_after_operand_separator(false);
+    let mut rows = Vec::new();
+    for insn in &mut decoder {
+        let at = insn.ip() as usize;
+        let raw: String = b[at..at + insn.len()].iter().map(|byte| format!("{byte:02X}")).collect();
+        let mut mnemonic = String::new();
+        formatter.format_mnemonic(&insn, &mut mnemonic);
+        let mut ops = String::new();
+        formatter.format_all_operands(&insn, &mut ops);
+        rows.push((raw, mnemonic.to_lowercase(), ops.trim().to_lowercase()));
+    }
+    rows
 }
 
 fn _isdigit(text: &str) -> bool {
@@ -557,3 +546,4 @@ pub fn main(argv: &[String]) -> i32 {
     println!("   above -- which are its short path, not its worst one.");
     0
 }
+
