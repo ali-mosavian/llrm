@@ -21,11 +21,15 @@ pub fn space(module: &Module, global: GlobalId) -> Space {
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
 /// is free, so one no assembler takes becomes `G$n`; an external one must
-/// be a symbol once mangled.
+/// be a symbol once mangled. An intrinsic has none.
 pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
+        // An intrinsic is lowered where it is called, never linked.
+        if global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved) {
+            continue;
+        }
         let name = linked(global.name.as_deref().unwrap_or_default());
         let symbol = if is_symbol(&name) {
             name

@@ -562,3 +562,15 @@ define cc1000 void @MAIN() addrspace(1) {
         ]
     );
 }
+
+/// An intrinsic is no symbol: declaring one refused the module as "no
+/// assembler symbol".
+#[test]
+fn test_a_declared_intrinsic_names_no_symbol() {
+    let text = "declare i16 @llvm.smax.i16(i16, i16)
+define i16 @f(i16 %a) addrspace(1) {
+  ret i16 %a
+}
+";
+    assert_eq!(listing(text, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "pop bp", "retf"]);
+}
