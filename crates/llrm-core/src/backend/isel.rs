@@ -740,6 +740,16 @@ impl Selector<'_, '_> {
 
     /// A far pointer operand's offset and selector, each in a register.
     fn far(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(Held, Held), Unselected> {
+        // A numeric constant, null among them: selector:offset as one dword.
+        if let Some(bits) = self.constant(operand, 4) {
+            let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
+                let held = self.fresh_held(2);
+                let word = Loc::Imm(Imm { value, width: 2, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![word])));
+                held
+            });
+            return Ok((halves[0], halves[1]));
+        }
         match self.pointer(operand)? {
             Pointer::Far { selector, base, offset: 0 } => Ok((base, selector)),
             pointer @ Pointer::Far { selector, .. } => {
