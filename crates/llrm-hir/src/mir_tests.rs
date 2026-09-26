@@ -191,6 +191,32 @@ fn a_float_converted_to_an_integer_is_rounded() {
     assert!(text.contains("  %1 = call i16 @llvm.lrint.i16.f64(double %0)\n  ret i16 %1\n"), "{text}");
 }
 
+/// `FIX(x)`, Nib's `i16(x)`: TRUNCATE rounds toward zero, as `fptosi`
+/// does, and an unsigned result by `fptoui`; it was `lrint`, which made
+/// `i16(-7.9)` -8.
+#[test]
+fn a_float_truncated_to_an_integer_rounds_toward_zero() {
+    for (signed, cast) in [(Some(true), "fptosi"), (Some(false), "fptoui")] {
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }];
+        let truncate = Instruction::new(1, Op::Truncate, vec![2], vec![Operand::value_ref(1)]);
+        let block = Block::new(1, vec![truncate], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "FIX%", 3, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+        let mut word = Type::new(3, "word", TypeKind::Integer, 2);
+        word.signed = signed;
+        program.modules[0].types.push(word);
+
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains(&format!("  %1 = {cast} double %0 to i16\n  ret i16 %1\n")), "{text}");
+        assert!(!text.contains("lrint"), "{text}");
+    }
+}
+
 /// `SQR(x)`: the float functions are LLVM's intrinsics.
 #[test]
 fn a_float_function_is_its_intrinsic() {

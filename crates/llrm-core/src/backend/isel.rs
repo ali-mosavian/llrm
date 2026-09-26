@@ -833,20 +833,23 @@ impl Selector<'_, '_> {
                 let into = Held { value: self.value(result), width: FLOAT };
                 self.float_loaded(into, "fild", cell, held.width, false, at, out);
             }
-            CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, at, out)?,
+            CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
+            CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
             _ => return refuse(format!("{op:?} of a float")),
         }
         Ok(())
     }
 
-    /// A float stored as an integer of `to` by `name`, and loaded back.
-    fn float_to_integer(&mut self, operand: Operand, name: &str, result: ValueId, to: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+    /// A float stored as an integer of `to` by `name`, and loaded back. x87
+    /// stores only signed integers: an unsigned one is stored twice as
+    /// wide, and its low part read.
+    fn float_to_integer(&mut self, operand: Operand, name: &str, result: ValueId, to: TypeId, unsigned: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let width = self.width(to)?;
         if width == 1 {
             return refuse("a float to a byte");
         }
         let held = self.float(operand)?;
-        let cell = self.float_stored(held, name, width, at, out);
+        let cell = self.float_stored(held, name, if unsigned { 2 * width } else { width }, at, out);
         let into = Held { value: self.value(result), width };
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(cell, width))])));
         Ok(())
@@ -1132,7 +1135,7 @@ impl Selector<'_, '_> {
                 // Rounds as the machine's default mode does: fistp.
                 Some(Intrinsic::LRint) => {
                     let result = instruction.result.expect("lrint's value");
-                    self.float_to_integer(arguments[0], "fistp", result, instruction.ty, at, out)
+                    self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
                 _ => refuse(format!("@{name}")),
             };

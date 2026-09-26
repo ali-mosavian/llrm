@@ -793,3 +793,40 @@ define double @f(double %x) addrspace(1) {
     );
 }
 
+
+/// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
+#[test]
+fn test_a_float_to_an_integer_is_stored_toward_zero() {
+    let text = "define i16 @f(double %x) addrspace(1) {
+  %s = fptosi double %x to i16
+  %u = fptoui double %x to i16
+  %r = add i16 %s, %u
+  ret i16 %r
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 10",
+            "L0_0:",
+            "fnstcw word ptr [bp-8]",
+            "mov ax, word ptr [bp-8]",
+            "or ax, 3072",
+            "mov word ptr [bp-10], ax",
+            "fld qword ptr [bp+6]",
+            "fld st(0)",
+            "fldcw word ptr [bp-10]",
+            "fistp word ptr [bp-2]",
+            "fldcw word ptr [bp-8]",
+            "mov ax, word ptr [bp-2]",
+            "fldcw word ptr [bp-10]",
+            "fistp dword ptr [bp-6]",
+            "fldcw word ptr [bp-8]",
+            "add ax, word ptr [bp-6]",
+            "leave",
+            "retf",
+        ]
+    );
+}

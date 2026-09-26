@@ -461,7 +461,7 @@ fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> 
         _ => return None,
     };
     let function = match op {
-        Op::Convert | Op::Truncate => return types.int_bits(to).map(|bits| format!("llvm.lrint.i{bits}.{float}")),
+        Op::Convert => return types.int_bits(to).map(|bits| format!("llvm.lrint.i{bits}.{float}")),
         Op::Fabs => "fabs",
         Op::Fsqrt => "sqrt",
         Op::Fsin => "sin",
@@ -808,7 +808,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let signed = self.operand_hir_type(&instruction.operands[0]).signed != Some(false);
                 let ty = self.result_type(instruction.results[0])?;
-                let result = self.convert(value, signed, ty)?;
+                let result = if op == Op::Truncate && matches!(self.b.context.types.get(self.b.type_of(value)), Type::Float(_)) {
+                    // Toward zero; the result's signedness picks the cast.
+                    let unsigned = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
+                    self.b.cast(if unsigned { CastOp::FPToUI } else { CastOp::FPToSI }, value, ty, "")
+                } else {
+                    self.convert(value, signed, ty)?
+                };
                 self.define(instruction, result);
             }
             Op::Divmod | Op::Udivmod => {
