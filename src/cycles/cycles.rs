@@ -235,7 +235,10 @@ pub fn classify(mnem: &str, ops: &str, raw: &str) -> &'static str {
         }
         return "mov_rr";
     }
-    if matches!(mnem, "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "shld" | "shrd") {
+    if matches!(mnem, "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal") && !mem(dst) && src == "1" {
+        return "shift_r1";
+    }
+    if matches!(mnem, "shl" | "shr" | "sar" | "rol" | "ror" | "rcl" | "rcr" | "sal" | "shld" | "shrd") {
         return "shift_ri";
     }
     if ALU.contains(&mnem) {
@@ -598,6 +601,25 @@ mod tests {
         }
     }
 
+    /// The D1 shift by one was priced as the two-clock imm8 form; it takes
+    /// three on the 486, and `add r,r` one.
+    #[test]
+    fn test_a_shift_by_one_is_priced_as_the_three_clock_form() {
+        assert_eq!(classify("shl", "ax,1", "d1e0"), "shift_r1");
+        assert_eq!(classify("shl", "ax,2", "c1e002"), "shift_ri");
+        assert_eq!(classify("shl", "word [bp-4],1", "d166fc"), "shift_ri");
+        let reg = || ir::Loc::Reg(ir::Reg { register: Register::AX, width: 2 });
+        let what = ir::Semantics {
+            name: Some("shl".to_owned()),
+            dests: vec![reg()],
+            sources: vec![reg(), ir::Loc::Imm(ir::Imm { value: 1, width: 1, address: None })],
+            ..ir::Semantics::new(ir::Operation::Binary)
+        };
+        let one = lir::Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]);
+        assert_eq!(schedule::_form(&one), "shift_r1");
+        assert_eq!(COST["shift_r1"][0], 3);
+    }
+
     #[test]
     fn test_complete_far_pointer_loads_share_one_priced_form() {
         for mnemonic in ["les", "lfs", "lgs"] {
@@ -628,7 +650,7 @@ mul: mgl call| 11 [82, 35, 50, 14, 14, 16, 49] [82.0, 35.0, 50.3, 13.8, 14.3, 16
 mul: mgl pow2| 6 [11, 8, 4, 3, 3, 4, 5] [11.0, 8.0, 2.0, 1.5, 2.0, 2.0, 1.5] []
 mul: qbopt absorbed, memory| 5 [40, 18, 14, 11, 10, 13, 14] [40.0, 18.0, 1.7, 1.2, 1.7, 1.7, 1.2] []
 mul: qbopt absorbed, register| 6 [47, 19, 11, 9, 8, 10, 10] [47.0, 19.0, 2.0, 1.5, 2.0, 2.0, 1.5] []
-cmp: stock| 20 [72, 34, 51, 18, 20, 22, 52] [72.0, 34.0, 50.7, 18.5, 19.7, 21.7, 51.5] []
+cmp: stock| 20 [74, 34, 51, 18, 20, 22, 52] [74.0, 34.0, 50.7, 18.5, 19.7, 21.7, 51.5] []
 cmp: mgl call| 11 [59, 26, 44, 14, 14, 16, 46] [59.0, 26.0, 44.3, 13.8, 14.3, 16.3, 45.8] []
 cmp: mgl inlined| 6 [11, 9, 7, 5, 5, 6, 8] [11.0, 9.0, 2.0, 1.5, 2.0, 2.0, 1.5] []
 cmp: qbopt absorbed, memory| 4 [12, 9, 11, 8, 8, 9, 12] [12.0, 9.0, 1.3, 1.0, 1.3, 1.3, 1.0] []
@@ -641,7 +663,7 @@ div: qbopt absorbed, register| 7 [68, 58, 48, 44, 43, 42, 32] [68.0, 58.0, 47.0,
 rmi4: stock| 31 [133, 89, 96, 66, 68, 70, 94] [133.0, 89.0, 96.3, 66.2, 68.3, 70.3, 94.2] []
 rmi4: qbopt absorbed, memory| 8 [64, 60, 48, 44, 43, 43, 33] [64.0, 60.0, 47.3, 43.8, 43.3, 42.3, 30.8] ['lcp']
 rmi4: qbopt absorbed, register| 8 [70, 60, 48, 44, 43, 42, 32] [70.0, 60.0, 47.3, 43.8, 43.3, 42.3, 30.8] ['lcp']
-loop| 6 [12, 6, 2, 2, 2, 2, 2] [12.0, 6.0, 2.0, 1.5, 2.0, 2.0, 1.5] []
+loop| 6 [16, 6, 2, 2, 2, 2, 2] [16.0, 6.0, 2.0, 1.5, 2.0, 2.0, 1.5] []
 ";
 
     #[test]

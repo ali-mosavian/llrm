@@ -7,6 +7,12 @@ pub fn cost<'a>(cpu: impl Into<ProfileOrName<'a>>, operation: &str) -> Result<i6
     targets::profile(cpu)?.cost(operation)
 }
 
+/// A left shift by `count`, by its cheapest form.
+pub fn shift<'a>(cpu: impl Into<ProfileOrName<'a>>, count: i64) -> Result<i64, String> {
+    let profile = targets::profile(cpu)?;
+    profile.cost(if count == 1 { profile.doubling()? } else { "shift_ri" })
+}
+
 pub fn validate<'a>(cpu: impl Into<ProfileOrName<'a>>) -> Result<(), String> {
     targets::profile(cpu)?;
     Ok(())
@@ -94,8 +100,8 @@ pub fn scale<'a>(
         }
         // One copy seeds the accumulator without destroying the source.
         let mut total = cost(target, "mov_rr")?;
-        for (name, _) in parts {
-            total += cost(target, if *name == "shl" { "shift_ri" } else { "alu_rr" })?;
+        for (name, count) in parts {
+            total += if *name == "shl" { shift(target, *count)? } else { cost(target, "alu_rr")? };
         }
         Ok(total)
     };

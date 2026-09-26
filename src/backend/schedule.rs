@@ -19,7 +19,7 @@ use crate::support::hash::IndexMap;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes};
 use crate::backend::select;
-use crate::model::ir::{Loc, Operation, Space};
+use crate::model::ir::{Imm, Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -153,7 +153,13 @@ pub fn _form(one: &Insn) -> &'static str {
         }
         return if what.sources.iter().any(|r#where| matches!(r#where, Loc::Imm(_))) { "mov_ri" } else { "mov_rr" };
     }
-    if matches!(name, Some("shl" | "shr" | "sar" | "rol" | "ror")) || what.op == Operation::Funnel {
+    if matches!(name, Some("shl" | "sal" | "shr" | "sar" | "rol" | "ror"))
+        && matches!(what.dests.as_slice(), [Loc::Reg(_)])
+        && matches!(what.sources.as_slice(), [_, Loc::Imm(Imm { value: 1, address: None, .. })])
+    {
+        return "shift_r1";
+    }
+    if matches!(name, Some("shl" | "sal" | "shr" | "sar" | "rol" | "ror")) || what.op == Operation::Funnel {
         return "shift_ri";
     }
     if matches!(name, Some("cwd" | "cdq")) {

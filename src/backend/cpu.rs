@@ -85,6 +85,12 @@ impl Profile {
             .ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
+    /// The cheaper way to double a register: `add r,r` or `shl r,1`, which
+    /// set the same flags. The 386 and 486 take three clocks for the D1 shift.
+    pub fn doubling(&self) -> Result<&'static str, String> {
+        Ok(if self.cost("alu_rr")? < self.cost("shift_r1")? { "alu_rr" } else { "shift_r1" })
+    }
+
     /// Whether this profile has an explicit ranking for a form.
     pub fn prices(&self, operation: &str) -> bool {
         let costs: IndexMap<&str, i64> = self
@@ -138,6 +144,7 @@ static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
         ("mov_mr", 2),
         ("mov_ri", 2),
         ("shift_ri", 3),
+        ("shift_r1", 3),
         ("movzx", 4),
         ("imul_r32", 22),
         ("imul_m32", 26),

@@ -12,6 +12,10 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **A regression test passed at HEAD.** The first count-to-zero test (RIPPLE) never reproduced the bug; the loop was already right in isolation, and went wrong only beside another loop. A test not seen to fail is evidence of nothing; the replacement was checked against the HEAD build before and after.
 
+**One price for two encodings.** The scorer and scheduler priced `shl r,1` (the D1 form, three clocks on the 386 and 486) as the two-clock imm8 form, so nothing saw that `add r,r` doubles in one. A golden carried over from the Python scorer held the wrong price as the expected answer. Guard: the D1 form has its own row, with a test.
+
+**The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
+
 ## Contracts
 
 **A call's declared effect read only its arguments.** The callee also runs on the caller's BP chain, SP, DS, SS and CS. Once liveness took a call's effect from that contract (df89fc8a), the peephole removed `mov ds, ss` before a call as dead, and qbdemo hung in `UPDPALPLASMA`. The old code treated an undecoded call as reading everything, which hid the gap. Guard: a call reads the same state a return does (8971698d), with a test.

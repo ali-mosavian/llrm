@@ -82,6 +82,7 @@ static _MODULE: LazyLock<(
         ("mov_mr", [1, 1, 1, 1, 1, 1, 1]),
         ("mov_ri", [1, 1, 1, 1, 1, 1, 1]),
         ("shift_ri", [2, 1, 1, 1, 1, 1, 1]), // shl/shr/sar reg,imm
+        ("shift_r1", [3, 1, 1, 1, 1, 1, 1]), // the D1 form, reg,1
         ("movzx", [3, 3, 1, 1, 1, 1, 1]),
         ("cdq", [3, 2, 1, 1, 1, 1, 1]),
         ("imul_r32", [26, 10, 4, 4, 3, 5, 3]), // 486 is 13-42, data dependent
@@ -117,6 +118,7 @@ static _MODULE: LazyLock<(
         ("mov_mr", [1, 1, 3, 2, 2, 3, 3]),
         ("mov_ri", [1, 1, 1, 1, 1, 1, 1]),
         ("shift_ri", [2, 1, 1, 1, 1, 1, 1]),
+        ("shift_r1", [3, 1, 1, 1, 1, 1, 1]),
         ("movzx", [3, 3, 1, 1, 1, 1, 1]),
         ("cdq", [3, 2, 1, 1, 1, 1, 1]),
         ("imul_r32", [26, 10, 4, 4, 3, 5, 3]),
@@ -233,6 +235,7 @@ mod tests {
                 "mov_mr",
                 "mov_ri",
                 "shift_ri",
+                "shift_r1",
                 "movzx",
                 "cdq",
                 "imul_r32",
@@ -288,6 +291,7 @@ mod tests {
                 "mov_mr",
                 "mov_ri",
                 "shift_ri",
+                "shift_r1",
                 "movzx",
                 "cdq",
                 "imul_r32",

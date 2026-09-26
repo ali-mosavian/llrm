@@ -152,6 +152,7 @@ impl LIRTransform for Peephole {
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
         let body = increments(&body);
+        let body = doubled(&body, &self.cpu)?;
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         Ok(self._frame(machinedce::eliminated(body)))
@@ -2793,6 +2794,39 @@ pub fn increments(body: &LirBody) -> LirBody {
         blocks.push(block.with_insns(insns));
     }
     body.with_blocks(blocks)
+}
+
+/// `shl r,1` as `add r,r` where the target prices the add lower.  Every
+/// flag the shift defines, the add sets the same way.
+pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
+    if cpu.doubling()? != "alu_rr" {
+        return Ok(body.clone());
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block.with_insns(
+                block
+                    .insns
+                    .iter()
+                    .map(|one| match one.what.as_ref().map(|what| (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())) {
+                        Some((
+                            Operation::Binary,
+                            Some("shl" | "sal"),
+                            [Loc::Reg(destination)],
+                            [Loc::Reg(source), Loc::Imm(Imm { value: 1, address: None, .. })],
+                        )) if destination == source => Arc::new(with_what(
+                            one,
+                            semantics(Operation::Binary, "add", vec![Loc::Reg(*destination)], vec![Loc::Reg(*source), Loc::Reg(*source)]),
+                        )),
+                        _ => Arc::clone(one),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    Ok(body.with_blocks(blocks))
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {

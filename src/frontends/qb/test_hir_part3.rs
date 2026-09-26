@@ -2146,6 +2146,22 @@ fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
 }
 
 #[test]
+fn test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift() {
+    // qbdemo's CYCLEBLOBS scaled up to nine indexes a trip with `shl r,1`,
+    // three clocks each on the 486 where `add r,r` takes one.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "LOOKUP.BAS", b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM t(32, 32), k(32)\r\nFOR i = 0 TO 32: k(i) = (i * 7) AND 31: NEXT\r\nFOR i = 0 TO 32: s = s + t(i, k(i)): NEXT\r\nPRINT s\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let body = jumps(&text, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| text.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &text[begun..end]))
+        .find(|one| one.contains("S%"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(!regex::Regex::new(r"s[ah]l \w+, 1\n").unwrap().is_match(body), "{body}");
+}
+
+#[test]
 fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
     // qbdemo's PLASMA hung: a call's contract read only its arguments, so the
     // `mov ds, ss` before it looked dead, and the callee ran with DS still
