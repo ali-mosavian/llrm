@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Step 4's instrument (docs/architecture/rich-mir.md): every QB suite
-# program's and Nib fixture's HIR emitted as MIR, which llrm-mir's verifier and opt must both
-# accept; what the emitter refuses is counted by reason.
+# program's and Nib fixture's HIR emitted as MIR, which llrm-mir's verifier
+# and opt must both accept, and which must hold no poison its language
+# defines; what the emitter refuses is counted by reason.
 set -u
 bin=${LLVM20:-/usr/lib/llvm-20/bin}
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -10,7 +11,7 @@ cargo build -q --release -p llrm-qb -p llrm-nib -p llrm-hir --manifest-path "$ro
 rm -rf "$out" && mkdir -p "$out"
 failed=0
 emit() {
-  "$root/target/release/hir-mir" "$out/$1.json" >"$out/$1.ll" 2>"$out/$1.err" || { echo "FAIL $1: llrm-mir rejects it"; failed=1; }
+  "$root/target/release/hir-mir" "$out/$1.json" >"$out/$1.ll" 2>"$out/$1.err" || { echo "FAIL $1: $(grep -m1 -e "^invalid" -e "^poison" "$out/$1.err")"; failed=1; }
   "$bin/opt" -passes=verify -disable-output "$out/$1.ll" 2>"$out/$1.opt" || { echo "FAIL $1: opt rejects it: $(head -1 "$out/$1.opt")"; failed=1; }
 }
 for source in "$root"/tests/suite/*.bas; do

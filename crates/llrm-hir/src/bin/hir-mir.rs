@@ -1,5 +1,5 @@
 //! hir-mir HIR.json: the MIR each HIR module emits, on stdout; each
-//! refusal, and anything the verifier rejects, on stderr.
+//! refusal, and anything the verifier or the poison lint rejects, on stderr.
 
 use std::process::ExitCode;
 
@@ -23,6 +23,10 @@ fn main() -> ExitCode {
         }
         for problem in llrm_mir::verify::verify(&emitted.module) {
             eprintln!("invalid: {problem}");
+            invalid = true;
+        }
+        for problem in llrm_mir::lint::poison(&emitted.module) {
+            eprintln!("poison: {problem}");
             invalid = true;
         }
     }
