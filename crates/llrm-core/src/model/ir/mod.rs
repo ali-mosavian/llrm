@@ -54,7 +54,8 @@ pub struct Imm {
 ///
 /// Direct port of `qbopt.model.ir:Address`.  Its encoding fields are
 /// deliberately excluded from equality and hashing, just as Python's
-/// `compare=False` fields are.
+/// `compare=False` fields are, except `offset` of an address with no `addr`,
+/// where it is the only displacement.
 #[derive(Clone, Debug)]
 pub struct Address {
     pub addr: Option<Addr>,
@@ -78,9 +79,15 @@ impl Address {
     }
 }
 
+impl Address {
+    fn displacement(&self) -> Option<i64> {
+        self.addr.is_none().then_some(self.offset)
+    }
+}
+
 impl PartialEq for Address {
     fn eq(&self, other: &Self) -> bool {
-        self.addr == other.addr
+        self.addr == other.addr && self.displacement() == other.displacement()
     }
 }
 
@@ -89,6 +96,7 @@ impl Eq for Address {}
 impl Hash for Address {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.addr.hash(state);
+        self.displacement().hash(state);
     }
 }
 
@@ -96,7 +104,8 @@ impl Hash for Address {
 ///
 /// Direct port of `qbopt.model.ir:Mem`.  Encoding details (`through`,
 /// `offset`, `disp_width`, and `index_through`) deliberately do not take part
-/// in equality or hashing.  The logical address values do.
+/// in equality or hashing.  The logical address values do, and so does
+/// `offset` of a cell with no `addr`, where it is the only displacement.
 #[derive(Clone, Debug)]
 pub struct Mem {
     pub addr: Option<Addr>,
@@ -133,6 +142,10 @@ impl Mem {
             exact: false,
         }
     }
+
+    fn displacement(&self) -> Option<i64> {
+        self.addr.is_none().then_some(self.offset)
+    }
 }
 
 impl PartialEq for Mem {
@@ -144,6 +157,7 @@ impl PartialEq for Mem {
             && self.selector == other.selector
             && self.index == other.index
             && self.scale == other.scale
+            && self.displacement() == other.displacement()
     }
 }
 
@@ -158,6 +172,7 @@ impl Hash for Mem {
         self.selector.hash(state);
         self.index.hash(state);
         self.scale.hash(state);
+        self.displacement().hash(state);
     }
 }
 
@@ -445,6 +460,16 @@ mod tests {
         ] {
             assert_eq!(root(register), iced_x86::Register::EAX);
         }
+    }
+
+    /// isel keeps a based cell's displacement only in `offset`; leaving it out
+    /// of equality made [p] and [p+2] one cell.
+    #[test]
+    fn two_addressless_cells_at_different_displacements_are_different_cells() {
+        let at = |offset| Mem { base: Some(Held { value: 1, width: 2 }), offset, ..Mem::new(None, 2) };
+        assert_ne!(at(0), at(2));
+        let address = |offset| Address { offset, ..Address::new(None) };
+        assert_ne!(address(0), address(2));
     }
 
     #[test]
