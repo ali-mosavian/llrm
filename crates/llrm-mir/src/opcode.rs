@@ -56,6 +56,22 @@ pub enum IntPredicate {
 }
 
 impl IntPredicate {
+    /// The predicate that holds where this one does not.
+    pub fn inverse(self) -> Self {
+        match self {
+            Self::Eq => Self::Ne,
+            Self::Ne => Self::Eq,
+            Self::Ugt => Self::Ule,
+            Self::Uge => Self::Ult,
+            Self::Ult => Self::Uge,
+            Self::Ule => Self::Ugt,
+            Self::Sgt => Self::Sle,
+            Self::Sge => Self::Slt,
+            Self::Slt => Self::Sge,
+            Self::Sle => Self::Sgt,
+        }
+    }
+
     /// The predicate that holds with the operands exchanged.
     pub fn swapped(self) -> Self {
         match self {

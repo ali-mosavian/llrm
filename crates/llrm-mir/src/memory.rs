@@ -20,8 +20,17 @@ impl Effects {
     pub const ANY: Effects = Effects { reads: true, writes: true };
 }
 
-/// Each function's effects, as its attributes state them.
-pub type Callees = HashMap<GlobalId, Effects>;
+/// What a call to a function does, as its attributes state it: its
+/// effects on memory, and whether it always comes back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Summary {
+    pub effects: Effects,
+    /// Its effects only reach what its pointer arguments point to.
+    pub arguments_only: bool,
+    pub returns: bool,
+}
+
+pub type Callees = HashMap<GlobalId, Summary>;
 
 pub fn callees(module: &Module) -> Callees {
     module
@@ -29,10 +38,49 @@ pub fn callees(module: &Module) -> Callees {
         .iter()
         .enumerate()
         .filter_map(|(at, global)| match &global.kind {
-            GlobalKind::Function(function) => Some((GlobalId(at as u32), stated(&function.attrs))),
+            GlobalKind::Function(function) => Some((GlobalId(at as u32), summary(&function.attrs))),
             GlobalKind::Variable(_) => None,
         })
         .collect()
+}
+
+pub fn summary(attrs: &[Attribute]) -> Summary {
+    Summary {
+        effects: stated(attrs),
+        arguments_only: argument_memory_only(attrs),
+        returns: attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "willreturn")),
+    }
+}
+
+/// Whether `attrs` confine every access to memory the pointer arguments
+/// point to: `memory(argmem: ...)`.
+pub fn argument_memory_only(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| match attr {
+        Attribute::Memory(locations) => locations.iter().all(|(location, access)| access == "none" || location.as_deref() == Some("argmem")),
+        _ => false,
+    })
+}
+
+/// The function `inst` calls directly, if it is a call.
+pub fn callee(context: &Context, function: &Function, inst: InstId) -> Option<GlobalId> {
+    let instruction = function.instruction(inst);
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
+    match instruction.operands.last() {
+        Some(Operand::Constant(id)) => match context.get(*id).kind {
+            ConstantKind::Global(global) => Some(global),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `inst` is a call nothing needs: its value unread, touching no
+/// memory, to a function that always comes back.
+pub fn removable(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::Call(info) = &instruction.opcode else { return false };
+    let returns = summary(&info.attrs).returns || callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.returns);
+    returns && instruction.result.is_none_or(|result| function.users(result).is_empty()) && of(context, callees, function, inst) == Effects::NONE
 }
 
 /// What `memory(...)`, `readnone` or `readonly` among `attrs` allows.
@@ -64,13 +112,7 @@ pub fn of(context: &Context, callees: &Callees, function: &Function, inst: InstI
         // Volatile, as LLVM has it: ordered with every other access.
         Opcode::Load { .. } | Opcode::Store { .. } => Effects::ANY,
         Opcode::Call(info) | Opcode::Invoke(info) => {
-            let callee = match instruction.operands.last() {
-                Some(Operand::Constant(id)) => match context.get(*id).kind {
-                    ConstantKind::Global(global) => callees.get(&global).copied(),
-                    _ => None,
-                },
-                _ => None,
-            };
+            let callee = callee(context, function, inst).and_then(|one| callees.get(&one)).map(|one| one.effects);
             let at_site = stated(&info.attrs);
             let declared = callee.unwrap_or(Effects::ANY);
             Effects { reads: at_site.reads && declared.reads, writes: at_site.writes && declared.writes }

@@ -48,7 +48,7 @@ b4:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @sum(i16 %n) {
+        "define i16 @sum(i16 %n) memory(none) willreturn {
 b1:
   br label %b2
 
@@ -116,7 +116,7 @@ b3:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %i, i16 %n) {
+        "define i16 @f(i16 %i, i16 %n) memory(none) willreturn {
 b1:
   %0 = icmp ult i16 %i, %n
   br i1 %0, label %b2, label %b3
@@ -160,7 +160,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %x) {
+        "define i16 @f(i16 %x) memory(none) willreturn {
 b1:
   %0 = add i16 %x, 1
   ret i16 %0
@@ -193,7 +193,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i1 %c, i1 %d, i16 %x) {
+        "define i16 @f(i1 %c, i1 %d, i16 %x) memory(none) willreturn {
 b1:
   br i1 %c, label %b2, label %b5
 
@@ -623,4 +623,110 @@ b3:
 }
 ";
     assert_eq!(through(&["inline"], text), through(&[], text));
+}
+
+/// priced_unroll's `value(3)` checked `k` against its bounds inside
+/// `value`: every call passes 3, so `k` is 3, and a parameter calls
+/// disagree on stays.
+#[test]
+fn test_ipsccp_gives_a_parameter_the_constant_every_call_passes() {
+    let text = "define internal i16 @f(i16 %k, i16 %n) {
+b1:
+  %0 = add i16 %k, %n
+  ret i16 %0
+}
+
+define i16 @g() {
+b1:
+  %0 = call i16 @f(i16 3, i16 1)
+  %1 = call i16 @f(i16 3, i16 2)
+  %2 = add i16 %0, %1
+  ret i16 %2
+}
+";
+    let out = through(&["ipsccp"], text);
+    assert!(out.contains("  %0 = add i16 3, %n\n"), "{out}");
+}
+
+/// A fill's `a[i, j]` checked `i < 8` unsigned inside a loop that stays
+/// only while `i < 8` from 0: the check always holds.
+#[test]
+fn test_indvars_settles_a_check_the_loop_test_implies() {
+    let text = "declare void @fail()
+
+define void @fill(ptr %p) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %3, %b3 ]
+  %1 = icmp slt i16 %0, 8
+  br i1 %1, label %b4, label %b5
+
+b4:
+  %2 = icmp ult i16 %0, 8
+  br i1 %2, label %b3, label %b6
+
+b3:
+  store i16 %0, ptr %p
+  %3 = add i16 %0, 1
+  br label %b2
+
+b5:
+  ret void
+
+b6:
+  call void @fail()
+  unreachable
+}
+";
+    let out = through(&["indvars"], text);
+    assert!(out.contains("  br i1 true, label %b3, label %b6\n"), "{out}");
+}
+
+/// priced_unroll's `main` called `value(3)` for nothing: `value` touches
+/// only its own stack and counts every loop to its bound, so it is
+/// `memory(none) willreturn`, and the call goes. One that calls what may
+/// not return stays.
+#[test]
+fn test_function_attrs_lets_an_unused_call_go() {
+    let text = "declare void @fail()
+
+define internal i16 @quiet(i16 %n) {
+b1:
+  %0 = alloca i16
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %2, %b3 ]
+  %c = icmp slt i16 %1, 8
+  br i1 %c, label %b3, label %b4
+
+b3:
+  store i16 %1, ptr %0
+  %2 = add i16 %1, 1
+  br label %b2
+
+b4:
+  %3 = load i16, ptr %0
+  ret i16 %3
+}
+
+define internal i16 @loud(i16 %n) {
+b1:
+  call void @fail()
+  ret i16 %n
+}
+
+define i16 @main() {
+b1:
+  %0 = call i16 @quiet(i16 3)
+  %1 = call i16 @loud(i16 3)
+  ret i16 0
+}
+";
+    let out = through(&["function-attrs", "instcombine"], text);
+    assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn {"), "{out}");
+    assert!(!out.contains("call i16 @quiet"), "{out}");
+    assert!(out.contains("call i16 @loud"), "{out}");
 }

@@ -3,9 +3,11 @@
 //! a copy of its body, its returns branching to what followed the call.
 //! A call within a cycle of calls stays.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
-use crate::context::{ConstantKind, Context, GlobalId};
+use crate::callgraph::CallGraph;
+use crate::context::{Context, GlobalId};
+use crate::memory::callee;
 use crate::edit::Position;
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
 use crate::opcode::{Attribute, Flags, Opcode};
@@ -23,9 +25,9 @@ impl ModulePass for Inline {
     }
 
     fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        let graph = graph(module);
+        let graph = CallGraph::new(module);
         let mut changed = Vec::new();
-        for caller in bottom_up(&graph) {
+        for caller in graph.bottom_up() {
             let mut inlined = false;
             while let Some((call, callee)) = site(module, &graph, caller) {
                 let GlobalKind::Function(body) = &module.globals[callee.0 as usize].kind else { unreachable!("a function") };
@@ -43,75 +45,8 @@ impl ModulePass for Inline {
     }
 }
 
-/// Each defined function's direct callees.
-fn graph(module: &Module) -> HashMap<GlobalId, BTreeSet<GlobalId>> {
-    module
-        .functions()
-        .filter(|(_, _, function)| !function.is_declaration())
-        .map(|(id, _, function)| {
-            let callees = function.walk().filter_map(|(_, inst)| callee(&module.context, function, inst)).collect();
-            (id, callees)
-        })
-        .collect()
-}
-
-/// The function `inst` calls directly, if it is a call.
-fn callee(context: &Context, function: &Function, inst: InstId) -> Option<GlobalId> {
-    let instruction = function.instruction(inst);
-    let Opcode::Call(_) = instruction.opcode else { return None };
-    match instruction.operands.last() {
-        Some(Operand::Constant(id)) => match context.get(*id).kind {
-            ConstantKind::Global(global) => Some(global),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Callees before their callers.
-fn bottom_up(graph: &HashMap<GlobalId, BTreeSet<GlobalId>>) -> Vec<GlobalId> {
-    let mut order = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut roots: Vec<GlobalId> = graph.keys().copied().collect();
-    roots.sort();
-    for root in roots {
-        let mut stack = vec![(root, false)];
-        while let Some((at, done)) = stack.pop() {
-            if done {
-                order.push(at);
-                continue;
-            }
-            if !seen.insert(at) {
-                continue;
-            }
-            stack.push((at, true));
-            for &next in graph.get(&at).into_iter().flatten().rev() {
-                if graph.contains_key(&next) && !seen.contains(&next) {
-                    stack.push((next, false));
-                }
-            }
-        }
-    }
-    order
-}
-
-/// Whether `from` calls `to`, directly or not.
-fn reaches(graph: &HashMap<GlobalId, BTreeSet<GlobalId>>, from: GlobalId, to: GlobalId) -> bool {
-    let mut seen = BTreeSet::new();
-    let mut work = vec![from];
-    while let Some(at) = work.pop() {
-        if at == to {
-            return true;
-        }
-        if seen.insert(at) {
-            work.extend(graph.get(&at).into_iter().flatten().copied());
-        }
-    }
-    false
-}
-
 /// A call in `caller` worth inlining, and its callee.
-fn site(module: &Module, graph: &HashMap<GlobalId, BTreeSet<GlobalId>>, caller: GlobalId) -> Option<(InstId, GlobalId)> {
+fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId, GlobalId)> {
     let function = module.global(caller).function()?;
     function.walk().find_map(|(_, inst)| {
         let callee = callee(&module.context, function, inst)?;
@@ -120,7 +55,8 @@ fn site(module: &Module, graph: &HashMap<GlobalId, BTreeSet<GlobalId>>, caller: 
         let fits = info.function_type == body.ty
             && !matches!(module.context.types.get(body.ty), Type::Function { variadic: true, .. })
             && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noinline" || flag == "optnone"))
-            && !reaches(graph, callee, caller)
+            && callee != caller
+            && !graph.reaches(callee, caller)
             && inlinable(body);
         fits.then_some((inst, callee))
     })

@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod build;
+pub mod callgraph;
 pub mod context;
 pub mod datalayout;
 pub mod dominators;

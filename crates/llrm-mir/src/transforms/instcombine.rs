@@ -29,7 +29,7 @@ impl FunctionPass for InstCombine {
                 if unit.function.is_erased(inst) {
                     continue;
                 }
-                if dead(unit.function, inst) {
+                if dead(unit.function, inst) || crate::memory::removable(unit.context, unit.callees, unit.function, inst) {
                     unit.function.erase(inst).expect("nothing uses it");
                 } else if let Some(simpler) = simplified(unit, &tree, inst) {
                     let result = unit.function.instruction(inst).result.expect("a simplified value");

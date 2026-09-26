@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 
 use crate::context::{ConstantKind, Context};
+use crate::dominators::DominatorTree;
 use crate::loops::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
-use crate::opcode::{BinaryOp, Opcode};
+use crate::opcode::{BinaryOp, IntPredicate, Opcode};
 
 /// A sum of loop-invariant values, each times a constant, and a constant.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -202,4 +203,65 @@ impl Linear {
             _ => None,
         }
     }
+}
+
+/// A loop's exit a counter must reach: the block testing it on every
+/// iteration's way round, the successor it stays in, the counter, its step
+/// of one either way, the invariant bound, and the predicate under which
+/// the loop stays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Counted {
+    pub block: BlockId,
+    pub inside: BlockId,
+    pub counter: ValueId,
+    pub step: i8,
+    pub bound: Operand,
+    pub stays: IntPredicate,
+}
+
+pub fn counted(context: &Context, function: &Function, tree: &DominatorTree, evolution: &Evolution, one: &Loop) -> Option<Counted> {
+    one.blocks.iter().find_map(|&block| {
+        if !one.latches.iter().all(|&latch| tree.dominates(block, latch)) {
+            return None;
+        }
+        let branch = function.instruction(function.terminator(block)?);
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else { return None };
+        let (stays_on_true, inside) = match (one.blocks.contains(&taken), one.blocks.contains(&otherwise)) {
+            (true, false) => (true, taken),
+            (false, true) => (false, otherwise),
+            _ => return None,
+        };
+        let ValueDef::Instruction(compare) = function.value(condition).def else { return None };
+        let compare = function.instruction(compare);
+        let Opcode::ICmp(predicate) = compare.opcode else { return None };
+        let (left, right) = (compare.operands[0], compare.operands[1]);
+        let stepped = |operand: Operand| -> Option<(ValueId, i8)> {
+            let Operand::Value(value) = operand else { return None };
+            let found = evolution.of(value).filter(|found| found.header == one.header)?;
+            let width = context.types.int_bits(function.value(value).ty)?;
+            match (found.step.terms.is_empty(), found.step.constant) {
+                (true, 1) => Some((value, 1)),
+                (true, step) if step == mask(width) => Some((value, -1)),
+                _ => None,
+            }
+        };
+        let invariant = |operand: Operand| match operand {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|block| !one.blocks.contains(&block)),
+                ValueDef::Argument(_) => true,
+            },
+            _ => true,
+        };
+        let ((counter, step), bound, predicate) = match (stepped(left), stepped(right)) {
+            (Some(found), None) if invariant(right) => (found, right, predicate),
+            (None, Some(found)) if invariant(left) => (found, left, predicate.swapped()),
+            _ => return None,
+        };
+        let stays = if stays_on_true { predicate } else { predicate.inverse() };
+        let finite = matches!(
+            (step, stays),
+            (1, IntPredicate::Slt | IntPredicate::Ult | IntPredicate::Ne) | (-1, IntPredicate::Sgt | IntPredicate::Ugt | IntPredicate::Ne)
+        );
+        finite.then_some(Counted { block, inside, counter, step, bound, stays })
+    })
 }
