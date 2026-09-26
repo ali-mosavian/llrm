@@ -134,6 +134,15 @@ impl Function {
         }
     }
 
+    /// An operand's type; a block has none.
+    pub fn operand_type(&self, context: &Context, operand: Operand) -> Option<TypeId> {
+        match operand {
+            Operand::Value(id) => Some(self.value(id).ty),
+            Operand::Constant(id) => Some(context.get(id).ty),
+            Operand::Block(_) => None,
+        }
+    }
+
     pub fn is_declaration(&self) -> bool {
         self.layout.is_empty()
     }

@@ -299,18 +299,10 @@ impl Printer<'_> {
         }
     }
 
-    fn operand_type(&self, function: &Function, operand: Operand) -> TypeId {
-        match operand {
-            Operand::Value(id) => function.value(id).ty,
-            Operand::Constant(id) => self.module.context.get(id).ty,
-            Operand::Block(_) => panic!("a block has no value type"),
-        }
-    }
-
     fn typed(&self, function: &Function, slots: &Slots, operand: Operand) -> String {
         match operand {
             Operand::Block(_) => format!("label {}", self.operand(slots, operand)),
-            _ => format!("{} {}", self.ty(self.operand_type(function, operand)), self.operand(slots, operand)),
+            _ => format!("{} {}", self.ty(function.operand_type(&self.module.context, operand).expect("a value")), self.operand(slots, operand)),
         }
     }
 
@@ -380,7 +372,7 @@ impl Printer<'_> {
                     .enumerate()
                     .map(|(at, &one)| {
                         let attrs = spaced(attributes(&self.module.context, &info.argument_attrs[at]));
-                        format!("{}{attrs} {}", self.ty(self.operand_type(function, one)), self.operand(slots, one))
+                        format!("{}{attrs} {}", self.ty(function.operand_type(&self.module.context, one).expect("a value")), self.operand(slots, one))
                     })
                     .collect();
                 let tail = match info.tail {

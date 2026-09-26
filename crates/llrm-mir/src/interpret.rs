@@ -377,7 +377,7 @@ impl<'m> Machine<'m> {
                         other => other,
                     }),
                     Opcode::Cast(op) => {
-                        let from = self.operand_type(function, ops[0]);
+                        let from = function.operand_type(&self.module.context, ops[0]).expect("a value");
                         Some(self.cast(*op, value(self, 0)?, from, instruction.ty, instruction.flags)?)
                     }
                     Opcode::ICmp(predicate) => Some(self.icmp(*predicate, value(self, 0)?, value(self, 1)?)),
@@ -424,7 +424,7 @@ impl<'m> Machine<'m> {
                     }),
                     Opcode::Store { .. } => {
                         let stored = value(self, 0)?;
-                        let ty = self.operand_type(function, ops[0]);
+                        let ty = function.operand_type(&self.module.context, ops[0]).expect("a value");
                         match value(self, 1)? {
                             Val::Ptr(address) => self.store(&stored, ty, address)?,
                             _ => return undefined("a store through poison"),
@@ -451,14 +451,6 @@ impl<'m> Machine<'m> {
             Operand::Value(id) => values.get(&id).cloned().ok_or_else(|| Trap::Unsupported(format!("value {} is read before it is set", id.0))),
             Operand::Constant(id) => self.constant(id),
             Operand::Block(_) => unreachable!("a block is not a value"),
-        }
-    }
-
-    fn operand_type(&self, function: &Function, operand: Operand) -> TypeId {
-        match operand {
-            Operand::Value(id) => function.value(id).ty,
-            Operand::Constant(id) => self.module.context.get(id).ty,
-            Operand::Block(_) => unreachable!("a block has no type"),
         }
     }
 

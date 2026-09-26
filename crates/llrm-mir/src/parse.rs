@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, mask};
-use crate::intrinsics::Intrinsic;
+use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
     Block, BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, LINKAGE, Linkage, MetadataId, MetadataNode,
@@ -491,13 +491,8 @@ impl Parser {
             local.function.personality = Some(self.constant(ty)?);
         }
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
-        // As LLVM does, an intrinsic's attributes are its own, whatever the text says.
-        if let Some(intrinsic) = self.module.globals[id.0 as usize].name.as_deref().and_then(Intrinsic::named) {
-            let (attrs, parameter_attrs) = intrinsic.attributes();
-            local.function.attrs = attrs;
-            for (slot, attrs) in local.function.parameter_attrs.iter_mut().zip(parameter_attrs) {
-                *slot = attrs;
-            }
+        if let Some(name) = &self.module.globals[id.0 as usize].name {
+            intrinsics::declare(&mut local.function, name);
         }
         if define {
             self.body(&mut local)?;
