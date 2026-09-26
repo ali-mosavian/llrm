@@ -83,6 +83,8 @@ struct Tables<'h> {
     data: HashMap<i64, ConstantId>,
     /// Each callee's function and its declared type, by HIR name.
     callees: HashMap<String, ConstantId>,
+    /// Each callee's calling convention, which its calls repeat.
+    conventions: HashMap<String, u32>,
 }
 
 fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool) -> Emitted {
@@ -96,6 +98,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
         callees: HashMap::new(),
+        conventions: HashMap::new(),
     };
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let mut defined = Vec::new();
@@ -117,9 +120,10 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
     let mut functions = Vec::new();
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
-            Ok(global) => {
+            Ok((global, convention)) => {
                 let reference = module.reference(global);
                 tables.callees.insert(function.name.clone(), reference);
+                tables.conventions.insert(function.name.clone(), convention);
                 functions.push((function, Some(global)));
             }
             Err(why) => {
@@ -128,8 +132,12 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
             }
         }
     }
-    for (function, _) in &functions {
+    for (function, global) in &mut functions {
         if let Err(why) = declare_outside(&mut module, &mut tables, function) {
+            // What it calls is undeclared: it stays a declaration, external as LLVM's `deleteBody` leaves one.
+            if let Some(global) = global.take() {
+                module.globals[global.0 as usize].linkage = Linkage::External;
+            }
             refused.push((function.name.clone(), why));
         }
     }
@@ -276,7 +284,32 @@ fn function_type(types: &mut Types, returns: TypeId, parameters: Vec<TypeId>) ->
     types.intern(Type::Function { returns, parameters, variadic: false })
 }
 
-fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<GlobalId> {
+/// The calling convention and code address space an ABI gives: BASIC's
+/// when the callee pops its arguments, C's when the caller does; a far
+/// procedure's code in address space 1, as its pointers are.
+fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Emit<(u32, u32)> {
+    let convention = match cleanup {
+        model::StackCleanup::Callee => llrm_mir::opcode::BASIC,
+        model::StackCleanup::Caller => 0,
+    };
+    let space = match distance {
+        model::CallDistance::Near => 0,
+        model::CallDistance::Far => FAR,
+        model::CallDistance::Interrupt => return Err("an interrupt handler".to_owned()),
+    };
+    Ok((convention, space))
+}
+
+/// `global`, now a function of `convention` in code address space `space`.
+fn place_function(module: &mut Module, global: GlobalId, (convention, space): (u32, u32)) {
+    let one = &mut module.globals[global.0 as usize];
+    one.address_space = space;
+    let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
+    function.calling_convention = convention;
+}
+
+/// A defined function, far and C's unless its ABI says otherwise.
+fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<(GlobalId, u32)> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
     let returns = value_type(types, tables.types[&function.result_type])?;
@@ -286,7 +319,13 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
         model::FunctionLinkage::Internal => Linkage::Internal,
         model::FunctionLinkage::External => Linkage::External,
     };
-    module.add_function(&function.name, ty, linkage)
+    let abi = match &function.abi {
+        Some(abi) => convention(abi.cleanup, abi.distance)?,
+        None => (0, FAR),
+    };
+    let global = module.add_function(&function.name, ty, linkage)?;
+    place_function(module, global, abi);
+    Ok((global, abi.0))
 }
 
 /// Declares what `function` calls or names outside the module: runtime
@@ -318,7 +357,23 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             }
         }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call) else { continue };
+        let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
+            Some(site) => {
+                let abi = convention(site.cleanup, site.distance)?;
+                // C pushes its arguments right to left, BASIC left to right.
+                let count = site.order.len() as i64;
+                let pushed: Vec<i64> = if abi.0 == 0 { (0..count).rev().collect() } else { (0..count).collect() };
+                if site.order != pushed {
+                    return Err(format!("a call to {callee} pushing {:?}", site.order));
+                }
+                abi
+            }
+            None => (0, FAR),
+        };
         if tables.callees.contains_key(callee) {
+            if tables.conventions.get(callee) != Some(&abi.0) {
+                return Err(format!("calls to {callee} by two conventions"));
+            }
             continue;
         }
         let types = &mut module.context.types;
@@ -330,8 +385,10 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let ty = function_type(types, returns, parameters);
         let name = if tables.callables.contains_key(callee) { callee.to_owned() } else { format!("{RUNTIME}{callee}") };
         let global = module.add_function(&name, ty, Linkage::External)?;
+        place_function(module, global, abi);
         let reference = module.reference(global);
         tables.callees.insert(callee.to_owned(), reference);
+        tables.conventions.insert(callee.to_owned(), abi.0);
     }
     Ok(())
 }
@@ -815,8 +872,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
+                let convention = self.tables.conventions[callee];
                 let callee = Value::Constant(self.tables.callees[callee]);
-                if let Some(result) = self.b.call(ty, callee, &arguments, "") {
+                if let Some(result) = self.b.call_as(convention, ty, callee, &arguments, "") {
                     self.define(instruction, result);
                 }
             }

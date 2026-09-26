@@ -216,6 +216,15 @@ impl Printer<'_> {
         }
     }
 
+    /// A calling convention as LLVM writes it; none for C's.
+    fn convention(number: u32) -> Option<String> {
+        match crate::opcode::CONVENTIONS.iter().find(|(_, one)| *one == number) {
+            Some((_, 0)) => None,
+            Some((name, _)) => Some((*name).to_owned()),
+            None => Some(format!("cc{number}")),
+        }
+    }
+
     fn address_space(space: u32) -> Option<String> {
         (space != 0).then(|| format!("addrspace({space})"))
     }
@@ -253,6 +262,7 @@ impl Printer<'_> {
         }
         let mut words: Vec<String> = vec![(if declaration { "declare" } else { "define" }).to_owned()];
         words.extend(Self::linkage(global.linkage).map(str::to_owned));
+        words.extend(Self::convention(function.calling_convention));
         let return_attrs = attributes(&self.module.context, &function.return_attrs);
         if !return_attrs.is_empty() {
             words.push(return_attrs);
@@ -382,9 +392,15 @@ impl Printer<'_> {
                     Tail::NoTail => "notail ",
                 };
                 let return_attrs = spaced(attributes(&self.module.context, &info.return_attrs));
-                let callee = self.operand(slots, *ops.last().expect("a callee"));
+                let callee_operand = *ops.last().expect("a callee");
+                let callee = self.operand(slots, callee_operand);
+                let convention = Self::convention(info.calling_convention).map_or_else(String::new, |one| format!(" {one}"));
+                let space = match function.operand_type(&self.module.context, callee_operand).map(|ty| self.module.context.types.get(ty)) {
+                    Some(Type::Pointer(space)) if *space != 0 => format!(" addrspace({space})"),
+                    _ => String::new(),
+                };
                 let mut text = format!(
-                    "{tail}{}{flags}{return_attrs} {callee_ty} {callee}({}){}",
+                    "{tail}{}{flags}{convention}{return_attrs}{space} {callee_ty} {callee}({}){}",
                     inst.opcode.mnemonic(),
                     arguments.join(", "),
                     spaced(attributes(&self.module.context, &info.attrs))

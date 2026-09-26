@@ -282,11 +282,19 @@ pub enum Tail {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CallInfo {
     pub function_type: TypeId,
+    /// LLVM's calling convention number; 0 is C's.
+    pub calling_convention: u32,
     pub return_attrs: Vec<Attribute>,
     pub argument_attrs: Vec<Vec<Attribute>>,
     pub attrs: Vec<Attribute>,
     pub tail: Tail,
 }
+
+/// The calling conventions LLVM names, by number; any other is `ccN`.
+pub const CONVENTIONS: [(&str, u32); 5] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65)];
+
+/// BASIC's own: arguments pushed left to right, popped by the callee.
+pub const BASIC: u32 = 1000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Clause {
