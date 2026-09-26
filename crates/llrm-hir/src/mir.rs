@@ -625,6 +625,43 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let result = self.b.binary(BinaryOp::Xor, value, ones, Flags::default(), "");
                 self.define(instruction, result);
             }
+            // A segment's integer form is its selector, a far pointer's
+            // segment:offset.
+            Op::PointerSegment => {
+                let far = self.value(&instruction.operands[0])?;
+                let segment = self.b.context.types.ptr(SEGMENT);
+                let segment = self.b.cast(CastOp::AddrSpaceCast, far, segment, "");
+                let ty = self.result_type(instruction.results[0])?;
+                let result = self.b.cast(CastOp::PtrToInt, segment, ty, "");
+                self.define(instruction, result);
+            }
+            Op::PointerOffset => {
+                let pointer = self.value(&instruction.operands[0])?;
+                let ty = self.result_type(instruction.results[0])?;
+                let result = self.b.cast(CastOp::PtrToInt, pointer, ty, "");
+                self.define(instruction, result);
+            }
+            // At the 16-bit index width, which for a far pointer moves the
+            // offset alone.
+            Op::PtrOffset => {
+                let [pointer, displacement] = self.operands(instruction)?[..] else { return Err("ptr_offset without two operands".to_owned()) };
+                let signed = self.operand_hir_type(&instruction.operands[1]).signed != Some(false);
+                let i16 = self.b.context.types.int(16);
+                let displacement = self.convert(displacement, signed, i16)?;
+                let byte = self.b.context.types.int(8);
+                let result = self.b.gep(byte, pointer, &[displacement], Flags::default(), "");
+                self.define(instruction, result);
+            }
+            Op::Concat => {
+                let [selector, offset] = self.operands(instruction)?[..] else { return Err("concat without two operands".to_owned()) };
+                let segment = self.b.context.types.ptr(SEGMENT);
+                let segment = self.b.cast(CastOp::IntToPtr, selector, segment, "");
+                let ty = self.result_type(instruction.results[0])?;
+                let base = self.b.cast(CastOp::AddrSpaceCast, segment, ty, "");
+                let byte = self.b.context.types.int(8);
+                let result = self.b.gep(byte, base, &[offset], Flags::default(), "");
+                self.define(instruction, result);
+            }
             Op::Fneg => {
                 let value = self.value(&instruction.operands[0])?;
                 let result = self.b.fneg(value, "");
