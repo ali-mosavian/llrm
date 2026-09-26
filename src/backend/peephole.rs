@@ -1928,7 +1928,7 @@ fn _fused(
                     let what = store.what.as_ref().expect("plain has semantics");
                     what.op == Operation::Move
                         && what.name.as_deref() == Some("mov")
-                        && what.dests == [Loc::Mem(cell.clone())]
+                        && matches!(what.dests.as_slice(), [Loc::Mem(into)] if _same_cell(into, &cell))
                         && what.sources == [Loc::Reg(register)]
                 }
             })
@@ -2006,6 +2006,16 @@ fn _fused(
     };
     emit(&made)?;
     Some((Arc::new(with_what(work, made)), used))
+}
+
+/// Whether two adjacent operands address the same bytes. The registers
+/// carry the address; the values they name may differ when allocation
+/// copied the same address into a register again as a new value.
+fn _same_cell(one: &Mem, other: &Mem) -> bool {
+    let physical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
+    physical(one) == physical(other)
+        && (one.base.is_none() || one.through != Register::None)
+        && (one.index.is_none() || one.index_through != Register::None)
 }
 
 /// `mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).
