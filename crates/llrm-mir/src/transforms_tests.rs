@@ -423,3 +423,120 @@ b5:
 "
     );
 }
+
+/// A fill's `a[i, j]` was `(i * 8 + j) * 4` each iteration, 768
+/// instructions to the old path's 69 in nested_fill: the address becomes a
+/// byte offset stepping by 4, and `i * 8` leaves the inner loop.
+#[test]
+fn test_loop_reduce_steps_an_address_by_its_stride() {
+    let text = "define void @fill() {
+b1:
+  %0 = alloca [256 x i8]
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %9, %b6 ]
+  %2 = icmp slt i16 %1, 8
+  br i1 %2, label %b3, label %b7
+
+b3:
+  %3 = shl i16 %1, 3
+  br label %b4
+
+b4:
+  %4 = phi i16 [ 0, %b3 ], [ %8, %b5 ]
+  %5 = icmp slt i16 %4, 8
+  br i1 %5, label %b5, label %b6
+
+b5:
+  %6 = add i16 %3, %4
+  %7 = getelementptr inbounds i32, ptr %0, i16 %6
+  store i32 0, ptr %7
+  %8 = add i16 %4, 1
+  br label %b4
+
+b6:
+  %9 = add i16 %1, 1
+  br label %b2
+
+b7:
+  ret void
+}
+";
+    assert_eq!(
+        through(&["loop-reduce", "instcombine"], text),
+        "define void @fill() {
+b1:
+  %0 = alloca [256 x i8]
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %11, %b6 ]
+  %2 = icmp slt i16 %1, 8
+  br i1 %2, label %b3, label %b7
+
+b3:
+  %3 = shl i16 %1, 3
+  %4 = shl i16 %3, 2
+  br label %b4
+
+b4:
+  %5 = phi i16 [ %4, %b3 ], [ %10, %b5 ]
+  %6 = phi i16 [ 0, %b3 ], [ %9, %b5 ]
+  %7 = icmp slt i16 %6, 8
+  br i1 %7, label %b5, label %b6
+
+b5:
+  %8 = getelementptr inbounds i8, ptr %0, i16 %5
+  store i32 0, ptr %8
+  %9 = add i16 %6, 1
+  %10 = add i16 %5, 4
+  br label %b4
+
+b6:
+  %11 = add i16 %1, 1
+  br label %b2
+
+b7:
+  ret void
+}
+"
+    );
+}
+
+/// floats.compare's `a[at]` shares `at - 1` with the counter: a recurrence
+/// of its own would save one shift for one more live value, so it stays.
+#[test]
+fn test_loop_reduce_keeps_what_would_add_a_live_value() {
+    let text = "define i8 @compare(ptr %a, ptr %b) {
+b1:
+  br label %b2
+
+b2:
+  %at = phi i16 [ 72, %b1 ], [ %next, %b4 ]
+  %more = icmp ne i16 %at, 0
+  br i1 %more, label %b3, label %b6
+
+b3:
+  %next = add i16 %at, -1
+  %offset = shl i16 %next, 1
+  %p = getelementptr i8, ptr %a, i16 %offset
+  %x = load i16, ptr %p
+  %q = getelementptr i8, ptr %b, i16 %offset
+  %y = load i16, ptr %q
+  %differ = icmp ne i16 %x, %y
+  br i1 %differ, label %b5, label %b4
+
+b4:
+  br label %b2
+
+b5:
+  ret i8 1
+
+b6:
+  ret i8 0
+}
+";
+    let same = through(&[], text);
+    assert_eq!(through(&["loop-reduce"], text), same);
+}

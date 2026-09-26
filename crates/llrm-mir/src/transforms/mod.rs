@@ -4,6 +4,7 @@
 pub mod earlycse;
 pub mod instcombine;
 pub mod licm;
+pub mod loopreduce;
 pub mod mem2reg;
 pub mod simplifycfg;
 
@@ -11,7 +12,7 @@ use crate::module::Module;
 use crate::passes::{FunctionPass, PassManager};
 
 /// The default pipeline, in order.
-const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "instcombine", "simplifycfg"];
+const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg"];
 
 fn pass(name: &str) -> Result<Box<dyn FunctionPass>, String> {
     Ok(match name {
@@ -20,6 +21,7 @@ fn pass(name: &str) -> Result<Box<dyn FunctionPass>, String> {
         "simplifycfg" => Box::new(simplifycfg::SimplifyCfg),
         "earlycse" => Box::new(earlycse::EarlyCse),
         "licm" => Box::new(licm::Licm),
+        "loop-reduce" => Box::new(loopreduce::LoopReduce),
         _ => return Err(format!("no MIR pass {name}")),
     })
 }

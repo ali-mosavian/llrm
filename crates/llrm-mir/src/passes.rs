@@ -55,6 +55,18 @@ impl Analysis for Loops {
     }
 }
 
+/// LLVM's `ScalarEvolutionAnalysis`, of add recurrences alone.
+pub struct ScalarEvolution;
+
+impl Analysis for ScalarEvolution {
+    type Result = crate::scalarevolution::Evolution;
+    const NAME: &'static str = "scalar-evolution";
+    fn run(context: &Context, _: &DataLayout, function: &Function) -> crate::scalarevolution::Evolution {
+        let loops = crate::loops::LoopInfo::new(function, &DominatorTree::new(function));
+        crate::scalarevolution::Evolution::new(context, function, &loops)
+    }
+}
+
 /// Which analyses a pass left true.
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
