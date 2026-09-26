@@ -180,3 +180,14 @@ fn a_float_function_is_its_intrinsic() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("  %1 = call double @llvm.sqrt.f64(double %0)\n  ret double %1\n"), "{text}");
 }
+
+/// A DATA statement in the first block marks the function's own entry as
+/// an external entry, which every caller already takes.
+#[test]
+fn an_external_entry_at_the_entry_needs_nothing_more() {
+    let mut function = difference();
+    function.external_entries = vec![1];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+}

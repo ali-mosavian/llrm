@@ -381,7 +381,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         if function.error_handler.is_some() {
             return Err("an ON ERROR handler".to_owned());
         }
-        if !function.external_entries.is_empty() {
+        if function.external_entries.iter().any(|&one| one != function.entry) {
             return Err("an alternate entry".to_owned());
         }
         let values = function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect();
