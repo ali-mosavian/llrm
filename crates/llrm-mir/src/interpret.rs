@@ -132,7 +132,7 @@ impl<'m> Machine<'m> {
             ConstantKind::Global(global) => Val::Ptr(self.addresses[global]),
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 let from = self.module.context.get(*value).ty;
-                self.cast(*op, self.constant(*value)?, from, constant.ty, Flags::default())?
+                cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
             }
             ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
                 let values: Vec<Val> = operands.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?;
@@ -248,8 +248,8 @@ impl<'m> Machine<'m> {
         let argument = |at: usize| arguments[at].clone();
         Ok(match intrinsic {
             Intrinsic::WithOverflow { op, signed } => {
-                let wrapped = self.binary(op, Flags::default(), argument(0), argument(1))?;
-                let exact = self.binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
+                let wrapped = binary(op, Flags::default(), argument(0), argument(1))?;
+                let exact = binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
                 let overflowed = match (&wrapped, exact) {
                     (Val::Poison, _) => Val::Poison,
                     (_, exact) => Val::Int { bits: u128::from(exact == Val::Poison), width: 1 },
@@ -263,7 +263,7 @@ impl<'m> Machine<'m> {
                     (false, true) => IntPredicate::Ugt,
                     (false, false) => IntPredicate::Ult,
                 };
-                match self.icmp(predicate, argument(0), argument(1)) {
+                match icmp(predicate, argument(0), argument(1)) {
                     Val::Int { bits: 1, .. } => argument(0),
                     Val::Int { .. } => argument(1),
                     _ => Val::Poison,
@@ -271,8 +271,8 @@ impl<'m> Machine<'m> {
             }
             // Fused or not is the machine's choice, as the LangRef allows.
             Intrinsic::FMulAdd => {
-                let product = self.binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
-                self.binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
+                let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
+                binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
             }
             // In the argument's own precision.
             Intrinsic::Unary(function) => match argument(0) {
@@ -391,16 +391,16 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
-                    Opcode::Binary(op) => Some(self.binary(*op, instruction.flags, value(self, 0)?, value(self, 1)?)?),
+                    Opcode::Binary(op) => Some(binary(*op, instruction.flags, value(self, 0)?, value(self, 1)?)?),
                     Opcode::FNeg => Some(match value(self, 0)? {
                         Val::Float(kind, bits) => Val::Float(kind, bits ^ (1 << (float_bits(kind) - 1))),
                         other => other,
                     }),
                     Opcode::Cast(op) => {
                         let from = function.operand_type(&self.module.context, ops[0]).expect("a value");
-                        Some(self.cast(*op, value(self, 0)?, from, instruction.ty, instruction.flags)?)
+                        Some(cast(self.types(), &self.layout, *op, value(self, 0)?, from, instruction.ty, instruction.flags)?)
                     }
-                    Opcode::ICmp(predicate) => Some(self.icmp(*predicate, value(self, 0)?, value(self, 1)?)),
+                    Opcode::ICmp(predicate) => Some(icmp(*predicate, value(self, 0)?, value(self, 1)?)),
                     Opcode::FCmp(predicate) => Some(fcmp(*predicate, value(self, 0)?, value(self, 1)?)),
                     Opcode::Select => Some(match value(self, 0)? {
                         Val::Poison => Val::Poison,
@@ -476,177 +476,6 @@ impl<'m> Machine<'m> {
 
     // ---- operations
 
-    fn binary(&self, op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
-        if let (Val::Float(kind, x), Val::Float(_, y)) = (&a, &b) {
-            return Ok(float_binary(op, *kind, *x, *y));
-        }
-        let (Val::Int { bits: x, width }, Val::Int { bits: y, .. }) = (&a, &b) else {
-            if matches!(op, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) && b == Val::Poison {
-                return undefined("a division by poison");
-            }
-            return Ok(Val::Poison);
-        };
-        let (x, y, width) = (*x, *y, *width);
-        let m = mask(width);
-        let (sx, sy) = (signed(x, width), signed(y, width));
-        let poison = |flag: Flags, overflowed: bool| flags.contains(flag) && overflowed;
-        let int = |bits: u128| Val::Int { bits: bits & m, width };
-        let signed_fits = |value: i128| width >= 128 || value == signed(value as u128 & m, width);
-        Ok(match op {
-            BinaryOp::Add => {
-                if poison(Flags::NUW, x.checked_add(y).is_none_or(|sum| sum > m)) || poison(Flags::NSW, sx.checked_add(sy).is_none_or(|sum| !signed_fits(sum))) {
-                    return Ok(Val::Poison);
-                }
-                int(x.wrapping_add(y))
-            }
-            BinaryOp::Sub => {
-                if poison(Flags::NUW, y > x) || poison(Flags::NSW, sx.checked_sub(sy).is_none_or(|one| !signed_fits(one))) {
-                    return Ok(Val::Poison);
-                }
-                int(x.wrapping_sub(y))
-            }
-            BinaryOp::Mul => {
-                if poison(Flags::NUW, x.checked_mul(y).is_none_or(|one| one > m)) || poison(Flags::NSW, sx.checked_mul(sy).is_none_or(|one| !signed_fits(one))) {
-                    return Ok(Val::Poison);
-                }
-                int(x.wrapping_mul(y))
-            }
-            BinaryOp::UDiv | BinaryOp::URem if y == 0 => return undefined("a division by zero"),
-            BinaryOp::SDiv | BinaryOp::SRem if y == 0 => return undefined("a division by zero"),
-            BinaryOp::SDiv | BinaryOp::SRem if sy == -1 && sx == signed(1u128 << (width - 1), width) && width > 1 => return undefined("a signed division overflows"),
-            BinaryOp::UDiv => {
-                if poison(Flags::EXACT, x % y != 0) {
-                    return Ok(Val::Poison);
-                }
-                int(x / y)
-            }
-            BinaryOp::SDiv => {
-                if poison(Flags::EXACT, sx % sy != 0) {
-                    return Ok(Val::Poison);
-                }
-                int((sx / sy) as u128)
-            }
-            BinaryOp::URem => int(x % y),
-            BinaryOp::SRem => int((sx % sy) as u128),
-            BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if y >= u128::from(width) => Val::Poison,
-            BinaryOp::Shl => {
-                let shifted = (x << y) & m;
-                if poison(Flags::NUW, shifted >> y != x) || poison(Flags::NSW, signed(shifted, width) >> y != sx) {
-                    return Ok(Val::Poison);
-                }
-                int(shifted)
-            }
-            BinaryOp::LShr => {
-                if poison(Flags::EXACT, x & ((1 << y) - 1) != 0) {
-                    return Ok(Val::Poison);
-                }
-                int(x >> y)
-            }
-            BinaryOp::AShr => {
-                if poison(Flags::EXACT, x & ((1 << y) - 1) != 0) {
-                    return Ok(Val::Poison);
-                }
-                int((sx >> y) as u128)
-            }
-            BinaryOp::And => int(x & y),
-            BinaryOp::Or => {
-                if poison(Flags::DISJOINT, x & y != 0) {
-                    return Ok(Val::Poison);
-                }
-                int(x | y)
-            }
-            BinaryOp::Xor => int(x ^ y),
-            _ => return unsupported("floating arithmetic on integers"),
-        })
-    }
-
-    fn icmp(&self, predicate: IntPredicate, a: Val, b: Val) -> Val {
-        let bits = |value: &Val| match value {
-            Val::Int { bits, width } => Some((*bits, *width)),
-            Val::Ptr(address) => Some((u128::from(*address), 64)),
-            _ => None,
-        };
-        let (Some((x, width)), Some((y, _))) = (bits(&a), bits(&b)) else { return Val::Poison };
-        let (sx, sy) = (signed(x, width), signed(y, width));
-        let truth = match predicate {
-            IntPredicate::Eq => x == y,
-            IntPredicate::Ne => x != y,
-            IntPredicate::Ugt => x > y,
-            IntPredicate::Uge => x >= y,
-            IntPredicate::Ult => x < y,
-            IntPredicate::Ule => x <= y,
-            IntPredicate::Sgt => sx > sy,
-            IntPredicate::Sge => sx >= sy,
-            IntPredicate::Slt => sx < sy,
-            IntPredicate::Sle => sx <= sy,
-        };
-        Val::Int { bits: u128::from(truth), width: 1 }
-    }
-
-    fn cast(&self, op: CastOp, value: Val, from: TypeId, to: TypeId, flags: Flags) -> Run<Val> {
-        if value == Val::Poison {
-            return Ok(Val::Poison);
-        }
-        let types = self.types();
-        let to_width = |types: &crate::types::Types| match types.get(to) {
-            Type::Int(width) => *width,
-            Type::Pointer(space) => self.layout.pointer(*space).bits,
-            _ => 0,
-        };
-        let width = to_width(types);
-        Ok(match (op, value) {
-            (CastOp::Trunc, Val::Int { bits, width: from_width }) => {
-                let kept = bits & mask(width);
-                if flags.contains(Flags::NUW) && kept != bits || flags.contains(Flags::NSW) && signed(kept, width) != signed(bits, from_width) {
-                    return Ok(Val::Poison);
-                }
-                Val::Int { bits: kept, width }
-            }
-            (CastOp::ZExt, Val::Int { bits, width: from_width }) => {
-                if flags.contains(Flags::NNEG) && signed(bits, from_width) < 0 {
-                    return Ok(Val::Poison);
-                }
-                Val::Int { bits, width }
-            }
-            (CastOp::SExt, Val::Int { bits, width: from_width }) => Val::Int { bits: signed(bits, from_width) as u128 & mask(width), width },
-            (CastOp::FPTrunc | CastOp::FPExt, Val::Float(kind, bits)) => {
-                let value = to_f64(kind, bits);
-                let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
-                from_f64(*target, value)
-            }
-            (CastOp::FPToSI | CastOp::FPToUI, Val::Float(kind, bits)) => {
-                let value = to_f64(kind, bits).trunc();
-                let (low, high) = if op == CastOp::FPToSI {
-                    (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
-                } else {
-                    (0.0, 2f64.powi(width as i32))
-                };
-                if value.is_nan() || value < low || value >= high {
-                    return Ok(Val::Poison);
-                }
-                Val::Int { bits: (value as i128) as u128 & mask(width), width }
-            }
-            (CastOp::SIToFP | CastOp::UIToFP, Val::Int { bits, width: from_width }) => {
-                let value = if op == CastOp::SIToFP { signed(bits, from_width) as f64 } else { bits as f64 };
-                let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
-                from_f64(*target, value)
-            }
-            (CastOp::PtrToInt, Val::Ptr(address)) => Val::Int { bits: u128::from(address) & mask(width), width },
-            (CastOp::IntToPtr, Val::Int { bits, .. }) => Val::Ptr(bits as u64),
-            (CastOp::AddrSpaceCast | CastOp::BitCast, Val::Ptr(address)) => Val::Ptr(address),
-            (CastOp::BitCast, Val::Int { bits, .. }) => match types.get(to) {
-                Type::Float(kind) => Val::Float(*kind, bits as u64),
-                _ => Val::Int { bits, width },
-            },
-            (CastOp::BitCast, Val::Float(_, bits)) => match types.get(to) {
-                Type::Int(width) => Val::Int { bits: u128::from(bits), width: *width },
-                Type::Float(kind) => Val::Float(*kind, bits),
-                _ => return unsupported("a bitcast of a float"),
-            },
-            (op, value) => return unsupported(format!("{op:?} of {value:?} from {}", types.display(from))),
-        })
-    }
-
     /// The address `operands[0] + indices`, stepping through `source`.
     fn gep(&self, source: TypeId, result: TypeId, operands: &[Val]) -> Run<Val> {
         let types = self.types();
@@ -663,6 +492,181 @@ impl<'m> Machine<'m> {
         Ok(Val::Ptr(address as u64))
     }
 }
+
+/// An integer or float operation on two values, as LLVM defines it: the
+/// interpreter's and constant folding's one answer.
+pub(crate) fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
+    if let (Val::Float(kind, x), Val::Float(_, y)) = (&a, &b) {
+        return Ok(float_binary(op, *kind, *x, *y));
+    }
+    let (Val::Int { bits: x, width }, Val::Int { bits: y, .. }) = (&a, &b) else {
+        if matches!(op, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) && b == Val::Poison {
+            return undefined("a division by poison");
+        }
+        return Ok(Val::Poison);
+    };
+    let (x, y, width) = (*x, *y, *width);
+    let m = mask(width);
+    let (sx, sy) = (signed(x, width), signed(y, width));
+    let poison = |flag: Flags, overflowed: bool| flags.contains(flag) && overflowed;
+    let int = |bits: u128| Val::Int { bits: bits & m, width };
+    let signed_fits = |value: i128| width >= 128 || value == signed(value as u128 & m, width);
+    Ok(match op {
+        BinaryOp::Add => {
+            if poison(Flags::NUW, x.checked_add(y).is_none_or(|sum| sum > m)) || poison(Flags::NSW, sx.checked_add(sy).is_none_or(|sum| !signed_fits(sum))) {
+                return Ok(Val::Poison);
+            }
+            int(x.wrapping_add(y))
+        }
+        BinaryOp::Sub => {
+            if poison(Flags::NUW, y > x) || poison(Flags::NSW, sx.checked_sub(sy).is_none_or(|one| !signed_fits(one))) {
+                return Ok(Val::Poison);
+            }
+            int(x.wrapping_sub(y))
+        }
+        BinaryOp::Mul => {
+            if poison(Flags::NUW, x.checked_mul(y).is_none_or(|one| one > m)) || poison(Flags::NSW, sx.checked_mul(sy).is_none_or(|one| !signed_fits(one))) {
+                return Ok(Val::Poison);
+            }
+            int(x.wrapping_mul(y))
+        }
+        BinaryOp::UDiv | BinaryOp::URem if y == 0 => return undefined("a division by zero"),
+        BinaryOp::SDiv | BinaryOp::SRem if y == 0 => return undefined("a division by zero"),
+        BinaryOp::SDiv | BinaryOp::SRem if sy == -1 && sx == signed(1u128 << (width - 1), width) && width > 1 => return undefined("a signed division overflows"),
+        BinaryOp::UDiv => {
+            if poison(Flags::EXACT, x % y != 0) {
+                return Ok(Val::Poison);
+            }
+            int(x / y)
+        }
+        BinaryOp::SDiv => {
+            if poison(Flags::EXACT, sx % sy != 0) {
+                return Ok(Val::Poison);
+            }
+            int((sx / sy) as u128)
+        }
+        BinaryOp::URem => int(x % y),
+        BinaryOp::SRem => int((sx % sy) as u128),
+        BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if y >= u128::from(width) => Val::Poison,
+        BinaryOp::Shl => {
+            let shifted = (x << y) & m;
+            if poison(Flags::NUW, shifted >> y != x) || poison(Flags::NSW, signed(shifted, width) >> y != sx) {
+                return Ok(Val::Poison);
+            }
+            int(shifted)
+        }
+        BinaryOp::LShr => {
+            if poison(Flags::EXACT, x & ((1 << y) - 1) != 0) {
+                return Ok(Val::Poison);
+            }
+            int(x >> y)
+        }
+        BinaryOp::AShr => {
+            if poison(Flags::EXACT, x & ((1 << y) - 1) != 0) {
+                return Ok(Val::Poison);
+            }
+            int((sx >> y) as u128)
+        }
+        BinaryOp::And => int(x & y),
+        BinaryOp::Or => {
+            if poison(Flags::DISJOINT, x & y != 0) {
+                return Ok(Val::Poison);
+            }
+            int(x | y)
+        }
+        BinaryOp::Xor => int(x ^ y),
+        _ => return unsupported("floating arithmetic on integers"),
+    })
+}
+
+
+pub(crate) fn icmp(predicate: IntPredicate, a: Val, b: Val) -> Val {
+    let bits = |value: &Val| match value {
+        Val::Int { bits, width } => Some((*bits, *width)),
+        Val::Ptr(address) => Some((u128::from(*address), 64)),
+        _ => None,
+    };
+    let (Some((x, width)), Some((y, _))) = (bits(&a), bits(&b)) else { return Val::Poison };
+    let (sx, sy) = (signed(x, width), signed(y, width));
+    let truth = match predicate {
+        IntPredicate::Eq => x == y,
+        IntPredicate::Ne => x != y,
+        IntPredicate::Ugt => x > y,
+        IntPredicate::Uge => x >= y,
+        IntPredicate::Ult => x < y,
+        IntPredicate::Ule => x <= y,
+        IntPredicate::Sgt => sx > sy,
+        IntPredicate::Sge => sx >= sy,
+        IntPredicate::Slt => sx < sy,
+        IntPredicate::Sle => sx <= sy,
+    };
+    Val::Int { bits: u128::from(truth), width: 1 }
+}
+
+
+pub(crate) fn cast(types: &crate::types::Types, layout: &DataLayout, op: CastOp, value: Val, from: TypeId, to: TypeId, flags: Flags) -> Run<Val> {
+    if value == Val::Poison {
+        return Ok(Val::Poison);
+    }
+    let to_width = |types: &crate::types::Types| match types.get(to) {
+        Type::Int(width) => *width,
+        Type::Pointer(space) => layout.pointer(*space).bits,
+        _ => 0,
+    };
+    let width = to_width(types);
+    Ok(match (op, value) {
+        (CastOp::Trunc, Val::Int { bits, width: from_width }) => {
+            let kept = bits & mask(width);
+            if flags.contains(Flags::NUW) && kept != bits || flags.contains(Flags::NSW) && signed(kept, width) != signed(bits, from_width) {
+                return Ok(Val::Poison);
+            }
+            Val::Int { bits: kept, width }
+        }
+        (CastOp::ZExt, Val::Int { bits, width: from_width }) => {
+            if flags.contains(Flags::NNEG) && signed(bits, from_width) < 0 {
+                return Ok(Val::Poison);
+            }
+            Val::Int { bits, width }
+        }
+        (CastOp::SExt, Val::Int { bits, width: from_width }) => Val::Int { bits: signed(bits, from_width) as u128 & mask(width), width },
+        (CastOp::FPTrunc | CastOp::FPExt, Val::Float(kind, bits)) => {
+            let value = to_f64(kind, bits);
+            let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
+            from_f64(*target, value)
+        }
+        (CastOp::FPToSI | CastOp::FPToUI, Val::Float(kind, bits)) => {
+            let value = to_f64(kind, bits).trunc();
+            let (low, high) = if op == CastOp::FPToSI {
+                (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
+            } else {
+                (0.0, 2f64.powi(width as i32))
+            };
+            if value.is_nan() || value < low || value >= high {
+                return Ok(Val::Poison);
+            }
+            Val::Int { bits: (value as i128) as u128 & mask(width), width }
+        }
+        (CastOp::SIToFP | CastOp::UIToFP, Val::Int { bits, width: from_width }) => {
+            let value = if op == CastOp::SIToFP { signed(bits, from_width) as f64 } else { bits as f64 };
+            let Type::Float(target) = types.get(to) else { unreachable!("a floating type") };
+            from_f64(*target, value)
+        }
+        (CastOp::PtrToInt, Val::Ptr(address)) => Val::Int { bits: u128::from(address) & mask(width), width },
+        (CastOp::IntToPtr, Val::Int { bits, .. }) => Val::Ptr(bits as u64),
+        (CastOp::AddrSpaceCast | CastOp::BitCast, Val::Ptr(address)) => Val::Ptr(address),
+        (CastOp::BitCast, Val::Int { bits, .. }) => match types.get(to) {
+            Type::Float(kind) => Val::Float(*kind, bits as u64),
+            _ => Val::Int { bits, width },
+        },
+        (CastOp::BitCast, Val::Float(_, bits)) => match types.get(to) {
+            Type::Int(width) => Val::Int { bits: u128::from(bits), width: *width },
+            Type::Float(kind) => Val::Float(*kind, bits),
+            _ => return unsupported("a bitcast of a float"),
+        },
+        (op, value) => return unsupported(format!("{op:?} of {value:?} from {}", types.display(from))),
+    })
+}
+
 
 fn insert(aggregate: Val, indices: &[u32], value: Val) -> Val {
     let Some((&first, rest)) = indices.split_first() else { return value };
