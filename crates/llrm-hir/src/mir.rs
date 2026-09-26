@@ -4,6 +4,7 @@
 //! a data object an external global, so what refers to them still verifies.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
 use llrm_mir::{
@@ -295,6 +296,20 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         }
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
+        if matches!(instruction.op, Op::Convert | Op::Truncate) {
+            let from = tables.types[&operand_type(&instruction.operands[0], &values, &places)];
+            let to = tables.types[&values[&instruction.results[0]]];
+            if from.kind == TypeKind::Float && matches!(to.kind, TypeKind::Integer | TypeKind::Boolean) {
+                let types = &mut module.context.types;
+                let (from, to) = (value_type(types, from)?, value_type(types, to)?);
+                let name = rounding(types, from, to);
+                if let Entry::Vacant(slot) = tables.callees.entry(name) {
+                    let ty = function_type(types, to, vec![from]);
+                    let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                    slot.insert(module.reference(global));
+                }
+            }
+        }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call) else { continue };
         if tables.callees.contains_key(callee) {
             continue;
@@ -312,6 +327,13 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         tables.callees.insert(callee.to_owned(), reference);
     }
     Ok(())
+}
+
+/// The intrinsic that rounds a `from` to a `to` as BASIC does: to nearest,
+/// ties to even, the machine's default.
+fn rounding(types: &Types, from: TypeId, to: TypeId) -> String {
+    let bits = if matches!(types.get(from), Type::Float(FloatKind::Float)) { 32 } else { 64 };
+    format!("llvm.lrint.i{}.f{bits}", types.int_bits(to).expect("an integer"))
 }
 
 /// An operand's HIR type: a place's is what it holds.
@@ -714,7 +736,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Type::Int(_), Type::Float(_)) => CastOp::UIToFP,
             (Type::Float(FloatKind::Float), Type::Float(FloatKind::Double)) => CastOp::FPExt,
             (Type::Float(FloatKind::Double), Type::Float(FloatKind::Float)) => CastOp::FPTrunc,
-            (Type::Float(_), Type::Int(_)) => return Err("a float rounded to an integer".to_owned()),
+            (Type::Float(_), Type::Int(_)) => {
+                let name = rounding(types, from, to);
+                let callee = Value::Constant(self.tables.callees[&name]);
+                let ty = function_type(&mut self.b.context.types, to, vec![from]);
+                return Ok(self.b.call(ty, callee, &[value], "").expect("an integer"));
+            }
             (a, b) => return Err(format!("a conversion from {a:?} to {b:?}")),
         };
         Ok(self.b.cast(op, value, to, ""))
