@@ -9,11 +9,12 @@ use std::sync::Arc;
 use iced_x86::Register;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
 use crate::abi::runtime::Contract;
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
-use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
@@ -121,6 +122,9 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
         _ => refuse(format!("a {} value", types.display(ty))),
     }
 }
+
+/// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
+const MEMSET_STORES: i64 = 16;
 
 fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
@@ -423,6 +427,10 @@ impl Selector<'_, '_> {
     fn fresh(&mut self) -> u32 {
         self.next += 1;
         self.next
+    }
+
+    fn fresh_held(&mut self, width: u32) -> Held {
+        Held { value: self.fresh(), width }
     }
 
     fn types(&self) -> &llrm_mir::Types {
@@ -830,7 +838,10 @@ impl Selector<'_, '_> {
         let global = self.module.global(global);
         let name = global.name.clone().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
-            return refuse(format!("@{name}"));
+            return match Intrinsic::named(&name) {
+                Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                _ => refuse(format!("@{name}")),
+            };
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
@@ -880,7 +891,7 @@ impl Selector<'_, '_> {
             self.far.insert(at);
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(crate::model::ir::Reg { register: Register::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -895,6 +906,53 @@ impl Selector<'_, '_> {
                 semantics(Operation::Binary, "or", vec![Loc::Held(held)], vec![Loc::Held(dword(shifted)), Loc::Held(dword(wide_low))]),
             ] {
                 out.push(insn(at, what));
+            }
+        }
+        Ok(())
+    }
+
+    /// A memset of a constant byte over a constant length, as LLVM's
+    /// getMemset lowers one: at most `MEMSET_STORES` stores, widest first,
+    /// or `rep stosd` through es:di and stores for the tail.
+    fn memset(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let &[destination, value, length, volatile] = arguments else { return refuse("a memset of other than four operands") };
+        let (Some(byte), Some(length)) = (self.constant(value, 1), self.constant(length, 2)) else {
+            return refuse("a memset of a variable byte or length");
+        };
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let pattern = |width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
+        let pointer = self.pointer(destination)?;
+        let (bulk, tail) = if length / 4 + (length % 4).count_ones() as i64 > MEMSET_STORES { (length / 4, length % 4) } else { (0, length) };
+        if bulk > 0 {
+            let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
+            let source = if matches!(pointer, Pointer::Frame(_)) { Register::SS } else { Register::DS };
+            let (stored, count, through) = (self.fresh_held(4), self.fresh_held(2), self.fresh_held(2));
+            let (stepped, emptied) = (self.fresh_held(2), self.fresh_held(2));
+            for what in [
+                semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![Loc::Imm(Imm { value: pattern(4), width: 4, address: None })]),
+                semantics(Operation::Move, "mov", vec![Loc::Held(count)], vec![Loc::Imm(Imm { value: bulk, width: 2, address: None })]),
+                self.address(pointer, through),
+                semantics(Operation::Push, "push", vec![], vec![segment.clone()]),
+                semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]),
+                semantics(Operation::Pop, "pop", vec![segment.clone()], vec![]),
+                semantics(
+                    Operation::Fill,
+                    "stosd",
+                    vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped), Loc::Held(emptied)],
+                    vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment.clone()],
+                ),
+                semantics(Operation::Pop, "pop", vec![segment], vec![]),
+            ] {
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+            }
+        }
+        let mut offset = length - tail;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                let cell = Self::memory(pointer.moved(offset), width);
+                let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(Imm { value: pattern(width), width, address: None })]);
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+                offset += i64::from(width);
             }
         }
         Ok(())

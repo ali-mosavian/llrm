@@ -574,3 +574,59 @@ define i16 @f(i16 %a) addrspace(1) {
 ";
     assert_eq!(listing(text, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "pop bp", "retf"]);
 }
+
+/// A memset expands as LLVM's getMemset does: up to 16 stores, widest
+/// first; beyond that `rep stosd` through es:di, the tail stored.
+#[test]
+fn test_a_memset_is_stores_or_a_string_fill() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 1, i16 {size}, i1 false)
+  %v = load i16, ptr %a
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(
+        listing(&text(7), "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 8",
+            "L0_0:",
+            "mov dword ptr [bp-8], 16843009",
+            "mov word ptr [bp-4], 257",
+            "mov byte ptr [bp-2], 1",
+            "mov ax, word ptr [bp-8]",
+            "leave",
+            "retf",
+        ]
+    );
+    assert_eq!(
+        listing(&text(70), "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 70",
+            "push di",
+            "L0_0:",
+            "lea di, [bp-70]",
+            "push es",
+            "push ss",
+            "pop es",
+            "mov eax, 16843009",
+            "mov cx, 17",
+            "rep stosd",
+            "pop es",
+            "mov word ptr [bp-2], 257",
+            "mov ax, word ptr [bp-70]",
+            "pop di",
+            "leave",
+            "retf",
+        ]
+    );
+}
