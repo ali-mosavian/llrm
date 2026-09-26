@@ -42,7 +42,8 @@ fn pass(name: &str) -> Result<Pass, String> {
 /// The module through the pipeline, verified after each pass. As `opt
 /// -passes`, `LLRM_MIR_PASSES` names another, comma-separated; with
 /// `LLRM_MIR_STAGES` set to a directory, each pass's output goes there as
-/// `NN-pass.ll` (agents.md, the fourth rule).
+/// `NN-pass.ll` (agents.md, the fourth rule); `LLRM_MIR_BISECT` limits
+/// how many pass runs happen, as LLVM's `-opt-bisect-limit`.
 pub fn optimized(module: &mut Module) -> Result<(), String> {
     let chosen = std::env::var("LLRM_MIR_PASSES").ok();
     let names: Vec<&str> = match &chosen {
@@ -54,7 +55,8 @@ pub fn optimized(module: &mut Module) -> Result<(), String> {
 
 /// The module through the passes `names`.
 pub fn optimized_with(module: &mut Module, names: &[&str]) -> Result<(), String> {
-    let mut manager = PassManager { verify_each: true, dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+    let bisect = std::env::var("LLRM_MIR_BISECT").ok().map(|limit| limit.parse().map_err(|_| format!("LLRM_MIR_BISECT={limit} is no count"))).transpose()?;
+    let mut manager = PassManager { verify_each: true, dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), bisect, ..Default::default() };
     for name in names {
         manager.passes.push(pass(name)?);
     }

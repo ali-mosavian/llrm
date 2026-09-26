@@ -125,3 +125,19 @@ fn verify_each_names_the_pass_that_broke_the_module() {
     let error = passes.run(&mut module()).unwrap_err();
     assert!(error.starts_with("after drop-return: "), "{error}");
 }
+
+/// A bisection limit runs only the first pass runs, as LLVM's
+/// `-opt-bisect-limit`: with two functions and a limit of one, the second
+/// is left as it was. It found the peephole that added deedlines' z%(i)
+/// to the wrong row.
+#[test]
+fn a_bisection_limit_skips_the_runs_after_it() {
+    let text = format!("{TEXT}{}", TEXT.replace("@f", "@g"));
+    let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let mut passes = PassManager { bisect: Some(1), ..Default::default() };
+    passes.add(Retarget(PreservedAnalyses::none()));
+    let stages = passes.run(&mut module).unwrap();
+    assert_eq!(stages.len(), 1);
+    let printed = crate::print::module(&module);
+    assert!(printed.contains("@g(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b"), "{printed}");
+}

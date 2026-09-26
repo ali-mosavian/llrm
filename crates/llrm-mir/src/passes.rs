@@ -188,6 +188,10 @@ pub struct PassManager {
     pub verify_invalidation: bool,
     /// A directory each pass's output is written to, as `NN-pass.ll`.
     pub dump: Option<std::path::PathBuf>,
+    /// How many pass runs happen, a module pass's one and a function
+    /// pass's one per function, as LLVM's `-opt-bisect-limit`: each run is
+    /// named on stderr, and those past the limit are skipped.
+    pub bisect: Option<usize>,
 }
 
 impl PassManager {
@@ -207,12 +211,24 @@ impl PassManager {
         };
         let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
         let mut stages = Vec::new();
+        let mut runs = 0;
+        let bisect = self.bisect;
+        let mut bisected = |name: &str, unit: &str| {
+            let Some(limit) = bisect else { return true };
+            runs += 1;
+            let running = runs <= limit;
+            eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
+            running
+        };
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
             let callees = crate::memory::callees(module);
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Module(pass) => {
+                    if !bisected(name, "the module") {
+                        continue;
+                    }
                     for id in pass.run(module) {
                         caches.remove(&id);
                         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
@@ -225,8 +241,9 @@ impl PassManager {
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
                 let Module { context, globals, .. } = &mut *module;
-                let GlobalKind::Function(function) = &mut globals[at].kind else { continue };
-                if function.is_declaration() {
+                let global = &mut globals[at];
+                let GlobalKind::Function(function) = &mut global.kind else { continue };
+                if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
                 let analyses = caches.entry(id).or_default();
