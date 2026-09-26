@@ -2,7 +2,7 @@
 //! target register stack.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +12,9 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::regions;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
-use crate::backend::floatregions::{Raised, boundary, bridged};
+use crate::backend::allocate::{Live, live};
+use crate::backend::floatregions::{Raised, boundary};
+use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::frame::Frame;
 use crate::backend::lower::Unlowered;
 use crate::backend::select;
@@ -250,26 +252,6 @@ fn _two_values(what: Option<&Semantics>) -> Option<(String, Held, Held)> {
     _ARITHMETIC.contains(&name).then(|| (name.to_owned(), *left, *right))
 }
 
-/// The CFG blocks execution can enter from this body's entry.
-///
-/// Stack state is a property of an executed edge.  A syntactic predecessor
-/// in dead code cannot arrive at a join or require an x87 bridge; treating
-/// it as one made an otherwise straight live edge spill an extended value.
-/// Keep the dead block for layout and ordinary emission, but exclude its
-/// edges from the allocator's live control-flow facts.
-fn _reachable_blocks(blocks: &[LirBlock], entry: i64) -> HashSet<i64> {
-    let at_of: HashMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
-    let (mut reached, mut pending) = (HashSet::default(), vec![entry]);
-    while let Some(at) = pending.pop() {
-        if reached.contains(&at) || !at_of.contains_key(&at) {
-            continue;
-        }
-        reached.insert(at);
-        pending.extend(&at_of[&at].succ);
-    }
-    reached
-}
-
 /// The instruction computing `name` with one operand read from `load`'s cell, if x87 has one.
 fn _memory_name(name: &str, cell_is_left: bool, load: &Insn) -> Option<String> {
     let mut name = if cell_is_left { _reversed(name) } else { name }.to_owned();
@@ -404,7 +386,8 @@ fn _rereadable(sequence: &[Arc<Insn>], position: usize, reads: &VecDeque<i64>) -
 /// or possibly-aliasing store invalidates the remembered cell through
 /// ``_may_write``; this is deliberately the same memory proof used by the
 /// existing memory-operand reuse path.
-fn _equivalent_loads(sequence: &[Arc<Insn>]) -> IndexMap<u32, u32> {
+/// A value read in a later block keeps its own name: the successor reads it.
+fn _equivalent_loads(sequence: &[Arc<Insn>], live_out: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
     for one in sequence {
@@ -432,7 +415,7 @@ fn _equivalent_loads(sequence: &[Arc<Insn>]) -> IndexMap<u32, u32> {
             continue;
         }
         let key = (what.name.clone(), cell.clone());
-        if let Some(first) = available.get(&key) {
+        if let Some(first) = available.get(&key).filter(|_| !live_out.contains(&result.value)) {
             aliases.insert(result.value, *first);
         } else {
             available.insert(key, result.value);
@@ -441,44 +424,15 @@ fn _equivalent_loads(sequence: &[Arc<Insn>]) -> IndexMap<u32, u32> {
     aliases
 }
 
-type Region = (Vec<Arc<Insn>>, IndexMap<u32, VecDeque<i64>>, IndexMap<u32, u32>);
+/// A stack slot whose value is overwritten: popped at once.
+const DEAD: u32 = u32::MAX;
 
-/// The instructions from here to the region's end, and where each floating value is read among them.
-fn _region(blocks: &[LirBlock], mut index: usize, mut offset: usize, continues: &HashSet<usize>) -> Region {
-    let finished = |sequence: Vec<Arc<Insn>>| -> Region {
-        let aliases = _equivalent_loads(&sequence);
-        let mut reads: IndexMap<u32, VecDeque<i64>> = IndexMap::default();
-        for (position, instruction) in sequence.iter().enumerate() {
-            for arg in &instruction.what.as_ref().expect("a region instruction has semantics").sources {
-                if let Loc::Held(arg) = arg {
-                    if arg.width == 10 {
-                        reads.entry(*aliases.get(&arg.value).unwrap_or(&arg.value)).or_default().push_back(position as i64);
-                    }
-                }
-            }
-        }
-        (sequence, reads, aliases)
-    };
-    let mut sequence = Vec::new();
-    loop {
-        for instruction in &blocks[index].insns[offset..] {
-            if boundary(instruction) {
-                return finished(sequence);
-            }
-            sequence.push(Arc::clone(instruction));
-        }
-        if !continues.contains(&index) {
-            return finished(sequence);
-        }
-        (index, offset) = (index + 1, 0);
-    }
-}
-
-/// The x87 register stack across one region, after LLVM's X86FloatingPoint.
+/// The x87 register stack through one block, after GCC's reg-stack and LLVM's X86FloatingPoint.
 ///
 /// An operand an instruction consumes dies there, and the result takes its
 /// slot. A value loaded from a cell is not held at all while the cell stays
 /// unwritten: each reader takes the cell as its memory operand or reloads it.
+/// A value no longer needed is popped where it dies.
 struct _Stack<'f, 'c> {
     frame: Option<&'f mut Frame>,
     floating: HashSet<u32>,
@@ -486,15 +440,20 @@ struct _Stack<'f, 'c> {
     retain_homes: bool,
     values: Vec<u32>,                 // top first
     home: IndexMap<u32, Arc<Insn>>,   // the load that reads a value again
+    spills: IndexMap<u32, Arc<Insn>>, // each value's 8-byte cell, read back
+    cells: IndexMap<u32, u32>,        // value -> the value whose cell it shares
     defined: HashMap<u32, i64>,
     sequence: Vec<Arc<Insn>>,
     reads: IndexMap<u32, VecDeque<i64>>,
+    defs: IndexMap<u32, VecDeque<i64>>,
+    live_out: BTreeSet<u32>,
     aliases: IndexMap<u32, u32>,
     here: i64,
     out: Vec<Arc<Insn>>,
     one: Option<Arc<Insn>>,
     keep: HashSet<u32>,
     retained: HashSet<u32>,
+    absorbed: HashSet<i64>, // later copies of a group already taken
 }
 
 impl<'f, 'c> _Stack<'f, 'c> {
@@ -506,15 +465,20 @@ impl<'f, 'c> _Stack<'f, 'c> {
             retain_homes,
             values: Vec::new(),
             home: IndexMap::default(),
+            spills: IndexMap::default(),
+            cells: IndexMap::default(),
             defined: HashMap::default(),
             sequence: Vec::new(),
             reads: IndexMap::default(),
+            defs: IndexMap::default(),
+            live_out: BTreeSet::new(),
             aliases: IndexMap::default(),
             here: -1,
             out: Vec::new(),
             one: None,
             keep: HashSet::default(),
             retained: HashSet::default(),
+            absorbed: HashSet::default(),
         }
     }
 
@@ -522,11 +486,171 @@ impl<'f, 'c> _Stack<'f, 'c> {
         self.one.as_ref().expect("an instruction is being allocated")
     }
 
-    fn region(&mut self, (sequence, reads, aliases): Region) {
-        (self.sequence, self.reads, self.here) = (sequence, reads, -1);
-        self.aliases = aliases;
+    /// Enter a block with `arriving` on the stack and `stored` in their spill cells.
+    fn block(&mut self, block: &LirBlock, live_out: BTreeSet<u32>, arriving: Vec<u32>, stored: &[u32]) -> Result<(), Raised> {
+        self.sequence = block.insns.clone();
+        self.aliases = _equivalent_loads(&self.sequence, &live_out);
+        (self.reads, self.defs) = (IndexMap::default(), IndexMap::default());
+        // A group's copies are simultaneous: all read at its first, all write at its last.
+        let mut spans: IndexMap<i64, (i64, i64)> = IndexMap::default();
+        for (position, instruction) in self.sequence.iter().enumerate() {
+            if let (Some(group), Some(_)) = (instruction.group, _float_copy(instruction)) {
+                spans.entry(group).or_insert((position as i64, position as i64)).1 = position as i64;
+            }
+        }
+        for (position, instruction) in self.sequence.iter().enumerate() {
+            let Some(what) = instruction.what.as_ref() else { continue };
+            let span = instruction.group.filter(|_| _float_copy(instruction).is_some()).map(|group| spans[&group]);
+            let (read, written) = span.unwrap_or((position as i64, position as i64));
+            for arg in &what.sources {
+                if let Loc::Held(arg) = arg {
+                    if arg.width == 10 {
+                        let key = *self.aliases.get(&arg.value).unwrap_or(&arg.value);
+                        self.reads.entry(key).or_default().push_back(read);
+                    }
+                }
+            }
+            for arg in &what.dests {
+                if let Loc::Held(arg) = arg {
+                    if arg.width == 10 && !self.aliases.contains_key(&arg.value) {
+                        self.defs.entry(arg.value).or_default().push_back(written);
+                    }
+                }
+            }
+        }
+        for positions in self.reads.values_mut().chain(self.defs.values_mut()) {
+            positions.make_contiguous().sort_unstable();
+        }
+        (self.live_out, self.values, self.here) = (live_out, arriving, -1);
         self.home.clear();
         self.retained.clear();
+        self.defined.clear();
+        self.keep.clear();
+        self.absorbed.clear();
+        for value in stored {
+            let load = self.spill_load(*value)?;
+            self.home.insert(*value, load);
+        }
+        Ok(())
+    }
+
+    /// The load reading `value` back from its own spill cell.
+    fn spill_load(&mut self, value: u32) -> Result<Arc<Insn>, Raised> {
+        if let Some(load) = self.spills.get(&value) {
+            return Ok(Arc::clone(load));
+        }
+        let Some(frame) = self.frame.as_deref_mut() else {
+            return Err(unlowered("floating spill requires an owned frame"));
+        };
+        let owner = self.cells.get(&value).copied().unwrap_or(value);
+        let cell = frame.cell(("floating", i64::from(owner)), 8)?;
+        let load = semantics(Operation::FloatLoad, "fld", vec![Loc::Held(Held { value, width: 10 })], vec![Loc::Mem(cell)]);
+        let load = Arc::new(inserted(self.sequence.first().map_or(0, |first| first.at), load));
+        self.spills.insert(value, Arc::clone(&load));
+        Ok(load)
+    }
+
+    /// Store the top in its spill cell and pop it.
+    fn spill_top(&mut self) -> Result<(), Raised> {
+        let value = self.values[0];
+        let load = self.spill_load(value)?;
+        let cell = cell_of(&load).clone();
+        self.insert(semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(cell)], vec![st(0)]));
+        self.home.insert(value, load);
+        self.values.remove(0);
+        Ok(())
+    }
+
+    /// Drop slot `slot`: `fstp st(i)` moves the top over it.
+    fn pop(&mut self, slot: usize) {
+        self.insert(semantics(Operation::FloatStore, "fstp", vec![st(slot)], vec![st(0)]));
+        self.values[slot] = self.values[0];
+        self.values.remove(0);
+    }
+
+    /// Pop every value nothing reads again.
+    fn pop_dead(&mut self) {
+        while let Some(slot) = (0..self.values.len()).find(|slot| !self.survives(self.values[*slot])) {
+            self.pop(slot);
+        }
+    }
+
+    /// Whether the value is read after here, from a stack slot or its home.
+    fn needed(&mut self, value: u32) -> bool {
+        self.live_after(value) || !self.pending(value).is_empty()
+    }
+
+    /// Empty the stack before an instruction it cannot cross, keeping what is read later in memory.
+    fn flush(&mut self) -> Result<(), Raised> {
+        while let Some(&value) = self.values.first() {
+            if !self.home.contains_key(&value) && self.needed(value) {
+                self.spill_top()?;
+            } else {
+                self.pop(0);
+            }
+        }
+        Ok(())
+    }
+
+    /// Leave the block with exactly `wanted` on the stack, and every other value read later in its cell.
+    ///
+    /// A wanted value this block does not have is read by none of its
+    /// successors: another exit into the bundle has it, and the slot is filled.
+    fn leave(&mut self, wanted: &[u32]) -> Result<(), Raised> {
+        self.here = self.sequence.len() as i64;
+        self.keep.clear();
+        while let Some(slot) = self.values.iter().position(|value| !wanted.contains(value)) {
+            let value = self.values[slot];
+            if self.live_after(value) && !self.home.contains_key(&value) {
+                self.exchange(slot);
+                self.spill_top()?;
+            } else {
+                self.pop(slot);
+            }
+        }
+        for value in wanted.iter().rev() {
+            if self.values.contains(value) {
+                continue;
+            }
+            if self.home.contains_key(value) {
+                self.materialize(*value)?;
+            } else {
+                // Not read on any path from here: the successors that share the slot pop it.
+                self.room(1)?;
+                let filler = if self.values.is_empty() {
+                    semantics(Operation::FloatLoad, "fldz", vec![st(0)], Vec::new())
+                } else {
+                    semantics(Operation::FloatLoad, "fld", vec![st(0)], vec![st(0)])
+                };
+                self.insert(filler);
+                self.values.insert(0, *value);
+            }
+        }
+        // Each exchange puts the top where it belongs, or brings the first misplaced value up.
+        while self.values != wanted {
+            let slot = if self.values[0] == wanted[0] {
+                (0..wanted.len()).find(|slot| self.values[*slot] != wanted[*slot]).expect("the stacks differ")
+            } else {
+                index_of(wanted, self.values[0])
+            };
+            self.exchange(slot);
+        }
+        Ok(())
+    }
+
+    /// The next definition of the value after here.
+    fn next_def(&mut self, value: u32) -> Option<i64> {
+        let here = self.here;
+        let defs = self.defs.entry(value).or_default();
+        while defs.front().is_some_and(|first| *first <= here) {
+            defs.pop_front();
+        }
+        defs.front().copied()
+    }
+
+    /// Whether the value leaves the block as it is now.
+    fn live_after(&mut self, value: u32) -> bool {
+        self.live_out.contains(&value) && self.next_def(value).is_none()
     }
 
     fn canonical(&self, mut value: u32) -> u32 {
@@ -549,20 +673,23 @@ impl<'f, 'c> _Stack<'f, 'c> {
         Semantics { sources, ..what.clone() }
     }
 
-    /// Where the value is read after this instruction.
+    /// Where the value is read after this instruction, before it is defined again.
     fn pending(&mut self, value: u32) -> VecDeque<i64> {
         let key = self.canonical(value);
-        let here = self.here;
+        let (here, until) = (self.here, self.next_def(key));
         let reads = self.reads.entry(key).or_default();
         while reads.front().is_some_and(|first| *first <= here) {
             reads.pop_front();
         }
-        reads.clone()
+        reads.iter().copied().take_while(|read| until.is_none_or(|until| *read <= until)).collect()
     }
 
     /// Whether a stack copy of the value is read after this instruction.
     fn survives(&mut self, value: u32) -> bool {
         let value = self.canonical(value);
+        if self.live_after(value) {
+            return true;
+        }
         if self.retained.contains(&value) && self.values.contains(&value) {
             return !self.pending(value).is_empty();
         }
@@ -760,12 +887,11 @@ impl<'f, 'c> _Stack<'f, 'c> {
                 return Err(unlowered("floating instruction requires too many stack operands"));
             };
             self.exchange(victim);
-            let value = self.values.remove(0);
-            let cell = self.frame.as_deref_mut().expect("checked above").cell(("floating", i64::from(value)), 10)?;
-            self.insert(semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(cell.clone())], vec![st(0)]));
-            let at = self.one().at;
-            let load = semantics(Operation::FloatLoad, "fld", vec![Loc::Held(Held { value, width: 10 })], vec![Loc::Mem(cell)]);
-            self.home.insert(value, Arc::new(inserted(at, load)));
+            if self.home.contains_key(&self.values[0]) {
+                self.pop(0);
+            } else {
+                self.spill_top()?;
+            }
         }
         Ok(())
     }
@@ -828,11 +954,13 @@ impl<'f, 'c> _Stack<'f, 'c> {
             self.vacate();
             return Ok(());
         }
-        if results.len() > 1 || results.iter().any(|result| self.values.contains(result)) {
+        if results.len() > 1 || (_float_copy(one).is_none() && results.iter().any(|result| self.values.contains(result))) {
             return Err(unlowered("floating stack result is not a fresh value"));
         }
         for result in &results {
             self.defined.insert(*result, self.here);
+            self.home.shift_remove(result);
+            self.retained.remove(result);
         }
         let two = _two_values(Some(&what));
         if let (Some((name, left, right)), false) = (&two, results.is_empty()) {
@@ -856,7 +984,7 @@ impl<'f, 'c> _Stack<'f, 'c> {
             self.compare(operands[0], operands[1])?;
         } else if what.op == Operation::FloatLoad && operands.is_empty() && !results.is_empty() {
             let reads = self.pending(results[0]);
-            if _rereadable(&self.sequence, self.here as usize, &reads) {
+            if !self.live_out.contains(&results[0]) && _rereadable(&self.sequence, self.here as usize, &reads) {
                 self.home.insert(results[0], Arc::clone(one));
                 if self.retain_home(results[0]) {
                     self.retained.insert(results[0]);
@@ -872,7 +1000,22 @@ impl<'f, 'c> _Stack<'f, 'c> {
                 self.values.insert(0, results[0]);
             }
         } else if matches!(what.op, Operation::FloatLoad | Operation::Move) && operands.len() == 1 && !results.is_empty() {
-            self.copy(operands[0], results[0])?;
+            // A phi's copies on one edge are simultaneous: take the whole group here.
+            let mut pairs = vec![(results[0], operands[0])];
+            if let Some(group) = one.group {
+                for (position, other) in self.sequence.iter().enumerate().skip(self.here as usize + 1) {
+                    if other.group == Some(group) {
+                        if let Some(pair) = _float_copy(other) {
+                            pairs.push(pair);
+                            self.absorbed.insert(position as i64);
+                        }
+                    }
+                }
+            }
+            if let Some(last) = self.absorbed.iter().max() {
+                self.here = self.here.max(*last);
+            }
+            self.copies(&pairs)?;
         } else if what.op == Operation::FloatStore && operands.len() == 1 && results.is_empty() {
             self.store(operands[0])?;
 
@@ -895,25 +1038,56 @@ impl<'f, 'c> _Stack<'f, 'c> {
         Ok(())
     }
 
-    fn copy(&mut self, source: u32, result: u32) -> Result<(), Raised> {
-        if self.values.contains(&source) && !self.survives(source) {
-            // GCC's move_for_stack_reg: a source dying here is renamed, not copied.
-            let index = index_of(&self.values, source);
-            self.values[index] = result;
-            self.vacate();
-            return Ok(());
+    /// Simultaneous copies, `(result, source)`: GCC's move_for_stack_reg.
+    ///
+    /// A source dying here is renamed, not copied, so a phi's copies at a
+    /// block's end cost nothing while their sources die. A value one of them
+    /// overwrites is popped.
+    fn copies(&mut self, pairs: &[(u32, u32)]) -> Result<(), Raised> {
+        let results: HashSet<u32> = pairs.iter().map(|(result, _)| *result).collect();
+        self.keep = pairs.iter().flat_map(|(result, source)| [*result, *source]).collect();
+        // A source waiting in the cell its result shares is already the result.
+        let mut free = Vec::new();
+        for (result, source) in pairs {
+            let spilled = self.home.get(source).is_some_and(|home| self.spills.get(source).is_some_and(|load| Arc::ptr_eq(home, load)));
+            if spilled && !self.values.contains(source) && self.cells.get(result) == self.cells.get(source) && self.cells.contains_key(result) {
+                free.push(*result);
+            }
         }
-        if !self.values.contains(&source) {
-            self.materialize(source)?;
-            self.values[0] = result;
-            self.vacate();
-            return Ok(());
+        let pairs: Vec<(u32, u32)> = pairs.iter().copied().filter(|(result, _)| !free.contains(result)).collect();
+        let mut loaded = HashSet::default();
+        for (_, source) in &pairs {
+            if !self.values.contains(source) {
+                self.materialize(*source)?;
+                loaded.insert(*source);
+            }
         }
-        self.room(1)?;
-        let what = self.one().what.clone().expect("a floating instruction has semantics");
-        let index = index_of(&self.values, source);
-        self.emit(Semantics { dests: vec![st(0)], sources: vec![st(index)], ..what }, &[], &[], None, None);
-        self.values.insert(0, result);
+        for result in &results {
+            self.defined.insert(*result, self.here);
+            self.home.shift_remove(result);
+            self.retained.remove(result);
+        }
+        for result in free {
+            let load = self.spill_load(result)?;
+            self.home.insert(result, load);
+        }
+        let mut copied = Vec::new();
+        for slot in 0..self.values.len() {
+            let value = self.values[slot];
+            let mut wanted = pairs.iter().filter(|(_, source)| *source == value).map(|(result, _)| *result);
+            let kept = !results.contains(&value) && !loaded.contains(&value) && self.survives(value);
+            if !kept {
+                self.values[slot] = wanted.next().unwrap_or(if results.contains(&value) { DEAD } else { value });
+            }
+            copied.extend(wanted.map(|result| (self.values[slot], result)));
+        }
+        for (from, result) in copied {
+            self.room(1)?;
+            let index = index_of(&self.values, from);
+            self.insert(semantics(Operation::FloatLoad, "fld", vec![st(0)], vec![st(index)]));
+            self.values.insert(0, result);
+        }
+        self.vacate();
         Ok(())
     }
 
@@ -1124,6 +1298,19 @@ impl<'f, 'c> _Stack<'f, 'c> {
     }
 }
 
+/// `(result, source)` of a copy between floating values.
+fn _float_copy(one: &Insn) -> Option<(u32, u32)> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::FloatLoad | Operation::Move, [Loc::Held(result)], [Loc::Held(source)])
+            if result.width == 10 && source.width == 10 =>
+        {
+            Some((result.value, source.value))
+        }
+        _ => None,
+    }
+}
+
 /// The profile cost form of an allocated x87 instruction.
 fn _floating_form(what: &Semantics) -> Option<String> {
     let name = what.name.as_deref().unwrap_or("");
@@ -1151,146 +1338,362 @@ fn _floating_form(what: &Semantics) -> Option<String> {
     Some(if what.sources.iter().any(|arg| matches!(arg, Loc::Mem(_))) { format!("{base}_m") } else { base.to_owned() })
 }
 
-type Candidate = (LirBody, IndexMap<i64, Vec<i64>>);
+/// The blocks in reverse postorder from the entry, then the unreachable ones, and how many are reached.
+fn _reverse_postorder(body: &LirBody) -> (Vec<i64>, usize) {
+    let at_of: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let (mut seen, mut order) = (HashSet::default(), Vec::new());
+    let mut pending: Vec<(i64, usize)> = vec![(body.entry, 0)];
+    seen.insert(body.entry);
+    while let Some((at, next)) = pending.pop() {
+        let successors = at_of.get(&at).map_or(&[][..], |block| block.succ.as_slice());
+        if let Some(successor) = successors.get(next) {
+            pending.push((at, next + 1));
+            if at_of.contains_key(successor) && seen.insert(*successor) {
+                pending.push((*successor, 0));
+            }
+        } else if at_of.contains_key(&at) {
+            order.push(at);
+        }
+    }
+    order.reverse();
+    let reached = order.len();
+    order.extend(body.blocks.iter().map(|block| block.at).filter(|at| !seen.contains(at)));
+    (order, reached)
+}
 
-/// Allocate one complete stack candidate so its real shuffles can be priced.
-fn _allocate_stack(
+/// Allocate the whole function's stack, GCC's reg-stack over LLVM's edge bundles.
+///
+/// Blocks go in reverse postorder. The first exit reaching a bundle fixes
+/// its stack: the values `stacked` puts there, in that exit's order. Every
+/// other exit into it shuffles to that order, and keeps what else is read
+/// later in each value's own 8-byte cell. A value on the stack at an entry
+/// that the block does not read is popped there.
+fn _allocate_function(
     body: &LirBody,
     frame: Option<&mut Frame>,
     floating: &HashSet<u32>,
     target: &Profile,
-    continues: &HashSet<usize>,
-    order: &[i64],
     retain_homes: bool,
+    pieces: &Pieces,
+    stacked: &IndexMap<usize, BTreeSet<u32>>,
+    cells: &IndexMap<u32, u32>,
 ) -> Result<Candidate, Raised> {
+    let (live_in, live_out) = live(body);
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let bundles = spillplacement::bundles(body);
+    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
     let mut stack = _Stack::new(frame, floating.clone(), target, retain_homes);
-    let mut blocks = Vec::new();
-    let mut labels: IndexMap<i64, Vec<i64>> = IndexMap::default();
-    let mut region = 0;
-    for (index, block) in body.blocks.iter().enumerate() {
-        if index == 0 || !continues.contains(&(index - 1)) {
-            region += 1;
-            stack.region(_region(&body.blocks, index, 0, continues));
-        }
+    stack.cells = cells.clone();
+    let mut made: IndexMap<i64, LirBlock> = IndexMap::default();
+    let mut labels: IndexMap<i64, Vec<usize>> = IndexMap::default();
+    let (order, reached) = _reverse_postorder(body);
+    for (index, at) in order.into_iter().enumerate() {
+        let block = at_of[&at];
+        let piece = &pieces.local[&at];
+        let mut labelled: Vec<usize> = Vec::new();
+        let (entry, exit) = bundles.of[&at];
+        let arriving = settled.entry(entry).or_default().clone();
+        // Nothing arrives at a block no path reaches: its successors' slots are filled.
+        let stored: Vec<u32> = if index < reached {
+            floats(&live_in[&at]).into_iter().filter(|value| !arriving.contains(value)).collect()
+        } else {
+            Vec::new()
+        };
+        stack.block(block, floats(&live_out[&at]), arriving, &stored)?;
+        let border = |at: i64| Arc::new(inserted(at, semantics(Operation::Nothing, "", Vec::new(), Vec::new())));
         stack.out = Vec::new();
-        let mut output_regions = Vec::new();
-        for (position, one) in block.insns.iter().enumerate() {
-            let current_region = region;
-            let before = stack.out.len();
-            let mut begins_region = false;
-            stack.here += 1;
+        stack.one = Some(border(block.insns.first().map_or(block.at, |first| first.at)));
+        stack.pop_dead();
+        labelled.resize(stack.out.len(), piece[0]);
+        let cut = _terminators(block);
+        for (position, one) in block.insns.iter().enumerate().take(cut) {
+            labelled.resize(stack.out.len(), piece[position.saturating_sub(1)]);
+            stack.here = stack.here.max(position as i64);
+            if stack.absorbed.contains(&(position as i64)) {
+                stack.one = Some(Arc::clone(one));
+                stack.vacate();
+                continue;
+            }
             if one.what.as_ref().is_none_or(|what| !what.sources.iter().chain(&what.dests).any(_floating)) {
                 if one.uses.iter().chain(&one.defines).any(|value| floating.contains(value)) {
                     return Err(unlowered("floating value used by an unmodelled instruction"));
                 }
                 if boundary(one) {
-                    // bridged() gave every value read beyond here its own cell.
-                    if !stack.values.is_empty() {
-                        return Err(unlowered("floating stack crosses an unmodelled instruction"));
-                    }
-                    stack.region(_region(&body.blocks, index, position + 1, continues));
-                    begins_region = true;
+                    stack.one = Some(Arc::clone(one));
+                    stack.flush()?;
                 }
                 stack.out.push(Arc::clone(one));
             } else {
                 stack.allocate(one)?;
-            }
-            output_regions.extend(std::iter::repeat_n(current_region, stack.out.len() - before));
-            if begins_region {
-                region += 1;
+                stack.pop_dead();
             }
         }
-        if !stack.values.is_empty() && !continues.contains(&index) {
-            return Err(unlowered("floating stack live-out requires cross-block allocation"));
+        labelled.resize(stack.out.len(), piece[cut.saturating_sub(1)]);
+        stack.one = Some(border(block.insns.get(cut).or(block.insns.last()).map_or(block.at, |one| one.at)));
+        if block.succ.iter().any(|successor| at_of.contains_key(successor)) {
+            let wanted = settled
+                .entry(exit)
+                .or_insert_with(|| {
+                    let chosen = stacked.get(&exit).cloned().unwrap_or_default();
+                    let missing = stack.live_out.iter().copied().filter(|value| chosen.contains(value) && !stack.values.contains(value));
+                    let held = stack.values.iter().copied().filter(|value| chosen.contains(value));
+                    let mut wanted: Vec<u32> = missing.take(8 - held.clone().count()).collect();
+                    wanted.extend(held);
+                    wanted
+                })
+                .clone();
+            stack.leave(&wanted)?;
+        } else {
+            stack.here = block.insns.len() as i64;
+            stack.pop_dead();
+            if !stack.values.is_empty() {
+                return Err(unlowered("floating value on the stack where the function leaves"));
+            }
         }
-        let mut made = block.clone();
-        made.insns = std::mem::take(&mut stack.out);
-        blocks.push(made);
-        labels.insert(block.at, output_regions);
+        stack.out.extend(block.insns[cut..].iter().cloned());
+        labelled.resize(stack.out.len(), piece[cut]);
+        let mut one = block.clone();
+        one.insns = std::mem::take(&mut stack.out);
+        made.insert(at, one);
+        labels.insert(at, labelled);
     }
-    let allocated_blocks: IndexMap<i64, LirBlock> = blocks.into_iter().map(|block| (block.at, block)).collect();
     let mut out = body.clone();
-    out.blocks = order.iter().map(|at| allocated_blocks[at].clone()).collect();
+    out.blocks = body.blocks.iter().map(|block| made.shift_remove(&block.at).expect("every block allocated")).collect();
     Ok((out, labels))
 }
 
-/// Target cost and instruction count for each independently empty-stack region.
-fn _region_scores(
-    body: &LirBody,
-    labels: &IndexMap<i64, Vec<i64>>,
-    target: &Profile,
-) -> Result<IndexMap<i64, (i64, i64)>, Raised> {
-    let mut costs: HashMap<i64, i64> = HashMap::default();
-    let mut counts: IndexMap<i64, i64> = IndexMap::default();
-    let mut unpriced: HashSet<i64> = HashSet::default();
-    for block in &body.blocks {
-        let regions = &labels[&block.at];
-        if regions.len() != block.insns.len() {
-            return Err(Raised::Value("x87 candidate region labels do not cover its instructions".to_owned()));
+type Candidate = (LirBody, IndexMap<i64, Vec<usize>>);
+
+/// Value -> the value whose spill cell it shares.
+///
+/// Values joined by copies share one cell where their lives do not overlap,
+/// so a copy between two spilled values is no instruction at all: LLVM's
+/// spill-slot coloring, within each copy-joined web.
+fn _shared_cells(body: &LirBody, floating: &HashSet<u32>, live_out: &Live) -> IndexMap<u32, u32> {
+    let mut web: IndexMap<u32, u32> = IndexMap::default();
+    fn find(web: &mut IndexMap<u32, u32>, mut one: u32) -> u32 {
+        while let Some(next) = web.get(&one).copied().filter(|next| *next != one) {
+            one = next;
         }
-        for (one, region) in block.insns.iter().zip(regions) {
-            let emitted = one.what.as_ref().is_some_and(|what| !(what.op == Operation::Nothing && unnamed(what)));
-            *counts.entry(*region).or_default() += i64::from(emitted);
-            let Some(form) = one.what.as_ref().and_then(_floating_form) else {
+        one
+    }
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        if let Some((result, source)) = _float_copy(one) {
+            let (result, source) = (find(&mut web, result), find(&mut web, source));
+            web.insert(result, result);
+            web.insert(source, result);
+        }
+    }
+    let members: Vec<u32> = web.keys().copied().collect();
+    let root: IndexMap<u32, u32> = members.iter().map(|value| (*value, find(&mut web, *value))).collect();
+    // Two members overlap where one is live as the other is defined.
+    let mut overlaps: HashSet<(u32, u32)> = HashSet::default();
+    for block in &body.blocks {
+        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| root.contains_key(value)).collect();
+        for one in block.insns.iter().rev() {
+            for defined in one.defines.iter().filter(|value| root.contains_key(*value)) {
+                for other in alive.iter().filter(|other| *other != defined && root[*other] == root[defined]) {
+                    overlaps.insert((*defined, *other));
+                    overlaps.insert((*other, *defined));
+                }
+            }
+            for value in &one.defines {
+                alive.remove(value);
+            }
+            alive.extend(one.uses.iter().copied().filter(|value| root.contains_key(value) && floating.contains(value)));
+        }
+    }
+    let mut cells: IndexMap<u32, u32> = IndexMap::default();
+    let mut colors: IndexMap<u32, Vec<u32>> = IndexMap::default(); // web -> each cell's owner
+    for value in members.iter().copied().collect::<BTreeSet<u32>>() {
+        let owners = colors.entry(root[&value]).or_default();
+        let taken = |owner: &u32| cells.iter().any(|(other, cell)| cell == owner && overlaps.contains(&(value, *other)));
+        let owner = owners.iter().copied().find(|owner| !taken(owner)).unwrap_or(value);
+        if owner == value {
+            owners.push(value);
+        }
+        cells.insert(value, owner);
+    }
+    cells
+}
+
+/// Bundle -> the floating values it holds on the stack, LLVM's SpillPlacement per value.
+///
+/// A block wants a value on the stack at a border where it reads the value
+/// before the stack is next emptied, or holds it after the stack was last
+/// emptied; memory where a call or barrier comes first. A block the value
+/// passes through links its bundles, or wants memory when it empties the stack.
+fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &Live, bundles: &spillplacement::Bundles) -> IndexMap<usize, BTreeSet<u32>> {
+    // Per block: where the stack is first and last emptied, and each value's first and last event.
+    let mut borders: IndexMap<i64, (Option<usize>, Option<usize>, IndexMap<u32, (usize, usize)>)> = IndexMap::default();
+    for block in &body.blocks {
+        let (mut first, mut last, mut events) = (None, None, IndexMap::<u32, (usize, usize)>::default());
+        for (position, one) in block.insns.iter().enumerate() {
+            let floated = one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating));
+            if !floated && boundary(one) {
+                first = first.or(Some(position));
+                last = Some(position);
+            }
+            // A copy moves a value between names, in whichever place its source is.
+            if _float_copy(one).is_some() {
+                continue;
+            }
+            for value in one.uses.iter().chain(&one.defines).filter(|value| floating.contains(value)) {
+                events.entry(*value).or_insert((position, position)).1 = position;
+            }
+        }
+        borders.insert(block.at, (first, last, events));
+    }
+    let mut placement = spillplacement::Placement::new(body, bundles);
+    let mut stacked: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
+    let values: BTreeSet<u32> = live_out.values().flatten().copied().filter(|value| floating.contains(value)).collect();
+    for value in values {
+        let (mut constraints, mut spilled, mut links) = (Vec::new(), Vec::new(), Vec::new());
+        for block in &body.blocks {
+            let (entering, leaving) = (live_in[&block.at].contains(&value), live_out[&block.at].contains(&value));
+            if !entering && !leaving {
+                continue;
+            }
+            let (first, last, events) = &borders[&block.at];
+            let Some((earliest, latest)) = events.get(&value) else {
+                if first.is_some() { spilled.push(block.at) } else { links.push(block.at) }
                 continue;
             };
-            if target.prices(&form) {
-                *costs.entry(*region).or_default() += target.cost(&form).expect("priced");
-            } else {
-                unpriced.insert(*region);
+            let border = |stacked: bool| if stacked { Border::PrefReg } else { Border::PrefSpill };
+            constraints.push(Constraint {
+                block: block.at,
+                entry: if entering { border(first.is_none_or(|first| *earliest < first)) } else { Border::DontCare },
+                exit: if leaving { border(last.is_none_or(|last| *latest > last)) } else { Border::DontCare },
+                weight: 1.0,
+            });
+        }
+        placement.prepare();
+        placement.add_constraints(&constraints);
+        placement.add_pref_spill(&spilled, false);
+        placement.add_links(&links);
+        placement.scan();
+        placement.iterate();
+        for bundle in placement.finish() {
+            stacked.entry(bundle).or_default().insert(value);
+        }
+    }
+    stacked
+}
+
+/// Where the instructions leaving the block begin; the stack shuffles there.
+fn _terminators(block: &LirBlock) -> usize {
+    let mut cut = block.insns.len();
+    while cut > 0
+        && block.insns[cut - 1]
+            .what
+            .as_ref()
+            .is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch | Operation::Return))
+    {
+        cut -= 1;
+    }
+    cut
+}
+
+/// Stretches of the function no floating value is live across.
+///
+/// A block is cut wherever no floating value is live; a bundle whose exits
+/// carry a value joins its exits' last and entries' first stretches. Each
+/// candidate's stack is empty at every cut, so any may be taken per piece.
+struct Pieces {
+    /// Block -> the piece of each instruction, and of the block's end last.
+    local: IndexMap<i64, Vec<usize>>,
+    /// Piece -> the joined piece it belongs to.
+    joined: Vec<usize>,
+}
+
+fn _pieces(body: &LirBody, floating: &HashSet<u32>) -> Pieces {
+    let (_, live_out) = live(body);
+    let floats = |values: &mut dyn Iterator<Item = u32>| -> BTreeSet<u32> { values.filter(|value| floating.contains(value)).collect() };
+    let mut local: IndexMap<i64, Vec<usize>> = IndexMap::default();
+    let mut count = 0;
+    for block in &body.blocks {
+        // Position p is the point after instruction p - 1.
+        let mut empty = vec![false; block.insns.len() + 1];
+        let mut alive = floats(&mut live_out[&block.at].iter().copied());
+        empty[block.insns.len()] = alive.is_empty();
+        for (position, one) in block.insns.iter().enumerate().rev() {
+            for value in &one.defines {
+                alive.remove(value);
+            }
+            alive.extend(floats(&mut one.uses.iter().copied()));
+            empty[position] = alive.is_empty();
+        }
+        let leaving = _terminators(block);
+        let mut pieces = Vec::with_capacity(empty.len());
+        for (position, cut) in empty.iter().enumerate() {
+            if position > 0 && position <= leaving && *cut {
+                count += 1;
+            }
+            pieces.push(count);
+        }
+        count += 1;
+        local.insert(block.at, pieces);
+    }
+    let mut joined: Vec<usize> = (0..count).collect();
+    fn find(joined: &mut [usize], mut one: usize) -> usize {
+        while joined[one] != one {
+            joined[one] = joined[joined[one]];
+            one = joined[one];
+        }
+        one
+    }
+    let bundles = spillplacement::bundles(body);
+    let mut ends: IndexMap<usize, (bool, Vec<usize>)> = IndexMap::default();
+    for block in &body.blocks {
+        let (entry, exit) = bundles.of[&block.at];
+        let pieces = &local[&block.at];
+        ends.entry(entry).or_default().1.push(pieces[0]);
+        let leaving = ends.entry(exit).or_default();
+        leaving.1.push(pieces[_terminators(block)]);
+        leaving.0 |= live_out[&block.at].iter().any(|value| floating.contains(value));
+    }
+    for (carried, pieces) in ends.values() {
+        if *carried {
+            for piece in &pieces[1..] {
+                let (one, other) = (find(&mut joined, pieces[0]), find(&mut joined, *piece));
+                joined[other] = one;
             }
         }
     }
-    Ok(counts
-        .iter()
-        .map(|(region, count)| {
-            let score = if unpriced.contains(region) { (*count, *count) } else { (costs.get(region).copied().unwrap_or(0), *count) };
-            (*region, score)
-        })
-        .collect())
+    let joined = (0..count).map(|piece| find(&mut joined, piece)).collect();
+    Pieces { local, joined }
 }
 
-/// Choose the cheaper complete allocation independently at every empty stack.
-fn _compose_regions(baseline: &Candidate, retained: &Candidate, target: &Profile) -> Result<LirBody, Raised> {
-    let (baseline_body, baseline_labels) = baseline;
-    let (retained_body, retained_labels) = retained;
-    let baseline_scores = _region_scores(baseline_body, baseline_labels, target)?;
-    let retained_scores = _region_scores(retained_body, retained_labels, target)?;
-    let regions: HashSet<i64> = baseline_scores.keys().chain(retained_scores.keys()).copied().collect();
-    let use_retained: HashSet<i64> = regions
-        .into_iter()
-        .filter(|region| {
-            retained_scores.get(region).copied().unwrap_or((0, 0)) < baseline_scores.get(region).copied().unwrap_or((0, 0))
-        })
-        .collect();
-    let retained_at: IndexMap<i64, &LirBlock> = retained_body.blocks.iter().map(|block| (block.at, block)).collect();
-    let mut blocks = Vec::new();
-    for block in &baseline_body.blocks {
-        let other = retained_at[&block.at];
-        let mut baseline_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::default();
-        let mut retained_groups: HashMap<i64, Vec<Arc<Insn>>> = HashMap::default();
-        for (one, region) in block.insns.iter().zip(&baseline_labels[&block.at]) {
-            baseline_groups.entry(*region).or_default().push(Arc::clone(one));
+/// Each joined piece from the candidate that prices it lower.
+fn _composed(candidates: &[Candidate], pieces: &Pieces, target: &Profile) -> LirBody {
+    let mut scores: IndexMap<(usize, usize), (i64, i64)> = IndexMap::default();
+    for (index, (body, labels)) in candidates.iter().enumerate() {
+        for block in &body.blocks {
+            for (one, piece) in block.insns.iter().zip(&labels[&block.at]) {
+                let score = scores.entry((pieces.joined[*piece], index)).or_default();
+                score.1 += i64::from(one.what.as_ref().is_some_and(|what| !(what.op == Operation::Nothing && unnamed(what))));
+                if let Some(form) = one.what.as_ref().and_then(_floating_form) {
+                    score.0 += target.cost(&form).unwrap_or(1);
+                }
+            }
         }
-        for (one, region) in other.insns.iter().zip(&retained_labels[&block.at]) {
-            retained_groups.entry(*region).or_default().push(Arc::clone(one));
-        }
-        let mut order: Vec<i64> = baseline_groups.keys().chain(retained_groups.keys()).copied().collect::<HashSet<i64>>().into_iter().collect();
-        order.sort_unstable();
-        let insns = order
-            .iter()
-            .flat_map(|region| {
-                let groups = if use_retained.contains(region) { &retained_groups } else { &baseline_groups };
-                groups.get(region).cloned().unwrap_or_default()
-            })
-            .collect();
-        let mut made = block.clone();
-        made.insns = insns;
-        blocks.push(made);
     }
-    let mut out = baseline_body.clone();
-    out.blocks = blocks;
-    Ok(out)
+    let chosen = |piece: usize| {
+        let root = pieces.joined[piece];
+        (0..candidates.len()).min_by_key(|index| scores.get(&(root, *index)).copied().unwrap_or_default()).expect("a candidate")
+    };
+    let mut out = candidates[0].0.clone();
+    for (position, block) in out.blocks.iter_mut().enumerate() {
+        let mut insns = Vec::new();
+        for piece in pieces.local[&block.at].iter().copied().collect::<BTreeSet<usize>>() {
+            let (body, labels) = &candidates[chosen(piece)];
+            let made = &body.blocks[position];
+            insns.extend(made.insns.iter().zip(&labels[&made.at]).filter(|(_, label)| **label == piece).map(|(one, _)| Arc::clone(one)));
+        }
+        block.insns = insns;
+    }
+    out
 }
 
 fn _floating_values(body: &LirBody) -> HashSet<u32> {
@@ -1319,86 +1722,16 @@ pub fn allocated<'a>(
     if floating.is_empty() {
         return Ok(body);
     }
-    let reachable = _reachable_blocks(&body.blocks, body.entry);
-    let mut predecessors: IndexMap<i64, HashSet<i64>> = body.blocks.iter().map(|block| (block.at, HashSet::default())).collect();
-    for block in &body.blocks {
-        if !reachable.contains(&block.at) {
-            continue;
-        }
-        for successor in &block.succ {
-            if reachable.contains(successor) {
-                predecessors.get_mut(successor).expect("a reachable block").insert(block.at);
-            }
-        }
+    let (live_in, live_out) = live(&body);
+    if live_in[&body.entry].iter().any(|value| floating.contains(value)) {
+        return Err(unlowered("floating stack input is unavailable"));
     }
-    let order: Vec<i64> = body.blocks.iter().map(|block| block.at).collect();
-    let next_blocks: IndexMap<i64, i64> = body
-        .blocks
-        .iter()
-        .filter(|block| {
-            reachable.contains(&block.at)
-                && block.succ.len() == 1
-                && block.succ[0] != body.entry
-                && reachable.contains(&block.succ[0])
-                && predecessors.get(&block.succ[0]) == Some(&HashSet::from_iter([block.at]))
-        })
-        .map(|block| (block.at, block.succ[0]))
-        .collect();
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let destinations: HashSet<i64> = next_blocks.values().copied().collect();
-    let mut roots: Vec<i64> = order.iter().copied().filter(|at| reachable.contains(at) && !destinations.contains(at)).collect();
-    roots.extend(order.iter().copied().filter(|at| !reachable.contains(at)));
-    let (mut scheduled, mut seen): (Vec<LirBlock>, HashSet<i64>) = (Vec::new(), HashSet::default());
-    for root in roots.iter().chain(&order) {
-        let mut at = Some(*root);
-        while let Some(here) = at {
-            if seen.contains(&here) {
-                break;
-            }
-            scheduled.push(at_of[&here].clone());
-            seen.insert(here);
-            at = next_blocks.get(&here).copied();
-        }
-    }
-    body.blocks = scheduled;
-    let continues: HashSet<usize> = body
-        .blocks
-        .windows(2)
-        .enumerate()
-        .filter(|(_, pair)| next_blocks.get(&pair[0].at) == Some(&pair[1].at))
-        .map(|(index, _)| index)
-        .collect();
-
-    // A region is keyed by instruction position: a phi is defined at -1 and
-    // read at its predecessor's end.
-    let (mut regions, mut region): (HashMap<(i64, i64), i64>, i64) = (HashMap::default(), 0);
-    for (index, block) in body.blocks.iter().enumerate() {
-        if index == 0 || !continues.contains(&(index - 1)) {
-            region += 1;
-        }
-        regions.insert((block.at, -1), region);
-        for (position, one) in block.insns.iter().enumerate() {
-            region += i64::from(boundary(one));
-            regions.insert((block.at, position as i64), region);
-        }
-        regions.insert((block.at, block.insns.len() as i64), region);
-    }
-    let body = bridged(&body, &regions, frame.as_deref_mut())?;
-    if body.blocks.len() != order.len() {
-        // Splitting critical edges changes the regions and their stack lifetimes.
-        let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-        let mut replaced = body.clone();
-        replaced.blocks = order
-            .iter()
-            .map(|at| by_at[at].clone())
-            .chain(body.blocks.iter().filter(|block| !order.contains(&block.at)).cloned())
-            .collect();
-        return allocated(&replaced, frame, true, target);
-    }
-    let floating = _floating_values(&body);
-    let baseline = _allocate_stack(&body, frame.as_deref_mut(), &floating, target, &continues, &order, false)?;
-    let retained = _allocate_stack(&body, frame.as_deref_mut(), &floating, target, &continues, &order, true)?;
-    let selected = _compose_regions(&baseline, &retained, target)?;
+    let pieces = _pieces(&body, &floating);
+    let stacked = _stacked(&body, &floating, &live_in, &live_out, &spillplacement::bundles(&body));
+    let cells = _shared_cells(&body, &floating, &live_out);
+    let baseline = _allocate_function(&body, frame.as_deref_mut(), &floating, target, false, &pieces, &stacked, &cells)?;
+    let retained = _allocate_function(&body, frame.as_deref_mut(), &floating, target, true, &pieces, &stacked, &cells)?;
+    let selected = _composed(&[baseline, retained], &pieces, target);
     _truncating(&selected, frame)
 }
 

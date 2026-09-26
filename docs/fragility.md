@@ -66,6 +66,10 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **A single-block loop shares a bundle with its preheader and exit.** A value whose register is taken for the whole of the block before a loop can never be placed in the loop. The border is only open when interference ends before the preheader's terminator, as LLVM's `addSplitConstraints` requires.
 
+**A bundle's stack came from its first exit.** Every other exit into it reloaded what the successors then stored again at their first call, and each value's own spill cell turned a phi's copy into a load and a store (ACTIONS3D). Guard: SpillPlacement decides per value whether a bundle holds it, and copy-joined values share a cell where their lives do not overlap, each with a test.
+
+**A copy group's reads came after its writes.** Positions ordered a swap's copies one after another, so the first copy's write killed the second's source. Guard: a group reads at its first copy and writes at its last, with a test.
+
 ## Build and harness
 
 **The sync script ships only tracked changes.** A new file must be `git add -N`'d before a remote build sees it.

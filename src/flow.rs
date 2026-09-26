@@ -40,8 +40,9 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     Ok(vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(floatalloc::FloatAlloc::new(frame.clone(), basic_semantics, target)?),
         Box::new(phielim::PhiElimination),
+        // After phi elimination: a phi's copies are where the stack shuffles.
+        Box::new(floatalloc::FloatAlloc::new(frame.clone(), basic_semantics, target)?),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target))?),
