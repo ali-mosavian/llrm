@@ -94,7 +94,7 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = alloca [30 x i8]\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
+    let body = "  %2 = alloca [30 x i8]\n  store [30 x i8] zeroinitializer, ptr %2\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
     assert!(text.contains(body), "{text}");
 }
 
@@ -267,4 +267,30 @@ fn fixed_point_arithmetic_is_done_at_twice_the_width() {
     let body = "  %2 = sext i32 %0 to i64\n  %3 = sext i32 %1 to i64\n  %4 = mul i64 %2, %3\n  %5 = ashr i64 %4, 16\n  %6 = trunc i64 %5 to i32\n  \
                 %7 = sext i32 %6 to i64\n  %8 = sext i32 %1 to i64\n  %9 = shl i64 %7, 16\n  %10 = sdiv i64 %9, %8\n  %11 = trunc i64 %10 to i32\n  ret i32 %11\n";
     assert!(text.contains(body), "{text}");
+}
+
+/// HIR's frame starts zeroed, so a local read before any store is 0; MIR's
+/// allocas started uninitialized, which a pass may take as any value.
+/// Places that overlap share their bytes: one alloca holds both.
+#[test]
+fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
+    use crate::model::{Place, Storage};
+    let mut long = Type::new(2, "long", TypeKind::Integer, 4);
+    long.signed = Some(true);
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let instructions = vec![
+        Instruction::new(1, Op::Load, vec![1], vec![Operand::place_ref(2)]),
+        Instruction::new(2, Op::Load, vec![2], vec![Operand::place_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let places = vec![Place::new(1, "L", 2, Storage::Local, -8), Place::new(2, "LOW", 1, Storage::Local, -8), Place::new(3, "X", 1, Storage::Local, -2)];
+    let function = Function::new(1, "F%", 1, values, places, vec![block], 1);
+    let mut program = program(function);
+    program.modules[0].types.push(long);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  store [4 x i8] zeroinitializer, ptr %0\n  store i16 0, ptr %1\n";
+    assert!(text.contains(entry), "{text}");
 }

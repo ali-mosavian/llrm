@@ -10,6 +10,7 @@ pub mod edit;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
+pub mod lint;
 pub mod module;
 pub mod opcode;
 pub mod parse;
@@ -34,6 +35,8 @@ mod build_tests;
 mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
+#[cfg(test)]
+mod lint_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]

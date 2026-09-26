@@ -37,7 +37,9 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    program.modules.iter().map(|one| emit_module(one, program.array_order)).collect()
+    // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
+    let zeroed = program.dialect != model::Dialect::Quickr;
+    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed)).collect()
 }
 
 type Emit<T> = Result<T, String>;
@@ -72,6 +74,8 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
 
 struct Tables<'h> {
     array_order: model::ArrayOrder,
+    /// Whether a frame starts zeroed.
+    zeroed: bool,
     layout: DataLayout,
     types: HashMap<i64, &'h model::Type>,
     callables: HashMap<&'h str, &'h model::Callable>,
@@ -81,11 +85,12 @@ struct Tables<'h> {
     callees: HashMap<String, ConstantId>,
 }
 
-fn emit_module(hir: &model::Module, array_order: model::ArrayOrder) -> Emitted {
+fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut tables = Tables {
         array_order,
+        zeroed,
         layout: DataLayout::parse(DATALAYOUT).expect("llrm's layout"),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
@@ -376,7 +381,9 @@ struct Body<'b, 'm, 'h> {
     places: HashMap<i64, &'h model::Place>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
-    slots: HashMap<i64, Value>,
+    /// Each local place's frame object, and its offset in it.
+    frame: HashMap<i64, (usize, i64)>,
+    objects: Vec<Value>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -396,7 +403,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             places: function.places.iter().map(|one| (one.id, one)).collect(),
             blocks: HashMap::new(),
             values,
-            slots: HashMap::new(),
+            frame: HashMap::new(),
+            objects: Vec::new(),
         })
     }
 
@@ -407,12 +415,65 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let id = self.b.block(&format!("b{}", block.id));
             self.blocks.insert(block.id, id);
         }
+        self.b.position(self.blocks[&entry.id]);
+        self.allocate()?;
         for block in order {
             self.b.position(self.blocks[&block.id]);
             for instruction in &block.instructions {
                 self.instruction(instruction)?;
             }
             self.terminator(&block.terminator)?;
+        }
+        Ok(())
+    }
+
+    /// An alloca for each group of local places that overlap, since they
+    /// share their bytes, each zeroed as HIR's frame starts.
+    fn allocate(&mut self) -> Emit<()> {
+        let mut locals: Vec<(i64, i64, &model::Place)> = self
+            .function
+            .places
+            .iter()
+            .filter(|one| one.storage == Storage::Local)
+            .map(|one| (one.offset, one.offset + one.extent.unwrap_or(self.tables.types[&one.r#type].width), one))
+            .collect();
+        locals.sort_by_key(|&(start, end, place)| (start, end, place.id));
+        let mut groups: Vec<(i64, i64, Vec<&model::Place>)> = Vec::new();
+        for (start, end, place) in locals {
+            match groups.last_mut() {
+                Some(group) if start < group.1 => {
+                    group.1 = group.1.max(end);
+                    group.2.push(place);
+                }
+                _ => groups.push((start, end, vec![place])),
+            }
+        }
+        let mut types = Vec::new();
+        for (start, end, places) in &groups {
+            let ty = match places[..] {
+                [place] => stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?,
+                _ => {
+                    let byte = self.b.context.types.int(8);
+                    self.b.context.types.intern(Type::Array { element: byte, count: (end - start) as u64 })
+                }
+            };
+            for place in places {
+                self.frame.insert(place.id, (self.objects.len(), place.offset - start));
+            }
+            self.objects.push(self.b.alloca(ty, ""));
+            types.push(ty);
+        }
+        if self.tables.zeroed {
+            for (&object, ty) in self.objects.clone().iter().zip(types) {
+                let kind = match self.b.context.types.get(ty) {
+                    Type::Int(_) => ConstantKind::Int(0),
+                    Type::Float(_) => ConstantKind::Float(0),
+                    Type::Pointer(_) => ConstantKind::Null,
+                    _ => ConstantKind::Zero,
+                };
+                let zero = Value::Constant(self.b.context.constant(Constant { ty, kind }));
+                self.b.store(zero, object, false);
+            }
         }
         Ok(())
     }
@@ -505,13 +566,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn base(&mut self, place: &model::Place) -> Emit<Value> {
         match place.storage {
             Storage::Local => {
-                if let Some(&slot) = self.slots.get(&place.id) {
-                    return Ok(slot);
-                }
-                let ty = stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?;
-                let slot = self.b.alloca(ty, "");
-                self.slots.insert(place.id, slot);
-                Ok(slot)
+                let (object, offset) = self.frame[&place.id];
+                Ok(self.offset(self.objects[object], offset, true))
             }
             Storage::Parameter => Err("a parameter-storage place".to_owned()),
             _ => {

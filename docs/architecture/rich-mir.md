@@ -244,6 +244,11 @@ declare `@llrm.qb.*` calls. `tools/hir-mir-corpus.sh` emits the QB suite,
 has `llrm-mir` and `opt` verify each module, and counts the refusals by
 reason.
 
+The lint is `llrm_mir::lint::poison`: a raise's MIR holds no `poison`
+constant, no flag but a GEP's `inbounds`, and no use of an alloca before
+a store of its whole type. HIR's frame starts zeroed, so the emitter zeroes
+each local, one alloca per group of places that overlap.
+
 ### 5. Port the passes
 
 - One pass at a time onto MIR, against `.ll` fixtures and the interpreter.
