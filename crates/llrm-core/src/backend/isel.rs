@@ -9,13 +9,16 @@ use std::sync::Arc;
 use iced_x86::Register;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::{BinaryOp, CastOp, ConstantKind, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
+use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
+use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
 use crate::abi::runtime::Contract;
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
-use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
+
+mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
 /// calling convention and address space say: LLVM's CC_X86 for ia16.
@@ -72,7 +75,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     let first = if far(global)? { 6 } else { 4 };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
-    let mut widths = function.parameters().iter().map(|&one| width_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
+    let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
         widths.reverse();
@@ -88,7 +91,8 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     }
     let types = &module.context.types;
     let (result, _, _) = module.signature(function.ty);
-    let returns = if types.is_void(result) { Vec::new() } else { returned(width_of(module, layout, result)?) };
+    // A float leaves in st(0), which no register names.
+    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { returned(size_of(module, layout, result)?) };
     let popped = if pops { cursor - first } else { 0 };
     Ok(Convention { parameters, returns, popped })
 }
@@ -117,8 +121,27 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
         // An i1 is a byte holding 0 or 1, as LLVM stores one.
         Type::Int(1) => Ok(1),
         Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
-        Type::Pointer(0) => Ok(layout.pointer(0).bits / 8),
+        Type::Pointer(space @ (0 | 2)) => Ok(layout.pointer(*space).bits / 8),
+        // An x87 register holds any float, extended.
+        Type::Float(FloatKind::Float | FloatKind::Double) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
+    }
+}
+
+/// The width of a float value in LIR: x87's extended precision.
+const FLOAT: u32 = 10;
+
+/// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
+const MEMSET_STORES: i64 = 16;
+
+/// The bytes a value of `ty` takes in memory or on the stack: a far
+/// pointer is its offset and selector, in two registers.
+fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
+    match module.context.types.get(ty) {
+        Type::Pointer(1) => Ok(4),
+        Type::Float(FloatKind::Float) => Ok(4),
+        Type::Float(FloatKind::Double) => Ok(8),
+        _ => width_of(module, layout, ty),
     }
 }
 
@@ -134,6 +157,8 @@ enum Pointer {
     Based { base: Held, offset: i64 },
     /// A near global's symbol, and a displacement from it.
     Global { space: Space, index: i64, offset: i64 },
+    /// A far pointer's selector and offset, and a displacement from it.
+    Far { selector: Held, base: Held, offset: i64 },
 }
 
 pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
@@ -151,6 +176,8 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result
         values: IndexMap::default(),
         next: 0,
         pointers: IndexMap::default(),
+        fars: IndexMap::default(),
+        wides: IndexMap::default(),
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -175,6 +202,11 @@ struct Selector<'m, 'c> {
     values: IndexMap<ValueId, u32>,
     next: u32,
     pointers: IndexMap<ValueId, Pointer>,
+    /// Each far pointer value's offset and selector, as LLVM's type
+    /// legalizer expands a value no register holds into two.
+    fars: IndexMap<ValueId, (Held, Held)>,
+    /// Each i64 value's low and high dwords, expanded likewise.
+    wides: IndexMap<ValueId, (Held, Held)>,
     depth: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
@@ -241,6 +273,17 @@ impl Selector<'_, '_> {
             if function.users(parameter).is_empty() {
                 continue;
             }
+            let ty = function.value(parameter).ty;
+            if self.is_float(ty) {
+                let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
+                self.float_loaded(held, "fld", Pointer::Frame(disp), size, false, block_at[&entry], &mut prologue);
+                continue;
+            }
+            if self.is_far(function.value(parameter).ty) {
+                let pair = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
+                self.fars.insert(parameter, pair);
+                continue;
+            }
             let width = self.width(function.value(parameter).ty)?;
             let held = Held { value: self.value(parameter), width };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
@@ -295,7 +338,7 @@ impl Selector<'_, '_> {
     fn fuse(&mut self, block: BlockId, inst: InstId) {
         let function = self.function;
         let instruction = function.instruction(inst);
-        if !matches!(instruction.opcode, Opcode::ICmp(_)) {
+        if !matches!(instruction.opcode, Opcode::ICmp(_) | Opcode::FCmp(_)) {
             return;
         }
         let result = instruction.result.expect("a comparison's value");
@@ -425,6 +468,10 @@ impl Selector<'_, '_> {
         self.next
     }
 
+    fn fresh_held(&mut self, width: u32) -> Held {
+        Held { value: self.fresh(), width }
+    }
+
     fn types(&self) -> &llrm_mir::Types {
         &self.module.context.types
     }
@@ -487,7 +534,8 @@ impl Selector<'_, '_> {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
-            Pointer::Based { base, offset } => {
+            // A far pointer's offset.
+            Pointer::Based { base, offset } | Pointer::Far { base, offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
@@ -505,6 +553,9 @@ impl Selector<'_, '_> {
             return Ok(pointer);
         }
         let ty = self.function.value(value).ty;
+        if let Some(&(base, selector)) = self.fars.get(&value) {
+            return Ok(Pointer::Far { selector, base, offset: 0 });
+        }
         if !matches!(self.types().get(ty), Type::Pointer(0)) {
             return refuse(format!("an access through a {}", self.types().display(ty)));
         }
@@ -559,7 +610,9 @@ impl Selector<'_, '_> {
     fn indexed(&mut self, inst: InstId, source: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
-        let width = self.width(instruction.ty)?;
+        // A far pointer's index is its 16-bit offset, as `p1:32:16:16:16` says.
+        let far = self.is_far(instruction.ty);
+        let width = if far { 2 } else { self.width(instruction.ty)? };
         let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
         let mut sum: Option<Held> = None;
         for (position, scale) in variable {
@@ -594,8 +647,9 @@ impl Selector<'_, '_> {
                 }
             });
         }
-        let start = match self.pointer(instruction.operands[0])? {
-            Pointer::Based { base, offset: 0 } if offset == 0 => base,
+        let pointer = self.pointer(instruction.operands[0])?;
+        let start = match pointer {
+            Pointer::Based { base, offset: 0 } | Pointer::Far { base, offset: 0, .. } if offset == 0 => base,
             pointer => {
                 let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
@@ -603,7 +657,15 @@ impl Selector<'_, '_> {
                 start
             }
         };
-        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        let address = instruction.result.expect("an address");
+        let result = match pointer {
+            Pointer::Far { selector, .. } if far => {
+                let offset = self.fresh_held(2);
+                self.fars.insert(address, (offset, selector));
+                offset
+            }
+            _ => Held { value: self.value(address), width },
+        };
         let sum = sum.expect("a variable index");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
         Ok(())
@@ -648,6 +710,177 @@ impl Selector<'_, '_> {
             Pointer::Frame(disp) => frame(disp, width),
             Pointer::Global { space, index, offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            Pointer::Far { selector, base, offset } => Mem {
+                offset,
+                disp_width: 2,
+                base: Some(base),
+                selector: Some(selector),
+                ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
+            },
+        }
+    }
+
+    fn is_far(&self, ty: TypeId) -> bool {
+        matches!(self.types().get(ty), Type::Pointer(1))
+    }
+
+    fn is_float(&self, ty: TypeId) -> bool {
+        matches!(self.types().get(ty), Type::Float(_))
+    }
+
+    /// A value's bytes in memory.
+    fn size(&self, ty: TypeId) -> Result<u32, Unselected> {
+        size_of(self.module, &self.layout, ty)
+    }
+
+    /// A far pointer's two words at `pointer`, offset first.
+    fn far_loaded(&mut self, pointer: Pointer, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> (Held, Held) {
+        let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+        for (held, by) in [(offset, 0), (selector, 2)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(pointer.moved(by), 2))]);
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        }
+        (offset, selector)
+    }
+
+    /// A far pointer operand's offset and selector, each in a register.
+    fn far(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(Held, Held), Unselected> {
+        // A numeric constant, null among them: selector:offset as one dword.
+        if let Some(bits) = self.constant(operand, 4) {
+            let halves = [bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| {
+                let held = self.fresh_held(2);
+                let word = Loc::Imm(Imm { value, width: 2, address: None });
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![word])));
+                held
+            });
+            return Ok((halves[0], halves[1]));
+        }
+        match self.pointer(operand)? {
+            Pointer::Far { selector, base, offset: 0 } => Ok((base, selector)),
+            pointer @ Pointer::Far { selector, .. } => {
+                let moved = self.fresh_held(2);
+                out.push(insn(at, self.address(pointer, moved)));
+                Ok((moved, selector))
+            }
+            _ => refuse("a far constant"),
+        }
+    }
+
+    /// A cast to or from a far pointer: its halves taken apart or put
+    /// together. A near pointer is into DGROUP; a segment is offset 0.
+    fn far_cast(&mut self, op: CastOp, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (operand, to) = (instruction.operands[0], instruction.ty);
+        let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+        let result = instruction.result.expect("a cast's value");
+        let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let mov = |into: Held, from: Loc| insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from]));
+        if self.is_far(to) {
+            let pair = match (op, self.types().get(from).clone()) {
+                (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
+                    let offset = self.held(operand, from, at, out)?;
+                    let selector = self.fresh_held(2);
+                    let (space, index) = crate::hir::lower::DGROUP;
+                    out.push(mov(selector, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })));
+                    (offset, selector)
+                }
+                (CastOp::AddrSpaceCast, Type::Pointer(2)) => {
+                    let selector = self.held(operand, from, at, out)?;
+                    let offset = self.fresh_held(2);
+                    out.push(mov(offset, word(0)));
+                    (offset, selector)
+                }
+                (CastOp::IntToPtr, Type::Int(32)) => {
+                    let dword = self.held(operand, from, at, out)?;
+                    let top = self.fresh_held(4);
+                    let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+                    out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(dword), sixteen])));
+                    (Held { width: 2, ..dword }, Held { width: 2, ..top })
+                }
+                _ => return refuse(format!("{op:?} to a far pointer")),
+            };
+            self.fars.insert(result, pair);
+            return Ok(());
+        }
+        let (offset, selector) = self.far(operand, at, out)?;
+        match (op, self.types().get(to).clone()) {
+            (CastOp::AddrSpaceCast, Type::Pointer(2)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
+            (CastOp::AddrSpaceCast, Type::Pointer(0)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
+            (CastOp::PtrToInt, Type::Int(32)) => {
+                let joined = Held { value: self.value(result), width: 4 };
+                self.joined(joined, offset, selector, at, out);
+            }
+            _ => return refuse(format!("{op:?} of a far pointer")),
+        }
+        Ok(())
+    }
+
+    /// A conversion to, from or between floats, through a stack temporary
+    /// where x87 reads or writes only memory: `fild`, `fistp`, and a
+    /// narrowing's `fstp`, as LLVM's x87 lowering goes through the stack.
+    fn float_cast(&mut self, op: CastOp, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (operand, to) = (instruction.operands[0], instruction.ty);
+        let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+        let result = instruction.result.expect("a cast's value");
+        match op {
+            // Exact: the register already holds it extended.
+            CastOp::FPExt => {
+                let held = self.float(operand)?;
+                self.values.insert(result, held.value);
+            }
+            CastOp::FPTrunc => {
+                let held = self.float(operand)?;
+                let cell = self.float_stored(held, "fstp", 4, at, out);
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fld", cell, 4, false, at, out);
+            }
+            CastOp::SIToFP => {
+                let mut held = self.held(operand, from, at, out)?;
+                // fild reads a word, a dword or a qword.
+                if held.width == 1 {
+                    let word = self.fresh_held(2);
+                    out.push(insn(at, semantics(Operation::Extend, "movsx", vec![Loc::Held(word)], vec![Loc::Held(held)])));
+                    held = word;
+                }
+                let cell = self.temporary(i64::from(held.width));
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, held.width))], vec![Loc::Held(held)])));
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fild", cell, held.width, false, at, out);
+            }
+            CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
+            CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
+            _ => return refuse(format!("{op:?} of a float")),
+        }
+        Ok(())
+    }
+
+    /// A float stored as an integer of `to` by `name`, and loaded back. x87
+    /// stores only signed integers: an unsigned one is stored twice as
+    /// wide, and its low part read.
+    fn float_to_integer(&mut self, operand: Operand, name: &str, result: ValueId, to: TypeId, unsigned: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let width = self.width(to)?;
+        if width == 1 {
+            return refuse("a float to a byte");
+        }
+        let held = self.float(operand)?;
+        let cell = self.float_stored(held, name, if unsigned { 2 * width } else { width }, at, out);
+        let into = Held { value: self.value(result), width };
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(cell, width))])));
+        Ok(())
+    }
+
+    /// `into` made of a low and a high word.
+    fn joined(&mut self, into: Held, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) {
+        let (wide_low, wide_high, shifted) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+        let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+        for what in [
+            semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_low)], vec![Loc::Held(low)]),
+            semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_high)], vec![Loc::Held(high)]),
+            semantics(Operation::Binary, "shl", vec![Loc::Held(shifted)], vec![Loc::Held(wide_high), sixteen]),
+            semantics(Operation::Binary, "or", vec![Loc::Held(into)], vec![Loc::Held(shifted), Loc::Held(wide_low)]),
+        ] {
+            out.push(insn(at, what));
         }
     }
 
@@ -668,6 +901,66 @@ impl Selector<'_, '_> {
             Opcode::GetElementPtr { source } => {
                 if self.folded(instruction.result.expect("an address"))?.is_none() {
                     self.indexed(inst, *source, at, out)?;
+                }
+            }
+            Opcode::Cast(op) if self.is_wide(instruction.ty) || self.is_wide(type_of(operands[0])) => self.wide_cast(*op, inst, at, out)?,
+            Opcode::Binary(op) if self.is_wide(instruction.ty) => self.wide_binary(*op, inst, at, out)?,
+            Opcode::Load { volatile, .. } if self.is_float(instruction.ty) => {
+                let (pointer, size) = (self.pointer(operands[0])?, self.size(instruction.ty)?);
+                let held = Held { value: self.value(instruction.result.expect("a load's value")), width: FLOAT };
+                self.float_loaded(held, "fld", pointer, size, *volatile, at, out);
+            }
+            Opcode::Store { volatile, .. } if self.is_float(type_of(operands[0])) => {
+                let (pointer, size) = (self.pointer(operands[1])?, self.size(type_of(operands[0]))?);
+                let what = match operands[0] {
+                    Operand::Constant(id) => {
+                        // A constant is its bits, stored as integers are.
+                        let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
+                        let bits = if size == 4 { u128::from(bits as u32) } else { u128::from(bits) };
+                        let low = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer, 4))], vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })]);
+                        if size == 8 {
+                            out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, low) }));
+                            let high = Loc::Imm(Imm { value: (bits >> 32) as u32 as i64, width: 4, address: None });
+                            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(4), 4))], vec![high])
+                        } else {
+                            low
+                        }
+                    }
+                    value => {
+                        let held = self.float(value)?;
+                        semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(Self::memory(pointer, size))], vec![Loc::Held(held)])
+                    }
+                };
+                out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
+            }
+            Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) => {
+                let name = match op {
+                    BinaryOp::FAdd => "fadd",
+                    BinaryOp::FSub => "fsub",
+                    BinaryOp::FMul => "fmul",
+                    _ => "fdiv",
+                };
+                let (a, b) = (self.float(operands[0])?, self.float(operands[1])?);
+                let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                out.push(insn(at, semantics(Operation::FloatArith, name, vec![Loc::Held(result)], vec![Loc::Held(a), Loc::Held(b)])));
+            }
+            Opcode::FNeg => {
+                let a = self.float(operands[0])?;
+                let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                out.push(insn(at, semantics(Operation::FloatUnary, "fchs", vec![Loc::Held(result)], vec![Loc::Held(a)])));
+            }
+            Opcode::Cast(op) if self.is_float(instruction.ty) || self.is_float(type_of(operands[0])) => self.float_cast(*op, inst, at, out)?,
+            Opcode::Load { volatile, .. } if self.is_far(instruction.ty) => {
+                let pointer = self.pointer(operands[0])?;
+                let pair = self.far_loaded(pointer, *volatile, at, out);
+                self.fars.insert(instruction.result.expect("a load's value"), pair);
+            }
+            Opcode::Store { volatile, .. } if self.is_far(type_of(operands[0])) => {
+                let (offset, selector) = self.far(operands[0], at, out)?;
+                let pointer = self.pointer(operands[1])?;
+                for (held, by) in [(offset, 0), (selector, 2)] {
+                    let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![Loc::Held(held)]);
+                    out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
                 }
             }
             Opcode::Load { volatile, .. } => {
@@ -716,6 +1009,7 @@ impl Selector<'_, '_> {
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
                 out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
             }
+            Opcode::Cast(op) if self.is_far(instruction.ty) || self.is_far(type_of(operands[0])) => self.far_cast(*op, inst, at, out)?,
             Opcode::Cast(op) => {
                 let from = type_of(operands[0]);
                 let (to, from_width) = (self.width(instruction.ty)?, self.width(from)?);
@@ -760,12 +1054,12 @@ impl Selector<'_, '_> {
                 };
                 out.push(insn(at, what));
             }
-            Opcode::ICmp(_) if self.fused.contains(&inst) => {}
+            Opcode::ICmp(_) | Opcode::FCmp(_) if self.fused.contains(&inst) => {}
             // SETcc, as LLVM selects a comparison it keeps as a value.
-            Opcode::ICmp(_) => {
-                let predicate = self.compare(inst, at, out)?;
+            Opcode::ICmp(_) | Opcode::FCmp(_) => {
+                let code = self.compare(inst, at, out)?;
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: 1 };
-                let name = format!("set{}", &condition_code(predicate)[1..]);
+                let name = format!("set{}", &code[1..]);
                 out.push(insn(at, semantics(Operation::Unary, &name, vec![Loc::Held(result)], vec![])));
             }
             Opcode::Br => match operands[..] {
@@ -776,16 +1070,16 @@ impl Selector<'_, '_> {
                     out.push(insn(at, jump(block_at[&taken])));
                 }
                 [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
-                    let predicate = match self.fused_compare(condition) {
+                    let code = match self.fused_compare(condition) {
                         Some(compare) => self.compare(compare, at, out)?,
                         None => {
                             let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
                             let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
                             out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
-                            IntPredicate::Ne
+                            "jne"
                         }
                     };
-                    let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, condition_code(predicate), vec![], vec![]) };
+                    let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, code, vec![], vec![]) };
                     out.push(insn(at, branch));
                 }
                 _ => return refuse("a branch on a constant"),
@@ -793,7 +1087,16 @@ impl Selector<'_, '_> {
             Opcode::Ret => {
                 let what = semantics(Operation::Return, "", vec![], vec![]);
                 let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
-                if let Some(&value) = operands.first() {
+                if let Some(&value) = operands.first().filter(|&&one| self.is_float(type_of(one))) {
+                    // Left in st(0).
+                    let held = self.float(value)?;
+                    out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
+                } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
+                    let (offset, selector) = self.far(value, at, out)?;
+                    let [low, high] = convention.returns[..] else { return refuse("a far result the convention has no pair for") };
+                    one.requires = vec![(offset, low), (selector, high)];
+                    one.uses = vec![offset.value, selector.value];
+                } else if let Some(&value) = operands.first() {
                     let held = self.held(value, type_of(value), at, out)?;
                     one.requires = match convention.returns[..] {
                         [register] => vec![(held, register)],
@@ -830,7 +1133,29 @@ impl Selector<'_, '_> {
         let global = self.module.global(global);
         let name = global.name.clone().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
-            return refuse(format!("@{name}"));
+            return match Intrinsic::named(&name) {
+                Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                Some(Intrinsic::Unary(function)) => {
+                    let name = match function {
+                        FloatFunction::Fabs => "fabs",
+                        FloatFunction::Sqrt => "fsqrt",
+                        FloatFunction::Rint => "frndint",
+                        FloatFunction::Sin => "fsin",
+                        FloatFunction::Cos => "fcos",
+                        other => return refuse(format!("{other:?}")),
+                    };
+                    let a = self.float(arguments[0])?;
+                    let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                    out.push(insn(at, semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)])));
+                    Ok(())
+                }
+                // Rounds as the machine's default mode does: fistp.
+                Some(Intrinsic::LRint) => {
+                    let result = instruction.result.expect("lrint's value");
+                    self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
+                }
+                _ => refuse(format!("@{name}")),
+            };
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
@@ -842,6 +1167,26 @@ impl Selector<'_, '_> {
         for index in order {
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            if self.is_float(ty) {
+                // Its bytes from a stack temporary, the high dword pushed first.
+                let size = self.size(ty)?;
+                let held = self.float(argument)?;
+                let cell = self.float_stored(held, "fstp", size, at, out);
+                for by in (0..i64::from(size) / 4).rev().map(|dword| dword * 4) {
+                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Mem(Self::memory(cell.moved(by), 4))])));
+                }
+                pushed += i64::from(size);
+                continue;
+            }
+            if self.is_far(ty) {
+                // Its offset at the lower address: the selector pushed first.
+                let (offset, selector) = self.far(argument, at, out)?;
+                for held in [selector, offset] {
+                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
+                }
+                pushed += 4;
+                continue;
+            }
             let mut held = self.held(argument, ty, at, out)?;
             if held.width == 1 {
                 let word = Held { value: self.fresh(), width: 2 };
@@ -854,7 +1199,14 @@ impl Selector<'_, '_> {
         let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
         let mut delivers = Vec::new();
         let mut result = None;
-        if let Some(value) = instruction.result {
+        let mut float = None;
+        if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
+            float = Some(Held { value: self.value(value), width: FLOAT });
+        } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
+            let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+            delivers = vec![(offset, Register::EAX), (selector, Register::EDX)];
+            self.fars.insert(value, (offset, selector));
+        } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
             match returned(width)[..] {
@@ -875,26 +1227,67 @@ impl Selector<'_, '_> {
             delivers,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         }));
+        // A float result is in st(0).
+        if let Some(held) = float {
+            out.push(insn(at, semantics(Operation::FloatLoad, "", vec![Loc::Held(held)], vec![])));
+        }
         self.calls.insert(at, name);
         if far {
             self.far.insert(at);
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(crate::model::ir::Reg { register: Register::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
         if let Some((held, low, high)) = result {
-            let (wide_low, wide_high, shifted) = (self.fresh(), self.fresh(), self.fresh());
-            let dword = |value| Held { value, width: 4 };
-            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+            self.joined(held, low, high, at, out);
+        }
+        Ok(())
+    }
+
+    /// A memset of a constant byte over a constant length, as LLVM's
+    /// getMemset lowers one: at most `MEMSET_STORES` stores, widest first,
+    /// or `rep stosd` through es:di and stores for the tail.
+    fn memset(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let &[destination, value, length, volatile] = arguments else { return refuse("a memset of other than four operands") };
+        let (Some(byte), Some(length)) = (self.constant(value, 1), self.constant(length, 2)) else {
+            return refuse("a memset of a variable byte or length");
+        };
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let pattern = |width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
+        let pointer = self.pointer(destination)?;
+        let (bulk, tail) = if length / 4 + (length % 4).count_ones() as i64 > MEMSET_STORES { (length / 4, length % 4) } else { (0, length) };
+        if bulk > 0 {
+            let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
+            let source = if matches!(pointer, Pointer::Frame(_)) { Register::SS } else { Register::DS };
+            let (stored, count, through) = (self.fresh_held(4), self.fresh_held(2), self.fresh_held(2));
+            let (stepped, emptied) = (self.fresh_held(2), self.fresh_held(2));
             for what in [
-                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_low))], vec![Loc::Held(low)]),
-                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_high))], vec![Loc::Held(high)]),
-                semantics(Operation::Binary, "shl", vec![Loc::Held(dword(shifted))], vec![Loc::Held(dword(wide_high)), sixteen]),
-                semantics(Operation::Binary, "or", vec![Loc::Held(held)], vec![Loc::Held(dword(shifted)), Loc::Held(dword(wide_low))]),
+                semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![Loc::Imm(Imm { value: pattern(4), width: 4, address: None })]),
+                semantics(Operation::Move, "mov", vec![Loc::Held(count)], vec![Loc::Imm(Imm { value: bulk, width: 2, address: None })]),
+                self.address(pointer, through),
+                semantics(Operation::Push, "push", vec![], vec![segment.clone()]),
+                semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]),
+                semantics(Operation::Pop, "pop", vec![segment.clone()], vec![]),
+                semantics(
+                    Operation::Fill,
+                    "stosd",
+                    vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped), Loc::Held(emptied)],
+                    vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment.clone()],
+                ),
+                semantics(Operation::Pop, "pop", vec![segment], vec![]),
             ] {
-                out.push(insn(at, what));
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+            }
+        }
+        let mut offset = length - tail;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                let cell = Self::memory(pointer.moved(offset), width);
+                let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(Imm { value: pattern(width), width, address: None })]);
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+                offset += i64::from(width);
             }
         }
         Ok(())
@@ -902,8 +1295,11 @@ impl Selector<'_, '_> {
 
     /// `cmp` of a comparison's operands, a constant second; the predicate
     /// that holds of them as ordered.
-    fn compare(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<IntPredicate, Unselected> {
+    fn compare(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<&'static str, Unselected> {
         let instruction = self.function.instruction(inst);
+        if let Opcode::FCmp(predicate) = instruction.opcode {
+            return self.float_compare(predicate, inst, at, out);
+        }
         let Opcode::ICmp(mut predicate) = instruction.opcode else { unreachable!("a comparison") };
         let (mut a, mut b) = (instruction.operands[0], instruction.operands[1]);
         let ty = self.function.operand_type(&self.module.context, a).expect("a typed operand");
@@ -914,7 +1310,54 @@ impl Selector<'_, '_> {
         let a = Loc::Held(self.held(a, ty, at, out)?);
         let b = self.source(b, ty, at, out)?;
         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
-        Ok(predicate)
+        Ok(condition_code(predicate))
+    }
+
+    /// `fcom`, its answer in the flags as sahf leaves it, as an unsigned
+    /// compare's: `a > b` is `ja`, and false when unordered. A less-than
+    /// compares the other way, as LLVM's x87 lowering does, so that it is
+    /// false when unordered too.
+    fn float_compare(&mut self, predicate: FloatPredicate, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<&'static str, Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+        let ((a, b), code) = match predicate {
+            FloatPredicate::Ogt => ((a, b), "ja"),
+            FloatPredicate::Oge => ((a, b), "jae"),
+            FloatPredicate::Olt => ((b, a), "ja"),
+            FloatPredicate::Ole => ((b, a), "jae"),
+            other => return refuse(format!("fcmp {other:?}")),
+        };
+        let (a, b) = (self.float(a)?, self.float(b)?);
+        out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), Loc::Held(b)])));
+        Ok(code)
+    }
+
+    /// A float operand, in an x87 register.
+    fn float(&mut self, operand: Operand) -> Result<Held, Unselected> {
+        match operand {
+            Operand::Value(value) => Ok(Held { value: self.value(value), width: FLOAT }),
+            _ => refuse("a float constant operand"),
+        }
+    }
+
+    /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
+    fn temporary(&mut self, size: i64) -> Pointer {
+        self.depth += size + size % 2;
+        Pointer::Frame(-self.depth)
+    }
+
+    /// A float's `size` bytes stored to a stack temporary, where a push or
+    /// an integer load reads them: `fstp`, or `fistp` as an integer.
+    fn float_stored(&mut self, held: Held, name: &str, size: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Pointer {
+        let cell = self.temporary(i64::from(size));
+        out.push(insn(at, semantics(Operation::FloatStore, name, vec![Loc::Mem(Self::memory(cell, size))], vec![Loc::Held(held)])));
+        cell
+    }
+
+    /// A float loaded from `size` bytes at `pointer`: `fld`, or `fild` of an integer.
+    fn float_loaded(&mut self, into: Held, name: &str, pointer: Pointer, size: u32, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) {
+        let what = semantics(Operation::FloatLoad, name, vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(pointer, size))]);
+        out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
     }
 
     fn fused_compare(&self, condition: ValueId) -> Option<InstId> {
@@ -931,6 +1374,7 @@ impl Pointer {
             Pointer::Frame(disp) => Pointer::Frame(disp + by),
             Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
             Pointer::Global { space, index, offset } => Pointer::Global { space, index, offset: offset + by },
+            Pointer::Far { selector, base, offset } => Pointer::Far { selector, base, offset: offset + by },
         }
     }
 }

@@ -19,8 +19,11 @@ fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     isel::selected(&parsed(text), name, &contracts)
 }
 
+/// The module's text, once its object is written: a listing that does not
+/// encode is no listing.
 fn assembled(text: &str) -> String {
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
+    crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -573,4 +576,332 @@ define i16 @f(i16 %a) addrspace(1) {
 }
 ";
     assert_eq!(listing(text, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "pop bp", "retf"]);
+}
+
+/// A memset expands as LLVM's getMemset does: up to 16 stores, widest
+/// first; beyond that `rep stosd` through es:di, the tail stored.
+#[test]
+fn test_a_memset_is_stores_or_a_string_fill() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 1, i16 {size}, i1 false)
+  %v = load i16, ptr %a
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(
+        listing(&text(7), "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 8",
+            "L0_0:",
+            "mov dword ptr [bp-8], 16843009",
+            "mov word ptr [bp-4], 257",
+            "mov byte ptr [bp-2], 1",
+            "mov ax, word ptr [bp-8]",
+            "leave",
+            "retf",
+        ]
+    );
+    assert_eq!(
+        listing(&text(70), "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 70",
+            "push di",
+            "L0_0:",
+            "lea di, [bp-70]",
+            "push es",
+            "push ss",
+            "pop es",
+            "mov eax, 16843009",
+            "mov cx, 17",
+            "rep stosd",
+            "pop es",
+            "mov word ptr [bp-2], 257",
+            "mov ax, word ptr [bp-70]",
+            "pop di",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// fixed.nib's `left * right / right` in 16.16: a 64-bit product and
+/// quotient of 32-bit factors, which isel refused as "a i64 value". Each
+/// i64 is a pair of dwords; factors and a divisor sign-extended from i32
+/// take one imul and a long division of magnitudes, as the old path did.
+#[test]
+fn test_a_fixed_product_and_quotient_take_dword_pairs() {
+    let text = "define i32 @scaled(i32 %0, i32 %1) addrspace(1) {
+b1:
+  %2 = sext i32 %0 to i64
+  %3 = sext i32 %1 to i64
+  %4 = mul i64 %2, %3
+  %5 = ashr i64 %4, 16
+  %6 = trunc i64 %5 to i32
+  %7 = sext i32 %6 to i64
+  %8 = sext i32 %1 to i64
+  %9 = shl i64 %7, 16
+  %10 = sdiv i64 %9, %8
+  %11 = trunc i64 %10 to i32
+  ret i32 %11
+}
+";
+    assert_eq!(
+        listing(text, "scaled"),
+        [
+            "push bp", "mov bp, sp", "sub sp, 4", "push si", "push di", "L0_0:",
+            "mov ecx, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "mov eax, ecx", "imul ebx", "mov ecx, eax", "shrd ecx, edx, 16",
+            "mov eax, ecx", "cdq", "mov edi, edx", "shld edi, ecx, 16", "shl ecx, 16",
+            "mov esi, edi", "sar esi, 31", "xor ecx, esi", "xor edi, esi", "sub ecx, esi", "sbb edi, esi",
+            "mov dword ptr [bp-4], ebx", "sar dword ptr [bp-4], 31", "xor ebx, dword ptr [bp-4]", "sub ebx, dword ptr [bp-4]",
+            "mov eax, edi", "xor edx, edx", "div ebx", "mov eax, ecx", "div ebx",
+            "xor esi, dword ptr [bp-4]", "xor eax, esi", "sub eax, esi", "shld edx, eax, 16",
+            "pop di", "pop si", "leave", "retf",
+        ]
+    );
+}
+
+/// A call names its callee as the procedure is defined: runtime.nib's
+/// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
+/// as `_buffers.allocate`, and the runtime did not link.
+#[test]
+fn test_a_call_names_an_internal_callee_as_it_is_defined() {
+    let text = "define internal i16 @buffers.allocate() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @buffers.allocate()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0 proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+}
+
+/// A far null is offset 0, selector 0: runtime.nib's errors.say stored one
+/// and isel refused it as "an address of no global".
+#[test]
+fn test_a_far_null_is_two_zero_words() {
+    let text = "declare void @take(ptr addrspace(1))
+define void @f() addrspace(1) {
+  %cell = alloca ptr addrspace(1)
+  store ptr addrspace(1) null, ptr %cell
+  call void @take(ptr addrspace(1) null)
+  ret void
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov ax, 0", "mov bx, 0", "mov word ptr [bp-4], ax", "mov word ptr [bp-2], bx",
+            "push bx", "push ax", "call take", "add sp, 4", "leave", "retf",
+        ]
+    );
+}
+
+/// A far pointer is its offset and selector, as a type legalizer expands a
+/// value no register holds: accessed through es, pushed selector first,
+/// returned in dx:ax, and a near pointer made far in DGROUP.
+#[test]
+fn test_far_pointers_are_an_offset_and_a_selector() {
+    let text = "@buf = internal global [4 x i16] zeroinitializer
+declare void @take(ptr addrspace(1), i16)
+define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
+  %q = getelementptr i16, ptr addrspace(1) %p, i16 %i
+  %v = load i16, ptr addrspace(1) %q
+  %r = getelementptr i8, ptr addrspace(1) %p, i16 4
+  store i16 %v, ptr addrspace(1) %r
+  %b = addrspacecast ptr @buf to ptr addrspace(1)
+  call void @take(ptr addrspace(1) %b, i16 %v)
+  ret ptr addrspace(1) %r
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov word ptr [bp-2], ax",
+            "mov ax, word ptr [bp+8]",
+            "mov word ptr [bp-4], ax",
+            "mov bx, word ptr [bp+10]",
+            "shl bx, 1",
+            "add bx, word ptr [bp-2]",
+            "mov es, word ptr [bp-4]",
+            "mov ax, word ptr es:[bx]",
+            "mov bx, word ptr [bp-2]",
+            "mov word ptr es:[bx+4], ax",
+            "mov bx, offset buf",
+            "mov cx, DGROUP",
+            "push ax",
+            "push cx",
+            "push bx",
+            "call take",
+            "add sp, 6",
+            "mov ax, word ptr [bp-2]",
+            "add ax, 4",
+            "mov dx, word ptr [bp-4]",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// Floats are x87 values: loads fold into arithmetic, a result leaves in
+/// st(0), an argument is pushed from a stack temporary, conversions go
+/// through memory, and an ordered compare is fcom, sahf and ja.
+#[test]
+fn test_floats_are_x87_values() {
+    let text = "@k = internal global double 1.5
+@out = internal global float 0.0
+declare cc1000 void @show(float) addrspace(1)
+declare i16 @llvm.lrint.i16.f64(double)
+define double @scale(double %x, double %y) addrspace(1) {
+  %m = fmul double %x, %y
+  %c = load double, ptr @k
+  %s = fadd double %m, %c
+  ret double %s
+}
+define i16 @f(i16 %n) addrspace(1) {
+  %a = sitofp i16 %n to float
+  %b = fpext float %a to double
+  %r = call addrspace(1) double @scale(double %b, double %b)
+  %t = fptrunc double %r to float
+  store float %t, ptr @out
+  call cc1000 addrspace(1) void @show(float %t)
+  %g = fcmp ogt double %r, %b
+  br i1 %g, label %big, label %small
+big:
+  %i = call i16 @llvm.lrint.i16.f64(double %r)
+  ret i16 %i
+small:
+  ret i16 0
+}
+";
+    assert_eq!(
+        listing(text, "scale"),
+        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fmul qword ptr [bp+14]", "fadd qword ptr k", "pop bp", "retf"]
+    );
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 48",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov word ptr [bp-2], ax",
+            "fild word ptr [bp-2]",
+            "fstp tbyte ptr [bp-38]",
+            "fld tbyte ptr [bp-38]",
+            "fst qword ptr [bp-10]",
+            "push dword ptr [bp-6]",
+            "push dword ptr [bp-10]",
+            "fstp qword ptr [bp-18]",
+            "push dword ptr [bp-14]",
+            "push dword ptr [bp-18]",
+            "call far ptr scale",
+            "fstp tbyte ptr [bp-48]",
+            "add sp, 16",
+            "fld tbyte ptr [bp-48]",
+            "fstp dword ptr [bp-22]",
+            "fld dword ptr [bp-22]",
+            "fst dword ptr out",
+            "fstp dword ptr [bp-26]",
+            "push dword ptr [bp-26]",
+            "call far ptr show",
+            "fld tbyte ptr [bp-48]",
+            "fld tbyte ptr [bp-38]",
+            "fxch st(1)",
+            "fcompp",
+            "fnstsw ax",
+            "sahf",
+            "ja L1_8",
+            "L1_10:",
+            "mov ax, 0",
+            "leave",
+            "retf",
+            "L1_8:",
+            "fld tbyte ptr [bp-48]",
+            "fistp word ptr [bp-28]",
+            "mov ax, word ptr [bp-28]",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// A float function x87 computes in one instruction is that instruction.
+/// frndint, fsin and fcos listed but did not encode.
+#[test]
+fn test_float_functions_are_x87_instructions() {
+    let text = "declare double @llvm.sqrt.f64(double)
+declare double @llvm.rint.f64(double)
+declare double @llvm.fabs.f64(double)
+declare double @llvm.sin.f64(double)
+declare double @llvm.cos.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.sqrt.f64(double %x)
+  %b = call double @llvm.rint.f64(double %a)
+  %c = call double @llvm.fabs.f64(double %b)
+  %d = call double @llvm.sin.f64(double %c)
+  %e = call double @llvm.cos.f64(double %d)
+  ret double %e
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fsqrt", "frndint", "fabs", "fsin", "fcos", "pop bp", "retf"]
+    );
+}
+
+
+/// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
+#[test]
+fn test_a_float_to_an_integer_is_stored_toward_zero() {
+    let text = "define i16 @f(double %x) addrspace(1) {
+  %s = fptosi double %x to i16
+  %u = fptoui double %x to i16
+  %r = add i16 %s, %u
+  ret i16 %r
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 10",
+            "L0_0:",
+            "fnstcw word ptr [bp-8]",
+            "mov ax, word ptr [bp-8]",
+            "or ax, 3072",
+            "mov word ptr [bp-10], ax",
+            "fld qword ptr [bp+6]",
+            "fld st(0)",
+            "fldcw word ptr [bp-10]",
+            "fistp word ptr [bp-2]",
+            "fldcw word ptr [bp-8]",
+            "mov ax, word ptr [bp-2]",
+            "fldcw word ptr [bp-10]",
+            "fistp dword ptr [bp-6]",
+            "fldcw word ptr [bp-8]",
+            "add ax, word ptr [bp-6]",
+            "leave",
+            "retf",
+        ]
+    );
 }

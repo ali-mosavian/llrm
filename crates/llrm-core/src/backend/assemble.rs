@@ -29,7 +29,8 @@ pub trait Abi {
 /// `module` as masm, its code in the segment `code`.
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
-    let names = globals::names(module, &|name| abi.linked(name))?;
+    let mut names = globals::names(module, &|name| abi.linked(name))?;
+    names.extend(crate::hir::lower::symbol_names());
     let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
@@ -45,7 +46,11 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                 let (body, reserve) = machine(body, &calls, cpu, convention.popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
-                    let linked = abi.linked(callee);
+                    // A global of this module is called by the name it is defined or declared as.
+                    let linked = match module.named(callee) {
+                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        None => abi.linked(callee),
+                    };
                     referenced.insert(linked.clone(), far.contains(at));
                     callees.insert(*at, masm::Callee::new(linked, far.contains(at)));
                 }
