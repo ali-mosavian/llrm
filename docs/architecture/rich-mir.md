@@ -258,8 +258,9 @@ ABIs, frame references and flags, a second lowering that this step would
 delete, so the permanent one comes first.
 
 `backend::isel` is that lowering: it selects instructions over virtual
-registers, folds allocas and constant GEPs into addressing modes, and keeps
-a branch's only comparison as flags. What an instruction does to memory is
+registers, folds allocas and constant GEPs into addressing modes, keeps a
+branch's only comparison as flags and any other as SETcc, and turns a switch
+into a chain of compares, each edge its own phi source. What an instruction does to memory is
 the `Insn`'s own answer (`volatile`, `barrier`, `unmodeled_write`), not the
 old MIR operation's.
 
