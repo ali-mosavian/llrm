@@ -46,7 +46,11 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                 let (body, reserve) = machine(body, &calls, cpu, convention.popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
-                    let linked = abi.linked(callee);
+                    // A global of this module is called by the name it is defined or declared as.
+                    let linked = match module.named(callee) {
+                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        None => abi.linked(callee),
+                    };
                     referenced.insert(linked.clone(), far.contains(at));
                     callees.insert(*at, masm::Callee::new(linked, far.contains(at)));
                 }

@@ -634,6 +634,24 @@ define i16 @f() addrspace(1) {{
     );
 }
 
+/// A call names its callee as the procedure is defined: runtime.nib's
+/// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
+/// as `_buffers.allocate`, and the runtime did not link.
+#[test]
+fn test_a_call_names_an_internal_callee_as_it_is_defined() {
+    let text = "define internal i16 @buffers.allocate() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @buffers.allocate()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0 proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+}
+
 /// A far null is offset 0, selector 0: runtime.nib's errors.say stored one
 /// and isel refused it as "an address of no global".
 #[test]
