@@ -7,15 +7,22 @@ use std::collections::{HashMap, HashSet};
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
 use crate::intrinsics::{self, Intrinsic};
-use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueDef};
+use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
 
 pub fn verify(module: &Module) -> Vec<String> {
     let mut out = Vec::new();
     for global in &module.globals {
+        let name = global.name.as_deref().unwrap_or("<unnamed>");
+        let declaration = match &global.kind {
+            GlobalKind::Function(function) => function.is_declaration(),
+            GlobalKind::Variable(variable) => variable.initializer.is_none(),
+        };
+        if declaration && !matches!(global.linkage, Linkage::External | Linkage::ExternWeak) {
+            out.push(format!("@{name}: Global is external, but doesn't have external or weak linkage!"));
+        }
         if let GlobalKind::Function(function) = &global.kind {
-            let name = global.name.as_deref().unwrap_or("<unnamed>");
             if intrinsics::is_reserved(name) {
                 let problem = match Intrinsic::named(name) {
                     _ if !function.is_declaration() => Err("llvm intrinsics cannot be defined!".to_owned()),
