@@ -2,6 +2,7 @@
 //! LLVM's assembly language and its in-memory form LLVM's object model,
 //! held in arenas addressed by id.
 
+pub mod alias;
 pub mod build;
 pub mod callgraph;
 pub mod context;

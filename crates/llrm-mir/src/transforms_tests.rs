@@ -243,7 +243,8 @@ b6:
   ret i16 %3
 }
 ";
-    assert!(optimized(text).contains("b4:\n  br label %b5"), "{}", optimized(text));
+    let out = through(&["simplifycfg"], text);
+    assert!(out.contains("b4:\n  br label %b5"), "{out}");
 }
 
 /// nbody ran 201 more instructions once simplifycfg bypassed an inner
@@ -271,7 +272,8 @@ b4:
   ret i16 %n
 }
 ";
-    assert!(optimized(text).contains("b5:\n  br label %b2"), "{}", optimized(text));
+    let out = through(&["simplifycfg"], text);
+    assert!(out.contains("b5:\n  br label %b2"), "{out}");
 }
 
 /// matmul8's inner loop loaded a view's dimension three times an iteration
@@ -429,9 +431,8 @@ b5:
 /// byte offset stepping by 4, and `i * 8` leaves the inner loop.
 #[test]
 fn test_loop_reduce_steps_an_address_by_its_stride() {
-    let text = "define void @fill() {
+    let text = "define void @fill(ptr %0) {
 b1:
-  %0 = alloca [256 x i8]
   br label %b2
 
 b2:
@@ -465,9 +466,8 @@ b7:
 ";
     assert_eq!(
         through(&["loop-reduce", "instcombine"], text),
-        "define void @fill() {
+        "define void @fill(ptr %0) {
 b1:
-  %0 = alloca [256 x i8]
   br label %b2
 
 b2:
@@ -729,4 +729,76 @@ b1:
     assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn {"), "{out}");
     assert!(!out.contains("call i16 @quiet"), "{out}");
     assert!(out.contains("call i16 @loud"), "{out}");
+}
+
+/// program.nib's `a[19, 1] = 7; return at(&a, 19)` reloaded through the
+/// view's descriptor, 3128 instructions to the old path's 154: stores to
+/// another slot leave a store current, and a zeroed range reads zero.
+#[test]
+fn test_earlycse_forwards_past_stores_elsewhere_and_from_memset() {
+    let text = "declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) memory(argmem: write)
+
+define i16 @f() {
+b1:
+  %0 = alloca [8 x i8]
+  %1 = alloca [4 x i8]
+  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
+  %2 = getelementptr inbounds i8, ptr %0, i16 2
+  store i16 7, ptr %2
+  store i16 1, ptr %1
+  %3 = getelementptr inbounds i8, ptr %1, i16 2
+  store ptr %0, ptr %3
+  %4 = getelementptr inbounds i8, ptr %0, i16 2
+  %5 = load i16, ptr %4
+  %6 = getelementptr inbounds i8, ptr %0, i16 4
+  %7 = load i16, ptr %6
+  %8 = add i16 %5, %7
+  ret i16 %8
+}
+";
+    let out = through(&["earlycse", "instcombine"], text);
+    assert!(out.contains("  ret i16 7\n"), "{out}");
+}
+
+/// Once its loads read what was stored, a slot is only written: it and
+/// every store and memset into it go.
+#[test]
+fn test_instcombine_removes_a_slot_only_written() {
+    let text = "declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) memory(argmem: write)
+
+define i16 @f() {
+b1:
+  %0 = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
+  %1 = getelementptr inbounds i8, ptr %0, i16 2
+  store i16 7, ptr %1
+  ret i16 7
+}
+";
+    let out = through(&["instcombine"], text);
+    assert!(out.contains("define i16 @f() {\nb1:\n  ret i16 7\n}"), "{out}");
+}
+
+/// The fill loop left storing nothing counts to 20 for no one: it goes.
+#[test]
+fn test_loop_deletion_skips_a_loop_that_does_nothing() {
+    let text = "define i16 @f() {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %2, %b3 ]
+  %1 = icmp slt i16 %0, 20
+  br i1 %1, label %b3, label %b4
+
+b3:
+  %2 = add i16 %0, 1
+  br label %b2
+
+b4:
+  ret i16 7
+}
+";
+    let out = through(&["loop-deletion", "simplifycfg"], text);
+    assert!(out.contains("define i16 @f() {\nb1:\n  ret i16 7\n}"), "{out}");
 }

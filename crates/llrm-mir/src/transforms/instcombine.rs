@@ -40,6 +40,7 @@ impl FunctionPass for InstCombine {
                 }
                 round = true;
             }
+            round |= removed_write_only_slots(unit);
             if !round {
                 break;
             }
@@ -269,4 +270,55 @@ fn replaced(unit: &mut Unit, inst: InstId, new: InstId) -> bool {
     function.replace_all_uses_with(old, Operand::Value(value));
     function.erase(inst).expect("its uses were replaced");
     true
+}
+
+/// Stack slots only ever written, and what writes them, gone, as LLVM's
+/// InstCombine removes an alloca site nothing reads: through its address
+/// and addresses made from it, only stores into it and `memset`s of it.
+fn removed_write_only_slots(unit: &mut Unit) -> bool {
+    let slots: Vec<InstId> = unit.function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. })).collect();
+    let mut changed = false;
+    for slot in slots {
+        let Some(writes) = write_only(unit, slot) else { continue };
+        for inst in writes.into_iter().rev() {
+            if let Some(result) = unit.function.instruction(inst).result {
+                let ty = unit.function.value(result).ty;
+                let poison = unit.context.constant(crate::context::Constant { ty, kind: ConstantKind::Poison });
+                unit.function.replace_all_uses_with(result, Operand::Constant(poison));
+            }
+            unit.function.erase(inst).expect("its uses were replaced");
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// `slot` and everything reaching it, addresses first, if nothing reads it.
+fn write_only(unit: &Unit, slot: InstId) -> Option<Vec<InstId>> {
+    let function = &*unit.function;
+    let mut out = vec![slot];
+    let mut at = 0;
+    while at < out.len() {
+        let Some(value) = function.instruction(out[at]).result else {
+            at += 1;
+            continue;
+        };
+        for one_use in function.users(value) {
+            let instruction = function.instruction(one_use.user);
+            let fine = match &instruction.opcode {
+                Opcode::GetElementPtr { .. } | Opcode::Cast(crate::opcode::CastOp::AddrSpaceCast) => one_use.index == 0,
+                Opcode::Store { volatile: false, .. } => one_use.index == 1,
+                Opcode::Call(_) => one_use.index == 0 && crate::memory::memset(unit.context, unit.callees, function, one_use.user).is_some(),
+                _ => false,
+            };
+            if !fine {
+                return None;
+            }
+            if !out.contains(&one_use.user) {
+                out.push(one_use.user);
+            }
+        }
+        at += 1;
+    }
+    Some(out)
 }

@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::context::{Constant, ConstantKind};
+use crate::alias::{alias, captured, contains, object, Alias, Location, Object};
 use crate::memory;
 use crate::module::{BlockId, InstId, Operand, ValueId};
 use crate::opcode::{BinaryOp, Flags, Opcode};
@@ -30,7 +31,7 @@ impl FunctionPass for EarlyCse {
             }
         }
         let entry = unit.function.entry().expect("a defined function");
-        let mut cse = Cse { unit, changed: false, generation: 0 };
+        let mut cse = Cse { unit, changed: false };
         let mut stack = vec![(entry, Scope::default())];
         while let Some((block, scope)) = stack.pop() {
             let scope = cse.block(block, scope);
@@ -52,29 +53,70 @@ struct Key {
     operands: Vec<Operand>,
 }
 
+/// What memory is known to hold: a value loaded or stored as a type, or
+/// bytes a `memset` zeroed.
+#[derive(Clone)]
+enum Known {
+    Value { at: Location, ty: TypeId, value: Operand },
+    /// Zeroed, but for the byte ranges since written, as offsets from the
+    /// object `at` lies in.
+    Zero { at: Location, holes: Vec<(i64, i64)> },
+}
+
+impl Known {
+    fn at(&self) -> Location {
+        match *self {
+            Known::Value { at, .. } | Known::Zero { at, .. } => at,
+        }
+    }
+}
+
 /// What a dominating block left known.
 #[derive(Clone, Default)]
 struct Scope {
     pure: HashMap<Key, ValueId>,
-    /// A pointer's value, loaded or stored as a type, and the memory
-    /// generation it was current in.
-    memory: HashMap<(Operand, TypeId), (Operand, u64)>,
+    memory: Vec<Known>,
     conditions: HashMap<ValueId, bool>,
-    generation: u64,
 }
 
 struct Cse<'u, 'a> {
     unit: &'u mut Unit<'a>,
     changed: bool,
-    /// Bumped at every possible write, and at every block with more than
-    /// one way in: what was current before is current nowhere after.
-    generation: u64,
 }
 
 impl Cse<'_, '_> {
-    fn fresh_generation(&mut self) -> u64 {
-        self.generation += 1;
-        self.generation
+    /// What survives a write to `at`: what it cannot overlap, and a
+    /// zeroed range with a hole where it lands.
+    fn written(&self, scope: &mut Scope, at: Location) {
+        let unit = &*self.unit;
+        let (base, offset) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, at.pointer);
+        scope.memory.retain_mut(|known| {
+            if memory::invariant(unit.context, unit.layout, unit.function, known.at().pointer)
+                || alias(unit.context, unit.layout, unit.callees, unit.function, known.at(), at) == Alias::No
+            {
+                return true;
+            }
+            let Known::Zero { at: zeroed, holes } = known else { return false };
+            match (crate::valuetracking::underlying(unit.context, unit.layout, unit.function, zeroed.pointer), offset) {
+                ((there, Some(_)), Some(offset)) if there == base => {
+                    holes.push((offset, offset + at.bytes as i64));
+                    true
+                }
+                _ => false,
+            }
+        });
+    }
+
+    /// What survives a write to memory no location names: the invariant,
+    /// and slots whose address never escapes.
+    fn clobbered(&self, scope: &mut Scope) {
+        let unit = &*self.unit;
+        scope.memory.retain(|known| {
+            let pointer = known.at().pointer;
+            let (base, _) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
+            memory::invariant(unit.context, unit.layout, unit.function, pointer)
+                || matches!(object(unit.context, unit.function, base), Some(Object::Slot(slot)) if !captured(unit.context, unit.callees, unit.function, slot))
+        });
     }
 
     fn block(&mut self, block: BlockId, mut scope: Scope) -> Scope {
@@ -91,7 +133,10 @@ impl Cse<'_, '_> {
                     scope.conditions.insert(condition, block == taken);
                 }
             }
-            _ => scope.generation = self.fresh_generation(),
+            _ => {
+                let unit = &*self.unit;
+                scope.memory.retain(|known| memory::invariant(unit.context, unit.layout, unit.function, known.at().pointer));
+            }
         }
         for inst in self.unit.function.block(block).instructions().to_vec() {
             self.known_conditions(inst, &scope);
@@ -144,25 +189,70 @@ impl Cse<'_, '_> {
             }
             Opcode::Load { volatile: false, .. } => {
                 let (pointer, ty, result) = (instruction.operands[0], instruction.ty, instruction.result.expect("a load's value"));
-                let unwritten = |generation| generation == scope.generation || memory::invariant(self.unit.context, self.unit.layout, function, pointer);
-                match scope.memory.get(&(pointer, ty)) {
-                    Some(&(value, generation)) if unwritten(generation) => self.replace(inst, value),
-                    _ => {
-                        scope.memory.insert((pointer, ty), (Operand::Value(result), scope.generation));
-                    }
+                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty) };
+                match self.known(scope, at, ty) {
+                    Some(value) => self.replace(inst, value),
+                    None => scope.memory.push(Known::Value { at, ty, value: Operand::Value(result) }),
                 }
             }
             Opcode::Store { volatile: false, .. } => {
                 let (value, pointer) = (instruction.operands[0], instruction.operands[1]);
                 let ty = function.operand_type(self.unit.context, value).expect("a stored value's type");
-                scope.generation = self.fresh_generation();
-                scope.memory.insert((pointer, ty), (value, scope.generation));
+                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty) };
+                self.written(scope, at);
+                scope.memory.push(Known::Value { at, ty, value });
             }
             _ => {
-                if memory::of(self.unit.context, self.unit.callees, function, inst).writes {
-                    scope.generation = self.fresh_generation();
+                if !memory::of(self.unit.context, self.unit.callees, function, inst).writes {
+                    return;
+                }
+                match memory::memset(self.unit.context, self.unit.callees, function, inst) {
+                    Some((pointer, byte, length)) => {
+                        let bytes = match length {
+                            Operand::Constant(id) => match self.unit.context.get(id).kind {
+                                ConstantKind::Int(bits) => Some(bits as u64),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let zero = matches!(byte, Operand::Constant(id) if self.unit.context.get(id).kind == ConstantKind::Int(0));
+                        let at = Location { pointer, bytes: bytes.unwrap_or(u64::MAX / 2) };
+                        self.written(scope, at);
+                        if zero && bytes.is_some() {
+                            scope.memory.push(Known::Zero { at, holes: Vec::new() });
+                        }
+                    }
+                    None => self.clobbered(scope),
                 }
             }
         }
+    }
+
+    /// What a load of `ty` at `at` reads, if memory is known to hold it.
+    fn known(&mut self, scope: &Scope, at: Location, ty: TypeId) -> Option<Operand> {
+        let unit = &*self.unit;
+        for known in scope.memory.iter().rev() {
+            match known {
+                Known::Value { at: there, ty: stored, value } if *stored == ty && alias(unit.context, unit.layout, unit.callees, unit.function, *there, at) == Alias::Must => {
+                    return Some(*value);
+                }
+                Known::Zero { at: there, holes } if contains(unit.context, unit.layout, unit.function, *there, at) => {
+                    let (_, Some(offset)) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, at.pointer) else { return None };
+                    let end = offset + at.bytes as i64;
+                    if holes.iter().any(|&(start, stop)| start < end && offset < stop) {
+                        return None;
+                    }
+                    let kind = match unit.context.types.get(ty) {
+                        crate::types::Type::Int(_) => ConstantKind::Int(0),
+                        crate::types::Type::Pointer(_) => ConstantKind::Null,
+                        crate::types::Type::Float(_) => ConstantKind::Float(0),
+                        _ => return None,
+                    };
+                    return Some(Operand::Constant(self.unit.context.constant(Constant { ty, kind })));
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }

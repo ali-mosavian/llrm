@@ -51,7 +51,7 @@ impl ModulePass for FunctionAttrs {
                     added.push(Attribute::Memory(vec![(Some("argmem".to_owned()), access(arguments).to_owned())]));
                 }
             }
-            if !memory::summary(&function.attrs).returns && returns(context, &callees, function) {
+            if !memory::returns(&function.attrs) && returns(context, &callees, function) {
                 added.push(Attribute::Flag("willreturn".to_owned()));
             }
             if added.is_empty() {
@@ -60,7 +60,8 @@ impl ModulePass for FunctionAttrs {
             // A stated `memory(...)` stays: it was never wider than the truth.
             function.attrs.retain(|attr| !matches!(attr, Attribute::Memory(_)) || !added.iter().any(|one| matches!(one, Attribute::Memory(_))));
             function.attrs.extend(added);
-            callees.insert(id, memory::summary(&function.attrs));
+            let memset = callees.get(&id).is_some_and(|one| one.memset);
+            callees.insert(id, memory::Summary { memset, ..memory::summary(function) });
             changed.push(id);
         }
         changed
@@ -124,7 +125,7 @@ fn accesses(context: &Context, layout: &crate::datalayout::DataLayout, callees: 
 /// leaves once a counter stepping by one reaches its bound.
 fn returns(context: &Context, callees: &Callees, function: &Function) -> bool {
     let calls_return = function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
-        Opcode::Call(info) => memory::summary(&info.attrs).returns || memory::callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.returns),
+        Opcode::Call(info) => memory::returns(&info.attrs) || memory::callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.returns),
         Opcode::Invoke(_) => false,
         _ => true,
     });
