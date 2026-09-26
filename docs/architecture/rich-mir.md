@@ -193,6 +193,11 @@ the code must come out the same, as LLVM's must with and without `-g`.
 - Modules: the datalayout, declarations and attributes, globals and
   initializers, `@llrm.qb.*` intrinsics.
 
+The text landed first, with the arenas it reads into: `llrm-mir` parses and
+prints the subset, and `tools/mir-oracle.sh` checks that LLVM reads its
+output as it reads the input, over the mapping fixtures and clang's output
+for `bench/parity`.
+
 ### 4. Raise into MIR beside the old MIR
 
 - The QB raise and the C and Nib frontends also build a MIR module. Nothing

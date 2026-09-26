@@ -1,22 +1,23 @@
-//! Rich portable MIR (`docs/architecture/rich-mir.md`), step 1: the typed shell.
-//!
-//! Interned types, typed SSA values and constants, explicit parameters and
-//! returns, CFG edges owned by terminators, and the integer family -- with the
-//! verifier, the text form and an interpreter for that slice. Nothing produces
-//! it yet; the old MIR in `llrm-core` stays the compiler's until raising does.
+//! MIR: a subset of LLVM IR (`docs/architecture/rich-mir.md`). Its text is
+//! LLVM's assembly language and its in-memory form LLVM's object model,
+//! held in arenas addressed by id.
 
-pub mod function;
-pub mod interpret;
+pub mod context;
+pub mod lexer;
+pub mod module;
 pub mod opcode;
 pub mod parse;
 pub mod print;
 pub mod types;
-pub mod verify;
 
-pub use function::{Block, BlockId, Constant, Edge, EdgeId, Function, Instruction, InstructionId, Module, Operand, ValueId, ValueInfo};
-pub use opcode::{Opcode, Overflow, Predicate};
-pub use print::View;
-pub use types::{FloatFormat, MirContext, Type, TypeId};
+pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
+pub use lexer::ParseError;
+pub use module::{
+    Block, BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand,
+    Module, Operand, UnnamedAddr, ValueData, ValueDef, ValueId,
+};
+pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, FloatPredicate, Flags, IntPredicate, Opcode, Tail};
+pub use types::{FloatKind, Type, TypeId, Types};
 
 #[cfg(test)]
 mod tests;
