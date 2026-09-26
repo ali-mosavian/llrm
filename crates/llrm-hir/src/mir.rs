@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use llrm_mir::build::Builder;
 use llrm_mir::{
-    BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
+    BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
     Linkage, Module, Operand as Value, Type, TypeId, Types,
 };
 
@@ -80,13 +80,22 @@ fn emit_module(hir: &model::Module) -> Emitted {
         data: HashMap::new(),
         callees: HashMap::new(),
     };
+    let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
+    let mut defined = Vec::new();
     for object in &hir.data {
-        let (global, why) = data_object(&mut module, object);
-        if let Some(why) = why {
-            refused.push((object.name.clone(), why));
+        let layout = data_type(&mut module.context.types, object, &objects);
+        let global = declare_data(&mut module, object, layout.as_ref().ok().copied());
+        match layout {
+            Ok(_) => defined.push((object, global)),
+            Err(why) => refused.push((object.name.clone(), why)),
         }
         let reference = module.reference(global);
         tables.data.insert(object.id, reference);
+    }
+    for (object, global) in defined {
+        let initializer = data_initializer(&mut module, object, &objects, &tables.data);
+        let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
+        variable.initializer = Some(initializer);
     }
     let mut functions = Vec::new();
     for function in &hir.functions {
@@ -124,25 +133,114 @@ fn emit_module(hir: &model::Module) -> Emitted {
     Emitted { module, refused }
 }
 
-/// A data object's bytes as a global, or an external one and the reason.
-fn data_object(module: &mut Module, object: &model::DataObject) -> (GlobalId, Option<String>) {
-    let types = &mut module.context.types;
+/// A data object's type: its bytes, with each relocation a pointer or, for
+/// a near one into far data, the far address's offset. A far pointer's
+/// integer form is segment:offset, so its low word is the offset.
+fn data_type(types: &mut Types, object: &model::DataObject, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
     let byte = types.int(8);
-    let ty = types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
-    let why = object.relocations.first().map(|one| format!("a {} relocation in its data", one.address));
-    let bytes: Vec<u8> = object.bytes.iter().map(|&one| one as u8).collect();
-    let initializer = why.is_none().then(|| {
-        let kind = if bytes.iter().all(|&one| one == 0) { ConstantKind::Zero } else { ConstantKind::Bytes(bytes) };
-        module.context.constant(Constant { ty, kind })
-    });
-    let linkage = match (why.is_some(), object.linkage) {
-        (true, _) | (false, model::DataLinkage::External) => Linkage::External,
-        (false, model::DataLinkage::Internal) => Linkage::Internal,
+    let mut fields = Vec::new();
+    let mut at = 0;
+    for relocation in relocations(object)? {
+        let target = objects.get(&relocation.target).ok_or_else(|| format!("a relocation to object {}", relocation.target))?;
+        if relocation.at > at {
+            fields.push(types.intern(Type::Array { element: byte, count: (relocation.at - at) as u64 }));
+        }
+        fields.push(match (relocation.address, target.address) {
+            (AddressKind::Near, AddressKind::Far) => types.int(16),
+            (AddressKind::Near, _) => types.ptr(0),
+            (AddressKind::Far, _) => types.ptr(1),
+            (other, _) => return Err(format!("a {other} relocation in its data")),
+        });
+        at = relocation.at + relocation_width(relocation.address);
+    }
+    let count = object.bytes.len() as i64;
+    if fields.is_empty() || count > at {
+        fields.push(types.intern(Type::Array { element: byte, count: (count - at) as u64 }));
+    }
+    Ok(if fields.len() == 1 { fields[0] } else { types.intern(Type::Struct { fields, packed: true }) })
+}
+
+fn relocation_width(address: AddressKind) -> i64 {
+    if address == AddressKind::Far { 4 } else { 2 }
+}
+
+/// A data object's relocations in order, each over zero bytes: its addend
+/// is the whole offset.
+fn relocations(object: &model::DataObject) -> Emit<Vec<&model::DataRelocation>> {
+    let mut out: Vec<&model::DataRelocation> = object.relocations.iter().collect();
+    out.sort_by_key(|one| one.at);
+    let mut end = 0;
+    for relocation in &out {
+        let width = relocation_width(relocation.address);
+        let site = object.bytes.get(relocation.at as usize..(relocation.at + width) as usize).ok_or("a relocation past its data")?;
+        if relocation.at < end || site.iter().any(|&one| one != 0) {
+            return Err("overlapping or pre-added relocations".to_owned());
+        }
+        end = relocation.at + width;
+    }
+    Ok(out)
+}
+
+/// A data object's global, its initializer set once every global exists;
+/// an external `[n x i8]` when its type is refused.
+fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<TypeId>) -> GlobalId {
+    let byte = module.context.types.int(8);
+    let bytes = module.context.types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
+    let linkage = match (ty, object.linkage) {
+        (None, _) | (Some(_), model::DataLinkage::External) => Linkage::External,
+        (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
     };
-    let variable = GlobalVariable { ty, constant: object.readonly && why.is_none(), initializer, align: None };
+    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { 1 } else { 0 };
-    (global, why)
+    global
+}
+
+fn data_initializer(module: &mut Module, object: &model::DataObject, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>) -> ConstantId {
+    let context = &mut module.context;
+    let (byte, i16) = (context.types.int(8), context.types.int(16));
+    let bytes = |context: &mut llrm_mir::Context, from: i64, to: i64| {
+        let slice: Vec<u8> = object.bytes[from as usize..to as usize].iter().map(|&one| one as u8).collect();
+        let ty = context.types.intern(Type::Array { element: byte, count: slice.len() as u64 });
+        let kind = if slice.iter().all(|&one| one == 0) { ConstantKind::Zero } else { ConstantKind::Bytes(slice) };
+        context.constant(Constant { ty, kind })
+    };
+    let mut members = Vec::new();
+    let mut at = 0;
+    for relocation in relocations(object).expect("its type was laid out") {
+        if relocation.at > at {
+            members.push(bytes(context, at, relocation.at));
+        }
+        let target = data[&relocation.target];
+        let space = if objects[&relocation.target].address == AddressKind::Far { 1 } else { 0 };
+        let mut address = target;
+        if relocation.addend != 0 {
+            let ty = context.types.ptr(space);
+            let index = context.int(i16, i128::from(relocation.addend));
+            let operands = vec![target, index];
+            address = context.constant(Constant { ty, kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source: byte, inbounds: false, operands }) });
+        }
+        let cast = |context: &mut llrm_mir::Context, op, ty| context.constant(Constant { ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op, value: address }) });
+        members.push(match (relocation.address, space) {
+            (AddressKind::Near, 1) => cast(context, CastOp::PtrToInt, i16),
+            (AddressKind::Far, 0) => {
+                let far = context.types.ptr(1);
+                cast(context, CastOp::AddrSpaceCast, far)
+            }
+            _ => address,
+        });
+        at = relocation.at + relocation_width(relocation.address);
+    }
+    let count = object.bytes.len() as i64;
+    if members.is_empty() || count > at {
+        members.push(bytes(context, at, count));
+    }
+    if members.len() == 1 {
+        return members[0];
+    }
+    let fields = members.iter().map(|&one| context.get(one).ty).collect();
+    let ty = context.types.intern(Type::Struct { fields, packed: true });
+    context.constant(Constant { ty, kind: ConstantKind::Aggregate(members) })
 }
 
 /// `name`, or `name.N` for the least N free, as LLVM uniques names.
