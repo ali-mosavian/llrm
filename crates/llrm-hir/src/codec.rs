@@ -197,10 +197,31 @@ impl _Plain for model::ProcedureAbi {
         Json::Dict(out)
     }
 }
-plain_record!(Function, None, id => "id", name => "name", result_type => "result_type", values => "values",
-    places => "places", blocks => "blocks", entry => "entry", parameters => "parameters", abi => "abi",
-    calls => "calls", error_handler => "error_handler", error_handler_local => "error_handler_local",
-    external_entries => "external_entries", linkage => "linkage");
+plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", unaliased => "unaliased", readonly => "readonly");
+// `promises` only when made, so that a function reads as it always has.
+impl _Plain for model::Function {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("result_type".to_owned(), self.result_type._plain());
+        out.insert("values".to_owned(), self.values._plain());
+        out.insert("places".to_owned(), self.places._plain());
+        out.insert("blocks".to_owned(), self.blocks._plain());
+        out.insert("entry".to_owned(), self.entry._plain());
+        out.insert("parameters".to_owned(), self.parameters._plain());
+        out.insert("abi".to_owned(), self.abi._plain());
+        out.insert("calls".to_owned(), self.calls._plain());
+        out.insert("error_handler".to_owned(), self.error_handler._plain());
+        out.insert("error_handler_local".to_owned(), self.error_handler_local._plain());
+        out.insert("external_entries".to_owned(), self.external_entries._plain());
+        out.insert("linkage".to_owned(), self.linkage._plain());
+        if !self.promises.is_empty() {
+            out.insert("promises".to_owned(), self.promises._plain());
+        }
+        Json::Dict(out)
+    }
+}
 // `code` only when set, so that data relocations read as they always have.
 impl _Plain for model::DataRelocation {
     fn _plain(&self) -> JSON {
@@ -535,6 +556,7 @@ macro_rules! made_records {
 }
 
 made_records!(
+    Promise,
     Type,
     Place,
     Value,
@@ -923,6 +945,7 @@ static FUNCTION: _Record = _Record {
         ("error_handler_local", _Hint::Bool, false),
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
+        ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
     ],
     build: |args| {
         _object(model::Function {
@@ -940,6 +963,20 @@ static FUNCTION: _Record = _Record {
             error_handler_local: _default(args, "error_handler_local", false)?,
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
+            promises: _default(args, "promises", Vec::new())?,
+        })
+    },
+};
+
+static PROMISE: _Record = _Record {
+    name: "Promise",
+    fields: &[("parameter", _Hint::Int, true), ("bytes", _Hint::Int, true), ("unaliased", _Hint::Bool, true), ("readonly", _Hint::Bool, true)],
+    build: |args| {
+        _object(model::Promise {
+            parameter: _required(args, "parameter")?,
+            bytes: _required(args, "bytes")?,
+            unaliased: _required(args, "unaliased")?,
+            readonly: _required(args, "readonly")?,
         })
     },
 };

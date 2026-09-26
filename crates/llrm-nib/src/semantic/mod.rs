@@ -1513,6 +1513,7 @@ struct FunctionCompiler<'a> {
     blocks: Vec<BlockBuilder>,
     current: u32,
     parameters: Vec<u32>,
+    promises: Vec<hir::Promise>,
     calls: Vec<hir::CallSite>,
     scopes: Vec<BTreeMap<String, Binding>>,
     loops: Vec<Loop>,
@@ -1587,6 +1588,7 @@ impl<'a> FunctionCompiler<'a> {
             }],
             current: 1,
             parameters: Vec::new(),
+            promises: Vec::new(),
             calls: Vec::new(),
             scopes: vec![BTreeMap::new()],
             loops: Vec::new(),
@@ -1644,6 +1646,11 @@ impl<'a> FunctionCompiler<'a> {
         for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
+            // A borrowed view's descriptor is the caller's, and only reseating
+            // a binding writes one: no parameter is reseated.
+            if let SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } = *resolved {
+                compiler.promises.push(hir::Promise { parameter: value, bytes: descriptor::size(rank) + 4, unaliased: true, readonly: true });
+            }
             let binding = match *resolved {
                 SignatureParameter::Adapter { basic, adapter, target, pointer } => {
                     compiler.adapter_binding(basic, adapter, target, pointer, value, parameter.span)?
@@ -1769,6 +1776,7 @@ impl<'a> FunctionCompiler<'a> {
             blocks,
             entry: 1,
             parameters: self.parameters,
+            promises: self.promises,
             calls: self.calls,
             exported: self.signature.exported,
             abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),

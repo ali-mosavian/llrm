@@ -521,6 +521,17 @@ pub struct Function {
     pub error_handler_local: bool,
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
+    pub promises: Vec<Promise>,
+}
+
+/// What the language promises of a pointer parameter, as LLVM's
+/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Promise {
+    pub parameter: i64,
+    pub bytes: i64,
+    pub unaliased: bool,
+    pub readonly: bool,
 }
 
 impl Function {
@@ -549,6 +560,7 @@ impl Function {
             error_handler_local: false,
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
+            promises: Vec::new(),
         }
     }
 }

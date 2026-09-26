@@ -349,3 +349,13 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
     assert!(text.contains(entry), "{text}");
 }
+
+/// A parameter's promise is its LLVM attributes, which LICM and EarlyCSE
+/// ask; with none, a view descriptor's loads never left a loop.
+#[test]
+fn a_promise_becomes_its_parameters_attributes() {
+    let mut function = difference();
+    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, unaliased: true, readonly: true }];
+    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) %1)"), "{text}");
+}

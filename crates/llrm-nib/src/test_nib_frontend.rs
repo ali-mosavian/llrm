@@ -1894,3 +1894,14 @@ fn test_a_loop_through_a_copied_pointer_converges() {
     );
     nib_compile::assembled(&parsed(&source), "assign", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
 }
+
+/// A borrowed view's descriptor is the caller's, never written in the
+/// call: promised as LLVM's `noalias readonly dereferenceable`, for LICM to
+/// hoist its loads.
+#[test]
+fn test_a_borrowed_view_promises_its_descriptor() {
+    let program = parsed(&fixture("matmul8.nib"));
+    let multiply = function(&program, "multiply");
+    let promised = |parameter| model::Promise { parameter, bytes: 10, unaliased: true, readonly: true };
+    assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
+}

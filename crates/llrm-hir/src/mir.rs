@@ -9,7 +9,7 @@ use std::collections::hash_map::Entry;
 use llrm_mir::build::Builder;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{
-    BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
+    Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
     Linkage, Module, Operand as Value, Type, TypeId, Types,
 };
 
@@ -325,6 +325,14 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
+    let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
+    for promise in &function.promises {
+        let at = function.parameters.iter().position(|&one| one == promise.parameter).ok_or("a promise of no parameter")?;
+        let attrs = &mut defined.parameter_attrs[at];
+        attrs.extend(promise.unaliased.then(|| Attribute::Flag("noalias".to_owned())));
+        attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
+        attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
+    }
     Ok((global, abi.0))
 }
 
