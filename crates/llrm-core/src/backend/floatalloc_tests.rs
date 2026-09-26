@@ -242,7 +242,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
 
 #[test]
 fn test_a_load_read_by_several_arithmetics_is_loaded_once() {
-    // NBODYS: `falloff` read by two multiplies. Priced by GCC's i486 table,
+    // NBODYS: `falloff` read by two multiplies. Priced by GCC's i386 table,
     // one load and two register multiplies cost less than two memory forms.
     let cells = _cells([-4, -8, -12, -16, -20], 4);
     let (x, y, falloff, px, py) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4]);
@@ -258,6 +258,30 @@ fn test_a_load_read_by_several_arithmetics_is_loaded_once() {
     let result = run(&body);
     let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(falloff))).count();
     assert_eq!(reads, 1);
+    let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
+    assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
+}
+
+/// The 486 table priced `fld m` at 8 and `fmul m` as `fmul st` plus that
+/// load, so a load read by two multiplies was held in a register. Intel's
+/// i486 figures are `fld m` 3, `fmul m64` 14 and `fmul st` 16: two memory
+/// forms are cheaper.
+#[test]
+fn test_a_load_read_by_two_multiplies_is_their_memory_operand_on_the_486() {
+    let cells = _cells([-4, -8, -12, -16, -20], 4);
+    let (x, y, falloff, px, py) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4]);
+    let body = _body(vec![
+        _load(1, x),
+        _load(2, y),
+        _load(3, falloff),
+        _arithmetic("fmul", 4, fl(1), fl(3)),
+        _store(px, 4),
+        _arithmetic("fmul", 5, fl(2), fl(3)),
+        _store(py, 5),
+    ]);
+    let result = allocated(&phielim::eliminated(&body).unwrap(), None, None, true, "486").unwrap();
+    let fused = result.insns().iter().filter(|one| name(one) == "fmul" && what(one).sources.contains(&m(falloff))).count();
+    assert_eq!(fused, 2);
     let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
     assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
 }

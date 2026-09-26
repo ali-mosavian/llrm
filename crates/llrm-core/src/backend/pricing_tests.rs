@@ -72,7 +72,7 @@ fn test_complete_far_pointer_loads_share_one_priced_form() {
 
 #[test]
 fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
-    let expected = [("386", 18), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 2), ("K6", 2), ("K7", 2), ("Core", 0)];
+    let expected = [("386", 18), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
     assert_eq!(classify("fxch", "st1", "d9c9"), "x87_exchange");
     let got: Vec<(&str, i64)> =
         cpu::names().into_iter().map(|name| (name, cpu::profile(name).unwrap().cost("x87_exchange").unwrap())).collect();
