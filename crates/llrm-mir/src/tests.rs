@@ -40,6 +40,10 @@ fn every_fixture_prints_to_a_fixed_point() {
     let fixtures = fixtures();
     assert!(fixtures.len() >= 17, "{} fixtures", fixtures.len());
     for (path, text) in fixtures {
+        let module = parse::module(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for (_, _, function) in module.functions() {
+            assert!(function.check_uses().is_empty(), "{}: {:?}", path.display(), function.check_uses());
+        }
         let once = round(&text);
         assert_eq!(round(&once), once, "{}", path.display());
     }
