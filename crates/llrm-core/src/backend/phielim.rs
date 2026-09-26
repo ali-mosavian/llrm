@@ -93,10 +93,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // A critical edge. Where every incoming value is defined in
                 // its own predecessor and read by nothing but this phi, having
                 // it define the phi's result outright says what the phi said.
-                if edges
-                    .iter()
-                    .all(|&(w, v)| _defined_in(at_of[&w], v) && once.get(&v).copied() == Some(1))
-                {
+                if edges.iter().all(|&(w, v)| {
+                    _defined_in(at_of[&w], v) && once.get(&v).copied() == Some(1) && !_live_after(&at_of, block.at, w, v, phi.result)
+                }) {
                     for &(_where, value) in &edges {
                         rename.insert(value, phi.result);
                     }
@@ -226,6 +225,47 @@ fn _read_once(body: &LirBody) -> IndexMap<u32, i64> {
         }
     }
     out
+}
+
+/// Whether `result`, the phi in `phi_block`'s, is still read after `value`
+/// is defined in predecessor `from`: later there, by another phi on the edge
+/// into `phi_block`, or down another path. Defining `result` where `value`
+/// was would then overwrite what that read wants.
+fn _live_after(at_of: &IndexMap<i64, &LirBlock>, phi_block: i64, from: i64, value: u32, result: u32) -> bool {
+    let block = at_of[&from];
+    let defined = block.insns.iter().position(|one| one.defines.contains(&value)).expect("defined here");
+    if block.insns[defined + 1..].iter().any(|one| one.uses.contains(&result)) {
+        return true;
+    }
+    let read_on_edge = |from: i64, into: i64| at_of[&into].phis.iter().any(|phi| phi.incoming.contains(&(from, result)));
+    // Live into a block: read before redefined, or passed on.
+    let mut seen = BTreeSet::new();
+    let mut work: Vec<(i64, i64)> = block.succ.iter().map(|&into| (from, into)).collect();
+    while let Some((edge_from, into)) = work.pop() {
+        if read_on_edge(edge_from, into) {
+            return true;
+        }
+        // The phi block's own phi defines `result` afresh.
+        if into == phi_block || !seen.insert(into) {
+            continue;
+        }
+        let Some(next) = at_of.get(&into) else { continue };
+        if next.phis.iter().any(|phi| phi.result == result) {
+            continue;
+        }
+        for one in &next.insns {
+            if one.uses.contains(&result) {
+                return true;
+            }
+            if one.defines.contains(&result) {
+                break;
+            }
+        }
+        if !next.insns.iter().any(|one| one.defines.contains(&result)) {
+            work.extend(next.succ.iter().map(|&after| (into, after)));
+        }
+    }
+    false
 }
 
 /// Whether exactly one instruction in this block defines the value.
@@ -754,6 +794,37 @@ mod tests {
         assert_eq!(last_what.op, Operation::Jump);
         assert_eq!(last_what.target, Some(edge.at));
         assert_eq!(last.at, jz.at);
+    }
+
+    #[test]
+    fn test_a_phi_read_by_its_sibling_is_not_renamed_into_the_latch() {
+        // runtime.nib's print_q4 hung once simplifycfg made its loop's entry
+        // edge critical: `b` took the latch's `b + 1` as its own register, so
+        // `a`'s copy on the back edge read the new `b`, not the old one.
+        let mov = |at: i64, value: u32, n: i64| {
+            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Move, "mov", vec![held(value, 2)], vec![imm(n, 2)], None), vec![value], vec![]))
+        };
+        let test = Arc::new(Insn::new(10, Some((10, 11)), what(Operation::Compare, "cmp", vec![], vec![held(4, 2), imm(9, 2)], None), vec![], vec![4]));
+        let step = Arc::new(Insn::new(20, Some((20, 21)), what(Operation::Binary, "add", vec![held(5, 2)], vec![held(4, 2), imm(1, 2)], None), vec![5], vec![4]));
+        let looped = body(
+            "looped",
+            vec![
+                block(0, vec![mov(0, 1, 0), mov(1, 2, 1)], vec![10, 30], vec![]),
+                block(
+                    10,
+                    vec![test],
+                    vec![20, 30],
+                    vec![Phi { result: 3, incoming: vec![(0, 1), (20, 4)] }, Phi { result: 4, incoming: vec![(0, 2), (20, 5)] }],
+                ),
+                block(20, vec![step], vec![10], vec![]),
+                block(30, vec![], vec![], vec![]),
+            ],
+        );
+        let done = eliminated(&looped).unwrap();
+        let latch = done.blocks.iter().find(|one| one.at == 20).unwrap();
+        let redefined = latch.insns.iter().position(|one| one.defines.contains(&4));
+        let copied = latch.insns.iter().position(|one| one.defines.contains(&3) && one.uses.contains(&4));
+        assert!(copied.is_some() && redefined.is_none_or(|at| at > copied.unwrap()), "{:?}", latch.insns);
     }
 
     #[test]
