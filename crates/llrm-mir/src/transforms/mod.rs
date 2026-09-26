@@ -2,6 +2,7 @@
 //! and no machine named (agents.md, the fifth rule).
 
 pub mod earlycse;
+pub mod inline;
 pub mod instcombine;
 pub mod licm;
 pub mod loopreduce;
@@ -9,13 +10,16 @@ pub mod mem2reg;
 pub mod simplifycfg;
 
 use crate::module::Module;
-use crate::passes::{FunctionPass, PassManager};
+use crate::passes::{Pass, PassManager};
 
 /// The default pipeline, in order.
-const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg"];
+const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "inline", "mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg"];
 
-fn pass(name: &str) -> Result<Box<dyn FunctionPass>, String> {
-    Ok(match name {
+fn pass(name: &str) -> Result<Pass, String> {
+    if name == "inline" {
+        return Ok(Pass::Module(Box::new(inline::Inline)));
+    }
+    Ok(Pass::Function(match name {
         "mem2reg" => Box::new(mem2reg::Mem2Reg),
         "instcombine" => Box::new(instcombine::InstCombine),
         "simplifycfg" => Box::new(simplifycfg::SimplifyCfg),
@@ -23,7 +27,7 @@ fn pass(name: &str) -> Result<Box<dyn FunctionPass>, String> {
         "licm" => Box::new(licm::Licm),
         "loop-reduce" => Box::new(loopreduce::LoopReduce),
         _ => return Err(format!("no MIR pass {name}")),
-    })
+    }))
 }
 
 /// The module through the pipeline, verified after each pass. As `opt

@@ -152,6 +152,27 @@ pub trait FunctionPass {
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses;
 }
 
+/// A pass over the whole module, as LLVM's inliner works across functions:
+/// it answers which functions it changed.
+pub trait ModulePass {
+    fn name(&self) -> &'static str;
+    fn run(&mut self, module: &mut Module) -> Vec<GlobalId>;
+}
+
+pub enum Pass {
+    Function(Box<dyn FunctionPass>),
+    Module(Box<dyn ModulePass>),
+}
+
+impl Pass {
+    fn name(&self) -> &'static str {
+        match self {
+            Pass::Function(pass) => pass.name(),
+            Pass::Module(pass) => pass.name(),
+        }
+    }
+}
+
 /// One pass over one function, and what it changed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stage {
@@ -162,7 +183,7 @@ pub struct Stage {
 
 #[derive(Default)]
 pub struct PassManager {
-    pub(crate) passes: Vec<Box<dyn FunctionPass>>,
+    pub(crate) passes: Vec<Pass>,
     pub verify_each: bool,
     pub verify_invalidation: bool,
     /// A directory each pass's output is written to, as `NN-pass.ll`.
@@ -171,7 +192,11 @@ pub struct PassManager {
 
 impl PassManager {
     pub fn add(&mut self, pass: impl FunctionPass + 'static) {
-        self.passes.push(Box::new(pass));
+        self.passes.push(Pass::Function(Box::new(pass)));
+    }
+
+    pub fn add_module(&mut self, pass: impl ModulePass + 'static) {
+        self.passes.push(Pass::Module(Box::new(pass)));
     }
 
     /// Runs every pass over every defined function, in order.
@@ -181,10 +206,22 @@ impl PassManager {
             None => DataLayout::default(),
         };
         let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
-        let callees = crate::memory::callees(module);
         let mut stages = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
+            let callees = crate::memory::callees(module);
+            let pass = match pass {
+                Pass::Function(pass) => pass,
+                Pass::Module(pass) => {
+                    for id in pass.run(module) {
+                        caches.remove(&id);
+                        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
+                        stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
+                    }
+                    after(&self.dump, self.verify_each, number, name, module)?;
+                    continue;
+                }
+            };
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
                 let Module { context, globals, .. } = &mut *module;
@@ -203,17 +240,24 @@ impl PassManager {
                 }
                 stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
             }
-            if let Some(directory) = &self.dump {
-                let file = directory.join(format!("{:02}-{name}.ll", number + 1));
-                std::fs::create_dir_all(directory).and_then(|()| std::fs::write(file, crate::print::module(module))).map_err(|error| error.to_string())?;
-            }
-            if self.verify_each {
-                let problems = crate::verify::verify(module);
-                if !problems.is_empty() {
-                    return Err(format!("after {name}: {}", problems.join("; ")));
-                }
-            }
+            after(&self.dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
     }
+
+}
+
+/// The dump and the verifier after pass `number`.
+fn after(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
+        if let Some(directory) = dump {
+            let file = directory.join(format!("{:02}-{name}.ll", number + 1));
+            std::fs::create_dir_all(directory).and_then(|()| std::fs::write(file, crate::print::module(module))).map_err(|error| error.to_string())?;
+        }
+        if verify_each {
+            let problems = crate::verify::verify(module);
+            if !problems.is_empty() {
+                return Err(format!("after {name}: {}", problems.join("; ")));
+            }
+        }
+        Ok(())
 }
