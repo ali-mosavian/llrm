@@ -440,19 +440,11 @@ impl Parser {
             return self.fail(format!("expected the function's name, found {}", self.describe()));
         };
         let id = self.globals[&name];
+        let void = self.module.context.types.void();
+        let mut function = Function::new(returns, void);
+        function.return_attrs = return_attrs;
         let mut local = Local {
-            function: Function {
-                ty: returns,
-                parameters: Vec::new(),
-                parameter_attrs: Vec::new(),
-                return_attrs,
-                attrs: Vec::new(),
-                personality: None,
-                values: Vec::new(),
-                instructions: Vec::new(),
-                blocks: Vec::new(),
-                layout: Vec::new(),
-            },
+            function,
             values: HashMap::new(),
             blocks: HashMap::new(),
             pending_values: HashMap::new(),
@@ -501,12 +493,13 @@ impl Parser {
         if define {
             self.body(&mut local)?;
         }
+        local.function.index();
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
             unnamed_addr,
             address_space,
-            kind: GlobalKind::Function(local.function),
+            kind: GlobalKind::Function(Box::new(local.function)),
         };
         self.defined_globals.insert(id);
         Ok(())

@@ -198,6 +198,11 @@ prints the subset, and `tools/mir-oracle.sh` checks that LLVM reads its
 output as it reads the input, over the mapping fixtures and clang's output
 for `bench/parity`.
 
+Then the mutation API (`llrm_mir::edit`): LLVM's `setOperand`,
+`replaceAllUsesWith`, `eraseFromParent`, `clone` and moves, over use lists
+kept for values and blocks, each change logged for the ledger;
+`check_uses` recomputes the lists and compares.
+
 ### 4. Raise into MIR beside the old MIR
 
 - The QB raise and the C and Nib frontends also build a MIR module. Nothing

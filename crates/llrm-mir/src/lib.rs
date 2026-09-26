@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod context;
+pub mod edit;
 pub mod lexer;
 pub mod module;
 pub mod opcode;
@@ -10,14 +11,17 @@ pub mod parse;
 pub mod print;
 pub mod types;
 
+pub use edit::Position;
 pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 pub use lexer::ParseError;
 pub use module::{
-    Block, BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand,
-    Module, Operand, UnnamedAddr, ValueData, ValueDef, ValueId,
+    Block, BlockId, Change, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand,
+    Module, Operand, UnnamedAddr, Use, ValueData, ValueDef, ValueId,
 };
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, FloatPredicate, Flags, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
 
+#[cfg(test)]
+mod edit_tests;
 #[cfg(test)]
 mod tests;
