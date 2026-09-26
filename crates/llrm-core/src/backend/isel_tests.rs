@@ -1,75 +1,43 @@
-use std::cell::RefCell;
-use std::collections::BTreeSet;
-use std::rc::Rc;
-
-use iced_x86::Register;
-
+use crate::backend::assemble::{self, Abi};
 use crate::backend::cpu::ProfileOrName;
-use crate::backend::isel::{self, Convention, Home, Unselected};
-use crate::backend::{addressvalues, frame, masm};
-use crate::flow;
+use crate::backend::isel::{self, Unselected};
+use crate::backend::masm;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
 
-/// cdecl, far: the first parameter at [bp+6], the result in AX.
-fn cdecl(parameters: usize) -> Convention {
-    Convention { parameters: (0..parameters).map(|at| Home::Frame(6 + 2 * at as i64)).collect(), returns: vec![Register::EAX] }
+/// QB's: the runtime's measured contracts, and conservative ones for what
+/// it does not know; a runtime routine linked by its own name.
+struct Qb;
+
+impl Abi for Qb {
+    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<crate::abi::runtime::Contract, String> {
+        let cleanup = if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+        crate::abi::qb::_contract(&self.linked(callee), cleanup, pushed, crate::hir::model::RuntimeProfile::Qb45).map_err(|error| error.0)
+    }
+
+    fn linked(&self, name: &str) -> String {
+        name.strip_prefix("llrm.qb.").unwrap_or(name).to_owned()
+    }
 }
 
-/// QB's contracts: the runtime's measured ones, and conservative ones for
-/// what it does not know.
-fn contracts(name: &str, pops: bool, pushed: i64) -> Result<crate::abi::runtime::Contract, String> {
-    let cleanup = if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
-    let name = name.strip_prefix("llrm.qb.").unwrap_or(name);
-    crate::abi::qb::_contract(name, cleanup, pushed, crate::hir::model::RuntimeProfile::Qb45).map_err(|error| error.0)
+fn parsed(text: &str) -> llrm_mir::Module {
+    llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses")
 }
 
-fn selected(text: &str, name: &str, convention: &Convention) -> Result<isel::Selected, Unselected> {
-    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    isel::selected(&module, name, convention, &contracts)
+fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
+    let contracts = |callee: &str, pops: bool, pushed: i64| Qb.contract(callee, pops, pushed);
+    isel::selected(&parsed(text), name, &contracts)
+}
+
+fn assembled(text: &str) -> String {
+    let module = assemble::assembled(&parsed(text), &Qb, "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
+    masm::text(&module).expect("prints")
 }
 
 /// The procedure's instructions, through every machine phase.
-fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
-    let parsed = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    let names = crate::backend::globals::names(&parsed).expect("names");
-    let isel::Selected { body, calls, far } = selected(text, name, convention).expect("selects");
-    let mut body = flow::verified(body, "isel", true).expect("verified");
-    let frame = Rc::new(RefCell::new(frame::of(&body, Some(&calls), "", None).expect("a frame")));
-    let pinned = body.pins.clone();
-    let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(&calls), false, ProfileOrName::Name("486")).expect("phases") {
-        if phase.class_name() == "Prologue" {
-            continue;
-        }
-        if phase.class_name() == "PhiElimination" {
-            in_ssa = false;
-        }
-        body = flow::checked(body, phase.as_mut(), in_ssa).expect("a phase");
-        if std::env::var_os("ISEL_DUMP").is_some() {
-            println!("{}", crate::tools::stages::lir_stage(phase.class_name(), &[(name.to_owned(), body.clone())]));
-        }
-    }
-    let body = masm::cleaned_returns(&addressvalues::converted(&body), 0).expect("returns");
-    let callees = calls.iter().map(|(at, callee)| (*at, masm::Callee::new(callee.clone(), far.contains(at)))).collect();
-    let reserve = {
-        let frame = frame.borrow();
-        -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)
-    };
-    let procedure =
-        masm::Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None };
-    let module = masm::Module {
-        code: "T_TEXT".to_owned(),
-        names,
-        externs: Vec::new(),
-        publics: Vec::new(),
-        data: Vec::new(),
-        procedures: vec![procedure],
-        private: BTreeSet::new(),
-        requests: BTreeSet::new(),
-    };
-    let text = masm::text(&module).expect("prints");
-    let from = text.find(&format!("{name} proc far")).expect("the procedure");
+fn listing(text: &str, name: &str) -> Vec<String> {
+    let text = assembled(text);
+    let from = text.find(&format!("{name} proc")).expect("the procedure");
     text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
 }
 
@@ -77,7 +45,7 @@ fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
 /// reading every register, it kept bx live and its load unfolded.
 #[test]
 fn test_arithmetic_on_stack_parameters() {
-    let got = listing("define i16 @f(i16 %a, i16 %b) {\n  %s = sub i16 %a, %b\n  %t = add i16 %s, 3\n  ret i16 %t\n}\n", "f", &cdecl(2));
+    let got = listing("define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b\n  %t = add i16 %s, 3\n  ret i16 %t\n}\n", "f");
     assert_eq!(
         got,
         [
@@ -95,7 +63,7 @@ fn test_arithmetic_on_stack_parameters() {
 
 #[test]
 fn test_a_counted_loop() {
-    let text = "define i16 @sum(i16 %n) {
+    let text = "define i16 @sum(i16 %n) addrspace(1) {
 entry:
   br label %test
 test:
@@ -111,7 +79,7 @@ done:
   ret i16 %s
 }
 ";
-    let got = listing(text, "sum", &cdecl(1));
+    let got = listing(text, "sum");
     // The comparison stays flags beside its branch; the phis' zeros are made in the entry.
     assert_eq!(
         got,
@@ -138,7 +106,7 @@ done:
 
 #[test]
 fn test_locals_live_in_frame_slots() {
-    let text = "define i16 @f(i16 %a) {
+    let text = "define i16 @f(i16 %a) addrspace(1) {
   %x = alloca [2 x i16]
   %y = getelementptr inbounds [2 x i16], ptr %x, i16 0, i16 1
   store i16 %a, ptr %y
@@ -147,7 +115,7 @@ fn test_locals_live_in_frame_slots() {
   ret i16 %v
 }
 ";
-    let got = listing(text, "f", &cdecl(1));
+    let got = listing(text, "f");
     // The load reads what the store left in ax; the volatile store stays.
     assert_eq!(
         got,
@@ -167,7 +135,7 @@ fn test_locals_live_in_frame_slots() {
 
 #[test]
 fn test_a_pointer_parameter_is_a_base_register() {
-    let text = "define i16 @f(ptr %p) {
+    let text = "define i16 @f(ptr %p) addrspace(1) {
   %q = getelementptr inbounds i8, ptr %p, i16 4
   %v = load i16, ptr %q
   %w = trunc i16 %v to i8
@@ -175,7 +143,7 @@ fn test_a_pointer_parameter_is_a_base_register() {
   ret i16 %x
 }
 ";
-    let got = listing(text, "f", &cdecl(1));
+    let got = listing(text, "f");
     assert_eq!(
         got,
         [
@@ -193,7 +161,7 @@ fn test_a_pointer_parameter_is_a_base_register() {
 
 #[test]
 fn test_a_constant_compared_first_is_swapped() {
-    let text = "define i16 @f(i16 %a) {
+    let text = "define i16 @f(i16 %a) addrspace(1) {
 entry:
   %c = icmp sgt i16 5, %a
   br i1 %c, label %yes, label %no
@@ -203,7 +171,7 @@ no:
   ret i16 2
 }
 ";
-    let got = listing(text, "f", &cdecl(1));
+    let got = listing(text, "f");
     assert_eq!(
         got,
         [
@@ -230,15 +198,15 @@ fn test_what_is_not_selected_yet_is_refused() {
         ("%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v", "arithmetic on an i1"),
         ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
     ] {
-        let text = format!("define i16 @f(ptr %p, i16 %a) {{\n  {body}\n}}\n");
-        assert_eq!(selected(&text, "f", &cdecl(2)).err(), Some(Unselected(why.to_owned())), "{body}");
+        let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
+        assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
     }
 }
 
 /// A shift counts from cl: the count as a word printed `shl ax, cx`.
 #[test]
 fn test_division_and_variable_shifts() {
-    let text = "define i16 @f(i16 %a, i16 %b) {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
   %q = sdiv i16 %a, %b
   %r = urem i16 %a, %b
   %s = add i16 %q, %r
@@ -246,7 +214,7 @@ fn test_division_and_variable_shifts() {
   ret i16 %t
 }
 ";
-    let got = listing(text, "f", &cdecl(2));
+    let got = listing(text, "f");
     assert_eq!(
         got,
         [
@@ -275,7 +243,7 @@ fn test_division_and_variable_shifts() {
 
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
-    let text = "define i16 @f(ptr %p, i16 %i) {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
   %x = alloca [4 x i16]
   %y = getelementptr inbounds [4 x i16], ptr %x, i16 0, i16 %i
   store i16 5, ptr %y
@@ -284,7 +252,7 @@ fn test_variable_indices_are_scaled_and_added() {
   ret i16 %v
 }
 ";
-    let got = listing(text, "f", &cdecl(2));
+    let got = listing(text, "f");
     assert_eq!(
         got,
         [
@@ -312,7 +280,7 @@ fn test_variable_indices_are_scaled_and_added() {
 
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
-    let text = "define i16 @f(i16 %a) {
+    let text = "define i16 @f(i16 %a) addrspace(1) {
 entry:
   switch i16 %a, label %other [ i16 1, label %one
                                 i16 5, label %five
@@ -327,7 +295,7 @@ other:
   ret i16 0
 }
 ";
-    let got = listing(text, "f", &cdecl(1));
+    let got = listing(text, "f");
     // 7 goes to the default anyway; `one` is entered from two blocks of the chain.
     assert_eq!(
         got,
@@ -362,8 +330,7 @@ other:
 
 #[test]
 fn test_a_dword_result_leaves_in_dx_ax() {
-    let convention = Convention { parameters: vec![Home::Frame(6)], returns: vec![Register::EAX, Register::EDX] };
-    let got = listing("define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n", "f", &convention);
+    let got = listing("define i32 @f(i32 %a) addrspace(1) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n", "f");
     assert_eq!(
         got,
         [
@@ -381,7 +348,7 @@ fn test_a_dword_result_leaves_in_dx_ax() {
 
 #[test]
 fn test_comparisons_as_values() {
-    let text = "define i16 @f(i16 %a, i16 %b) {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
 entry:
   %lt = icmp slt i16 %a, %b
   %basic = sext i1 %lt to i16
@@ -396,7 +363,7 @@ no:
   ret i16 0
 }
 ";
-    let got = listing(text, "f", &cdecl(2));
+    let got = listing(text, "f");
     // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
     assert_eq!(
         got,
@@ -432,15 +399,14 @@ no:
 fn test_calls_push_as_their_convention_orders() {
     let text = "declare cc1000 i16 @basic(i16, i8) addrspace(1)
 declare i32 @c(i16, i16)
-define i32 @f(i16 %a) {
+define i32 @f(i16 %a) addrspace(1) {
   %b = trunc i16 %a to i8
   %x = call cc1000 addrspace(1) i16 @basic(i16 %a, i8 %b)
   %y = call i32 @c(i16 %x, i16 5)
   ret i32 %y
 }
 ";
-    let convention = Convention { parameters: vec![Home::Frame(6)], returns: vec![Register::EAX, Register::EDX] };
-    let got = listing(text, "f", &convention);
+    let got = listing(text, "f");
     // BASIC's far callee pops `a`, then the byte widened; C's near one is popped by its caller.
     assert_eq!(
         got,
@@ -474,7 +440,7 @@ define i32 @f(i16 %a) {
 fn test_near_globals_are_symbols() {
     let text = "@count = internal global i16 5
 @table = internal global [3 x i16] [i16 1, i16 2, i16 3]
-define i16 @f(i16 %i) {
+define i16 @f(i16 %i) addrspace(1) {
   %c = load i16, ptr @count
   %d = add i16 %c, 1
   store i16 %d, ptr @count
@@ -485,7 +451,7 @@ define i16 @f(i16 %i) {
   ret i16 %s
 }
 ";
-    let got = listing(text, "f", &cdecl(1));
+    let got = listing(text, "f");
     assert_eq!(
         got,
         [
@@ -516,7 +482,7 @@ fn test_initializers_are_bytes_and_relocations() {
 @rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    let names = crate::backend::globals::names(&module).expect("names");
+    let names = crate::backend::globals::names(&module, &|name| Qb.linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
     let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
     assert_eq!(
@@ -528,6 +494,81 @@ fn test_initializers_are_bytes_and_relocations() {
             pointer("far", 0, true),
             pointer("far", 1, false),
             Datum::SegmentWord("far".to_owned()),
+        ]
+    );
+}
+
+/// Where arguments arrive is the MIR's: BASIC's pushed first-to-last and
+/// popped by the callee, C's near one first-nearest, BP above a near return.
+/// An unused argument is not loaded: it was, and machine DCE keeps loads.
+#[test]
+fn test_parameters_arrive_as_the_convention_pushed_them() {
+    let text = "define cc1000 i16 @basic(i16 %a, i32 %b, i16 %c) addrspace(1) {
+  %d = sub i16 %a, %c
+  ret i16 %d
+}
+define i16 @near(i16 %a, i16 %b) {
+  %d = sub i16 %a, %b
+  ret i16 %d
+}
+";
+    assert_eq!(
+        listing(text, "basic"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+12]", "sub ax, word ptr [bp+6]", "pop bp", "retf 8"]
+    );
+    assert_eq!(
+        listing(text, "near"),
+        ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+4]", "sub ax, word ptr [bp+6]", "pop bp", "ret"]
+    );
+}
+
+/// A module whole: a runtime routine extern by its linked name, an external
+/// function public, an internal one private, and its data.
+#[test]
+fn test_a_module_is_its_procedures_externs_publics_and_data() {
+    let text = "@count = internal global i16 5
+declare cc1000 void @\"llrm.qb.B$PEI2\"(i16) addrspace(1)
+define internal cc1000 void @helper(i16 %a) addrspace(1) {
+  call cc1000 addrspace(1) void @\"llrm.qb.B$PEI2\"(i16 %a)
+  ret void
+}
+define cc1000 void @MAIN() addrspace(1) {
+  %c = load i16, ptr @count
+  call cc1000 addrspace(1) void @helper(i16 %c)
+  ret void
+}
+";
+    let got = assembled(text);
+    assert_eq!(
+        got.lines().map(str::trim).collect::<Vec<_>>(),
+        [
+            ".model medium",
+            ".386",
+            "",
+            "public MAIN",
+            ".data",
+            "count label byte",
+            "db 005h,000h",
+            "extern B$PEI2:far",
+            ".code T_TEXT",
+            "helper proc far",
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "push ax",
+            "call far ptr B$PEI2",
+            "pop bp",
+            "retf 2",
+            "helper endp",
+            "MAIN proc far",
+            "L1_0:",
+            "mov ax, word ptr count",
+            "push ax",
+            "call far ptr helper",
+            "retf",
+            "MAIN endp",
+            "end",
         ]
     );
 }

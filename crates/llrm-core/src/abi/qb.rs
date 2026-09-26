@@ -886,19 +886,6 @@ pub fn parameter_offsets(function: &model::Function, parameter_types: &[&model::
     offsets
 }
 
-/// How `function` is entered and left, as instruction selection reads it:
-/// each parameter's frame cell, and the registers its result leaves in.
-pub fn convention(function: &model::Function, types: &IndexMap<i64, &model::Type>) -> crate::backend::isel::Convention {
-    let parameter_types: Vec<&model::Type> = function
-        .parameters
-        .iter()
-        .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
-        .collect();
-    let parameters = parameter_offsets(function, &parameter_types).into_iter().map(crate::backend::isel::Home::Frame).collect();
-    let returns = if _paired(types[&function.result_type]) { vec![Register::EAX, Register::EDX] } else { vec![Register::EAX] };
-    crate::backend::isel::Convention { parameters, returns }
-}
-
 /// Turn one optimized semantic body into the backend's existing call form.
 pub fn physicalize(
     program: &model::Program,

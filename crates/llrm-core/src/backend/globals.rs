@@ -18,14 +18,15 @@ pub fn space(module: &Module, global: GlobalId) -> Space {
     }
 }
 
-/// Each global's assembler name, keyed as an `Addr` names it. An internal
-/// global's name is free, so one no assembler takes becomes `G$n`; an
-/// external one must already be a symbol.
-pub fn names(module: &Module) -> Result<IndexMap<(Space, i64), String>, String> {
+/// Each global's assembler name, keyed as an `Addr` names it: its name as
+/// `linked` mangles it, as LLVM's Mangler does. An internal global's name
+/// is free, so one no assembler takes becomes `G$n`; an external one must
+/// be a symbol once mangled.
+pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
-        let name = global.name.clone().unwrap_or_default();
+        let name = linked(global.name.as_deref().unwrap_or_default());
         let symbol = if is_symbol(&name) {
             name
         } else if global.linkage == llrm_mir::Linkage::External {
