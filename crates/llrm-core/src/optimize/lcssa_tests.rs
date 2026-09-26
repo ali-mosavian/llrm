@@ -166,3 +166,31 @@ fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
     body.blocks[0].succ = vec![1, 3];
     assert_eq!(closed(&Rc::new(MirBody::clone(&body))).unwrap(), Rc::new(body));
 }
+
+/// matmul8: peeling left the outer counter's step behind `phi(x, x)`, and
+/// after unrolling an inner loop its exit phi stayed: no trip count through
+/// the one, no unrolling past the other, so both loop nests stayed rolled.
+#[test]
+fn test_a_phi_naming_one_value_outside_a_loop_exit_is_that_value() {
+    let x = value(1, 0, 1, 1);
+    let joined = value(2, 3, 1, 2);
+    let copied = value(3, 4, 1, 3);
+    let read = value(4, 4, 2, 1);
+    let make = operation(0, Kind::Copy, &[x], &[], vec![Arg::Const(Const::new(7, 2))], vec![held(x, 2)]);
+    let consume = operation(4, Kind::Copy, &[read], &[copied], vec![held(copied, 2)], vec![held(read, 2)]);
+    let body = MirBody::new(
+        0,
+        vec![
+            MirBlock::new(0, vec![], vec![make], vec![1, 2]),
+            MirBlock::new(1, vec![], vec![], vec![3]),
+            MirBlock::new(2, vec![], vec![], vec![3]),
+            MirBlock::new(3, vec![Phi { result: joined, incoming: incoming(&[(1, x), (2, x)]) }], vec![], vec![4]),
+            MirBlock::new(4, vec![Phi { result: copied, incoming: incoming(&[(3, joined)]) }], vec![consume], vec![]),
+        ],
+    );
+
+    let result = closed(&Rc::new(body)).unwrap();
+
+    assert!(result.blocks.iter().all(|block| block.phis.is_empty()), "{result:?}");
+    assert_eq!(result.block(4).unwrap().ops[0].uses, vec![x]);
+}

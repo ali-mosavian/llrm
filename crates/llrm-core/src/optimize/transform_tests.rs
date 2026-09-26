@@ -823,28 +823,31 @@ fn test_the_stage_records_account_for_every_operation() {
     use crate::optimize::transform::{Applied, recorded};
     use crate::testing::{blocks_of, module, raised_from};
 
-    let found = module("tests/fixtures/omf/nested-p-g2.obj");
-    let blocks = blocks_of(&found);
     let ids = |body: &MirBody| -> BTreeSet<u32> { body.blocks.iter().flat_map(|block| &block.ops).map(|op| op.id.0).collect() };
     let mut kinds = BTreeSet::new();
-    for (name, body) in raised_from(&found, &blocks, None).values {
-        let entry = identified(body);
-        let options = Applied { blocks: Some(blocks.clone()), found: Some(found.clone()), options: crate::model::passes::O2(), ..Default::default() };
-        let done = recorded(&entry, &found.dgroup.members, &found.calls, options).unwrap();
-        let mut live = ids(&entry);
-        for stage in &done.stages {
-            for change in &stage.changes {
-                kinds.insert(format!("{:?}", change.disposition));
-                let old = change.old.filter(|_| change.disposition != Disposition::Inserted);
-                if let Some(old) = old {
-                    assert!(live.remove(&old), "{name} {}: {old} is not live for {change:?}", stage.name);
-                }
-                for &new in &change.replacements {
-                    assert!(live.insert(new) || Some(new) == old, "{name} {}: {new} is already live", stage.name);
+    // nested-p-g2 no longer inserts: its inner loop unrolls rather than peels.
+    for fixture in ["tests/fixtures/omf/nested-p-g2.obj", "tests/fixtures/omf/nested-p-evt.obj"] {
+        let found = module(fixture);
+        let blocks = blocks_of(&found);
+        for (name, body) in raised_from(&found, &blocks, None).values {
+            let entry = identified(body);
+            let options = Applied { blocks: Some(blocks.clone()), found: Some(found.clone()), options: crate::model::passes::O2(), ..Default::default() };
+            let done = recorded(&entry, &found.dgroup.members, &found.calls, options).unwrap();
+            let mut live = ids(&entry);
+            for stage in &done.stages {
+                for change in &stage.changes {
+                    kinds.insert(format!("{:?}", change.disposition));
+                    let old = change.old.filter(|_| change.disposition != Disposition::Inserted);
+                    if let Some(old) = old {
+                        assert!(live.remove(&old), "{name} {}: {old} is not live for {change:?}", stage.name);
+                    }
+                    for &new in &change.replacements {
+                        assert!(live.insert(new) || Some(new) == old, "{name} {}: {new} is already live", stage.name);
+                    }
                 }
             }
+            assert_eq!(live, ids(&done.body), "{name}");
         }
-        assert_eq!(live, ids(&done.body), "{name}");
     }
     assert!(kinds.len() == 4, "{kinds:?}");
 }

@@ -144,6 +144,7 @@ pub fn reduced(
     }
 
     let reads = _Reads::of(body);
+    let made = induction::definitions(body);
     let partners = address_forms.iter().find(|form| !form.secondary).and_then(|form| form.partners);
     let address_registers = address_forms.iter().find(|form| !form.secondary).and_then(AddressForm::address_registers);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
@@ -352,6 +353,9 @@ pub fn reduced(
                 .find(|phi| phi.result.id == one.of.value)
                 .map(|phi| phi.result)
                 .expect("a counter is a header phi");
+            if _already_carried(op, one, counter, &made) {
+                continue;
+            }
             taken += 1;
             let base = Value {
                 id: _next(body, taken),
@@ -639,6 +643,9 @@ pub fn reduced(
                 let width = _width(op);
                 if member.offsets.is_empty() {
                     replacements.insert(member.op, vec![_copying(op, recurrence, answer, width)]);
+                    continue;
+                }
+                if _already_carried(op, member, recurrence, &made) {
                     continue;
                 }
                 taken += 1;
@@ -1565,6 +1572,27 @@ fn _recompute_cost(body: &MirBody, one: &Derived, costs: &OperationCosts) -> i64
         work += costs.address;
     }
     work
+}
+
+/// Whether `op` already adds `member`'s one invariant to `recurrence`, through
+/// copies: rewriting it would only copy the invariant, which gvn folds back.
+fn _already_carried(op: &Op, member: &Derived, recurrence: Value, made: &BTreeMap<u32, &Op>) -> bool {
+    let unit = matches!(&member.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
+    let [(Arg::Held(offset), coefficient)] = member.offsets.as_slice() else {
+        return false;
+    };
+    if !unit || member.pointer.is_some() || *coefficient != BigInt::from(1_u8) || op.kind != Kind::Add {
+        return false;
+    }
+    let resolved = |held: Held| induction::copied(held, made).value.id;
+    let mut read = op.args.iter().filter_map(|arg| match arg {
+        Arg::Held(held) => Some(resolved(*held)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    read.sort_unstable();
+    let mut wanted = vec![resolved(*offset), resolved(Held { value: recurrence, width: offset.width })];
+    wanted.sort_unstable();
+    read == wanted
 }
 
 /// `op` made a copy of the counter that replaces it.

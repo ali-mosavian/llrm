@@ -360,6 +360,21 @@ fn procedure_listing(name: &str, source: &[u8], procedure: &str) -> String {
     text[text.find(&format!("{procedure} proc")).expect("start")..text.find(&format!("{procedure} endp")).expect("end")].to_owned()
 }
 
+/// qbdemo's FRACLINE2 never converged: strength rewrote `x% + y320%`, an
+/// index already its invariant plus the counter, into a copy of the
+/// invariant plus the counter; gvn folded the copy back, every round.
+#[test]
+fn test_an_index_already_carried_by_its_counter_is_not_reduced_again() {
+    let source = "DECLARE SUB fracline2 (y%, y1#, y2#, x1#, x2#, distthr#)\r\nDEFINT A-Z\r\nDEF SEG = &HA000\r\n\
+FOR r = 0 TO 199: fracline2 r, 0, 1, 0, 1, 4: NEXT\r\nDEFDBL A-Z\r\nSUB fracline2 (y%, y1, y2, x1, x2, distthr)\r\n\
+deltax = (x2 - x1) / 320\r\ndeltay = (y2 - y1) / 320\r\ny = y1\r\nx% = 0\r\ny320% = y% * 320\r\nx = x1\r\nDO\r\n\
+IF PEEK(x% + y320% - 320) = PEEK(x% + y320% + 320) THEN\r\niter% = PEEK(x% + y320% - 320)\r\nELSE\r\n\
+re = 0: im = 0: iter% = 0\r\nDO\r\ntemp = re * re - im * im\r\nim = re * im\r\nim = im + im + y\r\nre = temp + x\r\n\
+iter% = iter% + 1\r\nLOOP UNTIL re * re + im * im >= distthr OR iter% = 255\r\nEND IF\r\nPOKE x% + y320%, iter%\r\n\
+x% = x% + 1\r\nIF x% >= 320 THEN EXIT SUB\r\nx = x + deltax\r\ny = y + deltay\r\nLOOP\r\nEND SUB\r\n";
+    procedure_listing("FRAC.BAS", source.as_bytes(), "FRACLINE2");
+}
+
 /// qbdemo's PLASMA: a split piece of `DEF SEG = &HA000` was evicted in the
 /// loop's preheader and never split again, so the pixel loop remade the
 /// segment with `push 0A000h / pop fs` every trip.
