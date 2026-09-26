@@ -165,6 +165,12 @@ impl Insn {
             .collect()
     }
 
+    /// The source ranges this instruction owns.
+    #[must_use]
+    pub fn owned(&self) -> Vec<(i64, i64)> {
+        if self.spread.is_empty() { self.covers.into_iter().filter(|(lo, hi)| lo < hi).collect() } else { self.spread.clone() }
+    }
+
     /// Python `Insn.rewritten`.
     #[must_use]
     pub fn rewritten(&self) -> bool {
@@ -298,6 +304,22 @@ impl LirBody {
             .flat_map(|block| block.insns.iter().cloned())
             .collect()
     }
+
+    /// Every source byte an instruction owns, once per owner, in order. A
+    /// machine phase may move bytes between instructions but neither lose
+    /// nor duplicate one.
+    #[must_use]
+    pub fn owned_bytes(&self) -> Vec<i64> {
+        let mut bytes: Vec<i64> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .flat_map(|one| one.owned())
+            .flat_map(|(lo, hi)| lo..hi)
+            .collect();
+        bytes.sort_unstable();
+        bytes
+    }
 }
 
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
@@ -325,6 +347,19 @@ pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     anchored.frame_adjust = false;
     anchored.rematerialized = false;
     Arc::new(anchored)
+}
+
+/// Only the source bytes `one` owns: no machine work and no dataflow.
+#[must_use]
+pub fn bytes_only(one: &Arc<Insn>) -> Arc<Insn> {
+    let inert = one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref().unwrap_or("").is_empty());
+    if inert && one.defines.is_empty() && one.uses.is_empty() {
+        return Arc::clone(one);
+    }
+    let mut kept = (*anchor(Arc::clone(one))).clone();
+    kept.defines.clear();
+    kept.uses.clear();
+    Arc::new(kept)
 }
 
 /// `insns` without the ones `drop` picks, their bytes given to a survivor.
