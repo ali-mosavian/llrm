@@ -23,8 +23,8 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 QuickrBASIC (`--dialect quickr`) is VBDOS BASIC extended, linked against the VBDOS
 runtime. It adds sized and unsigned integers, mandatory declarations, f-strings,
 PRIVATE procedures, `+=`, BREAK/CONTINUE, `FOR x IN`, `a IF c ELSE b`, IN, chained
-comparisons, `RETURN value`, tuples, and record and array results. See
-[the dialects](docs/frontends/qb/dialects.md).
+comparisons, `RETURN value`, tuples, record and array results, and string slices
+`s(a:b:c)`. See [the dialects](docs/frontends/qb/dialects.md).
 
 `FOR x [AS type] IN …` walks a one-dimensional array (`a()`), `RANGE(stop)` or
 `RANGE(start, stop[, step])`, the characters of a string, or the array a FUNCTION

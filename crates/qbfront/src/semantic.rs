@@ -392,7 +392,7 @@ fn built(
         });
     }
     let mut module = outline_module_gosubs(module)?;
-    if module.format_strings {
+    if module.prelude {
         add_prelude(&mut module)?;
     }
     let detached_results = detach_results(&mut module, dialect);
@@ -762,6 +762,41 @@ fn mentions(expression: &Expr, name: &str) -> bool {
                 }
         }
         Expr::Chain { first, rest, .. } => within(first) || rest.iter().any(|(_, one)| within(one)),
+        Expr::Slice {
+            base,
+            start,
+            end,
+            step,
+            ..
+        } => within(base) || [start, end, step].into_iter().flatten().any(|part| within(part)),
+    }
+}
+
+/// A call of the prelude's `name` for a slice of `base`: each bound, and
+/// whether it was given, then the step, then `extra`.
+fn slice_call(
+    name: &str,
+    base: &Expr,
+    start: &Option<Box<Expr>>,
+    end: &Option<Box<Expr>>,
+    step: &Option<Box<Expr>>,
+    extra: Vec<Expr>,
+    span: Span,
+) -> Expr {
+    let integer = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+    let mut arguments = vec![base.clone()];
+    for bound in [start, end] {
+        match bound {
+            Some(bound) => arguments.extend([bound.as_ref().clone(), integer(-1)]),
+            None => arguments.extend([integer(0), integer(0)]),
+        }
+    }
+    arguments.push(step.as_deref().cloned().unwrap_or(integer(1)));
+    arguments.extend(extra);
+    Expr::Apply {
+        name: format!("{PRELUDE_PREFIX}{name}"),
+        arguments,
+        span,
     }
 }
 
@@ -2714,6 +2749,28 @@ impl Compiler {
                     span,
                 } if arguments.is_empty() && self.dialect.array_values() && self.array(name).is_ok() => {
                     self.array_assignment(name, value, *span)?
+                }
+                Statement::Assign {
+                    target:
+                        Expr::Slice {
+                            base,
+                            start,
+                            end,
+                            step,
+                            ..
+                        },
+                    value,
+                    span,
+                } => {
+                    // `s(a:b) = v` is `s = s(:a) + v + s(b:)`, and an
+                    // extended slice's characters replaced one for one.
+                    let base = self.stable_target(base)?;
+                    let spliced = slice_call("SPLICE$", &base, start, end, step, vec![value.clone()], *span);
+                    self.statement_list(&[Statement::Assign {
+                        target: base,
+                        value: spliced,
+                        span: *span,
+                    }])?;
                 }
                 Statement::Assign { target, value, span } if augmented_op(value).is_some() => {
                     let (op, operand) = augmented_op(value).expect("guard matched");
@@ -5414,6 +5471,17 @@ impl Compiler {
     }
 
     fn string_descriptor(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Expr::Slice {
+            base,
+            start,
+            end,
+            step,
+            span,
+        } = expression
+        {
+            let call = slice_call("SLICE$", base, start, end, step, Vec::new(), *span);
+            return self.string_descriptor(&call);
+        }
         if let Expr::Conditional {
             condition,
             then,
@@ -5925,6 +5993,7 @@ impl Compiler {
                 ..
             } => Ok((self.membership(needle, haystack, *negated)?, BOOLEAN)),
             Expr::Chain { first, rest, .. } => Ok((self.chain(first, rest)?, BOOLEAN)),
+            Expr::Slice { .. } => self.fail("a slice is a string, not a number"),
         }
     }
 
@@ -6081,6 +6150,16 @@ impl Compiler {
     /// `a, b = x, y` evaluates every value, then assigns left to right;
     /// `a, b = f(…)` calls a FUNCTION `AS (…)` for its results.
     fn tuple_assignment(&mut self, targets: &[Expr], value: &Expr, span: Span) -> Result<(), SemanticError> {
+        // One target is a plain assignment the grammar could not parse.
+        if let [target] = targets {
+            if !matches!(value, Expr::Apply { name, .. } if name == TUPLE) {
+                return self.statement_list(&[Statement::Assign {
+                    target: target.clone(),
+                    value: value.clone(),
+                    span,
+                }]);
+            }
+        }
         // `RETURN f(…)` from a FUNCTION `AS (…)` parenthesizes its value.
         let value = match value {
             Expr::Unary {
@@ -7892,6 +7971,7 @@ impl Compiler {
             Expr::Conditional {
                 then, otherwise, ..
             } => self.string_syntax(then) || self.string_syntax(otherwise),
+            Expr::Slice { .. } => true,
             _ => false,
         }
     }
@@ -8288,7 +8368,7 @@ impl Compiler {
     fn constant(&self, expression: &Expr) -> Result<(u32, Number), SemanticError> {
         match expression {
             Expr::Omitted(_) => self.fail("omitted argument used as a constant expression"),
-            Expr::Conditional { .. } | Expr::In { .. } | Expr::Chain { .. } => {
+            Expr::Conditional { .. } | Expr::In { .. } | Expr::Chain { .. } | Expr::Slice { .. } => {
                 self.fail("not a constant expression")
             }
             Expr::Literal(Literal::Integer(value, type_name), _) => {
