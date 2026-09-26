@@ -125,3 +125,20 @@ fn lrint_rounds_ties_to_even() {
     assert_eq!(rounded("3.500000e+00"), int(4, 16));
     assert_eq!(rounded("-2.600000e+00"), int(0xfffd, 16));
 }
+
+/// The unary float intrinsics, each answer exact and derived by hand.
+#[test]
+fn unary_float_intrinsics_compute_their_functions() {
+    let applied = |name: &str, x: &str| {
+        result(&format!("declare double @llvm.{name}.f64(double)\ndefine double @f() {{\n  %r = call double @llvm.{name}.f64(double {x})\n  ret double %r\n}}\n"))
+    };
+    let double = |x: f64| Ok(Val::Float(FloatKind::Double, x.to_bits()));
+    assert_eq!(applied("fabs", "-3.000000e+00"), double(3.0));
+    assert_eq!(applied("sqrt", "2.250000e+00"), double(1.5));
+    assert_eq!(applied("rint", "2.500000e+00"), double(2.0));
+    assert_eq!(applied("exp2", "3.000000e+00"), double(8.0));
+    assert_eq!(applied("log2", "8.000000e+00"), double(3.0));
+    assert_eq!(applied("sin", "0.000000e+00"), double(0.0));
+    assert_eq!(applied("cos", "0.000000e+00"), double(1.0));
+    assert_eq!(applied("atan", "0.000000e+00"), double(0.0));
+}

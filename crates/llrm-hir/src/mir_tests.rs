@@ -162,3 +162,21 @@ fn a_float_converted_to_an_integer_is_rounded() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("  %1 = call i16 @llvm.lrint.i16.f64(double %0)\n  ret i16 %1\n"), "{text}");
 }
+
+/// `SQR(x)`: the float functions are LLVM's intrinsics.
+#[test]
+fn a_float_function_is_its_intrinsic() {
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }];
+    let root = Instruction::new(1, Op::Fsqrt, vec![2], vec![Operand::value_ref(1)]);
+    let block = Block::new(1, vec![root], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "ROOT#", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %1 = call double @llvm.sqrt.f64(double %0)\n  ret double %1\n"), "{text}");
+}
