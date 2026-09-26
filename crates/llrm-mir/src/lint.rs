@@ -5,7 +5,9 @@
 //! alloca before a store of its whole type.
 
 use crate::context::{ConstantKind, Context};
+use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
+use crate::intrinsics::Intrinsic;
 use crate::module::{Function, GlobalKind, Module, Operand, Use};
 use crate::opcode::Opcode;
 
@@ -16,7 +18,7 @@ pub fn poison(module: &Module) -> Vec<String> {
             continue;
         }
         let name = global.name.as_deref().unwrap_or("<unnamed>");
-        out.extend(function_poison(&module.context, function).into_iter().map(|one| format!("@{name}: {one}")));
+        out.extend(function_poison(module, function).into_iter().map(|one| format!("@{name}: {one}")));
     }
     for global in &module.globals {
         if let GlobalKind::Variable(variable) = &global.kind
@@ -38,7 +40,9 @@ fn holds_poison(context: &Context, constant: crate::context::ConstantId) -> bool
     }
 }
 
-fn function_poison(context: &Context, function: &Function) -> Vec<String> {
+fn function_poison(module: &Module, function: &Function) -> Vec<String> {
+    let context = &module.context;
+    let layout = module.datalayout.as_deref().and_then(|one| DataLayout::parse(one).ok());
     let mut out = Vec::new();
     let tree = DominatorTree::new(function);
     for (_, inst) in function.walk() {
@@ -56,7 +60,7 @@ fn function_poison(context: &Context, function: &Function) -> Vec<String> {
             let initializers: Vec<_> = function
                 .users(slot)
                 .iter()
-                .filter(|one| one.index == 1 && is_store_of(function, context, **one, allocated))
+                .filter(|one| is_store_of(function, context, **one, allocated) || is_fill_of(module, layout.as_ref(), function, **one, allocated))
                 .map(|one| one.user)
                 .collect();
             for &Use { user, .. } in function.users(slot) {
@@ -76,5 +80,22 @@ fn function_poison(context: &Context, function: &Function) -> Vec<String> {
 /// Whether `at` is a store's pointer operand, storing a whole `ty`.
 fn is_store_of(function: &Function, context: &Context, at: Use, ty: crate::types::TypeId) -> bool {
     let instruction = function.instruction(at.user);
-    matches!(instruction.opcode, Opcode::Store { .. }) && function.operand_type(context, instruction.operands[0]) == Some(ty)
+    at.index == 1 && matches!(instruction.opcode, Opcode::Store { .. }) && function.operand_type(context, instruction.operands[0]) == Some(ty)
+}
+
+/// Whether `at` is a memset's destination, setting every byte of a `ty`.
+fn is_fill_of(module: &Module, layout: Option<&DataLayout>, function: &Function, at: Use, ty: crate::types::TypeId) -> bool {
+    let instruction = function.instruction(at.user);
+    let (Opcode::Call(_), Some(layout)) = (&instruction.opcode, layout) else { return false };
+    let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return false };
+    let ConstantKind::Global(callee) = module.context.get(callee).kind else { return false };
+    let memset = module.global(callee).name.as_deref().and_then(Intrinsic::named) == Some(Intrinsic::MemSet);
+    let length = match instruction.operands.get(2) {
+        Some(&Operand::Constant(id)) => match module.context.get(id).kind {
+            ConstantKind::Int(bits) => bits,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    memset && at.index == 0 && length >= u128::from(layout.alloc_size(&module.context.types, ty))
 }

@@ -122,7 +122,7 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = alloca [30 x i8]\n  store [30 x i8] zeroinitializer, ptr %2\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
+    let body = "  %2 = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 30, i1 false)\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
     assert!(text.contains(body), "{text}");
 }
 
@@ -299,7 +299,8 @@ fn fixed_point_arithmetic_is_done_at_twice_the_width() {
 
 /// HIR's frame starts zeroed, so a local read before any store is 0; MIR's
 /// allocas started uninitialized, which a pass may take as any value.
-/// Places that overlap share their bytes: one alloca holds both.
+/// Places that overlap share their bytes: one alloca holds both, zeroed by
+/// memset as clang zeroes an aggregate.
 #[test]
 fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     use crate::model::{Place, Storage};
@@ -319,6 +320,6 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let emitted = emit(&program).remove(0);
     assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  store [4 x i8] zeroinitializer, ptr %0\n  store i16 0, ptr %1\n";
+    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
     assert!(text.contains(entry), "{text}");
 }

@@ -328,6 +328,55 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     Ok((global, abi.0))
 }
 
+/// Local places that overlap, since they share their bytes: one alloca.
+struct FrameGroup<'h> {
+    start: i64,
+    size: i64,
+    places: Vec<&'h model::Place>,
+    ty: TypeId,
+}
+
+fn frame_groups<'h>(types: &mut Types, tables: &Tables<'h>, function: &'h model::Function) -> Emit<Vec<FrameGroup<'h>>> {
+    let mut locals: Vec<(i64, i64, &model::Place)> = function
+        .places
+        .iter()
+        .filter(|one| one.storage == Storage::Local)
+        .map(|one| (one.offset, one.offset + one.extent.unwrap_or(tables.types[&one.r#type].width), one))
+        .collect();
+    locals.sort_by_key(|&(start, end, place)| (start, end, place.id));
+    let mut spans: Vec<(i64, i64, Vec<&model::Place>)> = Vec::new();
+    for (start, end, place) in locals {
+        match spans.last_mut() {
+            Some(span) if start < span.1 => {
+                span.1 = span.1.max(end);
+                span.2.push(place);
+            }
+            _ => spans.push((start, end, vec![place])),
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end, places)| {
+            let ty = match places[..] {
+                [place] => stored_type(types, tables.types[&place.r#type])?,
+                _ => {
+                    let byte = types.int(8);
+                    types.intern(Type::Array { element: byte, count: (end - start) as u64 })
+                }
+            };
+            Ok(FrameGroup { start, size: end - start, places, ty })
+        })
+        .collect()
+}
+
+/// The memset a zeroed aggregate local calls.
+const MEMSET: &str = "llvm.memset.p0.i16";
+
+fn memset_type(types: &mut Types) -> TypeId {
+    let (void, pointer, byte, size, flag) = (types.void(), types.ptr(0), types.int(8), types.int(16), types.int(1));
+    function_type(types, void, vec![pointer, byte, size, flag])
+}
+
 /// Declares what `function` calls or names outside the module: runtime
 /// routines, typed as the first call gives them, and external places.
 fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::Function) -> Emit<()> {
@@ -340,6 +389,15 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let global = add_unique(module, &place.name, |module, name| module.add_variable(name, variable.clone(), Linkage::External));
             let reference = module.reference(global);
             tables.data.insert(place.symbol, reference);
+        }
+    }
+    if tables.zeroed && !tables.callees.contains_key(MEMSET) {
+        let groups = frame_groups(&mut module.context.types, tables, function)?;
+        if groups.iter().any(|group| !matches!(module.context.types.get(group.ty), Type::Int(_) | Type::Float(_) | Type::Pointer(_))) {
+            let ty = memset_type(&mut module.context.types);
+            let global = module.add_function(MEMSET, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
@@ -484,53 +542,35 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok(())
     }
 
-    /// An alloca for each group of local places that overlap, since they
-    /// share their bytes, each zeroed as HIR's frame starts.
+    /// An alloca for each group of local places that overlap, each zeroed
+    /// as HIR's frame starts: a scalar by a store, an aggregate by memset,
+    /// as clang zeroes one.
     fn allocate(&mut self) -> Emit<()> {
-        let mut locals: Vec<(i64, i64, &model::Place)> = self
-            .function
-            .places
-            .iter()
-            .filter(|one| one.storage == Storage::Local)
-            .map(|one| (one.offset, one.offset + one.extent.unwrap_or(self.tables.types[&one.r#type].width), one))
-            .collect();
-        locals.sort_by_key(|&(start, end, place)| (start, end, place.id));
-        let mut groups: Vec<(i64, i64, Vec<&model::Place>)> = Vec::new();
-        for (start, end, place) in locals {
-            match groups.last_mut() {
-                Some(group) if start < group.1 => {
-                    group.1 = group.1.max(end);
-                    group.2.push(place);
-                }
-                _ => groups.push((start, end, vec![place])),
+        let groups = frame_groups(&mut self.b.context.types, self.tables, self.function)?;
+        for group in &groups {
+            for place in &group.places {
+                self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
+            self.objects.push(self.b.alloca(group.ty, ""));
         }
-        let mut types = Vec::new();
-        for (start, end, places) in &groups {
-            let ty = match places[..] {
-                [place] => stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?,
+        if !self.tables.zeroed {
+            return Ok(());
+        }
+        for (group, object) in groups.iter().zip(self.objects.clone()) {
+            let kind = match self.b.context.types.get(group.ty) {
+                Type::Int(_) => ConstantKind::Int(0),
+                Type::Float(_) => ConstantKind::Float(0),
+                Type::Pointer(_) => ConstantKind::Null,
                 _ => {
-                    let byte = self.b.context.types.int(8);
-                    self.b.context.types.intern(Type::Array { element: byte, count: (end - start) as u64 })
+                    let callee = Value::Constant(self.tables.callees[MEMSET]);
+                    let ty = memset_type(&mut self.b.context.types);
+                    let (zero, size, volatile) = (self.b.int(8, 0), self.b.int(16, i128::from(group.size)), self.b.int(1, 0));
+                    self.b.call(ty, callee, &[object, zero, size, volatile], "");
+                    continue;
                 }
             };
-            for place in places {
-                self.frame.insert(place.id, (self.objects.len(), place.offset - start));
-            }
-            self.objects.push(self.b.alloca(ty, ""));
-            types.push(ty);
-        }
-        if self.tables.zeroed {
-            for (&object, ty) in self.objects.clone().iter().zip(types) {
-                let kind = match self.b.context.types.get(ty) {
-                    Type::Int(_) => ConstantKind::Int(0),
-                    Type::Float(_) => ConstantKind::Float(0),
-                    Type::Pointer(_) => ConstantKind::Null,
-                    _ => ConstantKind::Zero,
-                };
-                let zero = Value::Constant(self.b.context.constant(Constant { ty, kind }));
-                self.b.store(zero, object, false);
-            }
+            let zero = Value::Constant(self.b.context.constant(Constant { ty: group.ty, kind }));
+            self.b.store(zero, object, false);
         }
         Ok(())
     }
