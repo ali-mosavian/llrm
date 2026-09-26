@@ -267,6 +267,7 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
                 &types,
                 &externals,
                 program.array_order,
+                program.float_semantics,
                 &symbols,
             )?);
         }
@@ -458,6 +459,7 @@ struct _Scope<'a> {
     function: &'a model::Function,
     types: &'a IndexMap<i64, &'a model::Type>,
     array_order: model::ArrayOrder,
+    float_semantics: model::FloatSemantics,
     symbols: &'a _Symbols,
     values: IndexMap<i64, mir::Value>,
     value_types: IndexMap<i64, &'a model::Type>,
@@ -567,6 +569,14 @@ impl<'a> _Scope<'a> {
     }
 
     /// `args`' float stored to `reference` as `stored` says.
+    /// How a float store to a float cell rounds.
+    fn stored_precision(&self) -> floating::Precision {
+        match self.float_semantics {
+            model::FloatSemantics::Declared => floating::Precision::Destination,
+            model::FloatSemantics::Machine => floating::Precision::Excess,
+        }
+    }
+
     fn float_store(&mut self, reference: &MemRef, args: &[Arg], stored: floating::Semantics, name: &str) -> mir::Op {
         let uses = args
             .iter()
@@ -1479,7 +1489,7 @@ impl<'a> _Scope<'a> {
                     semantics = Some(floating::Semantics::new(
                         vec![_FORMATS(source.evaluation)],
                         _stored_format(stored)?,
-                        floating::Precision::Destination,
+                        self.stored_precision(),
                         floating::Rounding::Dynamic,
                     ));
                 }
@@ -1626,7 +1636,7 @@ impl<'a> _Scope<'a> {
                     let stored = floating::Semantics::new(
                         vec![floating::Format::Extended80],
                         _stored_format(target_type)?,
-                        floating::Precision::Destination,
+                        self.stored_precision(),
                         floating::Rounding::Dynamic,
                     );
                     let store = self.float_store(&reference, &args, stored, "fstp");
@@ -1738,6 +1748,7 @@ fn _function(
     types: &IndexMap<i64, &model::Type>,
     externals: &IndexMap<i64, String>,
     array_order: model::ArrayOrder,
+    float_semantics: model::FloatSemantics,
     symbols: &_Symbols,
 ) -> Result<Lowered, InvalidHIR> {
     let values: IndexMap<i64, mir::Value> = function
@@ -1784,6 +1795,7 @@ fn _function(
         function,
         types,
         array_order,
+        float_semantics,
         symbols,
         values,
         value_types,

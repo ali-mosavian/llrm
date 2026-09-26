@@ -99,6 +99,7 @@ plain_enums!(
     TargetProfile,
     ArrayOrder,
     FloatMode,
+    FloatSemantics,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -224,8 +225,24 @@ plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", re
     relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
     data => "data", callables => "callables");
-plain_record!(Program, None, dialect => "dialect", runtime => "runtime", modules => "modules",
-    schema => "schema", target => "target", array_order => "array_order", float_mode => "float_mode");
+/// Float semantics are written only when they are the machine's, as before
+/// they existed.
+impl _Plain for model::Program {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("dialect".to_owned(), self.dialect._plain());
+        out.insert("runtime".to_owned(), self.runtime._plain());
+        out.insert("modules".to_owned(), self.modules._plain());
+        out.insert("schema".to_owned(), self.schema._plain());
+        out.insert("target".to_owned(), self.target._plain());
+        out.insert("array_order".to_owned(), self.array_order._plain());
+        out.insert("float_mode".to_owned(), self.float_mode._plain());
+        if self.float_semantics != model::FloatSemantics::Declared {
+            out.insert("float_semantics".to_owned(), self.float_semantics._plain());
+        }
+        Json::Dict(out)
+    }
+}
 
 impl _Plain for model::Operand {
     fn _plain(&self) -> JSON {
@@ -510,6 +527,7 @@ made_enums!(
     TargetProfile,
     ArrayOrder,
     FloatMode,
+    FloatSemantics,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -1033,6 +1051,7 @@ static PROGRAM: _Record = _Record {
         ("target", enum_hint!(TargetProfile), false),
         ("array_order", enum_hint!(ArrayOrder), false),
         ("float_mode", enum_hint!(FloatMode), false),
+        ("float_semantics", enum_hint!(FloatSemantics), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1043,6 +1062,7 @@ static PROGRAM: _Record = _Record {
             target: _default(args, "target", model::TargetProfile::I386RealMode)?,
             array_order: _default(args, "array_order", model::ArrayOrder::ColumnMajor)?,
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
+            float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
         })
     },
 };

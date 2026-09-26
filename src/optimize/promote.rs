@@ -20,8 +20,10 @@ use crate::analysis::regions::{self, RegionLayout};
 use crate::analysis::{alias, effects, loops, ssa};
 use crate::model::memory::{self, Identity, MemoryKind, MemoryObject, Provenance, Slice};
 use crate::model::mir::{
-    self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Symbol, Value,
+    self, Arg, Cell, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OpCode, OrderedMap, Symbol, Value,
 };
+use crate::model::floating::Precision;
+use crate::model::ir::Operation;
 use crate::model::passes::{MIRTransform, Where};
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::Repr;
@@ -1060,10 +1062,11 @@ pub(crate) fn promotable(
         }
     }
 
+    let (_, refused) = _float_cells(body, &blocked);
     let mut candidates = seen
         .into_iter()
         .filter(|(addr, times)| {
-            *times > 1 && widths.get(addr).is_some_and(|found| found.len() == 1)
+            *times > 1 && widths.get(addr).is_some_and(|found| found.len() == 1) && !refused.contains(addr)
         })
         .map(|(addr, _)| {
             let width = *widths[&addr].iter().next().expect("one width");
@@ -1094,10 +1097,44 @@ pub(crate) fn promotable(
 pub(crate) fn _cell(op: &Op) -> Option<MemRef> {
     let empty = BTreeSet::new();
     match (op.loads.as_slice(), op.stores.as_slice()) {
-        ([r#ref], []) if READS.contains(&op.kind) => _key(r#ref, &empty).map(|_| r#ref.clone()),
-        ([], [r#ref]) if op.kind == Kind::Store => _key(r#ref, &empty).map(|_| r#ref.clone()),
+        ([r#ref], []) if READS.contains(&op.kind) || op.kind == Kind::Fload => _key(r#ref, &empty).map(|_| r#ref.clone()),
+        ([], [r#ref]) if _stores_value(op) => _key(r#ref, &empty).map(|_| r#ref.clone()),
         _ => None,
     }
+}
+
+/// A store whose value a later read of its cell may take as it was: every
+/// integer store, and a float store the frontend lets keep its precision.
+pub(crate) fn _stores_value(op: &Op) -> bool {
+    op.kind == Kind::Store || _forwards_float(op)
+}
+
+fn _forwards_float(op: &Op) -> bool {
+    op.kind == Kind::Fstore && op.floating.as_ref().is_some_and(|rule| rule.precision == Precision::Excess)
+}
+
+/// Cells a float store or load touches, and cells only some float accesses
+/// may be promoted through: a float value never reaches an integer read, nor
+/// a store that must round.
+fn _float_cells(body: &MirBody, blocked: &BTreeSet<Slice>) -> (HashSet<Key>, HashSet<Key>) {
+    let mut floating = HashSet::default();
+    let mut refused = HashSet::default();
+    let mut integer = HashSet::default();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        let float = matches!(op.kind, Kind::Fload | Kind::Fstore);
+        for key in op.loads.iter().chain(&op.stores).filter_map(|one| _key(one, blocked)) {
+            if float {
+                if op.kind == Kind::Fstore && !_forwards_float(op) {
+                    refused.insert(key.clone());
+                }
+                floating.insert(key);
+            } else {
+                integer.insert(key);
+            }
+        }
+    }
+    refused.extend(floating.intersection(&integer).cloned());
+    (floating, refused)
 }
 
 /// Complete scalar constants established by intact, possibly split stores.
@@ -1241,7 +1278,7 @@ pub(crate) fn _available(
                 gone.into_iter().for_each(|at| available.remove(at));
             }
             if let (Some(cell), Some(key)) = (&cell, key) {
-                if op.kind == Kind::Store && cell.width == cells[key] {
+                if _stores_value(op) && cell.width == cells[key] {
                     available.insert(key);
                 }
             }
@@ -1588,6 +1625,23 @@ pub(crate) fn _instead(
     if cell.width != width {
         return None;
     }
+    // A float cell holds a value at its register precision, not its bytes.
+    let float = matches!(op.kind, Kind::Fload | Kind::Fstore);
+    let held_width = |args: &[Arg]| {
+        args.iter()
+            .find_map(|one| match one {
+                Arg::Held(held) if float => Some(held.width),
+                _ => None,
+            })
+            .unwrap_or(width)
+    };
+    let moved = |made: Op| {
+        if float {
+            Op { op: Some(OpCode::Operation(Operation::Move)), name: "mov".to_owned(), floating: None, ..made }
+        } else {
+            made
+        }
+    };
 
     if !op.stores.is_empty() && op.loads.is_empty() {
         // `mov [x],ax` is `x := ax`, and x is a variable now.
@@ -1596,7 +1650,8 @@ pub(crate) fn _instead(
             version: 1,
             ..Value::new(fresh, op.at)
         };
-        return Some(Op {
+        let width = held_width(&op.args);
+        return Some(moved(Op {
             kind: Kind::Copy,
             name: "mov".to_owned(),
             defines: std::iter::once(into)
@@ -1619,10 +1674,11 @@ pub(crate) fn _instead(
                 })
                 .collect(),
             ..op.clone()
-        });
+        }));
     }
 
     if !op.loads.is_empty() {
+        let width = held_width(&op.results);
         // `mov ax,[x]` is `ax := x`.  The version is a placeholder:
         // `ssa::constructed` renames per variable.
         let holding = Value {
@@ -1645,8 +1701,8 @@ pub(crate) fn _instead(
                 uses.push(one);
             }
         }
-        return Some(Op {
-            kind: if op.kind == Kind::Load {
+        return Some(moved(Op {
+            kind: if matches!(op.kind, Kind::Load | Kind::Fload) {
                 Kind::Copy
             } else {
                 op.kind
@@ -1665,7 +1721,7 @@ pub(crate) fn _instead(
                 })
                 .collect(),
             ..op.clone()
-        });
+        }));
     }
     None
 }

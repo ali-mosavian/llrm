@@ -871,7 +871,7 @@ impl<'f, 'c> _Stack<'f, 'c> {
                 self.emit(Semantics { dests: vec![st(0)], ..what }, &[], &[], None, None);
                 self.values.insert(0, results[0]);
             }
-        } else if what.op == Operation::FloatLoad && operands.len() == 1 && !results.is_empty() {
+        } else if matches!(what.op, Operation::FloatLoad | Operation::Move) && operands.len() == 1 && !results.is_empty() {
             self.copy(operands[0], results[0])?;
         } else if what.op == Operation::FloatStore && operands.len() == 1 && results.is_empty() {
             self.store(operands[0])?;

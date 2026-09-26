@@ -84,6 +84,13 @@ str_enum!(FloatMode {
     Alternate("ALTERNATE") = "alternate",
 });
 
+// Whether a float value must be rounded to its declared format where the
+// language says so, or may keep the machine's precision until it is stored.
+str_enum!(FloatSemantics {
+    Declared("DECLARED") = "declared",
+    Machine("MACHINE") = "machine",
+});
+
 str_enum!(TypeKind {
     Void("VOID") = "void",
     Boolean("BOOLEAN") = "boolean",
@@ -662,6 +669,7 @@ pub struct Program {
     pub target: TargetProfile,
     pub array_order: ArrayOrder,
     pub float_mode: FloatMode,
+    pub float_semantics: FloatSemantics,
 }
 
 impl Program {
@@ -674,6 +682,7 @@ impl Program {
             target: TargetProfile::I386RealMode,
             array_order: ArrayOrder::ColumnMajor,
             float_mode: FloatMode::Inline,
+            float_semantics: FloatSemantics::Declared,
         }
     }
 }
