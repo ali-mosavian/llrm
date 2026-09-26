@@ -2001,13 +2001,15 @@ fn _fused(
 }
 
 /// Whether two adjacent operands address the same bytes. The registers
-/// carry the address; the values they name may differ when allocation
-/// copied the same address into a register again as a new value.
+/// and displacement carry the address; the values they name may differ
+/// when allocation copied the same address into a register again as a new
+/// value. `Mem`'s equality compares those values and leaves the registers
+/// out, so it cannot say.
 fn _same_cell(one: &Mem, other: &Mem) -> bool {
-    let physical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
-    physical(one) == physical(other)
-        && (one.base.is_none() || one.through != Register::None)
-        && (one.index.is_none() || one.index_through != Register::None)
+    let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
+    let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
+    let placed = |cell: &Mem| (cell.base.is_none() || cell.through != Register::None) && (cell.index.is_none() || cell.index_through != Register::None);
+    logical(one) == logical(other) && physical(one) == physical(other) && placed(one) && placed(other)
 }
 
 /// `mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).

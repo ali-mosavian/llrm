@@ -2879,3 +2879,22 @@ fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
     let loads = whats(&result.insns()).iter().filter(|what| what.op == Operation::Move && what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))).count();
     assert_eq!(loads, 0, "{found:?}");
 }
+
+/// A load, an add and a store fuse only when the store writes the cell the
+/// load read. Two cells through different registers compared equal, since
+/// `Mem`'s equality leaves out the registers: deedlines' CREATEOBJECT added
+/// z%(i) to the source row instead of storing it to the destination.
+#[test]
+fn test_a_store_through_another_register_is_not_fused() {
+    let (dx, ax) = (rl(Register::DX, 2), rl(Register::AX, 2));
+    let through = |value: u32, register: Register| Loc::Mem(Mem { base: Some(Held { value, width: 2 }), through: register, ..Mem::new(None, 2) });
+    let head: Vec<Arc<Insn>> = vec![
+        Arc::new(insn(1, None, Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![through(1, Register::DI)])), vec![], vec![1])),
+        Arc::new(insn(2, None, Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), ax])), vec![], vec![])),
+        Arc::new(insn(3, None, Some(sem(Operation::Move, "mov", vec![through(2, Register::SI)], vec![dx.clone()])), vec![], vec![2])),
+    ];
+    let overwrite = insn(4, None, Some(sem(Operation::Move, "mov", vec![dx], vec![rl(Register::CX, 2)])), vec![], vec![]);
+    let input = body("two-cells", 0, vec![block(0, head.clone(), vec![1]), block(1, vec![Arc::new(overwrite)], vec![])]);
+
+    assert_eq!(whats(&fused(&input).blocks[0].insns), whats(&head));
+}
