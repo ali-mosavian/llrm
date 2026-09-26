@@ -26,7 +26,7 @@ That buys what a private IR cannot have:
   non-x86 target, and `opt -O2` on the same MIR is a quality reference.
   `tools/mir-oracle.sh` runs all three.
 - **LLVM's answers.** Poison and its flags, phi semantics, memory
-  attributes, constrained floating point and exception edges are settled
+  attributes and exception edges are settled
   questions there; llrm does not answer them again.
 - **Readers.** Anyone who reads LLVM IR reads MIR.
 
@@ -81,8 +81,7 @@ The complete list; everything else is LLVM's.
 | A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!alias.scope`, `!tbaa` |
 | A runtime routine | `@llrm.qb.<name>`, declared with `memory(...)` and the rest as proved; few are `nounwind`, since most can raise an error |
 | An unrecognized external call | a call to its declaration, all effects unknown; a function whose interface cannot be recovered is refused whole |
-| `SINGLE`, `DOUBLE` | `float`, `double`; the x87's extended intermediates are lowering's |
-| Floating errors BASIC reports | `strictfp` and `llvm.experimental.constrained.*` with `fpexcept.strict` |
+| `SINGLE`, `DOUBLE` | `float`, `double`, plain arithmetic; precision and floating exceptions are the machine's |
 
 The raise recognizes; no pass does. `B$MUI4` is a `mul` the moment MIR
 exists.
