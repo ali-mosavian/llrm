@@ -1466,14 +1466,21 @@ fn test_addrm_reuses_word_scale_for_long_address() {
     for tag in ["p-g2", "q-O", "v-g3"] {
         let result = testing::emitted_lir(format!("tests/fixtures/omf/addrm-{tag}.obj").to_lowercase());
         let found = testing::loaded_bytes(&result.data).unwrap();
-        let shifts: Vec<iced_x86::Instruction> = crate::frontends::bc::blocks::instructions(&found)
-            .unwrap()
-            .into_iter()
-            .map(|one| one.insn)
-            .filter(|one| one.mnemonic() == iced_x86::Mnemonic::Shl)
-            .collect();
-        assert_eq!(shifts.len(), 1, "{tag}");
-        assert!(shifts.iter().all(|one| one.immediate(1) == 1), "{tag}");
+        // A doubling is `shl r,1` or, where the target prices it lower, `add r,r`.
+        let insns: Vec<iced_x86::Instruction> =
+            crate::frontends::bc::blocks::instructions(&found).unwrap().into_iter().map(|one| one.insn).collect();
+        let shifts = insns.iter().filter(|one| one.mnemonic() == iced_x86::Mnemonic::Shl).count();
+        let doublings = insns
+            .iter()
+            .filter(|one| match one.mnemonic() {
+                iced_x86::Mnemonic::Shl => one.op1_kind() == iced_x86::OpKind::Immediate8 && one.immediate(1) == 1,
+                iced_x86::Mnemonic::Add => {
+                    one.op0_kind() == iced_x86::OpKind::Register && one.op1_kind() == iced_x86::OpKind::Register && one.op0_register() == one.op1_register()
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!((shifts, doublings), (0, 1), "{tag}");
     }
 }
 

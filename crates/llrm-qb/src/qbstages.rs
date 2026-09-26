@@ -373,6 +373,9 @@ pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Optio
     let numbers: IndexMap<i64, usize> =
         functions.iter().enumerate().map(|(number, function)| (function.id, number + 1)).collect();
     let mut next_machine_stage: IndexMap<i64, usize> = functions.iter().map(|function| (function.id, 8)).collect();
+    // Every MIR pass's result, numbered in the order it ran: rule 4's diff.
+    let passes = output.join("passes");
+    let mut next_pass: IndexMap<i64, usize> = IndexMap::default();
 
     let mut observe = |event: &Stage| -> Result<(), String> {
         if event.name == "hir" {
@@ -404,6 +407,13 @@ pub fn dumped(source: &Path, output: &Path, frontend: &Frontend, options: &Optio
             }
         }
         let (path, text) = match event.name.as_str() {
+            name if name.starts_with("pass:") => {
+                std::fs::create_dir_all(&passes).map_err(|error| error.to_string())?;
+                let seen = next_pass.entry(key).or_insert(0);
+                *seen += 1;
+                let stage = name["pass:".len()..].replace(['/', ' ', ':'], "_");
+                (passes.join(format!("{stem}-{:03}-{stage}.txt", *seen)), mir(event.value))
+            }
             "source-mir" => (output.join(format!("{stem}-02-mir.txt")), mir(event.value)),
             "optimized-mir" => (output.join(format!("{stem}-03-optimized-mir.txt")), mir(event.value)),
             "physical-mir" => (output.join(format!("{stem}-04-physical-mir.txt")), mir(event.value)),

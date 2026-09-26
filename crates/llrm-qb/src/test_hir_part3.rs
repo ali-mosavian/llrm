@@ -103,7 +103,7 @@ fn machine(
 /// `floatalloc.allocated(machine, frame.of(machine, calls))`.
 fn float_allocated(body: &lir::LirBody, calls: &IndexMap<i64, String>) -> lir::LirBody {
     let mut owned = frame::of(body, Some(calls), "", None).expect("frames");
-    floatalloc::allocated(body, Some(&mut owned), true, "386").expect("allocates")
+    floatalloc::allocated(body, Some(&mut owned), None, true, "386").expect("allocates")
 }
 
 fn loc_width(one: &Loc) -> u32 {
@@ -262,6 +262,15 @@ fn backward_loop(procedure: &str) -> String {
 }
 
 #[test]
+fn test_a_counter_whose_start_seeds_pointers_still_counts_to_zero() {
+    // Its start, `LBOUND`, also seeded the three pointers, so the counter was
+    // refused and a pointer took control at a symbolic bias: `[bx+di]` with
+    // `di` and another pointer reloaded from [bp] every trip.
+    let loop_ = backward_loop(&sum_three(false));
+    assert!(!loop_.contains("[bp") && !regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&loop_), "{loop_}");
+}
+
+#[test]
 fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
     // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and `jmp` back.
     let loop_ = backward_loop(&sum_three(false));
@@ -327,21 +336,72 @@ fn test_a_masked_far_subscript_compiles() {
     );
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, "MASKED.BAS").expect("compiles");
-    // The proven-exact `s(i)` addresses through `[e..+e..*2]`, its shift gone
-    // and the upper halves zeroed once before the loop.
+    // The proven-exact `s(i)` addresses through a doubled 32-bit index, its
+    // shift gone and the upper halves zeroed once before the loop.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
-    assert!(body.contains("*2]") && body.contains("movzx") && !body.contains("shl"), "{body}");
+    let index = regex::Regex::new(r"fs:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
+    let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
+    assert!(doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
 fn main_listing(name: &str, source: &[u8]) -> String {
+    procedure_listing(name, source, "$QB$MAIN")
+}
+
+/// `procedure`'s part of `source`'s listing.
+fn procedure_listing(name: &str, source: &[u8], procedure: &str) -> String {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(&directory, name, source);
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, name).expect("compiles");
     let text = listing(&program);
-    text[text.find("$QB$MAIN proc").expect("main")..text.find("$QB$MAIN endp").expect("main end")].to_owned()
+    text[text.find(&format!("{procedure} proc")).expect("start")..text.find(&format!("{procedure} endp")).expect("end")].to_owned()
+}
+
+/// qbdemo's FRACLINE2 never converged: strength rewrote `x% + y320%`, an
+/// index already its invariant plus the counter, into a copy of the
+/// invariant plus the counter; gvn folded the copy back, every round.
+#[test]
+fn test_an_index_already_carried_by_its_counter_is_not_reduced_again() {
+    let source = "DECLARE SUB fracline2 (y%, y1#, y2#, x1#, x2#, distthr#)\r\nDEFINT A-Z\r\nDEF SEG = &HA000\r\n\
+FOR r = 0 TO 199: fracline2 r, 0, 1, 0, 1, 4: NEXT\r\nDEFDBL A-Z\r\nSUB fracline2 (y%, y1, y2, x1, x2, distthr)\r\n\
+deltax = (x2 - x1) / 320\r\ndeltay = (y2 - y1) / 320\r\ny = y1\r\nx% = 0\r\ny320% = y% * 320\r\nx = x1\r\nDO\r\n\
+IF PEEK(x% + y320% - 320) = PEEK(x% + y320% + 320) THEN\r\niter% = PEEK(x% + y320% - 320)\r\nELSE\r\n\
+re = 0: im = 0: iter% = 0\r\nDO\r\ntemp = re * re - im * im\r\nim = re * im\r\nim = im + im + y\r\nre = temp + x\r\n\
+iter% = iter% + 1\r\nLOOP UNTIL re * re + im * im >= distthr OR iter% = 255\r\nEND IF\r\nPOKE x% + y320%, iter%\r\n\
+x% = x% + 1\r\nIF x% >= 320 THEN EXIT SUB\r\nx = x + deltax\r\ny = y + deltay\r\nLOOP\r\nEND SUB\r\n";
+    procedure_listing("FRAC.BAS", source.as_bytes(), "FRACLINE2");
+}
+
+/// qbdemo's PLASMA: a split piece of `DEF SEG = &HA000` was evicted in the
+/// loop's preheader and never split again, so the pixel loop remade the
+/// segment with `push 0A000h / pop fs` every trip.
+#[test]
+fn test_an_evicted_piece_splits_again_rather_than_remake_a_segment_in_its_loop() {
+    let source = "DEFINT A-Z\r\nDECLARE SUB plasma (totalframes)\r\nDECLARE SUB updpalplasma (f)\r\nplasma 2\r\n\
+SUB plasma (totalframes)\r\nDIM unf(320), unfunf(320)\r\nDIM sine(512)\r\nDIM fuh(128, 128)\r\nDEF SEG = &HA000\r\n\
+FOR x = 0 TO 512\r\nsine(x) = SIN(x * 3.14 / 256) * 32 + 32\r\nNEXT\r\nFOR f = 1 TO totalframes\r\n\
+FOR x = 0 TO 320\r\nunf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\nNEXT\r\no = 0\r\n\
+FOR y = 0 TO 128\r\nunf2 = sine((y * 7 + f * 5) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n\
+FOR x = 0 TO 128\r\nfuh(x, y) = unf(x) + unf2\r\no = o + 1\r\nNEXT\r\nNEXT\r\n\
+FOR x = 0 TO 320\r\nunf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n\
+unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)\r\nNEXT\r\no = 0\r\n\
+FOR y = 0 TO 199\r\nunf2 = sine((y * 11 + f * 6) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n\
+unf3 = sine((y * 9 + f * 4) AND 511) + sine((y * 17 + f * 23 + 1943) AND 511)\r\n\
+FOR x = 0 TO 319\r\nPOKE o, fuh((unf(x) + unf2) AND 127, (unfunf(x) + unf3) AND 127)\r\no = o + 1\r\nNEXT\r\nNEXT\r\n\
+updpalplasma f\r\nIF INKEY$ > \"\" THEN EXIT SUB\r\nNEXT\r\nEND SUB\r\nSUB updpalplasma (f)\r\nOUT &H3C8, f\r\nEND SUB\r\n";
+    let text = procedure_listing("PLASMA.BAS", source.as_bytes(), "PLASMA");
+    let remade = regex::Regex::new(r"\bpop [efg]s\b").unwrap();
+    let loops: Vec<(usize, usize)> = jumps(&text, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| text.find(&format!("{label}:\n")).filter(|at| *at < start).map(|at| (at, end)))
+        .collect();
+    let innermost = loops.iter().filter(|(at, end)| !loops.iter().any(|(other, _)| at < other && other < end));
+    for (at, end) in innermost {
+        assert!(!remade.is_match(&text[*at..*end]), "{}", &text[*at..*end]);
+    }
 }
 
 /// A static array's proven-exact subscript kept its shift and read the
@@ -350,7 +410,7 @@ fn main_listing(name: &str, source: &[u8]) -> String {
 fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
     let body = main_listing(
         "STATIC.BAS",
-        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * 3) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
+        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * x) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
     );
     assert!(body.contains("S%[e") && !body.contains("shl"), "{body}");
 }
@@ -616,11 +676,15 @@ fn test_pds_huge_array_uses_measured_ddim_and_hary_abi() {
     let text = mir_text(&physical.lowered);
 
     assert!(text.contains("v2 <- copy 65534:2"));
-    assert!(text.contains("arg v2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2"));
+    assert!(text.contains("arg -2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2"));
     assert!(text.contains("arg 2:2\n  arg 514:2"));
     assert_eq!(text.matches("call B$HARY(").count(), 10);
     assert!(has_hary_pair(&text));
-    assert!(text.contains("+v4@v5):2 <- 123:2"));
+    // 123 is stored through the offset and selector B$HARY returned.
+    let store = text.lines().find(|line| line.ends_with("):2 <- 123:2")).expect("the store of 123");
+    let (offset, selector) =
+        store.split_once("far+").and_then(|(_, rest)| rest.split_once(')')).and_then(|(pair, _)| pair.split_once('@')).expect("a far cell");
+    assert!(text.contains(&format!("{offset}, {selector} <- call B$HARY(")));
 
     let assembly = listing(&source);
     assert_eq!(assembly.matches("call far ptr B$HARY").count(), 10);
@@ -1025,7 +1089,7 @@ fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
             1,
             hir::Op::Load,
             vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
+            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
         )],
     );
     let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
@@ -1072,7 +1136,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
                     1,
                     hir::Op::Load,
                     vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None })],
+                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
                 )],
             )],
             1,
@@ -1138,6 +1202,28 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
     assert!(optimized.body.blocks.iter().any(|block| {
         inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load && one.volatile)
     }));
+}
+
+/// Every iteration of a counted loop reloaded its BYREF arguments, as if the
+/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times.
+#[test]
+fn test_a_counted_loop_reads_a_published_pointee_once() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "FILLBYREF.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Fill (ch)\r\nFill 65\r\nSUB Fill (ch)\r\nDEF SEG = &HB800\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let (_, function) = function_named(&source, "FILL");
+    let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("FILL")).expect("FILL");
+    let optimized = optimized(&source, function, &semantic);
+    let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
+    let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
+    let published = |one: &mir::Op| one.kind == Kind::Load && one.loads.iter().any(|reference| reference.published);
+
+    assert!(ops(&optimized.body).into_iter().any(published));
+    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(published)));
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -1444,6 +1530,8 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
             .expect("emits");
 
     assert_eq!(captured, uncaptured);
+    let (passes, names): (Vec<String>, Vec<String>) = names.into_iter().partition(|name| name.starts_with("pass:"));
+    assert!(passes.iter().any(|name| name.starts_with("pass:source-")) && passes.iter().any(|name| name.starts_with("pass:physical-")));
     assert_eq!(
         names,
         [
@@ -1455,13 +1543,15 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
             "rotated-mir",
             "initial-lir",
             "machine:far-indirect-calls",
-            "machine:floatalloc",
             "machine:phielim",
+            "machine:floatassign",
+            "machine:floatalloc",
             "machine:twoaddr",
             "machine:coalesce",
             "machine:regalloc",
             "machine:parcopy",
             "machine:peephole",
+            "machine:loopslots",
             "machine:schedule",
             "machine:jumps",
             "final-lir",
@@ -1620,8 +1710,8 @@ sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
-    let counter = &regex::Regex::new(r"f\d+ <- (v\d+):2 sub -?\d+:2").expect("a pattern").captures(&text).unwrap_or_else(|| panic!("{text}"))[1];
     let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
+    let counter = &regex::Regex::new(r"(v\d+) <- phi\(").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))[1];
     let reads = body
         .lines()
         .filter(|line| line.trim_start().starts_with('v') && line.contains(&format!("{counter}:2 ")) && !line.contains(" add 1:2"));
@@ -1681,4 +1771,523 @@ o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
     if regex::Regex::new(r"pop\s+ds|mov\s+ds,|\blds\b").unwrap().is_match(&inner) {
         assert!(inner.lines().filter(|line| line.contains("K%")).all(|line| line.contains("ss:K%")), "{inner}");
     }
+}
+
+/// A far element store was taken to reach any descriptor: deedlines'
+/// ROTATE3D reloaded a selector and origin for each of its 12 accesses.
+#[test]
+fn test_element_stores_leave_descriptors_unread() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "WALK.BAS",
+        b"'$DYNAMIC\r\nDIM a(100) AS INTEGER, b(100) AS INTEGER\r\nFOR i% = 0 TO 99\r\na(i%) = b(i%) + 1\r\nb(i%) = a(i%) * 3\r\nNEXT\r\n",
+    );
+    let assembly = listing(&parsed_as(&basic, "qb45", "qb45"));
+    let selectors = stripped_lines(&assembly)
+        .into_iter()
+        .filter(|line| ["mov es, word ptr", "mov fs, word ptr", "mov gs, word ptr"].iter().any(|one| line.starts_with(one)))
+        .count();
+    // One selector per array, read once.
+    assert_eq!(selectors, 2, "{assembly}");
+}
+
+/// A counter widened to a dword to index an array rebased the loop's word
+/// offsets as dwords too: deedlines' COPPER selected `mov eax, ax` and the
+/// compile failed.
+#[test]
+fn test_a_widened_counter_rebases_word_offsets_as_words() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "COPPER.BAS",
+        b"DIM SHARED fsin1%(-48 TO 1083)\r\nDIM SHARED fsin2%(-640 TO 957)\r\nDIM SHARED fsin3%(-640 TO 871)\r\nSUB actions3d\r\nDIM y2%(0 TO 399)\r\nFOR i% = 17 TO 32\r\nOUT &H3C9, (i% - 33) * 4\r\nNEXT i%\r\nFOR a% = 0 TO 15\r\nFOR B% = 0 TO 15\r\nNEXT B%\r\nNEXT a%\r\nDIM c1%(0 TO 7), c2%(0 TO 7), c3%(0 TO 7)\r\nDO WHILE INKEY$ = \"\"\r\nDEF SEG = &HA000\r\nFOR y% = 0 TO y1%\r\nFOR i% = 0 TO 7\r\nPOKE fsin2%(y2%(y%) + l%) + fsin3%(y% - m%) + i%, c1%(i%)\r\nPOKE fsin2%(y% + l%) + fsin1%(y2%(y%) + k%) + i%, c2%(i%)\r\nPOKE fsin1%(y% + k%) + fsin2%(y% + l%) + fsin3%(y% + m%) + i% - 99, c3%(i%)\r\nNEXT i%\r\nNEXT y%\r\nLOOP\r\nEND SUB\r\n",
+    );
+    object_bytes(&parsed_as(&basic, "qb45", "qb45"), "COPPER.BAS").expect("encodes");
+}
+
+/// A merged array's shift was added under the origin, `origin + (i * 2 +
+/// 1284)`, and cost qbdemo's PLASMA an `add` per access instead of a
+/// displacement.
+#[test]
+fn test_a_merged_array_shift_is_a_displacement() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "MERGED.BAS",
+        b"'$DYNAMIC\r\nDIM a(10) AS INTEGER, b(1 TO 5) AS LONG\r\nFOR i% = 1 TO n%\r\nb((i% AND 3) + 1) = a(i% AND 7)\r\nNEXT\r\n",
+    );
+    let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    // b's first element is at byte 24 of the group; `+ 1` cancels its lower bound.
+    assert!(lines.iter().any(|line| line.contains("+24]")), "{lines:#?}");
+    assert!(!lines.iter().any(|line| line.starts_with("add") && line.ends_with(", 24")), "{lines:#?}");
+}
+
+#[test]
+/// A selector the allocator put in DS was reloaded with the data group
+/// before the float load that read through it: deedlines' 3D object
+/// collapsed to a point.
+fn test_a_float_load_reads_its_selector_after_the_data_group_restore() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "RESTORE.BAS",
+        b"'$DYNAMIC\r\nDIM SHARED x(4096), y(4096), z(4096)\r\nDIM SHARED xs%(4096, 1), ys%(4096, 1)\r\nSUB t\r\nSHARED n%, zpr%\r\nFOR i% = 0 TO n% - 1\r\nxs%(i%, 1) = xs%(i%, 0)\r\nys%(i%, 1) = ys%(i%, 0)\r\nIF z(i%) <= zpr% THEN GOTO 10\r\nxs%(i%, 0) = (x(i%) * 256) / z(i%)\r\nys%(i%, 0) = (y(i%) * 256) / z(i%)\r\n10\r\nNEXT i%\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    let mut restored = false;
+    for line in &lines {
+        if line.contains("ds:") {
+            assert!(!restored, "reads the data group as an array: {lines:#?}");
+        }
+        if line.starts_with("mov ds,") {
+            restored = line.ends_with(", ss");
+        }
+        if line.ends_with(':') {
+            restored = false;
+        }
+    }
+}
+
+#[test]
+/// QB code was priced for a hard-coded 386, not the machine's CPU: `x * 100`
+/// became a 26-clock 486 `imul` instead of shifts and adds.
+fn test_code_is_priced_for_the_machines_cpu() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "PRICED.BAS",
+        b"DEFINT A-Z\r\nDECLARE FUNCTION F (x)\r\nPRINT F(7)\r\nFUNCTION F (x)\r\nF = x * 100\r\nEND FUNCTION\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let lines = stripped_lines(&listing(&program));
+    assert_eq!(llrm_core::abi::machine::current().cpu, "486");
+    assert!(!lines.iter().any(|line| line.starts_with("imul")), "{lines:#?}");
+}
+
+#[test]
+/// B800:FFFF ends in the VGA BIOS ROM, which the machine did not list: a POKE
+/// to text memory at an unbounded offset might have hit any descriptor, so
+/// the array's selector and origin were reloaded every iteration.
+fn test_text_memory_stores_leave_array_descriptors_invariant() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "TEXTPOKE.BAS",
+        b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM SHARED t(63)\r\nDECLARE SUB Blit (w)\r\nBlit 40\r\nSUB Blit (w)\r\nDEF SEG = &HB800\r\no = 0\r\nFOR x = 0 TO w - 1\r\nPOKE o, t(x AND 63)\r\no = o + 2\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("BLIT proc").expect("BLIT proc");
+    let end = text.find("BLIT endp").expect("BLIT endp");
+    let body = backward_loop(&text[start..end]);
+    let loads = body.lines().map(str::trim).filter(|line| ["mov es,", "mov fs,", "mov gs,", "mov ds,"].iter().any(|one| line.starts_with(one)));
+    assert_eq!(loads.count(), 0, "{body}");
+}
+
+#[test]
+fn test_scalars_stored_in_a_loop_are_forwarded_across_its_array_store() {
+    // On the 486 GVN kept `i` from crossing the `a(i)` store, so the index was rebuilt
+    // (`lea bx,[edx+edx]`) and compared with 255 every trip: 18 instructions for 16.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "STEPS.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Steps (n, d)\r\nSteps 7, 3\r\nSUB Steps (n, d)\r\nDIM a(255)\r\nv = n\r\nFOR i = 0 TO 255\r\na(i) = v\r\ne = e + d\r\nIF e > 100 THEN e = e - 100: v = v + 1\r\nv = v + n\r\nNEXT\r\nPRINT a(9)\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("STEPS proc").expect("STEPS proc");
+    let end = text.find("STEPS endp").expect("STEPS endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("lea "), "{body}");
+    assert!(!body.contains("cmp dx, 255"), "{body}");
+}
+
+#[test]
+fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
+    // Promotion carried `DEF SEG`'s selector from the entry across `Beat`, so the
+    // POKE loop rebuilt it every trip: `push 0A000h / pop fs`.
+    let directory = tempfile::tempdir().expect("tempdir");
+    let basic = written(
+        &directory,
+        "GLOW.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Glow (n)\r\nDECLARE SUB Beat (f)\r\nGlow 3\r\nSUB Glow (n)\r\nDIM w(255)\r\nDEF SEG = &HA000\r\nFOR i = 0 TO 255\r\nw(i) = SQR(i) * 4\r\nNEXT\r\nFOR f = 1 TO n\r\nFOR x = 0 TO 255\r\nPOKE x, w((x + f) AND 255)\r\nNEXT\r\nBeat f\r\nNEXT\r\nEND SUB\r\nSUB Beat (f)\r\nOUT &H3C8, f\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("GLOW proc").expect("GLOW proc");
+    let end = text.find("GLOW endp").expect("GLOW endp");
+    let procedure = &text[start..end];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| {
+            procedure.find(&format!("{label}:\n")).filter(|at| *at < start).map(|at| &procedure[at..end])
+        })
+        .collect::<Vec<_>>();
+    // Call-free loops: the SQR fill and the POKE loop.
+    for one in loops.iter().filter(|one| !one.contains("call")) {
+        assert!(!one.contains("push") && !one.contains("pop"), "{one}");
+    }
+}
+
+#[test]
+fn test_merged_fields_share_one_pointer() {
+    // Merged, the six fields' starts differed by constants below a sum, so each
+    // kept its own pointer and four lived in the frame: 18 instructions for 9.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/general/PARTICLE.BAS");
+    let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+    let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("ADVANCE proc").expect("ADVANCE proc");
+    let end = text.find("ADVANCE endp").expect("ADVANCE endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("[bp"), "{body}");
+}
+
+/// Two far arrays copied and cleared, one element a trip.
+const SHIFT: &[u8] = b"DEFINT A-Z\r\nDECLARE SUB Shift ()\r\n'$DYNAMIC\r\nDIM SHARED f1(32000&) AS INTEGER\r\nDIM SHARED f2(32000&) AS INTEGER\r\nShift\r\nPRINT f2(5)\r\nSUB Shift\r\nFOR x = 0 TO 32000\r\nf2(x) = f1(x)\r\nf1(x) = 0\r\nNEXT\r\nEND SUB\r\n";
+
+#[test]
+fn test_a_counter_crossing_the_sign_bit_still_counts_to_zero() {
+    // With the far origin constant, the byte offset itself is the counter and
+    // runs 0 to 64000; the signed wrap kept `cmp bx, 0FA02h` in every trip.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SHIFT.BAS", SHIFT);
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("SHIFT proc").expect("SHIFT proc");
+    let end = text.find("SHIFT endp").expect("SHIFT endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_cell_based_on_a_named_objects_address_is_that_object() {
+    // A SHARED array's descriptor was read through a register holding its
+    // relocated address: `mov bx, offset ...` then `[bx+2]`, costing a base
+    // register, rematerialized inside DRAWBOB's loop.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SHIFT.BAS", SHIFT);
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("SHIFT proc").expect("SHIFT proc");
+    let end = text.find("SHIFT endp").expect("SHIFT endp");
+    assert!(!text[start..end].contains("offset"), "{}", &text[start..end]);
+}
+
+/// RING.BAS's RingSum loop, from its backward jump.
+fn ring_loop() -> String {
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/general/RING.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
+    let end = start + text[start..].find(" endp").expect("RINGSUM endp");
+    backward_loop(&text[start..end])
+}
+
+#[test]
+fn test_a_for_counter_to_a_symbolic_bound_counts_to_zero() {
+    // `FOR i = 0 TO n - 1` could reach 32767 and wrap for all the analysis
+    // knew, so the count was unproven and `cmp bx, cx` stayed in the loop.
+    // FOR raises Overflow instead of wrapping: the frontend's promise.
+    let body = ring_loop();
+    assert!(!body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_loaded_addend_fuses_though_the_exit_splits_a_long() {
+    // The exit's `shld edx, eax, 16` reads edx, so a load into edx inside the
+    // loop looked live and stayed `mov edx, [..] / add eax, edx`.
+    let body = ring_loop();
+    assert!(body.contains("add eax, dword ptr"), "{body}");
+}
+
+#[test]
+fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
+    // `buf(((i * 5 + 3) AND 1023) + 1)` shifted the masked index every trip:
+    // `and si, 1023 / inc si / shl si, 2`, 9 instructions for 7.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/general/RING.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
+    let end = start + text[start..].find(" endp").expect("RINGSUM endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("shl") && body.contains(", 20\n") && body.contains(", 4092\n"), "{body}");
+}
+
+#[test]
+fn test_a_pointer_takes_control_of_a_loop_to_a_symbolic_bound() {
+    // With the FOR promise, `-n TO n` was bounded by the whole width, too
+    // many trips for a step-2 pointer, so the counter kept its own `dec`
+    // beside the pointer's `add`: 12 instructions for 11.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/general/PARTICLE.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("ADVANCE proc").expect("ADVANCE proc");
+    let end = text.find("ADVANCE endp").expect("ADVANCE endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("dec ") && !body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_masked_use_moves_with_a_counter_to_zero() {
+    // `POKE o, ch + (o AND 15)` read the counter through a mask, so FILL kept
+    // `cmp si, 0F9Eh` every trip. The bias 4000 is a multiple of 16: the mask
+    // reads the same bits of the rebased counter.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/general/TEXTFILL.BAS");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("FILL proc").expect("FILL proc");
+    let end = text.find("FILL endp").expect("FILL endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!body.contains("cmp ") && body.contains("and "), "{body}");
+}
+
+#[test]
+fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
+    // rcflip's third RAMP loop stepped `inc ax` before `add bx, 2`, which
+    // overwrote its flags, so the header kept `or ax, ax` every trip.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/suite/rcflip.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("RAMP proc").expect("RAMP proc");
+    let end = text.find("RAMP endp").expect("RAMP endp");
+    let procedure = &text[start..end];
+    let body = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| {
+            let at = procedure.find(&format!("{label}:\n")).filter(|at| *at < start)?;
+            Some(procedure[at..end].to_owned())
+        })
+        .find(|body| body.contains("imul"))
+        .expect("the multiplying loop");
+    assert!(!body.contains("or ax, ax") && !body.contains("cmp "), "{body}");
+}
+
+#[test]
+fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
+    // `cdq` and `idiv` each took their own copy of i \ 5's dividend in EAX,
+    // so the extended value sat in EDI across both and one of stride's three
+    // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/suite/stride.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let body = backward_loop(&listing(&program));
+    assert!(!body.contains("[bp") && body.contains("movsx eax"), "{body}");
+}
+
+#[test]
+fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
+    // segld's sum is printed after both loops, across a runtime call, so as
+    // one value with the loop's it could only live in SI: the loop added into
+    // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/suite/segld.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let body = backward_loop(&listing(&program));
+    let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();
+    assert!(!body.contains("jmp") && !copies.is_match(&body), "{body}");
+}
+
+#[test]
+fn test_loops_count_to_zero_once_their_other_counters_are_settled() {
+    // qbdemo's PLASMA: counting to zero inside strength reduction rotated the
+    // first loop before its pointer was made, leaving `test bx, bx`; run
+    // last, it kept the second loop's `x` because `x * 2` and `x * 8` each
+    // covered only part of it, so `lea si, [eax+eax]` addressed both stores.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "PAIR.BAS", b"DEFINT A-Z
+DECLARE SUB plasma (totalframes%)
+plasma 2
+SUB plasma (totalframes)
+DIM unf(320), unfunf(320)
+DIM sine(512)
+DIM fuh(128, 128)
+DEF SEG = &HA000
+FOR x = 0 TO 512
+sine(x) = SIN(x * 3.14 / 256) * 32 + 32
+NEXT
+FOR f = 1 TO totalframes
+ FOR x = 0 TO 320
+  unf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)
+ NEXT
+ FOR x = 0 TO 320
+  unf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)
+  unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)
+ NEXT
+NEXT
+PRINT unf(5)
+END SUB
+");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"\bPLASMA\S* proc").unwrap().find(&text).expect("PLASMA proc").start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("PLASMA endp")];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .collect::<Vec<_>>();
+    let innermost = loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other)));
+    let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
+    let [first, second] = masked.as_slice() else { panic!("{procedure}") };
+    assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
+    assert!(!second.contains("lea ") && !second.contains("[e"), "{second}");
+}
+
+#[test]
+fn test_a_loop_holds_its_spill_slots_in_the_registers_it_leaves_free() {
+    // Six invariants and a pointer need seven registers: two invariants were
+    // reloaded into `di` from [bp] every trip, though the loop reaches the
+    // frame through nothing else, so `di` and BP could hold them.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SIX.BAS", b"DEFINT A-Z
+DECLARE SUB s (k)
+DIM SHARED a(99), b(99), c(99), d(99), e(99), f(99)
+s 3
+PRINT a(5)
+SUB s (k)
+ ua = k * 3
+ ub = k * 4
+ uc = k * 5
+ ud = k * 6
+ ue = k * 7
+ uf = k * 8
+ FOR i = 0 TO 99
+  a(i) = a(i) + ua
+  b(i) = b(i) + ub
+  c(i) = c(i) + uc
+  d(i) = d(i) + ud
+  e(i) = e(i) + ue
+  f(i) = f(i) + uf
+ NEXT
+END SUB
+");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^S proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("S endp")];
+    let body = backward_loop(procedure);
+    eprintln!("{procedure}");
+    assert!(!body.contains("[bp"), "{body}");
+    let (before, after) = procedure.split_at(procedure.find(&body).expect("the loop"));
+    assert!(before.contains("push bp") && after.contains("pop bp"), "{procedure}");
+}
+
+#[test]
+fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
+    // qbdemo's FRACTALEFFECT: `tmpshit`'s selector, spilled across the calls
+    // around it, was reloaded into fs from [bp] on every trip of the loop
+    // that only reads that array.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "FRACTAL.BAS", b"DEFINT A-Z\r\nDECLARE SUB fracline (y%, y1#, y2#, x1#, x2#, distthr#)\r\nDECLARE SUB render (x1%, y1%, x2%, y2%)\r\nDECLARE SUB fractaleffect (totalframes%)\r\nCONST XCENTRE = -.577816001047738#\r\nCONST YCENTRE = -.6311212235178052#\r\n'$DYNAMIC\r\nDIM SHARED totalframecount AS INTEGER\r\nDIM SHARED fractal1(32000&) AS INTEGER\r\nDIM SHARED fractal2(32000&) AS INTEGER\r\nfractaleffect 30\r\nEND\r\nSUB fractaleffect (totalframes)\r\nDIM tmpshit(160, 100)\r\nly = -100:  f# = 1\r\nFOR f = 1 TO totalframes\r\n  ly0 = ly\r\n  ly1 = ly + 1\r\n  ly2 = ly + 2\r\n  ly3 = ly + 3\r\n  ly0# = ly0 / f# + YCENTRE\r\n  ly1# = ly1 / f# + YCENTRE\r\n  ly2# = ly2 / f# + YCENTRE\r\n  ly3# = ly3 / f# + YCENTRE\r\n  lx1# = XCENTRE - 160 / f#\r\n  lx2# = XCENTRE + 160 / f#\r\n  DEF SEG = VARSEG(fractal1(0))\r\n  distthr# = 4\r\n  fracline ly0 + 100, ly0#, ly0#, lx1#, lx2#, distthr#\r\n  fracline ly2 + 100, ly2#, ly2#, lx1#, lx2#, distthr#\r\n  fracline ly1 + 100, ly1#, ly1#, lx1#, lx2#, distthr#\r\n  fracline ly3 + 100, ly3#, ly3#, lx1#, lx2#, distthr#\r\n ly = ly + 4\r\n IF ly >= 100 THEN\r\n  ly = -100\r\n  f# = f# * 2\r\n  o = 16080\r\n  FOR y = 0 TO 99\r\n   FOR x = 0 TO 159\r\n    tmpshit(x, y) = PEEK(o)\r\n    o = o + 1\r\n   NEXT\r\n   o = o + 160\r\n  NEXT\r\n  o = 0\r\n  FOR x = 0 TO 32000\r\n   fractal2(x) = fractal1(x)\r\n   fractal1(x) = 0\r\n  NEXT\r\n  FOR y = 0 TO 99\r\n   FOR x = 0 TO 159\r\n    POKE x * 2 + y * 640, tmpshit(x, y)\r\n   NEXT\r\n  NEXT\r\n  \r\n END IF\r\n DEF SEG = VARSEG(fractal2(0))\r\n f50 = (f) MOD 50\r\n x1 = f50 * 1.6: y1 = f50\r\n x2 = 320 - f50 * 1.6: y2 = 200 - f50\r\n render x1, y1, x2, y2\r\n IF INKEY$ > \"\" THEN EXIT SUB\r\n totalframecount = totalframecount + 1\r\nNEXT\r\nEND SUB\r\nSUB fracline (y%, y1#, y2#, x1#, x2#, distthr#)\r\nfractal1(y%) = y1# + x2#\r\nEND SUB\r\nSUB render (x1%, y1%, x2%, y2%)\r\nfractal2(x1%) = y2%\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^FRACTALEFFECT proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("FRACTALEFFECT endp")];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .collect::<Vec<_>>();
+    let reload = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
+    for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
+        assert!(!reload.is_match(one), "{one}");
+    }
+}
+
+#[test]
+fn test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift() {
+    // qbdemo's CYCLEBLOBS scaled up to nine indexes a trip with `shl r,1`,
+    // three clocks each on the 486 where `add r,r` takes one.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "LOOKUP.BAS", b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM t(32, 32), k(32)\r\nFOR i = 0 TO 32: k(i) = (i * 7) AND 31: NEXT\r\nFOR i = 0 TO 32: s = s + t(i, k(i)): NEXT\r\nPRINT s\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let body = jumps(&text, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| text.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &text[begun..end]))
+        .find(|one| one.contains("S%"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(!regex::Regex::new(r"s[ah]l \w+, 1\n").unwrap().is_match(body), "{body}");
+}
+
+#[test]
+fn test_a_slot_an_x87_store_writes_stays_in_memory() {
+    // Parking a register around qbdemo's sprite loop gave its `fistp` slot a
+    // register home, and `fistp ax` does not encode: the compile failed.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SPRITE.BAS", b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM SHARED b(32, 32) AS INTEGER\r\nFOR x = 0 TO 32\r\nFOR y = 0 TO 32\r\nb(x, y) = 16 - SQR((16 - x) ^ 2 + (16 - y) ^ 2)\r\nIF b(x, y) < 0 THEN b(x, y) = 0\r\nNEXT\r\nNEXT\r\nPRINT b(3, 4)\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    assert!(!regex::Regex::new(r"fistp [a-z]{2}\n").unwrap().is_match(&text), "{text}");
+}
+
+#[test]
+fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
+    // qbdemo's PLASMA kept two counters in [bp] every trip: di held a value
+    // the loop never touched, and BP alone could take only one of them.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "PLASMA.BAS", b"DEFINT A-Z\r\nDECLARE SUB plasma (totalframes%)\r\nDECLARE SUB updpalplasma (f%)\r\nDIM SHARED totalframecount AS INTEGER\r\nplasma 2\r\nEND\r\nSUB plasma (totalframes)\r\nDIM unf(320), unfunf(320)\r\nDIM sine(512)\r\nDIM fuh(128, 128)\r\nDEF SEG = &HA000\r\nFOR x = 0 TO 512\r\nsine(x) = SIN(x * 3.14 / 256) * 32 + 32\r\nNEXT\r\nFOR f = 1 TO totalframes\r\n FOR x = 0 TO 320\r\n  unf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n NEXT\r\n o = 0\r\n FOR y = 0 TO 128\r\n  unf2 = sine((y * 7 + f * 5) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n  FOR x = 0 TO 128\r\n   fuh(x, y) = unf(x) + unf2\r\n   o = o + 1\r\n  NEXT\r\n NEXT\r\n FOR x = 0 TO 320\r\n  unf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n  unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)\r\n NEXT\r\n o = 0\r\n FOR y = 0 TO 199\r\n  unf2 = sine((y * 11 + f * 6) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n  unf3 = sine((y * 9 + f * 4) AND 511) + sine((y * 17 + f * 23 + 1943) AND 511)\r\n  FOR x = 0 TO 319\r\n   POKE o, fuh((unf(x) + unf2) AND 127, (unfunf(x) + unf3) AND 127)\r\n   o = o + 1\r\n  NEXT\r\n NEXT\r\n updpalplasma f\r\n totalframecount = totalframecount + 1\r\n IF INKEY$ > \"\" THEN EXIT SUB\r\nNEXT\r\nEND SUB\r\nSUB updpalplasma (f%)\r\nOUT &H3C8, f%\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("PLASMA proc").unwrap_or_else(|| panic!("{text}"));
+    let procedure = &text[start..start + text[start..].find(" endp").expect("PLASMA endp")];
+    let body = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .find(|one| one.matches(", 1022").count() == 4)
+        .unwrap_or_else(|| panic!("{procedure}"));
+    eprintln!("{procedure}");
+    assert!(!body.contains("[bp"), "{body}");
+}
+
+#[test]
+fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
+    // qbdemo's PLASMA hung: a call's contract read only its arguments, so the
+    // `mov ds, ss` before it looked dead, and the callee ran with DS still
+    // naming the array the loop had read through it.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "DSR.BAS", b"DEFINT A-Z\r\nDECLARE SUB p (a)\r\n'$DYNAMIC\r\nDIM SHARED a(99), b(99), c(99)\r\nDEF SEG = &HA000\r\nFOR r = 1 TO 3\r\nFOR i = 0 TO 99: POKE i, a(i) + b(i) + c(i): NEXT\r\np r\r\nNEXT\r\nSUB p (a)\r\nSHARED t\r\nt = t + a\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("proc far").unwrap_or_else(|| panic!("{text}"));
+    let procedure = &text[start..start + text[start..].find(" endp").expect("endp")];
+    let body = backward_loop(procedure);
+    let after = &procedure[procedure.find(&body).expect("the loop") + body.len()..];
+    let call = after.find("call far ptr P\n").unwrap_or_else(|| panic!("{procedure}"));
+    assert!(after[..call].contains("mov ds, "), "{procedure}");
+}
+
+#[test]
+fn test_a_pointer_from_a_symbolic_start_leaves_control_to_the_counter() {
+    // deedlines' MOV3DPOS: the array pointer took control from the counter, so
+    // each address became `[bx+si]`, and with both taken one more by-reference
+    // pointer was reloaded from [bp] every trip.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "MOVE.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB m (xp!, yp!, zp!)\r\n'$DYNAMIC\r\nDIM SHARED x(4096) AS SINGLE, y(4096) AS SINGLE, z(4096) AS SINGLE, n\r\n\
+n = 64: a! = 1: b! = 2: c! = 3\r\nm a!, b!, c!\r\n\
+SUB m (xp!, yp!, zp!)\r\nFOR i = 0 TO n - 1\r\nx(i) = x(i) + xp\r\ny(i) = y(i) + yp\r\nz(i) = z(i) + zp\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^M proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let end = start + text[start..].find(" endp").expect("M endp");
+    let body = backward_loop(&text[start..end]);
+    assert!(!regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&body), "{body}");
+}
+
+/// Float constants load as GCC's do: 1 is `fld1`, and 320 a readonly
+/// single. Each literal was stored to a frame temporary at its use and
+/// read back by `fild`, as BC does.
+#[test]
+fn test_an_integer_literal_in_a_float_expression_is_a_constant() {
+    let source = "DEFDBL A-Z\r\nDECLARE SUB f (a, b)\r\nf 1.5, 2\r\nSUB f (a, b)\r\nx = a * .5 + 3\r\ny = x - 1\r\n\
+z = y * 320\r\nPRINT x, y, z\r\nEND SUB\r\n";
+    let listing = procedure_listing("CONSTANT.BAS", source.as_bytes(), "F");
+    assert!(!listing.contains("fild") && !listing.contains("fiadd"), "{listing}");
+    assert!(listing.contains("fld1") && listing.contains("fadd dword ptr") && !listing.contains("320"), "{listing}");
 }

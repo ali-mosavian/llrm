@@ -85,6 +85,13 @@ str_enum!(FloatMode {
     Alternate("ALTERNATE") = "alternate",
 });
 
+// Whether a float value must be rounded to its declared format where the
+// language says so, or may keep the machine's precision until it is stored.
+str_enum!(FloatSemantics {
+    Declared("DECLARED") = "declared",
+    Machine("MACHINE") = "machine",
+});
+
 str_enum!(TypeKind {
     Void("VOID") = "void",
     Boolean("BOOLEAN") = "boolean",
@@ -263,6 +270,10 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
+    /// Another agent may write the pointee at any time, as a BYREF argument
+    /// an interrupt handler owns: ordered like `volatile`, but a loop that
+    /// ends without the value may read it once.
+    pub published: bool,
     /// The language promises the access stays inside one object.
     pub inbounds: bool,
     /// The value holding the offset of that object's first byte, where the
@@ -270,6 +281,9 @@ pub struct IndirectPlace {
     /// value plus a non-negative offset inside the object, and the object
     /// ends inside its segment.
     pub origin: Option<i64>,
+    /// The descriptor place owning the far allocation the access stays
+    /// inside, where the frontend knows it: disjoint from every place.
+    pub allocation: Option<i64>,
 }
 
 str_enum!(DescriptorField {
@@ -427,13 +441,15 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
+    /// The signed result fits its width, as the language promises.
+    pub nowrap: bool,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false }
     }
 }
 
@@ -631,6 +647,7 @@ pub struct Program {
     pub target: TargetProfile,
     pub array_order: ArrayOrder,
     pub float_mode: FloatMode,
+    pub float_semantics: FloatSemantics,
 }
 
 impl Program {
@@ -643,6 +660,7 @@ impl Program {
             target: TargetProfile::I386RealMode,
             array_order: ArrayOrder::ColumnMajor,
             float_mode: FloatMode::Inline,
+            float_semantics: FloatSemantics::Declared,
         }
     }
 }

@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
 
+use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::backend::{addressvalues, assemble, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
 use llrm_core::flow;
@@ -195,6 +196,7 @@ pub fn assembled(
     )?;
     drop(summaries);
 
+    let pool = Rc::new(RefCell::new(Pool::new(module.data.iter().map(|item| item.id + 1).max().unwrap_or(0))));
     for (function, mut physical) in module.functions.iter().zip(physicals) {
         if !found.reachable.contains(&function.name) {
             continue;
@@ -237,6 +239,7 @@ pub fn assembled(
         let mut phases = flow::machine(
             &pinned,
             Some(Rc::clone(&owned_frame)),
+            Some(Rc::clone(&pool)),
             Some(&legalized.calls),
             false,
             ProfileOrName::Profile(target),
@@ -324,6 +327,12 @@ pub fn assembled(
             let name = callables.get(&id).copied().unwrap_or_default();
             linked_names.get(name).cloned().unwrap_or_else(|| name.to_owned())
         })?);
+    }
+    for (bytes, id) in pool.borrow().entries() {
+        let name = format!("{}$D{id}", module.name);
+        names.insert((Space::Segment, id), name.clone());
+        data.push(masm::Datum::Label(masm::Label { name }));
+        data.push(masm::Datum::Bytes(bytes.to_vec()));
     }
     let data = vec![("_DATA".to_owned(), data)];
     Ok(masm::Module {

@@ -3,6 +3,7 @@
 
 use crate::backend::lower::Unlowered;
 use crate::frontends::bc::raising_floats;
+use crate::model::floating::{Precision, Semantics};
 use crate::model::mir::{Kind, MirBody, Op};
 
 fn _removed(op: &Op) -> Result<bool, Unlowered> {
@@ -34,10 +35,12 @@ pub fn checked(body: &MirBody) -> Result<(), Unlowered> {
             };
             // Selection encodes the instruction's name and operands, never
             // `floating`; only the exception policy is not in the bytes.
-            let encoded = raising_floats::semantics(op);
-            if encoded.is_none_or(|encoded| {
-                crate::model::floating::Semantics { exceptions: floating.exceptions, ..encoded } != *floating
-            }) {
+            // A store that rounds keeps the promise of one that may not.
+            let encoded = raising_floats::semantics(op).map(|encoded| match (floating.precision, encoded.precision) {
+                (Precision::Excess, Precision::Destination) => Semantics { precision: Precision::Excess, ..encoded },
+                _ => encoded,
+            });
+            if encoded.is_none_or(|encoded| Semantics { exceptions: floating.exceptions, ..encoded } != *floating) {
                 return Err(Unlowered("floating semantics are not what the instruction encodes".into()));
             }
         }

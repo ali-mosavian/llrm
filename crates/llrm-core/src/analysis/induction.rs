@@ -868,12 +868,11 @@ where
 
 /// Whether a cell is one no store inside the loop can reach.
 ///
-/// `mir.overlapping` hands `bounds` to regions and `dgroup` as a layout
-/// that is not a `module.Group`: a landmarks-only [`RegionLayout`] is both.
+/// `mir.overlapping` hands `bounds` to regions as a landmarks-only
+/// [`RegionLayout`].
 fn unwritten<'a>(
     body: &'a Rc<MirBody>,
     inside: &'a BTreeSet<i64>,
-    dgroup: &'a BTreeSet<i64>,
     bounds: Option<&'a RegionLayout>,
 ) -> impl Fn(&MemRef) -> Result<bool, RegionError> + 'a {
     let wrote = body
@@ -887,7 +886,7 @@ fn unwritten<'a>(
     let known = if wrote.is_empty() {
         BTreeMap::new()
     } else {
-        ranges::constants(body, Some(dgroup), None).into_iter().collect()
+        ranges::constants(body).into_iter().collect()
     };
 
     move |cell| {
@@ -905,7 +904,6 @@ pub fn derived(
     body: &Rc<MirBody>,
     loop_: &Loop,
     found: Option<&OrderedMap<u32, Affine>>,
-    dgroup: &BTreeSet<i64>,
     bounds: Option<&RegionLayout>,
 ) -> Result<Vec<Derived>, RegionError> {
     let at_of = body
@@ -933,7 +931,7 @@ pub fn derived(
         return Ok(Vec::new());
     }
     let still = invariant(body, &members);
-    let settled = unwritten(body, &members, dgroup, bounds);
+    let settled = unwritten(body, &members, bounds);
     // Python's dictionary comprehension is last-definition-wins in body,
     // block, operation, and defined-value order.
     let made = definitions(body);
@@ -1052,7 +1050,6 @@ pub fn derived(
 #[allow(clippy::type_complexity)]
 pub fn of(
     body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
     bounds: Option<&RegionLayout>,
 ) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
     let mut result = Vec::new();
@@ -1061,7 +1058,7 @@ pub fn of(
         if found.is_empty() {
             continue;
         }
-        let formulas = derived(body, &loop_, Some(&found), dgroup, bounds)?;
+        let formulas = derived(body, &loop_, Some(&found), bounds)?;
         result.push((loop_, found, formulas));
     }
     Ok(result)
@@ -1270,7 +1267,19 @@ pub fn counted_unless_stopped(
         } else if shape.posttested || abs(&step) != BigInt::from(1_u8) {
             continue;
         } else {
-            maximum = _unit_maximum(body, loop_, &start, &bound, begin.as_ref(), limit.as_ref(), &step, test, inbounds);
+            let promised = made.get(&update.id).is_some_and(|op| op.nowrap);
+            maximum = _unit_maximum(
+                body,
+                loop_,
+                &start,
+                &bound,
+                begin.as_ref(),
+                limit.as_ref(),
+                &step,
+                test,
+                inbounds,
+                promised,
+            );
             if maximum.is_none() && _INCLUSIVE(test) {
                 continue;
             }
@@ -1343,6 +1352,105 @@ fn _difference(
     let (root, ahead) = anchored(&bound.as_arg(), made, width, Some(facts));
     let (other, behind) = anchored(&start.as_arg(), made, width, Some(facts));
     (root == other).then(|| masked(&(ahead - behind), width))
+}
+
+/// `arg` as terms times coefficients, through copies, adds, subtracts,
+/// increments and decrements. A constant is a term; `headers` stay terms.
+/// A value no rule expands is a term too when `opaque`, else None.
+pub(crate) fn linear(
+    arg: &Arg,
+    made: &BTreeMap<Value, &Op>,
+    headers: &BTreeSet<Value>,
+    width: u32,
+    opaque: bool,
+    visiting: &BTreeSet<Value>,
+    cached: &mut IndexMap<Arg, IndexMap<Arg, BigInt>>,
+) -> Option<IndexMap<Arg, BigInt>> {
+    let held = match arg {
+        Arg::Const(constant) if constant.width == width => None,
+        Arg::Held(held) if held.width == width => Some(held),
+        _ => return None,
+    };
+    let Some(held) =
+        held.filter(|held| !headers.contains(&held.value) && made.contains_key(&held.value))
+    else {
+        return Some(IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
+    };
+    if visiting.contains(&held.value) {
+        return None;
+    }
+    if let Some(found) = cached.get(arg) {
+        return Some(found.clone());
+    }
+    let op = made[&held.value];
+    // Not `op.merges`. That is the two-address tie -- which use shares a
+    // register with which definition -- and it says nothing about whether
+    // the operation is a linear function of its own arguments. BC writes
+    // every accumulator as a two-address `add`, so refusing on it refused
+    // every accumulator there is: hotlpx's `s = s + (n*k) + i` linearised
+    // to None, so the sum had no exit value and the loop could not go.
+    let term = || opaque.then(|| IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
+    if op.results != [arg.clone()] || !op.loads.is_empty() || !op.stores.is_empty() {
+        return term();
+    }
+    let parts = if op.kind == Kind::Copy && op.args.len() == 1 {
+        vec![(op.args[0].clone(), BigInt::from(1))]
+    } else if matches!(op.kind, Kind::Add | Kind::Sub) && op.args.len() == 2 {
+        vec![
+            (op.args[0].clone(), BigInt::from(1)),
+            (
+                op.args[1].clone(),
+                BigInt::from(if op.kind == Kind::Sub { -1 } else { 1 }),
+            ),
+        ]
+    } else if matches!(op.kind, Kind::Increment | Kind::Decrement) && op.args.len() == 1 {
+        vec![
+            (op.args[0].clone(), BigInt::from(1)),
+            (
+                Arg::Const(Const::new(1, width)),
+                BigInt::from(if op.kind == Kind::Decrement { -1 } else { 1 }),
+            ),
+        ]
+    } else {
+        return term();
+    };
+    let mut result = IndexMap::<Arg, BigInt>::default();
+    let mut deeper = visiting.clone();
+    deeper.insert(held.value);
+    for (source, coefficient) in parts {
+        let terms = linear(&source, made, headers, width, opaque, &deeper, cached)?;
+        for (term, factor) in terms {
+            let entry = result.entry(term).or_insert_with(|| BigInt::from(0));
+            *entry += &coefficient * factor;
+        }
+    }
+    let kept = result
+        .into_iter()
+        .filter(|(_, factor)| *factor != BigInt::from(0))
+        .collect::<IndexMap<_, _>>();
+    cached.insert(arg.clone(), kept.clone());
+    Some(kept)
+}
+
+/// How far `one` lies above `other`, where their terms other than constants agree.
+///
+/// Strength reduction starts `a[i].x` at `n + (m + 600)` and `a[i].y` at
+/// `n + (m + 606)`: no single root, but 6 apart.
+pub(crate) fn distance(one: &Arg, other: &Arg, made: &BTreeMap<Value, &Op>, width: u32) -> Option<BigInt> {
+    let terms_of = |arg: &Arg| linear(arg, made, &BTreeSet::new(), width, true, &BTreeSet::new(), &mut IndexMap::default());
+    let mut terms = terms_of(one)?;
+    for (term, factor) in terms_of(other)? {
+        *terms.entry(term).or_insert_with(|| BigInt::from(0)) -= factor;
+    }
+    let mut apart = BigInt::from(0);
+    for (term, factor) in terms {
+        match term {
+            Arg::Const(constant) => apart += &constant.n * factor,
+            _ if factor == BigInt::from(0) => {}
+            _ => return None,
+        }
+    }
+    Some(masked(&apart, width))
 }
 
 /// `arg` as a root value plus a constant, through copies and constant adds; a number has no root.
@@ -1487,6 +1595,7 @@ fn _unit_maximum(
     step: &BigInt,
     test: Kind,
     inbounds: bool,
+    promised: bool,
 ) -> Option<BigInt> {
     let width = bound.width();
     if test == Kind::Ne {
@@ -1500,24 +1609,35 @@ fn _unit_maximum(
     let begin = begin.map(signed);
     let limit = limit.map(signed);
     let end = if ascending { &high } else { &low };
-    if inclusive && limit.as_ref() == Some(end) {
+    // Stepping past the width's end wraps back inside an inclusive bound,
+    // unless the step promised it never wraps: then the program stops first.
+    let endless = inclusive && !(promised && !unsigned);
+    if endless && limit.as_ref() == Some(end) {
         return None;
     }
     let ends = (
         _range(body, start, usize::from(!ascending), &high),
         _range(body, bound, usize::from(ascending), &high),
     );
-    let origin = begin.or(ends.0);
+    let mut origin = begin.or(ends.0);
     let mut target = limit.clone().or(ends.1);
-    if target.is_some() && limit.is_none() && inclusive && target.as_ref() == Some(end) {
+    if target.is_some() && limit.is_none() && endless && target.as_ref() == Some(end) {
         target = None;
     }
-    if let (Some(origin), Some(target)) = (&origin, &target) {
-        if low <= *origin.min(target) && *origin.max(target) <= high {
-            return Some(max(BigInt::from(0_u8), (target - origin) * step + u8::from(inclusive)));
-        }
+    if !endless && inclusive {
+        // Promised: the counter runs between the width's ends whatever it is given.
+        target = target.or_else(|| Some(end.clone()));
+        origin = origin.or_else(|| Some(if ascending { low.clone() } else { high.clone() }));
     }
-    if inbounds { _inbounds_trips(body, loop_, *loop_.latches.first().expect("one latch")) } else { None }
+    let ranged = match (&origin, &target) {
+        (Some(origin), Some(target)) if low <= *origin.min(target) && *origin.max(target) <= high => {
+            Some(max(BigInt::from(0_u8), (target - origin) * step + u8::from(inclusive)))
+        }
+        _ => None,
+    };
+    // Both bound the trips; the promise's is the whole width, so keep the tighter.
+    let bounded = if inbounds { _inbounds_trips(body, loop_, *loop_.latches.first().expect("one latch")) } else { None };
+    ranged.into_iter().chain(bounded).min()
 }
 
 /// How far each counter and each value affine in one advances per iteration.
@@ -1535,7 +1655,7 @@ pub fn advances(body: &Rc<MirBody>, loop_: &Loop) -> IndexMap<Value, BigInt> {
     }
     // Python's `derived` cannot fail; an endpoint Rust cannot hold drops only
     // the derived entries, which leaves fewer, never wrong, advances.
-    for one in derived(body, loop_, Some(&found), &BTreeSet::new(), None).unwrap_or_default() {
+    for one in derived(body, loop_, Some(&found), None).unwrap_or_default() {
         let op = &body.blocks[one.op.block_index()].ops[one.op.operation_index()];
         if let (AffineOperand::Const(step), Arg::Const(by), None, [Arg::Held(result)]) =
             (&one.of.step, &one.by, &one.pointer, op.results.as_slice())

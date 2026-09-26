@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_compared, Affine, AffineMap, AffineOperand, Derived, basics, derived, relation, trip_count};
+use super::{_compared, Affine, AffineMap, AffineOperand, Derived, basics, derived, distance, relation, trip_count};
 use crate::analysis::consts;
 use crate::analysis::loops::Loop;
 use crate::analysis::occurrence::operations;
@@ -74,7 +74,7 @@ fn looped(header: i64, latches: &[i64], body: &[i64]) -> Loop {
 }
 
 fn derive(body: &MirBody, loop_: &Loop) -> Vec<Derived> {
-    derived(&Rc::new(body.clone()), loop_, None, &BTreeSet::new(), None).unwrap()
+    derived(&Rc::new(body.clone()), loop_, None, None).unwrap()
 }
 
 /// `tests/test_counted_loops.py:_unit_loop`: `i = start; while not (i exit_test bound): i += 1`,
@@ -625,8 +625,17 @@ fn test_harr_descriptor_offset_is_read_before_inner_loop_unless_written() {
         }
     }
     let result = testing::applied(&found, Some(&blocks), &Rc::new(built), O2());
+    // Written in the loop, the offset may be reloaded or forwarded from the
+    // store, but never read once ahead of the loop.
     let inner = result.blocks.iter().find(|block| block.at == 0x58).unwrap();
-    assert_eq!(inner.ops.iter().flat_map(|op| &op.loads).any(|one| mir::same_bytes(one, &field)), changed);
+    let hoisted = result
+        .blocks
+        .iter()
+        .filter(|block| block.at < inner.at)
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| &op.loads)
+        .any(|one| mir::same_bytes(one, &field));
+    assert_eq!(hoisted, !changed);
 }
 
 /// NESTED rebuilt (row * width + column) * 2 on each of 30 inner iterations.
@@ -781,4 +790,31 @@ fn test_nested_row_recurrences_remove_repeated_multiplication() {
         let found = testing::loaded_bytes(&result.data).unwrap();
         assert!(!blocks::instructions(&found).unwrap().iter().any(|one| one.insn.mnemonic() == Mnemonic::Imul), "{tag}");
     }
+}
+
+/// Strength reduction started `a[i].x` at `n + (m * 12 + 600)` and `a[i].y`
+/// at `n + (m * 12 + 606)`: no single root, so merged PARTICLE kept six
+/// pointers and spilled four.
+#[test]
+fn test_starts_whose_terms_agree_are_a_constant_apart() {
+    let (n, m, scaled) = (value(1, 0, 1), value(2, 0, 2), value(3, 0, 3));
+    let mut scale = op(0, Operation::Multiply, vec![scaled], vec![m], Kind::Mul);
+    scale.args = vec![held(m, 2), Arg::Const(Const::new(12, 2))];
+    scale.results = vec![held(scaled, 2)];
+    let mut ops = vec![scale];
+    let mut starts = Vec::new();
+    for (index, offset) in [600, 606].into_iter().enumerate() {
+        let (inner, start) = (value(10 + index as u32 * 2, 0, 10), value(11 + index as u32 * 2, 0, 11));
+        let mut plus = op(0, Operation::Binary, vec![inner], vec![scaled], Kind::Add);
+        plus.args = vec![held(scaled, 2), Arg::Const(Const::new(offset, 2))];
+        plus.results = vec![held(inner, 2)];
+        let mut sum = op(0, Operation::Binary, vec![start], vec![n, inner], Kind::Add);
+        sum.args = vec![held(n, 2), held(inner, 2)];
+        sum.results = vec![held(start, 2)];
+        ops.extend([plus, sum]);
+        starts.push(start);
+    }
+    let made: BTreeMap<Value, &Op> = ops.iter().flat_map(|one| one.defines.iter().map(move |value| (*value, one))).collect();
+    assert_eq!(distance(&held(starts[1], 2), &held(starts[0], 2), &made, 2), Some(BigInt::from(6)));
+    assert_eq!(distance(&held(starts[1], 2), &held(n, 2), &made, 2), None);
 }

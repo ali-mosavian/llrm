@@ -10,6 +10,7 @@ use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 
 use crate::abi::runtime::Contract;
 use crate::backend::cpu::{Profile, ProfileOrName};
+use crate::backend::constpool::Pool;
 use crate::backend::isel::{self, Selected};
 use crate::backend::{addressvalues, frame, globals, jumps, masm};
 use crate::flow;
@@ -35,6 +36,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
+    let mut pool = Pool::new(module.globals.len() as i64);
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -42,7 +44,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Selected { body, convention, calls, far } = isel::selected(module, name, &contracts).map_err(unselected)?;
+                let Selected { body, convention, calls, far } = isel::selected(module, name, &contracts, &mut pool).map_err(unselected)?;
                 let (body, reserve) = machine(body, &calls, cpu, convention.popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
@@ -70,6 +72,11 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             _ => {}
         }
     }
+    for (bytes, id) in pool.entries() {
+        let name = format!("$K{id}");
+        names.insert((Space::Segment, id), name.clone());
+        data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
+    }
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -96,7 +103,7 @@ fn machine(body: LirBody, calls: &IndexMap<i64, String>, cpu: &Profile, popped: 
     let frame = Rc::new(RefCell::new(frame::of(&body, Some(calls), "", None).map_err(|error| error.0)?));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(calls), false, ProfileOrName::Profile(cpu))? {
+    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), None, Some(calls), false, ProfileOrName::Profile(cpu))? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

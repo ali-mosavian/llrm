@@ -848,10 +848,14 @@ impl<'p> Machine<'p> {
                 };
                 vec![Scalar::Address(Address { offset: address.offset + *displacement as i64, ..address.clone() })]
             }
-            // A selector joined to an offset: the offset already carries its
-            // object, and the selector is nominal.
-            Op::Concat => match &args[1] {
-                Scalar::Address(address) => vec![Scalar::Address(address.clone())],
+            // A selector joined to an offset: an offset that carries its object
+            // already addresses it; a plain one counts from where the selector's
+            // object starts.
+            Op::Concat => match (&args[0], &args[1]) {
+                (_, Scalar::Address(address)) => vec![Scalar::Address(address.clone())],
+                (Scalar::Address(segment), Scalar::Int(offset)) => {
+                    vec![Scalar::Address(Address { offset: segment.offset + *offset as i64, ..segment.clone() })]
+                }
                 _ => return fail("concat of plain words has no object to address"),
             },
             Op::Add | Op::Fadd => vec![arithmetic(&args, i128::wrapping_add, |a, b| a + b)?],
@@ -1087,9 +1091,6 @@ fn span(where_: &Location<'_>, length: usize) -> Outcome<std::ops::Range<usize>>
     }
 }
 
-/// The segment a far pointer's high word reads as.
-const NOMINAL_SEGMENT: i128 = 0x1000;
-
 fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     let type_ = where_.type_;
     span(where_, type_.width as usize)?;
@@ -1110,10 +1111,13 @@ fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     if let Some(address) = cells.pointers.get(&(where_.offset, type_.width)) {
         return Ok(Scalar::Address(address.clone()));
     }
-    // A far pointer's segment word, which array code tests to see whether
-    // an array is allocated: any real segment is nonzero.
-    if type_.width == 2 && cells.pointers.contains_key(&(where_.offset - 2, 4)) {
-        return Ok(Scalar::Int(NOMINAL_SEGMENT));
+    // A far pointer's segment word names the object its offset starts in:
+    // nonzero for array code testing whether an array is allocated, and the
+    // object an offset joined to it addresses.
+    if type_.width == 2 {
+        if let Some(far) = cells.pointers.get(&(where_.offset - 2, 4)) {
+            return Ok(Scalar::Address(Address { memory: far.memory.clone(), offset: far.offset, length: None, capacity: None }));
+        }
     }
     let data = &cells.bytes[span(where_, type_.width as usize)?];
     match type_.kind {

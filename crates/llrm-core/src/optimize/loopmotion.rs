@@ -123,7 +123,7 @@ pub fn sunk_stores(
             // selector 0A000h otherwise observes every frame and descriptor cell.
             let scoped = ranges::bounded(&body)?;
             let constant: BTreeMap<Value, Interval> =
-                ranges::constants(&body, Some(dgroup), None).into_iter().collect();
+                ranges::constants(&body).into_iter().collect();
             facts = Some((scoped, constant));
         }
         let (scoped, constant) = facts.as_ref().expect("computed above");

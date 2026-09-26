@@ -1,5 +1,6 @@
 use crate::abi::qb::HirAbi;
 use crate::backend::assemble::{self, Abi};
+use crate::backend::constpool::Pool;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
@@ -16,7 +17,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
-    isel::selected(&parsed(text), name, &contracts)
+    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0))
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -260,7 +261,7 @@ fn test_variable_indices_are_scaled_and_added() {
             "lea si, [bp-8]",
             "add si, cx",
             "mov word ptr [si], 5",
-            "shl ax, 1",
+            "add ax, ax",
             "add bx, 2",
             "add bx, ax",
             "mov ax, word ptr [bx]",
@@ -374,7 +375,6 @@ no:
             "sete dl",
             "movzx cx, dl",
             "and bl, dl",
-            "or bl, bl",
             "jne L0_6",
             "L0_8:",
             "mov ax, 0",
@@ -455,7 +455,7 @@ define i16 @f(i16 %i) addrspace(1) {
             "mov bx, word ptr [bp+6]",
             "add word ptr count, 1",
             "mov ax, word ptr table+4",
-            "shl bx, 1",
+            "add bx, bx",
             "mov si, offset table",
             "add si, bx",
             "add ax, word ptr [si]",
@@ -658,14 +658,47 @@ b1:
     assert_eq!(
         listing(text, "scaled"),
         [
-            "push bp", "mov bp, sp", "sub sp, 4", "push si", "push di", "L0_0:",
-            "mov ecx, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "mov eax, ecx", "imul ebx", "mov ecx, eax", "shrd ecx, edx, 16",
-            "mov eax, ecx", "cdq", "mov edi, edx", "shld edi, ecx, 16", "shl ecx, 16",
-            "mov esi, edi", "sar esi, 31", "xor ecx, esi", "xor edi, esi", "sub ecx, esi", "sbb edi, esi",
-            "mov dword ptr [bp-4], ebx", "sar dword ptr [bp-4], 31", "xor ebx, dword ptr [bp-4]", "sub ebx, dword ptr [bp-4]",
-            "mov eax, edi", "xor edx, edx", "div ebx", "mov eax, ecx", "div ebx",
-            "xor esi, dword ptr [bp-4]", "xor eax, esi", "sub eax, esi", "shld edx, eax, 16",
-            "pop di", "pop si", "leave", "retf",
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "push si",
+            "push di",
+            "L0_0:",
+            "mov ecx, dword ptr [bp+6]",
+            "mov ebx, dword ptr [bp+10]",
+            "mov eax, ecx",
+            "imul ebx",
+            "mov ecx, eax",
+            "shrd ecx, edx, 16",
+            "mov eax, ecx",
+            "cdq",
+            "mov di, dx",
+            "mov eax, ebx",
+            "shld edi, ecx, 16",
+            "shl ecx, 16",
+            "mov esi, edi",
+            "sar esi, 31",
+            "xor ecx, esi",
+            "xor edi, esi",
+            "sub ecx, esi",
+            "sbb edi, esi",
+            "sar eax, 31",
+            "xor ebx, eax",
+            "sub ebx, eax",
+            "mov dword ptr [bp-4], eax",
+            "mov eax, edi",
+            "xor edx, edx",
+            "div ebx",
+            "mov eax, ecx",
+            "div ebx",
+            "xor esi, dword ptr [bp-4]",
+            "xor eax, esi",
+            "sub eax, esi",
+            "shld edx, eax, 16",
+            "pop di",
+            "pop si",
+            "leave",
+            "retf",
         ]
     );
 }
@@ -690,8 +723,8 @@ define i16 @f() addrspace(1) {
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
 /// both valid MIR, which isel refused: "a branch on a constant", "a float
-/// constant operand". A branch on a constant jumps; a float constant is
-/// its bits, loaded from a stack temporary.
+/// constant operand". A branch on a constant jumps; a float constant loads
+/// from the pool in its narrowest exact format, as LLVM's does.
 #[test]
 fn test_a_constant_condition_and_a_float_constant_select() {
     let text = "define i16 @f() addrspace(1) {
@@ -710,10 +743,9 @@ b3:
     assert_eq!(
         listing(text, "f"),
         [
-            "push bp", "mov bp, sp", "sub sp, 22", "L0_0:", "fnstcw word ptr [bp-20]", "mov ax, word ptr [bp-20]", "or ax, 3072", "mov word ptr [bp-22], ax", "L0_1:",
-            "mov dword ptr [bp-8], 0", "mov dword ptr [bp-4], 1073217536", "mov dword ptr [bp-16], 0", "mov dword ptr [bp-12], 1073741824",
-            "fld qword ptr [bp-8]", "fadd qword ptr [bp-16]", "fldcw word ptr [bp-22]", "fistp word ptr [bp-18]", "fldcw word ptr [bp-20]",
-            "mov ax, word ptr [bp-18]", "leave", "retf",
+            "push bp", "mov bp, sp", "sub sp, 6", "L0_0:", "fnstcw word ptr [bp-4]", "mov ax, word ptr [bp-4]", "or ax, 3072", "mov word ptr [bp-6], ax", "L0_1:",
+            "fld dword ptr $K1", "fadd dword ptr $K2", "fldcw word ptr [bp-6]", "fistp word ptr [bp-2]", "fldcw word ptr [bp-4]",
+            "mov ax, word ptr [bp-2]", "leave", "retf",
         ]
     );
 }
@@ -781,18 +813,17 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "sub sp, 4",
+            "push si",
             "L0_0:",
-            "mov ax, word ptr [bp+6]",
-            "mov word ptr [bp-2], ax",
-            "mov ax, word ptr [bp+8]",
-            "mov word ptr [bp-4], ax",
-            "mov bx, word ptr [bp+10]",
-            "shl bx, 1",
-            "add bx, word ptr [bp-2]",
-            "mov es, word ptr [bp-4]",
-            "mov ax, word ptr es:[bx]",
-            "mov bx, word ptr [bp-2]",
+            "les bx, dword ptr [bp+6]",
+            "mov si, word ptr [bp+10]",
+            "add si, si",
+            "add si, bx",
+            "mov ax, word ptr es:[si]",
             "mov word ptr es:[bx+4], ax",
+            "mov word ptr [bp-4], bx",
+            "mov bx, es",
+            "mov word ptr [bp-2], bx",
             "mov bx, offset buf",
             "mov cx, DGROUP",
             "push ax",
@@ -800,9 +831,10 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
             "push bx",
             "call take",
             "add sp, 6",
-            "mov ax, word ptr [bp-2]",
+            "mov ax, word ptr [bp-4]",
             "add ax, 4",
-            "mov dx, word ptr [bp-4]",
+            "mov dx, word ptr [bp-2]",
+            "pop si",
             "leave",
             "retf",
         ]
@@ -849,13 +881,11 @@ small:
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 48",
+            "sub sp, 36",
             "L1_0:",
             "mov ax, word ptr [bp+6]",
             "mov word ptr [bp-2], ax",
             "fild word ptr [bp-2]",
-            "fstp tbyte ptr [bp-38]",
-            "fld tbyte ptr [bp-38]",
             "fst qword ptr [bp-10]",
             "push dword ptr [bp-6]",
             "push dword ptr [bp-10]",
@@ -863,28 +893,27 @@ small:
             "push dword ptr [bp-14]",
             "push dword ptr [bp-18]",
             "call far ptr scale",
-            "fstp tbyte ptr [bp-48]",
             "add sp, 16",
-            "fld tbyte ptr [bp-48]",
-            "fstp dword ptr [bp-22]",
+            "fst dword ptr [bp-22]",
             "fld dword ptr [bp-22]",
             "fst dword ptr out",
             "fstp dword ptr [bp-26]",
             "push dword ptr [bp-26]",
+            "fstp qword ptr [bp-36]",
             "call far ptr show",
-            "fld tbyte ptr [bp-48]",
-            "fld tbyte ptr [bp-38]",
-            "fxch st(1)",
+            "fld qword ptr [bp-36]",
+            "fild word ptr [bp-2]",
+            "fld st(1)",
             "fcompp",
             "fnstsw ax",
             "sahf",
             "ja L1_8",
             "L1_10:",
+            "fstp st(0)",
             "mov ax, 0",
             "leave",
             "retf",
             "L1_8:",
-            "fld tbyte ptr [bp-48]",
             "fistp word ptr [bp-28]",
             "mov ax, word ptr [bp-28]",
             "leave",

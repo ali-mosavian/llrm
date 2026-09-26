@@ -93,8 +93,8 @@ impl crate::model::passes::MIRTransform for Strength {
         "strength"
     }
 
-    fn after_settling(&self) -> bool {
-        true
+    fn settles_after(&self) -> u8 {
+        1
     }
 
     fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
@@ -106,7 +106,6 @@ impl crate::model::passes::MIRTransform for Strength {
         });
         let body = reduced(
             &body,
-            &self.r#where.dgroup,
             layout.as_ref(),
             self.r#where.registers,
             &self.r#where.index_scales,
@@ -119,9 +118,7 @@ impl crate::model::passes::MIRTransform for Strength {
         let body = exitsink::sunk(&transform::dead(&ivshare::shared(&body))?).map_err(|error| error.to_string())?;
         let body = loopexit::evaluated(&body)?;
         let body = indvars::rewound(&body, self.r#where.registers, Some(&self.r#where.costs));
-        let body = indvars::simplified(&body).map_err(|error| error.to_string())?;
-        let body = indvars::symbolically_zeroed(&body).map_err(|error| error.to_string())?;
-        indvars::zeroed(&body, true).map_err(|error| error.to_string())
+        indvars::simplified(&body).map_err(|error| error.to_string())
     }
 }
 
@@ -132,7 +129,6 @@ impl crate::model::passes::MIRTransform for Strength {
 #[allow(clippy::too_many_arguments)]
 pub fn reduced(
     body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
     registers: i64,
     scales: &BTreeSet<i64>,
@@ -142,12 +138,13 @@ pub fn reduced(
     control_recurrences: bool,
 ) -> Result<Rc<MirBody>, StrengthError> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
-    let found = induction::of(body, dgroup, layout)?;
+    let found = induction::of(body, layout)?;
     if found.is_empty() {
         return Ok(body.clone());
     }
 
     let reads = _Reads::of(body);
+    let made = induction::definitions(body);
     let partners = address_forms.iter().find(|form| !form.secondary).and_then(|form| form.partners);
     let address_registers = address_forms.iter().find(|form| !form.secondary).and_then(AddressForm::address_registers);
     let mut candidate_groups = BTreeMap::<i64, Vec<Derived>>::new();
@@ -356,6 +353,9 @@ pub fn reduced(
                 .find(|phi| phi.result.id == one.of.value)
                 .map(|phi| phi.result)
                 .expect("a counter is a header phi");
+            if _already_carried(op, one, counter, &made) {
+                continue;
+            }
             taken += 1;
             let base = Value {
                 id: _next(body, taken),
@@ -645,6 +645,9 @@ pub fn reduced(
                     replacements.insert(member.op, vec![_copying(op, recurrence, answer, width)]);
                     continue;
                 }
+                if _already_carried(op, member, recurrence, &made) {
+                    continue;
+                }
                 taken += 1;
                 let invariant = Value {
                     id: _next(body, taken),
@@ -932,13 +935,33 @@ fn _control_credits(
                 .iter()
                 .any(|arg| matches!(arg, Arg::Held(held) if results.contains(&held.value)))
         });
-        for (order, root) in roots.enumerate() {
-            let descendants = if _bare(root) {
-                _stride_cover(body, loop_, root, &candidates)
-            } else {
-                _formula_descendants(body, root, &candidates)
-            };
-            if induction::control_replacement(body, loop_, proof, &descendants).is_none() {
+        let covers = roots
+            .map(|root| {
+                let descendants = if _bare(root) {
+                    _stride_cover(body, loop_, root, &candidates)
+                } else {
+                    _formula_descendants(body, root, &candidates)
+                };
+                (root, descendants)
+            })
+            .collect::<Vec<_>>();
+        // Roots that together cover `i` free it one per round: each reduced
+        // one leaves the rest a smaller cover, until the last covers alone.
+        // Worth it only when one of them can take control at a constant
+        // bias; a symbolic one costs a register in every address it bases.
+        let constant = |root: &Derived| {
+            proof.count.is_some()
+                && proof.first.is_some()
+                && matches!(root.by, Arg::Const(_))
+                && root.offsets.iter().all(|(arg, _)| matches!(arg, Arg::Const(_)))
+                && root.pointer.is_none()
+        };
+        let together = covers.iter().flat_map(|(_, descendants)| descendants.iter().copied()).collect();
+        let whole = covers.len() > 1
+            && covers.iter().any(|(root, _)| constant(root))
+            && induction::control_replacement(body, loop_, proof, &together).is_some();
+        for (order, (root, descendants)) in covers.iter().enumerate() {
+            if !whole && induction::control_replacement(body, loop_, proof, descendants).is_none() {
                 continue;
             }
             let rank = (
@@ -948,7 +971,7 @@ fn _control_credits(
             );
             let previous = selected.get(&proof.counter.value);
             if previous.is_none_or(|previous| rank > previous.0) {
-                selected.insert(proof.counter.value, (rank, root.clone()));
+                selected.insert(proof.counter.value, (rank, (*root).clone()));
             }
         }
     }
@@ -1549,6 +1572,27 @@ fn _recompute_cost(body: &MirBody, one: &Derived, costs: &OperationCosts) -> i64
         work += costs.address;
     }
     work
+}
+
+/// Whether `op` already adds `member`'s one invariant to `recurrence`, through
+/// copies: rewriting it would only copy the invariant, which gvn folds back.
+fn _already_carried(op: &Op, member: &Derived, recurrence: Value, made: &BTreeMap<u32, &Op>) -> bool {
+    let unit = matches!(&member.by, Arg::Const(constant) if constant.n == BigInt::from(1_u8));
+    let [(Arg::Held(offset), coefficient)] = member.offsets.as_slice() else {
+        return false;
+    };
+    if !unit || member.pointer.is_some() || *coefficient != BigInt::from(1_u8) || op.kind != Kind::Add {
+        return false;
+    }
+    let resolved = |held: Held| induction::copied(held, made).value.id;
+    let mut read = op.args.iter().filter_map(|arg| match arg {
+        Arg::Held(held) => Some(resolved(*held)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    read.sort_unstable();
+    let mut wanted = vec![resolved(*offset), resolved(Held { value: recurrence, width: offset.width })];
+    wanted.sort_unstable();
+    read == wanted
 }
 
 /// `op` made a copy of the counter that replaces it.

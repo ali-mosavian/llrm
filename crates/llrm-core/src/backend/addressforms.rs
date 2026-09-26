@@ -17,6 +17,10 @@ use crate::model::lir::{self, Insn};
 use crate::model::mir::{self, Arg, Kind, MirBody, Op};
 use crate::model::passes::{AddressForm, OperationCosts};
 
+/// Word or dword addresses that are another value plus a constant.
+///
+/// A word sum wraps as 16-bit addressing does; a dword sum is the 32-bit
+/// effective address itself, so either constant is a displacement.
 pub fn offsets(body: &MirBody) -> IndexMap<u32, (ir::Held, BigInt)> {
     let mut result = IndexMap::default();
     for block in &body.blocks {
@@ -24,56 +28,15 @@ pub fn offsets(body: &MirBody) -> IndexMap<u32, (ir::Held, BigInt)> {
             if !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
                 continue;
             }
-            match (op.kind, op.args.as_slice(), op.results.as_slice()) {
-                (
-                    Kind::Copy,
-                    [Arg::Held(source @ mir::Held { width: 2, .. })],
-                    [
-                        Arg::Held(mir::Held {
-                            value: dest,
-                            width: 2,
-                        }),
-                    ],
-                ) => {
-                    result.insert(
-                        dest.id,
-                        (
-                            ir::Held {
-                                value: source.value.id,
-                                width: 2,
-                            },
-                            BigInt::from(0),
-                        ),
-                    );
+            let (source, amount, dest) = match (op.kind, op.args.as_slice(), op.results.as_slice()) {
+                (Kind::Copy, [Arg::Held(source)], [Arg::Held(dest)]) => (source, BigInt::from(0), dest),
+                (Kind::Add, [Arg::Held(source), Arg::Const(amount)], [Arg::Held(dest)]) if amount.width == dest.width => {
+                    (source, amount.n.clone(), dest)
                 }
-                (
-                    Kind::Add,
-                    [
-                        Arg::Held(source @ mir::Held { width: 2, .. }),
-                        Arg::Const(mir::Const {
-                            n: amount,
-                            width: 2,
-                        }),
-                    ],
-                    [
-                        Arg::Held(mir::Held {
-                            value: dest,
-                            width: 2,
-                        }),
-                    ],
-                ) => {
-                    result.insert(
-                        dest.id,
-                        (
-                            ir::Held {
-                                value: source.value.id,
-                                width: 2,
-                            },
-                            amount.clone(),
-                        ),
-                    );
-                }
-                _ => {}
+                _ => continue,
+            };
+            if matches!(dest.width, 2 | 4) && source.width == dest.width {
+                result.insert(dest.value.id, (ir::Held { value: source.value.id, width: dest.width }, amount));
             }
         }
     }
@@ -90,9 +53,10 @@ pub fn selected(
         let Loc::Mem(cell) = arg else {
             return arg.clone();
         };
-        let Some(mut base) = cell.base.filter(|base| base.width == 2) else {
+        let Some(mut base) = cell.base.filter(|base| matches!(base.width, 2 | 4)) else {
             return arg.clone();
         };
+        let width = base.width;
         if cell.index.is_some() {
             return arg.clone();
         }
@@ -110,34 +74,41 @@ pub fn selected(
         };
         let mut offset = BigInt::from(0);
         let mut seen = BTreeSet::new();
-        while forms.contains_key(&base.value) && !seen.contains(&base.value) {
+        // A word read of a dword sum is its low half, which word addressing
+        // wraps to anyway; a dword read of a word sum is not the dword sum.
+        while forms.get(&base.value).is_some_and(|(next, _)| next.width >= width) && !seen.contains(&base.value) {
             seen.insert(base.value);
             let (next, step) = &forms[&base.value];
-            base = *next;
+            base = ir::Held { value: next.value, width };
             offset += step;
         }
         if seen.contains(&base.value) {
             return arg.clone();
         }
-        let displacement = mod_floor(
-            &(BigInt::from(cell.offset) + &offset + 32768),
-            &BigInt::from(65536),
-        ) - 32768;
-        let disp = mod_floor(
-            &(BigInt::from(addr.disp) + &offset + 32768),
-            &BigInt::from(65536),
-        ) - 32768;
+        // A word address wraps; a dword one is the exact 32-bit sum.
+        let wrapped = |value: BigInt| {
+            if width == 2 {
+                mod_floor(&(value + 32768), &BigInt::from(65536)) - 32768
+            } else {
+                value
+            }
+        };
+        let displacement = wrapped(BigInt::from(cell.offset) + &offset);
+        let disp = wrapped(BigInt::from(addr.disp) + &offset);
         if seen.is_empty() {
+            return arg.clone();
+        }
+        let (Ok(displacement), Ok(disp)) = (i64::try_from(&displacement), i64::try_from(&disp)) else {
+            return arg.clone();
+        };
+        if width == 4 && i32::try_from(disp).is_err() {
             return arg.clone();
         }
         let mut changed = cell.clone();
         changed.base = Some(base);
-        changed.offset = i64::try_from(displacement).expect("a wrapped word fits");
-        changed.disp_width = 2;
-        changed.addr = Some(Addr {
-            disp: i64::try_from(disp).expect("a wrapped word fits"),
-            ..addr
-        });
+        changed.offset = displacement;
+        changed.disp_width = width;
+        changed.addr = Some(Addr { disp, ..addr });
         Loc::Mem(changed)
     };
 
@@ -157,6 +128,8 @@ static _SCALES: LazyLock<IndexMap<u32, Vec<i64>>> =
 pub enum IndexedBase {
     Held(ir::Held),
     Address(ir::Address),
+    /// No base register: the cell is its index, scaled, plus its displacement.
+    Absent,
 }
 
 pub type IndexedForm = (IndexedBase, ir::Held, i64);
@@ -225,6 +198,23 @@ pub fn indexed(
                         ..ir::Address::new(Some(Addr::new(Space::Frame, source.offset)))
                     },
                 );
+            }
+        }
+    }
+    // A named data object's near address is a relocated constant: a cell
+    // based on it is that object's own displacement, as a frame's is BP's.
+    let mut object_bases: IndexMap<u32, ir::Address> = IndexMap::default();
+    for op in made.values() {
+        if op.kind != Kind::Address || !op.loads.is_empty() || !op.stores.is_empty() || op.barrier() {
+            continue;
+        }
+        if let ([Arg::Cell(cell)], [Arg::Held(result @ mir::Held { width: 2, .. })]) =
+            (op.args.as_slice(), op.results.as_slice())
+        {
+            if let Some(addr) = cell.r#ref.addr.filter(|addr| matches!(addr.space, Space::Segment | Space::External)) {
+                if cell.r#ref.base.is_none() {
+                    object_bases.insert(result.value.id, ir::Address { disp_width: 2, ..ir::Address::new(Some(addr)) });
+                }
             }
         }
     }
@@ -339,7 +329,7 @@ pub fn indexed(
                 .collect::<BTreeSet<u32>>();
             for cell in &cells {
                 let value = cell.base.expect("filtered").id;
-                if cell.base_width == 2
+                if matches!(cell.base_width, 2 | 4)
                     && cell
                         .addr
                         .is_some_and(|addr| matches!(addr.space, Space::Far | Space::Literal))
@@ -444,6 +434,11 @@ pub fn indexed(
         // settled after all dependent address expressions have been folded.
         forms.insert(value, FoldedForm::Address(fixed.clone()));
     }
+    for (&value, fixed) in &object_bases {
+        if bases.contains_key(&value) && !forms.contains_key(&value) {
+            forms.insert(value, FoldedForm::Address(fixed.clone()));
+        }
+    }
     for block in &body.blocks {
         for op in &block.ops {
             if !plain(op, Kind::Add) || op.args.len() != 2 {
@@ -538,6 +533,64 @@ pub fn indexed(
             forms.insert(address.value.id, FoldedForm::Indexed(form));
             folded.insert(address.value.id);
         }
+    }
+
+    // A dword product read only as cell bases, directly or through constant
+    // adds `selected` folds into displacements, is those cells' scaled index:
+    // `[x+x+d]` for two, `[x*s+d]` otherwise. With a constant array origin
+    // there is no base register for the add-and-shift form above to find.
+    let mut readers: IndexMap<u32, Vec<&Op>> = IndexMap::default();
+    for op in body.blocks.iter().flat_map(|block| &block.ops) {
+        for value in &op.uses {
+            readers.entry(value.id).or_default().push(op);
+        }
+    }
+    for product in made.values() {
+        if !matches!(product.kind, Kind::Shl | Kind::Mul) || !plain(product, product.kind) {
+            continue;
+        }
+        let ([Arg::Held(result)], [Arg::Held(source), Arg::Const(amount)]) =
+            (product.results.as_slice(), product.args.as_slice())
+        else {
+            continue;
+        };
+        if result.width != 4 || source.width != 4 || forms.contains_key(&result.value.id) || exposed.contains(&result.value.id) {
+            continue;
+        }
+        let scale = match product.kind {
+            Kind::Shl => u32::try_from(&amount.n).ok().filter(|shift| *shift < 4).map(|shift| 1_i64 << shift),
+            _ => i64::try_from(&amount.n).ok(),
+        };
+        let Some(scale) = scale.filter(|scale| _SCALES[&4].iter().any(|shift| 1 << shift == *scale) && *scale > 1) else {
+            continue;
+        };
+        let folds = |value: u32| {
+            constant_bases.contains(&value) && !unencodable_constant_bases.contains(&value) && !other.contains_key(&value)
+        };
+        let uses = readers.get(&result.value.id).map_or(&[][..], Vec::as_slice);
+        let mut added = 0;
+        let spelled = !uses.is_empty()
+            && uses.iter().all(|reader| {
+                let held = reader.args.iter().any(|arg| matches!(arg, Arg::Held(arg) if arg.value.id == result.value.id));
+                if !held {
+                    return true;
+                }
+                added += 1;
+                reader.kind == Kind::Add
+                    && reader.results.iter().any(|one| {
+                        matches!(one, Arg::Held(one) if folded.contains(&one.value.id) && folds(one.value.id))
+                    })
+            });
+        if !spelled || other.get(&result.value.id).copied().unwrap_or(0) != added {
+            continue;
+        }
+        if bases.contains_key(&result.value.id) && unencodable_constant_bases.contains(&result.value.id) {
+            continue;
+        }
+        let index = ir::Held { value: source.value.id, width: 4 };
+        let form = if scale == 2 { (IndexedBase::Held(index), index, 1) } else { (IndexedBase::Absent, index, scale) };
+        forms.insert(result.value.id, FoldedForm::Indexed(form));
+        folded.insert(result.value.id);
     }
 
     // The native word form has no scale.  Before preserving a separately
@@ -732,6 +785,75 @@ pub fn indexed(
                 folded.insert(address.value.id);
             }
         }
+
+        // The same product with no base: a cell reads it directly, or through
+        // a constant add `selected` folds into the displacement. A constant
+        // array origin leaves `x * 2` alone as the address.
+        let reads = |address: u32, source: &mir::Held| -> bool {
+            use_ops.get(&address).is_some_and(|readers| {
+                readers.iter().all(|reader| {
+                    let cells = reader
+                        .args
+                        .iter()
+                        .chain(&reader.results)
+                        .filter_map(|one| match one {
+                            Arg::Cell(one) if one.r#ref.base.is_some_and(|base| base.id == address) => Some(&one.r#ref),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let fact = scoped.get(&block_of[&(*reader as *const Op)]).and_then(|known| known.get(&source.value));
+                    !cells.is_empty()
+                        && !reader.args.iter().any(|arg| matches!(arg, Arg::Held(arg) if arg.value.id == address))
+                        && fact.is_some_and(|fact| fact.width == 2 && fact.low >= BigInt::from(0))
+                        && (cells.iter().all(|cell| cell.typed.is_some()) || exact.contains(&address))
+                        && cells.iter().all(|cell| cell.addr.is_some_and(|addr| matches!(addr.space, Space::Far | Space::Literal)))
+                })
+            })
+        };
+        let promotable = |value: &mir::Value| made.get(&value.id).is_some_and(|op| matches!(op.kind, Kind::Load | Kind::Copy));
+        for product in made.values() {
+            if !plain(product, product.kind) || !matches!(product.kind, Kind::Mul | Kind::Shl) || folded.contains(&product.defines[0].id) {
+                continue;
+            }
+            let ([Arg::Held(result @ mir::Held { width: 2, .. })], [Arg::Held(source @ mir::Held { width: 2, .. }), Arg::Const(amount)]) =
+                (product.results.as_slice(), product.args.as_slice())
+            else {
+                continue;
+            };
+            let scale = match product.kind {
+                Kind::Shl => u32::try_from(&amount.n).ok().filter(|shift| *shift < 16).map(|shift| 1_i64 << shift),
+                _ => i64::try_from(&amount.n).ok(),
+            };
+            let Some(scale) = scale.filter(|scale| *scale > 1 && secondary.scales.contains(scale)) else {
+                continue;
+            };
+            if exposed.contains(&result.value.id) || !promotable(&source.value) {
+                continue;
+            }
+            let uses = use_ops.get(&result.value.id).map_or(&[][..], Vec::as_slice);
+            let mut added = 0;
+            let spelled = !uses.is_empty()
+                && uses.iter().all(|reader| {
+                    if !reader.args.iter().any(|arg| matches!(arg, Arg::Held(arg) if arg.value.id == result.value.id)) {
+                        return reads(result.value.id, source);
+                    }
+                    added += 1;
+                    reader.kind == Kind::Add
+                        && reader.results.iter().any(|one| {
+                            matches!(one, Arg::Held(one) if folded.contains(&one.value.id)
+                                && constant_offsets.contains_key(&one.value.id)
+                                && reads(one.value.id, source))
+                        })
+                });
+            if !spelled || other.get(&result.value.id).copied().unwrap_or(0) != added {
+                continue;
+            }
+            let index = ir::Held { value: source.value.id, width: 4 };
+            let form = if scale == 2 { (IndexedBase::Held(index), index, 1) } else { (IndexedBase::Absent, index, scale) };
+            promoted.insert(source.value.id);
+            forms.insert(result.value.id, FoldedForm::Indexed(form));
+            folded.insert(result.value.id);
+        }
     }
 
     let phi_reads: BTreeSet<u32> = body
@@ -749,7 +871,7 @@ pub fn indexed(
     // itself in `folded`; iterate because the proof runs from leaves to root.
     loop {
         let before = folded.len();
-        for &value in fixed_frames.keys() {
+        for &value in fixed_frames.keys().chain(object_bases.keys().filter(|value| forms.contains_key(*value))) {
             if folded.contains(&value) || exposed.contains(&value) || phi_reads.contains(&value) {
                 continue;
             }
@@ -950,6 +1072,19 @@ pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact
                 let (Some(base_addr), Some(arg_addr)) = (base.addr, cell.addr) else {
                     return arg.clone();
                 };
+                if matches!(base_addr.space, Space::Segment | Space::External)
+                    && arg_addr.space == Space::Literal
+                    && index.is_none()
+                {
+                    let mut changed = cell.clone();
+                    changed.addr =
+                        Some(Addr { disp: base_addr.disp + arg_addr.disp, segment: arg_addr.segment, ..base_addr });
+                    changed.through = Register::None;
+                    changed.base = None;
+                    changed.index = None;
+                    changed.scale = 1;
+                    return Loc::Mem(changed);
+                }
                 if base_addr.space != Space::Frame || arg_addr.space != Space::Literal {
                     return arg.clone();
                 }
@@ -981,6 +1116,14 @@ pub fn scaled(what: Option<&Semantics>, forms: &IndexMap<u32, FoldedForm>, exact
                 changed.base = None;
                 changed.index = index;
                 changed.scale = scale;
+                Loc::Mem(changed)
+            }
+            IndexedBase::Absent => {
+                let mut changed = cell.clone();
+                changed.base = None;
+                changed.index = index;
+                changed.scale = scale;
+                changed.through = Register::None;
                 Loc::Mem(changed)
             }
             IndexedBase::Held(base) => {

@@ -1039,3 +1039,55 @@ fn test_production_press_keeps_the_loop_counter_in_a_value() {
     let refs: Vec<MemRef> = testing::all_ops(&bodies).into_iter().flat_map(|op| op.loads).collect();
     assert!(!refs.iter().any(|one| one.addr == cell.addr), "the emitted loop still reloads J");
 }
+
+/// Machine float semantics: a double local round-tripped through its frame
+/// slot at every use, so FRACLINE's loop was loads and stores of `z`.
+#[test]
+fn test_a_float_store_with_excess_precision_reaches_later_loads_as_a_value() {
+    use crate::model::floating::{Format, Precision, Rounding, Semantics};
+    for (precision, forwarded) in [(Precision::Excess, true), (Precision::Destination, false)] {
+        let r#ref = MemRef::new(Some(Addr::new(Space::Frame, -8)), 8);
+        let (source, first, second) = (value(1, 0), value(2, 4), value(3, 6));
+        let fstore = Op {
+            kind: Kind::Fstore,
+            floating: Some(Semantics::new([Format::Extended80], Format::Binary64, precision, Rounding::Dynamic)),
+            args: vec![held(source, 10)],
+            results: vec![cell(&r#ref)],
+            stores: vec![r#ref.clone()],
+            ..op(2, Operation::FloatStore, "fstp", vec![], vec![source])
+        };
+        let fload = |at: i64, result: Value| Op {
+            kind: Kind::Fload,
+            floating: Some(Semantics::new([Format::Binary64], Format::Extended80, Precision::Exact, Rounding::None)),
+            args: vec![cell(&r#ref)],
+            results: vec![held(result, 10)],
+            loads: vec![r#ref.clone()],
+            ..op(at, Operation::FloatLoad, "fld", vec![result], vec![])
+        };
+        let result = plain(&one_block(vec![fstore, fload(4, first), fload(6, second)]));
+        let loads = result.blocks[0].ops.iter().filter(|one| one.kind == Kind::Fload).count();
+        assert_eq!(loads == 0, forwarded, "{precision:?}: {:?}", result.blocks[0].ops);
+    }
+}
+
+/// A conversion reads its cell in the cell's own integer format: QB's
+/// `x - 1` stored 1 to a frame temporary for `fild`, and promotion refused
+/// the cell as both integer and float, so every literal stayed in memory.
+#[test]
+fn test_an_integer_cell_a_conversion_reads_is_promoted() {
+    use crate::model::floating::{Format, Precision, Rounding, Semantics};
+    let r#ref = MemRef::new(Some(Addr::new(Space::Frame, -2)), 2);
+    let fload = |at: i64, result: Value| Op {
+        kind: Kind::Fload,
+        floating: Some(Semantics::new([Format::Signed16], Format::Extended80, Precision::Exact, Rounding::None)),
+        args: vec![cell(&r#ref)],
+        results: vec![held(result, 10)],
+        loads: vec![r#ref.clone()],
+        ..op(at, Operation::FloatLoad, "fild", vec![result], vec![])
+    };
+    let body = one_block(vec![store(2, vec![], constant(1, 2), &r#ref), fload(4, value(2, 4)), fload(6, value(3, 6))]);
+    let result = plain(&body);
+    let conversions: Vec<&Op> = result.blocks[0].ops.iter().filter(|one| one.kind == Kind::Fload).collect();
+    assert_eq!(conversions.len(), 2, "{:?}", result.blocks[0].ops);
+    assert!(conversions.iter().all(|one| one.loads.is_empty() && matches!(one.args[0], Arg::Held(Held { width: 2, .. }))), "{conversions:?}");
+}

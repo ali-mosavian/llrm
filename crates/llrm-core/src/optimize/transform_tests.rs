@@ -135,6 +135,34 @@ mod subexpressions_tests {
         assert_eq!(ops.last().unwrap().args, vec![Arg::Held(Held { value: first, width: 2 })]);
     }
 
+    /// An address took its cell for a read, so no two addresses of one
+    /// descriptor were ever one value and no load through them was shared.
+    #[test]
+    fn test_cse_reuses_one_cell_address() {
+        let first = Value::new(1, 0);
+        let duplicate = Value::new(2, 0);
+        let descriptor = crate::model::mir::MemRef::new(
+            Some(crate::objectfile::module::Addr::new(crate::objectfile::module::Space::Segment, 18)),
+            18,
+        );
+        let address = |at: i64, result: Value| Op {
+            args: vec![Arg::Cell(crate::model::mir::Cell { r#ref: descriptor.clone() })],
+            results: vec![Arg::Held(Held { value: result, width: 2 })],
+            ..op(at, Operation::Address, "lea", vec![result], vec![], Kind::Address)
+        };
+        let reader = Op {
+            args: vec![Arg::Held(Held { value: duplicate, width: 2 })],
+            ..op(2, Operation::Push, "push", vec![], vec![duplicate], Kind::Opaque)
+        };
+        let body = one_block(vec![address(0, first), address(1, duplicate), reader]);
+
+        let done = subexpressions(&std::rc::Rc::new(MirBody::clone(&body)), &BTreeSet::new(), false).unwrap();
+
+        let ops = &done.blocks[0].ops;
+        assert_eq!(ops.iter().filter(|one| one.kind == Kind::Address).count(), 1);
+        assert_eq!(ops.last().unwrap().uses, vec![first]);
+    }
+
     #[test]
     fn test_cse_refuses_an_operand_that_is_only_half_its_value() {
         let low = Held { value: versioned(1, 0, 1), width: 2 };
@@ -254,7 +282,7 @@ mod hoist_tests {
         OrderedMap, Phi, Value,
     };
     use crate::objectfile::module::{Addr, Space};
-    use crate::optimize::transform::{_crossing, _invariant_run, _reparented, _rewritten, _starts};
+    use crate::optimize::transform::{_crossing, _invariant_run, _placement, _reparented, _rewritten, _starts};
     use crate::support::pyset::PySet;
 
     fn flag(id: u32, at: i64) -> Value {
@@ -275,6 +303,7 @@ mod hoist_tests {
             None,
             false,
             &BTreeSet::new(),
+            false,
         )
         .unwrap()
     }
@@ -318,6 +347,22 @@ mod hoist_tests {
         let found = run(&[&load, &widening], &[], &[], None);
         assert!(found.contains(&&load), "an ordinary load is invariant here");
         assert!(found.contains(&&widening), "and the multiply behind it leaves with it");
+    }
+
+    /// A BYREF argument's pointer arrives at entry, which liveness counts as
+    /// the entry block's own definition: no preheader place was ready for a
+    /// load through it, and it stayed in the loop.
+    #[test]
+    fn test_a_value_arriving_at_entry_is_ready_in_the_preheader() {
+        let pointer = Value::new(1, 0x10);
+        let loaded = Value::new(2, 0x14);
+        let mut jump = Op::new(0x10, OpCode::Operation(Operation::Jump), "jmp", vec![], vec![]);
+        jump.kind = Kind::Jump;
+        let preheader = MirBlock::new(0x10, vec![], vec![jump], vec![0x14]);
+        let load = Op::new(0x14, OpCode::Operation(Operation::Move), "mov", vec![loaded], vec![pointer]);
+        let alive = crate::analysis::liveness::Liveness { live_in: Default::default(), live_out: Default::default() };
+
+        assert!(_placement(&preheader, &[&load], &alive, &BTreeSet::from([pointer])).is_some());
     }
 
     #[test]
@@ -778,28 +823,31 @@ fn test_the_stage_records_account_for_every_operation() {
     use crate::optimize::transform::{Applied, recorded};
     use crate::testing::{blocks_of, module, raised_from};
 
-    let found = module("tests/fixtures/omf/nested-p-g2.obj");
-    let blocks = blocks_of(&found);
     let ids = |body: &MirBody| -> BTreeSet<u32> { body.blocks.iter().flat_map(|block| &block.ops).map(|op| op.id.0).collect() };
     let mut kinds = BTreeSet::new();
-    for (name, body) in raised_from(&found, &blocks, None).values {
-        let entry = identified(body);
-        let options = Applied { blocks: Some(blocks.clone()), found: Some(found.clone()), options: crate::model::passes::O2(), ..Default::default() };
-        let done = recorded(&entry, &found.dgroup.members, &found.calls, options).unwrap();
-        let mut live = ids(&entry);
-        for stage in &done.stages {
-            for change in &stage.changes {
-                kinds.insert(format!("{:?}", change.disposition));
-                let old = change.old.filter(|_| change.disposition != Disposition::Inserted);
-                if let Some(old) = old {
-                    assert!(live.remove(&old), "{name} {}: {old} is not live for {change:?}", stage.name);
-                }
-                for &new in &change.replacements {
-                    assert!(live.insert(new) || Some(new) == old, "{name} {}: {new} is already live", stage.name);
+    // nested-p-g2 no longer inserts: its inner loop unrolls rather than peels.
+    for fixture in ["tests/fixtures/omf/nested-p-g2.obj", "tests/fixtures/omf/nested-p-evt.obj"] {
+        let found = module(fixture);
+        let blocks = blocks_of(&found);
+        for (name, body) in raised_from(&found, &blocks, None).values {
+            let entry = identified(body);
+            let options = Applied { blocks: Some(blocks.clone()), found: Some(found.clone()), options: crate::model::passes::O2(), ..Default::default() };
+            let done = recorded(&entry, &found.dgroup.members, &found.calls, options).unwrap();
+            let mut live = ids(&entry);
+            for stage in &done.stages {
+                for change in &stage.changes {
+                    kinds.insert(format!("{:?}", change.disposition));
+                    let old = change.old.filter(|_| change.disposition != Disposition::Inserted);
+                    if let Some(old) = old {
+                        assert!(live.remove(&old), "{name} {}: {old} is not live for {change:?}", stage.name);
+                    }
+                    for &new in &change.replacements {
+                        assert!(live.insert(new) || Some(new) == old, "{name} {}: {new} is already live", stage.name);
+                    }
                 }
             }
+            assert_eq!(live, ids(&done.body), "{name}");
         }
-        assert_eq!(live, ids(&done.body), "{name}");
     }
     assert!(kinds.len() == 4, "{kinds:?}");
 }

@@ -80,6 +80,26 @@ pub struct Indexes {
     pub order: Vec<i64>,          // block addresses, in the order they are numbered
 }
 
+impl Indexes {
+    /// The slot of the instruction at `position` in `block`, or the block's end past its last.
+    pub fn slot(&self, block: &LirBlock, position: usize) -> i64 {
+        block.insns.get(position).map_or(self.span[&block.at].1, |one| self.at[&key(one)])
+    }
+
+    /// The position in `block` of the instruction whose slots hold `slot`: -1
+    /// for the block's entry, its length for its end.
+    pub fn position(&self, block: &LirBlock, slot: i64) -> i64 {
+        let (first, last) = self.span[&block.at];
+        if slot < first + PER_INSN {
+            return -1;
+        }
+        if slot >= last {
+            return block.insns.len() as i64;
+        }
+        block.insns.iter().rposition(|one| self.at[&key(one)] <= slot).map_or(-1, |at| at as i64)
+    }
+}
+
 /// Number every point a value can start or stop being live.
 pub fn indexed(body: &LirBody) -> Indexes {
     let mut at = IndexMap::default();

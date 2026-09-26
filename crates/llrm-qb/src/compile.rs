@@ -16,6 +16,7 @@ use llrm_core::support::hash::{IndexMap, IndexSet};
 
 use super::abi::{physicalize, AbiError};
 use super::inline_x87::finalized;
+use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::backend::{addressvalues, frame, lower, masm, omfwrite};
 use llrm_core::flow;
@@ -161,7 +162,7 @@ fn _bytes_of(values: &[i64]) -> Vec<u8> {
 type Names = IndexMap<(Space, i64), String>;
 
 #[allow(clippy::type_complexity)]
-fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
+fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
     let mut names: Names = llrm_core::hir::lower::symbol_names();
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
     let internal: IndexMap<i64, &model::DataObject> = module
@@ -240,6 +241,11 @@ fn _data(module: &model::Module) -> Result<(Names, IndexMap<String, Vec<masm::Da
         if cursor != object_.bytes.len() as i64 {
             items.push(masm::Datum::Bytes(_bytes_of(&object_.bytes[cursor as usize..])));
         }
+    }
+    for (bytes, id) in pool.entries() {
+        let label = format!("{}$D{id}", _object_name(&module.name));
+        names.insert((Space::Segment, id), label.clone());
+        grouped["BC_CN"].extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     Ok((names, grouped))
 }
@@ -1117,11 +1123,13 @@ fn _optimized(
     function: &model::Function,
     body: &Lowered,
     options: &Options,
+    observer: &mut Option<&mut StageObserver<'_>>,
+    phase: &str,
 ) -> Result<Lowered, CompileError> {
     let Some(module) = program.modules.iter().find(|one| one.functions.contains(function)) else {
         return emission(format!("{}: function is not part of this program", function.name));
     };
-    let target = targets::profile(ProfileOrName::Name("386"))?;
+    let target = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu))?;
     let dgroup: BTreeSet<i64> = module
         .data
         .iter()
@@ -1145,6 +1153,17 @@ fn _optimized(
     // of the ordinary source predecessor.  Make every such edge visible while
     // optimization is running.
     let (rooted, temporary_root) = _machine_side_entry(&optimizer_body, &entries)?;
+    let watching = observer.is_some();
+    let failed = std::cell::RefCell::new(None);
+    let mut watch = |stage: &str, state: &mir::MirBody| {
+        if failed.borrow().is_none() {
+            let seen = Lowered { body: state.clone(), ..body.clone() };
+            let name = format!("pass:{phase}{stage}");
+            if let Err(error) = _observe(observer, &name, StageValue::Lowered(&seen), Some(function), None) {
+                *failed.borrow_mut() = Some(error);
+            }
+        }
+    };
     let transformed = flow::optimized(
         &Rc::new(rooted),
         &dgroup,
@@ -1154,8 +1173,11 @@ fn _optimized(
         None,
         None,
         None,
-        None,
+        if watching { Some(&mut watch) } else { None },
     )?;
+    if let Some(error) = failed.into_inner() {
+        return Err(error);
+    }
     let mut transformed = _drop_optimizer_resume_edges(&transformed, &resume_edges)?;
     if let Some(temporary_root) = temporary_root {
         transformed = mir::MirBody {
@@ -1182,7 +1204,7 @@ pub fn optimized(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options)
+    _optimized(program, function, body, options, &mut None, "")
 }
 
 /// Optimize MIR introduced by ABI physicalization.
@@ -1196,7 +1218,7 @@ pub fn optimized_physical(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options)
+    _optimized(program, function, body, options, &mut None, "")
 }
 
 /// Give the one-entry machine pipeline a temporary external-entry switch.
@@ -1475,6 +1497,7 @@ pub fn assembled(
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
     let mut referenced_calls: BTreeSet<String> = BTreeSet::new();
     let empty_occurrences = IndexMap::default();
+    let pool = Rc::new(RefCell::new(Pool::new(module.data.iter().map(|one| one.id + 1).max().unwrap_or(0))));
     for (function, body) in functions.iter().copied().zip(&semantic) {
         let handler_at = _handler_at(function);
         let zeroed;
@@ -1485,7 +1508,7 @@ pub fn assembled(
             body
         };
         _observe(&mut observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
-        let body = optimized(program, function, body, options)?;
+        let body = _optimized(program, function, body, options, &mut observer, "source-")?;
         _observe(&mut observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;
         let mut physical = physicalize(program, function, &body)?;
         _observe(&mut observer, "physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
@@ -1494,7 +1517,7 @@ pub fn assembled(
         // Feed those operations through the same fixed point as source MIR so
         // code quality cannot depend on whether a frontend expressed work
         // before or during ABI adaptation.
-        physical.lowered = optimized_physical(program, function, &physical.lowered, options)?;
+        physical.lowered = _optimized(program, function, &physical.lowered, options, &mut observer, "physical-")?;
         _observe(&mut observer, "optimized-physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
         let ordinary_entry = physical.lowered.body.entry;
         let ordinary_block = physical.lowered.body.block(ordinary_entry);
@@ -1511,7 +1534,7 @@ pub fn assembled(
             Some(&physical.calls),
             BTreeSet::new(),
             Some(&physical.contracts),
-            ProfileOrName::Name("386"),
+            ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
             lower::Lowered {
                 occurrences: Some(&empty_occurrences),
                 hints: Some(&physical.hints),
@@ -1536,9 +1559,10 @@ pub fn assembled(
         let mut phases = flow::machine(
             &IndexMap::default(),
             Some(Rc::clone(&owned_frame)),
+            Some(Rc::clone(&pool)),
             Some(&physical.calls),
             true,
-            ProfileOrName::Name("386"),
+            ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
         )?;
         for phase in phases.iter_mut() {
             // masm.Procedure owns a native BP frame and reserves the complete
@@ -1729,7 +1753,7 @@ pub fn assembled(
 
     statement_targets.sort();
     procedures.push(_statement_procedure(&statement_targets));
-    let (mut names, data_by_segment) = _data(module)?;
+    let (mut names, data_by_segment) = _data(module, &pool.borrow())?;
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
     if data_keys.values().any(|key| code_names[key].is_empty()) {
         return emission("one or more DATA rows have no final code label");

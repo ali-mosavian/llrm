@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod merging;
 mod assignment;
 mod format_spec;
 mod shapes;
@@ -85,7 +86,9 @@ enum Operand {
         base: u32,
         offset: usize,
         type_id: u32,
-        volatile: bool,
+        // A BYREF pointee: an interrupt handler may write it while a loop
+        // waits on it (VBDOS IN_KEYSTROKE).
+        published: bool,
         // An array element: QB promises it stays inside its array.
         inbounds: bool,
     },
@@ -93,7 +96,7 @@ enum Operand {
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    // Base, volatile, inbounds.
+    // Base, published, inbounds.
     Indirect(u32, bool, bool),
 }
 
@@ -110,6 +113,8 @@ struct Instruction {
     operands: Vec<Operand>,
     callee: Option<String>,
     tag: Option<Tag>,
+    /// The signed result fits its width: FOR raises Overflow, never wraps.
+    nowrap: bool,
 }
 
 struct CallAbi {
@@ -226,6 +231,9 @@ struct Function {
     // Each element pointer whose offset is its array's first byte plus a
     // non-negative in-object offset: the pointer's origin value.
     origins: BTreeMap<u32, u32>,
+    // Each element pointer into a far array: the place of the descriptor
+    // owning the allocation it stays inside.
+    allocations: BTreeMap<u32, u32>,
 }
 
 struct Compiler {
@@ -345,6 +353,8 @@ pub struct Options {
     /// Nothing outside the module calls its procedures: they get internal
     /// linkage, and no PUBDEF, so such a call fails to link.
     pub whole_program: bool,
+    /// Lay out dynamic arrays read together in one allocation.
+    pub array_merging: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -367,6 +377,10 @@ pub fn compile_with_warnings(
     options: &Options,
 ) -> Result<(String, Vec<String>), SemanticError> {
     let mut compiler = built(module, module_name, dialect, runtime, options)?;
+    // /Ah and /D address every element through the descriptor at run time.
+    if options.array_merging && !options.huge_arrays && !options.checked_arrays {
+        merging::applied(&mut compiler);
+    }
     shapes::applied(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
 }
@@ -1367,6 +1381,7 @@ impl Compiler {
             external_entries,
             linkage,
             origins: BTreeMap::new(),
+            allocations: BTreeMap::new(),
         });
     }
 
@@ -1443,7 +1458,7 @@ impl Compiler {
             .map(|(target, type_id)| {
                 let id = self.next_instruction;
                 self.next_instruction += 1;
-                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None }
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None, nowrap: false }
             })
             .collect();
         let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");
@@ -3669,7 +3684,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    volatile: false,
+                                    published: false,
                                     inbounds: false,
                                 },
                                 value,
@@ -4154,15 +4169,15 @@ impl Compiler {
             self.emit("load", vec![step_value], vec![Operand::Place(step_place)]);
             let step_value = self.convert(Operand::Value(step_value), step_type, counter_type)?;
             let advanced = self.value(counter_type);
+            let floating = matches!(counter_type, SINGLE | DOUBLE);
             self.emit(
-                if matches!(counter_type, SINGLE | DOUBLE) {
-                    "fadd"
-                } else {
-                    "add"
-                },
+                if floating { "fadd" } else { "add" },
                 vec![advanced],
                 vec![counter_value, step_value],
             );
+            if !floating {
+                self.blocks[self.current_block].instructions.last_mut().expect("the add").nowrap = true;
+            }
             self.emit(
                 "store",
                 Vec::new(),
@@ -4420,14 +4435,14 @@ impl Compiler {
             Operand::Indirect {
                 base,
                 offset: at,
-                volatile,
+                published,
                 inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
-                volatile: *volatile,
+                published: *published,
                 inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
@@ -4515,7 +4530,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        volatile: true,
+                        published: true,
                         inbounds: false,
                     }
                 } else {
@@ -4544,7 +4559,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
-                            volatile: false,
+                            published: false,
                             inbounds: true,
                         },
                         element,
@@ -4573,7 +4588,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
-                        volatile: false,
+                        published: false,
                         inbounds: true,
                     },
                     element,
@@ -4588,11 +4603,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
-                        volatile,
+                        published,
                         inbounds,
                     },
                 };
@@ -4705,11 +4720,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
+            ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
-                volatile,
+                published,
                 inbounds,
             },
         };
@@ -5062,7 +5077,7 @@ impl Compiler {
                 base: at,
                 offset: 16,
                 type_id: INTEGER,
-                volatile: false,
+                published: false,
                 inbounds: false,
             }],
         );
@@ -5075,7 +5090,7 @@ impl Compiler {
                     base: at,
                     offset: 14,
                     type_id: INTEGER,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -5140,7 +5155,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
-                volatile: false,
+                published: false,
                 inbounds: false,
             }],
         );
@@ -5812,17 +5827,24 @@ impl Compiler {
         let mut bounds = Vec::new();
         for bound in &declaration.bounds {
             let lower = match &bound.lower {
-                Some(lower) => {
-                    let (value, type_id) = self.expression(lower)?;
-                    self.convert(value, type_id, INTEGER)?
-                }
+                Some(lower) => self.bound(lower)?,
                 None => Operand::Constant(INTEGER, Number::Integer(self.option_base)),
             };
-            let (upper, upper_type) = self.expression(&bound.upper)?;
-            let upper = self.convert(upper, upper_type, INTEGER)?;
+            let upper = self.bound(&bound.upper)?;
             bounds.push((lower, upper));
         }
         Ok(bounds)
+    }
+
+    /// One array bound as an INTEGER; a constant one, `-50` included, as a constant.
+    fn bound(&mut self, expression: &Expr) -> Result<Operand, SemanticError> {
+        if let Ok((_, Number::Integer(value))) = self.constant(expression) {
+            if i16::try_from(value).is_ok() {
+                return Ok(Operand::Constant(INTEGER, Number::Integer(value)));
+            }
+        }
+        let (value, type_id) = self.expression(expression)?;
+        self.convert(value, type_id, INTEGER)
     }
 
     fn redim(&mut self, declaration: &Declaration) -> Result<(), SemanticError> {
@@ -5904,7 +5926,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        volatile: true,
+                        published: true,
                         inbounds: false,
                     }
                 } else {
@@ -6750,7 +6772,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -6790,7 +6812,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -7175,7 +7197,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -7304,7 +7326,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -7327,7 +7349,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
-                    volatile: false,
+                    published: false,
                     inbounds: false,
                 }],
             );
@@ -7636,7 +7658,7 @@ impl Compiler {
                         base,
                         offset,
                         type_id,
-                        volatile,
+                        published,
                         inbounds,
                     } => {
                         let pointer_type = self
@@ -7650,7 +7672,7 @@ impl Compiler {
                             base,
                             offset,
                             type_id,
-                            volatile,
+                            published,
                             inbounds,
                         };
                         if self.width(pointer_type) == 4 {
@@ -8756,6 +8778,7 @@ impl Compiler {
                 operands,
                 callee: None,
                 tag: None,
+                nowrap: false,
             });
     }
 
@@ -8807,6 +8830,7 @@ impl Compiler {
                 operands: vec![left, right],
                 callee: Some("B$SCMP".into()),
                 tag: None,
+                nowrap: false,
             });
         self.invalidate_descriptor_cache();
     }
@@ -8848,6 +8872,7 @@ impl Compiler {
                 operands,
                 callee: Some(callee.into()),
                 tag: None,
+                nowrap: false,
             });
         self.invalidate_descriptor_cache();
     }
@@ -9140,11 +9165,15 @@ impl Compiler {
                         if operand_index != 0 {
                             out.push(',');
                         }
-                        operand_json(&mut out, operand, &function.origins);
+                        operand_json(&mut out, operand, function);
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
-                    out.push_str("]}");
+                    out.push(']');
+                    if instruction.nowrap {
+                        out.push_str(",\"nowrap\":true");
+                    }
+                    out.push('}');
                 }
                 let terminator = block.terminator.as_ref().expect("compiler finishes blocks");
                 out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");
@@ -9154,7 +9183,7 @@ impl Compiler {
                     if index != 0 {
                         out.push(',');
                     }
-                    operand_json(&mut out, operand, &function.origins);
+                    operand_json(&mut out, operand, function);
                 }
                 out.push_str("],\"targets\":[");
                 numbers(&mut out, &terminator.targets);
@@ -9351,7 +9380,7 @@ impl Compiler {
         }
         write!(
             out,
-            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\"}}\n",
+            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -9811,7 +9840,7 @@ fn numbers(out: &mut String, values: &[u32]) {
     }
 }
 
-fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32>) {
+fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
     match operand {
         Operand::Value(value) => write!(out, "{{\"tag\":\"value\",\"value\":{value}}}").unwrap(),
         Operand::Constant(type_id, Number::Integer(value)) => write!(
@@ -9831,7 +9860,7 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand, origins);
+                operand_json(out, operand, function);
             }
             write!(out, "],\"place\":{place},\"tag\":\"array_element\"}}").unwrap();
         }
@@ -9846,7 +9875,7 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
                 if index != 0 {
                     out.push(',');
                 }
-                operand_json(out, operand, origins);
+                operand_json(out, operand, function);
             }
             write!(
                 out,
@@ -9858,14 +9887,19 @@ fn operand_json(out: &mut String, operand: &Operand, origins: &BTreeMap<u32, u32
             base,
             offset,
             type_id,
-            volatile,
+            published,
             inbounds,
         } => {
-            write!(out, "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
-            if let Some(origin) = origins.get(base).filter(|_| *inbounds) {
+            if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
+                write!(out, "{{\"allocation\":{place},").unwrap();
+            } else {
+                out.push('{');
+            }
+            write!(out, "\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }
-            write!(out, "\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":{volatile}}}").unwrap();
+            write!(out, "\"published\":{published},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
         }
     }
 }

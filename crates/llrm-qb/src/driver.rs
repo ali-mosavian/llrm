@@ -105,6 +105,8 @@ pub struct Frontend {
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
+    /// Lay out dynamic arrays read together in one allocation: `--array-merging`.
+    pub array_merging: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -121,6 +123,7 @@ impl Frontend {
             mbf: false,
             alternate_math: false,
             whole_program: false,
+            array_merging: false,
             includes: Vec::new(),
         }
     }
@@ -146,6 +149,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
         (frontend.mbf, "--mbf"),
         (frontend.alternate_math, "--alternate-math"),
         (frontend.whole_program, "--whole-program"),
+        (frontend.array_merging, "--array-merging"),
     ] {
         if on {
             out.push(flag.into());

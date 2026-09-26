@@ -14,7 +14,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::liveness;
-use crate::backend::peephole::{Lanes, _branch_reads, _register_effects, id};
+use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -97,28 +97,16 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            let what = one.what.as_ref();
-            if liveness::_terminator(what) {
-                let what = what.expect("a terminator has semantics");
-                if what.op == Operation::Branch {
-                    dead = dead.minus(&_branch_reads(what));
-                }
-                continue;
-            }
-            let mut effects = _register_effects(one, false, true);
-            if effects.is_none() {
-                effects = liveness::_declared(one);
-            }
-            let Some((reads, writes)) = effects else {
+            let Some(effect) = liveness::effect(one) else {
                 dead.clear();
                 continue;
             };
-            if !writes.is_empty() && writes.is_subset(&dead) && _pure(one) {
+            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(one) {
                 redundant.insert(id(one));
                 changed = true;
                 continue;
             }
-            dead = dead.or(&writes).minus(&reads);
+            dead = effect.dead_before(&dead);
         }
         blocks.push(if redundant.is_empty() {
             block.clone()

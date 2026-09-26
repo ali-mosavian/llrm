@@ -11,10 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::support::hash::IndexMap;
 use num_bigint::BigInt;
-use num_traits::{Signed, ToPrimitive};
+use num_traits::{Signed, ToPrimitive, Zero};
 
 use crate::analysis::consts::{self, Known};
-use crate::analysis::induction::{self, Affine, AffineOperand};
+use crate::analysis::induction::{self, Affine, AffineMap, AffineOperand};
 use crate::analysis::ssa::{self, SubstitutionError};
 use crate::analysis::{liveness, loops};
 use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBlock, MirBody, Op, OrderedMap, Phi, Value};
@@ -629,328 +629,49 @@ fn _before_leaving(ops: &mut Vec<Op>, inserted: Vec<Op>) {
     ops.splice(cut..cut, inserted);
 }
 
-/// Use a bounded affine data recurrence as the loop's sole control.
-///
-/// For a counted loop of `n` trips and an existing recurrence from `r0`
-/// with stride `s`, rebase its invariant users by its final value
-/// `r0 + n*s` and start it at `-n*s`.  Its update reaches zero on
-/// exactly the final iteration, so the original unit counter disappears.
-/// The proof is target-independent: `induction.counted` supplies `n` and
-/// `AffineMap.period` the modular safety condition.
-pub fn symbolically_zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
-    let facts = consts::known(body, None, None, None, None);
-    let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
-    let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
-    let mut made = BTreeMap::new();
-    let mut readers = BTreeMap::<Value, Vec<(usize, usize)>>::new();
-    let mut placed = BTreeMap::new();
-    let mut home = BTreeMap::new();
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        for (operation_index, op) in block.ops.iter().enumerate() {
-            let at = (block_index, operation_index);
-            for value in &op.defines {
-                made.insert(*value, at);
-                home.insert(*value, block.at);
-            }
-            for value in &op.uses {
-                readers.entry(*value).or_default().push(at);
-            }
-            placed.insert(at, block.at);
-        }
+/// Counting to zero, once every other pass, strength reduction included, has
+/// settled: a loop's control is chosen last, once what it computes is known.
+pub struct CountToZero;
+
+impl crate::model::passes::MIRTransform for CountToZero {
+    fn class_name(&self) -> &'static str {
+        "CountToZero"
     }
-    home.extend(body.blocks.iter().flat_map(|block| block.phis.iter().map(move |phi| (phi.result, block.at))));
-    let values = ssa::values(body).collect::<Vec<_>>();
 
-    for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let proofs = induction::counted(body, &loop_, Some(&facts), true);
-        if proofs.len() != 1 {
-            continue;
-        }
-        let proof = &proofs[0];
-        let header = &body.blocks[blocks[&loop_.header]];
-        let inside = loop_.body.clone();
-        let candidates = induction::basics(body, &loop_);
-        for candidate in candidates.values() {
-            let Some(preheader) = proof.preheader else {
-                continue;
-            };
-            let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
-                continue;
-            };
-            if phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([preheader, proof.latch]) {
-                continue;
-            }
-            let initial = *phi.incoming.get(&preheader).expect("checked incoming");
-            let update = *phi.incoming.get(&proof.latch).expect("checked incoming");
-            let Some(stepping_at) = made.get(&update).copied() else {
-                continue;
-            };
-            let stepping = operation(stepping_at);
-            if stepping.results.is_empty()
-                || !matches!(stepping.results[0], Arg::Held(_))
-                || !stepping.loads.is_empty()
-                || !stepping.stores.is_empty()
-                || stepping.barrier()
-                || !stepping.merges.is_empty()
-            {
-                continue;
-            }
-            // The counter itself may take the zero test: its own compare is
-            // control, and every other read must then be an offset.
-            let own_compare = (proof.compare.block_index(), proof.compare.operation_index());
-            let itself = candidate == &proof.counter;
-            let own = if itself { BTreeSet::from([stepping_at, own_compare]) } else { BTreeSet::from([stepping_at]) };
-            let offsets = _offsets(phi.result, &readers, &placed, &home, &inside, &own, body, true);
-            // A direct address recurrence has no separate invariant base to
-            // rebase.  It remains valid, but cannot replace control by this
-            // representation.  This is a property of the affine expression,
-            // not of an instruction or register class.
-            let Some(offsets) = offsets else {
-                continue;
-            };
-            if offsets.is_empty() || offsets.iter().any(|(_op, position, _multiplier, _address, _extra)| position.is_none())
-            {
-                continue;
-            }
-            let covered = if itself {
-                let rebased = offsets.iter().map(|(at, ..)| *at).collect::<BTreeSet<_>>();
-                crate::analysis::occurrence::operations(body)
-                    .map(|(at, ..)| at)
-                    .filter(|at| rebased.contains(&(at.block_index(), at.operation_index())))
-                    .collect()
-            } else {
-                BTreeSet::new()
-            };
-            let Some(symbolic) =
-                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
-            else {
-                continue;
-            };
-            let control = &symbolic.replacement;
-            let width = symbolic.candidate.start.width();
-            let step = &symbolic.step;
-            let read = body
-                .blocks
-                .iter()
-                .flat_map(|block| &block.ops)
-                .flat_map(|op| op.uses.iter().copied())
-                .collect::<BTreeSet<_>>();
-            if read.contains(&initial) || read.contains(&update) {
-                continue;
-            }
-            if stepping.defines.iter().any(|value| value.flags && read.contains(value)) {
-                continue;
-            }
-
-            let compare = &body.blocks[proof.compare.block_index()].ops[proof.compare.operation_index()];
-            let ending = body.blocks[blocks[&preheader]].ops.last().unwrap_or(compare);
-            let mut builder = counting::Seeds {
-                serial: values.iter().map(|value| value.id).max().unwrap_or(0) + 1,
-                variable: values.iter().map(|value| value.variable).max().unwrap_or(0) + 1,
-                at: ending.at,
-                width,
-                ops: Vec::new(),
-            };
-
-            let Some(count) = induction::trips(proof, &mut |kind, args| builder.computed(kind, args)) else {
-                continue;
-            };
-            let distance = builder.computed(
-                Kind::Mul,
-                vec![count.as_arg(), Arg::Const(Const::new(consts::masked(step, width), width))],
-            );
-            let final_ = builder.computed(Kind::Add, vec![Arg::Held(Held { value: initial, width }), distance.as_arg()]);
-            let mut rebased = BTreeMap::<(usize, usize), Op>::new();
-            for (at, position, multiplier, _address, _extra) in &offsets {
-                let position = position.expect("offsets were checked for a position");
-                let op = operation(*at);
-                let base = op.args[position].clone();
-                let delta = builder.computed(
-                    Kind::Mul,
-                    vec![final_.as_arg(), Arg::Const(Const::new(consts::masked(multiplier, width), width))],
-                );
-                let adjusted = builder.computed(Kind::Add, vec![base.clone(), delta.as_arg()]);
-                let args = op
-                    .args
-                    .iter()
-                    .enumerate()
-                    .map(|(index, arg)| if index == position { adjusted.as_arg() } else { arg.clone() })
-                    .collect();
-                assert!(matches!(base, Arg::Held(_) | Arg::Const(_)));
-                let mut uses: Vec<Value> = op
-                    .uses
-                    .iter()
-                    .map(|value| match &base {
-                        Arg::Held(base) if *value == base.value => match &adjusted {
-                            AffineOperand::Held(adjusted) => adjusted.value,
-                            AffineOperand::Const(_) => panic!("AttributeError: 'Const' object has no attribute 'value'"),
-                        },
-                        _ => *value,
-                    })
-                    .collect();
-                // A constant offset that became a held one is a new read, placed
-                // among the held arguments where it now sits.
-                if let (Arg::Const(_), AffineOperand::Held(adjusted)) = (&base, &adjusted) {
-                    let before = op.args[..position].iter().filter(|arg| matches!(arg, Arg::Held(_))).count();
-                    uses.insert(before.min(uses.len()), adjusted.value);
-                }
-                let mut replacement = op.clone();
-                replacement.args = args;
-                replacement.uses = uses;
-                replacement.source_backed = false;
-                replacement.raised = None;
-                rebased.insert(*at, replacement);
-            }
-
-            let computed = builder.computed(Kind::Sub, vec![Arg::Const(Const::new(0, width)), distance.as_arg()]);
-            let begun = builder.held(computed);
-            let exits = counting::leaving(body, control, &mut builder);
-            let step_flags =
-                Value { id: builder.serial, at: stepping.at, flags: true, variable: builder.variable, version: 1 };
-            let guard_flags =
-                Value { id: builder.serial + 1, at: ending.at, flags: true, variable: builder.variable + 1, version: 1 };
-            let mut decrement = stepping.clone();
-            decrement.name.clear();
-            decrement.defines =
-                stepping.defines.iter().copied().filter(|value| !value.flags).chain([step_flags]).collect();
-            decrement.source_backed = false;
-            decrement.raised = None;
-            decrement.symbol = Some(false);
-            let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
-            let proof_phi = &body.blocks[proof.phi.block_index()].phis[proof.phi.phi_index()];
-            let preheader_input = *proof_phi.incoming.get(&preheader).expect("a preheader input");
-            let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
-                .into_iter()
-                .flatten()
-                .filter_map(|value| {
-                    let definition = made.get(&value).copied()?;
-                    (!body.blocks.iter().flat_map(|block| &block.ops).any(|op| op.uses.contains(&value))
-                        && !builder.ops.iter().chain([&guard_compare]).any(|op| op.uses.contains(&value))
-                        && !body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
-                            other.incoming.values().any(|incoming| *incoming == value)
-                                && !std::ptr::eq(other, phi)
-                                && !std::ptr::eq(other, proof_phi)
-                        }))
-                    .then_some(definition)
-                })
-                .collect::<Vec<_>>();
-            let preheader_index = blocks[&preheader];
-            let mut entry_ops = body.blocks[preheader_index]
-                .ops
-                .iter()
-                .enumerate()
-                .map(|(index, op)| {
-                    if private.contains(&(preheader_index, index)) { mir::cleared(op) } else { op.clone() }
-                })
-                .collect::<Vec<_>>();
-            match entry_ops.last().map(|op| op.kind) {
-                Some(Kind::Jump) => {
-                    let last = entry_ops.len() - 1;
-                    entry_ops[last] = mir::cleared(&entry_ops[last]);
-                }
-                Some(Kind::Branch) => continue,
-                _ => {}
-            }
-            _before_leaving(&mut entry_ops, builder.ops);
-            entry_ops.extend([guard_compare, guard_branch]);
-
-            let compare_at = (proof.compare.block_index(), proof.compare.operation_index());
-            let branch_at = (proof.branch.block_index(), proof.branch.operation_index());
-            let control_stepping = (control.stepping.block_index(), control.stepping.operation_index());
-            let mut rewritten = Vec::new();
-            for (block_index, block) in body.blocks.iter().enumerate() {
-                let mut ops = Vec::new();
-                for (operation_index, op) in block.ops.iter().enumerate() {
-                    let at = (block_index, operation_index);
-                    if at == stepping_at || at == control_stepping {
-                        continue;
-                    }
-                    let op = if at == compare_at || private.contains(&at) {
-                        mir::cleared(op)
-                    } else if at == branch_at {
-                        let mut op = op.clone();
-                        op.name.clear();
-                        op.uses = vec![step_flags];
-                        op.source_backed = false;
-                        op.test = Some(Kind::Ne);
-                        op.target = Some(proof.latch);
-                        op.raised = None;
-                        op.symbol = Some(false);
-                        op
-                    } else {
-                        rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
-                    };
-                    ops.push(op);
-                }
-                if block.at == proof.latch {
-                    let cut = ops.len() - usize::from(ops.last().is_some_and(|op| op.kind == Kind::Jump));
-                    ops.insert(cut, decrement.clone());
-                }
-                let exit_phi = |phi_index: usize, other: &Phi| {
-                    exits
-                        .iter()
-                        .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
-                        .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
-                };
-                let phis = if block.at == loop_.header {
-                    block
-                        .phis
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
-                        .map(|(phi_index, other)| {
-                            if std::ptr::eq(other, phi) {
-                                Phi {
-                                    result: other.result,
-                                    incoming: OrderedMap::from_iter([
-                                        (preheader, begun.value),
-                                        (proof.latch, update),
-                                    ]),
-                                }
-                            } else {
-                                exit_phi(phi_index, other)
-                            }
-                        })
-                        .collect()
-                } else {
-                    block.phis.iter().enumerate().map(|(phi_index, other)| exit_phi(phi_index, other)).collect()
-                };
-                rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
-            }
-            let changed = body.with_blocks(rewritten);
-            let rotated = rotate::at_body(
-                &changed,
-                &loop_,
-                preheader,
-                changed.block(loop_.header).expect("the header remains"),
-                changed.block(proof.latch).expect("the latch remains"),
-                &entry_ops,
-                Some(&[proof.latch, proof.exit]),
-                induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
-            )?;
-            return symbolically_zeroed(&Rc::new(rotated));
-        }
+    fn name(&self) -> &str {
+        "zeroed"
     }
-    Ok(body.clone())
+
+    fn settles_after(&self) -> u8 {
+        2
+    }
+
+    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
+        zeroed(&body).map_err(|error| error.to_string())
+    }
 }
 
-/// A counter counted up to zero, so the loop can end on its step's flags.
+/// A counted loop's control moved onto a recurrence counted up to zero.
 ///
-/// `c` from `start` to `last` by `step` becomes `c - final`, `final` being
-/// `last + step`, and the exit test `c - final` against zero. Every other
-/// read is an invariant plus the counter, or plus the counter shifted, and
-/// the invariant takes `final`, shifted the same, once before the loop:
-/// both sides wrap at the add's own width, so the sum is unchanged.
-pub fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<MirBody>, SubstitutionError> {
+/// For `n` trips and a recurrence from `r0` by `s`, every read of the
+/// recurrence takes its final value `r0 + n*s` (see `Use`), and it starts at
+/// `-n*s` instead, reaching zero on exactly the last trip. When a recurrence
+/// other than the counter takes control, the counter's step dies with its
+/// compare. The loop is rotated to end on the step's flags, behind a guard
+/// where it may run no trip; one rotation cannot take, proven to run, tests
+/// the recurrence at its header.
+/// `induction.counted` supplies `n` and `AffineMap.period` the modular
+/// condition that zero is not reached early.
+pub fn zeroed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, SubstitutionError> {
     let facts = consts::known(body, None, None, None, None);
     let blocks = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect::<BTreeMap<_, _>>();
     let dominators = loops::dominators(&body.blocks, Some(body.entry));
     let predecessors = loops::predecessors(&body.blocks);
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
     let mut made = BTreeMap::new();
-    let mut home = BTreeMap::new();
     let mut readers = BTreeMap::<Value, Vec<(usize, usize)>>::new();
     let mut placed = BTreeMap::new();
+    let mut home = BTreeMap::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
         for (operation_index, op) in block.ops.iter().enumerate() {
             let at = (block_index, operation_index);
@@ -971,271 +692,499 @@ pub fn zeroed(body: &Rc<MirBody>, address_offsets: bool) -> Result<Rc<MirBody>, 
         .flat_map(|block| &block.phis)
         .flat_map(|phi| phi.incoming.values().copied())
         .collect::<BTreeSet<_>>();
+    let read = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| op.uses.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let values = ssa::values(body).collect::<Vec<_>>();
+
     for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        if loop_.latches.len() != 1 {
-            continue;
-        }
-        let preheader = transform::_preheader(body, &loop_);
-        let Some(preheader) = preheader.filter(|preheader| body.blocks[blocks[preheader]].succ == [loop_.header])
-        else {
+        let proofs = induction::counted(body, &loop_, Some(&facts), true);
+        let [proof] = proofs.as_slice() else {
             continue;
         };
+        let Some(preheader) = proof.preheader.filter(|_| !proof.posttested) else {
+            continue;
+        };
+        // Counting to zero at its header already, it may still be rotated.
+        let tested = proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne;
         let header_index = blocks[&loop_.header];
         let header = &body.blocks[header_index];
-        let latch = *loop_.latches.iter().next().expect("one latch");
-        if header.ops.last().is_none_or(|op| op.kind != Kind::Branch) {
-            continue;
-        }
-        let branch_index = header.ops.len() - 1;
-        let branch = &header.ops[branch_index];
         let inside = loop_.body.clone();
-        for counter in induction::basics(body, &loop_).values() {
-            let phi = header.phis.iter().find(|phi| phi.result.id == counter.value).expect("a basic counter's phi");
-            if phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([preheader, latch]) {
+        let compare_at = (proof.compare.block_index(), proof.compare.operation_index());
+        let branch_at = (proof.branch.block_index(), proof.branch.operation_index());
+        let compare = operation(compare_at);
+        let width = proof.width();
+        // What a candidate adds to the loop: another recurrence taking control
+        // lets the counter's step die, and a symbolic bias moves each address
+        // it bases by an in-loop add. A constant one is a displacement.
+        let added = |candidate: &Affine| -> i64 {
+            let itself = candidate == &proof.counter;
+            let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
+                return i64::MAX;
+            };
+            let Some(stepping_at) = phi.incoming.get(&proof.latch).and_then(|update| made.get(update).copied()) else {
+                return i64::MAX;
+            };
+            let own = if itself { BTreeSet::from([stepping_at, compare_at]) } else { BTreeSet::from([stepping_at]) };
+            let Some((uses, _)) = _uses(phi.result, &readers, &placed, &home, &inside, &own, body) else {
+                return i64::MAX;
+            };
+            let symbolic = proof.count.is_none() || induction::_signed(&candidate.start.as_arg(), &facts, width).is_none();
+            let moved = if symbolic { uses.iter().filter(|one| matches!(one, Use::Address { .. })).count() } else { 0 };
+            i64::try_from(moved).expect("few uses") - i64::from(!itself)
+        };
+        let basics = induction::basics(body, &loop_);
+        let mut ordered = basics.values().collect::<Vec<_>>();
+        ordered.sort_by_key(|candidate| (added(candidate), **candidate != proof.counter));
+        for candidate in ordered {
+            let Some(phi) = header.phis.iter().find(|one| one.result.id == candidate.value) else {
+                continue;
+            };
+            if phi.incoming.keys().copied().collect::<BTreeSet<_>>() != BTreeSet::from([preheader, proof.latch])
+                || candidate.start.width() != width
+                || candidate.step.width() != width
+            {
                 continue;
             }
             let initial = *phi.incoming.get(&preheader).expect("checked incoming");
-            let update = *phi.incoming.get(&latch).expect("checked incoming");
-            let (seed, stepping_at) = (made.get(&initial).copied().map(operation), made.get(&update).copied());
-            let (Some(seed), Some(stepping_at)) = (seed, stepping_at) else {
+            let update = *phi.incoming.get(&proof.latch).expect("checked incoming");
+            let Some(stepping_at) = made.get(&update).copied() else {
                 continue;
             };
             let stepping = operation(stepping_at);
-            let Some(Arg::Held(stepped)) = stepping.results.first() else {
-                continue;
-            };
-            let width = stepped.width;
-            let Some(Arg::Const(seeded)) = seed.args.first().filter(|_| seed.kind == Kind::Copy && seed.args.len() == 1)
-            else {
-                continue;
-            };
-            let Some(proof) = induction::controlling(body, &loop_, counter, &facts) else {
-                continue;
-            };
-            if proof.posttested || proof.last.is_none() {
-                continue;
-            }
-            if proof.bound == AffineOperand::Const(Const::new(0, proof.width())) && proof.test == Kind::Ne {
-                continue; // counts to zero already
-            }
-            let (compare_index, compare) = (proof.compare.operation_index(), proof.compare_in(body));
-            let start = proof.first.clone().expect("a last has a first");
-            let step = proof.step.clone();
-            let final_ = proof.last.as_ref().expect("checked") + &step;
-            let offsets = _offsets(
-                phi.result,
-                &readers,
-                &placed,
-                &home,
-                &inside,
-                &BTreeSet::from([(header_index, compare_index), stepping_at]),
-                body,
-                address_offsets,
-            );
-            let Some(offsets) = offsets else {
-                continue;
-            };
-            let read = body
-                .blocks
-                .iter()
-                .flat_map(|block| &block.ops)
-                .flat_map(|op| op.uses.iter().copied())
-                .collect::<BTreeSet<_>>();
-            if stepping.defines.iter().any(|value| value.flags && (read.contains(value) || in_phis.contains(value))) {
-                continue;
-            }
-            if body.blocks.iter().flat_map(|block| &block.ops).any(|op| op.uses.contains(&update))
-                || read.contains(&initial)
+            if stepping.results.is_empty()
+                || !matches!(stepping.results[0], Arg::Held(_))
+                || !stepping.loads.is_empty()
+                || !stepping.stores.is_empty()
+                || stepping.barrier()
+                || !stepping.merges.is_empty()
+                || read.contains(&update)
+                || stepping.defines.iter().any(|value| value.flags && (read.contains(value) || in_phis.contains(value)))
             {
                 continue;
             }
-            if body.blocks.iter().flat_map(|block| &block.ops).any(|op| {
-                compare.defines.iter().any(|value| op.uses.contains(value)) && !std::ptr::eq(op, branch)
-            }) {
+            // The counter itself may take the zero test: its own compare is
+            // control, and every other read must then be a `Use`.
+            let itself = candidate == &proof.counter;
+            let own = if itself { BTreeSet::from([stepping_at, compare_at]) } else { BTreeSet::from([stepping_at]) };
+            let Some((uses, through)) = _uses(phi.result, &readers, &placed, &home, &inside, &own, body) else {
                 continue;
-            }
-            let [exit_at] = header.succ.iter().copied().filter(|at| !inside.contains(at)).collect::<Vec<_>>()[..]
-            else {
-                panic!("one exit from the header");
             };
-            let exit_block = &body.blocks[blocks[&exit_at]];
-            if predecessors.get(&exit_at).cloned().unwrap_or_default() != BTreeSet::from([header.at])
-                || exit_block.ops.is_empty()
+            if uses.is_empty() && !itself {
+                continue;
+            }
+            let Some(step) = induction::_signed(&candidate.step.as_arg(), &facts, width).filter(|step| !step.is_zero())
+            else {
+                continue;
+            };
+            let period = AffineMap { scale: step.clone(), offset: BigInt::from(0_u8), width }.period();
+            let ending = body.blocks[blocks[&preheader]].ops.last().unwrap_or(compare);
+            let mut seeds = counting::Seeds {
+                serial: values.iter().map(|value| value.id).max().unwrap_or(0) + 1,
+                variable: values.iter().map(|value| value.variable).max().unwrap_or(0) + 1,
+                at: ending.at,
+                width,
+                ops: Vec::new(),
+            };
+            let Some(count) = induction::trips(proof, &mut |kind, args| seeds.computed(kind, args)) else {
+                continue;
+            };
+            let distance =
+                seeds.computed(Kind::Mul, vec![count.as_arg(), Arg::Const(Const::new(consts::masked(&step, width), width))]);
+            let start = induction::_signed(&Arg::Held(Held { value: initial, width }), &facts, width)
+                .map_or(Arg::Held(Held { value: initial, width }), |start| Arg::Const(Const::new(consts::masked(&start, width), width)));
+            let bias = seeds.computed(Kind::Add, vec![start, distance.as_arg()]);
+            let Some((rebased, inserted)) = _rebased(body, &uses, &bias, width, &mut seeds) else {
+                continue;
+            };
+            let begun = seeds.computed(Kind::Sub, vec![Arg::Const(Const::new(0, width)), distance.as_arg()]);
+            let begun = seeds.held(begun);
+            let covered = if itself {
+                let rebased = uses.iter().map(Use::at).chain(through.iter().copied()).collect::<BTreeSet<_>>();
+                crate::analysis::occurrence::operations(body)
+                    .map(|(at, ..)| at)
+                    .filter(|at| rebased.contains(&(at.block_index(), at.operation_index())))
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+
+            // The recurrence now runs elsewhere; a promise was about its old range.
+            let unpromised = mir::Op { nowrap: false, ..stepping.clone() };
+            // A loop proven to run enters its body unguarded.
+            let runs = proof.count.as_ref().is_some_and(|count| count >= &BigInt::from(1_u8))
+                || induction::nonempty(body, &loop_);
+            if let Some(symbolic) =
+                induction::zero_terminating_control(body, &loop_, proof, candidate, &covered, Some(&facts))
             {
-                continue;
-            }
-            let mut closed = IndexMap::<Value, &Phi>::default();
-            for other in &exit_block.phis {
-                if other.incoming.len() == 1 {
-                    for (predecessor, value) in other.incoming.iter() {
-                        if inside.contains(predecessor) {
-                            closed.insert(*value, other);
-                        }
-                    }
-                }
-            }
-            let following = blocks
-                .keys()
-                .copied()
-                .filter(|at| dominators.get(at).is_some_and(|dominating| dominating.contains(&exit_at)))
-                .collect::<BTreeSet<_>>();
-            let leaving = transform::_leaving(body);
-            if [phi.result, update].iter().any(|value| leaving.contains(value)) {
-                continue;
-            }
-            if body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
-                !std::ptr::eq(other, phi)
-                    && !closed.values().any(|one| *one == other)
-                    && other.incoming.values().any(|value| *value == phi.result || *value == update)
-            }) {
-                continue;
-            }
-            if body.blocks.iter().any(|block| {
-                block.ops.iter().any(|op| op.uses.contains(&phi.result))
-                    && !following.contains(&block.at)
-                    && !inside.contains(&block.at)
-            }) {
-                continue;
-            }
-            let mut serial = ssa::values(body).map(|value| value.id).max().expect("a value") + 1;
-            let mut variable = ssa::values(body).map(|value| value.variable).max().expect("a value") + 1;
-            let ending = body.blocks[blocks[&preheader]].ops.last().expect("a preheader operation");
-            let mut seeds = Vec::new();
-            let mut rebased = BTreeMap::new();
-            for (at, position, multiplier, address, extra) in &offsets {
-                let op = operation(*at);
-                let Some(position) = *position else {
-                    let (source, replacement) = address.expect("an address offset");
-                    rebased.insert(*at, _rebased_cells(op, source, &(&final_ * multiplier + extra), replacement));
-                    continue;
-                };
-                match &op.args[position] {
-                    Arg::Const(base) => {
-                        let mut replacement = op.clone();
-                        replacement.args[position] = Arg::Const(Const::new(
-                            consts::masked(&(&base.n + &final_ * multiplier), base.width),
-                            base.width,
-                        ));
-                        replacement.source_backed = false;
-                        replacement.raised = None;
-                        rebased.insert(*at, replacement);
-                    }
-                    Arg::Held(base) => {
-                        let moved = Value { id: serial, at: ending.at, flags: false, variable, version: 0 };
-                        (serial, variable) = (serial + 1, variable + 1);
-                        seeds.push(strength::_made(
-                            Kind::Add,
-                            "add",
-                            moved,
-                            vec![
-                                Arg::Held(*base),
-                                Arg::Const(Const::new(consts::masked(&(&final_ * multiplier), base.width), base.width)),
-                            ],
-                            ending.at,
-                            ending,
-                        ));
-                        let mut replacement = op.clone();
-                        replacement.args[position] = Arg::Held(Held { value: moved, width: base.width });
-                        replacement.uses =
-                            op.uses.iter().map(|value| if *value == base.value { moved } else { *value }).collect();
-                        rebased.insert(*at, replacement);
-                    }
-                    _ => panic!("assert isinstance(base, mir.Held)"),
-                }
-            }
-            let finished = Value { id: serial, at: exit_at, flags: false, variable, version: 0 };
-            // A start of its own: the constant it was seeded from can start another loop too.
-            let begun = Value { id: serial + 1, at: ending.at, flags: false, variable: variable + 1, version: 0 };
-            seeds.push(strength::_made(
-                Kind::Copy,
-                "",
-                begun,
-                vec![Arg::Const(Const::new(consts::masked(&(&start - &final_), seeded.width), seeded.width))],
-                ending.at,
-                ending,
-            ));
-            let finish = strength::_made(
-                Kind::Copy,
-                "",
-                finished,
-                vec![Arg::Const(Const::new(consts::masked(&final_, width), width))],
-                exit_at,
-                &exit_block.ops[0],
-            );
-            let mut swap = BTreeMap::from([(counter.value, finished)]);
-            let removed = closed
-                .iter()
-                .filter(|(value, _other)| **value == phi.result || **value == update)
-                .map(|(_value, other)| other.result)
-                .collect::<BTreeSet<_>>();
-            swap.extend(removed.iter().map(|value| (value.id, finished)));
-            let changed = loopexit::_substituted_exits(body, exit_at, &following, &[finish], &swap)?;
-            let mut out = Vec::new();
-            for (block_index, block) in changed.blocks.iter().enumerate() {
-                let kept = !following.contains(&block.at);
-                let mut ops = Vec::new();
-                for (operation_index, op) in block.ops.iter().enumerate() {
-                    let at = (block_index, operation_index);
-                    let op = if kept && at == (header_index, compare_index) {
-                        let mut op = op.clone();
-                        op.args = vec![Arg::Held(Held { value: phi.result, width }), Arg::Const(Const::new(0, width))];
-                        op.kind = Kind::Sub;
-                        op.results = Vec::new();
-                        op.defines.retain(|value| value.flags);
-                        op.uses = vec![phi.result];
-                        op.loads = Vec::new();
-                        op.source_backed = false;
-                        op.raised = None;
-                        op
-                    } else if kept && at == (header_index, branch_index) {
-                        let test =
-                            if branch.target.is_some_and(|target| inside.contains(&target)) { Kind::Ne } else { Kind::Eq };
-                        let mut op = op.clone();
-                        op.test = Some(test);
-                        op.name.clear();
-                        op.source_backed = false;
-                        op.raised = Some((Vec::new(), Vec::new()));
-                        op
-                    } else if kept {
-                        rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
-                    } else {
-                        op.clone()
-                    };
-                    ops.push(op);
-                }
-                if block.at == preheader {
-                    _before_leaving(&mut ops, seeds.clone());
-                }
-                let phis = block
-                    .phis
-                    .iter()
-                    .filter(|other| !removed.contains(&other.result))
-                    .map(|other| {
-                        let mut other = other.clone();
-                        if other.result == phi.result {
-                            other.incoming.insert(preheader, begun);
-                        }
-                        other
+                // Guarded and rotated: the step's flags end the loop.
+                let control = &symbolic.replacement;
+                let exits = counting::leaving(body, control, &mut seeds, !runs);
+                let step_flags = Value { id: seeds.serial, at: stepping.at, flags: true, variable: seeds.variable, version: 1 };
+                let guard_flags =
+                    Value { id: seeds.serial + 1, at: ending.at, flags: true, variable: seeds.variable + 1, version: 1 };
+                let mut decrement = unpromised;
+                decrement.name.clear();
+                decrement.defines =
+                    stepping.defines.iter().copied().filter(|value| !value.flags).chain([step_flags]).collect();
+                decrement.source_backed = false;
+                decrement.raised = None;
+                decrement.symbol = Some(false);
+                let (guard_compare, guard_branch) = counting::skip_guard(body, proof, ending.at, guard_flags);
+                let proof_phi = proof.phi_in(body);
+                let preheader_input = *proof_phi.incoming.get(&preheader).expect("a preheader input");
+                let private = [Some(initial), exits.is_empty().then_some(preheader_input)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| {
+                        let definition = made.get(&value).copied()?;
+                        (!read.contains(&value)
+                            && !seeds.ops.iter().chain([&guard_compare]).any(|op| op.uses.contains(&value))
+                            && !body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
+                                other.incoming.values().any(|incoming| *incoming == value)
+                                    && !std::ptr::eq(other, phi)
+                                    && !std::ptr::eq(other, proof_phi)
+                            }))
+                        .then_some(definition)
                     })
-                    .collect();
-                out.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
+                    .collect::<Vec<_>>();
+                let preheader_index = blocks[&preheader];
+                let mut entry_ops = body.blocks[preheader_index]
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .map(|(index, op)| if private.contains(&(preheader_index, index)) { mir::cleared(op) } else { op.clone() })
+                    .collect::<Vec<_>>();
+                match entry_ops.last().map(|op| op.kind) {
+                    Some(Kind::Jump) => {
+                        let last = entry_ops.len() - 1;
+                        entry_ops[last] = if runs {
+                            mir::Op { target: Some(proof.latch), ..entry_ops[last].clone() }
+                        } else {
+                            mir::cleared(&entry_ops[last])
+                        };
+                    }
+                    Some(Kind::Branch) => continue,
+                    _ if runs => continue,
+                    _ => {}
+                }
+                _before_leaving(&mut entry_ops, seeds.ops);
+                if !runs {
+                    entry_ops.extend([guard_compare, guard_branch]);
+                }
+
+                let control_stepping = (control.stepping.block_index(), control.stepping.operation_index());
+                let mut rewritten = Vec::new();
+                for (block_index, block) in body.blocks.iter().enumerate() {
+                    let mut ops = Vec::new();
+                    for (operation_index, op) in block.ops.iter().enumerate() {
+                        let at = (block_index, operation_index);
+                        if at == stepping_at || at == control_stepping {
+                            continue;
+                        }
+                        let op = if at == compare_at || private.contains(&at) {
+                            mir::cleared(op)
+                        } else if at == branch_at {
+                            let mut op = op.clone();
+                            op.name.clear();
+                            op.uses = vec![step_flags];
+                            op.source_backed = false;
+                            op.test = Some(Kind::Ne);
+                            op.target = Some(proof.latch);
+                            op.raised = None;
+                            op.symbol = Some(false);
+                            op
+                        } else {
+                            rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
+                        };
+                        ops.extend(inserted.get(&at).cloned());
+                        ops.push(op);
+                    }
+                    if block.at == proof.latch {
+                        let cut = ops.len() - usize::from(ops.last().is_some_and(|op| op.kind == Kind::Jump));
+                        ops.insert(cut, decrement.clone());
+                    }
+                    let exit_phi = |phi_index: usize, other: &Phi| {
+                        exits
+                            .iter()
+                            .find(|(at, _)| at.block_index() == block_index && at.phi_index() == phi_index)
+                            .map_or_else(|| other.clone(), |(_, exit)| exit.clone())
+                    };
+                    let phis = if block.at == loop_.header {
+                        block
+                            .phis
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, other)| !std::ptr::eq(*other, proof_phi) || std::ptr::eq(*other, phi))
+                            .map(|(phi_index, other)| {
+                                if std::ptr::eq(other, phi) {
+                                    Phi {
+                                        result: other.result,
+                                        incoming: OrderedMap::from_iter([(preheader, begun.value), (proof.latch, update)]),
+                                    }
+                                } else {
+                                    exit_phi(phi_index, other)
+                                }
+                            })
+                            .collect()
+                    } else {
+                        block.phis.iter().enumerate().map(|(phi_index, other)| exit_phi(phi_index, other)).collect()
+                    };
+                    rewritten.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
+                }
+                let changed = body.with_blocks(rewritten);
+                let entered = if runs { vec![proof.latch] } else { vec![proof.latch, proof.exit] };
+                let rotated = rotate::at_body(
+                    &changed,
+                    &loop_,
+                    preheader,
+                    changed.block(loop_.header).expect("the header remains"),
+                    changed.block(proof.latch).expect("the latch remains"),
+                    &entry_ops,
+                    Some(&entered),
+                    induction::trip_count(body, &loop_, &facts).and_then(|count| count.to_i64()),
+                )?;
+                return zeroed(&Rc::new(rotated));
             }
-            return zeroed(&Rc::new(MirBody { blocks: out, ..changed }), address_offsets);
+            // A loop rotation cannot take tests the recurrence at its header;
+            // zero first on the last trip needs fewer trips than the period.
+            'header: {
+                if tested || !runs || proof.maximum.as_ref().is_none_or(|maximum| maximum >= &period) || compare_at.0 != header_index {
+                    break 'header;
+                }
+                let branch = operation(branch_at);
+                if body.blocks.iter().flat_map(|block| &block.ops).any(|op| {
+                    compare.defines.iter().any(|value| op.uses.contains(value)) && !std::ptr::eq(op, branch)
+                }) {
+                    break 'header;
+                }
+                let [exit_at] = header.succ.iter().copied().filter(|at| !inside.contains(at)).collect::<Vec<_>>()[..] else {
+                    break 'header;
+                };
+                let exit_block = &body.blocks[blocks[&exit_at]];
+                if predecessors.get(&exit_at).cloned().unwrap_or_default() != BTreeSet::from([header.at])
+                    || exit_block.ops.is_empty()
+                {
+                    break 'header;
+                }
+                let mut closed = IndexMap::<Value, &Phi>::default();
+                for other in &exit_block.phis {
+                    if other.incoming.len() == 1 {
+                        for (predecessor, value) in other.incoming.iter() {
+                            if inside.contains(predecessor) {
+                                closed.insert(*value, other);
+                            }
+                        }
+                    }
+                }
+                let following = blocks
+                    .keys()
+                    .copied()
+                    .filter(|at| dominators.get(at).is_some_and(|dominating| dominating.contains(&exit_at)))
+                    .collect::<BTreeSet<_>>();
+                let leaving = transform::_leaving(body);
+                if [phi.result, update].iter().any(|value| leaving.contains(value))
+                    || body.blocks.iter().flat_map(|block| &block.phis).any(|other| {
+                        !std::ptr::eq(other, phi)
+                            && !closed.values().any(|one| *one == other)
+                            && other.incoming.values().any(|value| *value == phi.result || *value == update)
+                    })
+                    || body.blocks.iter().any(|block| {
+                        block.ops.iter().any(|op| op.uses.contains(&phi.result))
+                            && !following.contains(&block.at)
+                            && !inside.contains(&block.at)
+                    })
+                {
+                    break 'header;
+                }
+                // After the loop the recurrence is its final value.
+                let finished = seeds.fresh(exit_at);
+                let finish = strength::_made(Kind::Copy, "", finished, vec![bias.as_arg()], exit_at, &exit_block.ops[0]);
+                let mut swap = BTreeMap::from([(phi.result.id, finished)]);
+                let removed = closed
+                    .iter()
+                    .filter(|(value, _other)| **value == phi.result || **value == update)
+                    .map(|(_value, other)| other.result)
+                    .collect::<BTreeSet<_>>();
+                swap.extend(removed.iter().map(|value| (value.id, finished)));
+                let changed = loopexit::_substituted_exits(body, exit_at, &following, &[finish], &swap)?;
+                let mut out = Vec::new();
+                for (block_index, block) in changed.blocks.iter().enumerate() {
+                    let kept = !following.contains(&block.at);
+                    let mut ops = Vec::new();
+                    for (operation_index, op) in block.ops.iter().enumerate() {
+                        let at = (block_index, operation_index);
+                        let op = if kept && at == compare_at {
+                            let mut op = op.clone();
+                            op.args = vec![Arg::Held(Held { value: phi.result, width }), Arg::Const(Const::new(0, width))];
+                            op.kind = Kind::Sub;
+                            op.results = Vec::new();
+                            op.defines.retain(|value| value.flags);
+                            op.uses = vec![phi.result];
+                            op.loads = Vec::new();
+                            op.source_backed = false;
+                            op.raised = None;
+                            op
+                        } else if kept && at == branch_at {
+                            let test = if branch.target.is_some_and(|target| inside.contains(&target)) { Kind::Ne } else { Kind::Eq };
+                            let mut op = op.clone();
+                            op.test = Some(test);
+                            op.name.clear();
+                            op.source_backed = false;
+                            op.raised = Some((Vec::new(), Vec::new()));
+                            op
+                        } else if kept && at == stepping_at {
+                            unpromised.clone()
+                        } else if kept {
+                            rebased.get(&at).cloned().unwrap_or_else(|| op.clone())
+                        } else {
+                            op.clone()
+                        };
+                        if kept {
+                            ops.extend(inserted.get(&at).cloned());
+                        }
+                        ops.push(op);
+                    }
+                    if block.at == preheader {
+                        _before_leaving(&mut ops, seeds.ops.clone());
+                    }
+                    let phis = block
+                        .phis
+                        .iter()
+                        .filter(|other| !removed.contains(&other.result))
+                        .map(|other| {
+                            let mut other = other.clone();
+                            if other.result == phi.result {
+                                other.incoming.insert(preheader, begun.value);
+                            }
+                            other
+                        })
+                        .collect();
+                    out.push(MirBlock { at: block.at, phis, ops, succ: block.succ.clone(), cold: block.cold });
+                }
+                return zeroed(&Rc::new(MirBody { blocks: out, ..changed }));
+            }
+            continue;
         }
     }
     Ok(body.clone())
 }
 
-/// `(add, invariant's position, multiplier, address, extra)`, the add named by its occurrence.
-type _Offset = ((usize, usize), Option<usize>, BigInt, Option<(Value, Value)>, BigInt);
+/// `uses` moved by `bias`, as each op's replacement and an add to place before
+/// it; None where a mask would change. A constant amount is a displacement or
+/// a constant; a symbolic one is computed into `seeds`, and an address adds it
+/// beside the recurrence where the cell is read.
+fn _rebased(
+    body: &MirBody,
+    uses: &[Use],
+    bias: &AffineOperand,
+    width: u32,
+    seeds: &mut counting::Seeds,
+) -> Option<(BTreeMap<(usize, usize), Op>, BTreeMap<(usize, usize), Op>)> {
+    let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
+    let times = |seeds: &mut counting::Seeds, multiplier: &BigInt| {
+        seeds.computed(Kind::Mul, vec![bias.as_arg(), Arg::Const(Const::new(consts::masked(multiplier, width), width))])
+    };
+    let signed = |constant: &Const| induction::_signed(&Arg::Const(constant.clone()), &IndexMap::default(), width).expect("a constant");
+    let (mut rebased, mut inserted) = (BTreeMap::new(), BTreeMap::new());
+    for one in uses {
+        let at = one.at();
+        let op = operation(at);
+        match one {
+            Use::Masked { multiplier, span, .. } => {
+                let AffineOperand::Const(moved) = times(seeds, multiplier) else {
+                    return None;
+                };
+                if !(signed(&moved) % span).is_zero() {
+                    return None;
+                }
+            }
+            Use::Address { multiplier, source, base, extra, .. } => match times(seeds, multiplier) {
+                AffineOperand::Const(moved) => {
+                    rebased.insert(at, _rebased_cells(op, *source, &(signed(&moved) + extra), *base));
+                }
+                AffineOperand::Held(moved) => {
+                    let beside = seeds.fresh(op.at);
+                    let args = vec![Arg::Held(Held { value: *base, width }), Arg::Held(moved)];
+                    inserted.insert(at, mir::computed(op.at, Kind::Add, beside, args, width));
+                    rebased.insert(at, _rebased_cells(op, *source, extra, beside));
+                }
+            },
+            Use::Operand { position, multiplier, .. } => {
+                // Rebased at the width the operation reads: the recurrence's
+                // low bytes, never more than it has.
+                let base = op.args[*position].clone();
+                let narrow = match &base {
+                    Arg::Held(held) => held.width,
+                    Arg::Const(constant) => constant.width,
+                    _ => return None,
+                };
+                if narrow > width {
+                    return None;
+                }
+                let delta = match times(seeds, multiplier) {
+                    AffineOperand::Held(held) => Arg::Held(Held { width: narrow, ..held }),
+                    AffineOperand::Const(constant) => Arg::Const(Const::new(consts::masked(&constant.n, narrow), narrow)),
+                };
+                seeds.width = narrow;
+                let adjusted = seeds.computed(Kind::Add, vec![base.clone(), delta]);
+                seeds.width = width;
+                let mut uses = op.uses.clone();
+                match (&base, &adjusted) {
+                    (Arg::Held(base), AffineOperand::Held(adjusted)) => {
+                        uses = uses.iter().map(|value| if *value == base.value { adjusted.value } else { *value }).collect();
+                    }
+                    // A constant that became a held value is a new read, among
+                    // the held arguments where it now sits.
+                    (_, AffineOperand::Held(adjusted)) => {
+                        let before = op.args[..*position].iter().filter(|arg| matches!(arg, Arg::Held(_))).count();
+                        uses.insert(before.min(uses.len()), adjusted.value);
+                    }
+                    _ => {}
+                }
+                let mut replacement = op.clone();
+                replacement.args[*position] = adjusted.as_arg();
+                replacement.uses = uses;
+                replacement.source_backed = false;
+                replacement.raised = None;
+                rebased.insert(at, replacement);
+            }
+        }
+    }
+    Some((rebased, inserted))
+}
 
-/// Every add of an invariant to the counter, as (add, invariant's position, multiplier).
-///
-/// Also through a shift of the counter read only by such adds. None where
-/// the counter is read any other way inside the loop, or a flag an add or
-/// shift sets is read.
-#[allow(clippy::too_many_arguments)]
-fn _offsets(
+/// A read of a recurrence that counting it to zero must rebase: the
+/// recurrence moves by `bias`, its final value, and each use absorbs that.
+enum Use {
+    /// Operand `position` of the op at `at` moves by the bias times
+    /// `multiplier`: an invariant added to the recurrence, or the other side
+    /// of an equality with it.
+    Operand { at: (usize, usize), position: usize, multiplier: BigInt },
+    /// Cells based on `source`, the recurrence times `multiplier` plus
+    /// `extra`, move by the bias times `multiplier` onto `base`.
+    Address { at: (usize, usize), multiplier: BigInt, source: Value, base: Value, extra: BigInt },
+    /// The recurrence times `multiplier` masked to its low `span`: unchanged
+    /// by a bias whose product is a multiple of `span`.
+    Masked { at: (usize, usize), multiplier: BigInt, span: BigInt },
+}
+
+impl Use {
+    const fn at(&self) -> (usize, usize) {
+        match self {
+            Use::Operand { at, .. } | Use::Address { at, .. } | Use::Masked { at, .. } => *at,
+        }
+    }
+}
+
+/// Every read of `counter` inside the loop as a `Use`, also through a shift
+/// or constant multiple of it read only by such uses, and the reads looked
+/// through. None where it is read any other way, or a flag one of them sets
+/// is read.
+fn _uses(
     counter: Value,
     readers: &BTreeMap<Value, Vec<(usize, usize)>>,
     placed: &BTreeMap<(usize, usize), i64>,
@@ -1243,8 +1192,7 @@ fn _offsets(
     inside: &BTreeSet<i64>,
     own: &BTreeSet<(usize, usize)>,
     body: &MirBody,
-    address_offsets: bool,
-) -> Option<Vec<_Offset>> {
+) -> Option<(Vec<Use>, Vec<(usize, usize)>)> {
     let operation = |at: (usize, usize)| &body.blocks[at.0].ops[at.1];
     let flagless = |op: &Op| !op.defines.iter().any(|value| value.flags && readers.contains_key(value));
     let plain = |op: &Op, kind: Kind| {
@@ -1258,18 +1206,16 @@ fn _offsets(
         Arg::Held(held) => held.width,
         _ => unreachable!("plain checked the sole result"),
     };
-
-    let added = |at: (usize, usize), value: Value, multiplier: BigInt| -> Option<_Offset> {
-        let op = operation(at);
-        if !plain(op, Kind::Add) || op.args.len() != 2 {
-            return None;
-        }
+    // The other operand of a two-operand op reading `value` once, at the result's width.
+    let other = |op: &Op, value: Value| -> Option<usize> {
         let width = result_width(op);
-        if !op.args.iter().all(|arg| match arg {
-            Arg::Held(held) => held.width == width,
-            Arg::Const(constant) => address_offsets && constant.width == width,
-            _ => false,
-        }) {
+        if op.args.len() != 2
+            || !op.args.iter().all(|arg| match arg {
+                Arg::Held(held) => held.width == width,
+                Arg::Const(constant) => constant.width == width,
+                _ => false,
+            })
+        {
             return None;
         }
         let counted = op
@@ -1279,24 +1225,36 @@ fn _offsets(
             .filter(|(_, arg)| matches!(arg, Arg::Held(held) if held.value == value))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        if counted.len() != 1 {
+        (counted.len() == 1).then(|| 1 - counted[0])
+    };
+
+    let added = |at: (usize, usize), value: Value, multiplier: BigInt| -> Option<Use> {
+        let op = operation(at);
+        if !plain(op, Kind::Add) {
             return None;
         }
-        let position = 1 - counted[0];
+        let position = other(op, value)?;
         if let Arg::Held(invariant) = &op.args[position] {
             if home.get(&invariant.value).is_some_and(|at| inside.contains(at)) {
                 return None;
             }
         }
-        Some((at, Some(position), multiplier, None, BigInt::from(0_u8)))
+        Some(Use::Operand { at, position, multiplier })
     };
 
-    let addressed = |at: (usize, usize),
-                     value: Value,
-                     multiplier: BigInt,
-                     replacement: Option<Value>,
-                     extra: BigInt|
-     -> Option<_Offset> {
+    let masked = |at: (usize, usize), value: Value, multiplier: BigInt| -> Option<Use> {
+        let op = operation(at);
+        if !plain(op, Kind::And) {
+            return None;
+        }
+        let Arg::Const(mask) = &op.args[other(op, value)?] else {
+            return None;
+        };
+        let span = BigInt::from(1_u8) << consts::masked(&mask.n, mask.width).bits();
+        Some(Use::Masked { at, multiplier, span })
+    };
+
+    let addressed = |at: (usize, usize), value: Value, multiplier: BigInt, base: Value, extra: BigInt| -> Option<Use> {
         let op = operation(at);
         let refs = op
             .loads
@@ -1313,15 +1271,13 @@ fn _offsets(
         {
             return None;
         }
-        Some((at, None, multiplier, Some((value, replacement.unwrap_or(value))), extra))
+        Some(Use::Address { at, multiplier, source: value, base, extra })
     };
 
     let derived = |at: (usize, usize), value: Value, multiplier: BigInt| {
-        let form = added(at, value, multiplier.clone());
-        if form.is_some() || !address_offsets {
-            return form;
-        }
-        addressed(at, value, multiplier, None, BigInt::from(0_u8))
+        added(at, value, multiplier.clone())
+            .or_else(|| addressed(at, value, multiplier.clone(), value, BigInt::from(0_u8)))
+            .or_else(|| masked(at, value, multiplier))
     };
 
     // The invariant side of an equality, shifted with the counter.
@@ -1329,10 +1285,9 @@ fn _offsets(
     // Replacing `counter` by `counter - final` preserves identity only
     // when the other side becomes `other - final` too.  This is safe for
     // equality and inequality flags; ordered comparisons would change.
-    let equality = |at: (usize, usize), value: Value| -> Option<_Offset> {
+    let equality = |at: (usize, usize), value: Value| -> Option<Use> {
         let op = operation(at);
-        if !address_offsets
-            || op.kind != Kind::Sub
+        if op.kind != Kind::Sub
             || !op.results.is_empty()
             || !op.loads.is_empty()
             || !op.stores.is_empty()
@@ -1368,44 +1323,44 @@ fn _offsets(
             Arg::Const(other) if other.width == counted.width => {}
             _ => return None,
         }
-        Some((at, Some(position), BigInt::from(-1_i8), None, BigInt::from(0_u8)))
+        Some(Use::Operand { at, position, multiplier: BigInt::from(-1_i8) })
     };
 
-    let mut out = Vec::new();
+    let (mut out, mut through) = (Vec::new(), Vec::new());
     for at in readers.get(&counter).into_iter().flatten().copied() {
         if own.contains(&at) || !inside.contains(&placed[&at]) {
             continue;
         }
         let op = operation(at);
-        let mut form = if address_offsets { addressed(at, counter, BigInt::from(1_u8), None, BigInt::from(0_u8)) } else { None };
-        let added_form = added(at, counter, BigInt::from(1_u8));
-        if address_offsets {
-            if let Some((_, Some(position), _, _, _)) = &added_form {
-                if let Arg::Const(invariant) = &op.args[*position] {
-                    let Arg::Held(result) = &op.results[0] else {
-                        unreachable!("added checked the result");
-                    };
-                    let result = result.value;
-                    let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::default(), invariant.width)
-                        .expect("a constant is known");
-                    let forms = readers
-                        .get(&result)
-                        .into_iter()
-                        .flatten()
-                        .map(|reader| addressed(*reader, result, BigInt::from(1_u8), Some(counter), constant.clone()))
-                        .collect::<Vec<_>>();
-                    if !forms.is_empty() && forms.iter().all(Option::is_some) {
-                        out.extend(forms.into_iter().flatten());
-                        continue;
-                    }
+        // A constant added to the counter and read only as cell bases is
+        // those cells' displacement.
+        if let Some(Use::Operand { position, .. }) = added(at, counter, BigInt::from(1_u8)) {
+            if let Arg::Const(invariant) = &op.args[position] {
+                let Arg::Held(result) = &op.results[0] else {
+                    unreachable!("added checked the result");
+                };
+                let constant = induction::_signed(&Arg::Const(invariant.clone()), &IndexMap::default(), invariant.width)
+                    .expect("a constant is known");
+                let forms = readers
+                    .get(&result.value)
+                    .into_iter()
+                    .flatten()
+                    .map(|reader| addressed(*reader, result.value, BigInt::from(1_u8), counter, constant.clone()))
+                    .collect::<Vec<_>>();
+                if !forms.is_empty() && forms.iter().all(Option::is_some) {
+                    out.extend(forms.into_iter().flatten());
+                    through.push(at);
+                    continue;
                 }
             }
         }
-        if form.is_none() {
-            form = added_form;
-        }
-        if form.is_none() {
-            form = equality(at, counter);
+        let form = addressed(at, counter, BigInt::from(1_u8), counter, BigInt::from(0_u8))
+            .or_else(|| added(at, counter, BigInt::from(1_u8)))
+            .or_else(|| equality(at, counter))
+            .or_else(|| masked(at, counter, BigInt::from(1_u8)));
+        if form.is_some() {
+            out.extend(form);
+            continue;
         }
         let mut scale = None;
         if plain(op, Kind::Shl) && op.args.len() == 2 && matches!(op.args[1], Arg::Const(_)) {
@@ -1415,7 +1370,7 @@ fn _offsets(
                 };
                 scale = Some(BigInt::from(1_u8) << usize::try_from(&shift.n).expect("negative shift count"));
             }
-        } else if address_offsets && plain(op, Kind::Mul) && op.args.len() == 2 {
+        } else if plain(op, Kind::Mul) && op.args.len() == 2 {
             let constants = op
                 .args
                 .iter()
@@ -1440,27 +1395,23 @@ fn _offsets(
                 scale = induction::_signed(&Arg::Const(constants[0].clone()), &IndexMap::default(), constants[0].width);
             }
         }
-        if form.is_none() {
-            if let Some(scale) = &scale {
-                let Arg::Held(shifted) = &op.results[0] else {
-                    unreachable!("plain checked the result");
-                };
-                let shifted = shifted.value;
-                let forms = readers
-                    .get(&shifted)
-                    .into_iter()
-                    .flatten()
-                    .map(|reader| derived(*reader, shifted, scale.clone()))
-                    .collect::<Vec<_>>();
-                if !forms.is_empty() && forms.iter().all(Option::is_some) {
-                    out.extend(forms.into_iter().flatten());
-                    continue;
-                }
-            }
+        let scale = scale?;
+        let Arg::Held(shifted) = &op.results[0] else {
+            unreachable!("plain checked the result");
+        };
+        let forms = readers
+            .get(&shifted.value)
+            .into_iter()
+            .flatten()
+            .map(|reader| derived(*reader, shifted.value, scale.clone()))
+            .collect::<Vec<_>>();
+        if forms.is_empty() || !forms.iter().all(Option::is_some) {
+            return None;
         }
-        out.push(form?);
+        out.extend(forms.into_iter().flatten());
+        through.push(at);
     }
-    Some(out)
+    Some((out, through))
 }
 
 /// Move the fixed part of every address using `base` by displacement.

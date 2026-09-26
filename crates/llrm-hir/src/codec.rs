@@ -99,6 +99,7 @@ plain_enums!(
     TargetProfile,
     ArrayOrder,
     FloatMode,
+    FloatSemantics,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -141,12 +142,14 @@ plain_record!(ArrayElement, Some("array_element"), place => "place", indices => 
 plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
     r#type => "type");
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile", inbounds => "inbounds", origin => "origin");
+    volatile => "volatile", published => "published", inbounds => "inbounds", origin => "origin",
+    allocation => "allocation");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
     memory => "memory");
 
-/// Only an inline block names `asm`: every other instruction is written as before it existed.
+/// Only an inline block names `asm`, and only a promised op `nowrap`: every
+/// other instruction is written as before they existed.
 impl _Plain for model::Instruction {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -158,6 +161,9 @@ impl _Plain for model::Instruction {
         out.insert("pure".to_owned(), self.pure._plain());
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
+        }
+        if self.nowrap {
+            out.insert("nowrap".to_owned(), self.nowrap._plain());
         }
         Json::Dict(out)
     }
@@ -240,8 +246,24 @@ plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", re
     relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
     data => "data", callables => "callables");
-plain_record!(Program, None, dialect => "dialect", runtime => "runtime", modules => "modules",
-    schema => "schema", target => "target", array_order => "array_order", float_mode => "float_mode");
+/// Float semantics are written only when they are the machine's, as before
+/// they existed.
+impl _Plain for model::Program {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("dialect".to_owned(), self.dialect._plain());
+        out.insert("runtime".to_owned(), self.runtime._plain());
+        out.insert("modules".to_owned(), self.modules._plain());
+        out.insert("schema".to_owned(), self.schema._plain());
+        out.insert("target".to_owned(), self.target._plain());
+        out.insert("array_order".to_owned(), self.array_order._plain());
+        out.insert("float_mode".to_owned(), self.float_mode._plain());
+        if self.float_semantics != model::FloatSemantics::Declared {
+            out.insert("float_semantics".to_owned(), self.float_semantics._plain());
+        }
+        Json::Dict(out)
+    }
+}
 
 impl _Plain for model::Operand {
     fn _plain(&self) -> JSON {
@@ -526,6 +548,7 @@ made_enums!(
     TargetProfile,
     ArrayOrder,
     FloatMode,
+    FloatSemantics,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -755,8 +778,10 @@ static INDIRECT_PLACE: _Record = _Record {
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
         ("volatile", _Hint::Bool, false),
+        ("published", _Hint::Bool, false),
         ("inbounds", _Hint::Bool, false),
         ("origin", OPTIONAL_INT, false),
+        ("allocation", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::IndirectPlace {
@@ -764,8 +789,10 @@ static INDIRECT_PLACE: _Record = _Record {
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
             volatile: _default(args, "volatile", false)?,
+            published: _default(args, "published", false)?,
             inbounds: _default(args, "inbounds", false)?,
             origin: _default(args, "origin", None)?,
+            allocation: _default(args, "allocation", None)?,
         })
     },
 };
@@ -792,6 +819,7 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
+        ("nowrap", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::Instruction {
@@ -802,6 +830,7 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
+            nowrap: _default(args, "nowrap", false)?,
         })
     },
 };
@@ -1059,6 +1088,7 @@ static PROGRAM: _Record = _Record {
         ("target", enum_hint!(TargetProfile), false),
         ("array_order", enum_hint!(ArrayOrder), false),
         ("float_mode", enum_hint!(FloatMode), false),
+        ("float_semantics", enum_hint!(FloatSemantics), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1069,6 +1099,7 @@ static PROGRAM: _Record = _Record {
             target: _default(args, "target", model::TargetProfile::I386RealMode)?,
             array_order: _default(args, "array_order", model::ArrayOrder::ColumnMajor)?,
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
+            float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
         })
     },
 };

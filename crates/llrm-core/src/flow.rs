@@ -10,9 +10,10 @@ use crate::support::hash::IndexMap;
 use iced_x86::Register;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, jumps, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -25,6 +26,7 @@ use crate::optimize::transform;
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
     frame: Option<Rc<RefCell<Frame>>>,
+    pool: Option<Rc<RefCell<Pool>>>,
     calls: Option<&IndexMap<i64, String>>,
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
@@ -40,8 +42,10 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     Ok(vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(floatalloc::FloatAlloc::new(frame.clone(), basic_semantics, target)?),
         Box::new(phielim::PhiElimination),
+        // After phi elimination: a phi's copies are where the stack shuffles.
+        Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target))?),
@@ -49,6 +53,8 @@ pub fn machine<'a>(
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::new(frame.clone(), target)?),
+        // Once spill traffic is final: which slots a loop still reaches.
+        Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.

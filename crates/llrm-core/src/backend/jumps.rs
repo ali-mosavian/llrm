@@ -368,23 +368,51 @@ pub fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
             }
         }
         let mut redirect: IndexMap<i64, i64> = IndexMap::default();
+        // A copy's values are the kept block's, the same registers by name.
+        let mut rename: IndexMap<u32, u32> = IndexMap::default();
         for copies in groups.values() {
             if copies.len() < 2 {
                 continue;
             }
             let canonical = copies.iter().find(|block| block.at == body.entry).unwrap_or(&copies[0]);
-            redirect.extend(
-                copies
-                    .iter()
-                    .filter(|block| !std::ptr::eq(**block, *canonical))
-                    .map(|block| (block.at, canonical.at)),
-            );
+            for copy in copies.iter().filter(|block| !std::ptr::eq(**block, *canonical)) {
+                redirect.insert(copy.at, canonical.at);
+                // An anchor left by an identity copy defines what it reads.
+                let identities = copy.insns.iter().filter(|one| _inert(one)).flat_map(|one| one.defines.iter().zip(&one.uses));
+                let mut pairs: Vec<(u32, u32)> = identities.map(|(from, to)| (*from, *to)).collect();
+                for (one, kept) in _real(copy).iter().zip(_real(canonical)) {
+                    pairs.extend(one.defines.iter().zip(&kept.defines).chain(one.uses.iter().zip(&kept.uses)).map(|(from, to)| (*from, *to)));
+                }
+                for (from, to) in pairs.into_iter().filter(|(from, to)| from != to) {
+                    let (from, to) = (_root(&rename, from), _root(&rename, to));
+                    if from != to {
+                        rename.insert(from, to);
+                    }
+                }
+            }
         }
         if redirect.is_empty() {
             return Ok(body);
         }
+        if !rename.is_empty() {
+            let rename: IndexMap<u32, u32> = rename.keys().map(|one| (*one, _root(&rename, *one))).collect();
+            body = body.with_blocks(
+                body.blocks
+                    .iter()
+                    .map(|block| block.with_insns(block.insns.iter().map(|one| crate::backend::spiller::_renamed(one, &rename)).collect()))
+                    .collect(),
+            );
+        }
         body = _redirected(&body, &redirect);
     }
+}
+
+/// The value `one` is renamed to, through every rename after it.
+fn _root(rename: &IndexMap<u32, u32>, mut one: u32) -> u32 {
+    while let Some(next) = rename.get(&one) {
+        one = *next;
+    }
+    one
 }
 
 /// The complete physical form of a fresh, mergeable block.

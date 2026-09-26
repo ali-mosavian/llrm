@@ -74,7 +74,7 @@ pub fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<Value, Interval>) ->
 ///
 /// A 16-bit address wraps; summed through 32-bit registers it does not. The
 /// two agree for a cell whose start is its object's first byte (a symbol, or
-/// the far origin the frontend names) when every partial sum of the offset
+/// the far origin the frontend names, or offset 0 of its own segment) when every partial sum of the offset
 /// added to that start, as the affine operations computing it would be cut
 /// anywhere, is a non-negative integer below 64K: each register then holds
 /// its partial sum exactly, zero extension is the identity, and the object
@@ -135,14 +135,20 @@ fn _exact_cell(
     let offset = match addr.space {
         Space::Segment | Space::External => Some(base),
         Space::Far | Space::Literal => {
+            // Where the base is not `origin + offset`, its whole sum must be
+            // exact: a constant origin has folded into the arithmetic.
+            let whole = || {
+                _exact_sum(base, at, made, arrived, scoped, 16)
+                    .is_some_and(|(low, high)| low + addr.disp >= 0 && high + addr.disp < 1 << 16)
+            };
             let Some(origin) = reference.origin else {
-                return false;
+                return whole();
             };
             if origin == base {
                 None
             } else {
                 let Some((op, _)) = made.get(&base) else {
-                    return false;
+                    return whole();
                 };
                 let held: Vec<Value> = op
                     .args
@@ -155,7 +161,7 @@ fn _exact_cell(
                 match (op.kind, held.as_slice()) {
                     (Kind::Add | Kind::PtrOffset, [left, right]) if *left == origin => Some(*right),
                     (Kind::Add | Kind::PtrOffset, [left, right]) if *right == origin => Some(*left),
-                    _ => return false,
+                    _ => return whole(),
                 }
             }
         }
@@ -596,10 +602,12 @@ pub fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Inter
         if known.is_empty() {
             continue;
         }
+        // The header's values too: seen from inside, they are the trip's,
+        // though the header itself also sees the exit value.
         let operations = body
             .blocks
             .iter()
-            .filter(|block| inside.contains(&block.at))
+            .filter(|block| inside.contains(&block.at) || block.at == loop_.header)
             .flat_map(|block| block.ops.iter())
             .collect::<Vec<_>>();
         loop {
@@ -766,13 +774,10 @@ pub fn scoped(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Interv
     Ok(result)
 }
 
-/// Every value `consts` knows, as the singleton interval an alias query reads.
-pub fn constants(
-    body: &Rc<MirBody>,
-    dgroup: Option<&BTreeSet<i64>>,
-    calls: Option<&IndexMap<i64, String>>,
-) -> IndexMap<Value, Interval> {
-    consts::known(body, dgroup, calls, None, None)
+/// Every value `consts` knows without solving memory, as the singleton
+/// interval an alias query reads.
+pub fn constants(body: &Rc<MirBody>) -> IndexMap<Value, Interval> {
+    consts::known(body, None, None, None, None)
         .into_iter()
         .map(|(value, fact)| {
             (

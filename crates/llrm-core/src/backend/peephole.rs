@@ -7,7 +7,7 @@ use crate::support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 
-use iced_x86::{Decoder, DecoderOptions, FlowControl, OpAccess, Register, RflagsBits};
+use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpAccess, OpKind, Register, RflagsBits};
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -152,6 +152,7 @@ impl LIRTransform for Peephole {
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
         let body = increments(&body);
+        let body = doubled(&body, &self.cpu)?;
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         Ok(self._frame(machinedce::eliminated(body)))
@@ -1456,6 +1457,67 @@ pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
     }
 }
 
+/// The machine instructions `what` encodes to.
+fn _decoded(what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
+    let encoded = emit(what)?;
+    let mut decoder = Decoder::new(16, &encoded.code, DecoderOptions::NONE);
+    Some((&mut decoder).into_iter().collect())
+}
+
+/// The bytes a constant register shift carries, as `(written, source)`, and
+/// the lanes of its shifted operands.
+///
+/// Each written byte reads only its sources; the rest of the operands are not
+/// read at all. `shld edx, eax, 16` moves DX into the upper half of EDX, so it
+/// reads DX only where that half is live. None for any other instruction.
+pub fn _moved_lanes(one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
+    let instructions = one.what.as_ref().and_then(_decoded)?;
+    let [insn] = instructions.as_slice() else {
+        return None;
+    };
+    let register = |index: u32| (insn.op_kind(index) == OpKind::Register).then(|| insn.op_register(index));
+    let (left, destination, source, count) = match insn.mnemonic() {
+        Mnemonic::Shl | Mnemonic::Shr if insn.op_count() == 2 && insn.op1_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shl, register(0), None, insn.immediate8())
+        }
+        Mnemonic::Shld | Mnemonic::Shrd if insn.op_count() == 3 && insn.op2_kind() == OpKind::Immediate8 => {
+            (insn.mnemonic() == Mnemonic::Shld, register(0), register(1), insn.immediate8())
+        }
+        _ => return None,
+    };
+    let destination = destination.filter(|one| matches!(one.size(), 2 | 4) && !_lanes(*one).is_empty())?;
+    if source.is_some_and(|one| one.size() != destination.size() || _lanes(one).is_empty()) {
+        return None;
+    }
+    let bits = destination.size() * 8;
+    let count = usize::from(count & 31);
+    if count == 0 || count >= bits {
+        return None;
+    }
+    // Result bit `b` comes from the destination shifted by `count`, and what
+    // the shift empties from the source's other end, or zero.
+    let origin = |bit: usize| -> Option<(Register, usize)> {
+        if left {
+            if bit >= count { Some((destination, bit - count)) } else { source.map(|one| (one, bits - count + bit)) }
+        } else if bit + count < bits {
+            Some((destination, bit + count))
+        } else {
+            source.map(|one| (one, bit + count - bits))
+        }
+    };
+    let byte = |register: Register, bit: usize| (full32(register), u32::try_from(bit / 8).expect("a byte"));
+    let mut moved = Vec::new();
+    for bit in 0..bits {
+        if let Some((register, from)) = origin(bit) {
+            let pair = (byte(destination, bit), byte(register, from));
+            if !moved.contains(&pair) {
+                moved.push(pair);
+            }
+        }
+    }
+    Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
+}
+
 pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
@@ -1478,9 +1540,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
-    let encoded = emit(what)?;
-    let mut decoder = Decoder::new(16, &encoded.code, DecoderOptions::NONE);
-    let instructions: Vec<iced_x86::Instruction> = (&mut decoder).into_iter().collect();
+    let instructions = _decoded(what)?;
     // A fixed-register ABI names the conventional register (AX, BX, ...)
     // separately from the value it carries.  The Held width is authoritative:
     // a dword in the BX slot occupies EBX, including its upper lanes.
@@ -1594,14 +1654,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            if liveness::_terminator(one.what.as_ref()) {
-                let what = one.what.as_ref().expect("a terminator has semantics");
-                if what.op == Operation::Branch {
-                    dead = dead.minus(&_branch_reads(what));
-                }
-                continue;
-            }
-            let Some(effects) = _register_effects(one, false, true) else {
+            let Some(effect) = liveness::effect(one) else {
                 dead.clear();
                 continue;
             };
@@ -1637,8 +1690,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                         // Pure, and nothing else it writes. Lowering a divide's
                         // sign word as `cwd` leaves the widening it replaced
                         // behind, with a register and an instruction to its name.
-                        if !effects.1.is_empty()
-                            && effects.1.is_subset(&dead)
+                        if !effect.writes.is_empty()
+                            && effect.writes.is_subset(&dead)
                             && !_lanes(dest.register).is_empty()
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
@@ -1651,8 +1704,8 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                         }
                     }
                     (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor"), [Loc::Reg(dest)], sources) => {
-                        if !effects.1.is_empty()
-                            && effects.1.is_subset(&dead)
+                        if !effect.writes.is_empty()
+                            && effect.writes.is_subset(&dead)
                             && !_lanes(dest.register).is_empty()
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
@@ -1670,8 +1723,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
                     _ => {}
                 }
             }
-            let (reads, writes) = effects;
-            dead = dead.or(&writes).minus(&reads);
+            dead = effect.dead_before(&dead);
         }
         let insns = block
             .insns
@@ -1868,7 +1920,7 @@ fn _fused(
                     let what = store.what.as_ref().expect("plain has semantics");
                     what.op == Operation::Move
                         && what.name.as_deref() == Some("mov")
-                        && what.dests == [Loc::Mem(cell.clone())]
+                        && matches!(what.dests.as_slice(), [Loc::Mem(into)] if _same_cell(into, &cell))
                         && what.sources == [Loc::Reg(register)]
                 }
             })
@@ -1946,6 +1998,16 @@ fn _fused(
     };
     emit(&made)?;
     Some((Arc::new(with_what(work, made)), used))
+}
+
+/// Whether two adjacent operands address the same bytes. The registers
+/// carry the address; the values they name may differ when allocation
+/// copied the same address into a register again as a new value.
+fn _same_cell(one: &Mem, other: &Mem) -> bool {
+    let physical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
+    physical(one) == physical(other)
+        && (one.base.is_none() || one.through != Register::None)
+        && (one.index.is_none() || one.index_through != Register::None)
 }
 
 /// `mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).
@@ -2729,6 +2791,39 @@ pub fn increments(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
+/// `shl r,1` as `add r,r` where the target prices the add lower.  Every
+/// flag the shift defines, the add sets the same way.
+pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
+    if cpu.doubling()? != "alu_rr" {
+        return Ok(body.clone());
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block.with_insns(
+                block
+                    .insns
+                    .iter()
+                    .map(|one| match one.what.as_ref().map(|what| (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())) {
+                        Some((
+                            Operation::Binary,
+                            Some("shl" | "sal"),
+                            [Loc::Reg(destination)],
+                            [Loc::Reg(source), Loc::Imm(Imm { value: 1, address: None, .. })],
+                        )) if destination == source => Arc::new(with_what(
+                            one,
+                            semantics(Operation::Binary, "add", vec![Loc::Reg(*destination)], vec![Loc::Reg(*source), Loc::Reg(*source)]),
+                        )),
+                        _ => Arc::clone(one),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    Ok(body.with_blocks(blocks))
+}
+
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
     let Some(what) = &one.what else {
         return false;
@@ -2805,12 +2900,20 @@ static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHM
 /// An add, subtract, logic or unary operation sets ZF and SF from its result
 /// exactly as a zero test of that result does. The test goes where only its
 /// branch reads those two, and no later instruction reads the carry,
-/// overflow or adjust flags it would have cleared.
+/// overflow or adjust flags it would have cleared. Work independent of the
+/// computation may stand between them, in the block or in a sole predecessor
+/// that only falls into it: the computation sinks to just before the test.
 pub fn tested(body: &LirBody) -> LirBody {
     let live = _flags_live_out(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
+    let mut predecessors = HashMap::<i64, Vec<usize>>::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            predecessors.entry(*to).or_default().push(at);
+        }
+    }
+    let mut blocks = body.blocks.iter().map(|block| block.insns.clone()).collect::<Vec<_>>();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let insns = &blocks[block_index];
         // Moves change no flag, so the three may have a phi's copies between them.
         let work: Vec<usize> = insns
             .iter()
@@ -2820,42 +2923,86 @@ pub fn tested(body: &LirBody) -> LirBody {
             .collect();
         let at = |position: isize| work[usize::try_from(position).expect("a non-negative position")];
         let mut test_at = work.len() as isize - 2;
-        while test_at >= 1 && _moves(&insns[at(test_at)], None) {
+        while test_at >= 0 && _moves(&insns[at(test_at)], None) {
             test_at -= 1;
         }
-        let register = if test_at >= 1 { _zero_tested(&insns[at(test_at)]) } else { None };
-        let mut before_at = test_at - 1;
-        while let Some(register) = &register {
-            if !(before_at >= 0 && _moves(&insns[at(before_at)], Some(register))) {
-                break;
-            }
-            before_at -= 1;
+        let Some(register) = (test_at >= 0).then(|| _zero_tested(&insns[at(test_at)])).flatten() else {
+            continue;
+        };
+        let branch = &insns[*work.last().expect("a test has a branch")];
+        if !branch.what.as_ref().is_some_and(|what| {
+            what.op == Operation::Branch && _lookup(&_ZERO_BRANCHES, what.name.as_deref()).is_some()
+        }) || !live[&block.at].is_disjoint(&_DIFFERING)
+        {
+            continue;
         }
-        if let Some(register) = register {
-            if before_at >= 0 && !work.is_empty() {
-                let (before, test, branch) = (
-                    Arc::clone(&insns[at(before_at)]),
-                    Arc::clone(&insns[at(test_at)]),
-                    Arc::clone(&insns[*work.last().expect("checked above")]),
-                );
-                if branch.what.as_ref().is_some_and(|what| {
-                    what.op == Operation::Branch && _lookup(&_ZERO_BRANCHES, what.name.as_deref()).is_some()
-                }) && _sets_from(&before, &register)
-                    && live[&block.at].is_disjoint(&_DIFFERING)
-                {
-                    insns[at(test_at)] = Arc::new(Insn {
-                        what: Some(semantics(Operation::Nothing, "", vec![], vec![])),
-                        defines: Vec::new(),
-                        uses: Vec::new(),
-                        widths: Vec::new(),
-                        ..(*test).clone()
-                    });
-                }
-            }
+        // The straight line into the test: a sole predecessor's work, then the block's.
+        let sole = match predecessors.get(&block.at).map(Vec::as_slice) {
+            Some([one]) if *one != block_index && body.blocks[*one].succ == [block.at] => Some(*one),
+            _ => None,
+        };
+        let mut line = Vec::new();
+        if let Some(one) = sole {
+            let before = &blocks[one];
+            let jumps = before.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
+            line.extend((0..before.len() - usize::from(jumps)).map(|index| (one, index)));
         }
-        blocks.push(block.with_insns(insns));
+        line.extend((0..at(test_at)).map(|index| (block_index, index)));
+        let Some(source) = _flag_source(&blocks, &line, &register) else {
+            continue;
+        };
+        let (from, from_index) = line[source];
+        let setter = blocks[from].remove(from_index);
+        let test_index = at(test_at) - usize::from(from == block_index);
+        let test = Arc::clone(&blocks[block_index][test_index]);
+        blocks[block_index][test_index] = Arc::new(Insn {
+            what: Some(semantics(Operation::Nothing, "", vec![], vec![])),
+            defines: Vec::new(),
+            uses: Vec::new(),
+            widths: Vec::new(),
+            ..(*test).clone()
+        });
+        blocks[block_index].insert(test_index, setter);
     }
-    body.with_blocks(blocks)
+    body.with_blocks(body.blocks.iter().zip(blocks).map(|(block, insns)| block.with_insns(insns)).collect())
+}
+
+/// The position in `line` of what set `register` last, when nothing after it
+/// reads flags, touches its operands or its result, or accesses a register it
+/// reads: it may then run last, and its flags are `register`'s zero test.
+fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &Reg) -> Option<usize> {
+    let registers = |lanes: &Lanes| {
+        let mut lanes = *lanes;
+        lanes.retain(|lane| lane.0 != Register::None);
+        lanes
+    };
+    let mut crossed = Vec::new();
+    for (position, (block, index)) in line.iter().enumerate().rev() {
+        let one = &blocks[*block][*index];
+        if _skippable_nothing(one) {
+            continue;
+        }
+        let effect = liveness::effect(one)?;
+        if _sets_from(one, register) {
+            let operands_in_registers = one.what.as_ref().is_some_and(|what| {
+                what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_)))
+            });
+            let (reads, writes) = (registers(&effect.reads), registers(&effect.writes));
+            return (operands_in_registers
+                && crossed.iter().all(|other: &liveness::Effect| {
+                    other.writes.is_disjoint(&reads) && other.reads.is_disjoint(&writes) && other.writes.is_disjoint(&writes)
+                }))
+            .then_some(position);
+        }
+        let transfers = one.what.as_ref().is_none_or(|what| {
+            [Operation::Branch, Operation::Jump, Operation::Call, Operation::Return].contains(&what.op)
+        });
+        if transfers || !one.clobbers.is_empty() || effect.reads.iter().any(|lane| lane.0 == Register::None) {
+            return None;
+        }
+        crossed.push(effect);
+    }
+    None
 }
 
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
@@ -2983,33 +3130,27 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
     // any other flag, but only an instruction here that reads AF reads it.
     let exits: Lanes = every.minus(&_ADJUST);
 
+    // The flag lanes of each instruction's effect, as liveness reads it.
     let effects = |one: &Insn| -> (Lanes, Lanes) {
-        if let Some(what) = &one.what {
-            if what.op == Operation::Branch {
-                return (_flag_lanes(_lookup(&_BRANCH_FLAGS, what.name.as_deref()).unwrap_or(_ARITHMETIC)), Lanes::new());
-            }
-        }
-        if one.what.as_ref().is_some_and(|what| what.op == Operation::Jump) || _nothing(one) {
+        if _nothing(one) {
             return (Lanes::new(), Lanes::new());
+        }
+        if let Some(effect) = liveness::effect(one) {
+            let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
+            return (flags(&effect.reads), flags(&effect.writes));
         }
         if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
             return (exits.clone(), Lanes::new());
         }
-        let Some((reads, writes)) = _register_effects(one, false, true) else {
-            // Bytes this cannot encode -- a relocated operand, an x87 form --
-            // still name their instruction, and only a few instructions read
-            // a flag. Writes stay unknown, which only keeps flags live longer.
-            if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
-                if !name.is_empty() && !_reads_flags(name) {
-                    return (Lanes::new(), Lanes::new());
-                }
+        // Bytes this cannot encode -- a relocated operand, an x87 form --
+        // still name their instruction, and only a few instructions read
+        // a flag. Writes stay unknown, which only keeps flags live longer.
+        if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
+            if !name.is_empty() && !_reads_flags(name) {
+                return (Lanes::new(), Lanes::new());
             }
-            return (every.clone(), Lanes::new());
-        };
-        (
-            reads.into_iter().filter(|lane| lane.0 == Register::None).collect(),
-            writes.into_iter().filter(|lane| lane.0 == Register::None).collect(),
-        )
+        }
+        (every.clone(), Lanes::new())
     };
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> = body

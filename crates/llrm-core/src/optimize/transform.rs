@@ -535,7 +535,9 @@ pub fn _computation(op: &Op, stands: &IndexMap<u32, Value>, whole: &IndexMap<u32
             _ => None,
         })
         .collect::<HashSet<_>>();
-    if op.loads.iter().collect::<HashSet<_>>() != cells {
+    // An address names its cell without reading it.
+    let read = if op.kind == Kind::Address { HashSet::default() } else { cells };
+    if op.loads.iter().collect::<HashSet<_>>() != read {
         return None;
     }
     let mut named: Vec<Arg> = Vec::new();
@@ -1251,6 +1253,12 @@ pub fn motion_blocked<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool {
 /// refused whole.  `intervals` and `floating_allowed` are keyed by Python's
 /// `id(op)`, the operation's address.
 #[allow(clippy::too_many_arguments)]
+/// A load of published memory alone: another agent may write it, and no
+/// device sees the read.
+fn _published_read(one: &Op) -> bool {
+    one.kind == Kind::Load && one.stores.is_empty() && one.loads.iter().all(|reference| !reference.volatile || reference.published)
+}
+
 pub fn _invariant_run<'a>(
     ops: &[&'a Op],
     carried: &BTreeSet<Value>,
@@ -1264,6 +1272,7 @@ pub fn _invariant_run<'a>(
     intervals: Option<&crate::support::hash::HashMap<usize, &BTreeMap<Value, crate::analysis::ranges::Interval>>>,
     nonempty: bool,
     floating_allowed: &BTreeSet<usize>,
+    finite: bool,
 ) -> Result<Vec<&'a Op>, String> {
     let _ = (dgroup, calls);
     let id = |op: &Op| std::ptr::from_ref(op) as usize;
@@ -1296,7 +1305,7 @@ pub fn _invariant_run<'a>(
             // `mir.instruction`
             let real = one.kind != Kind::Nothing;
             if run.iter().any(|other| **other == *one)
-                || one.volatile
+                || (one.volatile && !(finite && _published_read(one)))
                 || !one.stores.is_empty()
                 || (one.floating.is_some() && !floating_allowed.contains(&id(one)))
                 || !real
@@ -1347,6 +1356,7 @@ pub fn _invariant_run<'a>(
                         || crate::analysis::regions::overlapping(reference, other, known, *theirs, layout.as_ref())
                             .map_err(|error| format!("{error:?}"))?
                     {
+                        llrm_support::debug!("hoist", "keeps {:?}: may overlap store {:?}", reference, other);
                         overlaps = true;
                         break 'refs;
                     }
@@ -3005,6 +3015,39 @@ pub fn _constant_operands(
             }
         }
     }
+    // A known integer converted is a float constant; the target places it.
+    if op.kind == Kind::Fload
+        && op.floating.as_ref().is_some_and(|rule| rule.inputs[0].integer())
+        && op.args.len() == 1
+        && op.stores.is_empty()
+        && !op.barrier()
+    {
+        let (constant, read) = match &op.args[0] {
+            Arg::Held(held) => (
+                facts
+                    .get(&held.value)
+                    .filter(|fact| fact.width >= held.width)
+                    .map(|fact| Const::new(consts::masked(&fact.n, held.width), held.width)),
+                None,
+            ),
+            Arg::Cell(cell) if op.loads == [cell.r#ref.clone()] => {
+                (consts::_cell(memory, &cell.r#ref).map(|fact| Const::new(fact.n, cell.r#ref.width)), Some(&cell.r#ref))
+            }
+            _ => (None, None),
+        };
+        let Some(constant) = constant else { return op.clone() };
+        let mut result = op.clone();
+        if let Arg::Held(held) = &op.args[0] {
+            result.uses.retain(|value| *value != held.value || op.merges.contains_key(value));
+        }
+        if read.is_some() {
+            result.loads = Vec::new();
+            result.source_backed = false;
+            result.raised = None;
+        }
+        result.args = vec![Arg::Const(constant)];
+        return result;
+    }
     if !matches!(
         op.kind,
         Kind::Add
@@ -3216,14 +3259,22 @@ pub fn _folded_op(op: &Op, facts: &IndexMap<Value, crate::analysis::consts::Know
     result
 }
 /// The latest place in the preheader every value the run reads is defined.
-pub fn _placement(block: &MirBlock, run: &[&Op], alive: &crate::analysis::liveness::Liveness) -> Option<usize> {
+pub fn _placement(
+    block: &MirBlock,
+    run: &[&Op],
+    alive: &crate::analysis::liveness::Liveness,
+    arriving: &BTreeSet<Value>,
+) -> Option<usize> {
     let made = run.iter().flat_map(|one| one.defines.iter().copied()).collect::<BTreeSet<_>>();
     let wants = run
         .iter()
         .flat_map(|one| _consumed(one))
         .filter(|value| !value.flags && !made.contains(value))
         .collect::<BTreeSet<_>>();
+    // What arrives at entry is ready everywhere; liveness counts it as the
+    // entry block's own definition, which no op makes.
     let mut ready = alive.live_in.get(&block.at).cloned().unwrap_or_default();
+    ready.extend(arriving.iter().copied());
     let mut index = 0;
     for (number, one) in block.ops.iter().enumerate() {
         if wants.is_subset(&ready) {
@@ -3408,7 +3459,7 @@ pub fn hoisted(
     }
 
     let scoped = ranges::bounded(body)?;
-    let constant = ranges::constants(body, None, None).into_iter().collect::<BTreeMap<Value, Interval>>();
+    let constant = ranges::constants(body).into_iter().collect::<BTreeMap<Value, Interval>>();
     let facts = scoped
         .iter()
         .map(|(at, inside)| {
@@ -3427,6 +3478,7 @@ pub fn hoisted(
         .collect::<HashMap<usize, &BTreeMap<Value, Interval>>>();
     let at_of = body.blocks.iter().map(|block| (block.at, block)).collect::<BTreeMap<i64, &MirBlock>>();
     let alive = crate::analysis::liveness::live(body);
+    let arriving = crate::analysis::liveness::entry_values(body);
     let readable = live(body);
     let effective = _effective(body, calls);
     let mut crossed: PySet<Value> = PySet::new();
@@ -3437,6 +3489,7 @@ pub fn hoisted(
 
     for loop_ in &inside {
         let Some(into) = _preheader(body, loop_) else {
+            llrm_support::debug!("hoist", "loop at b{} has no preheader", loop_.header);
             continue;
         };
         if loop_.body.contains(&into) {
@@ -3497,7 +3550,10 @@ pub fn hoisted(
             Some(&intervals),
             nonempty,
             &_guaranteed_float_work(body, loop_, nonempty),
+            // A loop that ends without a published value may read it once.
+            !crate::analysis::induction::counted(body, loop_, None, false).is_empty(),
         )?;
+        llrm_support::debug!("hoist", "loop at b{} of {} blocks moves {} of {} ops", loop_.header, loop_.body.len(), run.len(), ops.len());
         // Track operations, not source addresses: hoisted definitions share
         // their anchor's address with other computations and the jump.
         run.retain(|one| !gone.contains(&identities[&id(one)]));
@@ -3522,7 +3578,7 @@ pub fn hoisted(
         }
 
         // The latest point every value the run reads is defined.
-        let Some(index) = _placement(at_of[&into], &run, &alive) else {
+        let Some(index) = _placement(at_of[&into], &run, &alive, &arriving) else {
             continue;
         };
 
@@ -3851,6 +3907,7 @@ pub fn pipeline(
         Box::new(unroll::Unroll::new(r#where.clone())),
         Box::new(peel::Peel::new(r#where.clone())),
         Box::new(fill::Fill),
+        Box::new(crate::optimize::indvars::CountToZero),
     ];
     every.into_iter().filter(|one| wanted.get(one.name()).copied().unwrap_or(true)).collect()
 }
@@ -3998,7 +4055,9 @@ impl _Transaction<'_, '_> {
         // last change skips every pass that already saw it.
         let mut settled: Vec<Option<Rc<MirBody>>> = vec![None; self.passes.borrow().len()];
         let mut unroll_settled: Option<Rc<MirBody>> = None;
-        let mut holding = !self.only && self.passes.borrow().iter().any(|one| one.after_settling());
+        // Passes wait by stage; each settled round admits the next.
+        let last = if self.only { 0 } else { self.passes.borrow().iter().map(|one| one.settles_after()).max().unwrap_or(0) };
+        let mut stage = 0;
         for iteration in 0..limit {
             let before = Rc::clone(&state);
             let started = std::time::Instant::now();
@@ -4006,7 +4065,7 @@ impl _Transaction<'_, '_> {
             {
                 let mut passes = self.passes.borrow_mut();
                 for (one, settled) in passes.iter_mut().zip(&mut settled) {
-                    if holding && one.after_settling() {
+                    if one.settles_after() > stage {
                         continue;
                     }
                     if !settled.as_ref().is_some_and(|body| Rc::ptr_eq(body, &state)) {
@@ -4054,8 +4113,8 @@ impl _Transaction<'_, '_> {
                 started.elapsed().as_secs_f64() * 1e3,
                 if changed.is_empty() { "nothing".to_owned() } else { changed.join(" ") }
             );
-            if holding && state == before {
-                holding = false;
+            if stage < last && state == before {
+                stage += 1;
                 continue;
             }
             if self.only || state == before {
@@ -4107,6 +4166,7 @@ fn _applied(
         ("unroll", options.unroll),
         ("peel", options.peel),
         ("fill", options.fill),
+        ("zeroed", options.strength),
     ]);
     let r#where = crate::model::passes::Where {
         dgroup: dgroup.clone(),

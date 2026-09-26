@@ -1,7 +1,7 @@
 //! What the machine promises, whatever the source language or runtime: how a
 //! far address becomes a linear one, which segment registers the program
-//! model reserves, which memory holds no program data, and which ports touch
-//! no memory. One description per target, read from TOML;
+//! model reserves, which memory holds no program data, which ports touch
+//! no memory, and which CPU its code is priced for. One description per target, read from TOML;
 //! real-mode DOS is the default.
 
 use std::sync::OnceLock;
@@ -35,6 +35,8 @@ pub struct Machine {
     pub foreign: Vec<(i64, i64)>,
     /// [low, high) port ranges whose writes change no memory.
     pub silent_ports: Vec<(i64, i64)>,
+    /// The processor whose costs choose between equivalent code.
+    pub cpu: String,
 }
 
 impl Machine {
@@ -74,7 +76,17 @@ impl Machine {
                 })
                 .collect()
         };
-        Ok(Self { addressing, segments, foreign: ranges("foreign")?, silent_ports: ranges("silent_ports")? })
+        let cpu = table.get("cpu").and_then(toml::Value::as_str).ok_or("cpu is not a string")?;
+        if !crate::backend::cpu::names().contains(&cpu) {
+            return Err(format!("cpu {cpu:?} is not one of {:?}", crate::backend::cpu::names()));
+        }
+        Ok(Self {
+            addressing,
+            segments,
+            foreign: ranges("foreign")?,
+            silent_ports: ranges("silent_ports")?,
+            cpu: cpu.to_owned(),
+        })
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
@@ -90,7 +102,16 @@ impl Machine {
             return None;
         }
         let (start, end) = (selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width);
-        self.foreign.iter().any(|&(from, to)| from <= start && end <= to).then_some((start, end))
+        // Adjacent ranges cover as one.
+        let mut ranges = self.foreign.clone();
+        ranges.sort_unstable();
+        let mut reached = start;
+        for (from, to) in ranges {
+            if from <= reached && reached < to {
+                reached = to;
+            }
+        }
+        (end <= reached).then_some((start, end))
     }
 
     pub fn silent_port(&self, port: i64) -> bool {
@@ -119,9 +140,11 @@ mod tests {
         let dos = Machine::parse(DOS).unwrap();
         let every = (0, 0xFFFF);
         assert_eq!(dos.foreign_span((0xA000, 0xAF8C), every, 1), Some((0xA0000, 0xAF8C0 + 0x1_0000)));
-        assert_eq!(dos.foreign_span((0xA000, 0xB001), every, 1), None);
+        assert_eq!(dos.foreign_span((0xA000, 0xB801), every, 1), None);
         assert_eq!(dos.foreign_span((0x9FFF, 0xA000), every, 1), None);
         assert_eq!(dos.foreign_span((0x9FFF, 0x9FFF), (0x10, 0x11), 2), Some((0xA0000, 0xA0003)));
+        assert_eq!(dos.foreign_span((0xB800, 0xB800), every, 1), Some((0xB8000, 0xC8000)));
+        assert_eq!(dos.foreign_span((0xB801, 0xB801), every, 1), None);
         let protected = Machine { addressing: Addressing::Protected, ..dos };
         assert_eq!(protected.foreign_span((0xA000, 0xA000), every, 1), None);
     }

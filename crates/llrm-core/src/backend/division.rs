@@ -65,8 +65,8 @@ pub fn reciprocal<'a>(
     let mut reconstruction = match chained {
         Some(chain) => {
             let mut total = 0;
-            for (name, _) in chain {
-                total += cost(if *name == "shl" { "shift_ri" } else { "alu_rr" })?;
+            for (name, count) in chain {
+                total += if *name == "shl" { arithmetic::shift(cpu, *count)? } else { cost("alu_rr")? };
             }
             total
         }

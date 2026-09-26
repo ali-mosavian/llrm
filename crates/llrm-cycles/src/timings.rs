@@ -42,21 +42,30 @@ pub const INORDER: [i64; 7] = [1, 1, 0, 0, 0, 0, 0];
 //                            486 P5 P6 K5 K6 K7 Core
 pub const PREFIX: [i64; 7] = [1, 1, 0, 0, 0, 0, 0];
 
-// x87 forms from the C frontend's lowering: target-ranking units. K5 has no
-// published FDIV timing, so its division entry keeps the K6 ranking.
+// x87 forms from the C frontend's lowering: target-ranking units, from
+// - 486: Intel's i486 data sheet, Table 10.3 (lower bounds; memory forms at
+//   m64, the wider one);
+// - P5, P6, K7: Agner Fog's instruction tables (P6/K7 latencies; FDIV at
+//   64-bit precision; K7 FLDCW and FNSTCW by throughput);
+// - K5: AMD's K5 technical reference, Table 4-3 (last execution cycle);
+// - K6, which covers K6-2 and K6-III: AMD's K6 code optimization note 21924,
+//   Table 1 (load 2 plus FPU 2).
+// Neither AMD document gives FDIV, so K5 and K6 keep GCC's 56, plus the load
+// from memory. Core and control-word entries without a figure are the
+// earlier rankings.
 //                                486 P5 P6 K5 K6 K7 Core
-const _X87_LOAD: [i64; 7] = [8, 2, 2, 6, 6, 4, 6];
-// FXCH: 486 four-clock form; P5 pairs; P6/Core add no latency.
-const _X87_EXCHANGE: [i64; 7] = [4, 1, 0, 2, 2, 2, 0];
-const _X87_STORE: [i64; 7] = [8, 4, 4, 6, 4, 6, 6];
+const _X87_LOAD: [i64; 7] = [3, 1, 1, 6, 4, 4, 6];
+const _X87_EXCHANGE: [i64; 7] = [4, 1, 0, 1, 2, 0, 0];
+const _X87_STORE: [i64; 7] = [8, 2, 1, 6, 1, 3, 6];
 const _X87_ADD: [i64; 7] = [8, 3, 3, 5, 2, 4, 3];
 const _X87_MUL: [i64; 7] = [16, 3, 5, 8, 2, 4, 5];
-const _X87_DIV: [i64; 7] = [73, 39, 56, 56, 56, 24, 24];
-
-// Memory arithmetic: K5 published directly; the rest compose arithmetic + load.
-const _X87_ADD_M: [i64; 7] = [16, 5, 5, 7, 8, 8, 9];
-const _X87_MUL_M: [i64; 7] = [24, 5, 7, 10, 8, 8, 11];
-const _X87_DIV_M: [i64; 7] = [81, 41, 58, 62, 62, 28, 30];
+const _X87_DIV: [i64; 7] = [73, 39, 38, 56, 56, 24, 24];
+const _X87_ADD_M: [i64; 7] = [8, 3, 3, 7, 4, 4, 9];
+const _X87_MUL_M: [i64; 7] = [14, 3, 5, 10, 4, 4, 11];
+const _X87_DIV_M: [i64; 7] = [73, 39, 38, 62, 58, 24, 30];
+// FLDCW and FNSTCW.
+const _X87_CONTROL_LOAD: [i64; 7] = [4, 8, 10, 6, 6, 42, 6];
+const _X87_CONTROL_STORE: [i64; 7] = [3, 2, 4, 6, 4, 1, 6];
 
 /// What an instruction kind occupies, per arch.
 pub static COST: LazyLock<IndexMap<&'static str, [i64; 7]>> = LazyLock::new(|| _MODULE.0.clone());
@@ -82,6 +91,7 @@ static _MODULE: LazyLock<(
         ("mov_mr", [1, 1, 1, 1, 1, 1, 1]),
         ("mov_ri", [1, 1, 1, 1, 1, 1, 1]),
         ("shift_ri", [2, 1, 1, 1, 1, 1, 1]), // shl/shr/sar reg,imm
+        ("shift_r1", [3, 1, 1, 1, 1, 1, 1]), // the D1 form, reg,1
         ("movzx", [3, 3, 1, 1, 1, 1, 1]),
         ("cdq", [3, 2, 1, 1, 1, 1, 1]),
         ("imul_r32", [26, 10, 4, 4, 3, 5, 3]), // 486 is 13-42, data dependent
@@ -117,6 +127,7 @@ static _MODULE: LazyLock<(
         ("mov_mr", [1, 1, 3, 2, 2, 3, 3]),
         ("mov_ri", [1, 1, 1, 1, 1, 1, 1]),
         ("shift_ri", [2, 1, 1, 1, 1, 1, 1]),
+        ("shift_r1", [3, 1, 1, 1, 1, 1, 1]),
         ("movzx", [3, 3, 1, 1, 1, 1, 1]),
         ("cdq", [3, 2, 1, 1, 1, 1, 1]),
         ("imul_r32", [26, 10, 4, 4, 3, 5, 3]),
@@ -185,9 +196,8 @@ static _MODULE: LazyLock<(
         ("x87_mul_m", _X87_MUL_M),
         ("x87_div", _X87_DIV),
         ("x87_div_m", _X87_DIV_M),
-        // Control-word transfers rank as memory transfers.
-        ("x87_control_load", _X87_LOAD),
-        ("x87_control_store", _X87_STORE),
+        ("x87_control_load", _X87_CONTROL_LOAD),
+        ("x87_control_store", _X87_CONTROL_STORE),
     ]);
 
     // No second number is established for these forms, so matching
@@ -233,6 +243,7 @@ mod tests {
                 "mov_mr",
                 "mov_ri",
                 "shift_ri",
+                "shift_r1",
                 "movzx",
                 "cdq",
                 "imul_r32",
@@ -288,6 +299,7 @@ mod tests {
                 "mov_mr",
                 "mov_ri",
                 "shift_ri",
+                "shift_r1",
                 "movzx",
                 "cdq",
                 "imul_r32",
@@ -335,8 +347,8 @@ mod tests {
             ("pop_m", [6, 1, 4, 3, 3, 4, 4]),
             ("mul_r16", [13, 11, 4, 4, 3, 5, 3]),
             ("lea", [2, 1, 1, 1, 1, 1, 1]),
-            ("x87_div_m", [81, 41, 58, 62, 62, 28, 30]),
-            ("x87_control_store", [8, 4, 4, 6, 4, 6, 6]),
+            ("x87_div_m", [73, 39, 38, 62, 58, 24, 30]),
+            ("x87_control_store", [3, 2, 4, 6, 4, 1, 6]),
         ] {
             assert_eq!(COST[k], row, "COST[{k}]");
             assert_eq!(LATENCY[k], row, "LATENCY[{k}]");

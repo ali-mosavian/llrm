@@ -14,7 +14,7 @@ use crate::model::lir::Insn;
 
 type Pair = (Held, Held);
 
-impl Selector<'_, '_> {
+impl Selector<'_, '_, '_> {
     pub(super) fn is_wide(&self, ty: llrm_mir::TypeId) -> bool {
         self.types().int_bits(ty) == Some(64)
     }

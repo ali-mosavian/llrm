@@ -100,6 +100,26 @@ fn test_guard_refines_subscript_without_leaking_to_the_join() {
     assert_eq!(known[&50][&counter], interval(10, 32767, 2));
 }
 
+/// matmul8: gvn forwarded a copy of the counter made past the header's
+/// test to the one the header tests, and inside the loop that value had no
+/// range; its bounds check stayed and the loop nest stayed rolled.
+#[test]
+fn test_a_value_the_header_makes_is_bounded_inside_the_loop() {
+    let mut body = guarded_loop();
+    let counter = body.blocks[1].phis[0].result;
+    let copied = value(7, 10);
+    let mut copy = operation(9, Operation::Move, Kind::Copy, vec![copied], vec![counter]);
+    copy.args = vec![word(counter)];
+    copy.results = vec![word(copied)];
+    let header = &mut body.blocks[1];
+    header.ops[0].args[0] = word(copied);
+    header.ops[0].uses = vec![copied];
+    header.ops.insert(0, copy);
+    let known = bounded(&Rc::new(body)).unwrap();
+
+    assert_eq!(known[&20].get(&copied), Some(&interval(0, 9, 2)));
+}
+
 #[test]
 fn test_a_compare_under_the_same_compare_is_decided_outside_any_loop() {
     // Only counted loops were scoped, so `x < 8` under `x < 8` in straight-line code kept both branches.

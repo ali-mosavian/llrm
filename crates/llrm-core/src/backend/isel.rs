@@ -13,6 +13,7 @@ use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
 use crate::abi::runtime::Contract;
+use crate::backend::constpool::{self, Pool};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
@@ -161,7 +162,7 @@ enum Pointer {
     Far { selector: Held, base: Held, offset: i64 },
 }
 
-pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
+pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mut Pool) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -191,12 +192,13 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result
         calls: IndexMap::default(),
         far: BTreeSet::new(),
         reachable: BTreeSet::new(),
+        pool,
     };
     let body = selector.body(name, &convention)?;
     Ok(Selected { body, convention, calls: selector.calls, far: selector.far })
 }
 
-struct Selector<'m, 'c> {
+struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     layout: DataLayout,
@@ -228,9 +230,11 @@ struct Selector<'m, 'c> {
     far: BTreeSet<i64>,
     /// The blocks execution can reach.
     reachable: BTreeSet<BlockId>,
+    /// Where a float constant is loaded from, as LLVM's constant pool.
+    pool: &'p mut Pool,
 }
 
-impl Selector<'_, '_> {
+impl Selector<'_, '_, '_> {
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
         // Only what execution can reach is selected, as LLVM's code generator
@@ -1372,17 +1376,18 @@ impl Selector<'_, '_> {
             Operand::Constant(id) => id,
             Operand::Block(_) => unreachable!("a float is no block"),
         };
-        // A constant's bits, stored to a stack temporary and loaded, where
-        // LLVM would load them from a constant pool.
+        // As LLVM's x87 lowering: +0 and +1 are `fldz` and `fld1`, and any
+        // other constant loads from the pool.
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
         let size = self.size(self.module.context.get(id).ty)?;
-        let cell = self.temporary(i64::from(size));
-        for by in (0..size).step_by(4) {
-            let dword = Loc::Imm(Imm { value: (bits >> (8 * by)) as u32 as i64, width: 4, address: None });
-            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(i64::from(by)), 4))], vec![dword])));
-        }
         let held = self.fresh_held(FLOAT);
-        self.float_loaded(held, "fld", cell, size, false, at, out);
+        let value = if size == 4 { f64::from(f32::from_bits(bits as u32)) } else { f64::from_bits(bits) };
+        let (name, sources) = match value {
+            0.0 if value.is_sign_positive() => ("fldz", vec![]),
+            1.0 => ("fld1", vec![]),
+            _ => ("fld", vec![Loc::Mem(self.pool.cell(constpool::narrowest(value)))]),
+        };
+        out.push(insn(at, semantics(Operation::FloatLoad, name, vec![Loc::Held(held)], sources)));
         Ok(held)
     }
 

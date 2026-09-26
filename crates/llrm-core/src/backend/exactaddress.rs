@@ -131,11 +131,13 @@ fn sum_of(insns: &[Arc<Insn>], at: usize, cell: &Mem) -> Option<Sum> {
     registers.iter().zip(values).try_fold(Vec::new(), |sum, ((register, multiple), value)| add(sum, (full32(*register), *multiple, value)))
 }
 
-/// The roots of `cell`'s offset: every register of a symbol's cell, and a
-/// far cell's register other than its origin.
+/// The roots of `cell`'s offset: every register of a symbol's cell or of a
+/// far cell with no index, whose constant origin folded into the offset, and
+/// a far cell's register other than its origin.
 fn offsets(cell: &Mem, sum: &Sum) -> Vec<Register> {
     match cell.addr.map(|addr| addr.space) {
         Some(Space::Segment | Space::External) => sum.iter().map(|one| one.0).collect(),
+        _ if cell.index.is_none() => sum.iter().map(|one| one.0).collect(),
         _ => {
             let (Some(base), Some(index)) = (cell.base, cell.index) else {
                 return Vec::new();
@@ -283,7 +285,12 @@ fn rewritten(
     let address = affine::form(&terms, 0, &form.scales)?;
     let value = |register: Register| sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4 });
     let (base, index) = (value(address.through), value(address.index));
-    if matches!(addr.space, Space::Far | Space::Literal) && (index.is_none() || base.map(|one| one.value) != cell.base.map(|one| one.value)) {
+    // A far cell keeps its origin as the base, unless the origin was a
+    // constant and the one register the cell had was all offset.
+    if matches!(addr.space, Space::Far | Space::Literal)
+        && cell.index.is_some()
+        && (index.is_none() || base.map(|one| one.value) != cell.base.map(|one| one.value))
+    {
         return None;
     }
     // A 32-bit EBP base selects SS where a 16-bit cell's register did not.

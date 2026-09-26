@@ -2856,3 +2856,26 @@ fn test_empty_spill_reservation_is_removed_only_without_remaining_uses() {
         );
     }
 }
+
+#[test]
+fn test_a_repeated_address_copy_does_not_hide_a_read_modify_write() {
+    // DRAWBOB's counter took a load, an add and a store once allocation
+    // copied its pointer into SI again, as a new value, before the store.
+    let (si, ax, dx) = (rl(Register::SI, 2), rl(Register::AX, 2), rl(Register::DX, 2));
+    let cell = |base: u32| Loc::Mem(Mem { base: Some(Held { value: base, width: 2 }), ..mem(None, 2, Register::SI, 0, 0) });
+    let copy = |at, into: u32| {
+        Arc::new(insn(at, None, Some(sem(Operation::Move, "mov", vec![si.clone()], vec![ax.clone()])), vec![into], vec![1]))
+    };
+    let insns = vec![
+        copy(1, 10),
+        Arc::new(insn(2, None, Some(sem(Operation::Move, "mov", vec![dx.clone()], vec![cell(10)])), vec![11], vec![10])),
+        Arc::new(insn(3, None, Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(1, 2)])), vec![12], vec![11])),
+        copy(4, 13),
+        Arc::new(insn(5, None, Some(sem(Operation::Move, "mov", vec![cell(13)], vec![dx.clone()])), vec![], vec![13, 12])),
+        Arc::new(insn(6, None, Some(sem(Operation::Move, "mov", vec![dx], vec![im(0, 2)])), vec![14], vec![])),
+    ];
+    let result = transform(body("rmw", 0, vec![block(0, insns, vec![])]));
+    let found: Vec<String> = whats(&result.insns()).iter().map(Repr::repr).collect();
+    let loads = whats(&result.insns()).iter().filter(|what| what.op == Operation::Move && what.sources.iter().any(|one| matches!(one, Loc::Mem(_)))).count();
+    assert_eq!(loads, 0, "{found:?}");
+}

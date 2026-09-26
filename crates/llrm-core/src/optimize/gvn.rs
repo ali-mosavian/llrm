@@ -16,21 +16,33 @@ use crate::optimize::{floatfold, loadjoins, profit, transform};
 
 /// Number values, reuse dominating providers, and complete join PRE.
 pub fn optimized(body: &Rc<MirBody>, where_: &Where) -> Result<Rc<MirBody>, String> {
-    let mut avoid_store_crossing = false;
-    if where_.registers != 0 {
-        let pressure = profit::spill_risk(body, &where_.costs, where_.registers, None);
-        let cheap_secondary =
-            where_.address_forms.iter().any(|form| form.secondary && form.before_spill(&where_.costs));
-        avoid_store_crossing = pressure.is_some_and(|pressure| pressure > 0) && !cheap_secondary;
-    }
-    let body = transform::forwarded(body, &where_.dgroup, &where_.named(), avoid_store_crossing)?;
-    let body = transform::reused_divides(&body, &where_.dgroup, where_.found.as_ref())?;
-    let canonical = transform::subexpressions(&body, &where_.dgroup, avoid_store_crossing)?;
+    let (body, canonical) = _numbered(body, where_)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(&canonical, canonical == body)?;
     let loaded = loadjoins::reused(&combined, None, combined == canonical)?;
     Ok(Rc::new(floatfold::checks(&loaded)))
+}
+
+/// Local numbering, crossing stores only where the whole body prices lower
+/// for it: a provider held across a store saves loads but may spill.
+fn _numbered(body: &Rc<MirBody>, where_: &Where) -> Result<(Rc<MirBody>, Rc<MirBody>), String> {
+    let numbered = |avoid_store_crossing: bool| -> Result<(Rc<MirBody>, Rc<MirBody>), String> {
+        let body = transform::forwarded(body, &where_.dgroup, &where_.named(), avoid_store_crossing)?;
+        let body = transform::reused_divides(&body, &where_.dgroup, where_.found.as_ref())?;
+        let canonical = transform::subexpressions(&body, &where_.dgroup, avoid_store_crossing)?;
+        Ok((body, canonical))
+    };
+    let crossing = numbered(false)?;
+    if where_.registers == 0 {
+        return Ok(crossing);
+    }
+    let price = |one: &Rc<MirBody>| profit::pressure_adjusted(one, &where_.costs, where_.registers, None);
+    let Some(crossed) = price(&crossing.1) else {
+        return Ok(crossing);
+    };
+    let careful = numbered(true)?;
+    Ok(if price(&careful.1).is_some_and(|kept| kept < crossed) { careful } else { crossing })
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.

@@ -275,7 +275,7 @@ pub fn assembled(
         }
         let frame = frame::of(&low, Some(&legalized.calls), "", None).map_err(|error| hir::Unsupported(error.0))?;
         let frame = Rc::new(RefCell::new(frame));
-        let mut phases = flow::machine(&low.pins, Some(Rc::clone(&frame)), Some(&legalized.calls), false, target)
+        let mut phases = flow::machine(&low.pins, Some(Rc::clone(&frame)), None, Some(&legalized.calls), false, target)
             .map_err(hir::Unsupported)?;
         let mut in_ssa = true;
         let mut low = low;

@@ -101,7 +101,6 @@ fn occurrence(body: &MirBody, block: usize, index: usize) -> OpOccurrence {
 fn reduced_default(body: &MirBody, registers: i64) -> MirBody {
     MirBody::clone(&reduced(
         &Rc::new(body.clone()),
-        &BTreeSet::new(),
         None,
         registers,
         &BTreeSet::new(),
@@ -598,7 +597,7 @@ fn test_composed_offset_can_carry_an_invariant_pointer() {
             built.blocks[2].clone(),
         ],
     );
-    let derived = induction::derived(&Rc::new(MirBody::clone(&built)), &loop_, None, &BTreeSet::new(), None).unwrap();
+    let derived = induction::derived(&Rc::new(MirBody::clone(&built)), &loop_, None, None).unwrap();
     let carried = derived
         .iter()
         .find(|one| one.op == occurrence(&built, 1, 3))
@@ -918,7 +917,7 @@ fn test_strength_reduction_replaces_a_loop_multiply_with_an_add() {
     for (_, body) in testing::raised_from(&found, &blocks, None).values {
         // The counter is a cell until forwarding makes it a value.
         let body = crate::optimize::transform::forwarded(&body, dgroup, &found.calls, false).unwrap();
-        let out = reduced(&body, dgroup, Some(&layout), 0, &BTreeSet::new(), 0, &_DEFAULT_COSTS, &[], true).unwrap();
+        let out = reduced(&body, Some(&layout), 0, &BTreeSet::new(), 0, &_DEFAULT_COSTS, &[], true).unwrap();
         if Rc::ptr_eq(&out, &body) {
             continue;
         }

@@ -175,7 +175,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()
@@ -406,6 +406,31 @@ fn test_identical_result_tails_are_merged() {
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
 }
 
+/// Merged tails set the same register but named different values: a later
+/// read of the dropped block's value had no definition (deedlines
+/// SPHEREMAPLASMA, "value#5635 is read but never defined").
+#[test]
+fn test_merged_tails_share_their_values() {
+    let named = |one: Arc<Insn>, value: u32| Arc::new(Insn { defines: vec![value], ..(*_inserted(one)).clone() });
+    let push = Arc::new(Insn { uses: vec![2], ..(*_insn(30, Operation::Push, "push", vec![], vec![ax()], None)).clone() });
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
+            block(10, vec![named(_move(10, imm(0)), 1), _inserted(_jump(11, 30))], vec![30]),
+            block(20, vec![named(_move(20, imm(0)), 2), _inserted(_jump(21, 30))], vec![30]),
+            block(30, vec![push, _return(31)], vec![]),
+        ],
+    );
+    let result = merged(&placed(&source).unwrap()).unwrap();
+
+    assert_eq!(result.blocks.len(), 3, "the tails were not merged");
+    let undefined: Vec<String> =
+        crate::backend::verify::verify(&result, false).into_iter().filter(|said| said.contains("never defined")).collect();
+    assert_eq!(undefined, Vec::<String>::new());
+}
+
 /// Decoded tails cannot share one copy without reconciling source maps.
 #[test]
 fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
@@ -423,7 +448,7 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
         .unwrap()
         .pop()
         .unwrap()

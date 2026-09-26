@@ -42,6 +42,11 @@ impl Format {
             Self::Unsigned64 => "unsigned64",
         }
     }
+
+    /// A two's complement or unsigned integer, not a float.
+    pub const fn integer(self) -> bool {
+        matches!(self, Self::Signed16 | Self::Signed32 | Self::Signed64 | Self::Unsigned64)
+    }
 }
 
 impl fmt::Display for Format {
@@ -56,10 +61,13 @@ pub enum Precision {
     Exact,
     Destination,
     Dynamic,
+    /// A store that rounds to its destination in memory, while a later read
+    /// of the cell may observe the stored value at its source's precision.
+    Excess,
 }
 
 impl Precision {
-    pub const ALL: [Self; 3] = [Self::Exact, Self::Destination, Self::Dynamic];
+    pub const ALL: [Self; 4] = [Self::Exact, Self::Destination, Self::Dynamic, Self::Excess];
 
     /// The exact `StrEnum` spelling from Python.
     pub const fn as_str(self) -> &'static str {
@@ -67,6 +75,7 @@ impl Precision {
             Self::Exact => "exact",
             Self::Destination => "destination",
             Self::Dynamic => "dynamic",
+            Self::Excess => "excess",
         }
     }
 }
@@ -203,7 +212,7 @@ mod tests {
     fn precision_spellings_are_the_python_strenum_values() {
         assert_eq!(
             Precision::ALL.map(Precision::as_str),
-            ["exact", "destination", "dynamic"]
+            ["exact", "destination", "dynamic", "excess"]
         );
     }
 

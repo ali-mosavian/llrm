@@ -165,6 +165,11 @@ pub struct MemRef {
     pub within: Option<Vec<(i64, i64)>>,
     pub provenance: Option<Provenance>,
     pub volatile: bool,
+    /// Another agent may write the object at any time: an interrupt handler,
+    /// the runtime. The access is `volatile`, ordered as one; reading it once
+    /// before a loop that ends without it is the run where the write comes
+    /// after the loop, so such a read may leave that loop.
+    pub published: bool,
     /// The source language promises this access stays inside one object.
     /// Not part of equality or hashing, as Python's `compare=False`.
     pub inbounds: bool,
@@ -205,6 +210,7 @@ impl MemRef {
             within: None,
             provenance: None,
             volatile: false,
+            published: false,
             inbounds: false,
             origin: None,
         }
@@ -234,6 +240,7 @@ impl PartialEq for MemRef {
             && self.excludes == other.excludes
             && self.provenance == other.provenance
             && self.volatile == other.volatile
+            && self.published == other.published
     }
 }
 
@@ -254,6 +261,7 @@ impl Hash for MemRef {
         self.excludes.hash(state);
         self.provenance.hash(state);
         self.volatile.hash(state);
+        self.published.hash(state);
     }
 }
 
@@ -1152,6 +1160,10 @@ pub struct Op {
     pub absorbed: Vec<u32>,
     pub indirect: bool,
     pub exits: Vec<Value>,
+    /// The language promises the signed result fits its width: QBasic's FOR
+    /// raises Overflow rather than wrap its counter. A pass that changes what
+    /// the operation computes clears it.
+    pub nowrap: bool,
     /// Python's `_RaisedOp` subclass: `Some` is an occurrence still inside the
     /// raise, carrying its decoded node and byte ranges.  `_externalized`
     /// clears it, so no completed body has one.
@@ -1210,6 +1222,7 @@ impl Op {
             absorbed: Vec::new(),
             indirect: false,
             exits: Vec::new(),
+            nowrap: false,
             raising: None,
         }
     }

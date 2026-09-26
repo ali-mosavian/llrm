@@ -9,7 +9,7 @@ use crate::support::hash::IndexMap;
 
 use crate::analysis::loops::{self, Loop};
 use crate::analysis::ssa;
-use crate::model::mir::{MirBlock, MirBody, Phi, Value};
+use crate::model::mir::{MirBlock, MirBody, OrderedMap, Phi, Value};
 use crate::model::passes::MIRTransform;
 use crate::optimize::lcssamerges;
 
@@ -31,13 +31,49 @@ impl MIRTransform for LoopClosedSSA {
 
 /// Return `body` with every supported natural loop in closed SSA form.
 pub fn closed(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
-    let mut result = body.clone();
+    let mut result = _opened(body)?;
     // loops() deliberately returns inner loops first.  Closing an inner loop
     // first makes its exit value an ordinary definition in an enclosing loop.
     for loop_ in loops::loops(&result.blocks, Some(result.entry)) {
         result = _closed_loop(&result, &loop_)?;
     }
     Ok(result)
+}
+
+/// `body` without the phis outside any loop exit that name one value: no
+/// loop closes there any longer (unrolled or peeled away), and each is a copy.
+fn _opened(body: &Rc<MirBody>) -> Result<Rc<MirBody>, String> {
+    let mut exits = BTreeSet::new();
+    for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
+        for block in body.blocks.iter().filter(|block| loop_.body.contains(&block.at)) {
+            exits.extend(block.succ.iter().copied().filter(|successor| !loop_.body.contains(successor)));
+        }
+    }
+    let swap = body
+        .blocks
+        .iter()
+        .filter(|block| !exits.contains(&block.at))
+        .flat_map(|block| &block.phis)
+        .filter(|phi| phi.incoming.values().collect::<BTreeSet<_>>().len() == 1)
+        .map(|phi| (phi.result.id, *phi.incoming.values().next().expect("an incoming value")))
+        .collect::<BTreeMap<u32, Value>>();
+    if swap.is_empty() {
+        return Ok(body.clone());
+    }
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut phis = Vec::new();
+        for phi in block.phis.iter().filter(|phi| !swap.contains_key(&phi.result.id)) {
+            let mut incoming = OrderedMap::new();
+            for (&from, &one) in phi.incoming.iter() {
+                incoming.insert(from, ssa::provider(one, &swap).map_err(|error| error.to_string())?);
+            }
+            phis.push(Phi { incoming, ..phi.clone() });
+        }
+        let ops = block.ops.iter().map(|op| ssa::substituted(op, &swap).map_err(|error| error.to_string())).collect::<Result<Vec<_>, _>>()?;
+        blocks.push(MirBlock { phis, ..block.with_ops(ops) });
+    }
+    Ok(Rc::new(MirBody { blocks, ..MirBody::clone(body) }))
 }
 
 pub fn _closed_loop(body: &Rc<MirBody>, loop_: &Loop) -> Result<Rc<MirBody>, String> {

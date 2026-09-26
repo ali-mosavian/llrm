@@ -16,7 +16,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::liveness;
-use crate::backend::peephole::{DeadAfter, Lanes, _flag_lanes, _lanes, _register_effects, _register_operand, id};
+use crate::backend::peephole::{DeadAfter, Lanes, _lanes, _register_effects, _register_operand, id};
 use crate::backend::select;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -77,28 +77,8 @@ pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
     let mut dead = dead;
     let mut out = DeadAfter::default();
     for one in block.insns.iter().rev() {
-        out.insert(id(one), dead.clone());
-        if liveness::_terminator(one.what.as_ref()) {
-            if one.what.as_ref().is_some_and(|what| what.op == Operation::Branch) {
-                dead = dead.minus(&_flag_lanes(0xFFFF_FFFF));
-            }
-            continue;
-        }
-        let mut effects = _register_effects(one, false, true);
-        if effects.is_none() {
-            // The whole-body liveness solver already has an exact fallback
-            // for fully described returns and call register masks.  Use the
-            // same contract locally: treating a complete return as opaque
-            // made every lane look live immediately before it and hid legal
-            // result-register cleanup.
-            effects = liveness::_declared(one);
-            if effects.is_none() {
-                dead.clear();
-                continue;
-            }
-        }
-        let (reads, writes) = effects.expect("checked above");
-        dead = dead.or(&writes).minus(&reads);
+        out.insert(id(one), dead);
+        dead = liveness::effect(one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
     }
     out
 }

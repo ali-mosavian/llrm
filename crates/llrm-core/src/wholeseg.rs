@@ -457,7 +457,7 @@ pub fn _through_lir<'w>(
         };
         let mut in_ssa = true;
         let mut phases =
-            flow::machine(&low.pins, Some(Rc::new(RefCell::new(frame))), Some(&found.calls), basic_semantics, cpu)
+            flow::machine(&low.pins, Some(Rc::new(RefCell::new(frame))), None, Some(&found.calls), basic_semantics, cpu)
                 .map_err(value_error)?;
         for phase in &mut phases {
             if phase.class_name() == "PhiElimination" {

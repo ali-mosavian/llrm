@@ -14,4 +14,5 @@
 | [examples](../examples) | Nib, BASIC, Pascal and C interop sample programs |
 
 [roadmap.md](roadmap.md) is the ordered plan; [testing.md](testing.md) says how to run the tests.
+[fragility.md](fragility.md) records what broke, or hid a break, and what guards it now.
 [codegen-improvements.md](codegen-improvements.md) ranks backend ideas from LLVM, gcc-ia16 and Open Watcom.

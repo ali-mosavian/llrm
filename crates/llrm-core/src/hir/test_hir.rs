@@ -50,7 +50,7 @@ fn vbdos(modules: Vec<Module>) -> Program {
 }
 
 fn indirect(base: i64, offset: i64, r#type: i64) -> model::Operand {
-    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, inbounds: false, origin: None })
+    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, published: false, inbounds: false, origin: None, allocation: None })
 }
 
 fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
