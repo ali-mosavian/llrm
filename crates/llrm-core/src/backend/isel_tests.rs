@@ -688,6 +688,55 @@ define i16 @f() addrspace(1) {
     assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
 }
 
+/// Constant folding leaves `br i1 true` and a float constant as an operand,
+/// both valid MIR, which isel refused: "a branch on a constant", "a float
+/// constant operand". A branch on a constant jumps; a float constant is
+/// its bits, loaded from a stack temporary.
+#[test]
+fn test_a_constant_condition_and_a_float_constant_select() {
+    let text = "define i16 @f() addrspace(1) {
+b1:
+  br i1 true, label %b2, label %b3
+
+b2:
+  %x = fadd double 1.5, 2.0
+  %y = fptosi double %x to i16
+  ret i16 %y
+
+b3:
+  ret i16 0
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp", "mov bp, sp", "sub sp, 22", "L0_0:", "fnstcw word ptr [bp-20]", "mov ax, word ptr [bp-20]", "or ax, 3072", "mov word ptr [bp-22], ax", "L0_1:",
+            "mov dword ptr [bp-8], 0", "mov dword ptr [bp-4], 1073217536", "mov dword ptr [bp-16], 0", "mov dword ptr [bp-12], 1073741824",
+            "fld qword ptr [bp-8]", "fadd qword ptr [bp-16]", "fldcw word ptr [bp-22]", "fistp word ptr [bp-18]", "fldcw word ptr [bp-20]",
+            "mov ax, word ptr [bp-18]", "leave", "retf",
+        ]
+    );
+}
+
+/// A phi whose input comes along an edge a constant branch never takes:
+/// isel panicked, "phis_from made every other input".
+#[test]
+fn test_a_phi_ignores_an_edge_never_taken() {
+    let text = "define i16 @f() addrspace(1) {
+b1:
+  br i1 true, label %b3, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %0 = phi i16 [ 7, %b1 ], [ 0, %b2 ]
+  ret i16 %0
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "L0_1:", "mov ax, 7", "retf"]);
+}
+
 /// A far null is offset 0, selector 0: runtime.nib's errors.say stored one
 /// and isel refused it as "an address of no global".
 #[test]

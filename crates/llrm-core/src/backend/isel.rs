@@ -190,6 +190,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result
         contracts,
         calls: IndexMap::default(),
         far: BTreeSet::new(),
+        reachable: BTreeSet::new(),
     };
     let body = selector.body(name, &convention)?;
     Ok(Selected { body, convention, calls: selector.calls, far: selector.far })
@@ -225,12 +226,23 @@ struct Selector<'m, 'c> {
     contracts: Contracts<'c>,
     calls: IndexMap<i64, String>,
     far: BTreeSet<i64>,
+    /// The blocks execution can reach.
+    reachable: BTreeSet<BlockId>,
 }
 
 impl Selector<'_, '_> {
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
-        let layout = function.layout();
+        // Only what execution can reach is selected, as LLVM's code generator
+        // drops unreachable blocks.
+        let mut work = vec![function.entry().expect("a body")];
+        while let Some(block) = work.pop() {
+            if self.reachable.insert(block) {
+                work.extend(self.successors(block));
+            }
+        }
+        let layout: Vec<BlockId> = function.layout().iter().copied().filter(|block| self.reachable.contains(block)).collect();
+        let layout = &layout[..];
         let mut at = 0;
         let mut block_at = IndexMap::default();
         for &block in layout {
@@ -261,7 +273,7 @@ impl Selector<'_, '_> {
                 }
                 self.edge(block, default, leaving);
             } else {
-                for successor in function.successors(block) {
+                for successor in self.successors(block) {
                     self.edge(block, successor, from);
                 }
             }
@@ -321,7 +333,7 @@ impl Selector<'_, '_> {
                 continue;
             }
             let mut succ: Vec<i64> = Vec::new();
-            for one in function.successors(block) {
+            for one in self.successors(block) {
                 if !succ.contains(&block_at[&one]) {
                     succ.push(block_at[&one]);
                 }
@@ -361,6 +373,9 @@ impl Selector<'_, '_> {
             }
             for pair in instruction.operands.chunks(2) {
                 let [value, Operand::Block(from)] = *pair else { unreachable!("a phi's pairs") };
+                if !self.reachable.contains(&from) || !self.successors(from).contains(&block) {
+                    continue;
+                }
                 if let Operand::Value(one) = value
                     && self.folded(one)?.is_none()
                 {
@@ -386,6 +401,8 @@ impl Selector<'_, '_> {
         for pair in instruction.operands.chunks(2) {
             let [value, Operand::Block(from)] = *pair else { unreachable!("a phi's pairs") };
             // A block that reaches this one by two edges is listed once per edge.
+            // An edge execution never takes brings nothing.
+            let Some(edges) = self.edges.get(&(from, block)).cloned() else { continue };
             if !seen.insert(from) {
                 continue;
             }
@@ -394,9 +411,21 @@ impl Selector<'_, '_> {
                 (None, Operand::Value(one)) => self.value(one),
                 (None, _) => unreachable!("phis_from made every other input"),
             };
-            out.extend(self.edges[&(from, block)].iter().map(|&at| (at, held)));
+            out.extend(edges.iter().map(|&at| (at, held)));
         }
         Ok(out)
+    }
+
+    /// The blocks `block` can leave for: a branch on a constant takes one.
+    fn successors(&self, block: BlockId) -> Vec<BlockId> {
+        let function = self.function;
+        let terminator = function.instruction(function.terminator(block).expect("a terminator"));
+        match terminator.operands[..] {
+            [condition @ Operand::Constant(_), Operand::Block(taken), Operand::Block(otherwise)] if terminator.opcode == Opcode::Br => {
+                vec![if self.constant(condition, 1) == Some(0) { otherwise } else { taken }]
+            }
+            _ => function.successors(block),
+        }
     }
 
     fn edge(&mut self, from: BlockId, to: BlockId, leaving: i64) {
@@ -826,11 +855,11 @@ impl Selector<'_, '_> {
         match op {
             // Exact: the register already holds it extended.
             CastOp::FPExt => {
-                let held = self.float(operand)?;
+                let held = self.float(operand, at, out)?;
                 self.values.insert(result, held.value);
             }
             CastOp::FPTrunc => {
-                let held = self.float(operand)?;
+                let held = self.float(operand, at, out)?;
                 let cell = self.float_stored(held, "fstp", 4, at, out);
                 let into = Held { value: self.value(result), width: FLOAT };
                 self.float_loaded(into, "fld", cell, 4, false, at, out);
@@ -863,7 +892,7 @@ impl Selector<'_, '_> {
         if width == 1 {
             return refuse("a float to a byte");
         }
-        let held = self.float(operand)?;
+        let held = self.float(operand, at, out)?;
         let cell = self.float_stored(held, name, if unsigned { 2 * width } else { width }, at, out);
         let into = Held { value: self.value(result), width };
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(cell, width))])));
@@ -927,7 +956,7 @@ impl Selector<'_, '_> {
                         }
                     }
                     value => {
-                        let held = self.float(value)?;
+                        let held = self.float(value, at, out)?;
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(Self::memory(pointer, size))], vec![Loc::Held(held)])
                     }
                 };
@@ -940,12 +969,12 @@ impl Selector<'_, '_> {
                     BinaryOp::FMul => "fmul",
                     _ => "fdiv",
                 };
-                let (a, b) = (self.float(operands[0])?, self.float(operands[1])?);
+                let (a, b) = (self.float(operands[0], at, out)?, self.float(operands[1], at, out)?);
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
                 out.push(insn(at, semantics(Operation::FloatArith, name, vec![Loc::Held(result)], vec![Loc::Held(a), Loc::Held(b)])));
             }
             Opcode::FNeg => {
-                let a = self.float(operands[0])?;
+                let a = self.float(operands[0], at, out)?;
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
                 out.push(insn(at, semantics(Operation::FloatUnary, "fchs", vec![Loc::Held(result)], vec![Loc::Held(a)])));
             }
@@ -1082,14 +1111,18 @@ impl Selector<'_, '_> {
                     let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, code, vec![], vec![]) };
                     out.push(insn(at, branch));
                 }
-                _ => return refuse("a branch on a constant"),
+                [Operand::Constant(_), ..] => {
+                    let block = function.parent(inst).expect("a placed branch");
+                    out.push(insn(at, jump(block_at[&self.successors(block)[0]])));
+                }
+                _ => return refuse("a branch of no form"),
             },
             Opcode::Ret => {
                 let what = semantics(Operation::Return, "", vec![], vec![]);
                 let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
                 if let Some(&value) = operands.first().filter(|&&one| self.is_float(type_of(one))) {
                     // Left in st(0).
-                    let held = self.float(value)?;
+                    let held = self.float(value, at, out)?;
                     out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
                 } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
                     let (offset, selector) = self.far(value, at, out)?;
@@ -1144,7 +1177,7 @@ impl Selector<'_, '_> {
                         FloatFunction::Cos => "fcos",
                         other => return refuse(format!("{other:?}")),
                     };
-                    let a = self.float(arguments[0])?;
+                    let a = self.float(arguments[0], at, out)?;
                     let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
                     out.push(insn(at, semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)])));
                     Ok(())
@@ -1170,7 +1203,7 @@ impl Selector<'_, '_> {
             if self.is_float(ty) {
                 // Its bytes from a stack temporary, the high dword pushed first.
                 let size = self.size(ty)?;
-                let held = self.float(argument)?;
+                let held = self.float(argument, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
                 for by in (0..i64::from(size) / 4).rev().map(|dword| dword * 4) {
                     out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Mem(Self::memory(cell.moved(by), 4))])));
@@ -1327,17 +1360,30 @@ impl Selector<'_, '_> {
             FloatPredicate::Ole => ((b, a), "jae"),
             other => return refuse(format!("fcmp {other:?}")),
         };
-        let (a, b) = (self.float(a)?, self.float(b)?);
+        let (a, b) = (self.float(a, at, out)?, self.float(b, at, out)?);
         out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), Loc::Held(b)])));
         Ok(code)
     }
 
     /// A float operand, in an x87 register.
-    fn float(&mut self, operand: Operand) -> Result<Held, Unselected> {
-        match operand {
-            Operand::Value(value) => Ok(Held { value: self.value(value), width: FLOAT }),
-            _ => refuse("a float constant operand"),
+    fn float(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Held, Unselected> {
+        let id = match operand {
+            Operand::Value(value) => return Ok(Held { value: self.value(value), width: FLOAT }),
+            Operand::Constant(id) => id,
+            Operand::Block(_) => unreachable!("a float is no block"),
+        };
+        // A constant's bits, stored to a stack temporary and loaded, where
+        // LLVM would load them from a constant pool.
+        let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
+        let size = self.size(self.module.context.get(id).ty)?;
+        let cell = self.temporary(i64::from(size));
+        for by in (0..size).step_by(4) {
+            let dword = Loc::Imm(Imm { value: (bits >> (8 * by)) as u32 as i64, width: 4, address: None });
+            out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(i64::from(by)), 4))], vec![dword])));
         }
+        let held = self.fresh_held(FLOAT);
+        self.float_loaded(held, "fld", cell, size, false, at, out);
+        Ok(held)
     }
 
     /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
