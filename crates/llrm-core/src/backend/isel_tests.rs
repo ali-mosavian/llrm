@@ -634,6 +634,42 @@ define i16 @f() addrspace(1) {{
     );
 }
 
+/// fixed.nib's `left * right / right` in 16.16: a 64-bit product and
+/// quotient of 32-bit factors, which isel refused as "a i64 value". Each
+/// i64 is a pair of dwords; factors and a divisor sign-extended from i32
+/// take one imul and a long division of magnitudes, as the old path did.
+#[test]
+fn test_a_fixed_product_and_quotient_take_dword_pairs() {
+    let text = "define i32 @scaled(i32 %0, i32 %1) addrspace(1) {
+b1:
+  %2 = sext i32 %0 to i64
+  %3 = sext i32 %1 to i64
+  %4 = mul i64 %2, %3
+  %5 = ashr i64 %4, 16
+  %6 = trunc i64 %5 to i32
+  %7 = sext i32 %6 to i64
+  %8 = sext i32 %1 to i64
+  %9 = shl i64 %7, 16
+  %10 = sdiv i64 %9, %8
+  %11 = trunc i64 %10 to i32
+  ret i32 %11
+}
+";
+    assert_eq!(
+        listing(text, "scaled"),
+        [
+            "push bp", "mov bp, sp", "sub sp, 4", "push si", "push di", "L0_0:",
+            "mov ecx, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "mov eax, ecx", "imul ebx", "mov ecx, eax", "shrd ecx, edx, 16",
+            "mov eax, ecx", "cdq", "mov edi, edx", "shld edi, ecx, 16", "shl ecx, 16",
+            "mov esi, edi", "sar esi, 31", "xor ecx, esi", "xor edi, esi", "sub ecx, esi", "sbb edi, esi",
+            "mov dword ptr [bp-4], ebx", "sar dword ptr [bp-4], 31", "xor ebx, dword ptr [bp-4]", "sub ebx, dword ptr [bp-4]",
+            "mov eax, edi", "xor edx, edx", "div ebx", "mov eax, ecx", "div ebx",
+            "xor esi, dword ptr [bp-4]", "xor eax, esi", "sub eax, esi", "shld edx, eax, 16",
+            "pop di", "pop si", "leave", "retf",
+        ]
+    );
+}
+
 /// A call names its callee as the procedure is defined: runtime.nib's
 /// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
 /// as `_buffers.allocate`, and the runtime did not link.
