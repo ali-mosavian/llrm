@@ -681,3 +681,87 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
         ]
     );
 }
+
+/// Floats are x87 values: loads fold into arithmetic, a result leaves in
+/// st(0), an argument is pushed from a stack temporary, conversions go
+/// through memory, and an ordered compare is fcom, sahf and ja.
+#[test]
+fn test_floats_are_x87_values() {
+    let text = "@k = internal global double 1.5
+@out = internal global float 0.0
+declare cc1000 void @show(float) addrspace(1)
+declare i16 @llvm.lrint.i16.f64(double)
+define double @scale(double %x, double %y) addrspace(1) {
+  %m = fmul double %x, %y
+  %c = load double, ptr @k
+  %s = fadd double %m, %c
+  ret double %s
+}
+define i16 @f(i16 %n) addrspace(1) {
+  %a = sitofp i16 %n to float
+  %b = fpext float %a to double
+  %r = call addrspace(1) double @scale(double %b, double %b)
+  %t = fptrunc double %r to float
+  store float %t, ptr @out
+  call cc1000 addrspace(1) void @show(float %t)
+  %g = fcmp ogt double %r, %b
+  br i1 %g, label %big, label %small
+big:
+  %i = call i16 @llvm.lrint.i16.f64(double %r)
+  ret i16 %i
+small:
+  ret i16 0
+}
+";
+    assert_eq!(
+        listing(text, "scale"),
+        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fmul qword ptr [bp+14]", "fadd qword ptr k", "pop bp", "retf"]
+    );
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 48",
+            "L1_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov word ptr [bp-2], ax",
+            "fild word ptr [bp-2]",
+            "fstp tbyte ptr [bp-38]",
+            "fld tbyte ptr [bp-38]",
+            "fst qword ptr [bp-10]",
+            "push dword ptr [bp-6]",
+            "push dword ptr [bp-10]",
+            "fstp qword ptr [bp-18]",
+            "push dword ptr [bp-14]",
+            "push dword ptr [bp-18]",
+            "call far ptr scale",
+            "fstp tbyte ptr [bp-48]",
+            "add sp, 16",
+            "fld tbyte ptr [bp-48]",
+            "fstp dword ptr [bp-22]",
+            "fld dword ptr [bp-22]",
+            "fst dword ptr out",
+            "fstp dword ptr [bp-26]",
+            "push dword ptr [bp-26]",
+            "call far ptr show",
+            "fld tbyte ptr [bp-48]",
+            "fld tbyte ptr [bp-38]",
+            "fxch st(1)",
+            "fcompp",
+            "fnstsw ax",
+            "sahf",
+            "ja L1_8",
+            "L1_10:",
+            "mov ax, 0",
+            "leave",
+            "retf",
+            "L1_8:",
+            "fld tbyte ptr [bp-48]",
+            "fistp word ptr [bp-28]",
+            "mov ax, word ptr [bp-28]",
+            "leave",
+            "retf",
+        ]
+    );
+}
