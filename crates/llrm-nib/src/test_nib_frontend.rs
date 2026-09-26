@@ -1860,3 +1860,17 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
     let native = written(&directory, "native.nib", &text("@export(name=\"N$SIZE\")"));
     driver::parsed(&native, &Default::default(), None).expect("a native export takes a view");
 }
+
+/// runtime.nib's floats.assign: affine rewrote `at * 2 + copy(a)`, its own
+/// form, into a fresh copy each round, strength folded it back, and the
+/// runtime did not compile: "MIR optimization did not converge".
+#[test]
+fn test_a_loop_through_a_copied_pointer_converges() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "assign.nib",
+        "const LIMBS = 72\n\npub fn assign(a: *near mut u16, value: u16) -> void:\n    unsafe:\n        for at in 0..LIMBS:\n            a[at] = 0\n        a[0] = value\n",
+    );
+    nib_compile::assembled(&parsed(&source), "assign", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+}
