@@ -1501,6 +1501,7 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
             "machine:regalloc",
             "machine:parcopy",
             "machine:peephole",
+            "machine:loopslots",
             "machine:schedule",
             "machine:jumps",
             "final-lir",
@@ -2083,6 +2084,44 @@ END SUB
     let [first, second] = masked.as_slice() else { panic!("{procedure}") };
     assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
     assert!(!second.contains("lea ") && !second.contains("[e"), "{second}");
+}
+
+#[test]
+fn test_a_loop_holds_its_spill_slots_in_the_registers_it_leaves_free() {
+    // Six invariants and a pointer need seven registers: two invariants were
+    // reloaded into `di` from [bp] every trip, though the loop reaches the
+    // frame through nothing else, so `di` and BP could hold them.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SIX.BAS", b"DEFINT A-Z
+DECLARE SUB s (k)
+DIM SHARED a(99), b(99), c(99), d(99), e(99), f(99)
+s 3
+PRINT a(5)
+SUB s (k)
+ ua = k * 3
+ ub = k * 4
+ uc = k * 5
+ ud = k * 6
+ ue = k * 7
+ uf = k * 8
+ FOR i = 0 TO 99
+  a(i) = a(i) + ua
+  b(i) = b(i) + ub
+  c(i) = c(i) + uc
+  d(i) = d(i) + ud
+  e(i) = e(i) + ue
+  f(i) = f(i) + uf
+ NEXT
+END SUB
+");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^S proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("S endp")];
+    let body = backward_loop(procedure);
+    assert!(!body.contains("[bp"), "{body}");
+    let (before, after) = procedure.split_at(procedure.find(&body).expect("the loop"));
+    assert!(before.contains("push bp") && after.contains("pop bp"), "{procedure}");
 }
 
 #[test]

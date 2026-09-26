@@ -25,6 +25,7 @@ pub mod jumps;
 pub mod lanes;
 pub mod layout;
 pub mod liveness;
+pub mod loopslots;
 pub mod lower;
 pub mod lower_floats;
 pub mod lower_int64;

@@ -12,7 +12,7 @@ use iced_x86::Register;
 use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, jumps, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -49,6 +49,8 @@ pub fn machine<'a>(
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::new(frame.clone(), target)?),
+        // Once spill traffic is final: which slots a loop still reaches.
+        Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
