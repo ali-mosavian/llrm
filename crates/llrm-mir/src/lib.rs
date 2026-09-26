@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod context;
+pub mod dominators;
 pub mod edit;
 pub mod lexer;
 pub mod module;
@@ -10,6 +11,7 @@ pub mod opcode;
 pub mod parse;
 pub mod print;
 pub mod types;
+pub mod verify;
 
 pub use edit::Position;
 pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};

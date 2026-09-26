@@ -203,6 +203,11 @@ Then the mutation API (`llrm_mir::edit`): LLVM's `setOperand`,
 kept for values and blocks, each change logged for the ledger;
 `check_uses` recomputes the lists and compares.
 
+Then the verifier (`llrm_mir::verify`), over a dominator tree: LLVM's
+rules for the subset. `tools/mir-oracle.sh` holds it to `opt`'s verdicts,
+accepting what `opt` accepts and refusing `tests/invalid` for the reasons
+they state.
+
 ### 4. Raise into MIR beside the old MIR
 
 - The QB raise and the C and Nib frontends also build a MIR module. Nothing

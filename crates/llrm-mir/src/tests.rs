@@ -2,11 +2,15 @@ use crate::{parse, print};
 
 const DATALAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16\"\n";
 
-/// Every `.ll` under `tests/`: hand-written mappings and clang's output.
-fn fixtures() -> Vec<(std::path::PathBuf, String)> {
+/// Every `.ll` under `tests/`: hand-written mappings, clang's output, and
+/// with `invalid`, the ones LLVM's verifier refuses instead.
+fn fixtures(invalid: bool) -> Vec<(std::path::PathBuf, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let mut out = Vec::new();
     for dir in std::fs::read_dir(&root).expect("tests/").flatten() {
+        if (dir.file_name() == "invalid") != invalid {
+            continue;
+        }
         for file in std::fs::read_dir(dir.path()).into_iter().flatten().flatten() {
             if file.path().extension().is_some_and(|one| one == "ll") {
                 out.push((file.path(), std::fs::read_to_string(file.path()).expect("readable")));
@@ -37,13 +41,11 @@ fn the_crate_depends_on_nothing() {
 
 #[test]
 fn every_fixture_prints_to_a_fixed_point() {
-    let fixtures = fixtures();
+    let fixtures = fixtures(false);
     assert!(fixtures.len() >= 17, "{} fixtures", fixtures.len());
     for (path, text) in fixtures {
         let module = parse::module(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        for (_, _, function) in module.functions() {
-            assert!(function.check_uses().is_empty(), "{}: {:?}", path.display(), function.check_uses());
-        }
+        assert_eq!(crate::verify::verify(&module), Vec::<String>::new(), "{}", path.display());
         let once = round(&text);
         assert_eq!(round(&once), once, "{}", path.display());
     }
@@ -116,4 +118,18 @@ fn metadata_keeps_its_numbers_whatever_mentions_it_first() {
     // it refers to, and clang's loop metadata never printed the same twice.
     let text = "define void @f() {\n  ret void, !x !1\n}\n\n!0 = !{!\"first\"}\n!1 = !{!0}\n";
     assert_eq!(round(text), text);
+}
+
+#[test]
+fn every_invalid_fixture_is_refused_for_its_reason() {
+    let fixtures = fixtures(true);
+    assert!(fixtures.len() >= 9, "{} fixtures", fixtures.len());
+    for (path, text) in fixtures {
+        let reason = text.lines().find_map(|line| line.strip_prefix("; invalid: ")).expect("a `; invalid:` line");
+        let found = match parse::module(&text) {
+            Err(error) => vec![error.to_string()],
+            Ok(module) => crate::verify::verify(&module),
+        };
+        assert!(found.iter().any(|one| one.contains(reason)), "{}: {found:?}", path.display());
+    }
 }
