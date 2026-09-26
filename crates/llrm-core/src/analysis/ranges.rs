@@ -602,10 +602,12 @@ pub fn bounded(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value, Inter
         if known.is_empty() {
             continue;
         }
+        // The header's values too: seen from inside, they are the trip's,
+        // though the header itself also sees the exit value.
         let operations = body
             .blocks
             .iter()
-            .filter(|block| inside.contains(&block.at))
+            .filter(|block| inside.contains(&block.at) || block.at == loop_.header)
             .flat_map(|block| block.ops.iter())
             .collect::<Vec<_>>();
         loop {
