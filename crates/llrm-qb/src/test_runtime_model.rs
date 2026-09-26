@@ -139,3 +139,11 @@ fn dynamic_arrays_run_in_the_model() {
         REDIM b(1 TO 2, 3 TO 4) AS LONG\nb(2, 4) = 5: b(1, 3) = 9\nPRINT b(2, 4) + b(1, 3); UBOUND(b, 2)\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), " 7  1  3 \n 0 \n 14  4 \n");
 }
+
+#[test]
+fn mid_statement_runs_in_the_model() {
+    // The model had no B$SMID: any MID$ statement stopped the run. The
+    // expected text is VBDOS's own output for this program.
+    let source = "a$ = \"hello\"\nMID$(a$, 2, 3) = \"XYZW\"\nPRINT a$\nMID$(a$, 5) = \"!!\"\nPRINT a$\n";
+    assert_eq!(printed_on(source, "vbdos", "vbdos"), "hXYZo\nhXYZ!\n");
+}
