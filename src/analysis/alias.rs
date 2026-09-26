@@ -1587,7 +1587,7 @@ pub fn named_bytes(body: &MirBody) -> NamedBytes {
 pub fn annotated(body: &Rc<MirBody>) -> Result<MirBody, String> {
     let facts = points_to(body, None, None)?;
     let bounded = ranges::bounded(body)?;
-    let constants = ranges::constants(body, None, None);
+    let constants = ranges::constants(body);
     let strides = congruences(body);
 
     let tag = |reference: &MemRef, at: i64, outgoing: bool| -> Result<MemRef, String> {

@@ -772,13 +772,10 @@ pub(crate) fn scoped(body: &Rc<MirBody>) -> Result<IndexMap<i64, IndexMap<Value,
     Ok(result)
 }
 
-/// Every value `consts` knows, as the singleton interval an alias query reads.
-pub(crate) fn constants(
-    body: &Rc<MirBody>,
-    dgroup: Option<&BTreeSet<i64>>,
-    calls: Option<&IndexMap<i64, String>>,
-) -> IndexMap<Value, Interval> {
-    consts::known(body, dgroup, calls, None, None)
+/// Every value `consts` knows without solving memory, as the singleton
+/// interval an alias query reads.
+pub(crate) fn constants(body: &Rc<MirBody>) -> IndexMap<Value, Interval> {
+    consts::known(body, None, None, None, None)
         .into_iter()
         .map(|(value, fact)| {
             (

@@ -74,7 +74,7 @@ fn looped(header: i64, latches: &[i64], body: &[i64]) -> Loop {
 }
 
 fn derive(body: &MirBody, loop_: &Loop) -> Vec<Derived> {
-    derived(&Rc::new(body.clone()), loop_, None, &BTreeSet::new(), None).unwrap()
+    derived(&Rc::new(body.clone()), loop_, None, None).unwrap()
 }
 
 /// `tests/test_counted_loops.py:_unit_loop`: `i = start; while not (i exit_test bound): i += 1`,

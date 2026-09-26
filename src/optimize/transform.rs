@@ -3426,7 +3426,7 @@ pub(crate) fn hoisted(
     }
 
     let scoped = ranges::bounded(body)?;
-    let constant = ranges::constants(body, None, None).into_iter().collect::<BTreeMap<Value, Interval>>();
+    let constant = ranges::constants(body).into_iter().collect::<BTreeMap<Value, Interval>>();
     let facts = scoped
         .iter()
         .map(|(at, inside)| {

@@ -6,7 +6,7 @@
 //! `x * 2`, and hoist moves each `base` out of the loop. `induction` owns
 //! the affine form; this only spells it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use num_bigint::BigInt;
@@ -38,7 +38,7 @@ impl crate::model::passes::MIRTransform for Affine {
             shared_segments: None,
             landmarks: bounds.iter().map(|(key, marks)| (*key, marks.clone())).collect(),
         });
-        canonical(&body, &self.r#where.dgroup, layout.as_ref())
+        canonical(&body, layout.as_ref())
     }
 }
 
@@ -46,10 +46,9 @@ impl crate::model::passes::MIRTransform for Affine {
 /// invariant base, where the loop lets that base move out.
 pub(crate) fn canonical(
     body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
 ) -> Result<Rc<MirBody>, String> {
-    let found = induction::of(body, dgroup, layout).map_err(|error| format!("{error:?}"))?;
+    let found = induction::of(body, layout).map_err(|error| format!("{error:?}"))?;
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
     // A value is affine in every loop around it; its innermost loop is the
     // one whose trips it varies with.

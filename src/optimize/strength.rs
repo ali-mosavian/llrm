@@ -106,7 +106,6 @@ impl crate::model::passes::MIRTransform for Strength {
         });
         let body = reduced(
             &body,
-            &self.r#where.dgroup,
             layout.as_ref(),
             self.r#where.registers,
             &self.r#where.index_scales,
@@ -130,7 +129,6 @@ impl crate::model::passes::MIRTransform for Strength {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn reduced(
     body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
     layout: Option<&RegionLayout>,
     registers: i64,
     scales: &BTreeSet<i64>,
@@ -140,7 +138,7 @@ pub(crate) fn reduced(
     control_recurrences: bool,
 ) -> Result<Rc<MirBody>, StrengthError> {
     let op_at = |at: OpOccurrence| &body.blocks[at.block_index()].ops[at.operation_index()];
-    let found = induction::of(body, dgroup, layout)?;
+    let found = induction::of(body, layout)?;
     if found.is_empty() {
         return Ok(body.clone());
     }

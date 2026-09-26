@@ -868,12 +868,11 @@ where
 
 /// Whether a cell is one no store inside the loop can reach.
 ///
-/// `mir.overlapping` hands `bounds` to regions and `dgroup` as a layout
-/// that is not a `module.Group`: a landmarks-only [`RegionLayout`] is both.
+/// `mir.overlapping` hands `bounds` to regions as a landmarks-only
+/// [`RegionLayout`].
 fn unwritten<'a>(
     body: &'a Rc<MirBody>,
     inside: &'a BTreeSet<i64>,
-    dgroup: &'a BTreeSet<i64>,
     bounds: Option<&'a RegionLayout>,
 ) -> impl Fn(&MemRef) -> Result<bool, RegionError> + 'a {
     let wrote = body
@@ -887,7 +886,7 @@ fn unwritten<'a>(
     let known = if wrote.is_empty() {
         BTreeMap::new()
     } else {
-        ranges::constants(body, Some(dgroup), None).into_iter().collect()
+        ranges::constants(body).into_iter().collect()
     };
 
     move |cell| {
@@ -905,7 +904,6 @@ pub(crate) fn derived(
     body: &Rc<MirBody>,
     loop_: &Loop,
     found: Option<&OrderedMap<u32, Affine>>,
-    dgroup: &BTreeSet<i64>,
     bounds: Option<&RegionLayout>,
 ) -> Result<Vec<Derived>, RegionError> {
     let at_of = body
@@ -933,7 +931,7 @@ pub(crate) fn derived(
         return Ok(Vec::new());
     }
     let still = invariant(body, &members);
-    let settled = unwritten(body, &members, dgroup, bounds);
+    let settled = unwritten(body, &members, bounds);
     // Python's dictionary comprehension is last-definition-wins in body,
     // block, operation, and defined-value order.
     let mut made = BTreeMap::<u32, &Op>::new();
@@ -1059,7 +1057,6 @@ pub(crate) fn derived(
 #[allow(clippy::type_complexity)]
 pub(crate) fn of(
     body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
     bounds: Option<&RegionLayout>,
 ) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
     let mut result = Vec::new();
@@ -1068,7 +1065,7 @@ pub(crate) fn of(
         if found.is_empty() {
             continue;
         }
-        let formulas = derived(body, &loop_, Some(&found), dgroup, bounds)?;
+        let formulas = derived(body, &loop_, Some(&found), bounds)?;
         result.push((loop_, found, formulas));
     }
     Ok(result)
@@ -1672,7 +1669,7 @@ pub(crate) fn advances(body: &Rc<MirBody>, loop_: &Loop) -> IndexMap<Value, BigI
     }
     // Python's `derived` cannot fail; an endpoint Rust cannot hold drops only
     // the derived entries, which leaves fewer, never wrong, advances.
-    for one in derived(body, loop_, Some(&found), &BTreeSet::new(), None).unwrap_or_default() {
+    for one in derived(body, loop_, Some(&found), None).unwrap_or_default() {
         let op = &body.blocks[one.op.block_index()].ops[one.op.operation_index()];
         if let (AffineOperand::Const(step), Arg::Const(by), None, [Arg::Held(result)]) =
             (&one.of.step, &one.by, &one.pointer, op.results.as_slice())
