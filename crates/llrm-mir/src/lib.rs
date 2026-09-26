@@ -7,6 +7,7 @@ pub mod datalayout;
 pub mod dominators;
 pub mod edit;
 pub mod interpret;
+pub mod intrinsics;
 pub mod lexer;
 pub mod module;
 pub mod opcode;

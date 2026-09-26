@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, signed};
 use crate::datalayout::{DataLayout, float_bits};
+use crate::intrinsics::Intrinsic;
 use crate::module::{BlockId, Function, GlobalKind, Module, Operand, ValueId};
 use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
 use crate::types::{FloatKind, Type, TypeId};
@@ -229,13 +230,67 @@ impl<'m> Machine<'m> {
         let name = global.name.clone().unwrap_or_default();
         let GlobalKind::Function(function) = &global.kind else { return undefined(format!("a call to the variable @{name}")) };
         if function.is_declaration() {
-            return unsupported(format!("a call to the external @{name}"));
+            return match Intrinsic::named(&name) {
+                Some(intrinsic) => self.intrinsic(intrinsic, arguments),
+                None => unsupported(format!("a call to the external @{name}")),
+            };
         }
         let mark = self.memory.len();
         let result = self.execute(function, arguments);
         self.memory.truncate(mark);
         self.poison.truncate(mark);
         result
+    }
+
+    /// An intrinsic, in terms of the instructions that define it.
+    fn intrinsic(&mut self, intrinsic: Intrinsic, arguments: Vec<Val>) -> Run<Val> {
+        let void = Val::Aggregate(Vec::new());
+        let argument = |at: usize| arguments[at].clone();
+        Ok(match intrinsic {
+            Intrinsic::WithOverflow { op, signed } => {
+                let wrapped = self.binary(op, Flags::default(), argument(0), argument(1))?;
+                let exact = self.binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
+                let overflowed = match (&wrapped, exact) {
+                    (Val::Poison, _) => Val::Poison,
+                    (_, exact) => Val::Int { bits: u128::from(exact == Val::Poison), width: 1 },
+                };
+                Val::Aggregate(vec![wrapped, overflowed])
+            }
+            Intrinsic::MinMax { signed, max } => {
+                let predicate = match (signed, max) {
+                    (true, true) => IntPredicate::Sgt,
+                    (true, false) => IntPredicate::Slt,
+                    (false, true) => IntPredicate::Ugt,
+                    (false, false) => IntPredicate::Ult,
+                };
+                match self.icmp(predicate, argument(0), argument(1)) {
+                    Val::Int { bits: 1, .. } => argument(0),
+                    Val::Int { .. } => argument(1),
+                    _ => Val::Poison,
+                }
+            }
+            // Fused or not is the machine's choice, as the LangRef allows.
+            Intrinsic::FMulAdd => {
+                let product = self.binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
+                self.binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
+            }
+            Intrinsic::MemSet => {
+                let (Val::Ptr(address), Val::Int { bits: length, .. }) = (argument(0), argument(2)) else { return undefined("a memset of a poison address or length") };
+                let length = length as u64;
+                if length > 0 {
+                    self.check_bounds(address, length)?;
+                }
+                let (byte, poison) = match argument(1) {
+                    Val::Int { bits, .. } => (bits as u8, false),
+                    _ => (0, true),
+                };
+                let range = address as usize..(address + length) as usize;
+                self.memory[range.clone()].fill(byte);
+                self.poison[range].fill(poison);
+                void
+            }
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => void,
+        })
     }
 
     fn execute(&mut self, function: &'m Function, arguments: Vec<Val>) -> Run<Val> {
