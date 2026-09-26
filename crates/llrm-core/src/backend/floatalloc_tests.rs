@@ -8,7 +8,8 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
-use super::{_equivalent_loads, _truncating, allocated};
+use super::{_truncating, allocated};
+use crate::backend::floatassign::_equivalent_loads;
 use crate::backend::cpu;
 use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
@@ -240,8 +241,9 @@ fn test_truncation_saves_the_control_word_once_per_body() {
 }
 
 #[test]
-fn test_a_load_read_by_several_arithmetics_is_each_ones_memory_operand() {
-    // NBODYS held `falloff` for two multiplies where BC wrote `fmul [m]` twice.
+fn test_a_load_read_by_several_arithmetics_is_loaded_once() {
+    // NBODYS: `falloff` read by two multiplies. Priced by GCC's i486 table,
+    // one load and two register multiplies cost less than two memory forms.
     let cells = _cells([-4, -8, -12, -16, -20], 4);
     let (x, y, falloff, px, py) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4]);
     let body = _body(vec![
@@ -254,13 +256,8 @@ fn test_a_load_read_by_several_arithmetics_is_each_ones_memory_operand() {
         _store(py, 5),
     ]);
     let result = run(&body);
-    let insns = result.insns();
-    let using: Vec<(&str, Vec<Loc>)> = insns
-        .iter()
-        .filter(|one| what(one).sources.contains(&m(falloff)))
-        .map(|one| (name(one), what(one).sources.clone()))
-        .collect();
-    assert_eq!(using, vec![("fmul", vec![st(0), m(falloff)]); 2]);
+    let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(falloff))).count();
+    assert_eq!(reads, 1);
     let (memory, stack) = _x87(&result.insns(), &[(x, 3.0), (y, 5.0), (falloff, 0.5)]);
     assert_eq!((memory[px], memory[py], stack), (1.5, 2.5, vec![]));
 }
@@ -1296,6 +1293,54 @@ fn test_a_copy_between_spilled_values_is_no_instruction() {
     assert_eq!(spill_traffic(&result), 2);
     let (memory, stack) = _x87(&result.insns(), &[(&source, 3.0)]);
     assert_eq!((memory[&target], stack), (-3.0, vec![]));
+}
+
+/// deedlines: a phi's float copy between spilled values sharing a cell
+/// became nothing, still tagged with its copy group, and parcopy refused
+/// the group: "is in a copy group and is not a move".
+/// qbdemo FRACLINE: a by-reference parameter's volatile read, compared
+/// right after, loaded and compared both on the stack: four more exchanges
+/// than `fcomp` of the cell. A volatile read may be its one adjacent reader's
+/// operand, and never read twice.
+#[test]
+fn test_a_volatile_load_is_its_adjacent_readers_operand_only() {
+    let (sum, limit) = (frame_cell(-4, 4), frame_cell(-12, 8));
+    let volatile = |what: Semantics| Arc::new(Insn { volatile: true, ..Insn::new(8, Some((8, 16)), Some(what), vec![2], vec![]) });
+    for twice in [false, true] {
+        let mut body = _body(vec![_load(1, &sum)]);
+        let mut insns = body.blocks[0].insns.clone();
+        insns.push(volatile(_load(2, &limit)));
+        insns.push(Arc::new(Insn::new(16, Some((16, 24)), Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])), vec![], vec![1, 2])));
+        if twice {
+            insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&sum, 2)), vec![], vec![2])));
+        }
+        body.blocks[0].insns = insns;
+        let result = with_frame(&body, &mut Frame::new(-12));
+        let reads = result.insns().iter().filter(|one| what(one).sources.contains(&m(&limit))).count();
+        let fused = result.insns().iter().any(|one| name(one) == "fcomp" && what(one).sources.contains(&m(&limit)));
+        assert_eq!((reads, fused), (1, !twice), "{:?}", result.insns().iter().map(|one| name(one).to_owned()).collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn test_a_vacated_phi_copy_leaves_its_copy_group() {
+    let (source, target, word) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-10, 2));
+    let call = || sem(Operation::Call, "call", vec![], vec![]);
+    let integer = Loc::Held(Held { value: 20, width: 2 });
+    let mut body = _body(vec![
+        _load(1, &source),
+        fchs(2, 1),
+        sem(Operation::Move, "mov", vec![integer.clone()], vec![m(&word)]),
+        call(),
+        sem(Operation::Move, "mov", vec![fl(3)], vec![fl(2)]),
+        sem(Operation::Move, "mov", vec![Loc::Held(Held { value: 21, width: 2 })], vec![integer]),
+        call(),
+        _store(&target, 3),
+    ]);
+    let insns: Vec<Arc<Insn>> = body.insns().iter().enumerate().map(|(at, one)| if at == 4 || at == 5 { Arc::new(Insn { group: Some(7), ..(**one).clone() }) } else { Arc::clone(one) }).collect();
+    body.blocks[0].insns = insns;
+    let result = with_frame(&body, &mut Frame::new(-10));
+    assert!(result.insns().iter().filter(|one| one.group.is_some()).all(|one| what(one).op == Operation::Move), "{:?}", result.insns());
 }
 
 #[test]

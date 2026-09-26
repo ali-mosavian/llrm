@@ -19,6 +19,7 @@ pub mod farcall;
 pub mod farload;
 pub mod constpool;
 pub mod floatalloc;
+pub mod floatassign;
 pub mod floatregions;
 pub mod inline_asm;
 pub mod fpu;

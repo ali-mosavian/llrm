@@ -13,7 +13,7 @@ use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -44,7 +44,8 @@ pub fn machine<'a>(
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
-        Box::new(floatalloc::FloatAlloc::new(frame.clone(), pool, basic_semantics, target)?),
+        Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target))?),

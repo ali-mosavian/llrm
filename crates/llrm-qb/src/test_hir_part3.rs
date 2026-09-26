@@ -1544,6 +1544,7 @@ fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
             "initial-lir",
             "machine:far-indirect-calls",
             "machine:phielim",
+            "machine:floatassign",
             "machine:floatalloc",
             "machine:twoaddr",
             "machine:coalesce",
