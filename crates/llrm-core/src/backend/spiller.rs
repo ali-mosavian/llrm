@@ -12,7 +12,6 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
-use crate::analysis::effects;
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
 use crate::analysis::regions;
 use crate::backend::allocate::Error;
@@ -775,12 +774,12 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
             return false;
         }
     }
+    if one.unmodeled_write() {
+        return true;
+    }
     let Some(op) = op else {
         return false;
     };
-    if effects::unmodeled_write(op) {
-        return true;
-    }
     for reference in &op.stores {
         if _in_frame(cell) && reference.excludes.contains(&mir::WHOLE_FRAME) {
             continue;
@@ -1268,7 +1267,7 @@ fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
         if matches!(what.op, Operation::Branch | Operation::Jump | Operation::Call | Operation::Return) {
             return false;
         }
-        if matches!(what.name.as_deref(), Some("adc" | "sbb" | "rcl" | "rcr")) {
+        if what.name.as_deref().is_some_and(crate::backend::peephole::_reads_flags) {
             return false;
         }
         if matches!(what.name.as_deref(), Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test")) {
@@ -2123,6 +2122,16 @@ mod tests {
         insns.iter().position(|other| Arc::ptr_eq(other, one)).expect("present")
     }
 
+    /// A hoisted index add may not land before a SETcc, which reads the
+    /// flags an earlier compare left: `setl` was read as neither reading
+    /// nor writing them, so the add behind it looked safe to hoist.
+    #[test]
+    fn test_an_index_add_is_not_hoisted_above_a_flag_reader() {
+        let set = insn(0x10, (0x10, 0x10), semantics(Operation::Unary, "setl", vec![held(1, 1)], vec![]), &[1], &[]);
+        let add = _add(2, 3, 0x11);
+        assert!(!super::_flags_overwritten(&[Arc::new(set), Arc::new(add)]));
+    }
+
     #[test]
     fn test_a_spilled_move_source_loads_straight_into_its_short_successor() {
         let insns = _out(&_body(vec![_move(1, 3, None, 0x10), _move(2, 1, None, 0x11)]), &[1]);
@@ -2184,7 +2193,8 @@ mod tests {
 
     #[test]
     fn test_parameter_is_reloaded_across_what_spares_the_frame() {
-        for between in ["call sparing the frame", "call", "call unstated", "pointer store sparing the frame", "pointer store"]
+        for between in
+            ["call sparing the frame", "call", "call unstated", "call with no MIR", "pointer store sparing the frame", "pointer store"]
         {
             let param = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
             let load = insn(
@@ -2209,7 +2219,8 @@ mod tests {
                 }
                 let mut middle =
                     insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
-                middle.op = Some(Arc::new(site));
+                // A call lowered from the new MIR carries no old operation: it may write anything.
+                middle.op = (between != "call with no MIR").then(|| Arc::new(site));
                 middle.clobbers = BTreeSet::from([Register::EAX]);
                 middle
             } else {

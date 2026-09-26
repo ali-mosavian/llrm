@@ -90,13 +90,13 @@ fn _integer_chain(
         }
         _ => return None,
     };
-    if !_plain(store) || _volatile(store) || users.get(&result.value).copied().unwrap_or(0) != 1 {
+    if !_plain(store) || store.volatile() || users.get(&result.value).copied().unwrap_or(0) != 1 {
         return None;
     }
 
     let (operation_at, operation) = definitions.get(&result.value)?;
     let operation_at = *operation_at;
-    if operation_at >= store_at || !_plain(operation) || _volatile(operation) {
+    if operation_at >= store_at || !_plain(operation) || operation.volatile() {
         return None;
     }
     let (name, made, left, right) = match &operation.what {
@@ -142,7 +142,7 @@ fn _integer_chain(
             continue;
         };
         let load_at = *load_at;
-        if load_at >= operation_at || !_plain(load) || _volatile(load) {
+        if load_at >= operation_at || !_plain(load) || load.volatile() {
             continue;
         }
         if let Some(what) = &load.what {
@@ -375,10 +375,6 @@ fn _plain(one: &Insn) -> bool {
         || one.rematerialized)
 }
 
-fn _volatile(one: &Insn) -> bool {
-    one.op.as_ref().is_some_and(|op| op.volatile)
-}
-
 fn _anchor(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
         && one.defines.is_empty()
@@ -391,7 +387,7 @@ fn _preparation(one: &Insn) -> bool {
     if _anchor(one) {
         return true;
     }
-    if !_plain(one) || one.what.is_none() || _volatile(one) {
+    if !_plain(one) || one.what.is_none() || one.volatile() {
         return false;
     }
     let what = one.what.as_ref().expect("checked");
@@ -602,6 +598,16 @@ mod tests {
     #[test]
     fn test_volatile_update_retains_its_explicit_load_and_store() {
         let insns = _chain("add", true, true);
+
+        assert_eq!(selected(&insns, &_users(&insns)), insns);
+    }
+
+    #[test]
+    fn test_volatile_update_without_a_mir_op_retains_its_explicit_load_and_store() {
+        let insns: Vec<Arc<Insn>> = _chain("add", true, true)
+            .iter()
+            .map(|one| Arc::new(Insn { op: None, volatile: one.op.as_ref().is_some_and(|op| op.volatile), ..Insn::clone(one) }))
+            .collect();
 
         assert_eq!(selected(&insns, &_users(&insns)), insns);
     }

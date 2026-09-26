@@ -653,27 +653,12 @@ impl<'m> Machine<'m> {
         let Val::Ptr(base) = operands[0] else { return Ok(Val::Poison) };
         let Type::Pointer(space) = types.get(result) else { unreachable!("a pointer") };
         let index_bits = self.layout.pointer(*space).index_bits;
-        let mut offset: i128 = 0;
-        let mut current = source;
-        for (step, value) in operands[1..].iter().enumerate() {
+        let mut indices = Vec::new();
+        for value in &operands[1..] {
             let Val::Int { bits, width } = value else { return Ok(Val::Poison) };
-            let index = signed(*bits, *width);
-            if step == 0 {
-                offset += index * self.layout.alloc_size(types, current) as i128;
-                continue;
-            }
-            match types.get(current) {
-                Type::Array { element, .. } | Type::Vector { element, .. } => {
-                    offset += index * self.layout.alloc_size(types, *element) as i128;
-                    current = *element;
-                }
-                _ => {
-                    let (_, offsets) = self.layout.struct_layout(types, current);
-                    offset += offsets[index as usize] as i128;
-                    current = types.member(current, index as u64).expect("a verified field");
-                }
-            }
+            indices.push(Some(signed(*bits, *width)));
         }
+        let (offset, _) = self.layout.collect_offset(types, source, &indices);
         let address = (i128::from(base) + offset) as u128 & mask(index_bits);
         Ok(Val::Ptr(address as u64))
     }

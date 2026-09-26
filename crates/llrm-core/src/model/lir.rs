@@ -43,6 +43,10 @@ pub struct Insn {
     pub spill_store: bool,
     pub frame_adjust: bool,
     pub rematerialized: bool,
+    /// Its memory access must happen exactly as written.
+    pub volatile: bool,
+    /// A return that reads only its `requires` and the epilogue's registers.
+    pub reads_complete: bool,
 }
 
 impl Insn {
@@ -76,6 +80,8 @@ impl Insn {
             spill_store: false,
             frame_adjust: false,
             rematerialized: false,
+            volatile: false,
+            reads_complete: false,
         }
     }
 
@@ -89,6 +95,36 @@ impl Insn {
                 .as_ref()
                 .is_some_and(|what| what.op == Operation::Restore);
         !idiom && self.covers.is_some_and(|(start, end)| start == end)
+    }
+
+    /// Whether its access must happen exactly as written: its own mark, or
+    /// its MIR operation's.
+    #[must_use]
+    pub fn volatile(&self) -> bool {
+        self.volatile || self.op.as_ref().is_some_and(|op| op.volatile)
+    }
+
+    /// Whether it reads no register beyond its `requires` and the
+    /// epilogue's: its own mark, or its MIR operation's.
+    #[must_use]
+    pub fn reads_complete(&self) -> bool {
+        self.reads_complete || self.op.as_ref().is_some_and(|op| op.reads_complete)
+    }
+
+    /// Whether nothing may move across it or merge with it.
+    #[must_use]
+    pub fn barrier(&self) -> bool {
+        self.volatile || self.op.as_ref().is_some_and(|op| op.barrier())
+    }
+
+    /// Whether it may write memory its operands do not name. A call with no
+    /// MIR operation to list what it touches may touch anything.
+    #[must_use]
+    pub fn unmodeled_write(&self) -> bool {
+        match &self.op {
+            Some(op) => crate::analysis::effects::unmodeled_write(op),
+            None => self.what.as_ref().is_some_and(|what| what.op == Operation::Call),
+        }
     }
 
     /// Python `Insn.source`.

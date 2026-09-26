@@ -1537,7 +1537,7 @@ fn _named_values(where_: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction writes: a destination that *is* a value.
-fn _written(dests: &[Loc]) -> Vec<u32> {
+pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
     dests
         .iter()
         .filter_map(|one| match one {
@@ -1549,7 +1549,7 @@ fn _written(dests: &[Loc]) -> Vec<u32> {
 
 /// The values an instruction reads: its sources, and the addresses its
 /// destinations are reached by.
-fn _read(what: &ir::Semantics) -> Vec<u32> {
+pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
     let mut out = _named_values(&what.sources);
     for where_ in &what.dests {
         if !matches!(where_, Loc::Held(_)) {

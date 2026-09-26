@@ -89,7 +89,7 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     let held_lanes = |held: &Held, register: Register| _lanes(target::named(register, i64::from(held.width)));
 
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Return)
-        && one.op.as_ref().is_some_and(|op| op.reads_complete)
+        && one.reads_complete()
     {
         // Nothing runs after it: it reads explicit results and only the
         // architectural state its generated epilogue itself needs.

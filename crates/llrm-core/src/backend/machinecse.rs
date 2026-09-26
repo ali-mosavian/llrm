@@ -124,7 +124,7 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
         || one.frame_adjust
         || one.spill_reload
         || one.spill_store
-        || one.op.as_ref().is_some_and(|op| op.barrier())
+        || one.barrier()
     {
         return Ok(None);
     }
