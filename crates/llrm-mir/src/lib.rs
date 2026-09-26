@@ -17,6 +17,7 @@ pub mod parse;
 pub mod passes;
 pub mod print;
 pub mod types;
+pub mod valuetracking;
 pub mod verify;
 
 pub use edit::Position;
@@ -41,3 +42,5 @@ mod lint_tests;
 mod pass_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod valuetracking_tests;
