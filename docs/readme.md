@@ -11,7 +11,8 @@
 | [measurement](measurement/readme.md) | How we measure, the numbers, and per-program targets |
 | [qrender](qrender/readme.md) | The qrender correctness gate and its contract profiles |
 | [history](history) | Handover and takeover logs, the inherited plan, the Python port map |
-| [examples](examples) | Nib, BASIC, Pascal and C interop sample programs |
+| [examples](../examples) | Nib, BASIC, Pascal and C interop sample programs |
 
 [roadmap.md](roadmap.md) is the ordered plan; [testing.md](testing.md) says how to run the tests.
 [fragility.md](fragility.md) records what broke, or hid a break, and what guards it now.
+[codegen-improvements.md](codegen-improvements.md) ranks backend ideas from LLVM, gcc-ia16 and Open Watcom.

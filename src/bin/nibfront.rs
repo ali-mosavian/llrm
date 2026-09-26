@@ -11,7 +11,7 @@ fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == "--declare" {
-            let Some(language) = arguments.next().as_deref().and_then(llrm::frontends::nib::declarations::Language::named)
+            let Some(language) = arguments.next().as_deref().and_then(llrm_nib::declarations::Language::named)
             else {
                 eprintln!("nibfront: --declare takes h, bi or inc");
                 return ExitCode::from(2);
@@ -49,9 +49,9 @@ fn main() -> ExitCode {
     };
     if tokens_only || syntax_only {
         let text = if tokens_only {
-            llrm::frontends::nib::tokens_text(&source)
+            llrm_nib::tokens_text(&source)
         } else {
-            llrm::frontends::nib::syntax_text(&source)
+            llrm_nib::syntax_text(&source)
         };
         return match text {
             Ok(text) => {
@@ -62,7 +62,7 @@ fn main() -> ExitCode {
         };
     }
     if let Some(language) = declare {
-        return match llrm::frontends::nib::declare_file(Path::new(&input), language) {
+        return match llrm_nib::declare_file(Path::new(&input), language) {
             Ok(text) => {
                 print!("{text}");
                 ExitCode::SUCCESS
@@ -70,7 +70,7 @@ fn main() -> ExitCode {
             Err((path, error)) => report(&path.display().to_string(), error),
         };
     }
-    match llrm::frontends::nib::compile_file(Path::new(&input)) {
+    match llrm_nib::compile_file(Path::new(&input), &Default::default()) {
         Ok(hir) => {
             print!("{hir}");
             ExitCode::SUCCESS
@@ -79,7 +79,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn report(path: &str, error: llrm::frontends::nib::Diagnostic) -> ExitCode {
+fn report(path: &str, error: llrm_nib::Diagnostic) -> ExitCode {
     eprintln!("{path}:{error}");
     ExitCode::FAILURE
 }

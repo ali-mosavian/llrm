@@ -49,7 +49,7 @@ Compile and link logs were clean. No floating operation was changed.
 The production regression failed before the fix. Six boundary checks cover
 live flags, partial output, merged contents, invalid counts and unknown
 liveness. The inner counter's shift must stay inside the loop. A differential
-emission check of all 487 `fixtures/omf` objects, disabling only this new
+emission check of all 487 `tests/fixtures/omf` objects, disabling only this new
 exception for the baseline, found no changed bytes or emission outcomes.
 
 Full stage dumps, timed outputs and build logs are retained locally at

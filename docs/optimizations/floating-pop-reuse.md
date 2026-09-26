@@ -1,6 +1,6 @@
 # Preserving popping arithmetic operands
 
-`src/backend/floatalloc.rs` can now allocate a popping arithmetic operation whose
+`crates/llrm-core/src/backend/floatalloc.rs` can now allocate a popping arithmetic operation whose
 left operand, right operand, or both remain live. It duplicates only live
 operands and positions the right operand at the top before the original
 operation. It also separates identical operands into two physical slots:

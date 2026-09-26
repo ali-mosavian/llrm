@@ -3,31 +3,15 @@
 llrm, the Low Level Real Machine, is a compiler suite for 16-bit real-mode
 DOS aiming at GCC/LLVM-quality code. Its frontends are QuickBASIC-family
 source, C, its own language and BC-produced OMF objects; all share one MIR,
-optimizer, x86 backend and OMF writer. `qbopt/` is its Python predecessor.
+optimizer, x86 backend and OMF writer.
 
-## The Rust port -- read this first
-
-**The Rust port is a 1:1 translation of the Python compiler.** The Python
-code and its tests are the specification. Rust is how it is written down,
-not a chance to redesign it. The plan is the Codex thread's `PLAN.md`.
+## Layout
 
 - The crate is `llrm`; every command is `llrm-*`.
-- Frontends live under `src/frontends/<lang>` (`c`, `qb`, `nib`, `bc`);
-  everything else mirrors `qbopt/`: `qbopt/<pkg>/<mod>.py` is
-  `src/<pkg>/<mod>.rs`. Every Python function has a Rust function of the
-  same name.
-- Behaviour, refusals, ordering and emitted code match Python. Correct
-  output by a different mechanism is a failed port. So is a "safe subset",
-  a textbook version of a pass with the same name, or a new abstraction the
-  Python code does not have.
-- Every port names the Python `file:function` it replaces and ports that
-  module's tests in the same commit, with expected values produced by
-  Python.
-- Acceptance is `tools/port_diff.py`: stage dumps identical to Python's for
-  every fixture, not a passing Rust test.
-- A sub-agent forks with full context (`fork_turns: "all"`) or a brief that
-  restates this section and names the Python source, tests and stage.
-  Anything not traceable to Python is rejected.
+- Source frontends are crates (`crates/llrm-nib`, `llrm-qb`, `llrm-c`) over
+  `crates/llrm-core`, which holds the MIR, optimizer, x86 backend, OMF writer
+  and the BC frontend.
+  `docs/architecture/source-layout.md` has the rest.
 
 **Writing rules -- repeat them after every iteration.** Keep it short, to
 the point and coherent. No rambling. This applies to all writing: replies,
@@ -348,13 +332,13 @@ the pass; the machine arm is legacy and is retired last.
   checked.
 - **Round trip first.** Read an object and write it back; the bytes must be
   identical. Nothing that rewrites is trustworthy until nothing it does not
-  touch is disturbed. `tests/test_omf.py` asserts it on all four
-  configurations.
+  touch is disturbed. `omf.rs`'s `test_round_trip_is_byte_identical`
+  asserts it.
 - **Measure, do not reason, about what things cost.** DOSBox charges per
-  instruction and models no latency. Use `qbopt/price.py` for 486, P5, P6,
+  instruction and models no latency. Use `crates/llrm-core/src/cycles` for 486, P5, P6,
   K5, K6, K7 and Core, and treat those as a ranking -- they are published
   latencies, not measurements.
-- **BASIC is written the way the Python here is.** Names are camelCase and
+- **BASIC style.** Names are camelCase and
   descriptive in as few words as do that -- `posX` and `stepCount`, not `p` and
   not `theNumberOfStepsToRun`. Only a user-defined type's own name is
   PascalCase. Keywords are lowercase, always. No type suffixes: `as long` and
@@ -404,7 +388,7 @@ full matrix.
 
 ## What the runtime does that an instruction does not
 
-Measured with `suite/divmod.bas`, which traps under `/X` and prints `ERR`:
+Measured with `tests/suite/divmod.bas`, which traps under `/X` and prints `ERR`:
 
 - `x \ 0` raises BASIC error 11. `idiv` traps with `#DE`.
 - `-2147483648 \ -1` raises **nothing at all** -- `B$DVI4` returns. `idiv`
@@ -509,9 +493,9 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   -- measured on qb-qrender, every one of its 201 has one.
 - **The emulator patch is driven by a linker symbol, not only at run time.**
   An object that does floating point carries `FIDRQQ` as an EXTDEF -- 13
-  references across qb-qrender, one in `suite/fpemu.bas`. The runtime pass
+  references across qb-qrender, one in `tests/suite/fpemu.bas`. The runtime pass
   could not move code out from under an already-patched site; here the moving
-  happens before LINK has resolved that symbol, and `suite/fpemu.bas`
+  happens before LINK has resolved that symbol, and `tests/suite/fpemu.bas`
   establishes that it is safe -- it moves all 27 of its sites and gets BC's
   own answers in all twelve configurations.
 
@@ -591,7 +575,7 @@ is what the fix rests on -- it does not attempt the general case.
 region crossing from record A into record B extends A's own span to the
 edit's own end and shrinks B's to start there; neither is removed. That
 matters because a FIXUPP's offset is relative to whichever LEDATA precedes it
-in the file -- `src/objectfile/omf.rs`'s `fixups()` tracks `base` exactly that way, and
+in the file -- `crates/llrm-core/src/objectfile/omf.rs`'s `fixups()` tracks `base` exactly that way, and
 `relocate()` mirrors it with `covered`, reset on every LEDATA it passes. An
 earlier design that dropped the fully-absorbed record instead re-parented
 every FIXUPP that used to follow it: measured, 72 of 73 corpus crossings have
@@ -612,7 +596,7 @@ all -- correct by its own rule, wrong in fact, and caught because a run-twice
 idempotence check found the region on the second pass that the first had
 refused for nothing. Only two edits wanting to move the *same* boundary
 actually conflict, and that needs every taken edit at once to see, which a
-single region's own check cannot -- `src/rewrite.rs`'s
+single region's own check cannot -- `crates/llrm-core/src/rewrite.rs`'s
 `drop_chained_crossings` runs after every region has been decided
 independently, refusing the later of the two rather
 than the runtime pass's blunter option of costing the whole module.
@@ -632,14 +616,6 @@ than the runtime pass's blunter option of costing the whole module.
 
 ## Code
 
-- **Python 3.13+, and `uv` for everything.** `uv run`, `uv sync`, `uv add`. No
-  `pip`, no hand-rolled venv.
-- **Write 3.13, not 3.6.** `match` rather than an `if`/`elif` chain, structural
-  patterns over a dataclass rather than a field test, `StrEnum` where a set of
-  string constants would otherwise be matched by name -- a bare name in a
-  `case` is a capture pattern and matches everything, so the constants have to
-  be dotted for the match to mean anything. `type` aliases, `X | None`, the
-  walrus where it shortens.
 - **Names say what the thing is, in as few words as do that.** `value`, not
   `v`; `from_memory`, not `m`. Not `the_value_being_encoded` either.
 - **The code explains itself, or it is rewritten until it does.** A comment
@@ -653,53 +629,19 @@ than the runtime pass's blunter option of costing the whole module.
   module-level code that does work. Module-level *constants* are fine and
   wanted -- but a table that has to be computed is computed by a function that
   returns it and bound once, and a script's body lives in `main()`.
-- **Functions over classes.** A class earns its place only when behaviour and
-  state travel together. Data is a `@dataclass(slots=True)`, and `frozen=True`
-  unless something has to mutate it.
-- **Prefer a comprehension where it fits.** A `for` loop whose body only ever
-  appends one value or sets one dict entry per iteration is a comprehension
-  that has not been written as one yet -- reach for one instead of the loop
-  and the accumulator.
-- **Type annotations on every parameter and every return.** ruff's `ANN`
-  requires them; `ty` checks they are true. Neither does the other's job --
-  ty has no `disallow-untyped-defs`, and an unannotated parameter is
-  `Unknown`, which is assignable both ways and so can never conflict.
-- `ruff check` and `ruff format`, and `isort` for import order -- configs
-  borrowed from capcore: line length 120, double quotes, one import per line.
+- **Functions over types.** A type earns methods only when behaviour and
+  state travel together.
+- **Prefer an iterator chain where it fits.** A loop that only pushes one value
+  per iteration is a `map`/`filter`/`collect` not yet written as one.
+- **Match the surrounding formatting.** `cargo fmt` is not run on this tree.
 - **No docstrings. No comments unless something is not trivial** -- and here
   that means a comment carries a *fact that is not in the code*: a
   measurement, the reason a case is refused, something BC does that nobody
   would guess. Narrating the next line does not qualify. Module-level facts
   live in this file or in `docs/`, not in a docstring.
-- **pytest.** No test classes. Fixtures in `conftest.py` for the OMF corpus.
-  `parametrize` wherever one assertion runs over the fixtures, the twelve
-  configurations, or an opcode table -- which is most of this suite.
-- **A test reads the corpus through `tests/corpus.py`, not through the pass.**
-  Every stage is a pure function of an object's bytes and the suite asked for
-  the same answers over and over -- 3615 `code_map()` calls for 110 distinct
-  answers, 880 `rewrite()`s for a few hundred, counted -- which is most of what
-  a run used to cost. `corpus.loaded/mapped/partitioned/reached/bodies/extents/
-  relocated/rewritten` memoise on SHA-256 over the input bytes, every
-  `qbopt/*.py`, and the iced-x86 version, so an edited fixture and an edited
-  pass both miss. `QBOPT_NO_CORPUS_CACHE=1` bypasses it and the suite passes
-  identically either way; a `Module` built by hand in a test still goes
-  straight to the pass.
-- `pre-commit` runs ruff, ruff-format, the whitespace hooks, `ty`, and the
-  whole test suite -- every tier, including the ones that need DOSBox and the
-  DOS toolchains. Nothing is committed on a partial run.
-- **While working, run only the tests for the files being changed.** The
-  whole suite above is the commit gate, not the inner loop -- point pytest at
-  the specific test file, or use `-m "not e2e"` for a fast host-only pass,
-  and save the full run for right before committing.
-- **`tools/fuzzcheck.py`/`tools/matrix.py`/`tools/mutate.py` are the gate for
-  a whole batch of related fixes, not for each one inside it.** Landing three
-  fixes in sequence needs three `pytest` runs (cheap, one per commit) but one
-  DOSBox-heavy sweep at the end, not three -- these are real-hardware-emulator
-  runs even with the launch cache warm, and re-running the full sweep after
-  every single fix is exactly the waiting this project has already paid once
-  to avoid (`docs/testing.md`). Use the fast per-fix regression test to catch
-  an obvious break early; save the expensive sweep for confirming the whole
-  batch before it lands.
+- **Tests sit beside their module** (`*_tests.rs`, or `#[cfg(test)]` in it).
+- **While working, run only the tests for the files being changed**:
+  `cargo test --release <filter>`. See `docs/testing.md`.
 
 ## Writing
 

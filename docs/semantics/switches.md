@@ -92,7 +92,7 @@ Evidence: `/tmp/qbopt-dispatch-boundary.9ap9IY/result-final.png`; per-case
 compiler/linker logs, original/emitted objects, output logs and replay scripts
 are beside it. Every compile reports zero severe errors. FPS is inapplicable.
 
-`fixtures/regressions/dispatch.bas` (CRLF) and `dispatch-p-g2.obj` retain the
+`tests/fixtures/regressions/dispatch.bas` (CRLF) and `dispatch-p-g2.obj` retain the
 256 witness, compiled as D6.BAS. The initial INPUT version refused an
 unestablished helper interface; it was not accepted as an optimized run.
 Seventeen focused tests pass, including live-output/unknown-input refusal

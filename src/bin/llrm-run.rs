@@ -4,9 +4,9 @@
 
 use std::process::ExitCode;
 
-use llrm::hir::codec;
-use llrm::hir::execute;
-use llrm::hir::model::Number;
+use llrm_core::hir::codec;
+use llrm_core::hir::execute;
+use llrm_core::hir::model::Number;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
     };
-    let hir = match llrm::frontends::nib::compile_file(std::path::Path::new(input)) {
+    let hir = match llrm_nib::compile_file(std::path::Path::new(input), &Default::default()) {
         Ok(hir) => hir,
         Err((path, error)) => {
             eprintln!(

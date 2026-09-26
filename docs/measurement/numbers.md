@@ -84,7 +84,7 @@ Raw OPT ticks: `4373286, 4374896, 4373286, 4374864, 4375652`.
 
 Reproduction stamp: revision `6020221` plus the `raising_bytes` fix committed
 with this measurement; macOS 27.0 arm64; DOSBox-X 2026.06.02 SDL2.
-The compiled BC input is `fixtures/bench/nbody-v-g3.obj`.
+The compiled BC input is `tests/fixtures/bench/nbody-v-g3.obj`.
 SHA256 values:
 
 | Artifact | SHA256 |
@@ -147,7 +147,7 @@ floating CSE or a fully optimized integrator. Full stages are in
 
 | Artifact | SHA256 |
 |---|---|
-| `fixtures/bench/fpbench-v-g3.obj` | `24b93d10ff0b16c00ffa39ceff4e29446021958c7f5fcc28fd7892cc9a0918d1` |
+| `tests/fixtures/bench/fpbench-v-g3.obj` | `24b93d10ff0b16c00ffa39ceff4e29446021958c7f5fcc28fd7892cc9a0918d1` |
 | Optimized OBJ | `b11b99d1ef80493f412472252b70a63d12bc797839728ed94c2cfa2b74bcd3bb` |
 | BASE.EXE | `0a3b75b9abd194d7cd7f26a5605f414f947c9dd70c6255d49f2f6e2a182d2431` |
 | OPT.EXE | `76d17625a0373da4886c04145982813e813b8a7745dbb09cc651ce618d050bd3` |
@@ -155,7 +155,7 @@ floating CSE or a fully optimized integrator. Full stages are in
 ## Static: what the pass does to the corpus
 
 
-Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
+Measured 2026-08-30, over the 110 objects in `tests/fixtures/omf`, with
 `uv run python tools/census.py`, after `docs/optimizations/residue.md`'s D, I and B all
 landed.
 
@@ -234,7 +234,7 @@ rewritten object is now **26 bytes larger** than BC's own, 1386 against 1360
 object's byte count at all: every one of its 9 measured sites is still
 refused by the same growth check that refuses any region wider than what it
 replaces, for reasons `docs/optimizations/residue.md`'s own F section now measures in
-full rather than estimates. The 110-object `fixtures/omf` static census
+full rather than estimates. The 110-object `tests/fixtures/omf` static census
 (below) is unchanged by either -- neither shape occurs in that corpus.
 
 4268 bytes bigger than the previous census (16942), from a correctness fix
@@ -376,7 +376,7 @@ refusals above.
 
 Re-measured 2026-08-31, code bytes only, `v-g3`.
 
-| | fixtures/omf (155) | qb-qrender (15) |
+| | tests/fixtures/omf (155) | qb-qrender (15) |
 |---|---|---|
 | BC | 95,189 | 74,855 |
 | absorbed | 89,665 (-5.80%) | 76,198 (+1.79%) |
@@ -509,7 +509,7 @@ Both numbers are on code that computes the right answer. An earlier
 measurement of 1.78 was not: `forward.py` was deleting the second of two
 `fld dword ptr [si]`, and the build it timed printed -2147483648 for every
 coordinate. It ran faster because it was doing less, and less was wrong.
-`suite/fpdeep.bas` exists so that shape is in the corpus now.
+`tests/suite/fpdeep.bas` exists so that shape is in the corpus now.
 
 ## Absorption
 
@@ -517,7 +517,7 @@ All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
 `B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
 them. Base is unchanged, as it must be
 -- BC's own build does not move. `bench/nbody.bas` uses Q23.9 (see
-`suite/nbody.bas`'s own comment), and BC alone builds the base half of this
+`tests/suite/nbody.bas`'s own comment), and BC alone builds the base half of this
 comparison.
 
 Re-measured, not reasoned: opt dropped from 4649876 to 4519562 ticks (2.8%
@@ -570,7 +570,7 @@ hardware, and this document quotes both rather than picking the flattering
 one.
 
 One honest gap: `bench/nbody.bas` itself has no golden and prints only
-`TICKS=`, so nothing here checks its own arithmetic. `suite/nbody.bas` --
+`TICKS=`, so nothing here checks its own arithmetic. `tests/suite/nbody.bas` --
 the same integrator, Q16.16 instead of Q23.9 -- is golden-checked across all
 twelve configurations by `tools/matrix.py`/`tests/test_e2e.py`, and passes;
 that is the evidence this number rests on for correctness, not an

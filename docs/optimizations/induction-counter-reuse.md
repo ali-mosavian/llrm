@@ -1,6 +1,6 @@
 # Reuse a recurrence for loop termination
 
-`src/optimize/indvars.rs` removes a controlling induction variable when it is
+`crates/llrm-core/src/optimize/indvars.rs` removes a controlling induction variable when it is
 otherwise used only by its own update and constant exit uses. An existing
 recurrence already needed by the body supplies the termination test.
 

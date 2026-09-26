@@ -144,7 +144,7 @@ is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop. On `bench/nbody.bas`
 (measured after D and I, both below, are already
 in): all 3 instances gone, 24 bytes, the object's own code segment 1419 ->
 1395 bytes, and `tools/residue_census.py`'s own B count on the freshly
-rewritten object is 0. Not exercised by any of the 110 `fixtures/omf` objects: the shape
+rewritten object is 0. Not exercised by any of the 110 `tests/fixtures/omf` objects: the shape
 needs both a widened region's own restore *and* an immediately adjacent
 `consume()`-absorbed call, which the small per-fixture corpus does not
 happen to produce -- `tools/matrix.py`'s 12/12 and `tools/fuzzcheck.py`'s
@@ -352,7 +352,7 @@ covers directly, caught by a second-round design review, not by testing.
 
 Two real bugs were found this way before this restriction existed at all --
 built, then caught by `tools/fuzzcheck.py`/`tools/matrix.py`, not by
-inspection. `suite/nots.bas` is why the restriction exists in the first
+inspection. `tests/suite/nots.bas` is why the restriction exists in the first
 place: BC pre-stages one call's own argument at a frame address (`mov
 [bp-14h],dx` right before `call far B$PSSD`) that this pass cannot tell
 apart from an ordinary local spill, and bridging freely after a store the
@@ -385,7 +385,7 @@ this document also shifted them):
 Region `0x113-0x14c` (57 bytes, extending past the worked statement above
 into the next, cx:bx-paired one right after it) is **taken**, 57 -> 46 bytes.
 `bench/nbody.bas`'s own rewritten object: **1395 -> 1386 bytes**, all of it
-this one region -- corpus-wide (`fixtures/omf`'s 110 objects), the static
+this one region -- corpus-wide (`tests/fixtures/omf`'s 110 objects), the static
 census does not move at all (26446 -> 21302 bytes, unchanged from the D/I/B
 census): none of the 110 small, single-statement fixtures happen to interleave
 an unrelated instruction between two halves of one long expression the way
@@ -501,7 +501,7 @@ routine may not touch dx/bx at all, but nothing here has established which
 ones, so it is charged as reading everything). `bench/nbody.bas`'s object is
 unchanged by this alone: 1386 bytes before and after `Op.MOVSX` is added
 (E's own -9 bytes, from 1395, holds either way), and the corpus-wide census
-does not move a single byte (`fixtures/omf`: 26446 -> 21302, identical to
+does not move a single byte (`tests/fixtures/omf`: 26446 -> 21302, identical to
 the D/I/B baseline).
 
 **A second mechanism was tried and reverted.** `mov ax,<r16>/cwd/push
@@ -606,7 +606,7 @@ that does not work out falls straight through to the unmodified, narrow-
 boundary standalone `absorb()` this project already had. On `bench/nbody.bas`
 specifically: 12 call sites folded, 59 bytes saved over what standalone
 absorption plus an un-widened tail would have produced. Corpus-wide
-(`fixtures/omf`, 110 much smaller, more varied programs), 19 instances, 57
+(`tests/fixtures/omf`, 110 much smaller, more varied programs), 19 instances, 57
 bytes -- see `docs/measurement/numbers.md`.
 
 ## I -- restores that are simply dead
@@ -802,10 +802,10 @@ but 57 bytes better, net, than before it. D, I and B: `qbopt/legacy/lift.py`'s
 `Kind.ALU_IMM`/`Op.ALUI`, the new `qbopt/registers.py`, and
 `qbopt/rewrite.py`'s `dead_pairs_after()` and
 `drop_restore_repush_round_trips()`; corpus-wide static census 26446 ->
-21302, 19 per cent smaller (110 `fixtures/omf` objects are mostly too small
+21302, 19 per cent smaller (110 `tests/fixtures/omf` objects are mostly too small
 to exercise I or B at all -- see each pattern's own paragraph). E:
 `qbopt/legacy/lift.py`'s `_bridges()`, `Bridge`, and the `committed` gate;
-corpus-wide static census does not move (110 fixtures/omf objects do not
+corpus-wide static census does not move (110 tests/fixtures/omf objects do not
 happen to interleave an unrelated instruction the way `bench/nbody.bas`
 does), `bench/nbody.bas` itself -9 bytes. F: `qbopt/legacy/lift.py`'s `Op.MOVSX`
 and `_sign_extend_step()`; corpus-wide static census does not move either,

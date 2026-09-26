@@ -67,7 +67,7 @@ and can emit the one instruction `select.py` knows, but cannot rebuild a
 body -- and CSE must emit a copy, folding an immediate, LICM a move between
 blocks.
 
-That is done. `src/rewrite.rs` writes the code segment from MIR, lowering selects
+That is done. `crates/llrm-core/src/rewrite.rs` writes the code segment from MIR, lowering selects
 machine semantics into LIR, and opaque operation identities recover source
 ownership from the module's `SourceMap`. `layout.py` consumes the allocated
 LIR, places the result and relaxes its branches. What orders the milestones
@@ -246,7 +246,7 @@ Built, no consumer:
       known**: no join has every path into it agreeing on a number. The
       262 it gained came from reading `Op.made`, so a value an earlier
       pass computed counts too
-- [x] `wide.py` — superseded by `src/frontends/bc/pairs.rs`, which is on. See M5
+- [x] `wide.py` — superseded by `crates/llrm-core/src/frontends/bc/pairs.rs`, which is on. See M5
 - [ ] `regalloc.colour()` — correct, and cannot pay while identity is optimal at pressure 6/6
 
 ## M1 — instruction selection
@@ -317,7 +317,7 @@ now has every body layable**; it was 42 when this was written.
       targets resolved, and all 4,846 fixups in the span carried. 34 of 125
       objects; the rest refuse on an op `select.py` cannot emit, or on data
       BC put inline
-- [x] turn that image into a fresh object — `src/backend/omfwrite.rs`, shared
+- [x] turn that image into a fresh object — `crates/llrm-core/src/backend/omfwrite.rs`, shared
       with the C frontend. BC's OBJ supplies decoded declarations, data and
       relocation semantics; none of its record stream is reused as an output
       template. EXTDEFs are emitted before all LEDATA/FIXUPP records.
@@ -338,7 +338,7 @@ now has every body layable**; it was 42 when this was written.
       by however far it moved, and what it cannot do is fix a branch landing
       in its middle, which is exactly what reachability rules out
 
-**Whole-segment emission is on.** `src/rewrite.rs` writes the code segment from
+**Whole-segment emission is on.** `crates/llrm-core/src/rewrite.rs` writes the code segment from
 MIR: 170 of 170 corpus objects and all 15 of qb-qrender's BC-built modules
 rebuild, all nineteen suite programs run right on all twelve
 configurations, and the fuzz corpus finds no divergence. It is not a size
@@ -522,7 +522,7 @@ So the work is deleting a reload, not allocating a class:
 Done when the old path is deleted, not when MIR also does it.
 
 Three of the five are built and on, and they find nothing -- **which is not
-parity, and was read as parity here for too long.** `src/rewrite.rs` runs
+parity, and was read as parity here for too long.** `crates/llrm-core/src/rewrite.rs` runs
 `forward.py` and `memory.py` first, so of course the MIR versions find
 nothing left. Nobody had measured the other direction.
 
@@ -582,7 +582,7 @@ have to be measured with their MIR counterparts carrying the load alone.
 
 ### What the pair analysis is for
 
-`src/frontends/bc/pairs.rs` reads BC's two long register pairs over values, and five of
+`crates/llrm-core/src/frontends/bc/pairs.rs` reads BC's two long register pairs over values, and five of
 its shapes agree with `lift.py` exactly, object by object -- load 533,
 alu-m 363, alu-i 121, not 51, move 12 across the corpus. It is easy to
 mistake it for widening's prerequisite and judge it on what widening saves.
@@ -644,7 +644,7 @@ version without it would make qb-qrender bigger.
         a two-and-two pair. `layout.py` keys every op by address, so the two
         collided. What an op emits and which of BC's bytes it stands for are
         separate questions, and `layout.py` now measures a restore by the
-        first. `suite/negnot.bas` is that shape, added because no fixture
+        first. `tests/suite/negnot.bas` is that shape, added because no fixture
         had it -- and with it the corpus is 170 objects, which moved every
         measured count in this file
 
@@ -684,7 +684,7 @@ version without it would make qb-qrender bigger.
         high and low halves of one long -- and of the long stranded there
         for the *next* call, not either operand of this one
 
-      **And `src/frontends/bc/stack.rs` already answered all three**, and did before
+      **And `crates/llrm-core/src/frontends/bc/stack.rs` already answered all three**, and did before
       any of that was written -- a virtual stack per block, a closed
       allowlist of push widths, a recognised call popping `4 * arity`, and
       an unknown one resetting rather than guessing. `calls.py` has used it
@@ -714,7 +714,7 @@ version without it would make qb-qrender bigger.
       **It needed a lever to be testable at all.** `calls.py` absorbs every
       arithmetic call before a body reaches the MIR tower, so with the
       machine arm on the emitter finds nothing and no gate exercises it.
-      `--no-absorb-calls` on `src/rewrite.rs`, `matrix.py` and `fuzzcheck.py` is
+      `--no-absorb-calls` on `crates/llrm-core/src/rewrite.rs`, `matrix.py` and `fuzzcheck.py` is
       that lever, and it is how the machine arm gets retired. Under it,
       **all twelve configurations pass all nineteen suite programs** and the
       fuzz corpus finds no divergence.
@@ -796,7 +796,7 @@ Largest untouched surface, newly testable: `fuzzgen.py` generates SINGLE
 and DOUBLE, and `87bhelp.asm`'s six helpers have contracts.
 
 - [x] the x87 memory and popping forms select — `fld [x]`, `faddp st(i),st(0)`
-- [x] x87 stack positions as MIR values — `src/frontends/bc/fpstack.rs`. Entering slots
+- [x] x87 stack positions as MIR values — `crates/llrm-core/src/frontends/bc/fpstack.rs`. Entering slots
       are minted rather than assumed empty: BC leaves values on the stack
       across a branch
 - [x] that shape, measured. qb-qrender's 191 bodies hold 743 `fld` against
@@ -852,7 +852,7 @@ A benchmark found the one they missed. `bench/fpbench.bas` printed
 address looked like a load and a redundant reload, and deleting the second
 slid every x87 slot after it. Nothing in the suite could have caught it --
 every other float program here is one operation deep, and `fuzzgen.py`'s
-floats stay inside the exactly-representable integers. `suite/fpdeep.bas`
+floats stay inside the exactly-representable integers. `tests/suite/fpdeep.bas`
 is the two-deep indexed shape, added so the corpus holds it now.
 
 Widening the generator to cover it found a second one immediately. It made
@@ -914,4 +914,4 @@ had one.
 ## Housekeeping
 
 - [x] `docs/architecture/readme.md` — brought up to date, including that the MIR
-      tower emits now and that `src/rewrite.rs` does not call it
+      tower emits now and that `crates/llrm-core/src/rewrite.rs` does not call it

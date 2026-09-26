@@ -18,13 +18,13 @@ targets and their evidence belong in `docs/measurement/targets.md`.
 
 ```mermaid
 flowchart LR
-    QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>frontends/qb/"]
-    Nib["Nib source"] --> NibFront["lexer, parser, semantics<br/>src/frontends/nib/"]
-    QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>src/hir/"]
+    QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>crates/qbfront/"]
+    Nib["Nib source"] --> NibFront["lexer, parser, semantics<br/>crates/llrm-nib/src/"]
+    QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>crates/llrm-core/src/hir/"]
     NibFront -->|"common HIR"| Hir
-    C["C source"] --> Wcc["Open Watcom front end<br/>owshim/ capture"]
-    Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>src/frontends/c/"]
-    BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>src/frontends/bc/"]
+    C["C source"] --> Wcc["Open Watcom front end<br/>toolchain/owshim/ capture"]
+    Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>crates/llrm-c/src/"]
+    BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>crates/llrm-core/src/frontends/bc/"]
 
     Hir -->|"MirBody"| Opt
     CRaise -->|"MirBody"| Opt
@@ -32,17 +32,17 @@ flowchart LR
 
     subgraph Middle["Machine-independent middle end"]
         direction LR
-        Opt["MIR fixed point<br/>src/optimize/transform.rs"] --> MirOut["Optimized MirBody"]
+        Opt["MIR fixed point<br/>crates/llrm-core/src/optimize/transform.rs"] --> MirOut["Optimized MirBody"]
     end
 
     MirOut -->|"the lowering boundary"| Lower
 
     subgraph Backend["Machine backend"]
         direction LR
-        Lower["Instruction selection<br/>src/backend/lower.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
-        LIR --> Machine["Machine phases<br/>src/flow.rs"]
+        Lower["Instruction selection<br/>crates/llrm-core/src/backend/lower.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
+        LIR --> Machine["Machine phases<br/>crates/llrm-core/src/flow.rs"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Select, layout, fresh OMF<br/>src/backend/omfwrite.rs"]
+        Physical --> Write["Select, layout, fresh OMF<br/>crates/llrm-core/src/backend/omfwrite.rs"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
@@ -57,12 +57,12 @@ flowchart LR
 
 | Tool | Frontend | Raise |
 | --- | --- | --- |
-| `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, lowered by `src/hir/lower.rs` with the QB runtime ABI |
-| `llrm-nib` | `src/frontends/nib/` | the same HIR path |
-| `llrm-c` | a patched Open Watcom front end records its code-generator calls | `src/frontends/c/raise_hir.rs`, Borland's medium-model ABI |
-| `llrm-omf` | OMF decode of BC's machine code | `src/frontends/bc/raising_*.rs` recognition |
+| `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, lowered by `crates/llrm-core/src/hir/lower.rs` with the QB runtime ABI |
+| `llrm-nib` | `crates/llrm-nib/src/` | the same HIR path |
+| `llrm-c` | a patched Open Watcom front end records its code-generator calls | `crates/llrm-c/src/raise_hir.rs`, Borland's medium-model ABI |
+| `llrm-omf` | OMF decode of BC's machine code | `crates/llrm-core/src/frontends/bc/raising_*.rs` recognition |
 
-There is one production optimizer and one production backend. `src/legacy/`
+There is one production optimizer and one production backend. `crates/llrm-core/src/legacy/`
 remains only where raising or encoding still shares old recognition data; it is
 not a second optimization route.
 
@@ -164,13 +164,13 @@ The main ownership split is:
 
 | Concern | Owner |
 | --- | --- |
-| OMF parsing and record fidelity | `src/objectfile/omf.rs` |
-| Segment, group, symbol, call and object-bound facts | `src/objectfile/module.rs` |
-| Instruction lengths and BC emulator forms | `src/frontends/bc/declen.rs` |
-| Reachability, inline tables and basic blocks | `src/frontends/bc/blocks.rs` |
-| BC calling and runtime contracts | `src/abi/runtime.rs`, `runtime.toml` |
-| Idiom recognition | `src/frontends/bc/raising_*.rs`, coordinated by `src/model/mir.rs` |
-| Pure analyses used by passes | `src/analysis/` |
+| OMF parsing and record fidelity | `crates/llrm-omf/src/omf.rs` |
+| Segment, group, symbol, call and object-bound facts | `crates/llrm-omf/src/module.rs` |
+| Instruction lengths and BC emulator forms | `crates/llrm-core/src/frontends/bc/declen.rs` |
+| Reachability, inline tables and basic blocks | `crates/llrm-core/src/frontends/bc/blocks.rs` |
+| BC calling and runtime contracts | `crates/llrm-core/src/abi/runtime.rs`, `runtime.toml` |
+| Idiom recognition | `crates/llrm-core/src/frontends/bc/raising_*.rs`, coordinated by `crates/llrm-core/src/model/mir.rs` |
+| Pure analyses used by passes | `crates/llrm-core/src/analysis/` |
 
 Established terminal calls lose their false return edges before body ownership
 and SSA construction. Registered `B$OEGA` error handlers are independent entries,
@@ -304,7 +304,7 @@ Pass responsibilities are intentionally narrow:
 | Placement in program order | `place` | Where may a surviving definition execute without changing meaning? |
 | Division reuse | `gvn` | Can an existing quotient/remainder serve another use? |
 
-`src/analysis/` contains analyses, not phases. Liveness, intervals, loops,
+`crates/llrm-core/src/analysis/` contains analyses, not phases. Liveness, intervals, loops,
 induction, ranges, float facts and available values answer questions without
 mutating a body.
 
@@ -328,7 +328,7 @@ flowchart LR
 
 Cost belongs at the correct level. Whether `x * 8` equals `x << 3` is a MIR
 fact; whether a shift/add sequence beats `imul` on 386, 486, P5 or P6 is a
-lowering decision informed by `src/backend/timing.rs` and `cycles/`. MIR never
+lowering decision informed by `crates/llrm-core/src/backend/timing.rs` and `cycles/`. MIR never
 names a CPU.
 
 ## Lowering and LIR
@@ -366,7 +366,7 @@ The principal constraints are:
 
 ## Machine pipeline and allocation
 
-The phase order lives in `src/flow.rs`, analogous to LLVM's target pass
+The phase order lives in `crates/llrm-core/src/flow.rs`, analogous to LLVM's target pass
 configuration. Analyses such as live intervals are invoked by these phases but
 are not themselves listed as transformations.
 
@@ -430,7 +430,7 @@ the MIR boundary.
 | `phielim.py` | `PHIElimination` | SSA-to-RTL edge moves |
 | `twoaddr.py` | `TwoAddressInstructionPass` | target constraints during RTL expansion/reload |
 | `coalesce.py` | `RegisterCoalescer` | IRA copy coalescing |
-| `src/analysis/intervals.rs` | `LiveIntervals` / spill weights | IRA live ranges and costs |
+| `crates/llrm-core/src/analysis/intervals.rs` | `LiveIntervals` / spill weights | IRA live ranges and costs |
 | `allocate.py` | `RegAllocGreedy` + `VirtRegRewriter` | IRA + LRA |
 | `spiller.py` | `InlineSpiller` | LRA spill/reload insertion |
 | `prologue.py` | `PrologEpilogInserter` | prologue/epilogue RTL passes |
@@ -516,13 +516,13 @@ buffers every object in a link unit before writing any of them.
 
 ```mermaid
 flowchart TD
-    Rewrite["src/rewrite.rs<br/>CLI, policy and finalization"] --> Whole["src/wholeseg.rs<br/>module orchestration"]
+    Rewrite["crates/llrm-core/src/rewrite.rs<br/>CLI, policy and finalization"] --> Whole["crates/llrm-core/src/wholeseg.rs<br/>module orchestration"]
     Whole --> Obj["objectfile/<br/>OMF model, module facts, writing, relocation"]
     Whole --> Front["frontend/<br/>decode, CFG and recognition helpers"]
     Whole --> ABI["abi/<br/>runtime and event contracts"]
     Whole --> Model["model/<br/>IR, MIR, LIR and pass interfaces"]
     Whole --> Opt["optimize/<br/>MIR transformations"]
-    Whole --> Flow["src/flow.rs<br/>machine pass order"]
+    Whole --> Flow["crates/llrm-core/src/flow.rs<br/>machine pass order"]
     Flow --> Back["backend/<br/>lowering, allocation, peephole, encoding"]
 
     Front --> Model
@@ -593,7 +593,7 @@ one documented target without materially regressing another.
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
   Raw-MIR inventory (2026-09-10): 489 objects, 587 bodies, 465 natural
-  loops across `fixtures/omf` and `fixtures/bench`. Every loop already has
+  loops across `tests/fixtures/omf` and `tests/fixtures/bench`. Every loop already has
   a dedicated preheader and exits; only VBDOS PITSNAP in FPBENCH and NBODY
   has multiple latches. General canonicalization remains required, but is
   not the current arithmetic-kernel optimization blocker.
@@ -659,7 +659,7 @@ one documented target without materially regressing another.
   with downstream SSA merges where their values meet. Bypass phi inputs are
   repaired on their incoming edges; a direct use reachable without a defining
   exit is left unchanged rather than supplied an invented value.
-  Real PDS `fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
+  Real PDS `tests/fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
   paths and an accumulator use after their join. Its MIR gains two exit phis
   and one downstream merge; all five focused regressions pass, including a
   following cycle and a bypass join. Baseline and both native builds print
@@ -752,7 +752,7 @@ one documented target without materially regressing another.
   answers pass through fresh OMF emission, LINK and DOSBox. A separate
   boundary test rejects widening the sequence 65535,0 as 65535,65536.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
-  `src/analysis/memoryssa.rs` provides live-on-entry, memory uses/definitions and
+  `crates/llrm-core/src/analysis/memoryssa.rs` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Pure calls have no memory access, complete read-only calls
   are uses, and complete write footprints are definitions.
 - [x] Refine alias, object-identity, escape and per-argument mod/ref facts used
@@ -958,7 +958,7 @@ one documented target without materially regressing another.
   elimination. Dead-store elimination remains its own ordered transform.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
-  `src/analysis/constant_cycles.rs` combines its sparse value worklist with
+  `crates/llrm-core/src/analysis/constant_cycles.rs` combines its sparse value worklist with
   executable-edge discovery, feeding feasible phi inputs back into branch
   evaluation. New backedges invalidate optimistic constants; pending reachable
   values become overdefined before completion, and unresolved conditions keep
@@ -1110,7 +1110,7 @@ one documented target without materially regressing another.
   accepted for 386 and rejected for P5. Matmul's real eight-trip loop remains
   expanded; moving candidate discovery after convergence made its emitted
   branch regression fail and was corrected at the pass boundary.
-  `src/optimize/loopclone.rs` now supplies CFG-preserving peeling candidates:
+  `crates/llrm-core/src/optimize/loopclone.rs` now supplies CFG-preserving peeling candidates:
   fresh SSA values, cloned branch joins and early-exit phis, followed by the
   residual loop. It requires loop-closed live-outs and rejects opaque dispatch
   terminators. Two peeled iterations of real IVARM produce valid SSA/phi edges
@@ -1203,7 +1203,7 @@ one documented target without materially regressing another.
   Floating point, traps, non-parameter memory, observed ABI-only results and
   multiply-called bodies remain conservative. The size bound receives only
   the selected CPU's numeric call cost; the transform sees no opcode or
-  register name. On `fixtures/c/choose.cgs`, the one-use `pick` and `which`
+  register name. On `tests/fixtures/c/choose.cgs`, the one-use `pick` and `which`
   bodies disappear and their six pushes, two calls and two cleanups vanish:
   the whole module falls from 93 bytes / 44 instructions to 48 bytes / 22
   instructions on every CPU profile. GCC 16.2's installed i686 compiler also
@@ -1225,7 +1225,7 @@ one documented target without materially regressing another.
 ### Machine backend
 
 - [x] Add global machine copy propagation after allocation.
-  `src/backend/copyprop.rs` eliminates equal-register copies and forwards explicit
+  `crates/llrm-core/src/backend/copyprop.rs` eliminates equal-register copies and forwards explicit
   uses to their reaching copy source using byte-level agreement over every
   reachable incoming edge. Source and destination clobbers invalidate the
   direction lane by lane; fixed, implicit and unencodable operands are refused

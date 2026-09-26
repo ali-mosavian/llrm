@@ -15,10 +15,34 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 
 | Tool | Input |
 | --- | --- |
-| `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS |
-| `llrm-c` | C, through a patched Open Watcom front end (`owshim/`) |
+| `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS, and QuickrBASIC |
+| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`) |
 | `llrm-nib` | llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
+
+QuickrBASIC (`--dialect quickr`) is VBDOS BASIC extended, linked against the VBDOS
+runtime. It adds sized and unsigned integers, mandatory declarations, f-strings,
+PRIVATE procedures, `+=`, BREAK/CONTINUE, `FOR x IN`, `a IF c ELSE b`, IN, chained
+comparisons, `RETURN value`, tuples, record and array results, and string slices
+`s(a:b:c)`. See [the dialects](docs/frontends/qb/dialects.md).
+
+`FOR x [AS type] IN …` walks a one-dimensional array (`a()`), `RANGE(stop)` or
+`RANGE(start, stop[, step])`, the characters of a string, or the array a FUNCTION
+`AS t()` returns. `x` is a copy of each element, and BREAK, CONTINUE and EXIT FOR
+work as in any loop.
+
+```basic
+DIM q AS INTEGER, r AS INTEGER, parity AS STRING
+q, r = divmod(17, 5)
+FOR i IN RANGE(q)
+    parity = "even" IF i MOD 2 = 0 ELSE "odd"
+    PRINT f"{i}: {parity}"
+NEXT
+
+FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
+    RETURN a \ b, a MOD b
+END FUNCTION
+```
 
 `llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
 coprocessor is required.
@@ -119,15 +143,8 @@ _dot endp
 
 ```sh
 cargo test --release <name>
-uv run python tools/port_diff.py FIXTURE
 ```
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
 [docs/testing.md](docs/testing.md).
-
-## Python reference
-
-`qbopt/` is the Python compiler the Rust crate was ported from. It is legacy
-and kept only as the reference `tools/port_diff.py` diffs stage dumps against;
-[the port map](docs/history/port-map.md) tracks every module.

@@ -1439,7 +1439,7 @@ The indirect character-conversion target is **B$ToLower**, proved by the
 and nonempty paths restore their local stack then RETF 2. Only this bounded
 interface is added; no string allocation, alias or preservation claims.
 
-`fixtures/regressions/qrender-sys-v-g3.obj` is the original BC output.
+`tests/fixtures/regressions/qrender-sys-v-g3.obj` is the original BC output.
 Its actual argument-parser block failed strict lowering at 012f without
 the contract and passes with it (one focused regression). Full native SYS
 emission now reaches **FDR1 at 0823**, still refused atomically. Dumps:
@@ -1500,7 +1500,7 @@ creating `fstore signed16` followed by EXTRACT(word, 0). Lowering supports
 extracting halves of a long, not extracting a word from the same word.
 The raise now uses COPY for the whole signed16 value; long results still
 use two extractions. Actual `ent.obj` is retained as
-`fixtures/regressions/qrender-ent-v-g3.obj`. Its regression failed at the
+`tests/fixtures/regressions/qrender-ent-v-g3.obj`. Its regression failed at the
 observed unsupported extraction before the fix and now lowers to word
 FISTP without a FIS2 call. Three existing long-conversion emission tests
 also pass. Full corrected `ent` emission succeeds (17843 OBJ bytes), with
@@ -1773,7 +1773,7 @@ entity and player-state outputs agree. Timing fields differ, and available
 memory is 32 bytes lower. This is a partial correctness check, not completion
 of the integration gate or evidence of a speedup.
 
-`fixtures/regressions/qrender-dturb-v-g3.obj` is the real `d_turb.obj` from
+`tests/fixtures/regressions/qrender-dturb-v-g3.obj` is the real `d_turb.obj` from
 the source revision and compiler flags above. Its fail-first regression
 requires LIR emission. The audited `B$SIN4`/`B$SIN8` VBDOS interface retains
 all six GP inputs and unknown clobbers, memory and control effects; only

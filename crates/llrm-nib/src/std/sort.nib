@@ -1,0 +1,56 @@
+# Quicksort, ascending by `<`. Ranges shorter than RUN are left for one
+# insertion pass at the end.
+
+const RUN: u16 = 16
+
+pub fn sort[T](items: &mut [T]) -> void:
+    partition(items, 0, items.len)
+    insert(items)
+
+# Sorts `items[start..stop]` to within RUN of place. Recurses into the
+# smaller side and loops on the larger, so the stack holds at most 16 frames.
+fn partition[T](items: &mut [T], start: u16, stop: u16) -> void:
+    let mut low = start
+    let mut high = stop
+    while high - low > RUN:
+        let middle = low + (high - low) // 2
+        order(items, low, middle)
+        order(items, middle, high - 1)
+        order(items, low, middle)
+        # items[low] <= pivot <= items[high - 1] stop both scans.
+        let pivot = items[middle]
+        let mut left = low
+        let mut right = high - 1
+        loop:
+            left += 1
+            while items[left] < pivot:
+                left += 1
+            right -= 1
+            while pivot < items[right]:
+                right -= 1
+            if left >= right:
+                break
+            let held = items[left]
+            items[left] = items[right]
+            items[right] = held
+        if left - low < high - left:
+            partition(items, low, left)
+            low = left
+        else:
+            partition(items, left, high)
+            high = left
+
+fn order[T](items: &mut [T], first: u16, second: u16) -> void:
+    if items[second] < items[first]:
+        let held = items[first]
+        items[first] = items[second]
+        items[second] = held
+
+fn insert[T](items: &mut [T]) -> void:
+    for at in 1..items.len:
+        let value = items[at]
+        let mut to = at
+        while to > 0 && value < items[to - 1]:
+            items[to] = items[to - 1]
+            to -= 1
+        items[to] = value

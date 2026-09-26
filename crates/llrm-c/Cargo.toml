@@ -1,0 +1,27 @@
+[package]
+name = "llrm-c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The C frontend, through Open Watcom's front end"
+
+[dependencies]
+llrm-core = { workspace = true }
+iced-x86 = { workspace = true }
+indexmap = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+toml = { workspace = true }
+
+[features]
+# wccq, which build.rs bootstraps
+toolchain = []
+
+[dev-dependencies]
+regex = { workspace = true }
+llrm-core = { workspace = true, features = ["testing"] }

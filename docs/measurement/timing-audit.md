@@ -25,7 +25,7 @@ now emits through LIR and both versions link successfully. A 100-step
 correctness smoke run completed for BASE, but OPT did not complete within
 30 seconds and its redirected output was empty. This is an unresolved
 execution failure, not a timing result. The unmodified BC object is kept
-in `fixtures/bench/nbody-v-g3.obj` for reproduction.
+in `tests/fixtures/bench/nbody-v-g3.obj` for reproduction.
 
 The 30-second failure used the FAST dynamic-core profile, not the pinned
 measurement profile. With the pinned normal core, both programs finished,
@@ -145,7 +145,7 @@ No emitted code changed during this primary-table inspection.
 
 ## Bounds integrated into division selection
 
-`src/backend/timing.rs` now separates audited multiplication ranges and division
+`crates/llrm-core/src/backend/timing.rs` now separates audited multiplication ranges and division
 widths from the old scoreboard's midpoint guesses. Reciprocal selection
 uses the maximum multiply cost and minimum divide cost. Missing exact-form
 evidence (currently P6 and later profiles) retains IDIV. This is not a

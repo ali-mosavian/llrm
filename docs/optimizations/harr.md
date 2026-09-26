@@ -1,6 +1,6 @@
 # HARR: a BC object before and after
 
-`suite/harr.bas` stores and immediately rereads a two-dimensional INTEGER
+`tests/suite/harr.bas` stores and immediately rereads a two-dimensional INTEGER
 array element. The helper is `B$HARY`; `harr` is the benchmark name.
 
 Before, BC performs the address calculation twice per inner iteration:

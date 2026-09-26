@@ -164,7 +164,22 @@ name = "llrm"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-c",
+ "llrm-core",
+ "llrm-nib",
+ "llrm-qb",
+ "regex",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "llrm-c"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
  "indexmap",
+ "llrm-core",
  "num-bigint",
  "num-traits",
  "regex",
@@ -174,6 +189,111 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-core"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-cycles",
+ "llrm-hir",
+ "llrm-omf",
+ "llrm-support",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-cycles"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-support",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "llrm-hir"
+version = "0.1.0"
+dependencies = [
+ "llrm-mir",
+ "llrm-support",
+]
+
+[[package]]
+name = "llrm-mir"
+version = "0.1.0"
+
+[[package]]
+name = "llrm-nib"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-core",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-omf"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-support",
+]
+
+[[package]]
+name = "llrm-qb"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "llrm-core",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "llrm-support"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "num-bigint",
+ "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 # Generated lexer parity
 
-`frontends/qb/src/generated_parser/lexer.rs` is a table-facing scanner, not a
+`crates/qbfront/src/generated_parser/lexer.rs` is a table-facing scanner, not a
 conversion layer over the legacy recursive parser's tokens. It uses the
 highest VBDOS source-syntax superset for every selected compiler profile:
 identifier underscores after the first character and logical-line

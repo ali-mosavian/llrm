@@ -1,28 +1,44 @@
 # Source layout
 
-The crate root holds pipeline orchestration: `src/flow.rs`, `src/rewrite.rs`
-and `src/wholeseg.rs`. Everything else is grouped by responsibility:
+| Path | Holds |
+| --- | --- |
+| `crates/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
+| `crates/llrm-cycles` | The instruction-cost model |
+| `crates/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
+| `crates/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
+| `crates/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
+| `crates/llrm-core` | HIR lowering and interpreter, MIR, the optimizer, the x86 backend, and BC raising |
+| `crates/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
+| `crates/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |
+| `crates/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`) |
+| `crates/qbfront` | The QB parser, run by `llrm-qb` as a program, and its compatibility corpus |
+| `src/bin` | The `llrm-*` tools, `nibfront` and `nib-lsp` (package `llrm`) |
+| `tests` | Integration tests, fixtures, and the BASIC suite |
+| `bench` | Benchmark programs |
+| `examples` | Nib, BASIC, Pascal and C interop programs |
+| `editors` | The Zed extension and tree-sitter grammar |
+| `toolchain` | What the build scripts bootstrap: `wccq` (`owshim`), jwasm, jwlink, DOSBox-X |
+| `tools` | Developer tools; see `tools/readme.md` |
+
+`llrm-core` depends on `llrm-support`, `llrm-cycles`, `llrm-omf` and
+`llrm-hir`, and re-exports them as `support`, `cycles`, `objectfile` and
+`hir::{model, codec, verify, escape}`. The frontends depend on `llrm-core`
+and never on each other. `LLRM_ROOT` (`.cargo/config.toml`) is the
+repository root for any crate's tests.
+
+In `llrm-core`, `flow.rs` is the pipeline; `rewrite.rs` and `wholeseg.rs`
+rewrite BC objects. The rest is grouped by responsibility:
 
 | Module | Responsibility |
 | --- | --- |
-| `src/bin` | The `llrm-*` tools and `nibfront` |
-| `src/frontends/qb` | QB-family driver, HIR-to-MIR ABI, inline x87 |
-| `src/frontends/nib` | The llrm language: lexer, parser, semantics, HIR |
-| `src/frontends/c` | C through Open Watcom's front end (`owshim/`): its code-generator stream, raised to MIR |
-| `src/frontends/bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
-| `src/hir` | The common HIR: model, codec, verifier, lowering to MIR |
-| `src/objectfile` | OMF records, module metadata, relocation |
-| `src/model` | MIR, LIR, decoded IR, floating semantics, phase interfaces |
-| `src/analysis` | SSA, liveness, ranges, loops, induction, memory/value facts |
-| `src/optimize` | MIR transformations |
-| `src/backend` | Lowering, instruction selection, allocation, frame/layout, peepholes, object writing |
-| `src/abi` | Runtime contracts and the adjacent `runtime.toml` data file |
-| `src/legacy` | Older lifting and call absorption still shared by raising |
-| `src/cycles` | Instruction-cost model |
-
-The QB parser is its own crate in `frontends/qb/` (`qbfront`). `qbopt/` is the
-Python predecessor; every Rust module mirrors its path there, and
-[the port map](../history/port-map.md) pairs them.
+| `hir` | Lowering the HIR to MIR, and the HIR interpreter |
+| `model` | MIR, LIR, decoded IR, floating semantics, phase interfaces |
+| `analysis` | SSA, liveness, ranges, loops, induction, memory/value facts |
+| `optimize` | MIR transformations |
+| `backend` | Lowering, instruction selection, allocation, frame/layout, peepholes, object writing |
+| `abi` | Runtime contracts, `runtime.toml`, and the QB runtime ABI (`abi::qb`) |
+| `frontends::bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
+| `legacy` | Older lifting and call absorption still shared by raising |
 
 This organization makes ownership visible; it does not claim the architectural
 migration is finished. Existing dependency cycles and machine-aware MIR

@@ -2,7 +2,7 @@
 
 MIR's `PTR_OFFSET(pointer, byte_displacement)` produces one whole pointer.
 It does not say how selectors, registers or segment boundaries work.
-`src/backend/pointers.rs` owns that representation and requires an explicit ABI
+`crates/llrm-core/src/backend/pointers.rs` owns that representation and requires an explicit ABI
 model. CPU arithmetic tuning does not establish an operating-system ABI.
 
 The runtime source `runtime/rt/gwini.asm` documents `b$HugeShift`: each 64K
@@ -62,7 +62,7 @@ No selector extraction is added to MIR. The frontend also proves that the
 helper's old selector result is dead before removing it. Unproved consumers,
 string indirection, floating accesses and other layouts still refuse explicitly.
 
-`fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
+`tests/fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
 and VBDOS. Its 201-by-201 INTEGER array includes two transposed pairs of
 accesses: `(4,161)/(5,161)` cross byte 65536 under QB/PDS, while
 `(163,2)/(163,3)` do so under VBDOS's reversed dimension order.

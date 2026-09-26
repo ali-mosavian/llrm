@@ -359,7 +359,7 @@ requires seven `B$PEI4` output sites or reports PROVISIONAL. Fresh builds of the
 current source execute all seven rows correctly on QB, PDS and VBDOS. All 15
 CHAIN fixtures have now been regenerated from that source with zero severe
 compiler errors and updated manifest hashes. Three historical five-row objects
-remain as `fixtures/regressions/chain5-*.obj` solely to test stale-reference
+remain as `tests/fixtures/regressions/chain5-*.obj` solely to test stale-reference
 rejection; their original source is unavailable, so they are not runtime goldens.
 Those fresh optimized objects cost **962 on QB/PDS (2.00×)** and **882 on
 VBDOS (1.83×)**. This exposes a real above-target case hidden by the stale
@@ -638,7 +638,7 @@ Fresh per-pass dumps of QB `/O` and PDS `/G2` distinguish the source-level
 constant from what the raise actually knows. PDS initializes `d=12` using four
 `MOVSW` instructions at original offsets 0x154–0x157. All four remain OPAQUE
 in the initial MIR; its subsequent binary64 load at 0x158 has no constant fact.
-This is not a missed arithmetic identity in CSE. `src/frontends/bc/raising_copies.rs`
+This is not a missed arithmetic identity in CSE. `crates/llrm-core/src/frontends/bc/raising_copies.rs`
 already scalarizes explicit-direction, proven-selector copies, but its dataflow
 forgets traversal direction across calls. No local CLD establishes it here.
 
@@ -1502,7 +1502,7 @@ measure in this file missed it until the helper was priced.
 statement** -- one to store it and one to read it back. 3,944 weighted
 cycles against about 320.
 
-It is not in `suite/` because only QuickBASIC 4.5 accepts the form; PDS
+It is not in `tests/suite/` because only QuickBASIC 4.5 accepts the form; PDS
 refuses the REDIM with a math overflow, and the matrix compiles every suite
 program on every configuration.
 

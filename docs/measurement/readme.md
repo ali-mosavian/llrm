@@ -17,7 +17,7 @@ Published latencies for 486, P5, P6, K5, K6, K7 and Core.
     uv run python -m qbopt.price FILE.OBJ
 
 **A ranking, not a measurement.** The costs are approximate and are the part of
-the tool most worth arguing with; `src/cycles/timings.rs` says so itself.
+the tool most worth arguing with; `crates/llrm-core/src/cycles/timings.rs` says so itself.
 Never quote one of these as a speedup.
 
 **And it prices only what is in the object.** BC's side of an absorbed call is

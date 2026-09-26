@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build one Nib module into a DOS executable on the host:
-# llrm-nib compiles the program and runtime/nib/runtime.nib, jwasm
+# llrm-nib compiles the program and crates/llrm-nib/src/runtime/runtime.nib, jwasm
 # assembles, jwlink links, with any C or assembly files the program imports
 # from. Those C files may include SOURCE's generated declarations as
 # "NAME.h". Running it is a separate, visible DOSBox step.
@@ -33,12 +33,12 @@ for part in "$@"; do
     used="$used --used-by $work/$name.obj"
 done
 for part in start dos; do
-    "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$part.obj" "$root/runtime/nib/$part.asm"
+    "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$part.obj" "$root/crates/llrm-nib/src/runtime/$part.asm"
     used="$used --used-by $work/$part.obj"
 done
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
-"$bin/llrm-nib" "$root/runtime/nib/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
+"$bin/llrm-nib" "$root/crates/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate format dos name "$work/program.exe" \
     file "$work/start.obj" file "$work/program.obj" $objects \

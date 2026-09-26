@@ -179,7 +179,7 @@ Runtime artifacts under `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`:
 
 ## 2026-09-10: full scoreboard checkpoint
 
-At b126fb4, all 487 `fixtures/omf` objects were measured once: 289 comparable
+At b126fb4, all 487 `tests/fixtures/omf` objects were measured once: 289 comparable
 rows within 1.5x, none above it, 102 provisional and 96 without targets.
 No row was unmeasured. Worst comparable ratio is IVCHAN's 1.36x. The gate
 still returns 1; regression fixtures outside that directory and unfinished
@@ -6186,7 +6186,7 @@ None of them is a program-specific patch and none names a machine.
 
 ### The gate
 
-487 objects in `fixtures/omf`, all three compiler families and every
+487 objects in `tests/fixtures/omf`, all three compiler families and every
 variant: **0 refused, 132 changed, all 132 smaller, none larger.** The
 changes run across families as the mechanism should -- harr-p, -q and -v,
 hotlop, hotlpx and the rest at the same sizes in each.

@@ -6,7 +6,7 @@ on:
   push:
     tags: ["nib-lsp-v*"]
   pull_request:
-    paths: ["build.rs", "Cargo.toml", "Cargo.lock", "src/**", ".github/workflows/nib-lsp-release.yml"]
+    paths: ["build.rs", "Cargo.toml", "Cargo.lock", "src/**", "crates/**", ".cargo/**", ".github/workflows/nib-lsp-release.yml"]
 
 permissions:
   contents: write
