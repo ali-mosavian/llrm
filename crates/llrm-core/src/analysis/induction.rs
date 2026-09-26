@@ -694,7 +694,7 @@ where
                 .args
                 .iter()
                 .map(|argument| match argument {
-                    Arg::Held(held) => Arg::Held(_copied(*held, made)),
+                    Arg::Held(held) => Arg::Held(copied(*held, made)),
                     _ => argument.clone(),
                 })
                 .collect::<Vec<_>>();
@@ -936,14 +936,7 @@ pub fn derived(
     let settled = unwritten(body, &members, dgroup, bounds);
     // Python's dictionary comprehension is last-definition-wins in body,
     // block, operation, and defined-value order.
-    let mut made = BTreeMap::<u32, &Op>::new();
-    for block in &body.blocks {
-        for operation in &block.ops {
-            for value in &operation.defines {
-                made.insert(value.id, operation);
-            }
-        }
-    }
+    let made = definitions(body);
 
     let mut direct = OrderedMap::<OpOccurrence, Derived>::new();
     for at in inside.iter() {
@@ -992,7 +985,7 @@ pub fn derived(
                 .args
                 .iter()
                 .map(|argument| match argument {
-                    Arg::Held(held) => Arg::Held(_copied(*held, &made)),
+                    Arg::Held(held) => Arg::Held(copied(*held, &made)),
                     _ => argument.clone(),
                 })
                 .collect::<Vec<_>>();
@@ -1196,14 +1189,7 @@ pub fn counted_unless_stopped(
     };
     let latch = *loop_.latches.first().expect("_control proved one latch");
     let still = invariant(body, inside);
-    let mut made = BTreeMap::<u32, &Op>::new();
-    for block in &body.blocks {
-        for operation in &block.ops {
-            for value in &operation.defines {
-                made.insert(value.id, operation);
-            }
-        }
-    }
+    let made = definitions(body);
     let header_phis = phis(body)
         .filter(|(occurrence, _, _)| occurrence.block_index() == header_index)
         .map(|(occurrence, _, phi)| (occurrence, phi))
@@ -1330,7 +1316,7 @@ pub fn _compared<'o>(
     }
     for (index, arg) in op.args.iter().enumerate() {
         let Arg::Held(held) = arg else { continue };
-        let Some(&stepped) = tested.get(&_copied(*held, made).value.id) else { continue };
+        let Some(&stepped) = tested.get(&copied(*held, made).value.id) else { continue };
         if op.kind == Kind::Sub && op.results.is_empty() && op.defines.len() == 1 {
             return Some((op, held.width, op.args[1 - index].clone(), index == 1, stepped));
         }
@@ -1903,7 +1889,7 @@ pub fn basics(body: &MirBody, loop_: &Loop) -> OrderedMap<u32, Affine> {
             }
             let width = results[0].width;
             widths.insert(width);
-            let root = _copied(results[0], &made);
+            let root = copied(results[0], &made);
             let step = _stepped(
                 made.get(&root.value.id).copied(),
                 phi.result.id,
@@ -1935,8 +1921,22 @@ pub fn basics(body: &MirBody, loop_: &Loop) -> OrderedMap<u32, Affine> {
     out
 }
 
-/// Python's `_copied(operand, made)`.
-fn _copied(mut operand: Held, made: &BTreeMap<u32, &Op>) -> Held {
+/// Each value's defining operation, the last definition winning.
+pub fn definitions(body: &MirBody) -> BTreeMap<u32, &Op> {
+    let mut made = BTreeMap::<u32, &Op>::new();
+    for block in &body.blocks {
+        for operation in &block.ops {
+            for value in &operation.defines {
+                made.insert(value.id, operation);
+            }
+        }
+    }
+    made
+}
+
+/// `operand` through the copies that made it: the value an affine form
+/// names for it.
+pub fn copied(mut operand: Held, made: &BTreeMap<u32, &Op>) -> Held {
     let mut seen = BTreeSet::new();
     while !seen.contains(&operand.value.id) {
         seen.insert(operand.value.id);
@@ -1970,10 +1970,10 @@ fn _stepped(
     let op = op?;
     let (mut stepped, mut step) = crate::model::mir::stepping(op)?;
     if let Arg::Held(held) = stepped {
-        stepped = Arg::Held(_copied(held, made));
+        stepped = Arg::Held(copied(held, made));
     }
     if let Arg::Held(held) = step {
-        step = Arg::Held(_copied(held, made));
+        step = Arg::Held(copied(held, made));
     }
     if !matches!(&stepped, Arg::Held(held) if held.value.id == value) {
         if matches!(&step, Arg::Held(held) if held.value.id == value) {
