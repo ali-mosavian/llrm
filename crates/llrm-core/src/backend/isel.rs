@@ -18,6 +18,8 @@ use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Seman
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
+mod wide;
+
 /// Where a function's parameters arrive and its result leaves, as its
 /// calling convention and address space say: LLVM's CC_X86 for ia16.
 #[derive(Clone, Debug)]
@@ -175,6 +177,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result
         next: 0,
         pointers: IndexMap::default(),
         fars: IndexMap::default(),
+        wides: IndexMap::default(),
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -202,6 +205,8 @@ struct Selector<'m, 'c> {
     /// Each far pointer value's offset and selector, as LLVM's type
     /// legalizer expands a value no register holds into two.
     fars: IndexMap<ValueId, (Held, Held)>,
+    /// Each i64 value's low and high dwords, expanded likewise.
+    wides: IndexMap<ValueId, (Held, Held)>,
     depth: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
@@ -898,6 +903,8 @@ impl Selector<'_, '_> {
                     self.indexed(inst, *source, at, out)?;
                 }
             }
+            Opcode::Cast(op) if self.is_wide(instruction.ty) || self.is_wide(type_of(operands[0])) => self.wide_cast(*op, inst, at, out)?,
+            Opcode::Binary(op) if self.is_wide(instruction.ty) => self.wide_binary(*op, inst, at, out)?,
             Opcode::Load { volatile, .. } if self.is_float(instruction.ty) => {
                 let (pointer, size) = (self.pointer(operands[0])?, self.size(instruction.ty)?);
                 let held = Held { value: self.value(instruction.result.expect("a load's value")), width: FLOAT };
