@@ -354,6 +354,7 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         return Err(format!("@{name}: {why}"));
     }
     let mut mir = emitted.module;
+    llrm_mir::transforms::optimized(&mut mir)?;
     // The entry is public for the runtime to call; a library has none.
     match mir.named(entry) {
         Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,

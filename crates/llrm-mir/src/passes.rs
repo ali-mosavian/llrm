@@ -140,6 +140,8 @@ pub struct PassManager {
     pub(crate) passes: Vec<Box<dyn FunctionPass>>,
     pub verify_each: bool,
     pub verify_invalidation: bool,
+    /// A directory each pass's output is written to, as `NN-pass.ll`.
+    pub dump: Option<std::path::PathBuf>,
 }
 
 impl PassManager {
@@ -155,7 +157,7 @@ impl PassManager {
         };
         let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
         let mut stages = Vec::new();
-        for pass in &mut self.passes {
+        for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
@@ -174,6 +176,10 @@ impl PassManager {
                     }
                 }
                 stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
+            }
+            if let Some(directory) = &self.dump {
+                let file = directory.join(format!("{:02}-{name}.ll", number + 1));
+                std::fs::create_dir_all(directory).and_then(|()| std::fs::write(file, crate::print::module(module))).map_err(|error| error.to_string())?;
             }
             if self.verify_each {
                 let problems = crate::verify::verify(module);
