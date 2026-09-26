@@ -74,7 +74,7 @@ fn _pair(first: &Insn, second: &Insn, selectors: &BTreeSet<u32>) -> Option<Arc<I
     }
     let (first_dest, first_cell) = words[0].clone();
     let (second_dest, second_cell) = words[1].clone();
-    if !_next_word(&first_cell, &second_cell) || !selectors.contains(&second_dest.value) || _volatile(first, second) {
+    if !_next_word(&first_cell, &second_cell) || !selectors.contains(&second_dest.value) || first.volatile() || second.volatile() {
         return None;
     }
     // A fixed address survives allocation unchanged; only a virtual
@@ -147,13 +147,6 @@ fn _next_word(low: &Mem, high: &Mem) -> bool {
     };
     let moved = high_addr.disp - low_addr.disp;
     moved == 2 && [0, 2].contains(&(high.offset - low.offset)) || moved == 0 && high.offset == low.offset + 2
-}
-
-fn _volatile(first: &Insn, second: &Insn) -> bool {
-    [first, second]
-        .into_iter()
-        .filter_map(|one| one.op.as_ref())
-        .any(|op| op.loads.iter().any(|r#ref| r#ref.volatile))
 }
 
 /// Values read only as a cell's selector: what makes a far load the right load.
