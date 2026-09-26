@@ -2125,6 +2125,23 @@ END SUB
 }
 
 #[test]
+fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
+    // qbdemo's PLASMA hung: a call's contract read only its arguments, so the
+    // `mov ds, ss` before it looked dead, and the callee ran with DS still
+    // naming the array the loop had read through it.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "DSR.BAS", b"DEFINT A-Z\r\nDECLARE SUB p (a)\r\n'$DYNAMIC\r\nDIM SHARED a(99), b(99), c(99)\r\nDEF SEG = &HA000\r\nFOR r = 1 TO 3\r\nFOR i = 0 TO 99: POKE i, a(i) + b(i) + c(i): NEXT\r\np r\r\nNEXT\r\nSUB p (a)\r\nSHARED t\r\nt = t + a\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("proc far").unwrap_or_else(|| panic!("{text}"));
+    let procedure = &text[start..start + text[start..].find(" endp").expect("endp")];
+    let body = backward_loop(procedure);
+    let after = &procedure[procedure.find(&body).expect("the loop") + body.len()..];
+    let call = after.find("call far ptr P\n").unwrap_or_else(|| panic!("{procedure}"));
+    assert!(after[..call].contains("mov ds, "), "{procedure}");
+}
+
+#[test]
 fn test_a_pointer_from_a_symbolic_start_leaves_control_to_the_counter() {
     // deedlines' MOV3DPOS: the array pointer took control from the counter, so
     // each address became `[bx+si]`, and with both taken one more by-reference

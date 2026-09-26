@@ -133,6 +133,12 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
         return None;
     }
     let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
+    // A callee runs on the caller's frame chain, stack and data group.
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
+        for register in _RETURN_STATE {
+            reads.extend(_lanes(register));
+        }
+    }
     // A transfer's decoded effects are unavailable, but its explicit operands
     // are still real reads. In particular an indirect `call bx` reads BX
     // before the calling convention clobbers it.
