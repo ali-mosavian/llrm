@@ -29,7 +29,8 @@ pub trait Abi {
 /// `module` as masm, its code in the segment `code`.
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
-    let names = globals::names(module, &|name| abi.linked(name))?;
+    let mut names = globals::names(module, &|name| abi.linked(name))?;
+    names.extend(crate::hir::lower::symbol_names());
     let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();

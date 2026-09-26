@@ -630,3 +630,54 @@ define i16 @f() addrspace(1) {{
         ]
     );
 }
+
+/// A far pointer is its offset and selector, as a type legalizer expands a
+/// value no register holds: accessed through es, pushed selector first,
+/// returned in dx:ax, and a near pointer made far in DGROUP.
+#[test]
+fn test_far_pointers_are_an_offset_and_a_selector() {
+    let text = "@buf = internal global [4 x i16] zeroinitializer
+declare void @take(ptr addrspace(1), i16)
+define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
+  %q = getelementptr i16, ptr addrspace(1) %p, i16 %i
+  %v = load i16, ptr addrspace(1) %q
+  %r = getelementptr i8, ptr addrspace(1) %p, i16 4
+  store i16 %v, ptr addrspace(1) %r
+  %b = addrspacecast ptr @buf to ptr addrspace(1)
+  call void @take(ptr addrspace(1) %b, i16 %v)
+  ret ptr addrspace(1) %r
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov word ptr [bp-2], ax",
+            "mov ax, word ptr [bp+8]",
+            "mov word ptr [bp-4], ax",
+            "mov bx, word ptr [bp+10]",
+            "shl bx, 1",
+            "add bx, word ptr [bp-2]",
+            "mov es, word ptr [bp-4]",
+            "mov ax, word ptr es:[bx]",
+            "mov bx, word ptr [bp-2]",
+            "mov word ptr es:[bx+4], ax",
+            "mov bx, offset buf",
+            "mov cx, DGROUP",
+            "push ax",
+            "push cx",
+            "push bx",
+            "call take",
+            "add sp, 6",
+            "mov ax, word ptr [bp-2]",
+            "add ax, 4",
+            "mov dx, word ptr [bp-4]",
+            "leave",
+            "retf",
+        ]
+    );
+}

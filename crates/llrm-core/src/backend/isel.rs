@@ -73,7 +73,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     let first = if far(global)? { 6 } else { 4 };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
-    let mut widths = function.parameters().iter().map(|&one| width_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
+    let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
         widths.reverse();
@@ -89,7 +89,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     }
     let types = &module.context.types;
     let (result, _, _) = module.signature(function.ty);
-    let returns = if types.is_void(result) { Vec::new() } else { returned(width_of(module, layout, result)?) };
+    let returns = if types.is_void(result) { Vec::new() } else { returned(size_of(module, layout, result)?) };
     let popped = if pops { cursor - first } else { 0 };
     Ok(Convention { parameters, returns, popped })
 }
@@ -118,13 +118,22 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
         // An i1 is a byte holding 0 or 1, as LLVM stores one.
         Type::Int(1) => Ok(1),
         Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
-        Type::Pointer(0) => Ok(layout.pointer(0).bits / 8),
+        Type::Pointer(space @ (0 | 2)) => Ok(layout.pointer(*space).bits / 8),
         _ => refuse(format!("a {} value", types.display(ty))),
     }
 }
 
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
+
+/// The bytes a value of `ty` takes in memory or on the stack: a far
+/// pointer is its offset and selector, in two registers.
+fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
+    match module.context.types.get(ty) {
+        Type::Pointer(1) => Ok(4),
+        _ => width_of(module, layout, ty),
+    }
+}
 
 fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
@@ -138,6 +147,8 @@ enum Pointer {
     Based { base: Held, offset: i64 },
     /// A near global's symbol, and a displacement from it.
     Global { space: Space, index: i64, offset: i64 },
+    /// A far pointer's selector and offset, and a displacement from it.
+    Far { selector: Held, base: Held, offset: i64 },
 }
 
 pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
@@ -155,6 +166,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result
         values: IndexMap::default(),
         next: 0,
         pointers: IndexMap::default(),
+        fars: IndexMap::default(),
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -179,6 +191,9 @@ struct Selector<'m, 'c> {
     values: IndexMap<ValueId, u32>,
     next: u32,
     pointers: IndexMap<ValueId, Pointer>,
+    /// Each far pointer value's offset and selector, as LLVM's type
+    /// legalizer expands a value no register holds into two.
+    fars: IndexMap<ValueId, (Held, Held)>,
     depth: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
@@ -243,6 +258,11 @@ impl Selector<'_, '_> {
         for (&parameter, &disp) in function.parameters().iter().zip(&convention.parameters) {
             // Only a used argument is loaded, as a DAG has no node for an unused one.
             if function.users(parameter).is_empty() {
+                continue;
+            }
+            if self.is_far(function.value(parameter).ty) {
+                let pair = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
+                self.fars.insert(parameter, pair);
                 continue;
             }
             let width = self.width(function.value(parameter).ty)?;
@@ -495,7 +515,8 @@ impl Selector<'_, '_> {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
-            Pointer::Based { base, offset } => {
+            // A far pointer's offset.
+            Pointer::Based { base, offset } | Pointer::Far { base, offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
@@ -513,6 +534,9 @@ impl Selector<'_, '_> {
             return Ok(pointer);
         }
         let ty = self.function.value(value).ty;
+        if let Some(&(base, selector)) = self.fars.get(&value) {
+            return Ok(Pointer::Far { selector, base, offset: 0 });
+        }
         if !matches!(self.types().get(ty), Type::Pointer(0)) {
             return refuse(format!("an access through a {}", self.types().display(ty)));
         }
@@ -567,7 +591,9 @@ impl Selector<'_, '_> {
     fn indexed(&mut self, inst: InstId, source: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
-        let width = self.width(instruction.ty)?;
+        // A far pointer's index is its 16-bit offset, as `p1:32:16:16:16` says.
+        let far = self.is_far(instruction.ty);
+        let width = if far { 2 } else { self.width(instruction.ty)? };
         let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
         let mut sum: Option<Held> = None;
         for (position, scale) in variable {
@@ -602,8 +628,9 @@ impl Selector<'_, '_> {
                 }
             });
         }
-        let start = match self.pointer(instruction.operands[0])? {
-            Pointer::Based { base, offset: 0 } if offset == 0 => base,
+        let pointer = self.pointer(instruction.operands[0])?;
+        let start = match pointer {
+            Pointer::Based { base, offset: 0 } | Pointer::Far { base, offset: 0, .. } if offset == 0 => base,
             pointer => {
                 let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
@@ -611,7 +638,15 @@ impl Selector<'_, '_> {
                 start
             }
         };
-        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        let address = instruction.result.expect("an address");
+        let result = match pointer {
+            Pointer::Far { selector, .. } if far => {
+                let offset = self.fresh_held(2);
+                self.fars.insert(address, (offset, selector));
+                offset
+            }
+            _ => Held { value: self.value(address), width },
+        };
         let sum = sum.expect("a variable index");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
         Ok(())
@@ -656,6 +691,103 @@ impl Selector<'_, '_> {
             Pointer::Frame(disp) => frame(disp, width),
             Pointer::Global { space, index, offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            Pointer::Far { selector, base, offset } => Mem {
+                offset,
+                disp_width: 2,
+                base: Some(base),
+                selector: Some(selector),
+                ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
+            },
+        }
+    }
+
+    fn is_far(&self, ty: TypeId) -> bool {
+        matches!(self.types().get(ty), Type::Pointer(1))
+    }
+
+    /// A far pointer's two words at `pointer`, offset first.
+    fn far_loaded(&mut self, pointer: Pointer, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> (Held, Held) {
+        let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+        for (held, by) in [(offset, 0), (selector, 2)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(pointer.moved(by), 2))]);
+            out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        }
+        (offset, selector)
+    }
+
+    /// A far pointer operand's offset and selector, each in a register.
+    fn far(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(Held, Held), Unselected> {
+        match self.pointer(operand)? {
+            Pointer::Far { selector, base, offset: 0 } => Ok((base, selector)),
+            pointer @ Pointer::Far { selector, .. } => {
+                let moved = self.fresh_held(2);
+                out.push(insn(at, self.address(pointer, moved)));
+                Ok((moved, selector))
+            }
+            _ => refuse("a far constant"),
+        }
+    }
+
+    /// A cast to or from a far pointer: its halves taken apart or put
+    /// together. A near pointer is into DGROUP; a segment is offset 0.
+    fn far_cast(&mut self, op: CastOp, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (operand, to) = (instruction.operands[0], instruction.ty);
+        let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+        let result = instruction.result.expect("a cast's value");
+        let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let mov = |into: Held, from: Loc| insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from]));
+        if self.is_far(to) {
+            let pair = match (op, self.types().get(from).clone()) {
+                (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
+                    let offset = self.held(operand, from, at, out)?;
+                    let selector = self.fresh_held(2);
+                    let (space, index) = crate::hir::lower::DGROUP;
+                    out.push(mov(selector, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })));
+                    (offset, selector)
+                }
+                (CastOp::AddrSpaceCast, Type::Pointer(2)) => {
+                    let selector = self.held(operand, from, at, out)?;
+                    let offset = self.fresh_held(2);
+                    out.push(mov(offset, word(0)));
+                    (offset, selector)
+                }
+                (CastOp::IntToPtr, Type::Int(32)) => {
+                    let dword = self.held(operand, from, at, out)?;
+                    let top = self.fresh_held(4);
+                    let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+                    out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(dword), sixteen])));
+                    (Held { width: 2, ..dword }, Held { width: 2, ..top })
+                }
+                _ => return refuse(format!("{op:?} to a far pointer")),
+            };
+            self.fars.insert(result, pair);
+            return Ok(());
+        }
+        let (offset, selector) = self.far(operand, at, out)?;
+        match (op, self.types().get(to).clone()) {
+            (CastOp::AddrSpaceCast, Type::Pointer(2)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
+            (CastOp::AddrSpaceCast, Type::Pointer(0)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
+            (CastOp::PtrToInt, Type::Int(32)) => {
+                let joined = Held { value: self.value(result), width: 4 };
+                self.joined(joined, offset, selector, at, out);
+            }
+            _ => return refuse(format!("{op:?} of a far pointer")),
+        }
+        Ok(())
+    }
+
+    /// `into` made of a low and a high word.
+    fn joined(&mut self, into: Held, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) {
+        let (wide_low, wide_high, shifted) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+        let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+        for what in [
+            semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_low)], vec![Loc::Held(low)]),
+            semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_high)], vec![Loc::Held(high)]),
+            semantics(Operation::Binary, "shl", vec![Loc::Held(shifted)], vec![Loc::Held(wide_high), sixteen]),
+            semantics(Operation::Binary, "or", vec![Loc::Held(into)], vec![Loc::Held(shifted), Loc::Held(wide_low)]),
+        ] {
+            out.push(insn(at, what));
         }
     }
 
@@ -676,6 +808,19 @@ impl Selector<'_, '_> {
             Opcode::GetElementPtr { source } => {
                 if self.folded(instruction.result.expect("an address"))?.is_none() {
                     self.indexed(inst, *source, at, out)?;
+                }
+            }
+            Opcode::Load { volatile, .. } if self.is_far(instruction.ty) => {
+                let pointer = self.pointer(operands[0])?;
+                let pair = self.far_loaded(pointer, *volatile, at, out);
+                self.fars.insert(instruction.result.expect("a load's value"), pair);
+            }
+            Opcode::Store { volatile, .. } if self.is_far(type_of(operands[0])) => {
+                let (offset, selector) = self.far(operands[0], at, out)?;
+                let pointer = self.pointer(operands[1])?;
+                for (held, by) in [(offset, 0), (selector, 2)] {
+                    let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![Loc::Held(held)]);
+                    out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
                 }
             }
             Opcode::Load { volatile, .. } => {
@@ -724,6 +869,7 @@ impl Selector<'_, '_> {
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
                 out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
             }
+            Opcode::Cast(op) if self.is_far(instruction.ty) || self.is_far(type_of(operands[0])) => self.far_cast(*op, inst, at, out)?,
             Opcode::Cast(op) => {
                 let from = type_of(operands[0]);
                 let (to, from_width) = (self.width(instruction.ty)?, self.width(from)?);
@@ -801,7 +947,12 @@ impl Selector<'_, '_> {
             Opcode::Ret => {
                 let what = semantics(Operation::Return, "", vec![], vec![]);
                 let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
-                if let Some(&value) = operands.first() {
+                if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
+                    let (offset, selector) = self.far(value, at, out)?;
+                    let [low, high] = convention.returns[..] else { return refuse("a far result the convention has no pair for") };
+                    one.requires = vec![(offset, low), (selector, high)];
+                    one.uses = vec![offset.value, selector.value];
+                } else if let Some(&value) = operands.first() {
                     let held = self.held(value, type_of(value), at, out)?;
                     one.requires = match convention.returns[..] {
                         [register] => vec![(held, register)],
@@ -853,6 +1004,15 @@ impl Selector<'_, '_> {
         for index in order {
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            if self.is_far(ty) {
+                // Its offset at the lower address: the selector pushed first.
+                let (offset, selector) = self.far(argument, at, out)?;
+                for held in [selector, offset] {
+                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
+                }
+                pushed += 4;
+                continue;
+            }
             let mut held = self.held(argument, ty, at, out)?;
             if held.width == 1 {
                 let word = Held { value: self.fresh(), width: 2 };
@@ -865,7 +1025,11 @@ impl Selector<'_, '_> {
         let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
         let mut delivers = Vec::new();
         let mut result = None;
-        if let Some(value) = instruction.result {
+        if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
+            let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+            delivers = vec![(offset, Register::EAX), (selector, Register::EDX)];
+            self.fars.insert(value, (offset, selector));
+        } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
             match returned(width)[..] {
@@ -896,17 +1060,7 @@ impl Selector<'_, '_> {
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
         if let Some((held, low, high)) = result {
-            let (wide_low, wide_high, shifted) = (self.fresh(), self.fresh(), self.fresh());
-            let dword = |value| Held { value, width: 4 };
-            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
-            for what in [
-                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_low))], vec![Loc::Held(low)]),
-                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_high))], vec![Loc::Held(high)]),
-                semantics(Operation::Binary, "shl", vec![Loc::Held(dword(shifted))], vec![Loc::Held(dword(wide_high)), sixteen]),
-                semantics(Operation::Binary, "or", vec![Loc::Held(held)], vec![Loc::Held(dword(shifted)), Loc::Held(dword(wide_low))]),
-            ] {
-                out.push(insn(at, what));
-            }
+            self.joined(held, low, high, at, out);
         }
         Ok(())
     }
@@ -989,6 +1143,7 @@ impl Pointer {
             Pointer::Frame(disp) => Pointer::Frame(disp + by),
             Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
             Pointer::Global { space, index, offset } => Pointer::Global { space, index, offset: offset + by },
+            Pointer::Far { selector, base, offset } => Pointer::Far { selector, base, offset: offset + by },
         }
     }
 }
