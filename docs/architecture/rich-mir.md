@@ -1110,9 +1110,12 @@ No pass sees a tombstone. At each pass boundary `mir::transformed` strips
 them and records where their bytes land: before the next operation still in
 the block, chained as that operation is deleted or moves, or where a vanished
 block's control or last operation went (`mir::Ledger`). `transform::applied`
-puts them back before the backend runs. Tombstones are still made, and the
-backend still carries byte markers as LIR instructions, which its allocator
-counts as code. Next, LIR anchors replace those markers.
+puts them back before the backend runs.
+
+In LIR the byte markers are meta instructions (`Insn::is_meta`), as LLVM's
+debug instructions are: they take no slot, and no pass counts, windows or
+stops on them. `LLRM_STRIP_META` drops them at every LIR phase boundary;
+the code must come out the same, as LLVM's must with and without `-g`.
 
 ### 3. Add modules, declarations, globals, and intrinsics
 

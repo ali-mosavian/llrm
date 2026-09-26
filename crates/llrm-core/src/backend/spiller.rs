@@ -1113,7 +1113,7 @@ pub fn _remove_abandoned(body: &LirBody, abandoned: &BTreeSet<usize>) -> LirBody
             return one;
         }
         _with(&one, |made| {
-            made.what = Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) });
+            made.what = Some(lir::inert());
             made.defines = Vec::new();
             made.uses = Vec::new();
             made.widths = Vec::new();
@@ -2033,7 +2033,7 @@ mod tests {
 
     use super::{_color_slots, _constants, spilled};
     use crate::backend::frame::{Frame, SlotKey};
-    use crate::backend::omfwrite;
+    use crate::backend::{omfwrite, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
@@ -3274,6 +3274,8 @@ mod tests {
         assert_eq!(insns.last().unwrap().covers, Some((0, 4)));
     }
 
+    /// The anchor was a `nop` that select emitted: 220 NOPs across 146
+    /// corpus objects, each where a definition owning bytes went away.
     #[test]
     fn test_reordered_definition_retains_a_byte_ownership_anchor() {
         let prefix = _push(0, (0, 1), imm(0, 2), &[]);
@@ -3284,8 +3286,8 @@ mod tests {
         let result = _spilled_one("reordered", vec![prefix, constant, moved, use_]);
         let insns = result.insns();
         let owner = insns.iter().find(|one| one.covers == Some((3, 6))).unwrap();
-        assert_eq!(owner.what, Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) }));
-        assert!(owner.defines.is_empty() && owner.uses.is_empty());
+        assert!(owner.is_meta(), "{owner:?}");
+        assert!(select::emit(owner.what.as_ref().unwrap(), 3, None, false, false, None).unwrap().code.is_empty());
     }
 
     #[test]

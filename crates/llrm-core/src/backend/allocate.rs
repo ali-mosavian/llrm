@@ -1832,7 +1832,7 @@ fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
         return one;
     }
     let mut made = (*one).clone();
-    made.what = Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) });
+    made.what = Some(lir::inert());
     Arc::new(made)
 }
 

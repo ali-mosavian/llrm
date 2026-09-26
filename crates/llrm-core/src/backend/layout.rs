@@ -29,20 +29,7 @@ pub use crate::backend::asm::{Item, Laid, Table};
 
 /// Whether this block puts any byte in the output.
 pub fn _emits(block: &LirBlock) -> bool {
-    block.insns.iter().any(|op| _emitting(op))
-}
-
-/// Whether `op` puts bytes out, which its machine form answers and its kind
-/// does not.
-///
-/// A phi's copy placed after allocation rides on a NOTHING op. Asked by
-/// kind, deedlines' `IF ... THEN rc% = -1` read as an empty block, the jump
-/// over it went, and the copy ran on both paths.
-pub fn _emitting(op: &Insn) -> bool {
-    match &op.what {
-        Some(what) => what.op != Operation::Nothing,
-        None => op.kind() != mir::Kind::Nothing,
-    }
+    block.insns.iter().any(|op| op.emits())
 }
 
 fn by_address(body: &LirBody) -> Vec<&LirBlock> {
@@ -218,7 +205,7 @@ pub fn _threaded(body: LirBody) -> LirBody {
         if Some(target) != following.get(&through).copied() {
             continue;
         }
-        let alive: Vec<&Arc<Insn>> = middle.insns.iter().filter(|op| _emitting(op)).collect();
+        let alive: Vec<&Arc<Insn>> = middle.insns.iter().filter(|op| op.emits()).collect();
         if alive.len() != 1 || alive[0].kind() != mir::Kind::Jump || middle.succ.len() != 1 {
             continue;
         }
