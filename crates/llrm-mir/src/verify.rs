@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
+use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
@@ -15,6 +16,16 @@ pub fn verify(module: &Module) -> Vec<String> {
     for global in &module.globals {
         if let GlobalKind::Function(function) = &global.kind {
             let name = global.name.as_deref().unwrap_or("<unnamed>");
+            if intrinsics::is_reserved(name) {
+                let problem = match Intrinsic::named(name) {
+                    _ if !function.is_declaration() => Err("llvm intrinsics cannot be defined!".to_owned()),
+                    None => Err("an intrinsic MIR does not have".to_owned()),
+                    Some(intrinsic) => intrinsic.check(name, &module.context.types, function.ty),
+                };
+                if let Err(problem) = problem {
+                    out.push(format!("@{name}: {problem}"));
+                }
+            }
             let mut checker = Checker { module, context: &module.context, function, errors: Vec::new() };
             checker.function();
             out.extend(checker.errors.into_iter().map(|one| format!("@{name}: {one}")));
@@ -49,6 +60,15 @@ impl Checker<'_> {
             Operand::Constant(id) => Some(self.context.get(id).ty),
             Operand::Block(_) => None,
         }
+    }
+
+    /// The type of the intrinsic `operand` names, if it names one.
+    fn intrinsic(&self, operand: Operand) -> Option<TypeId> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        let global = self.module.global(global);
+        let function = global.function()?;
+        global.name.as_deref().is_some_and(intrinsics::is_reserved).then_some(function.ty)
     }
 
     fn at(&self, inst: InstId) -> String {
@@ -186,6 +206,12 @@ impl Checker<'_> {
         let ty = |at: usize| types[at].expect("a value operand");
         let result = instruction.ty;
         let at = self.at(inst);
+        let calls = matches!(instruction.opcode, Opcode::Call(_) | Opcode::Invoke(_));
+        for (index, operand) in instruction.operands.iter().enumerate() {
+            if self.intrinsic(*operand).is_some() && !(calls && index + 1 == instruction.operands.len()) {
+                self.fail(format!("{at}: Cannot take the address of an intrinsic!"));
+            }
+        }
         let is_int = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Int(_)) || matches!(checker.ty(ty), Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Int(_)));
         let is_float = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Float(_)) || matches!(checker.ty(ty), Type::Vector { element, .. } if matches!(checker.ty(*element), Type::Float(_)));
         let is_pointer = |checker: &Self, ty: TypeId| matches!(checker.ty(ty), Type::Pointer(_));
@@ -266,6 +292,11 @@ impl Checker<'_> {
                     if ty(index) != *parameter {
                         self.fail(format!("{at} passes {} as parameter {index}, a {}", self.show(ty(index)), self.show(*parameter)));
                     }
+                }
+                if let Some(declared) = self.intrinsic(callee)
+                    && declared != info.function_type
+                {
+                    self.fail(format!("{at}: Intrinsic called with incompatible signature"));
                 }
                 if call_returns != result {
                     self.fail(format!("{at} returns {}, not its type's {}", self.show(result), self.show(call_returns)));

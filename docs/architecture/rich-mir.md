@@ -1,8 +1,8 @@
 # Rich portable MIR
 
-Status: steps 0 to 2 landed (`tools/baseline.sh`, `crates/llrm-mir`, the
-rewrite ledger, LIR meta instructions); the compiler still runs on the old
-MIR.
+Status: steps 0 to 3 landed (`tools/baseline.sh`, `crates/llrm-mir`, the
+rewrite ledger, LIR meta instructions, LLVM IR in `llrm-mir`); the compiler
+still runs on the old MIR.
 
 ## Decision
 
@@ -20,7 +20,7 @@ That buys what a private IR cannot have:
 
 - **Independent oracles**, pinned to LLVM 20. `opt -passes=verify` checks
   every stage dump. `lli -force-interpreter` runs what it can: not
-  overflow intrinsics or unwinding, and a
+  overflow, min/max or `fmuladd` intrinsics or unwinding, and a
   `@llrm.qb.*` routine only where a `.ll` model of it is linked in.
   `llc -mtriple=msp430` compiles all but exception handling for a 16-bit
   non-x86 target, and `opt -O2` on the same MIR is a quality reference.
@@ -191,7 +191,7 @@ the code must come out the same, as LLVM's must with and without `-g`.
 - Verifier and interpreter for the subset, checked against `opt` and `lli`
   on the fixtures.
 - Modules: the datalayout, declarations and attributes, globals and
-  initializers, `@llrm.qb.*` intrinsics.
+  initializers, LLVM's intrinsics.
 
 The text landed first, with the arenas it reads into: `llrm-mir` parses and
 prints the subset, and `tools/mir-oracle.sh` checks that LLVM reads its
@@ -218,6 +218,12 @@ analyses cached per function until a pass's `PreservedAnalyses` drops
 them, and each pass's changes returned as a stage for the ledger. Its
 instruments are LLVM's `-verify-each` and `-verify-analysis-invalidation`,
 which recomputes every analysis a pass kept.
+
+Then LLVM's intrinsics (`llrm_mir::intrinsics`): one table gives each its
+signature and attributes, which the parser sets as LLVM does, the verifier
+checks with LLVM's messages, and the interpreter runs. Those lli cannot run
+are checked by hand. The `@llrm.qb.*` routines are declared by the raise,
+which proves their attributes, so they come with step 4.
 
 ### 4. Raise into MIR beside the old MIR
 

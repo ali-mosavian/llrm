@@ -133,3 +133,12 @@ fn every_invalid_fixture_is_refused_for_its_reason() {
         assert!(found.iter().any(|one| one.contains(reason)), "{}: {found:?}", path.display());
     }
 }
+
+/// LLVM replaces an intrinsic declaration's attributes with the intrinsic's
+/// own; kept from the text, `cold` and `noundef` would claim what LLVM does
+/// not, and a missing `memory(none)` would hide that the call is pure.
+#[test]
+fn an_intrinsic_declaration_takes_llvms_attributes() {
+    let module = parse::module("declare i16 @llvm.smax.i16(i16 noundef, i16) cold\n").unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(print::module(&module), "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n");
+}
