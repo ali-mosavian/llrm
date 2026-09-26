@@ -22,7 +22,7 @@ use crate::analysis::intervals::{self as ranges, _graph};
 use crate::analysis::loops::{self, Loop};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
-use crate::backend::liveness;
+use crate::backend::{liveness, spiller};
 use crate::backend::peephole::{_lanes, Lanes};
 use crate::backend::target;
 use crate::support::hash::IndexMap;
@@ -56,7 +56,7 @@ impl LIRTransform for LoopSlots {
             return Ok(body);
         };
         let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == 2).map(|(at, _)| *at).collect();
-        Ok(promoted(&body, &spills, &self.cpu.operations))
+        Ok(promoted(&hoisted(&body, &spills), &spills, &self.cpu.operations))
     }
 }
 
@@ -293,6 +293,134 @@ fn saving(one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
     }
     let plain = !folded && one.what.as_ref().is_some_and(|what| what.op == Operation::Move);
     i64::from(reads) * costs.load + i64::from(writes) * costs.store - i64::from(plain) * costs.r#move
+}
+
+/// A register every write of which, inside `one`, reloads the one slot the
+/// loop never writes, and which nothing reads before that reload.
+fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<i64> {
+    let lanes = _lanes(root);
+    if !entering.is_disjoint(&lanes) {
+        return None;
+    }
+    let mut from = None;
+    for at in &one.body {
+        for insn in &body.blocks[index[at]].insns {
+            let effect = liveness::effect(insn)?;
+            if effect.writes.is_disjoint(&lanes) {
+                continue;
+            }
+            let what = insn.what.as_ref()?;
+            let slot = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+                (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)])
+                    if ir::root(reg.register) == ir::root(root) && reg.width == WORD && mem.width == WORD =>
+                {
+                    slot(mem)?
+                }
+                _ => return None,
+            };
+            if from.is_some_and(|one| one != slot) {
+                return None;
+            }
+            from = Some(slot);
+        }
+    }
+    let from = from?;
+    let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
+    let kept = if spills.contains(&from) {
+        !insns().any(|insn| touch(insn).writes.contains(&from))
+    } else {
+        insns().all(|insn| spares(insn, from))
+    };
+    kept.then_some(from)
+}
+
+/// Whether `one` cannot write the frame cell at `at`: it writes memory only
+/// in far segments, at globals, or at other frame cells.
+fn spares(one: &Insn, at: i64) -> bool {
+    let Some(what) = one.what.as_ref() else {
+        return false;
+    };
+    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Restore) {
+        return false;
+    }
+    what.dests.iter().all(|place| match place {
+        Loc::Mem(mem) => match (slot(mem), mem.addr) {
+            (Some(cell), _) => (cell - at).abs() >= i64::from(WORD) && mem.width <= WORD,
+            (None, Some(addr)) => {
+                matches!(addr.space, Space::Far | Space::Segment | Space::Group | Space::External) && !is_bp(mem.through)
+            }
+            (None, None) => false,
+        },
+        _ => true,
+    })
+}
+
+/// `body` with each loop-invariant reload moved to where its loop is entered.
+pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
+    let graph = _graph(&body.blocks);
+    let predecessors = loops::predecessors(&graph);
+    let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
+    let (live_into, _, _) = liveness::live_into(body);
+    let mut blocks = body.blocks.clone();
+    let mut found = loops::loops(&graph, Some(body.entry));
+    found.sort_by_key(|one| one.body.len());
+    let mut taken = BTreeSet::<i64>::new();
+    for one in &found {
+        if one.body.iter().any(|at| taken.contains(at)) {
+            continue;
+        }
+        let entries = predecessors[&one.header].iter().copied().filter(|at| !one.body.contains(at)).collect::<Vec<_>>();
+        if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
+            continue;
+        }
+        let roots = ROOTS.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let moved = roots
+            .filter_map(|root| invariant(body, one, &index, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
+            .collect::<Vec<_>>();
+        if moved.is_empty() {
+            continue;
+        }
+        // The first reload goes to each entry; the others' values are its.
+        let mut first = BTreeMap::<Register, Arc<Insn>>::new();
+        let mut rename = IndexMap::<u32, u32>::default();
+        let reloads = |insn: &Insn, root: Register| {
+            insn.what.as_ref().is_some_and(|what| {
+                what.op == Operation::Move && matches!(what.dests.as_slice(), [Loc::Reg(reg)] if ir::root(reg.register) == ir::root(root))
+            })
+        };
+        for at in &one.body {
+            let block = &blocks[index[at]];
+            let mut kept = Vec::new();
+            for insn in &block.insns {
+                match moved.iter().find(|(root, _)| reloads(insn, *root)) {
+                    Some((root, _)) => match first.get(root) {
+                        Some(chosen) => rename.extend(insn.defines.iter().copied().zip(chosen.defines.iter().copied())),
+                        None => {
+                            first.insert(*root, Arc::clone(insn));
+                        }
+                    },
+                    None => kept.push(Arc::clone(insn)),
+                }
+            }
+            blocks[index[at]] = block.with_insns(kept);
+        }
+        for at in &entries {
+            let block = &blocks[index[at]];
+            let mut insns = block.insns.clone();
+            let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
+            for load in first.values() {
+                insns.insert(insns.len() - usize::from(jumps), Arc::clone(load));
+            }
+            blocks[index[at]] = block.with_insns(insns);
+        }
+        if !rename.is_empty() {
+            for block in &mut blocks {
+                *block = block.with_insns(block.insns.iter().map(|insn| spiller::_renamed(insn, &rename)).collect());
+            }
+        }
+        taken.extend(one.body.iter().copied());
+    }
+    body.with_blocks(blocks)
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.

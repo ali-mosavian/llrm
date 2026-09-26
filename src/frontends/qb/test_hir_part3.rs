@@ -2125,6 +2125,27 @@ END SUB
 }
 
 #[test]
+fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
+    // qbdemo's FRACTALEFFECT: `tmpshit`'s selector, spilled across the calls
+    // around it, was reloaded into fs from [bp] on every trip of the loop
+    // that only reads that array.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "FRACTAL.BAS", b"DEFINT A-Z\r\nDECLARE SUB fracline (y%, y1#, y2#, x1#, x2#, distthr#)\r\nDECLARE SUB render (x1%, y1%, x2%, y2%)\r\nDECLARE SUB fractaleffect (totalframes%)\r\nCONST XCENTRE = -.577816001047738#\r\nCONST YCENTRE = -.6311212235178052#\r\n'$DYNAMIC\r\nDIM SHARED totalframecount AS INTEGER\r\nDIM SHARED fractal1(32000&) AS INTEGER\r\nDIM SHARED fractal2(32000&) AS INTEGER\r\nfractaleffect 30\r\nEND\r\nSUB fractaleffect (totalframes)\r\nDIM tmpshit(160, 100)\r\nly = -100:  f# = 1\r\nFOR f = 1 TO totalframes\r\n  ly0 = ly\r\n  ly1 = ly + 1\r\n  ly2 = ly + 2\r\n  ly3 = ly + 3\r\n  ly0# = ly0 / f# + YCENTRE\r\n  ly1# = ly1 / f# + YCENTRE\r\n  ly2# = ly2 / f# + YCENTRE\r\n  ly3# = ly3 / f# + YCENTRE\r\n  lx1# = XCENTRE - 160 / f#\r\n  lx2# = XCENTRE + 160 / f#\r\n  DEF SEG = VARSEG(fractal1(0))\r\n  distthr# = 4\r\n  fracline ly0 + 100, ly0#, ly0#, lx1#, lx2#, distthr#\r\n  fracline ly2 + 100, ly2#, ly2#, lx1#, lx2#, distthr#\r\n  fracline ly1 + 100, ly1#, ly1#, lx1#, lx2#, distthr#\r\n  fracline ly3 + 100, ly3#, ly3#, lx1#, lx2#, distthr#\r\n ly = ly + 4\r\n IF ly >= 100 THEN\r\n  ly = -100\r\n  f# = f# * 2\r\n  o = 16080\r\n  FOR y = 0 TO 99\r\n   FOR x = 0 TO 159\r\n    tmpshit(x, y) = PEEK(o)\r\n    o = o + 1\r\n   NEXT\r\n   o = o + 160\r\n  NEXT\r\n  o = 0\r\n  FOR x = 0 TO 32000\r\n   fractal2(x) = fractal1(x)\r\n   fractal1(x) = 0\r\n  NEXT\r\n  FOR y = 0 TO 99\r\n   FOR x = 0 TO 159\r\n    POKE x * 2 + y * 640, tmpshit(x, y)\r\n   NEXT\r\n  NEXT\r\n  \r\n END IF\r\n DEF SEG = VARSEG(fractal2(0))\r\n f50 = (f) MOD 50\r\n x1 = f50 * 1.6: y1 = f50\r\n x2 = 320 - f50 * 1.6: y2 = 200 - f50\r\n render x1, y1, x2, y2\r\n IF INKEY$ > \"\" THEN EXIT SUB\r\n totalframecount = totalframecount + 1\r\nNEXT\r\nEND SUB\r\nSUB fracline (y%, y1#, y2#, x1#, x2#, distthr#)\r\nfractal1(y%) = y1# + x2#\r\nEND SUB\r\nSUB render (x1%, y1%, x2%, y2%)\r\nfractal2(x1%) = y2%\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = regex::Regex::new(r"(?m)^FRACTALEFFECT proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
+    let procedure = &text[start..start + text[start..].find(" endp").expect("FRACTALEFFECT endp")];
+    let loops = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .collect::<Vec<_>>();
+    let reload = regex::Regex::new(r"mov [c-gs]s, word ptr \[bp").unwrap();
+    for one in loops.iter().filter(|one| !loops.iter().any(|other| other.len() < one.len() && one.contains(*other))) {
+        assert!(!reload.is_match(one), "{one}");
+    }
+}
+
+#[test]
 fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
     // qbdemo's PLASMA hung: a call's contract read only its arguments, so the
     // `mov ds, ss` before it looked dead, and the callee ran with DS still
