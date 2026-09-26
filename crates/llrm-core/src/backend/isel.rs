@@ -66,6 +66,8 @@ pub fn selected(module: &Module, name: &str, convention: &Convention) -> Result<
         fused: BTreeSet::new(),
         pending: IndexMap::default(),
         phi_inputs: IndexMap::default(),
+        edges: IndexMap::default(),
+        chains: IndexMap::default(),
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
     };
@@ -87,6 +89,11 @@ struct Selector<'m> {
     pending: IndexMap<BlockId, Vec<Arc<Insn>>>,
     /// The register each (phi, predecessor) reads, where that block made it.
     phi_inputs: IndexMap<(InstId, BlockId), u32>,
+    /// The LIR blocks each MIR edge leaves from: a switch's cases leave
+    /// from blocks of their own.
+    edges: IndexMap<(BlockId, BlockId), Vec<i64>>,
+    /// The blocks a switch's compare chain adds after its own.
+    chains: IndexMap<InstId, Vec<i64>>,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
 }
@@ -106,6 +113,27 @@ impl Selector<'_> {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     self.depth += size + size % 2;
                     self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame(-self.depth));
+                }
+            }
+        }
+        for &block in layout {
+            let from = block_at[&block];
+            let terminator = function.terminator(block).expect("a terminator");
+            if function.instruction(terminator).opcode == Opcode::Switch {
+                let (default, cases) = self.cases(terminator);
+                let mut leaving = from;
+                for (index, &(_, target)) in cases.iter().enumerate() {
+                    self.edge(block, target, leaving);
+                    if index + 1 < cases.len() {
+                        leaving = at;
+                        at += 1;
+                        self.chains.entry(terminator).or_default().push(leaving);
+                    }
+                }
+                self.edge(block, default, leaving);
+            } else {
+                for successor in function.successors(block) {
+                    self.edge(block, successor, from);
                 }
             }
         }
@@ -142,7 +170,7 @@ impl Selector<'_> {
                 let instruction = function.instruction(inst);
                 if instruction.opcode == Opcode::Phi {
                     let result = instruction.result.expect("a phi's value");
-                    let incoming = self.incoming(inst, &block_at)?;
+                    let incoming = self.incoming(inst)?;
                     self.width(instruction.ty)?;
                     phis.push(Phi { result: self.value(result), incoming });
                     continue;
@@ -150,9 +178,21 @@ impl Selector<'_> {
                 if instruction.opcode.is_terminator() {
                     insns.extend(self.pending.shift_remove(&block).unwrap_or_default());
                 }
+                if instruction.opcode == Opcode::Switch {
+                    self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), &mut blocks)?;
+                    break;
+                }
                 self.instruction(inst, &block_at, &mut insns, convention)?;
             }
-            let succ = function.successors(block).iter().map(|one| block_at[one]).collect();
+            if function.instruction(function.terminator(block).expect("a terminator")).opcode == Opcode::Switch {
+                continue;
+            }
+            let mut succ: Vec<i64> = Vec::new();
+            for one in function.successors(block) {
+                if !succ.contains(&block_at[&one]) {
+                    succ.push(block_at[&one]);
+                }
+            }
             blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
         }
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
@@ -203,19 +243,83 @@ impl Selector<'_> {
         Ok(())
     }
 
-    fn incoming(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>) -> Result<Vec<(i64, u32)>, Unselected> {
-        let instruction = self.function.instruction(inst);
+    /// Each LIR edge into the phi's block, and the register it brings.
+    fn incoming(&mut self, inst: InstId) -> Result<Vec<(i64, u32)>, Unselected> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let block = function.parent(inst).expect("a placed phi");
         let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
         for pair in instruction.operands.chunks(2) {
             let [value, Operand::Block(from)] = *pair else { unreachable!("a phi's pairs") };
+            // A block that reaches this one by two edges is listed once per edge.
+            if !seen.insert(from) {
+                continue;
+            }
             let held = match (self.phi_inputs.get(&(inst, from)), value) {
                 (Some(&made), _) => made,
                 (None, Operand::Value(one)) => self.value(one),
                 (None, _) => unreachable!("phis_from made every other input"),
             };
-            out.push((block_at[&from], held));
+            out.extend(self.edges[&(from, block)].iter().map(|&at| (at, held)));
         }
         Ok(out)
+    }
+
+    fn edge(&mut self, from: BlockId, to: BlockId, leaving: i64) {
+        let ats = self.edges.entry((from, to)).or_default();
+        if !ats.contains(&leaving) {
+            ats.push(leaving);
+        }
+    }
+
+    /// A switch's default, and each case that goes elsewhere.
+    fn cases(&self, inst: InstId) -> (BlockId, Vec<(Operand, BlockId)>) {
+        let operands = &self.function.instruction(inst).operands;
+        let Operand::Block(default) = operands[1] else { unreachable!("a switch's default") };
+        let cases = operands[2..]
+            .chunks(2)
+            .filter_map(|pair| match *pair {
+                [value, Operand::Block(target)] if target != default => Some((value, target)),
+                _ => None,
+            })
+            .collect();
+        (default, cases)
+    }
+
+    /// A switch as a chain of compares, as SelectionDAGBuilder makes one
+    /// short of a jump table: each case its own block, the last falling to
+    /// the default.
+    fn switch(
+        &mut self,
+        inst: InstId,
+        block_at: &IndexMap<BlockId, i64>,
+        from: i64,
+        mut insns: Vec<Arc<Insn>>,
+        mut phis: Vec<Phi>,
+        blocks: &mut Vec<LirBlock>,
+    ) -> Result<(), Unselected> {
+        let at = self.ats[&inst];
+        let operand = self.function.instruction(inst).operands[0];
+        let ty = self.function.operand_type(&self.module.context, operand).expect("a typed value");
+        let (default, cases) = self.cases(inst);
+        if cases.is_empty() {
+            insns.push(insn(at, jump(block_at[&default])));
+            blocks.push(LirBlock { succ: vec![block_at[&default]], phis, ..LirBlock::new(from, insns) });
+            return Ok(());
+        }
+        let value = Loc::Held(self.held(operand, ty, at, &mut insns)?);
+        let chain: Vec<i64> = std::iter::once(from).chain(self.chains.get(&inst).cloned().unwrap_or_default()).collect();
+        for (index, (case, target)) in cases.into_iter().enumerate() {
+            let next = chain.get(index + 1).copied().unwrap_or(block_at[&default]);
+            let case = self.source(case, ty, at, &mut insns)?;
+            insns.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![value.clone(), case])));
+            let branch = Semantics { target: Some(block_at[&target]), ..semantics(Operation::Branch, "je", vec![], vec![]) };
+            insns.push(insn(at, branch));
+            let succ = vec![block_at[&target], next];
+            blocks.push(LirBlock { succ, phis: std::mem::take(&mut phis), ..LirBlock::new(chain[index], std::mem::take(&mut insns)) });
+        }
+        Ok(())
     }
 
     fn value(&mut self, value: ValueId) -> u32 {
@@ -535,6 +639,9 @@ impl Selector<'_> {
             Opcode::Br => match operands[..] {
                 [Operand::Block(target)] => {
                     out.push(insn(at, jump(block_at[&target])));
+                }
+                [Operand::Value(_), Operand::Block(taken), Operand::Block(otherwise)] if taken == otherwise => {
+                    out.push(insn(at, jump(block_at[&taken])));
                 }
                 [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
                     let Some(compare) = self.fused_compare(condition) else {

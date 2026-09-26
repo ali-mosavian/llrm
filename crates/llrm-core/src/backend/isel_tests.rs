@@ -299,3 +299,53 @@ fn test_variable_indices_are_scaled_and_added() {
         ]
     );
 }
+
+#[test]
+fn test_a_switch_is_a_chain_of_compares() {
+    let text = "define i16 @f(i16 %a) {
+entry:
+  switch i16 %a, label %other [ i16 1, label %one
+                                i16 5, label %five
+                                i16 7, label %other
+                                i16 9, label %one ]
+one:
+  %x = phi i16 [ 10, %entry ], [ 10, %entry ]
+  ret i16 %x
+five:
+  ret i16 50
+other:
+  ret i16 0
+}
+";
+    let got = listing(text, "f", &cdecl(1));
+    // 7 goes to the default anyway; `one` is entered from two blocks of the chain.
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "cmp ax, 1",
+            "je L0_1",
+            "L0_5:",
+            "cmp ax, 5",
+            "je L0_3",
+            "L0_6:",
+            "cmp ax, 9",
+            "je L0_1",
+            "L0_4:",
+            "mov ax, 0",
+            "pop bp",
+            "retf",
+            "L0_1:",
+            "mov ax, 10",
+            "pop bp",
+            "retf",
+            "L0_3:",
+            "mov ax, 50",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
