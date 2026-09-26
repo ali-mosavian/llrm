@@ -668,9 +668,18 @@ impl Selector<'_> {
                 let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
                 if let Some(&value) = operands.first() {
                     let held = self.held(value, type_of(value), at, out)?;
-                    let Some(&register) = convention.returns.first() else { return refuse("a result the convention has no register for") };
-                    one.uses = vec![held.value];
-                    one.requires = vec![(held, register)];
+                    one.requires = match convention.returns[..] {
+                        [register] => vec![(held, register)],
+                        // A dword result in a word pair: its low word, and its high word shifted down.
+                        [low, high] if held.width == 4 => {
+                            let top = Held { value: self.fresh(), width: 4 };
+                            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+                            out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
+                            vec![(Held { width: 2, ..held }, low), (Held { width: 2, ..top }, high)]
+                        }
+                        _ => return refuse("a result the convention has no registers for"),
+                    };
+                    one.uses = one.requires.iter().map(|(held, _)| held.value).collect();
                 }
                 out.push(Arc::new(one));
             }

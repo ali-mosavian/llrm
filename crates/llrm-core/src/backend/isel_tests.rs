@@ -349,3 +349,22 @@ other:
         ]
     );
 }
+
+#[test]
+fn test_a_dword_result_leaves_in_dx_ax() {
+    let convention = Convention { parameters: vec![Home::Frame(6)], returns: vec![Register::EAX, Register::EDX] };
+    let got = listing("define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n", "f", &convention);
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov eax, dword ptr [bp+6]",
+            "inc eax",
+            "shld edx, eax, 16",
+            "pop bp",
+            "retf",
+        ]
+    );
+}

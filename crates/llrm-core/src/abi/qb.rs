@@ -858,6 +858,47 @@ pub fn _contract(
     })
 }
 
+/// Where each of `function`'s parameters arrives, as a displacement from BP.
+///
+/// A Pascal BASIC caller evaluates and pushes left-to-right, so the first
+/// source formal is furthest from the return address. CDECL pushes
+/// right-to-left and therefore retains the ordinary ascending layout.
+/// Above BP: the saved BP and a near or far return address.
+pub fn parameter_offsets(function: &model::Function, parameter_types: &[&model::Type]) -> Vec<i64> {
+    let widths: Vec<i64> = parameter_types.iter().map(|type_| 2.max(type_.width)).collect();
+    let near = function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Near);
+    let first = if near { 4 } else { 6 };
+    let callee_cleanup = function.abi.as_ref().is_some_and(|abi| abi.cleanup == model::StackCleanup::Callee);
+    let mut offsets = Vec::new();
+    if callee_cleanup {
+        let mut cursor = first + widths.iter().sum::<i64>();
+        for width in &widths {
+            cursor -= width;
+            offsets.push(cursor);
+        }
+    } else {
+        let mut cursor = first;
+        for width in &widths {
+            offsets.push(cursor);
+            cursor += width;
+        }
+    }
+    offsets
+}
+
+/// How `function` is entered and left, as instruction selection reads it:
+/// each parameter's frame cell, and the registers its result leaves in.
+pub fn convention(function: &model::Function, types: &IndexMap<i64, &model::Type>) -> crate::backend::isel::Convention {
+    let parameter_types: Vec<&model::Type> = function
+        .parameters
+        .iter()
+        .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
+        .collect();
+    let parameters = parameter_offsets(function, &parameter_types).into_iter().map(crate::backend::isel::Home::Frame).collect();
+    let returns = if _paired(types[&function.result_type]) { vec![Register::EAX, Register::EDX] } else { vec![Register::EAX] };
+    crate::backend::isel::Convention { parameters, returns }
+}
+
 /// Turn one optimized semantic body into the backend's existing call form.
 pub fn physicalize(
     program: &model::Program,
@@ -1063,27 +1104,7 @@ pub fn physicalize(
         && parameter_types[parameter_types.len() - 1].element == Some(result_type.id);
     let hidden_float_result =
         if returns_legacy_float { Some(lowered.values[&function.parameters[function.parameters.len() - 1]]) } else { None };
-    let parameter_widths: Vec<i64> = parameter_types.iter().map(|type_| 2.max(type_.width)).collect();
-    // A Pascal BASIC caller evaluates and pushes left-to-right, so the first
-    // source formal is furthest from the return address. CDECL pushes
-    // right-to-left and therefore retains the ordinary ascending layout.
-    // Above BP: the saved BP and a near or far return address.
-    let near = function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Near);
-    let first = if near { 4 } else { 6 };
-    let mut parameter_offsets = Vec::new();
-    if callee_cleanup {
-        let mut cursor = first + parameter_widths.iter().sum::<i64>();
-        for width in &parameter_widths {
-            cursor -= width;
-            parameter_offsets.push(cursor);
-        }
-    } else {
-        let mut cursor = first;
-        for width in &parameter_widths {
-            parameter_offsets.push(cursor);
-            cursor += width;
-        }
-    }
+    let parameter_offsets = parameter_offsets(function, &parameter_types);
     let read: BTreeSet<mir::Value> = lowered
         .body
         .blocks
