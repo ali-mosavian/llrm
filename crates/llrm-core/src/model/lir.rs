@@ -165,6 +165,35 @@ impl Insn {
             .collect()
     }
 
+    /// Whether this instruction puts bytes out, which its machine form
+    /// answers and its kind does not: select emits a named NOTHING (`nop`,
+    /// `fwait`) and only an unnamed one as no bytes.
+    ///
+    /// A phi's copy placed after allocation rides on a NOTHING op. Asked by
+    /// kind, deedlines' `IF ... THEN rc% = -1` read as an empty block, the jump
+    /// over it went, and the copy ran on both paths.
+    #[must_use]
+    pub fn emits(&self) -> bool {
+        match &self.what {
+            Some(what) => what.op != Operation::Nothing || what.name.as_deref().is_some_and(|name| !name.is_empty()),
+            None => self.kind() != Kind::Nothing,
+        }
+    }
+
+    /// LLVM's `isMetaInstruction`: emits nothing and names no value or
+    /// register, so it only marks where source bytes land. Code must not
+    /// depend on one: no heuristic counts it.
+    #[must_use]
+    pub fn is_meta(&self) -> bool {
+        !self.emits()
+            && self.defines.is_empty()
+            && self.uses.is_empty()
+            && self.clobbers.is_empty()
+            && self.clobbers_high.is_empty()
+            && self.requires.is_empty()
+            && self.delivers.is_empty()
+    }
+
     /// The source ranges this instruction owns.
     #[must_use]
     pub fn owned(&self) -> Vec<(i64, i64)> {
@@ -322,20 +351,20 @@ impl LirBody {
     }
 }
 
+/// What an instruction that only owns source bytes does: nothing, and
+/// selects to no bytes. Named `nop`, select emits a real one.
+#[must_use]
+pub fn inert() -> Semantics {
+    Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }
+}
+
 /// Keep virtual dataflow and source-byte ownership for an elided machine op.
 ///
 /// Direct port of `qbopt.model.lir:anchor`.
 #[must_use]
 pub fn anchor(one: Arc<Insn>) -> Arc<Insn> {
     let mut anchored = (*one).clone();
-    anchored.what = Some(Semantics {
-        op: Operation::Nothing,
-        name: Some(String::new()),
-        dests: Vec::new(),
-        sources: Vec::new(),
-        target: None,
-        indirect: false,
-    });
+    anchored.what = Some(inert());
     anchored.clobbers.clear();
     anchored.clobbers_high.clear();
     anchored.group = None;
@@ -374,6 +403,8 @@ where
     R: Fn(&Arc<Insn>) -> Arc<Insn>,
 {
     let mut out = Vec::new();
+    // Whether `out` starts with a dropped instruction's anchor.
+    let mut first_dropped = false;
     for one in insns {
         let kept = rewrite
             .as_ref()
@@ -382,6 +413,8 @@ where
             out.push(kept);
             continue;
         }
+        // Bytes no survivor can take stay on an anchor, never on the code.
+        let anchored = bytes_only(&kept);
         let Some((start, end)) = one.covers else {
             continue;
         };
@@ -389,7 +422,8 @@ where
             continue;
         }
         if one.spread.len() > 1 {
-            out.push(kept);
+            first_dropped |= out.is_empty();
+            out.push(anchored);
             continue;
         }
         let where_ = out.iter().rposition(|previous| {
@@ -398,14 +432,15 @@ where
                 .is_some_and(|(previous_start, previous_end)| previous_start != previous_end)
         });
         let Some(where_) = where_ else {
-            out.push(kept);
+            first_dropped |= out.is_empty();
+            out.push(anchored);
             continue;
         };
         if out[where_]
             .covers
             .is_none_or(|(_, previous_end)| previous_end != start)
         {
-            out.push(kept);
+            out.push(anchored);
             continue;
         }
         let mut replacement = (*out[where_]).clone();
@@ -420,7 +455,7 @@ where
         });
         let first = Arc::clone(&out[0]);
         let second = following.map(|index| Arc::clone(&out[index]));
-        if drop(&first)
+        if first_dropped
             && first.covers.is_some()
             && second.is_some()
             && first.spread.len() <= 1
@@ -592,9 +627,9 @@ mod tests {
 
     #[test]
     fn direct_lir_model_without_preserves_python_instruction_identity() {
-        // Python backend passes use id(one) as their set/map key. A kept or
-        // refused occurrence must therefore be the same object; ownership
-        // donation is the one case that replaces the recipient dataclass.
+        // Passes key sets on an instruction's identity, so a kept one is the
+        // same object. A dropped one whose bytes no survivor can take becomes
+        // an anchor: bytes never keep code alive.
         let kept = instruction(0x08, Some((0x08, 0x0a)));
         let recipient = instruction(0x10, Some((0x10, 0x12)));
         let donor = instruction(0x12, Some((0x12, 0x14)));
@@ -616,25 +651,7 @@ mod tests {
             None::<fn(&Arc<Insn>) -> Arc<Insn>>,
         );
         assert!(Arc::ptr_eq(&result[0], &kept));
-        assert!(Arc::ptr_eq(&result[1], &refused));
-    }
-
-    #[test]
-    fn without_asks_drop_of_the_first_survivor_even_with_no_heir() {
-        // Python evaluates `drop(first)` before `second is not None`; the
-        // port skipped that call, so drop saw [0, 2] instead of [0, 2, 0].
-        let first = instruction(0, Some((0, 2)));
-        let bare = instruction(2, None);
-        let calls = std::cell::RefCell::new(Vec::new());
-        let _ = without(
-            &[first, bare],
-            |one| {
-                calls.borrow_mut().push(one.at);
-                false
-            },
-            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-        );
-        assert_eq!(*calls.borrow(), vec![0, 2, 0]);
+        assert!(result[1].is_meta() && result[1].spread == refused.spread, "{:?}", result[1]);
     }
 
     #[test]

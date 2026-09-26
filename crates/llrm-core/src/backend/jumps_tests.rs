@@ -297,6 +297,26 @@ fn test_a_threaded_source_jump_keeps_its_bytes() {
     assert_eq!(result.owned_bytes(), [7, 8, 9]);
 }
 
+/// Control falls through a block of only markers. Taken for the next
+/// block, rotate's loop kept a `jmp` to the instruction right after it.
+#[test]
+fn test_a_jump_past_a_marker_block_to_the_next_code_is_dropped() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 9), _inserted(_jump(3, 7))], vec![9, 7]),
+            block(5, vec![nothing(5, Some((5, 7)))], vec![]),
+            block(7, vec![_return(7)], vec![]),
+            block(9, vec![_return(9)], vec![]),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    assert!(!result.blocks[0].insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump)));
+}
+
 /// A carried, non-generated LIR occurrence can have no contiguous `covers` span.
 #[test]
 fn test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading() {
@@ -308,9 +328,10 @@ fn test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading()
     assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1]);
 }
 
-/// PARITY's fully unrolled BASIC loop left only source-map anchors.
+/// PARITY's fully unrolled BASIC loop left only source-map anchors. They
+/// are not work: the jump threads past them, and they keep their bytes.
 #[test]
-fn test_reachable_inert_source_ownership_is_not_a_transparent_passage() {
+fn test_reachable_inert_source_ownership_is_a_passage_that_keeps_its_bytes() {
     let owned = nothing(5, Some((5, 9)));
     let source = body(
         "f",
@@ -325,8 +346,9 @@ fn test_reachable_inert_source_ownership_is_not_a_transparent_passage() {
     let result = threaded(&source);
 
     assert_eq!(result.blocks.iter().map(|block| block.at).collect::<Vec<_>>(), [1, 5, 9]);
-    assert_eq!(result.blocks[0].succ, [5]);
+    assert_eq!(result.blocks[0].succ, [9]);
     assert_eq!(result.blocks[1].insns, [owned]);
+    assert!(result.blocks[1].succ.is_empty());
 }
 
 /// Mandel's rewound coordinate made its outer header emit no bytes.

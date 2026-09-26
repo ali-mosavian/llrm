@@ -913,7 +913,71 @@ pub fn allocate(
         stage.insert(value, Stage::Done);
     }
 
+    let settled = Settled { live: &live, masks: &masks, widths: &widths, hints: &hints, confined: &confined, data_free };
+    _recolored_hints(&mut r#where, &mut union, &settled, |value| {
+        fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
+    });
     Ok(Assignment { r#where, spilled, cost, optimal: false, why: "greedy with eviction".to_owned() })
+}
+
+/// What recoloring reads of a finished assignment.
+struct Settled<'a> {
+    live: &'a IndexMap<u32, Interval>,
+    masks: &'a Masks,
+    widths: &'a IndexMap<u32, u32>,
+    hints: &'a IndexMap<u32, Vec<u32>>,
+    confined: &'a Classes,
+    data_free: bool,
+}
+
+/// LLVM's `tryHintsRecoloring`. Greedy order decides which end of a copy
+/// is placed first, and that end picks blindly when its partner has no
+/// register yet: sum_three's pointer went to DX and its latch kept
+/// `mov di,dx`. Afterwards, a value moves to a copy partner's register when
+/// that is free over its whole interval and joins more of its copies than
+/// the register it has; each joined copy is a deleted move. Every move
+/// joins more pairs than it splits, so this ends.
+fn _recolored_hints(
+    r#where: &mut IndexMap<u32, Register>,
+    union: &mut IndexMap<Register, Vec<u32>>,
+    settled: &Settled<'_>,
+    pinned: impl Fn(u32) -> bool,
+) {
+    let joined = |value: u32, register: Register, r#where: &IndexMap<u32, Register>| {
+        settled.hints[&value].iter().filter(|other| r#where.get(*other).is_some_and(|theirs| _whole(*theirs) == register)).count()
+    };
+    let mut moved = true;
+    while moved {
+        moved = false;
+        let values: Vec<u32> = r#where.keys().copied().filter(|value| settled.hints.contains_key(value) && !pinned(*value)).collect();
+        for value in values {
+            let (now, Some(mine)) = (_whole(r#where[&value]), settled.live.get(&value)) else {
+                continue;
+            };
+            let width = settled.widths.get(&value).copied().unwrap_or(4);
+            let mut best: Option<(usize, Register)> = Some((joined(value, now, r#where), now));
+            for other in &settled.hints[&value] {
+                let Some(theirs) = r#where.get(other).map(|one| _whole(*one)) else {
+                    continue;
+                };
+                let gained = joined(value, theirs, r#where);
+                if best.is_some_and(|(most, _)| gained <= most) || (!settled.data_free && theirs == *target::DATA_SEGMENT) {
+                    continue;
+                }
+                let order: Vec<Register> =
+                    target::order(settled.confined.get(&value)).into_iter().filter(|one| _whole(*one) == theirs).collect();
+                if let Some(register) = _free(mine, &order, union, settled.live, settled.masks, width) {
+                    best = Some((gained, register));
+                }
+            }
+            if let Some((_, register)) = best.filter(|(_, register)| _whole(*register) != now) {
+                union.get_mut(&now).expect("assigned").retain(|one| *one != value);
+                union.entry(_whole(register)).or_default().push(value);
+                r#where.insert(value, register);
+                moved = true;
+            }
+        }
+    }
 }
 
 /// Allocate one evaluated retention plan, or discard that plan.
@@ -1832,7 +1896,7 @@ fn _identity_anchor(one: Arc<Insn>) -> Arc<Insn> {
         return one;
     }
     let mut made = (*one).clone();
-    made.what = Some(Semantics { name: Some("nop".to_owned()), ..Semantics::new(Operation::Nothing) });
+    made.what = Some(lir::inert());
     Arc::new(made)
 }
 
@@ -2181,6 +2245,43 @@ mod tests {
         )
         .expect("allocates");
         assert_eq!(got.r#where[&1], Register::EDX, "{:?}", got.r#where);
+    }
+
+    #[test]
+    fn test_a_copy_placed_before_its_partner_moves_to_join_it() {
+        // The longer source was placed first, blind to its copy; the copy's
+        // destination then found that register held by a pinned value and
+        // the copy stayed a mov.
+        let add = |at: i64, value: u32| {
+            Insn::new(
+                at,
+                Some((at, at + 2)),
+                Some(semantics(Operation::Binary, "add", vec![held(value, 2)], vec![held(value, 2), imm(1, 2)])),
+                vec![value],
+                vec![value],
+            )
+        };
+        let mut insns = vec![_mov(1, 1, 0x100)];
+        insns.extend((0..4).map(|at| add(0x102 + 2 * at, 1)));
+        insns.push(Insn::new(
+            0x10a,
+            Some((0x10a, 0x10c)),
+            Some(semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)])),
+            vec![2],
+            vec![1],
+        ));
+        insns.push(_mov(3, 3, 0x10c));
+        insns.push(Insn::new(
+            0x10e,
+            Some((0x10e, 0x110)),
+            Some(semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), held(3, 2)])),
+            vec![2],
+            vec![2, 3],
+        ));
+        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into()).expect("allocates");
+        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into())
+            .expect("allocates");
+        assert_eq!(_whole(got.r#where[&1]), _whole(got.r#where[&2]), "{:?}", got.r#where);
     }
 
     #[test]

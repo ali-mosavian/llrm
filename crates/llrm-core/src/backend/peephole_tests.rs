@@ -422,7 +422,7 @@ fn test_constant_push_pair_preserves_stack_bytes() {
 
 #[test]
 fn test_constant_push_fusion_stops_at_boundaries() {
-    for barrier in ["relocation", "gap", "block", "instruction"] {
+    for barrier in ["relocation", "block", "instruction"] {
         let mut first =
             insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
         let mut second = Insn { at: 3, covers: Some((3, 6)), ..first.clone() };
@@ -434,15 +434,12 @@ fn test_constant_push_fusion_stops_at_boundaries() {
                     address: Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }),
                 })];
             }
-            "gap" => {
-                second.at = 4;
-                second.covers = Some((4, 7));
-            }
             _ => {}
         }
         let (first, second) = (Arc::new(first), Arc::new(second));
         let insns = if barrier == "instruction" {
-            vec![Arc::clone(&first), Arc::new(insn(3, Some((3, 3)), None, vec![], vec![])), Arc::clone(&second)]
+            let nop = insn(3, Some((3, 3)), Some(sem(Operation::Nothing, "nop", vec![], vec![])), vec![], vec![]);
+            vec![Arc::clone(&first), Arc::new(nop), Arc::clone(&second)]
         } else {
             vec![Arc::clone(&first), Arc::clone(&second)]
         };
@@ -454,6 +451,24 @@ fn test_constant_push_fusion_stops_at_boundaries() {
         let input = body("boundary", 0, blocks);
         assert_eq!(pushes(&input), input, "{barrier}");
     }
+}
+
+/// Source bytes never keep code alive. Two pushes whose bytes were not
+/// contiguous stayed two, because `without` refused to drop the second.
+#[test]
+fn test_a_byte_gap_does_not_stop_push_fusion() {
+    let first = insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
+    let second = Insn { at: 4, covers: Some((4, 7)), ..first.clone() };
+    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]));
+    let code: Vec<_> = fused.insns().into_iter().filter(|one| !one.is_meta()).collect();
+    assert_eq!(code.len(), 1, "{code:?}");
+    assert_eq!(fused.owned_bytes(), [0, 1, 2, 4, 5, 6]);
+
+    // Nor does a marker between them.
+    let marker = insn(3, Some((3, 4)), Some(lir::inert()), vec![], vec![]);
+    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]));
+    assert_eq!(fused.insns().iter().filter(|one| !one.is_meta()).count(), 1, "{:?}", fused.insns());
+    assert_eq!(fused.owned_bytes(), [0, 1, 2, 3, 4, 5, 6]);
 }
 
 #[test]
@@ -655,6 +670,40 @@ fn test_source_owned_scale_converges_with_a_synthetic_frontend() {
     assert_eq!(result[0].covers, Some((0x90, 0x95)));
     assert_eq!(result[0].defines, addition.defines);
     assert_eq!(result[0].uses, copy.uses);
+}
+
+/// Neither a marker between the parts nor bytes that do not meet stop the
+/// LEA. Both did: lngmxx kept `lea` and seven `add`s for `lea [edx+edx*8]`.
+#[test]
+fn test_scaled_lea_crosses_markers_and_byte_gaps() {
+    let (source, dest) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
+    let copy =
+        insn(0x90, Some((0x90, 0x90)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![77], vec![72]);
+    let shift = insn(
+        0x90,
+        Some((0x90, 0x95)),
+        Some(sem(Operation::Binary, "shl", vec![dest.clone()], vec![dest.clone(), im(2, 1)])),
+        vec![77],
+        vec![77],
+    );
+    let marker = insn(0x95, Some((0x95, 0x97)), Some(lir::inert()), vec![], vec![]);
+    let addition = insn(
+        0x99,
+        Some((0x99, 0x9b)),
+        Some(sem(Operation::Binary, "add", vec![dest.clone()], vec![dest.clone(), source])),
+        vec![77],
+        vec![77, 72],
+    );
+    let compare =
+        insn(0x9b, Some((0x9b, 0x9b)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![77]);
+    let parts = [copy, shift, marker, addition, compare].map(Arc::new).to_vec();
+    let input = body("marked-scale", 0x90, vec![block(0x90, parts, vec![])]);
+
+    let result = addresses(&input, "386").unwrap();
+
+    let code: Vec<Arc<Insn>> = result.insns().into_iter().filter(|one| !one.is_meta()).collect();
+    assert_eq!(names(&code), ["lea", "cmp"]);
+    assert_eq!(result.owned_bytes(), input.owned_bytes());
 }
 
 #[test]

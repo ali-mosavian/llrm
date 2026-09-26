@@ -661,7 +661,12 @@ pub fn _step(body: &LirBody) -> (LirBody, bool) {
     for index in 0..blocks.len() {
         let block = blocks[index].clone();
         let real = _real(&block);
-        let after = blocks.get(index + 1).map(|next| next.at);
+        // Control falls through blocks of only meta instructions, as layout
+        // places them.
+        let after = blocks[index + 1..]
+            .iter()
+            .find(|next| !next.phis.is_empty() || next.insns.iter().any(|one| !one.is_meta()))
+            .map(|next| next.at);
         let Some(last) = real.last() else {
             continue;
         };
@@ -752,39 +757,20 @@ pub fn _step(body: &LirBody) -> (LirBody, bool) {
 }
 
 /// The instructions that print.
+/// The block's work: neither meta instructions nor source `nop`s.
 pub fn _real(block: &LirBlock) -> Vec<Arc<Insn>> {
-    block
-        .insns
-        .iter()
-        .filter(|one| match &one.what {
-            None => true,
-            Some(what) => what.op != Operation::Nothing || !matches!(what.name.as_deref().unwrap_or(""), "" | "nop"),
-        })
-        .cloned()
-        .collect()
+    let nop = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"));
+    block.insns.iter().filter(|one| !one.is_meta() && !nop(one)).cloned().collect()
 }
 
-/// Where a block with no owned inert work goes.
+/// Where a block with no work goes.
 ///
-/// An inert anchor emits no machine instruction, but it still owns decoded
-/// bytes that fresh layout must account for.  Redirecting the incoming edge
-/// makes the block unreachable and can strand that ownership.  Executable
-/// jump passages retain the existing threading rule; source-owned jumps are
-/// handled when a chosen fall-through removes the instruction itself.
+/// Meta instructions are not work: threading past them strands no bytes,
+/// since an unreachable block keeps what it owns. An identity copy's anchor
+/// is: it defines a value on this edge, and threading around it would leave
+/// the successor's operand naming a value no surviving instruction defines.
 pub fn _passage(block: &LirBlock) -> Option<i64> {
-    if !block.phis.is_empty()
-        || block.insns.iter().any(|one| {
-            one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
-                && (!one.inserted()
-                    || !one.spread.is_empty()
-                    // An identity copy may emit no instruction after allocation, but
-                    // its anchor still establishes a virtual definition on this CFG
-                    // edge. Threading around it would leave the successor's operand
-                    // naming a value no surviving instruction defines.
-                    || !one.defines.is_empty()
-                    || !one.uses.is_empty())
-        })
-    {
+    if !block.phis.is_empty() {
         return None;
     }
     let real = _real(block);

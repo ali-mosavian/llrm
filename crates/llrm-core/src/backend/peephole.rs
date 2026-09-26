@@ -618,14 +618,46 @@ pub fn pushed_constants(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
+/// `insns` with `rewrite` offered each run of up to `width` instructions,
+/// meta instructions skipped (LLVM's walk without debug instructions): a
+/// marker between two instructions never stops a rewrite. `rewrite` answers
+/// how many it consumed and what replaces them; markers inside a consumed
+/// run follow the replacement.
+fn _code_windows<E>(
+    insns: &[Arc<Insn>],
+    width: usize,
+    mut rewrite: impl FnMut(&[Arc<Insn>]) -> Result<Option<(usize, Vec<Arc<Insn>>)>, E>,
+) -> Result<Vec<Arc<Insn>>, E> {
+    let code: Vec<usize> = (0..insns.len()).filter(|&at| !insns[at].is_meta()).collect();
+    let only: Vec<Arc<Insn>> = code.iter().map(|&at| Arc::clone(&insns[at])).collect();
+    let mut out = Vec::with_capacity(insns.len());
+    let (mut next, mut at) = (0, 0);
+    while at < code.len() {
+        out.extend(insns[next..code[at]].iter().cloned());
+        match rewrite(&only[at..(at + width).min(code.len())])? {
+            Some((consumed, replacement)) => {
+                let last = code[at + consumed - 1];
+                out.extend(replacement);
+                out.extend(insns[code[at] + 1..last].iter().filter(|one| one.is_meta()).cloned());
+                next = last + 1;
+                at += consumed;
+            }
+            None => {
+                out.push(Arc::clone(&insns[code[at]]));
+                next = code[at] + 1;
+                at += 1;
+            }
+        }
+    }
+    out.extend(insns[next..].iter().cloned());
+    Ok(out)
+}
+
 /// Two adjacent immediate word pushes have one dword's stack layout.
 pub fn pushes(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut out = Vec::new();
-        let mut index = 0;
-        while index < block.insns.len() {
-            let pair = &block.insns[index..(index + 2).min(block.insns.len())];
+        let out = _code_windows(&block.insns, 2, |pair| -> Result<_, std::convert::Infallible> {
             if pair.len() == 2
                 && pair.iter().all(|one| {
                     !(!one.clobbers.is_empty()
@@ -663,17 +695,13 @@ pub fn pushes(body: &LirBody) -> LirBody {
                             |one| Arc::ptr_eq(one, &removed),
                             None::<fn(&Arc<Insn>) -> Arc<Insn>>,
                         );
-                        if folded.len() == 1 {
-                            out.extend(folded);
-                            index += 2;
-                            continue;
-                        }
+                        return Ok(Some((2, folded)));
                     }
                 }
             }
-            out.push(Arc::clone(&block.insns[index]));
-            index += 1;
-        }
+            Ok(None)
+        });
+        let Ok(out) = out;
         blocks.push(block.with_insns(out));
     }
     body.with_blocks(blocks)
@@ -825,19 +853,9 @@ pub fn transferred(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = Vec::new();
-        let mut index = 0;
-        while index < block.insns.len() {
-            let pair = &block.insns[index..(index + 2).min(block.insns.len())];
-            let changed = if pair.len() == 2 { _transferred(pair, &dead_after) } else { None };
-            if let Some(changed) = changed {
-                insns.extend(changed);
-                index += 2;
-                continue;
-            }
-            insns.push(Arc::clone(&block.insns[index]));
-            index += 1;
-        }
+        let Ok(insns) = _code_windows(&block.insns, 2, |pair| -> Result<_, std::convert::Infallible> {
+            Ok(if pair.len() == 2 { _transferred(pair, &dead_after).map(|changed| (2, changed)) } else { None })
+        });
         blocks.push(block.with_insns(insns));
     }
     body.with_blocks(blocks)
@@ -929,37 +947,21 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = Vec::new();
-        let mut index = 0;
-        while index < block.insns.len() {
-            let triple = &block.insns[index..(index + 3).min(block.insns.len())];
-            let changed = if triple.len() == 3 {
-                _register_high_extract(triple, &dead_after, &virtual_uses, profile)?
-            } else {
-                None
-            };
-            if let Some(changed) = changed {
-                insns.extend(changed);
-                index += 3;
-                continue;
-            }
-            let pair = &block.insns[index..(index + 2).min(block.insns.len())];
-            let changed = if pair.len() == 2 {
-                match _selected_register_high_extract(pair, &dead_after, &virtual_uses, profile)? {
-                    Some(changed) => Some(changed),
-                    None => _high_extract(pair, &dead_after),
+        let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
+            if run.len() == 3 {
+                if let Some(changed) = _register_high_extract(run, &dead_after, &virtual_uses, profile)? {
+                    return Ok(Some((3, changed)));
                 }
-            } else {
-                None
-            };
-            if let Some(changed) = changed {
-                insns.extend(changed);
-                index += 2;
-                continue;
             }
-            insns.push(Arc::clone(&block.insns[index]));
-            index += 1;
-        }
+            if run.len() < 2 {
+                return Ok(None);
+            }
+            let pair = &run[..2];
+            Ok(match _selected_register_high_extract(pair, &dead_after, &virtual_uses, profile)? {
+                Some(changed) => Some((2, changed)),
+                None => _high_extract(pair, &dead_after).map(|changed| (2, changed)),
+            })
+        })?;
         blocks.push(block.with_insns(insns));
     }
     Ok(body.with_blocks(blocks))
@@ -1166,7 +1168,7 @@ fn _selected_register_high_extract(
         |one| Arc::ptr_eq(one, shift),
         None::<fn(&Arc<Insn>) -> Arc<Insn>>,
     );
-    Ok(if folded.len() == 1 { Some(folded) } else { None })
+    Ok(Some(folded))
 }
 
 fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
@@ -1256,19 +1258,9 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
 pub fn shuttles(body: &LirBody) -> LirBody {
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let mut out = Vec::new();
-        let mut index = 0;
-        while index < block.insns.len() {
-            let triple = &block.insns[index..(index + 3).min(block.insns.len())];
-            let changed = if triple.len() == 3 { _shuttle(triple) } else { None };
-            if let Some(changed) = changed {
-                out.extend(changed);
-                index += 3;
-                continue;
-            }
-            out.push(Arc::clone(&block.insns[index]));
-            index += 1;
-        }
+        let Ok(out) = _code_windows(&block.insns, 3, |triple| -> Result<_, std::convert::Infallible> {
+            Ok(if triple.len() == 3 { _shuttle(triple).map(|changed| (3, changed)) } else { None })
+        });
         blocks.push(block.with_insns(out));
     }
     body.with_blocks(blocks)
@@ -2194,12 +2186,19 @@ fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu
             |one| Arc::ptr_eq(one, &shift),
             None::<fn(&Arc<Insn>) -> Arc<Insn>>,
         );
-        if folded.len() != 1 {
-            at += 1;
-            continue;
+        // The shift's bytes join the combined instruction, or stay on an
+        // anchor where the shift was.
+        match &folded[..] {
+            [joined] => {
+                insns[indexes[2]] = Arc::clone(joined);
+                removed.insert(indexes[1]);
+            }
+            [anchor, joined] => {
+                insns[indexes[1]] = Arc::clone(anchor);
+                insns[indexes[2]] = Arc::clone(joined);
+            }
+            _ => unreachable!("without keeps the combined instruction and at most one anchor"),
         }
-        insns[indexes[2]] = Arc::clone(&folded[0]);
-        removed.insert(indexes[1]);
         at += 3;
     }
     let insns =
@@ -2300,21 +2299,14 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
         let block = _loaded_addresses(block, flags_dead_out, &virtual_uses, target_cpu)?;
         let dead = _flags_dead_after(&block, flags_dead_out);
         let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
-        let mut insns = Vec::new();
-        let mut index = 0;
-        while index < block.insns.len() {
-            let rest = &block.insns[index..];
-            match _affine_address(rest, &dead, target_cpu)? {
-                Some((taken, combined)) if !_loses_live_definition(&rest[..taken], &combined, &rest[taken..], &live_out) => {
-                    insns.push(combined);
-                    index += taken;
+        let insns = _code_windows(&block.insns, block.insns.len(), |rest| -> Result<_, String> {
+            Ok(match _affine_address(rest, &dead, target_cpu)? {
+                Some((taken, made)) if !_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out) => {
+                    Some((taken, made))
                 }
-                _ => {
-                    insns.push(Arc::clone(&block.insns[index]));
-                    index += 1;
-                }
-            }
-        }
+                _ => None,
+            })
+        })?;
         blocks.push(block.with_insns(insns));
     }
     Ok(body.with_blocks(blocks))
@@ -2582,7 +2574,7 @@ fn _affine_address(
     parts: &[Arc<Insn>],
     dead: &HashSet<usize>,
     cpu: &Profile,
-) -> Result<Option<(usize, Arc<Insn>)>, String> {
+) -> Result<Option<(usize, Vec<Arc<Insn>>)>, String> {
     let Some(copy) = parts.first() else {
         return Ok(None);
     };
@@ -2652,22 +2644,15 @@ fn _affine_address(
     if new.code.len() > before.iter().map(|one| one.code.len()).sum() {
         return Ok(None);
     }
-    // One instruction owns the source interval the LEA keeps: a single
-    // wider owner, or intervals that meet end to start.
+    // The LEA takes its first owner's bytes; the other parts' join it where
+    // they meet, else stay on anchors. Bytes never veto the LEA.
     let owned: Vec<&Arc<Insn>> =
         replaced.iter().filter(|one| one.covers.is_some_and(|(start, end)| start != end)).collect();
-    if owned.windows(2).any(|pair| pair[0].covers.expect("owned").1 != pair[1].covers.expect("owned").0) {
-        return Ok(None);
-    }
     let owner = owned.first().copied().unwrap_or(copy);
     let symbolic: Vec<&Arc<Insn>> = replaced.iter().filter(|one| one.symbol == Some(true)).collect();
     if !symbolic.is_empty() && (symbolic.len() != 1 || !Arc::ptr_eq(symbolic[0], owner)) {
         return Ok(None);
     }
-    let covers = match (owned.first(), owned.last()) {
-        (Some(first), Some(end)) => Some((first.covers.expect("owned").0, end.covers.expect("owned").1)),
-        _ => owner.covers,
-    };
     let result = &replaced[last];
     let intermediate: HashSet<u32> = replaced[..last].iter().flat_map(|one| one.defines.iter().copied()).collect();
     let uses = deduped(
@@ -2678,19 +2663,19 @@ fn _affine_address(
     );
     let live: HashSet<u32> = uses.iter().chain(&result.defines).copied().collect();
     let widths = deduped(replaced.iter().flat_map(|one| one.widths.iter().copied()).filter(|pair| live.contains(&pair.0)));
-    Ok(Some((
-        last + 1,
-        Arc::new(Insn {
-            what: Some(what),
-            defines: result.defines.clone(),
-            uses,
-            widths,
-            requires: deduped(replaced.iter().flat_map(|one| one.requires.iter().copied())),
-            delivers: deduped(replaced.iter().flat_map(|one| one.delivers.iter().copied())),
-            covers,
-            ..(**owner).clone()
-        }),
-    )))
+    let combined = Arc::new(Insn {
+        what: Some(what),
+        defines: result.defines.clone(),
+        uses,
+        widths,
+        requires: deduped(replaced.iter().flat_map(|one| one.requires.iter().copied())),
+        delivers: deduped(replaced.iter().flat_map(|one| one.delivers.iter().copied())),
+        ..(**owner).clone()
+    });
+    let others: Vec<Arc<Insn>> = owned.iter().filter(|one| !Arc::ptr_eq(one, &owner)).map(|one| Arc::clone(one)).collect();
+    let sequence: Vec<Arc<Insn>> = std::iter::once(combined).chain(others.iter().cloned()).collect();
+    let made = lir::without(&sequence, |one| others.iter().any(|other| Arc::ptr_eq(other, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
+    Ok(Some((last + 1, made)))
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead.

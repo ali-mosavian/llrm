@@ -91,7 +91,11 @@ pub fn indexed(body: &LirBody) -> Indexes {
         next_slot += PER_INSN;
         for one in &block.insns {
             at.insert(key(one), next_slot);
-            next_slot += PER_INSN;
+            // A meta instruction takes no slot, as LLVM's SlotIndexes skip
+            // debug instructions: a range across one is no longer.
+            if !one.is_meta() {
+                next_slot += PER_INSN;
+            }
         }
         span.insert(block.at, (first, next_slot));
     }

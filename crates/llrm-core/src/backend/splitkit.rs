@@ -242,11 +242,15 @@ fn _local(
     _deep: &IndexMap<i64, u32>,
 ) -> Option<Region> {
     let found = _references(body, value);
-    let gaps: Vec<(usize, i64, usize)> = found
+    // The gap in code: a meta instruction is no distance.
+    let gaps: Vec<(usize, i64, usize)> = body
+        .blocks
         .iter()
-        .flat_map(|(at, positions)| {
-            (0..positions.len().saturating_sub(1))
-                .map(move |position| (positions[position + 1] - positions[position], *at, positions[position + 1]))
+        .filter_map(|block| found.get(&block.at).map(|positions| (block, positions)))
+        .flat_map(|(block, positions)| {
+            positions.windows(2).map(move |pair| {
+                (block.insns[pair[0]..pair[1]].iter().filter(|one| !one.is_meta()).count(), block.at, pair[1])
+            })
         })
         .collect();
     let (gap, at, cut) = *gaps.iter().max()?;
@@ -767,6 +771,27 @@ mod tests {
         let empty = Indexes { at: IndexMap::default(), span: IndexMap::default(), order: Vec::new() };
         let plan = _local(&body, 3, &IndexMap::default(), &empty, &IndexMap::default());
         assert_eq!(plan, Some(region(&[0x10], Some(2))));
+    }
+
+    /// A meta instruction is no distance, as LLVM's SlotIndexes skip debug
+    /// instructions. Counted, markers moved splits and changed register
+    /// choices: addrm took SI where BX was free.
+    #[test]
+    fn test_meta_instructions_neither_lengthen_a_range_nor_move_a_split() {
+        let marker = |at: i64| Arc::new(Insn::new(at, Some((at, at + 1)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
+        let with = |markers: usize| {
+            let mut insns = vec![move_imm(0, 3, 0x40)];
+            insns.extend((0..markers as i64).map(|at| marker(2 + at)));
+            insns.extend([push(0x10, 3), move_imm(0x12, 4, 1), move_imm(0x14, 5, 2), push(0x16, 3), push(0x18, 4), push(0x1a, 5)]);
+            body("marked", vec![block(0, insns, &[])])
+        };
+        let (bare, marked) = (with(0), with(3));
+        let size = |body: &LirBody| intervals::intervals(body, None)[&3].size();
+        assert_eq!(size(&marked), size(&bare));
+        let empty = Indexes { at: IndexMap::default(), span: IndexMap::default(), order: Vec::new() };
+        let cut = |body: &LirBody| _local(body, 3, &IndexMap::default(), &empty, &IndexMap::default());
+        assert_eq!(cut(&bare), Some(region(&[0], Some(4))));
+        assert_eq!(cut(&marked), Some(region(&[0], Some(7))), "the same push, three markers later");
     }
 
     #[test]

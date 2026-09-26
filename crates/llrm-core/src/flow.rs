@@ -127,6 +127,9 @@ pub enum Checked {
 /// Run one machine phase and verify what it returned.
 pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
+    // The invariance instrument, LLVM's `-g` rule: stripped of meta
+    // instructions, every phase must make the same code.
+    let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
     let owned = body.owned_bytes();
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
@@ -141,6 +144,25 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         llrm_support::debug!("cost", "{}", crate::backend::executed::summary(&body));
     }
     Ok(body)
+}
+
+/// `body` without meta instructions, and without the unreachable blocks
+/// that held only those.
+fn without_meta(body: LirBody) -> LirBody {
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let (mut reached, mut work) = (std::collections::BTreeSet::new(), vec![body.entry]);
+    while let Some(at) = work.pop() {
+        if succ.contains_key(&at) && reached.insert(at) {
+            work.extend(succ[&at].iter().copied());
+        }
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| block.with_insns(block.insns.iter().filter(|one| !one.is_meta()).cloned().collect()))
+        .filter(|block| reached.contains(&block.at) || !block.insns.is_empty() || !block.phis.is_empty())
+        .collect();
+    LirBody { blocks, ..body }
 }
 
 /// What sorted `one` has that sorted `other` lacks, counting repeats.

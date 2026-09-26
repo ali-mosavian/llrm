@@ -1488,11 +1488,9 @@ fn _immediate_arguments(insns: &[Arc<Insn>], uses: &IndexMap<u32, i64>) -> Vec<A
                         |one| Arc::ptr_eq(one, push),
                         None::<fn(&Arc<Insn>) -> Arc<Insn>>,
                     );
-                    if folded.len() == 1 {
-                        out.extend(folded);
-                        index += 2;
-                        continue;
-                    }
+                    out.extend(folded);
+                    index += 2;
+                    continue;
                 }
             }
         }
