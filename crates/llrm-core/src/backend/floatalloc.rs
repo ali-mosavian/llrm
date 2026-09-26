@@ -394,7 +394,7 @@ fn _equivalent_loads(sequence: &[Arc<Insn>], live_out: &BTreeSet<u32>) -> IndexM
         // A volatile load is observable and may be backed by changing device
         // state.  It must neither be removed nor let an earlier ordinary read
         // stand for a later one.
-        if one.op.as_ref().is_some_and(|op| op.volatile) {
+        if one.volatile() {
             available.clear();
             continue;
         }

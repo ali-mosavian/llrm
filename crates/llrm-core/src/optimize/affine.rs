@@ -143,10 +143,15 @@ fn _rewritable(body: &MirBody, loop_: &Loop, one: &Derived, op: &Op) -> Option<(
         .find(|phi| phi.result.id == one.of.value)?
         .result;
     let counter = Held { value: counter, width: answer.width };
-    // Already `scaled + base`: one held offset, added to the scaled counter.
+    // Already `scaled + base`: one held offset, added to the scaled counter,
+    // through the copies induction sees through, as this pass spells a base.
+    let made = induction::definitions(body);
     let spelled = op.kind == Kind::Add
         && one.offsets.len() == 1
         && one.offsets[0].1 == BigInt::from(1_u8)
-        && op.args.contains(&one.offsets[0].0);
+        && op.args.iter().any(|arg| match arg {
+            Arg::Held(held) => Arg::Held(induction::copied(*held, &made)) == one.offsets[0].0,
+            other => *other == one.offsets[0].0,
+        });
     (!spelled).then_some((counter, *answer))
 }

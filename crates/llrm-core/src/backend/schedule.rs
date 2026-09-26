@@ -99,7 +99,7 @@ pub fn _safe(one: &Insn) -> Option<(Lanes, Lanes)> {
         || one.spill_reload
         || one.spill_store
         || one.rematerialized
-        || one.op.as_ref().is_some_and(|op| op.barrier())
+        || one.barrier()
     {
         return None;
     }

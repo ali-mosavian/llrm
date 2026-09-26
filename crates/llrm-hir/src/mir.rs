@@ -83,6 +83,8 @@ struct Tables<'h> {
     data: HashMap<i64, ConstantId>,
     /// Each callee's function and its declared type, by HIR name.
     callees: HashMap<String, ConstantId>,
+    /// Each callee's calling convention, which its calls repeat.
+    conventions: HashMap<String, u32>,
 }
 
 fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool) -> Emitted {
@@ -96,6 +98,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
         callees: HashMap::new(),
+        conventions: HashMap::new(),
     };
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let mut defined = Vec::new();
@@ -117,9 +120,10 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
     let mut functions = Vec::new();
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
-            Ok(global) => {
+            Ok((global, convention)) => {
                 let reference = module.reference(global);
                 tables.callees.insert(function.name.clone(), reference);
+                tables.conventions.insert(function.name.clone(), convention);
                 functions.push((function, Some(global)));
             }
             Err(why) => {
@@ -128,8 +132,12 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
             }
         }
     }
-    for (function, _) in &functions {
+    for (function, global) in &mut functions {
         if let Err(why) = declare_outside(&mut module, &mut tables, function) {
+            // What it calls is undeclared: it stays a declaration, external as LLVM's `deleteBody` leaves one.
+            if let Some(global) = global.take() {
+                module.globals[global.0 as usize].linkage = Linkage::External;
+            }
             refused.push((function.name.clone(), why));
         }
     }
@@ -276,7 +284,32 @@ fn function_type(types: &mut Types, returns: TypeId, parameters: Vec<TypeId>) ->
     types.intern(Type::Function { returns, parameters, variadic: false })
 }
 
-fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<GlobalId> {
+/// The calling convention and code address space an ABI gives: BASIC's
+/// when the callee pops its arguments, C's when the caller does; a far
+/// procedure's code in address space 1, as its pointers are.
+fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Emit<(u32, u32)> {
+    let convention = match cleanup {
+        model::StackCleanup::Callee => llrm_mir::opcode::BASIC,
+        model::StackCleanup::Caller => 0,
+    };
+    let space = match distance {
+        model::CallDistance::Near => 0,
+        model::CallDistance::Far => FAR,
+        model::CallDistance::Interrupt => return Err("an interrupt handler".to_owned()),
+    };
+    Ok((convention, space))
+}
+
+/// `global`, now a function of `convention` in code address space `space`.
+fn place_function(module: &mut Module, global: GlobalId, (convention, space): (u32, u32)) {
+    let one = &mut module.globals[global.0 as usize];
+    one.address_space = space;
+    let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
+    function.calling_convention = convention;
+}
+
+/// A defined function, far and C's unless its ABI says otherwise.
+fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<(GlobalId, u32)> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
     let returns = value_type(types, tables.types[&function.result_type])?;
@@ -286,7 +319,62 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
         model::FunctionLinkage::Internal => Linkage::Internal,
         model::FunctionLinkage::External => Linkage::External,
     };
-    module.add_function(&function.name, ty, linkage)
+    let abi = match &function.abi {
+        Some(abi) => convention(abi.cleanup, abi.distance)?,
+        None => (0, FAR),
+    };
+    let global = module.add_function(&function.name, ty, linkage)?;
+    place_function(module, global, abi);
+    Ok((global, abi.0))
+}
+
+/// Local places that overlap, since they share their bytes: one alloca.
+struct FrameGroup<'h> {
+    start: i64,
+    size: i64,
+    places: Vec<&'h model::Place>,
+    ty: TypeId,
+}
+
+fn frame_groups<'h>(types: &mut Types, tables: &Tables<'h>, function: &'h model::Function) -> Emit<Vec<FrameGroup<'h>>> {
+    let mut locals: Vec<(i64, i64, &model::Place)> = function
+        .places
+        .iter()
+        .filter(|one| one.storage == Storage::Local)
+        .map(|one| (one.offset, one.offset + one.extent.unwrap_or(tables.types[&one.r#type].width), one))
+        .collect();
+    locals.sort_by_key(|&(start, end, place)| (start, end, place.id));
+    let mut spans: Vec<(i64, i64, Vec<&model::Place>)> = Vec::new();
+    for (start, end, place) in locals {
+        match spans.last_mut() {
+            Some(span) if start < span.1 => {
+                span.1 = span.1.max(end);
+                span.2.push(place);
+            }
+            _ => spans.push((start, end, vec![place])),
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end, places)| {
+            let ty = match places[..] {
+                [place] => stored_type(types, tables.types[&place.r#type])?,
+                _ => {
+                    let byte = types.int(8);
+                    types.intern(Type::Array { element: byte, count: (end - start) as u64 })
+                }
+            };
+            Ok(FrameGroup { start, size: end - start, places, ty })
+        })
+        .collect()
+}
+
+/// The memset a zeroed aggregate local calls.
+const MEMSET: &str = "llvm.memset.p0.i16";
+
+fn memset_type(types: &mut Types) -> TypeId {
+    let (void, pointer, byte, size, flag) = (types.void(), types.ptr(0), types.int(8), types.int(16), types.int(1));
+    function_type(types, void, vec![pointer, byte, size, flag])
 }
 
 /// Declares what `function` calls or names outside the module: runtime
@@ -301,6 +389,15 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let global = add_unique(module, &place.name, |module, name| module.add_variable(name, variable.clone(), Linkage::External));
             let reference = module.reference(global);
             tables.data.insert(place.symbol, reference);
+        }
+    }
+    if tables.zeroed && !tables.callees.contains_key(MEMSET) {
+        let groups = frame_groups(&mut module.context.types, tables, function)?;
+        if groups.iter().any(|group| !matches!(module.context.types.get(group.ty), Type::Int(_) | Type::Float(_) | Type::Pointer(_))) {
+            let ty = memset_type(&mut module.context.types);
+            let global = module.add_function(MEMSET, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
@@ -318,7 +415,23 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             }
         }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call) else { continue };
+        let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
+            Some(site) => {
+                let abi = convention(site.cleanup, site.distance)?;
+                // C pushes its arguments right to left, BASIC left to right.
+                let count = site.order.len() as i64;
+                let pushed: Vec<i64> = if abi.0 == 0 { (0..count).rev().collect() } else { (0..count).collect() };
+                if site.order != pushed {
+                    return Err(format!("a call to {callee} pushing {:?}", site.order));
+                }
+                abi
+            }
+            None => (0, FAR),
+        };
         if tables.callees.contains_key(callee) {
+            if tables.conventions.get(callee) != Some(&abi.0) {
+                return Err(format!("calls to {callee} by two conventions"));
+            }
             continue;
         }
         let types = &mut module.context.types;
@@ -330,8 +443,10 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let ty = function_type(types, returns, parameters);
         let name = if tables.callables.contains_key(callee) { callee.to_owned() } else { format!("{RUNTIME}{callee}") };
         let global = module.add_function(&name, ty, Linkage::External)?;
+        place_function(module, global, abi);
         let reference = module.reference(global);
         tables.callees.insert(callee.to_owned(), reference);
+        tables.conventions.insert(callee.to_owned(), abi.0);
     }
     Ok(())
 }
@@ -346,7 +461,7 @@ fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> 
         _ => return None,
     };
     let function = match op {
-        Op::Convert | Op::Truncate => return types.int_bits(to).map(|bits| format!("llvm.lrint.i{bits}.{float}")),
+        Op::Convert => return types.int_bits(to).map(|bits| format!("llvm.lrint.i{bits}.{float}")),
         Op::Fabs => "fabs",
         Op::Fsqrt => "sqrt",
         Op::Fsin => "sin",
@@ -427,53 +542,35 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok(())
     }
 
-    /// An alloca for each group of local places that overlap, since they
-    /// share their bytes, each zeroed as HIR's frame starts.
+    /// An alloca for each group of local places that overlap, each zeroed
+    /// as HIR's frame starts: a scalar by a store, an aggregate by memset,
+    /// as clang zeroes one.
     fn allocate(&mut self) -> Emit<()> {
-        let mut locals: Vec<(i64, i64, &model::Place)> = self
-            .function
-            .places
-            .iter()
-            .filter(|one| one.storage == Storage::Local)
-            .map(|one| (one.offset, one.offset + one.extent.unwrap_or(self.tables.types[&one.r#type].width), one))
-            .collect();
-        locals.sort_by_key(|&(start, end, place)| (start, end, place.id));
-        let mut groups: Vec<(i64, i64, Vec<&model::Place>)> = Vec::new();
-        for (start, end, place) in locals {
-            match groups.last_mut() {
-                Some(group) if start < group.1 => {
-                    group.1 = group.1.max(end);
-                    group.2.push(place);
-                }
-                _ => groups.push((start, end, vec![place])),
+        let groups = frame_groups(&mut self.b.context.types, self.tables, self.function)?;
+        for group in &groups {
+            for place in &group.places {
+                self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
+            self.objects.push(self.b.alloca(group.ty, ""));
         }
-        let mut types = Vec::new();
-        for (start, end, places) in &groups {
-            let ty = match places[..] {
-                [place] => stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?,
+        if !self.tables.zeroed {
+            return Ok(());
+        }
+        for (group, object) in groups.iter().zip(self.objects.clone()) {
+            let kind = match self.b.context.types.get(group.ty) {
+                Type::Int(_) => ConstantKind::Int(0),
+                Type::Float(_) => ConstantKind::Float(0),
+                Type::Pointer(_) => ConstantKind::Null,
                 _ => {
-                    let byte = self.b.context.types.int(8);
-                    self.b.context.types.intern(Type::Array { element: byte, count: (end - start) as u64 })
+                    let callee = Value::Constant(self.tables.callees[MEMSET]);
+                    let ty = memset_type(&mut self.b.context.types);
+                    let (zero, size, volatile) = (self.b.int(8, 0), self.b.int(16, i128::from(group.size)), self.b.int(1, 0));
+                    self.b.call(ty, callee, &[object, zero, size, volatile], "");
+                    continue;
                 }
             };
-            for place in places {
-                self.frame.insert(place.id, (self.objects.len(), place.offset - start));
-            }
-            self.objects.push(self.b.alloca(ty, ""));
-            types.push(ty);
-        }
-        if self.tables.zeroed {
-            for (&object, ty) in self.objects.clone().iter().zip(types) {
-                let kind = match self.b.context.types.get(ty) {
-                    Type::Int(_) => ConstantKind::Int(0),
-                    Type::Float(_) => ConstantKind::Float(0),
-                    Type::Pointer(_) => ConstantKind::Null,
-                    _ => ConstantKind::Zero,
-                };
-                let zero = Value::Constant(self.b.context.constant(Constant { ty, kind }));
-                self.b.store(zero, object, false);
-            }
+            let zero = Value::Constant(self.b.context.constant(Constant { ty: group.ty, kind }));
+            self.b.store(zero, object, false);
         }
         Ok(())
     }
@@ -711,7 +808,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let signed = self.operand_hir_type(&instruction.operands[0]).signed != Some(false);
                 let ty = self.result_type(instruction.results[0])?;
-                let result = self.convert(value, signed, ty)?;
+                let result = if op == Op::Truncate && matches!(self.b.context.types.get(self.b.type_of(value)), Type::Float(_)) {
+                    // Toward zero; the result's signedness picks the cast.
+                    let unsigned = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
+                    self.b.cast(if unsigned { CastOp::FPToUI } else { CastOp::FPToSI }, value, ty, "")
+                } else {
+                    self.convert(value, signed, ty)?
+                };
                 self.define(instruction, result);
             }
             Op::Divmod | Op::Udivmod => {
@@ -815,8 +918,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
+                let convention = self.tables.conventions[callee];
                 let callee = Value::Constant(self.tables.callees[callee]);
-                if let Some(result) = self.b.call(ty, callee, &arguments, "") {
+                if let Some(result) = self.b.call_as(convention, ty, callee, &arguments, "") {
                     self.define(instruction, result);
                 }
             }

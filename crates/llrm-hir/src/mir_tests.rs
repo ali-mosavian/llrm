@@ -24,7 +24,35 @@ fn a_function_becomes_its_llvm_ir() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.ends_with("define i16 @\"DIFF%\"(i16 %0, i16 %1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
+    // With no ABI of its own, a procedure is far and C's.
+    assert!(text.ends_with("define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
+}
+
+/// A call carries its callee's calling convention, and a far callee lives
+/// in code address space 1: BASIC's pops its own arguments, pushed left to
+/// right; a near C one is in address space 0.
+#[test]
+fn a_call_repeats_its_callees_convention() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, ProcedureAbi, StackCleanup};
+    let mut function = difference();
+    function.abi = Some(ProcedureAbi { cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer });
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]);
+    call.callee = Some("B$NEAR".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
+    function.calls = vec![site(vec![1, 0])];
+    let emitted = emit(&program(function.clone())).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("define cc1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
+    assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
+
+    function.calls = vec![site(vec![0, 1])];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "a call to B$NEAR pushing [0, 1]".to_owned())]);
 }
 
 /// A refused internal function was left `declare internal`, which LLVM
@@ -94,7 +122,7 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = alloca [30 x i8]\n  store [30 x i8] zeroinitializer, ptr %2\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
+    let body = "  %2 = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 30, i1 false)\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
     assert!(text.contains(body), "{text}");
 }
 
@@ -161,6 +189,32 @@ fn a_float_converted_to_an_integer_is_rounded() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("  %1 = call i16 @llvm.lrint.i16.f64(double %0)\n  ret i16 %1\n"), "{text}");
+}
+
+/// `FIX(x)`, Nib's `i16(x)`: TRUNCATE rounds toward zero, as `fptosi`
+/// does, and an unsigned result by `fptoui`; it was `lrint`, which made
+/// `i16(-7.9)` -8.
+#[test]
+fn a_float_truncated_to_an_integer_rounds_toward_zero() {
+    for (signed, cast) in [(Some(true), "fptosi"), (Some(false), "fptoui")] {
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }];
+        let truncate = Instruction::new(1, Op::Truncate, vec![2], vec![Operand::value_ref(1)]);
+        let block = Block::new(1, vec![truncate], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "FIX%", 3, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+        let mut word = Type::new(3, "word", TypeKind::Integer, 2);
+        word.signed = signed;
+        program.modules[0].types.push(word);
+
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains(&format!("  %1 = {cast} double %0 to i16\n  ret i16 %1\n")), "{text}");
+        assert!(!text.contains("lrint"), "{text}");
+    }
 }
 
 /// `SQR(x)`: the float functions are LLVM's intrinsics.
@@ -271,7 +325,8 @@ fn fixed_point_arithmetic_is_done_at_twice_the_width() {
 
 /// HIR's frame starts zeroed, so a local read before any store is 0; MIR's
 /// allocas started uninitialized, which a pass may take as any value.
-/// Places that overlap share their bytes: one alloca holds both.
+/// Places that overlap share their bytes: one alloca holds both, zeroed by
+/// memset as clang zeroes an aggregate.
 #[test]
 fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     use crate::model::{Place, Storage};
@@ -291,6 +346,6 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let emitted = emit(&program).remove(0);
     assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  store [4 x i8] zeroinitializer, ptr %0\n  store i16 0, ptr %1\n";
+    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
     assert!(text.contains(entry), "{text}");
 }

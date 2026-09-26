@@ -55,6 +55,23 @@ pub enum IntPredicate {
     Sle,
 }
 
+impl IntPredicate {
+    /// The predicate that holds with the operands exchanged.
+    pub fn swapped(self) -> Self {
+        match self {
+            Self::Ugt => Self::Ult,
+            Self::Uge => Self::Ule,
+            Self::Ult => Self::Ugt,
+            Self::Ule => Self::Uge,
+            Self::Sgt => Self::Slt,
+            Self::Sge => Self::Sle,
+            Self::Slt => Self::Sgt,
+            Self::Sle => Self::Sge,
+            same => same,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FloatPredicate {
     False,
@@ -282,11 +299,19 @@ pub enum Tail {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CallInfo {
     pub function_type: TypeId,
+    /// LLVM's calling convention number; 0 is C's.
+    pub calling_convention: u32,
     pub return_attrs: Vec<Attribute>,
     pub argument_attrs: Vec<Vec<Attribute>>,
     pub attrs: Vec<Attribute>,
     pub tail: Tail,
 }
+
+/// The calling conventions LLVM names, by number; any other is `ccN`.
+pub const CONVENTIONS: [(&str, u32); 5] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65)];
+
+/// BASIC's own: arguments pushed left to right, popped by the callee.
+pub const BASIC: u32 = 1000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Clause {

@@ -11,12 +11,15 @@ pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
 pub mod lint;
+pub mod loops;
 pub mod module;
 pub mod opcode;
 pub mod parse;
 pub mod passes;
 pub mod print;
+pub mod transforms;
 pub mod types;
+pub mod valuetracking;
 pub mod verify;
 
 pub use edit::Position;
@@ -41,3 +44,7 @@ mod lint_tests;
 mod pass_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transforms_tests;
+#[cfg(test)]
+mod valuetracking_tests;

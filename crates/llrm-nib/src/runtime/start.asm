@@ -1,7 +1,8 @@
 .model medium
 .386
 .dosseg
-.stack 512
+; Nib keeps arrays in the frame: 4 KB, as Open Watcom gives a DOS program.
+.stack 4096
 
 extrn _main:far
 extrn N$EDIV:far
@@ -24,6 +25,15 @@ start:
     mov ax, DGROUP
     mov ds, ax
     mov es, ax
+    ; The stack is data (the machine's stack_is_data): SS is DGROUP and SP
+    ; rebased, so a near pointer to a frame cell reaches it through DS.
+    mov dx, ss
+    sub dx, ax
+    shl dx, 4
+    cli
+    mov ss, ax
+    add sp, dx
+    sti
     ; Statics without an initializer are in _BSS, which the EXE does not
     ; store: they hold whatever the last program left there until zeroed.
     mov di, offset DGROUP:_edata
@@ -35,10 +45,7 @@ start:
     mov N$OPSP, bx
     ; The near heap starts where the stack ends, the image's last byte in
     ; DGROUP. The program keeps only its image; the heap grows the block.
-    mov ax, ss
-    sub ax, DGROUP
-    shl ax, 4
-    add ax, sp
+    mov ax, sp
     mov N$OTOP, ax
     add ax, 15
     shr ax, 4

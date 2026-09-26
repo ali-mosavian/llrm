@@ -249,13 +249,22 @@ each local, one alloca per group of places that overlap.
 
 ### 5. Lower from MIR
 
-- Lowering reads only MIR and the side tables -- a call's ABI, a data
-  object's placement -- into the existing LIR, so unoptimized e2e answers
+- Lowering reads only MIR into the existing LIR, so unoptimized e2e answers
   check the new MIR, and `lli` agrees with them where it can run.
+- A call's ABI is in the MIR, as LLVM keeps it: the calling convention on
+  the callee and the call (C's is 0, BASIC's `cc1000`), and far code in
+  address space 1, whose pointers are segment:offset.
 
 An adapter into the old MIR was planned here; it needed the old MIR's call
 ABIs, frame references and flags, a second lowering that this step would
 delete, so the permanent one comes first.
+
+`backend::isel` is that lowering: it selects instructions over virtual
+registers, folds allocas and constant GEPs into addressing modes, keeps a
+branch's only comparison as flags and any other as SETcc, and turns a switch
+into a chain of compares, each edge its own phi source. What an instruction does to memory is
+the `Insn`'s own answer (`volatile`, `barrier`, `unmodeled_write`), not the
+old MIR operation's.
 
 ### 6. Port the passes
 
@@ -263,6 +272,9 @@ delete, so the permanent one comes first.
   the e2e answers, with quality judged by `docs/measurement/targets.md`.
   Where LLVM has the pass, llrm's follows it.
 - Representation changes stay apart from optimization-policy changes.
+- LLVM's CodeGenPrepare sinks a comparison into the block of the branch
+  that reads it, so isel keeps it as flags there; until a MIR pass does,
+  such a comparison is SETcc and a test.
 
 ### 7. Delete the old MIR
 

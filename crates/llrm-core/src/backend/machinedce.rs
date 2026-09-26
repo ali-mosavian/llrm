@@ -85,7 +85,7 @@ fn _pure(one: &Insn) -> bool {
         && !one.frame_adjust
         && !one.spill_reload
         && !one.spill_store
-        && !one.op.as_ref().is_some_and(|op| op.barrier())
+        && !one.barrier()
 }
 
 /// `body` with one sweep's dead work anchored, or None where Python returns `body` itself.

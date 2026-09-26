@@ -3,6 +3,7 @@
 pub mod addressforms;
 pub mod affine;
 pub mod addressvalues;
+pub mod assemble;
 pub mod allocate;
 pub mod arithmetic;
 pub mod asm;
@@ -25,6 +26,10 @@ pub mod jumps;
 pub mod lanes;
 pub mod layout;
 pub mod liveness;
+pub mod globals;
+pub mod isel;
+#[cfg(test)]
+mod isel_tests;
 pub mod loopslots;
 pub mod lower;
 pub mod lower_floats;

@@ -134,6 +134,36 @@ impl DataLayout {
     }
 
     /// A struct's size and each field's offset.
+    /// What a GEP's indices add to its pointer, as LLVM's `collectOffset`:
+    /// a constant, and each variable index's scale by its position. A
+    /// variable index is `None`; a struct's index never is.
+    pub fn collect_offset(&self, types: &Types, source: TypeId, indices: &[Option<i128>]) -> (i128, Vec<(usize, u64)>) {
+        let mut constant = 0;
+        let mut variable = Vec::new();
+        let mut current = source;
+        for (at, index) in indices.iter().enumerate() {
+            let scale = match (at, types.get(current)) {
+                (0, _) => self.alloc_size(types, current),
+                (_, Type::Array { element, .. } | Type::Vector { element, .. }) => {
+                    current = *element;
+                    self.alloc_size(types, current)
+                }
+                _ => {
+                    let field = index.expect("a struct's index is a constant");
+                    let (_, offsets) = self.struct_layout(types, current);
+                    constant += offsets[field as usize] as i128;
+                    current = types.member(current, field as u64).expect("a verified field");
+                    continue;
+                }
+            };
+            match index {
+                Some(index) => constant += index * scale as i128,
+                None => variable.push((at, scale)),
+            }
+        }
+        (constant, variable)
+    }
+
     pub fn struct_layout(&self, types: &Types, ty: TypeId) -> (u64, Vec<u64>) {
         let packed = match types.get(ty) {
             Type::Struct { packed, .. } => *packed,

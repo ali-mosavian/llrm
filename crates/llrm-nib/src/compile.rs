@@ -8,9 +8,9 @@ use std::path::Path;
 use std::rc::Rc;
 
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::backend::{addressvalues, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
+use llrm_core::backend::{addressvalues, assemble, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
 use llrm_core::flow;
-use llrm_core::abi::qb::physicalize;
+use llrm_core::abi::qb::{HirAbi, physicalize};
 use llrm_core::hir::lower::{DGROUP, Lowered};
 use llrm_core::hir::{self, callmemory, model};
 use llrm_core::model::mir::{Kind, MirBody};
@@ -342,6 +342,35 @@ pub fn assembled(
     })
 }
 
+/// The same through the rich MIR: the HIR emitted as MIR, then selected
+/// and assembled whole. It runs no MIR passes yet.
+pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrName<'static>) -> Result<masm::Module, String> {
+    if program.modules.len() != 1 {
+        return Err("native Nib compilation currently accepts one module".to_owned());
+    }
+    let module = &program.modules[0];
+    let emitted = hir::mir::emit(program).swap_remove(0);
+    if let Some((name, why)) = emitted.refused.first() {
+        return Err(format!("@{name}: {why}"));
+    }
+    let mut mir = emitted.module;
+    llrm_mir::transforms::optimized(&mut mir)?;
+    // The entry is public for the runtime to call; a library has none.
+    match mir.named(entry) {
+        Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,
+        None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
+        None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
+    }
+    let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
+    let abi = HirAbi { runtime: program.runtime, objects };
+    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
+    // Beside the MIR stages, what they became.
+    if let Some(directory) = std::env::var_os("LLRM_MIR_STAGES") {
+        std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    }
+    Ok(assembled)
+}
+
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
 /// or a callable's code, which `code` names.
 fn _initialized(
@@ -396,8 +425,15 @@ pub fn written(program: &model::Program, entry: &str, source: &Path, options: &O
 /// lets a linker that drops unreferenced segments keep only what is
 /// called; every Nib call is far, so that is safe.
 pub fn written_as(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+    _object(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, source, layout)
+}
+
+pub fn written_from_mir(program: &model::Program, entry: &str, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+    _object(&assembled_from_mir(program, entry, ProfileOrName::Name(CPU))?, source, layout)
+}
+
+fn _object(module: &masm::Module, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    omfwrite::written_as(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, &name, layout)
-        .map_err(|error| error.to_string())
+    omfwrite::written_as(module, &name, layout).map_err(|error| error.to_string())
 }
 
