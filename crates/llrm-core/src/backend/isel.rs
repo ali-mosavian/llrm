@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::{BinaryOp, CastOp, ConstantKind, IntPredicate, Module, Opcode, Type, TypeId};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::{BinaryOp, CastOp, ConstantKind, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
 use crate::abi::runtime::Contract;
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
@@ -17,20 +17,80 @@ use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Semantics,
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
-/// Where a function's parameters arrive and its result leaves: the call
-/// ABI its frontend chose.
+/// Where a function's parameters arrive and its result leaves, as its
+/// calling convention and address space say: LLVM's CC_X86 for ia16.
 #[derive(Clone, Debug)]
 pub struct Convention {
-    pub parameters: Vec<Home>,
+    /// Each parameter's cell, by its displacement from BP.
+    pub parameters: Vec<i64>,
     /// The registers a result leaves in, low part first.
     pub returns: Vec<Register>,
+    /// The bytes the function pops as it returns.
+    pub popped: i64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Home {
-    /// A cell at this displacement from BP.
-    Frame(i64),
-    Register(Register),
+/// How a calling convention pushes arguments and who pops them. C pushes
+/// right to left and its caller pops; BASIC pushes left to right and pops
+/// its own.
+struct Passing {
+    in_order: bool,
+    pops: bool,
+}
+
+fn passing(convention: u32) -> Result<Passing, Unselected> {
+    match convention {
+        0 => Ok(Passing { in_order: false, pops: false }),
+        llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true }),
+        other => refuse(format!("calling convention {other}")),
+    }
+}
+
+/// The bytes an argument of `width` takes on the stack: a byte is pushed
+/// as a word.
+fn slot(width: u32) -> i64 {
+    i64::from(width.max(2))
+}
+
+/// The registers a result of `width` leaves in: a dword in DX:AX.
+fn returned(width: u32) -> Vec<Register> {
+    if width == 4 { vec![Register::EAX, Register::EDX] } else { vec![Register::EAX] }
+}
+
+/// Whether a function's code is far: in addrspace(1), entered by a far call.
+pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
+    match global.address_space {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => refuse(format!("code in address space {other}")),
+    }
+}
+
+/// `function`'s convention: the return address, BP, then its arguments,
+/// the last pushed nearest.
+fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<Convention, Unselected> {
+    let global = module.global(global);
+    let Some(function) = global.function() else { return refuse("a variable has no convention") };
+    let first = if far(global)? { 6 } else { 4 };
+    let Passing { in_order, pops } = passing(function.calling_convention)?;
+    let mut widths = function.parameters().iter().map(|&one| width_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
+    // The last pushed is nearest: C's first argument, BASIC's last.
+    if in_order {
+        widths.reverse();
+    }
+    let mut parameters = Vec::new();
+    let mut cursor = first;
+    for width in widths {
+        parameters.push(cursor);
+        cursor += width;
+    }
+    if in_order {
+        parameters.reverse();
+    }
+    let types = &module.context.types;
+    let (result, _, _) = module.signature(function.ty);
+    let returns = if types.is_void(result) { Vec::new() } else { returned(width_of(module, layout, result)?) };
+    let popped = if pops { cursor - first } else { 0 };
+    Ok(Convention { parameters, returns, popped })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +101,7 @@ pub struct Unselected(pub String);
 #[derive(Clone, Debug)]
 pub struct Selected {
     pub body: LirBody,
+    pub convention: Convention,
     pub calls: IndexMap<i64, String>,
     pub far: BTreeSet<i64>,
 }
@@ -48,6 +109,18 @@ pub struct Selected {
 /// A call's contract, asked of the ABI that knows the callee: its name,
 /// whether it pops its own arguments, and how many bytes were pushed.
 pub type Contracts<'c> = &'c dyn Fn(&str, bool, i64) -> Result<Contract, String>;
+
+/// The bytes a value of `ty` takes in a register.
+fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
+    let types = &module.context.types;
+    match types.get(ty) {
+        // An i1 is a byte holding 0 or 1, as LLVM stores one.
+        Type::Int(1) => Ok(1),
+        Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
+        Type::Pointer(0) => Ok(layout.pointer(0).bits / 8),
+        _ => refuse(format!("a {} value", types.display(ty))),
+    }
+}
 
 fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
@@ -63,13 +136,14 @@ enum Pointer {
     Global { space: Space, index: i64, offset: i64 },
 }
 
-pub fn selected(module: &Module, name: &str, convention: &Convention, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
+pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
     };
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
+    let convention = convention(module, &layout, global)?;
     let mut selector = Selector {
         module,
         function,
@@ -90,8 +164,8 @@ pub fn selected(module: &Module, name: &str, convention: &Convention, contracts:
         calls: IndexMap::default(),
         far: BTreeSet::new(),
     };
-    let body = selector.body(name, convention)?;
-    Ok(Selected { body, calls: selector.calls, far: selector.far })
+    let body = selector.body(name, &convention)?;
+    Ok(Selected { body, convention, calls: selector.calls, far: selector.far })
 }
 
 struct Selector<'m, 'c> {
@@ -162,22 +236,15 @@ impl Selector<'_, '_> {
         }
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
-        if function.parameters().len() != convention.parameters.len() {
-            return refuse("the convention places a different number of parameters");
-        }
-        for (&parameter, home) in function.parameters().iter().zip(&convention.parameters) {
+        for (&parameter, &disp) in function.parameters().iter().zip(&convention.parameters) {
+            // Only a used argument is loaded, as a DAG has no node for an unused one.
+            if function.users(parameter).is_empty() {
+                continue;
+            }
             let width = self.width(function.value(parameter).ty)?;
             let held = Held { value: self.value(parameter), width };
-            match *home {
-                Home::Frame(disp) => {
-                    let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
-                    prologue.push(insn(block_at[&entry], what));
-                }
-                Home::Register(register) => {
-                    self.inputs.insert(held.value);
-                    self.pins.insert(held.value, register);
-                }
-            }
+            let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
+            prologue.push(insn(block_at[&entry], what));
         }
         for &block in layout {
             for &inst in function.block(block).instructions() {
@@ -364,13 +431,7 @@ impl Selector<'_, '_> {
 
     /// A value's width in bytes, if a register holds it.
     fn width(&self, ty: TypeId) -> Result<u32, Unselected> {
-        match self.types().get(ty) {
-            // An i1 is a byte holding 0 or 1, as LLVM stores one.
-            Type::Int(1) => Ok(1),
-            Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
-            Type::Pointer(0) => Ok(self.layout.pointer(0).bits / 8),
-            _ => refuse(format!("a {} value", self.types().display(ty))),
-        }
+        width_of(self.module, &self.layout, ty)
     }
 
     fn constant(&self, operand: Operand, width: u32) -> Option<i64> {
@@ -771,17 +832,8 @@ impl Selector<'_, '_> {
         if llrm_mir::intrinsics::is_reserved(&name) {
             return refuse(format!("@{name}"));
         }
-        let far = match global.address_space {
-            0 => false,
-            1 => true,
-            other => return refuse(format!("code in address space {other}")),
-        };
-        // C pushes right to left and its caller pops; BASIC pushes left to right and pops its own.
-        let (in_order, pops) = match convention {
-            0 => (false, false),
-            llrm_mir::opcode::BASIC => (true, true),
-            other => return refuse(format!("calling convention {other}")),
-        };
+        let far = far(global)?;
+        let Passing { in_order, pops } = passing(convention)?;
         let mut order: Vec<usize> = (0..arguments.len()).collect();
         if !in_order {
             order.reverse();
@@ -796,7 +848,7 @@ impl Selector<'_, '_> {
                 out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(word)], vec![Loc::Held(held)])));
                 held = word;
             }
-            pushed += i64::from(held.width);
+            pushed += slot(held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
         let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
@@ -805,13 +857,14 @@ impl Selector<'_, '_> {
         if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
-            if width == 4 {
+            match returned(width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
-                let (low, high) = (Held { value: self.fresh(), width: 2 }, Held { value: self.fresh(), width: 2 });
-                delivers = vec![(low, Register::EAX), (high, Register::EDX)];
-                result = Some((held, low, high));
-            } else {
-                delivers = vec![(held, Register::EAX)];
+                [low_register, high_register] => {
+                    let (low, high) = (Held { value: self.fresh(), width: 2 }, Held { value: self.fresh(), width: 2 });
+                    delivers = vec![(low, low_register), (high, high_register)];
+                    result = Some((held, low, high));
+                }
+                ref registers => delivers = vec![(held, registers[0])],
             }
         }
         let what = semantics(Operation::Call, "call", vec![], vec![]);

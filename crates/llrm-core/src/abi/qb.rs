@@ -886,17 +886,28 @@ pub fn parameter_offsets(function: &model::Function, parameter_types: &[&model::
     offsets
 }
 
-/// How `function` is entered and left, as instruction selection reads it:
-/// each parameter's frame cell, and the registers its result leaves in.
-pub fn convention(function: &model::Function, types: &IndexMap<i64, &model::Type>) -> crate::backend::isel::Convention {
-    let parameter_types: Vec<&model::Type> = function
-        .parameters
-        .iter()
-        .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
-        .collect();
-    let parameters = parameter_offsets(function, &parameter_types).into_iter().map(crate::backend::isel::Home::Frame).collect();
-    let returns = if _paired(types[&function.result_type]) { vec![Register::EAX, Register::EDX] } else { vec![Register::EAX] };
-    crate::backend::isel::Convention { parameters, returns }
+/// The ABI of the MIR a HIR program emits: a runtime routine linked by its
+/// own name and called by its contract, any other function by its
+/// frontend's object name.
+pub struct HirAbi {
+    pub runtime: model::RuntimeProfile,
+    /// Each function's object name, where it is not its HIR name.
+    pub objects: std::collections::BTreeMap<String, String>,
+}
+
+impl crate::backend::assemble::Abi for HirAbi {
+    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
+        let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
+        let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
+        _contract(name, cleanup, pushed, self.runtime).map_err(|error| error.0)
+    }
+
+    fn linked(&self, name: &str) -> String {
+        match name.strip_prefix(crate::hir::mir::RUNTIME) {
+            Some(routine) => routine.to_owned(),
+            None => self.objects.get(name).cloned().unwrap_or_else(|| name.to_owned()),
+        }
+    }
 }
 
 /// Turn one optimized semantic body into the backend's existing call form.

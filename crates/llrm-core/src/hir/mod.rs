@@ -5,7 +5,7 @@ pub mod dump;
 pub mod execute;
 pub mod lower;
 
-pub use llrm_hir::{codec, escape, model, verify};
+pub use llrm_hir::{codec, escape, mir, model, verify};
 
 pub use codec::{decode, encode};
 pub use dump::mir_text;

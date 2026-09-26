@@ -247,6 +247,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-core",
+ "llrm-mir",
  "num-bigint",
  "num-traits",
  "regex",

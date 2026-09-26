@@ -3,6 +3,7 @@
 pub mod addressforms;
 pub mod affine;
 pub mod addressvalues;
+pub mod assemble;
 pub mod allocate;
 pub mod arithmetic;
 pub mod asm;
