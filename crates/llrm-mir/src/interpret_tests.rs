@@ -113,3 +113,15 @@ define float @f() {
 ";
     assert_eq!(result(text), Ok(Val::Float(FloatKind::Float, u64::from(10.0f32.to_bits()))));
 }
+
+/// BASIC's float to integer conversion, the machine's round to nearest,
+/// ties to even; derived by hand, since lli cannot run it.
+#[test]
+fn lrint_rounds_ties_to_even() {
+    let rounded = |x: &str| {
+        result(&format!("declare i16 @llvm.lrint.i16.f64(double)\ndefine i16 @f() {{\n  %r = call i16 @llvm.lrint.i16.f64(double {x})\n  ret i16 %r\n}}\n"))
+    };
+    assert_eq!(rounded("2.500000e+00"), int(2, 16));
+    assert_eq!(rounded("3.500000e+00"), int(4, 16));
+    assert_eq!(rounded("-2.600000e+00"), int(0xfffd, 16));
+}

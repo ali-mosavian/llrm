@@ -15,6 +15,9 @@ pub enum Intrinsic {
     /// `llvm.{s,u}{max,min}`.
     MinMax { signed: bool, max: bool },
     FMulAdd,
+    /// Rounds to an integer as the rounding mode says: by default, to
+    /// nearest, ties to even.
+    LRint,
     MemSet,
     LifetimeStart,
     LifetimeEnd,
@@ -70,7 +73,7 @@ const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 14] = [
+const TABLE: [Spec; 15] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -82,6 +85,15 @@ const TABLE: [Spec; 14] = [
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
     arithmetic("llvm.fmuladd", Intrinsic::FMulAdd, Slot::Any(0), &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])], Kind::Float),
+    Spec {
+        name: "llvm.lrint",
+        intrinsic: Intrinsic::LRint,
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(1), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
+    },
     Spec {
         name: "llvm.memset",
         intrinsic: Intrinsic::MemSet,

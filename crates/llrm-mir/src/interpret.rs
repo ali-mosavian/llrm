@@ -231,7 +231,7 @@ impl<'m> Machine<'m> {
         let GlobalKind::Function(function) = &global.kind else { return undefined(format!("a call to the variable @{name}")) };
         if function.is_declaration() {
             return match Intrinsic::named(&name) {
-                Some(intrinsic) => self.intrinsic(intrinsic, arguments),
+                Some(intrinsic) => self.intrinsic(intrinsic, self.module.signature(function.ty).0, arguments),
                 None => unsupported(format!("a call to the external @{name}")),
             };
         }
@@ -243,7 +243,7 @@ impl<'m> Machine<'m> {
     }
 
     /// An intrinsic, in terms of the instructions that define it.
-    fn intrinsic(&mut self, intrinsic: Intrinsic, arguments: Vec<Val>) -> Run<Val> {
+    fn intrinsic(&mut self, intrinsic: Intrinsic, returns: TypeId, arguments: Vec<Val>) -> Run<Val> {
         let void = Val::Aggregate(Vec::new());
         let argument = |at: usize| arguments[at].clone();
         Ok(match intrinsic {
@@ -273,6 +273,20 @@ impl<'m> Machine<'m> {
             Intrinsic::FMulAdd => {
                 let product = self.binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 self.binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
+            }
+            Intrinsic::LRint => {
+                let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
+                let x = match kind {
+                    FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+                    FloatKind::Double => f64::from_bits(bits),
+                }
+                .round_ties_even();
+                let width = self.types().int_bits(returns).expect("an integer result");
+                let limit = 2f64.powi(width as i32 - 1);
+                if !(-limit..limit).contains(&x) {
+                    return unsupported("an lrint out of range, whose value LLVM leaves unspecified");
+                }
+                Val::Int { bits: (x as i128 as u128) & mask(width), width }
             }
             Intrinsic::MemSet => {
                 let (Val::Ptr(address), Val::Int { bits: length, .. }) = (argument(0), argument(2)) else { return undefined("a memset of a poison address or length") };
