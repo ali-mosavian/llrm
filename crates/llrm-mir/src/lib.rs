@@ -3,8 +3,10 @@
 //! held in arenas addressed by id.
 
 pub mod context;
+pub mod datalayout;
 pub mod dominators;
 pub mod edit;
+pub mod interpret;
 pub mod lexer;
 pub mod module;
 pub mod opcode;
@@ -25,5 +27,7 @@ pub use types::{FloatKind, Type, TypeId, Types};
 
 #[cfg(test)]
 mod edit_tests;
+#[cfg(test)]
+mod interpret_tests;
 #[cfg(test)]
 mod tests;

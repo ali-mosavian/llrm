@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # LLVM 20 as MIR's oracle (docs/architecture/rich-mir.md): every .ll given
 # must pass opt's verifier, compile for msp430 unless it says "; msp430: no",
-# and, where it says "; expect: N", exit with N under LLVM's interpreter.
+# and, where it says "; expect: N", exit with N under LLVM's interpreter
+# and llrm's alike.
 # llrm-mir must read it and write it back as LLVM reads it: both texts
 # disassemble alike. A file saying "; invalid: REASON" must instead be
 # refused by opt, and by llrm-mir for REASON.
@@ -46,6 +47,10 @@ for file in "$@"; do
     "$bin/lli" -force-interpreter "$file" >/dev/null 2>&1
     got=$?
     [ "$got" = "$want" ] || why="lli exits $got, expected $want"
+    if [ -z "$why" ]; then
+      ran=$("$root/target/release/llrm-mir" --run "$file" 2>&1)
+      [ "$ran" = "${ran//[^0-9]/}" ] && [ -n "$ran" ] && [ $((ran % 256)) = "$want" ] || why="llrm-mir runs it to $ran, expected $want"
+    fi
   fi
   if [ -n "$why" ]; then echo "FAIL $file: $why"; failed=1; else echo "ok   $file"; fi
 done

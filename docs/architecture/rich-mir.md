@@ -208,6 +208,11 @@ rules for the subset. `tools/mir-oracle.sh` holds it to `opt`'s verdicts,
 accepting what `opt` accepts and refusing `tests/invalid` for the reasons
 they state.
 
+Then the datalayout and the interpreter (`llrm_mir::interpret`): LLVM's
+semantics with poison, memory laid out as the datalayout says, and
+undefined behaviour reported rather than run. On every fixture that states
+its answer it agrees with `lli`.
+
 ### 4. Raise into MIR beside the old MIR
 
 - The QB raise and the C and Nib frontends also build a MIR module. Nothing
