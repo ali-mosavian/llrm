@@ -909,3 +909,42 @@ fn for_each_inference_needs_something_to_iterate() {
     let error = compiled("FOR x IN 5\nNEXT\n").expect_err("5 is not iterable");
     assert!(error.contains("nothing here to iterate"), "{error}");
 }
+
+#[test]
+fn strings_slice_as_python_does() {
+    // Each expected value is Python's for the same slice of "hello".
+    let source = "DIM s AS STRING\ns = \"hello\"\n\
+        PRINT s(1:3); \"|\"; s(:2); \"|\"; s(3:); \"|\"; s(-3:); \"|\"; s(:-1); \"|\"; s(:)\n\
+        PRINT s(::2); \"|\"; s(::-1); \"|\"; s(-1:0:-2); \"|\"; s(10:); \"|\"; s(3:1); \"|\"\n\
+        PRINT s(1:)(:2); twice$(s)(8:); LEN(s(1:3)); \"ell\" IN s(:4); \"lo\" IN s(:4)\n\
+        FUNCTION twice$ (t AS STRING)\nRETURN t + t\nEND FUNCTION\n";
+    assert_eq!(
+        printed(source),
+        "el|he|lo|llo|hell|hello\nhlo|olleh|ol|||\nello 2 -1  0 \n"
+    );
+}
+
+#[test]
+fn slice_assignment_splices() {
+    let source = "DIM t AS STRING\nt = \"hello\"\n\
+        t(1:3) = \"EY\"\nPRINT t\nt(:0) = \">\"\nPRINT t\nt(-1:) = \"\"\nPRINT t\n\
+        t(::2) = \"abc\"\nPRINT t\n";
+    assert_eq!(printed(source), "hEYlo\n>hEYlo\n>hEYl\nahbYc\n");
+}
+
+#[test]
+fn microsoft_profiles_have_no_slices() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "vbdos.bas", b"s$ = \"ab\"\nPRINT s$(0:1)\n");
+    qb_driver::parsed(&path, &qb_driver::Frontend::new("vbdos", "vbdos"), None)
+        .expect_err("VBDOS has no slices");
+}
+
+#[test]
+fn slice_colons_do_not_end_statements() {
+    // `s(i:j)` must not read as a statement ending at `i:`, nor `j` as a label.
+    let source = "DIM s AS STRING, i AS INTEGER, j AS INTEGER\ns = \"hello\": i = 1: j = 3\n\
+        PRINT s(i:j): PRINT s(j:)\nIF i THEN PRINT s(:i); \"|\": PRINT s(i:j:1)\n\
+        s(i:j) = \"-\": PRINT s\n";
+    assert_eq!(printed(source), "el\nlo\nh|\nel\nh-lo\n");
+}

@@ -275,3 +275,13 @@ copy; when the arguments name `a`, the result goes to a temporary first.
 `RETURN r()` copies `r` into the result. `FOR x IN f(…)` iterates a
 returned array. Only one-dimensional arrays are copied, and the target of an
 array assignment must be dynamic: `DIM a() AS LONG`.
+
+### String slices
+
+`s(start:end:step)` is Python's slice of string `s`, counting from 0: `s(1:3)`,
+`s(:2)`, `s(-3:)`, `s(::-1)`. Each part is optional, a negative index counts
+from the end, and bounds outside the string are clamped. A slice can follow a
+call, `f$(x)(1:)`, and another slice. Assigning to a slice splices:
+`s(1:3) = "xyz"` replaces those characters whatever the new length, and an
+extended slice such as `s(::2)` takes exactly as many characters as it has.
+The slices run in the QuickrBASIC prelude.

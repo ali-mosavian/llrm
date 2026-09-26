@@ -238,6 +238,31 @@ impl Machine<'_> {
                 None
             }
             "B$STDL" => None,
+            // MID$(destination, start, maximum) = source overwrites in place:
+            // the destination keeps its length.
+            "B$SMID" => {
+                let [Scalar::Address(destination), width, _, maximum, start] = arguments else {
+                    return fail("B$SMID takes a destination, width, source, maximum and start");
+                };
+                let width = width.whole()? as usize;
+                let mut current = if width == 0 { text(0)? } else { bytes_at(destination, width)? };
+                let start = start.whole()?;
+                if start < 1 || start as usize > current.len() {
+                    return fail("Illegal function call");
+                }
+                let at = start as usize - 1;
+                let source = text(2)?;
+                let count = (maximum.whole()?.max(0) as usize).min(source.len()).min(current.len() - at);
+                current[at..at + count].copy_from_slice(&source[..count]);
+                if width == 0 {
+                    assign(destination, &current)?;
+                } else {
+                    let mut cells = destination.memory.borrow_mut();
+                    let from = destination.offset as usize;
+                    cells.bytes[from..from + width].copy_from_slice(&current);
+                }
+                None
+            }
             "B$DDIM" | "B$RDIM" => {
                 dimension(name, arguments)?;
                 None

@@ -194,6 +194,15 @@ pub enum Expr {
         negated: bool,
         span: Span,
     },
+    /// QuickrBASIC's string slice `base(start:end:step)`, each part
+    /// optional.
+    Slice {
+        base: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+        span: Span,
+    },
     /// QuickrBASIC's chained comparison `a < b <= c`: `a < b AND b <= c`
     /// with `b` evaluated once, stopping at the first false comparison.
     Chain {
@@ -224,6 +233,7 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Conditional { span, .. }
             | Self::In { span, .. }
+            | Self::Slice { span, .. }
             | Self::Chain { span, .. } => *span,
         }
     }
@@ -477,6 +487,7 @@ pub enum CaseItem {
 pub struct Module {
     pub statements: Vec<Statement>,
     pub procedures: Vec<Procedure>,
-    /// Some expression is an f-string, which needs the QuickrBASIC prelude.
-    pub format_strings: bool,
+    /// Some expression is an f-string or a slice, which need the
+    /// QuickrBASIC prelude.
+    pub prelude: bool,
 }

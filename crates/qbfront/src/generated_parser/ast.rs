@@ -188,15 +188,16 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
     if state.open_procedure.is_some() {
         return error(&state, "procedure has no matching END");
     }
-    let format_strings = state
-        .tokens
-        .iter()
-        .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
+    let prelude = state.slices
+        || state
+            .tokens
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
     Ok(ParseOutput {
         module: Module {
             statements: state.statements,
             procedures: state.procedures,
-            format_strings,
+            prelude,
         },
         actions: state.sink.actions,
     })
@@ -321,7 +322,9 @@ fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
 
 /// QuickrBASIC's tuple assignment, `a, b = x, y`, rewritten into one the
 /// grammar parses: `$TUPLE(a, b) = $TUPLE(x, y)`. A statement that starts
-/// with a name and has a comma before its `=` is one.
+/// with a name and has a comma before its `=` is one. A slice target,
+/// `s(1:3) = v`, which the grammar cannot parse either, becomes a one-target
+/// list: `$TUPLE(s(1:3)) = v`.
 fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
     if !dialect.tuples() {
         return tokens;
@@ -343,12 +346,15 @@ fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
         };
         let statement = &tokens[at..end];
         let equals = statement.iter().position(|one| is(Some(one), "tkEQ"));
-        let (Some(equals), Some(comma)) = (equals, depth_zero_comma(statement)) else {
+        let Some(equals) = equals else {
             out.push(token.clone());
             at += 1;
             continue;
         };
-        if comma > equals {
+        let targets = depth_zero_comma(statement).is_some_and(|comma| comma < equals);
+        // A statement's own colons end it, so any before `=` is a slice's.
+        let slice = statement[..equals].iter().any(|one| is(Some(one), "tkColon"));
+        if !targets && !slice {
             out.push(token.clone());
             at += 1;
             continue;
@@ -2782,7 +2788,25 @@ fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Ex
                 span,
             };
         } else if consume_named(state, "tkLParen") {
-            let arguments = expression_list(state)?;
+            let arguments = match slice_or_arguments(state)? {
+                Ok(arguments) => arguments,
+                Err((start, end, step)) => {
+                    state.slices = true;
+                    let span = Span {
+                        line: value.span().line,
+                        start: value.span().start,
+                        end: previous_end(state),
+                    };
+                    value = Expr::Slice {
+                        base: Box::new(value),
+                        start,
+                        end,
+                        step,
+                        span,
+                    };
+                    continue;
+                }
+            };
             let span = Span {
                 line: value.span().line,
                 start: value.span().start,
@@ -2802,6 +2826,50 @@ fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Ex
             };
         } else {
             return Ok(value);
+        }
+    }
+}
+
+/// The parts of QuickrBASIC's `(start:end:step)` slice.
+type SliceParts = (Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>);
+
+/// After `(`: a parenthesized argument list, or under QuickrBASIC a slice,
+/// which has a colon where a list has a comma. Inside parentheses a colon
+/// cannot end a statement.
+fn slice_or_arguments(state: &mut ParseState) -> Result<Result<Vec<Expr>, SliceParts>, ParseResult> {
+    if !state.python_expressions {
+        return expression_list(state).map(Ok);
+    }
+    let part = |state: &mut ParseState| -> Result<Option<Box<Expr>>, ParseResult> {
+        if at_named(state, "tkColon") || at_named(state, "tkRParen") {
+            Ok(None)
+        } else {
+            expression(state, 0).map(|one| Some(Box::new(one)))
+        }
+    };
+    if consume_named(state, "tkRParen") {
+        return Ok(Ok(Vec::new()));
+    }
+    let first = part(state)?;
+    if consume_named(state, "tkColon") {
+        let end = part(state)?;
+        let step = if consume_named(state, "tkColon") { part(state)? } else { None };
+        if !consume_named(state, "tkRParen") {
+            return Err(ParseResult::BadSyntax);
+        }
+        return Ok(Err((first, end, step)));
+    }
+    let Some(first) = first else {
+        return Err(ParseResult::BadSyntax);
+    };
+    let mut values = vec![*first];
+    loop {
+        if consume_named(state, "tkComma") {
+            values.push(expression(state, 0)?);
+        } else if consume_named(state, "tkRParen") {
+            return Ok(Ok(values));
+        } else {
+            return Err(ParseResult::BadSyntax);
         }
     }
 }

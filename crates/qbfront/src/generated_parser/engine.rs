@@ -79,6 +79,8 @@ pub(crate) struct ParseState {
     pub at: usize,
     /// QuickrBASIC's conditional, IN and chained-comparison expressions.
     pub python_expressions: bool,
+    /// A slice was parsed: the program needs the QuickrBASIC prelude.
+    pub slices: bool,
     pub sink: AstSink,
     pub expressions: Vec<Expr>,
     pub statements: Vec<Statement>,
@@ -103,6 +105,7 @@ impl ParseState {
             tokens,
             at: 0,
             python_expressions: false,
+            slices: false,
             sink: AstSink::default(),
             expressions: Vec::new(),
             statements: Vec::new(),
