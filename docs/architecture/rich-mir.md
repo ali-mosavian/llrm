@@ -20,9 +20,11 @@ That buys what a private IR cannot have:
 
 - **Independent oracles**, pinned to LLVM 20. `opt -passes=verify` checks
   every stage dump. `lli -force-interpreter` runs what it can: not
-  `x86_fp80` arithmetic, and a `@llrm.qb.*` routine only where a `.ll`
-  model of it is linked in. `llc -mtriple=msp430` compiles it for a 16-bit
+  `x86_fp80` arithmetic, overflow intrinsics or unwinding, and a
+  `@llrm.qb.*` routine only where a `.ll` model of it is linked in.
+  `llc -mtriple=msp430` compiles all but exception handling for a 16-bit
   non-x86 target, and `opt -O2` on the same MIR is a quality reference.
+  `tools/mir-oracle.sh` runs all three.
 - **LLVM's answers.** Poison and its flags, phi semantics, memory
   attributes, constrained floating point and exception edges are settled
   questions there; llrm does not answer them again.
