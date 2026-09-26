@@ -660,6 +660,25 @@ pub fn rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32>
     out
 }
 
+/// The instruction that remakes `value` anywhere: its only definition, when
+/// that reads nothing (a constant or an address).
+pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
+    let only = BTreeSet::from([value]);
+    if !_constants(body, &only).contains_key(&value) && !_addresses(body, &only).contains_key(&value) {
+        return None;
+    }
+    let mut defining = body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.defines.contains(&value));
+    let one = defining.next()?;
+    let alone = defining.next().is_none()
+        && one.defines == [value]
+        && one.uses.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.group.is_none();
+    alone.then(|| Arc::clone(one))
+}
+
 /// Frame-loaded selectors whose proof permits eager rematerialization.
 pub fn frame_rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
     _frame_loads(body, values).keys().copied().collect()

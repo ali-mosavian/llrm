@@ -16,6 +16,10 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
 
+**The allocator prices spills the later passes undo.** `_traffic` charges a memory operand per reference of a spilled value, but spillforward and loopslots then delete many of those reloads. Every accept-or-reject gate built on it (region split, trials) judges against a cost the output does not pay: PARTICLE's selector was priced at 117 and cost 0 after loopslots. Guard: none yet. The spiller must own reload placement so the gate asks the same fact.
+
+**Batch acceptance hides good splits behind bad ones.** A round's splits are carved together and kept only if total traffic falls. Adding single-instruction pieces changed the plan, so CYCLEBLOBS' region split went from accepted to rejected (21765 → 24804) and took every good split with it. Guard: a piece is carved only if its references outweigh its copies, or if the rest of the value got a register. Single-instruction pieces are gone until they are priced.
+
 ## Contracts
 
 **A call's declared effect read only its arguments.** The callee also runs on the caller's BP chain, SP, DS, SS and CS. Once liveness took a call's effect from that contract (df89fc8a), the peephole removed `mov ds, ss` before a call as dead, and qbdemo hung in `UPDPALPLASMA`. The old code treated an undecoded call as reading everything, which hid the gap. Guard: a call reads the same state a return does (8971698d), with a test.
@@ -41,6 +45,12 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 **BP is the runtime's frame chain.** Error handling walks it; a loop may hold a value in BP only when it cannot call, trap or touch x87 state, and only between `push bp` and `pop bp` on every entry and exit edge.
 
 **DS is a register the program model reserves only at calls.** Between the points that need the data group, the allocator may give DS an array's selector, so every call site must restore it; nothing but the call contract enforces that.
+
+**A split made a remakeable value a spill.** The piece took the `lea` and the rest was defined by a copy back, so the spiller no longer saw an address to remake, and a frame address crossing calls got a slot. Guard: a split point remakes a value whose only definition reads nothing (LLVM's `defFromParent`), with a test on the frame size.
+
+**Planned positions go stale.** Regions name instruction positions, and carving one split inserts copies that shift them for the next. Guard: `carved_moving` returns where each position went, and later regions are moved through it.
+
+**A single-block loop shares a bundle with its preheader and exit.** A value whose register is taken for the whole of the block before a loop can never be placed in the loop. The border is only open when interference ends before the preheader's terminator, as LLVM's `addSplitConstraints` requires.
 
 ## Build and harness
 

@@ -406,7 +406,7 @@ fn test_vbdos_managed_locals_begin_below_the_runtime_frame_header() {
 
     assert!(procedure.contains("mov bx, 1"));
     assert!(procedure.contains("lea ax, [bp-38]"));
-    assert!(procedure.contains("lea ax, [bp-42]"));
+    assert!(procedure.contains(", [bp-42]"), "{procedure}");
 }
 
 /// SYS read its Game argument at BP-0Eh and later raised error 64 opening the map.

@@ -49,6 +49,7 @@ pub mod schedule;
 pub mod select;
 pub mod spiller;
 pub mod spillforward;
+pub mod spillplacement;
 pub mod splitkit;
 pub mod storecombine;
 pub mod target;

@@ -60,6 +60,7 @@ impl LIRTransform for LoopSlots {
         };
         let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == 2).map(|(at, _)| *at).collect();
         let park = self.cpu.cost("push_r")? + self.cpu.cost("pop_r")?;
+        crate::debug!("traffic", "{} {:?}", body.name, crate::backend::allocate::traffic_by_cause(&body));
         Ok(promoted(&hoisted(&body, &spills), &spills, &self.cpu.operations, park))
     }
 }
