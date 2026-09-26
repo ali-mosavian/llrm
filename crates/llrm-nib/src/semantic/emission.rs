@@ -154,7 +154,7 @@ impl<'a> FunctionCompiler<'a> {
                 extent: 2,
                 storage: "local",
                 symbol: 0,
-                volatile: true,
+                volatile: false,
             });
             self.emit(
                 "store",

@@ -533,9 +533,12 @@ fn test_fixed_array_storage_has_a_prefix_descriptor() {
     assert_eq!(descriptor("$values.length").offset, values.offset - 4);
     assert_eq!(descriptor("$values.capacity").offset, values.offset - 2);
 
+    // Nothing reads the words, so nothing stores them: kept volatile,
+    // they held priced_unroll's `value` at 4717 instructions on the isel
+    // path to the old path's 190.
     let assembly = listing(&parsed(&source), "main", &O2());
-    assert!(assembly.contains("mov word ptr [bp-10], 3"));
-    assert!(assembly.contains("mov word ptr [bp-8], 3"));
+    assert!(!assembly.contains("mov word ptr [bp-10], 3"));
+    assert!(!assembly.contains("mov word ptr [bp-8], 3"));
 }
 
 #[test]
@@ -945,8 +948,9 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
-    assert_eq!(body.matches("rep stosd").count(), 2);
-    assert_eq!(body.matches("mov cx, 64").count(), 2);
+    // `a`'s fill is one `rep stosd`; `b`'s stays one rolled store, not eight.
+    assert_eq!(body.matches("rep stosd").count(), 1);
+    assert_eq!(Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count(), 1);
 }
 
 fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir::MirBody {
@@ -1874,8 +1878,8 @@ fn test_a_program_compiles_through_the_rich_mir() {
         lines,
         [
             ".model medium", ".386", "public _main", ".data", ".code TWICE_TEXT",
-            "_twice proc far", "push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "add ax, ax", "pop bp", "retf", "_twice endp",
-            "_main proc far", "L1_0:", "mov ax, 21", "push ax", "call far ptr _twice", "add sp, 2", "retf", "_main endp",
+            "_twice proc far", "L0_0:", "mov ax, 42", "retf", "_twice endp",
+            "_main proc far", "L1_0:", "mov ax, 42", "retf", "_main endp",
             "end",
         ]
     );
