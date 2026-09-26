@@ -21,6 +21,8 @@ pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
+    /// What each function in the module does to memory.
+    pub callees: &'a crate::memory::Callees,
 }
 
 /// A fact about a function, computed on demand and cached until a pass
@@ -167,6 +169,7 @@ impl PassManager {
             None => DataLayout::default(),
         };
         let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
+        let callees = crate::memory::callees(module);
         let mut stages = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
@@ -178,7 +181,7 @@ impl PassManager {
                     continue;
                 }
                 let analyses = caches.entry(id).or_default();
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function }, analyses);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees }, analyses);
                 analyses.invalidate(&preserved);
                 if self.verify_invalidation {
                     let stale = analyses.stale(context, &layout, function);

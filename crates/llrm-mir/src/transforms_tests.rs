@@ -7,6 +7,13 @@ fn optimized(text: &str) -> String {
     print::module(&module)
 }
 
+/// `text` through `passes` alone, printed.
+fn through(passes: &[&str], text: &str) -> String {
+    let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    transforms::optimized_with(&mut module, passes).expect("optimizes");
+    print::module(&module)
+}
+
 /// Every Nib local was a stack cell loaded and stored around each use, so
 /// the isel path ran 1.98 times the old path's instructions: a loop's
 /// counter is a phi, and what it sums another.
@@ -79,7 +86,7 @@ b1:
   ret i16 %z
 }
 ";
-    assert_eq!(optimized(text), print::module(&parse::module(text).unwrap()));
+    assert_eq!(through(&["mem2reg"], text), print::module(&parse::module(text).unwrap()));
 }
 
 /// Nib's frontend spells a condition `icmp`, `sext i1` to i8, `icmp ne 0`,
@@ -265,4 +272,66 @@ b4:
 }
 ";
     assert!(optimized(text).contains("b5:\n  br label %b2"), "{}", optimized(text));
+}
+
+/// matmul8's inner loop loaded a view's dimension three times an iteration
+/// and checked `k < dim` twice, once as the loop's condition: the check and
+/// the reloads go, a load after a store reads the stored value, and one
+/// after a call that may write stays.
+#[test]
+fn test_earlycse_reuses_loads_and_known_conditions() {
+    let text = "declare void @panic()
+declare void @write()
+
+define i16 @f(ptr %v, i16 %k, ptr %out) {
+b1:
+  %0 = load i16, ptr %v
+  %1 = icmp ult i16 %k, %0
+  br i1 %1, label %b2, label %b4
+
+b2:
+  %2 = load i16, ptr %v
+  %3 = icmp ult i16 %k, %2
+  br i1 %3, label %b3, label %b5
+
+b3:
+  store i16 %k, ptr %out
+  %4 = load i16, ptr %out
+  call void @write()
+  %5 = load i16, ptr %out
+  %6 = add i16 %4, %5
+  ret i16 %6
+
+b4:
+  ret i16 0
+
+b5:
+  call void @panic()
+  unreachable
+}
+";
+    assert_eq!(
+        optimized(text),
+        "declare void @panic()
+
+declare void @write()
+
+define i16 @f(ptr %v, i16 %k, ptr %out) {
+b1:
+  %0 = load i16, ptr %v
+  %1 = icmp ult i16 %k, %0
+  br i1 %1, label %b2, label %b4
+
+b2:
+  store i16 %k, ptr %out
+  call void @write()
+  %2 = load i16, ptr %out
+  %3 = add i16 %k, %2
+  ret i16 %3
+
+b4:
+  ret i16 0
+}
+"
+    );
 }

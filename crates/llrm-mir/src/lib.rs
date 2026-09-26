@@ -12,6 +12,7 @@ pub mod intrinsics;
 pub mod lexer;
 pub mod lint;
 pub mod loops;
+pub mod memory;
 pub mod module;
 pub mod opcode;
 pub mod parse;
