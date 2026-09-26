@@ -1019,6 +1019,34 @@ fn _allocated(
                 continue;
             }
         }
+        {
+            // Last chance: move what holds a register rather than spill.
+            let choices = |other: u32| -> Vec<Register> {
+                let mut order = match fixed.get(&other) {
+                    None => target::order(confined.get(&other)),
+                    Some(register) => vec![*register],
+                };
+                order.retain(|one| data_free || _whole(*one) != *target::DATA_SEGMENT);
+                order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
+                order
+            };
+            let wide = |other: u32| widths.get(&other).copied().unwrap_or(4);
+            let mut coloring = Coloring {
+                union: &mut union,
+                r#where: &mut r#where,
+                live: &live,
+                masks: &masks,
+                order: &choices,
+                width: &wide,
+                fenced: &fenced,
+                budget: Coloring::BUDGET,
+                stack: Vec::new(),
+            };
+            if coloring.recolor(value, 0, &mut BTreeSet::new()) {
+                stage.insert(value, Stage::Done);
+                continue;
+            }
+        }
         if let Some(register) = fixed.get(&value) {
             return Err(Unplaced(format!("value#{value} cannot be placed in fixed {}", register.repr())).into());
         }
@@ -1248,6 +1276,112 @@ fn _evict(
         }
     }
     best.map(|(_bill, register, victims)| (register, victims))
+}
+
+/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
+pub struct Coloring<'a> {
+    pub union: &'a mut IndexMap<Register, Vec<u32>>,
+    pub r#where: &'a mut IndexMap<u32, Register>,
+    pub live: &'a IndexMap<u32, Interval>,
+    pub masks: &'a Masks,
+    /// Each value's registers, in the order it tries them.
+    pub order: &'a dyn Fn(u32) -> Vec<Register>,
+    pub width: &'a dyn Fn(u32) -> u32,
+    /// Values whose register is not the allocator's to change.
+    pub fenced: &'a BTreeSet<u32>,
+    /// Recoloring attempts left, bounding the search as a whole.
+    pub budget: usize,
+    /// Each moved value and the register it held: LLVM's `RecolorStack`.
+    pub stack: Vec<(u32, Register)>,
+}
+
+impl Coloring<'_> {
+    /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
+    pub const DEPTH: usize = 5;
+    pub const INTERFERENCES: usize = 8;
+    /// Registers tried per recoloring session.
+    pub const BUDGET: usize = 2000;
+
+    fn take(&mut self, value: u32, register: Register) {
+        self.r#where.insert(value, register);
+        self.union.entry(_whole(register)).or_default().push(value);
+    }
+
+    fn release(&mut self, value: u32) {
+        if let Some(register) = self.r#where.shift_remove(&value) {
+            self.union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| *other != value);
+        }
+    }
+
+    /// `RAGreedy::tryLastChanceRecoloring`: a register for `value` whose
+    /// holders all move elsewhere, recursively. `recolored` are the values
+    /// placed in this session, never moved again. On success `value` is
+    /// placed; on failure nothing has changed.
+    pub fn recolor(&mut self, value: u32, depth: usize, recolored: &mut BTreeSet<u32>) -> bool {
+        if depth >= Self::DEPTH {
+            return false;
+        }
+        let mine = &self.live[&value];
+        let width = (self.width)(value);
+        recolored.insert(value);
+        for register in (self.order)(value) {
+            if self.budget == 0 {
+                break;
+            }
+            self.budget -= 1;
+            if _clobbered(mine, register, self.masks, width) {
+                continue;
+            }
+            let mut holders: Vec<u32> = self
+                .union
+                .get(&_whole(register))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|other| self.live.get(other).is_some_and(|found| found.overlaps(mine)))
+                .collect();
+            if holders.len() >= Self::INTERFERENCES
+                || holders.iter().any(|other| self.fenced.contains(other) || recolored.contains(other))
+            {
+                continue;
+            }
+            // Largest first, as the allocator's queue orders them.
+            holders.sort_by_key(|other| Reverse(self.live[other].size()));
+            let entry = self.stack.len();
+            let session = recolored.clone();
+            for other in &holders {
+                self.stack.push((*other, self.r#where[other]));
+                self.release(*other);
+            }
+            self.take(value, register);
+            let all = holders.iter().all(|other| {
+                match _free(&self.live[other], &(self.order)(*other), self.union, self.live, self.masks, (self.width)(*other)) {
+                    Some(found) => {
+                        self.take(*other, found);
+                        recolored.insert(*other);
+                        true
+                    }
+                    None => self.recolor(*other, depth + 1, recolored),
+                }
+            });
+            if all {
+                return true;
+            }
+            // Undo every move this attempt made, deeper ones included.
+            self.release(value);
+            let moved: Vec<(u32, Register)> = self.stack.drain(entry..).collect();
+            for (other, _) in &moved {
+                self.release(*other);
+            }
+            for (other, register) in moved {
+                self.take(other, register);
+            }
+            *recolored = session;
+            recolored.insert(value);
+        }
+        recolored.remove(&value);
+        false
+    }
 }
 
 /// Assign, then rewrite. LLVM's two halves, in one phase.
@@ -2577,6 +2711,68 @@ mod tests {
         let got =
             _evict(&incoming, &[Register::DI], &union, &live, &Vec::new(), &|_, _| false, &values(&[1]), 4, None, None);
         assert!(got.is_none(), "{got:?}");
+    }
+
+    /// Eviction only weighs the holders' spill costs, so a value whose register
+    /// was held by something that could move, if a third value moved first,
+    /// spilled (deedlines: 3600 weighted frame operands).
+    #[test]
+    fn test_a_register_whose_holder_moves_through_a_chain_is_taken_not_spilled() {
+        let span = |value: u32, end: i64| (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end }]) });
+        let live: IndexMap<u32, Interval> = IndexMap::from_iter([span(1, 10), span(2, 4), span(3, 10)]);
+        let choices = |value: u32| match value {
+            1 => vec![Register::AX, Register::BX],
+            2 => vec![Register::BX, Register::CX],
+            _ => vec![Register::AX],
+        };
+        let mut union: IndexMap<Register, Vec<u32>> =
+            IndexMap::from_iter([(_whole(Register::AX), vec![1]), (_whole(Register::BX), vec![2])]);
+        let mut placed: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::AX), (2, Register::BX)]);
+        let mut coloring = Coloring {
+            union: &mut union,
+            r#where: &mut placed,
+            live: &live,
+            masks: &Vec::new(),
+            order: &choices,
+            width: &|_| 2,
+            fenced: &BTreeSet::new(),
+            budget: Coloring::BUDGET,
+            stack: Vec::new(),
+        };
+        assert!(coloring.recolor(3, 0, &mut BTreeSet::new()));
+        assert_eq!(placed.get(&3), Some(&Register::AX));
+        assert_eq!(placed.get(&1), Some(&Register::BX));
+        assert_eq!(placed.get(&2), Some(&Register::CX));
+    }
+
+    /// A failed recoloring must leave every holder where it was.
+    #[test]
+    fn test_a_recoloring_that_fails_restores_every_holder() {
+        let span = |value: u32, end: i64| (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end }]) });
+        let live: IndexMap<u32, Interval> = IndexMap::from_iter([span(1, 10), span(2, 4), span(3, 10)]);
+        let choices = |value: u32| match value {
+            1 => vec![Register::AX, Register::BX],
+            2 => vec![Register::BX],
+            _ => vec![Register::AX],
+        };
+        let mut union: IndexMap<Register, Vec<u32>> =
+            IndexMap::from_iter([(_whole(Register::AX), vec![1]), (_whole(Register::BX), vec![2])]);
+        let mut placed: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::AX), (2, Register::BX)]);
+        let mut coloring = Coloring {
+            union: &mut union,
+            r#where: &mut placed,
+            live: &live,
+            masks: &Vec::new(),
+            order: &choices,
+            width: &|_| 2,
+            fenced: &BTreeSet::new(),
+            budget: Coloring::BUDGET,
+            stack: Vec::new(),
+        };
+        assert!(!coloring.recolor(3, 0, &mut BTreeSet::new()));
+        assert_eq!(placed, IndexMap::from_iter([(1, Register::AX), (2, Register::BX)]));
+        assert_eq!(union[&_whole(Register::AX)], vec![1]);
+        assert_eq!(union[&_whole(Register::BX)], vec![2]);
     }
 
     #[test]
