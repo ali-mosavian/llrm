@@ -137,6 +137,11 @@ impl Selector<'_, '_> {
                 let crossed = self.made(Operation::Binary, "add", vec![Loc::Held(first), Loc::Held(second)], at, out);
                 (low, self.made(Operation::Binary, "add", vec![Loc::Held(carried), Loc::Held(crossed)], at, out))
             }
+            BinaryOp::SDiv | BinaryOp::SRem if self.constant(right, 8).is_some_and(|bits| bits > 1 && (bits as u64).is_power_of_two()) => {
+                let shift = (self.constant(right, 8).expect("a constant") as u64).trailing_zeros() as i64;
+                let dividend = self.wide(left, at, out)?;
+                self.divided_by_power(op == BinaryOp::SDiv, dividend, shift, at, out)
+            }
             BinaryOp::SDiv | BinaryOp::SRem if self.narrow(right) => {
                 let (dividend, divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
                 self.divided(op == BinaryOp::SDiv, dividend, divisor, at, out)
@@ -201,6 +206,31 @@ impl Selector<'_, '_> {
         let flipped = self.made(Operation::Binary, "xor", vec![Loc::Held(remainder), Loc::Held(sign)], at, out);
         let low = self.made(Operation::Binary, "sub", vec![Loc::Held(flipped), Loc::Held(sign)], at, out);
         (low, sign)
+    }
+
+    /// A signed i64 divided by `2^shift`, as LLVM's BuildSDIVPow2: a
+    /// negative dividend biased by `2^shift - 1` so that the arithmetic
+    /// shift rounds toward zero; the remainder what the shift drops.
+    fn divided_by_power(&mut self, quotient: bool, (low, high): Pair, shift: i64, at: i64, out: &mut Vec<Arc<Insn>>) -> Pair {
+        let sign = self.made(Operation::Binary, "sar", vec![Loc::Held(high), Self::count(31)], at, out);
+        let (bias_low, bias_high) = match shift {
+            1..32 => (self.made(Operation::Binary, "shr", vec![Loc::Held(sign), Self::count(32 - shift)], at, out), self.made(Operation::Move, "mov", vec![Self::dword(0)], at, out)),
+            32 => (sign, self.made(Operation::Move, "mov", vec![Self::dword(0)], at, out)),
+            _ => (sign, self.made(Operation::Binary, "shr", vec![Loc::Held(sign), Self::count(64 - shift)], at, out)),
+        };
+        let biased_low = self.made(Operation::Binary, "add", vec![Loc::Held(low), Loc::Held(bias_low)], at, out);
+        let biased_high = self.made(Operation::Binary, "adc", vec![Loc::Held(high), Loc::Held(bias_high)], at, out);
+        if quotient {
+            return self.shifted(BinaryOp::AShr, biased_low, biased_high, shift, at, out);
+        }
+        let mask = (-1_i64 << shift) as u64;
+        let kept_low = self.made(Operation::Binary, "and", vec![Loc::Held(biased_low), Self::dword(mask as u32 as i64)], at, out);
+        let kept_high = match (mask >> 32) as u32 {
+            u32::MAX => biased_high,
+            word => self.made(Operation::Binary, "and", vec![Loc::Held(biased_high), Self::dword(i64::from(word))], at, out),
+        };
+        let low = self.made(Operation::Binary, "sub", vec![Loc::Held(low), Loc::Held(kept_low)], at, out);
+        (low, self.made(Operation::Binary, "sbb", vec![Loc::Held(high), Loc::Held(kept_high)], at, out))
     }
 
     /// The pair negated where `sign` is all ones, unchanged where it is 0.

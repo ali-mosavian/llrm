@@ -954,3 +954,81 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
         ]
     );
 }
+
+/// A fixed-point quotient by a power of two was a long division, two
+/// `div`s and the signs around them: matmul_fixed's `/ 4` ran 23280
+/// instructions to the old path's 17402. It is a biased arithmetic shift.
+#[test]
+fn test_an_i64_divided_by_a_power_of_two_is_shifted() {
+    let text = "define i32 @quotient(i32 %0) addrspace(1) {
+b1:
+  %1 = sext i32 %0 to i64
+  %2 = shl i64 %1, 16
+  %3 = sdiv i64 %2, 1024
+  %4 = trunc i64 %3 to i32
+  ret i32 %4
+}
+define i32 @remainder(i32 %0) addrspace(1) {
+b1:
+  %1 = sext i32 %0 to i64
+  %2 = shl i64 %1, 16
+  %3 = srem i64 %2, 1024
+  %4 = trunc i64 %3 to i32
+  ret i32 %4
+}
+";
+    assert_eq!(
+        listing(text, "quotient"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ebx, dword ptr [bp+6]",
+            "mov eax, ebx",
+            "cdq",
+            "shld edx, ebx, 16",
+            "shl ebx, 16",
+            "mov eax, edx",
+            "sar eax, 31",
+            "shr eax, 22",
+            "xor ecx, ecx",
+            "add ebx, eax",
+            "adc edx, ecx",
+            "shrd ebx, edx, 10",
+            "sar edx, 10",
+            "shld edx, ebx, 16",
+            "mov ax, bx",
+            "pop bp",
+            "retf",
+        ]
+    );
+    assert_eq!(
+        listing(text, "remainder"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "push si",
+            "L1_0:",
+            "mov ebx, dword ptr [bp+6]",
+            "mov eax, ebx",
+            "cdq",
+            "shld edx, ebx, 16",
+            "shl ebx, 16",
+            "mov eax, edx",
+            "sar eax, 31",
+            "shr eax, 22",
+            "xor esi, esi",
+            "add eax, ebx",
+            "mov ecx, edx",
+            "adc ecx, esi",
+            "and eax, 4294966272",
+            "sub ebx, eax",
+            "sbb edx, ecx",
+            "shld edx, ebx, 16",
+            "mov ax, bx",
+            "pop si",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
