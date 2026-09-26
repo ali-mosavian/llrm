@@ -20,7 +20,7 @@ That buys what a private IR cannot have:
 
 - **Independent oracles**, pinned to LLVM 20. `opt -passes=verify` checks
   every stage dump. `lli -force-interpreter` runs what it can: not
-  `x86_fp80` arithmetic, overflow intrinsics or unwinding, and a
+  overflow intrinsics or unwinding, and a
   `@llrm.qb.*` routine only where a `.ll` model of it is linked in.
   `llc -mtriple=msp430` compiles all but exception handling for a 16-bit
   non-x86 target, and `opt -O2` on the same MIR is a quality reference.
@@ -58,9 +58,6 @@ The complete list; everything else is LLVM's.
    the rewrite ledger's (step 2), outside MIR. Diagnostic lineage is
    `!llrm.origin` metadata; stripping it must not change the output, the
    rule LLVM holds for `-g`.
-5. **x87 precision control.** LLVM has no form for the precision field.
-   Where the raise proves it fixed, arithmetic is plain `fadd`; where it
-   cannot, the operation is an `@llrm.x87.*` intrinsic.
 
 ## llrm's needs in LLVM's terms
 
@@ -84,8 +81,8 @@ The complete list; everything else is LLVM's.
 | A frontend's promise that an access stays in its object | `getelementptr inbounds`, `noalias`, `!alias.scope`, `!tbaa` |
 | A runtime routine | `@llrm.qb.<name>`, declared with `memory(...)` and the rest as proved; few are `nounwind`, since most can raise an error |
 | An unrecognized external call | a call to its declaration, all effects unknown; a function whose interface cannot be recovered is refused whole |
-| x87 rounding and deferred exceptions | `strictfp` and `llvm.experimental.constrained.*` with `round.dynamic`, `fpexcept.strict` |
-| 80-bit reals | `x86_fp80` |
+| `SINGLE`, `DOUBLE` | `float`, `double`; the x87's extended intermediates are lowering's |
+| Floating errors BASIC reports | `strictfp` and `llvm.experimental.constrained.*` with `fpexcept.strict` |
 
 The raise recognizes; no pass does. `B$MUI4` is a `mul` the moment MIR
 exists.
