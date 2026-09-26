@@ -191,3 +191,80 @@ fn an_external_entry_at_the_entry_needs_nothing_more() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
+
+/// An unsigned byte index was scaled at its own width, mixing an `i8` with
+/// an `i16` that both verifiers reject; an index is the pointer's index
+/// width, extended as its type says.
+#[test]
+fn an_index_is_extended_to_the_pointers_index_width() {
+    use crate::model::{ArrayElement, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }];
+    let element = Operand::ArrayElement(ArrayElement { place: 1, indices: vec![Operand::value_ref(1)] });
+    let load = Instruction::new(1, Op::Load, vec![2], vec![element]);
+    let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let places = vec![Place::new(1, "A", 2, Storage::Local, -512)];
+    let mut function = Function::new(1, "AT%", 1, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut array = Type::new(2, "array", TypeKind::Array, 512);
+    (array.element, array.rank, array.bounds) = (Some(1), 1, vec![(0, 255)]);
+    let mut byte = Type::new(3, "byte", TypeKind::Integer, 1);
+    byte.signed = Some(false);
+    program.modules[0].types.extend([array, byte]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %2 = zext i8 %0 to i16\n  %3 = sub i16 %2, 0\n  %4 = getelementptr inbounds i16, ptr %1, i16 %3\n"), "{text}");
+}
+
+/// `LEN(s)` of a heap string: its length is the word four bytes before its
+/// data.
+#[test]
+fn a_descriptor_field_is_read_where_the_layout_puts_it() {
+    use crate::model::{DescriptorField, DescriptorPlace};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
+    let length = Operand::DescriptorPlace(DescriptorPlace { base: 1, field: DescriptorField::Length, r#type: 1 });
+    let load = Instruction::new(1, Op::Load, vec![2], vec![length]);
+    let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "LENGTH%", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut pointer = Type::new(2, "near*string", TypeKind::Pointer, 2);
+    pointer.address = crate::model::AddressKind::Near;
+    program.modules[0].types.push(pointer);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %1 = getelementptr i8, ptr %0, i16 -4\n  %2 = load i16, ptr %1\n"), "{text}");
+}
+
+/// Nib's 16.16 fixed point: the 64-bit product shifted back down, and the
+/// dividend shifted up before a 64-bit division.
+#[test]
+fn fixed_point_arithmetic_is_done_at_twice_the_width() {
+    let mut long = Type::new(2, "long", TypeKind::Integer, 4);
+    long.signed = Some(true);
+    let mut byte = Type::new(3, "byte", TypeKind::Integer, 1);
+    byte.signed = Some(true);
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }, Value { id: 4, r#type: 2 }];
+    let sixteen = Operand::constant(3, 16);
+    let instructions = vec![
+        Instruction::new(1, Op::FixedMul, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2), sixteen.clone()]),
+        Instruction::new(2, Op::FixedDiv, vec![4], vec![Operand::value_ref(3), Operand::value_ref(2), sixteen]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(4)], Vec::new()));
+    let mut function = Function::new(1, "SCALE", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.extend([long, byte]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = "  %2 = sext i32 %0 to i64\n  %3 = sext i32 %1 to i64\n  %4 = mul i64 %2, %3\n  %5 = ashr i64 %4, 16\n  %6 = trunc i64 %5 to i32\n  \
+                %7 = sext i32 %6 to i64\n  %8 = sext i32 %1 to i64\n  %9 = shl i64 %7, 16\n  %10 = sdiv i64 %9, %8\n  %11 = trunc i64 %10 to i32\n  ret i32 %11\n";
+    assert!(text.contains(body), "{text}");
+}
