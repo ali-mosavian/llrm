@@ -3,5 +3,9 @@
 
 pub mod codec;
 pub mod escape;
+pub mod mir;
 pub mod model;
 pub mod verify;
+
+#[cfg(test)]
+mod mir_tests;

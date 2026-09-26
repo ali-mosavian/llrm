@@ -236,6 +236,13 @@ which proves their attributes, so they come with step 4.
 - An adapter lowers MIR through the old backend, so the e2e answers check
   the new MIR, and `lli` agrees with them where it can run.
 
+HIR, the common frontend of QB source and Nib, emits MIR first
+(`llrm_hir::mir`), as clang's CodeGen emits LLVM IR: data objects become
+globals, local places allocas, calls to routines the module does not
+declare `@llrm.qb.*` calls. `tools/hir-mir-corpus.sh` emits the QB suite,
+has `llrm-mir` and `opt` verify each module, and counts the refusals by
+reason.
+
 ### 5. Port the passes
 
 - One pass at a time onto MIR, against `.ll` fixtures and the interpreter.

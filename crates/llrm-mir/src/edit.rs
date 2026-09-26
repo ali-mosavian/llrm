@@ -259,6 +259,23 @@ impl Function {
         Ok(())
     }
 
+    /// Drops every instruction and block, leaving a declaration, as LLVM's
+    /// `deleteBody`.
+    pub fn delete_body(&mut self) {
+        for block in self.layout.clone() {
+            for inst in self.block(block).instructions.clone() {
+                let (block, next) = self.detach(inst).expect("a placed instruction");
+                self.changes.push(Change::Erased { inst, block, next });
+            }
+            self.blocks[block.0 as usize].erased = true;
+            self.changes.push(Change::BlockErased(block));
+        }
+        self.layout.clear();
+        self.erased.fill(true);
+        self.value_uses.iter_mut().for_each(Vec::clear);
+        self.block_uses.iter_mut().for_each(Vec::clear);
+    }
+
     /// Removes an empty block nothing names.
     pub fn erase_block(&mut self, block: BlockId) -> Result<(), String> {
         if !self.block(block).instructions.is_empty() {

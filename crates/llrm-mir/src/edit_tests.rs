@@ -101,3 +101,14 @@ fn the_use_list_check_notices_an_operand_changed_behind_its_back() {
     f.instructions[y.0 as usize].operands[0] = Operand::Value(a);
     assert_eq!(f.check_uses().len(), 2, "{:?}", f.check_uses());
 }
+
+/// A refused body goes whole, and what calls the function still verifies.
+#[test]
+fn deleting_a_body_leaves_a_declaration() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    f.delete_body();
+    assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+    assert!(f.is_declaration());
+    assert_eq!(print::module(&module), "declare i16 @f(i16)\n");
+}
