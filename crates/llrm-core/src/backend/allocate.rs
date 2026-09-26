@@ -980,6 +980,7 @@ fn _allocated(
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
+            let spread = splitkit::live_blocks(&body, value, (&live_sets.0, &live_sets.1));
             let occupied = splitkit::Occupied {
                 segments: union
                     .iter()
@@ -1017,8 +1018,12 @@ fn _allocated(
                 }
             }
             if !made.is_empty() {
+                // As LLVM's RS_Split2: a piece splits again only while its
+                // live blocks strictly shrink, so splitting ends.
+                let after = self::live(&cut);
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, (&after.0, &after.1)) >= spread));
+                pieces.insert(value);
                 body = cut;
-                pieces.extend(made.iter().copied().chain([value]));
                 for one in &made {
                     stage.insert(*one, Stage::Assign);
                 }

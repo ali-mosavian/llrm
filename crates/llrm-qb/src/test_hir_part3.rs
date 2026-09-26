@@ -347,12 +347,46 @@ fn test_a_masked_far_subscript_compiles() {
 
 /// The main body of `source`'s listing.
 fn main_listing(name: &str, source: &[u8]) -> String {
+    procedure_listing(name, source, "$QB$MAIN")
+}
+
+/// `procedure`'s part of `source`'s listing.
+fn procedure_listing(name: &str, source: &[u8], procedure: &str) -> String {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(&directory, name, source);
     let program = parsed_as(&basic, "qb45", "qb45");
     object_bytes(&program, name).expect("compiles");
     let text = listing(&program);
-    text[text.find("$QB$MAIN proc").expect("main")..text.find("$QB$MAIN endp").expect("main end")].to_owned()
+    text[text.find(&format!("{procedure} proc")).expect("start")..text.find(&format!("{procedure} endp")).expect("end")].to_owned()
+}
+
+/// qbdemo's PLASMA: a split piece of `DEF SEG = &HA000` was evicted in the
+/// loop's preheader and never split again, so the pixel loop remade the
+/// segment with `push 0A000h / pop fs` every trip.
+#[test]
+fn test_an_evicted_piece_splits_again_rather_than_remake_a_segment_in_its_loop() {
+    let source = "DEFINT A-Z\r\nDECLARE SUB plasma (totalframes)\r\nDECLARE SUB updpalplasma (f)\r\nplasma 2\r\n\
+SUB plasma (totalframes)\r\nDIM unf(320), unfunf(320)\r\nDIM sine(512)\r\nDIM fuh(128, 128)\r\nDEF SEG = &HA000\r\n\
+FOR x = 0 TO 512\r\nsine(x) = SIN(x * 3.14 / 256) * 32 + 32\r\nNEXT\r\nFOR f = 1 TO totalframes\r\n\
+FOR x = 0 TO 320\r\nunf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\nNEXT\r\no = 0\r\n\
+FOR y = 0 TO 128\r\nunf2 = sine((y * 7 + f * 5) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n\
+FOR x = 0 TO 128\r\nfuh(x, y) = unf(x) + unf2\r\no = o + 1\r\nNEXT\r\nNEXT\r\n\
+FOR x = 0 TO 320\r\nunf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n\
+unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)\r\nNEXT\r\no = 0\r\n\
+FOR y = 0 TO 199\r\nunf2 = sine((y * 11 + f * 6) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n\
+unf3 = sine((y * 9 + f * 4) AND 511) + sine((y * 17 + f * 23 + 1943) AND 511)\r\n\
+FOR x = 0 TO 319\r\nPOKE o, fuh((unf(x) + unf2) AND 127, (unfunf(x) + unf3) AND 127)\r\no = o + 1\r\nNEXT\r\nNEXT\r\n\
+updpalplasma f\r\nIF INKEY$ > \"\" THEN EXIT SUB\r\nNEXT\r\nEND SUB\r\nSUB updpalplasma (f)\r\nOUT &H3C8, f\r\nEND SUB\r\n";
+    let text = procedure_listing("PLASMA.BAS", source.as_bytes(), "PLASMA");
+    let remade = regex::Regex::new(r"\bpop [efg]s\b").unwrap();
+    let loops: Vec<(usize, usize)> = jumps(&text, true)
+        .into_iter()
+        .filter_map(|(start, end, label)| text.find(&format!("{label}:\n")).filter(|at| *at < start).map(|at| (at, end)))
+        .collect();
+    let innermost = loops.iter().filter(|(at, end)| !loops.iter().any(|(other, _)| at < other && other < end));
+    for (at, end) in innermost {
+        assert!(!remade.is_match(&text[*at..*end]), "{}", &text[*at..*end]);
+    }
 }
 
 /// A static array's proven-exact subscript kept its shift and read the

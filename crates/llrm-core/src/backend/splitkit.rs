@@ -526,6 +526,12 @@ struct Analysis {
     through: Vec<i64>,
 }
 
+/// LLVM's `countLiveBlocks`: the blocks `value` is named in or lives through.
+pub fn live_blocks(body: &LirBody, value: u32, live: (&allocate::Live, &allocate::Live)) -> usize {
+    let analysis = analysed(body, value, live.0, live.1);
+    analysis.uses.len() + analysis.through.len()
+}
+
 fn analysed(body: &LirBody, value: u32, live_in: &allocate::Live, live_out: &allocate::Live) -> Analysis {
     let mut uses = Vec::new();
     let mut through = Vec::new();
