@@ -3,6 +3,7 @@
 //! attributes, as LLVM does on creating it; the verifier checks its
 //! signature; the interpreter runs it.
 
+use crate::module::Function;
 use crate::opcode::{Attribute, BinaryOp};
 use crate::types::{FloatKind, Type, TypeId, Types};
 
@@ -109,6 +110,17 @@ const TABLE: [Spec; 14] = [
         memory: (Some("argmem"), "readwrite"),
     },
 ];
+
+/// Gives a function named `name` its intrinsic's attributes, if it names
+/// one; as in LLVM, whatever attributes it had are dropped.
+pub(crate) fn declare(function: &mut Function, name: &str) {
+    let Some(intrinsic) = Intrinsic::named(name) else { return };
+    let (attrs, parameter_attrs) = intrinsic.attributes();
+    function.attrs = attrs;
+    for (slot, attrs) in function.parameter_attrs.iter_mut().zip(parameter_attrs) {
+        *slot = attrs;
+    }
+}
 
 /// Whether `name` is in LLVM's reserved namespace.
 pub fn is_reserved(name: &str) -> bool {

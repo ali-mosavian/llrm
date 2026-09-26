@@ -55,11 +55,7 @@ impl Checker<'_> {
     }
 
     fn operand_type(&self, operand: Operand) -> Option<TypeId> {
-        match operand {
-            Operand::Value(id) => Some(self.function.value(id).ty),
-            Operand::Constant(id) => Some(self.context.get(id).ty),
-            Operand::Block(_) => None,
-        }
+        self.function.operand_type(self.context, operand)
     }
 
     /// The type of the intrinsic `operand` names, if it names one.
