@@ -18,6 +18,10 @@ pub enum TypeName {
     Named(String),
     /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
     Integral { width: u8, signed: bool },
+    /// QuickrBASIC's `AS (t1, t2, …)`, a FUNCTION's several results.
+    Tuple(Vec<TypeName>),
+    /// QuickrBASIC's `AS t()`, a FUNCTION's array result.
+    Array(Box<TypeName>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,6 +180,44 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
+    /// QuickrBASIC's `then IF condition ELSE otherwise`.
+    Conditional {
+        condition: Box<Expr>,
+        then: Box<Expr>,
+        otherwise: Box<Expr>,
+        span: Span,
+    },
+    /// QuickrBASIC's `needle [NOT] IN haystack`.
+    In {
+        needle: Box<Expr>,
+        haystack: Haystack,
+        negated: bool,
+        span: Span,
+    },
+    /// QuickrBASIC's string slice `base(start:end:step)`, each part
+    /// optional.
+    Slice {
+        base: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        step: Option<Box<Expr>>,
+        span: Span,
+    },
+    /// QuickrBASIC's chained comparison `a < b <= c`: `a < b AND b <= c`
+    /// with `b` evaluated once, stopping at the first false comparison.
+    Chain {
+        first: Box<Expr>,
+        rest: Vec<(Binary, Expr)>,
+        span: Span,
+    },
+}
+
+/// What IN searches: a parenthesized list with a comma, or one string or
+/// array.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Haystack {
+    Values(Vec<Expr>),
+    Container(Box<Expr>),
 }
 
 impl Eq for Expr {}
@@ -188,7 +230,11 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::Field { span, .. }
             | Self::Unary { span, .. }
-            | Self::Binary { span, .. } => *span,
+            | Self::Binary { span, .. }
+            | Self::Conditional { span, .. }
+            | Self::In { span, .. }
+            | Self::Slice { span, .. }
+            | Self::Chain { span, .. } => *span,
         }
     }
 }
@@ -336,6 +382,46 @@ pub enum Statement {
 }
 
 impl Statement {
+    /// The statement lists nested directly inside this one, to change.
+    pub fn bodies_mut(&mut self) -> Vec<&mut Vec<Statement>> {
+        match self {
+            Self::If {
+                then_branch,
+                else_branch,
+                ..
+            } => vec![then_branch, else_branch],
+            Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
+            Self::Select {
+                arms, otherwise, ..
+            } => arms
+                .iter_mut()
+                .map(|(_, body)| body)
+                .chain([otherwise])
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The statement lists nested directly inside this one.
+    pub fn bodies(&self) -> Vec<&[Statement]> {
+        match self {
+            Self::If {
+                then_branch,
+                else_branch,
+                ..
+            } => vec![then_branch, else_branch],
+            Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
+            Self::Select {
+                arms, otherwise, ..
+            } => arms
+                .iter()
+                .map(|(_, body)| body.as_slice())
+                .chain([otherwise.as_slice()])
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn span(&self) -> Span {
         match self {
             Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) => {
@@ -401,6 +487,7 @@ pub enum CaseItem {
 pub struct Module {
     pub statements: Vec<Statement>,
     pub procedures: Vec<Procedure>,
-    /// Some expression is an f-string, which needs the QuickrBASIC prelude.
-    pub format_strings: bool,
+    /// Some expression is an f-string or a slice, which need the
+    /// QuickrBASIC prelude.
+    pub prelude: bool,
 }

@@ -3,7 +3,7 @@ use crate::dialect::Dialect;
 use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
-    Binary, Bound, CaseItem, Declaration, Expr, Literal, Module, Parameter, PrintItem,
+    Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem,
     PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
@@ -26,8 +26,12 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
-    let (tokens, private_at) = without_private(lex(source, dialect).map_err(ParseError::from)?);
+    let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(
+        returned(lex(source, dialect).map_err(ParseError::from)?, dialect),
+        dialect,
+    ))));
     let mut state = ParseState::new(tokens);
+    state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
         while consume_named(&mut state, "tkNewLine") || consume_named(&mut state, "tkColon") {}
@@ -184,18 +188,282 @@ pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutpu
     if state.open_procedure.is_some() {
         return error(&state, "procedure has no matching END");
     }
-    let format_strings = state
-        .tokens
-        .iter()
-        .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
+    let prelude = state.slices
+        || state
+            .tokens
+            .iter()
+            .any(|token| matches!(token.kind, TokenKind::FormatString(_)));
     Ok(ParseOutput {
         module: Module {
             statements: state.statements,
             procedures: state.procedures,
-            format_strings,
+            prelude,
         },
         actions: state.sink.actions,
     })
+}
+
+/// The prefix of the function an augmented assignment calls: `x += e`
+/// becomes `x = $AUG+(e)`. No source name can spell it.
+pub const AUGMENTED: &str = "$AUG";
+
+/// QuickrBASIC's augmented assignment, `target op= value`, rewritten into
+/// an ordinary assignment the grammar parses anywhere a statement goes. An
+/// operator written directly against `=` cannot occur in QuickBASIC, so the
+/// rewrite changes no valid program.
+fn augmented(tokens: Vec<Token>) -> Vec<Token> {
+    let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
+    let operators = ["tkAdd", "tkMinus", "tkMult", "tkDiv", "tkIdiv", "tkPwr", "tkMOD", "tkAND", "tkOR", "tkXOR"];
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let operator = operators.iter().find(|name| is(token, name));
+        let equals = tokens.get(at + 1).filter(|next| {
+            is(next, "tkEQ") && next.span.line == token.span.line && next.span.start == token.span.end
+        });
+        let (Some(operator), Some(equals)) = (operator, equals) else {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        };
+        let end = token_statement_end(&tokens, at + 2);
+        let at_token = |kind: TokenKind| Token { kind, span: token.span };
+        out.push(equals.clone());
+        out.push(at_token(TokenKind::Identifier(format!("{AUGMENTED}{}", operator))));
+        out.push(at_token(TokenKind::Reserved(named("tkLParen"))));
+        out.extend(tokens[at + 2..end].iter().cloned());
+        out.push(at_token(TokenKind::Reserved(named("tkRParen"))));
+        at = end;
+    }
+    out
+}
+
+/// QuickrBASIC's `RETURN value` in a FUNCTION, rewritten into QB's own way
+/// to return: `name = value: EXIT FUNCTION`. A bare RETURN still ends a
+/// GOSUB, and QB's `RETURN label` has no place left in a FUNCTION.
+fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+    if !dialect.return_values() {
+        return tokens;
+    }
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let mut function: Option<Token> = None;
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let previous = at.checked_sub(1).and_then(|before| tokens.get(before));
+        if is(Some(token), "tkFUNCTION") {
+            match tokens.get(at + 1) {
+                _ if is(previous, "tkEND") => function = None,
+                Some(name @ Token { kind: TokenKind::Identifier(_), .. })
+                    if !is(previous, "tkDECLARE") && !is(previous, "tkEXIT") =>
+                {
+                    function = Some(name.clone())
+                }
+                _ => {}
+            }
+        }
+        let value_end = || token_statement_end(&tokens, at + 1);
+        match &function {
+            Some(name) if is(Some(token), "tkRETURN") && value_end() > at + 1 => {
+                let end = value_end();
+                let reserved = |name: &str| Token {
+                    kind: TokenKind::Reserved(named(name)),
+                    span: token.span,
+                };
+                out.push(Token { span: token.span, ..name.clone() });
+                out.push(reserved("tkEQ"));
+                let value = &tokens[at + 1..end];
+                if depth_zero_comma(value).is_some() {
+                    out.push(Token {
+                        kind: TokenKind::Identifier(TUPLE.into()),
+                        span: token.span,
+                    });
+                    out.push(reserved("tkLParen"));
+                    out.extend(value.iter().cloned());
+                    out.push(reserved("tkRParen"));
+                } else {
+                    out.extend(value.iter().cloned());
+                }
+                out.push(reserved("tkColon"));
+                out.push(reserved("tkEXIT"));
+                out.push(reserved("tkFUNCTION"));
+                at = end;
+            }
+            _ => {
+                out.push(token.clone());
+                at += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The function a tuple calls, on either side of `=`: `a, b = b, a`
+/// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
+pub const TUPLE: &str = "$TUPLE";
+
+/// Where the first comma outside parentheses stands in `tokens`.
+fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            TokenKind::Reserved(id) if id == named("tkLParen") => depth += 1,
+            TokenKind::Reserved(id) if id == named("tkRParen") => depth = depth.saturating_sub(1),
+            TokenKind::Reserved(id) if id == named("tkComma") && depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// QuickrBASIC's tuple assignment, `a, b = x, y`, rewritten into one the
+/// grammar parses: `$TUPLE(a, b) = $TUPLE(x, y)`. A statement that starts
+/// with a name and has a comma before its `=` is one. A slice target,
+/// `s(1:3) = v`, which the grammar cannot parse either, becomes a one-target
+/// list: `$TUPLE(s(1:3)) = v`.
+fn tuple_assignment(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
+    if !dialect.tuples() {
+        return tokens;
+    }
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let token = &tokens[at];
+        let starts = out.last().is_none_or(|last: &Token| {
+            ["tkNewLine", "tkColon", "tkTHEN", "tkELSE"].iter().any(|name| is(Some(last), name))
+        });
+        let end = if starts && matches!(token.kind, TokenKind::Identifier(_)) {
+            token_statement_end(&tokens, at)
+        } else {
+            at
+        };
+        let statement = &tokens[at..end];
+        let equals = statement.iter().position(|one| is(Some(one), "tkEQ"));
+        let Some(equals) = equals else {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        };
+        let targets = depth_zero_comma(statement).is_some_and(|comma| comma < equals);
+        // A statement's own colons end it, so any before `=` is a slice's.
+        let slice = statement[..equals].iter().any(|one| is(Some(one), "tkColon"));
+        if !targets && !slice {
+            out.push(token.clone());
+            at += 1;
+            continue;
+        }
+        let wrapped = |out: &mut Vec<Token>, part: &[Token]| {
+            let span = part[0].span;
+            out.push(Token { kind: TokenKind::Identifier(TUPLE.into()), span });
+            out.push(Token { kind: TokenKind::Reserved(named("tkLParen")), span });
+            out.extend(part.iter().cloned());
+            out.push(Token { kind: TokenKind::Reserved(named("tkRParen")), span });
+        };
+        wrapped(&mut out, &statement[..equals]);
+        out.push(statement[equals].clone());
+        let value = &statement[equals + 1..];
+        if value.is_empty() || depth_zero_comma(value).is_none() {
+            out.extend(value.iter().cloned());
+        } else {
+            wrapped(&mut out, value);
+        }
+        at = end;
+    }
+    out
+}
+
+/// Where the statement running from `at` ends: `:`, a new line, or the ELSE
+/// of a one-line IF, outside any parentheses. An ELSE answering an IF inside
+/// the statement belongs to a conditional expression.
+fn token_statement_end(tokens: &[Token], mut at: usize) -> usize {
+    let is = |token: &Token, name: &str| matches!(token.kind, TokenKind::Reserved(id) if id == named(name));
+    let mut depth = 0usize;
+    let mut conditionals = 0usize;
+    while let Some(next) = tokens.get(at) {
+        if depth == 0 && is(next, "tkELSE") && conditionals > 0 {
+            conditionals -= 1;
+            at += 1;
+            continue;
+        }
+        if depth == 0 && (is(next, "tkColon") || is(next, "tkNewLine") || is(next, "tkELSE")) {
+            break;
+        }
+        if is(next, "tkIF") {
+            conditionals += 1;
+        } else if is(next, "tkLParen") {
+            depth += 1;
+        } else if is(next, "tkRParen") {
+            depth = depth.saturating_sub(1);
+        }
+        at += 1;
+    }
+    at
+}
+
+/// The function a `FOR … IN` loop starts from, and the prefix of the name
+/// its `AS` declares: `FOR x AS t IN e` becomes
+/// `DIM $EACHx AS t: FOR x = $EACH(e) TO 0`. No source name can spell it.
+pub const EACH: &str = "$EACH";
+
+/// QuickrBASIC's `FOR x [AS type] IN iterable`, rewritten into a FOR the
+/// grammar parses and pairs with its NEXT. A QB FOR has `=` after its
+/// counter, never AS or IN.
+fn for_in(tokens: Vec<Token>) -> Vec<Token> {
+    let is = |token: Option<&Token>, name: &str| {
+        token.is_some_and(|token| matches!(token.kind, TokenKind::Reserved(id) if id == named(name)))
+    };
+    let word = |token: Option<&Token>, text: &str| {
+        token.is_some_and(|token| matches!(&token.kind, TokenKind::Identifier(word) if word == text))
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        let variable = match tokens.get(at + 1).map(|token| &token.kind) {
+            Some(TokenKind::Identifier(name)) if is(tokens.get(at), "tkFOR") => name.clone(),
+            _ => {
+                out.push(tokens[at].clone());
+                at += 1;
+                continue;
+            }
+        };
+        let end = token_statement_end(&tokens, at);
+        let Some(within) = (at + 2..end).find(|&index| word(tokens.get(index), "IN")) else {
+            out.push(tokens[at].clone());
+            at += 1;
+            continue;
+        };
+        let span = tokens[at].span;
+        let token = |kind: TokenKind| Token { kind, span };
+        let reserved = |name: &str| token(TokenKind::Reserved(named(name)));
+        if is(tokens.get(at + 2), "tkAS") {
+            out.push(reserved("tkDIM"));
+            out.push(token(TokenKind::Identifier(format!("{EACH}{variable}"))));
+            out.extend(tokens[at + 2..within].iter().cloned());
+            out.push(reserved("tkColon"));
+        } else if within != at + 2 {
+            out.push(tokens[at].clone());
+            at += 1;
+            continue;
+        }
+        out.push(tokens[at].clone());
+        out.push(tokens[at + 1].clone());
+        out.push(reserved("tkEQ"));
+        out.push(token(TokenKind::Identifier(EACH.into())));
+        out.push(reserved("tkLParen"));
+        out.extend(tokens[within + 1..end].iter().cloned());
+        out.push(reserved("tkRParen"));
+        out.push(reserved("tkTO"));
+        out.push(token(TokenKind::Integer(0, None)));
+        at = end;
+    }
+    out
 }
 
 /// `PRIVATE SUB` and `PRIVATE FUNCTION`: the grammar parses an ordinary
@@ -491,7 +759,7 @@ fn literal_string(state: &mut ParseState) -> ParseResult {
     };
     let expression = match token.kind {
         TokenKind::String(value) => Expr::Literal(Literal::String(value), token.span),
-        TokenKind::FormatString(segments) => match format_string(&segments, token.span) {
+        TokenKind::FormatString(segments) => match format_string(&segments, token.span, state.python_expressions) {
             Ok(expression) => expression,
             Err(result) => return result,
         },
@@ -508,13 +776,18 @@ pub const FORMAT_FIELD: &str = "$FSTRING";
 
 /// `f"…"` as the concatenation of its text and its converted fields, a
 /// field's spec passed to the conversion as a string.
-fn format_string(segments: &[FormatSegment], span: Span) -> Result<Expr, ParseResult> {
+fn format_string(
+    segments: &[FormatSegment],
+    span: Span,
+    python_expressions: bool,
+) -> Result<Expr, ParseResult> {
     let mut parts = Vec::new();
     for segment in segments {
         parts.push(match segment {
             FormatSegment::Text(text) => Expr::Literal(Literal::String(text.clone()), span),
             FormatSegment::Field { tokens, spec, span } => {
                 let mut field = ParseState::new(tokens.clone());
+                field.python_expressions = python_expressions;
                 let value = expression(&mut field, 0)?;
                 if field.at != tokens.len() {
                     return Err(ParseResult::BadSyntax);
@@ -617,9 +890,28 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
 }
 
 fn declaration_type(state: &mut ParseState) -> Option<TypeName> {
-    if let Some(integral) = signed_type(state) {
-        return Some(integral);
+    if state.python_expressions && consume_named(state, "tkLParen") {
+        let mut types = vec![declaration_type(state)?];
+        while consume_named(state, "tkComma") {
+            types.push(declaration_type(state)?);
+        }
+        return (consume_named(state, "tkRParen") && types.len() > 1).then_some(TypeName::Tuple(types));
     }
+    let element = match signed_type(state) {
+        Some(integral) => integral,
+        None => plain_declaration_type(state)?,
+    };
+    if state.python_expressions
+        && at_named(state, "tkLParen")
+        && matches!(state.tokens.get(state.at + 1), Some(Token { kind: TokenKind::Reserved(id), .. }) if *id == named("tkRParen"))
+    {
+        state.at += 2;
+        return Some(TypeName::Array(Box::new(element)));
+    }
+    Some(element)
+}
+
+fn plain_declaration_type(state: &mut ParseState) -> Option<TypeName> {
     let token = state.token()?.clone();
     let type_name = match token.kind {
         TokenKind::Reserved(id) if id == named("tkINTEGER") => TypeName::Integer,
@@ -2272,7 +2564,32 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
     } else {
         primary(state)?
     };
+    // Whether this loop built `left` from a comparison, which another
+    // comparison then chains rather than compares.
+    let mut chained = false;
+    let span_of = |left: &Expr, right: &Expr| Span {
+        line: left.span().line,
+        start: left.span().start,
+        end: right.span().end,
+    };
     loop {
+        if let Some(negated) = in_operator(state) {
+            if COMPARISON_BINDING < minimum {
+                break;
+            }
+            state.at += if negated { 2 } else { 1 };
+            let haystack = haystack(state)?;
+            let end = previous_end(state);
+            let start = left.span();
+            left = Expr::In {
+                needle: Box::new(left),
+                haystack,
+                negated,
+                span: Span { end, ..start },
+            };
+            chained = false;
+            continue;
+        }
         let Some((op, left_binding, right_binding)) = binary(state) else {
             break;
         };
@@ -2281,19 +2598,92 @@ fn expression(state: &mut ParseState, minimum: u8) -> Result<Expr, ParseResult> 
         }
         state.at += 1;
         let right = expression(state, right_binding)?;
-        let span = Span {
-            line: left.span().line,
-            start: left.span().start,
-            end: right.span().end,
+        let span = span_of(&left, &right);
+        let comparison = left_binding == COMPARISON_BINDING;
+        left = match left {
+            Expr::Binary {
+                op: first_op,
+                left: first,
+                right: middle,
+                ..
+            } if chained && comparison && state.python_expressions => Expr::Chain {
+                first,
+                rest: vec![(first_op, *middle), (op, right)],
+                span,
+            },
+            Expr::Chain { first, mut rest, .. } if chained && comparison => {
+                rest.push((op, right));
+                Expr::Chain { first, rest, span }
+            }
+            left => Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            },
         };
-        left = Expr::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
+        chained = comparison;
+    }
+    // `then IF condition ELSE otherwise` binds loosest, and nests only to
+    // the right, as in Python.
+    if state.python_expressions && minimum == 0 && consume_named(state, "tkIF") {
+        let condition = expression(state, 1)?;
+        if !consume_named(state, "tkELSE") {
+            return Err(ParseResult::BadSyntax);
+        }
+        let otherwise = expression(state, 0)?;
+        let span = span_of(&left, &otherwise);
+        left = Expr::Conditional {
+            condition: Box::new(condition),
+            then: Box::new(left),
+            otherwise: Box::new(otherwise),
             span,
         };
     }
     Ok(left)
+}
+
+const COMPARISON_BINDING: u8 = 60;
+
+/// `IN` or `NOT IN` after an operand: Some(negated).
+fn in_operator(state: &ParseState) -> Option<bool> {
+    if !state.python_expressions {
+        return None;
+    }
+    let is_in = |token: Option<&Token>| {
+        token.is_some_and(|token| matches!(&token.kind, TokenKind::Identifier(word) if word == "IN"))
+    };
+    if is_in(state.token()) {
+        Some(false)
+    } else if at_named(state, "tkNOT") && is_in(state.tokens.get(state.at + 1)) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// IN's right side: `(a, b, …)` is a list of values; anything else, a
+/// parenthesized one included, is a string or an array.
+fn haystack(state: &mut ParseState) -> Result<Haystack, ParseResult> {
+    let start = state.at;
+    if consume_named(state, "tkLParen") {
+        let first = expression(state, 0)?;
+        if consume_named(state, "tkComma") {
+            let mut values = vec![first, expression(state, 0)?];
+            while consume_named(state, "tkComma") {
+                values.push(expression(state, 0)?);
+            }
+            if !consume_named(state, "tkRParen") {
+                return Err(ParseResult::BadSyntax);
+            }
+            return Ok(Haystack::Values(values));
+        }
+        state.at = start;
+    }
+    Ok(Haystack::Container(Box::new(expression(
+        state,
+        COMPARISON_BINDING + 1,
+    )?)))
 }
 
 fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
@@ -2325,7 +2715,9 @@ fn primary(state: &mut ParseState) -> Result<Expr, ParseResult> {
             token.span,
         )),
         TokenKind::String(value) => Ok(Expr::Literal(Literal::String(value), token.span)),
-        TokenKind::FormatString(segments) => format_string(&segments, token.span),
+        TokenKind::FormatString(segments) => {
+            format_string(&segments, token.span, state.python_expressions)
+        }
         TokenKind::Identifier(name) => name_or_apply(state, name, token.span),
         TokenKind::Reserved(id) if id == named("tkLParen") => {
             let value = expression(state, 0)?;
@@ -2396,7 +2788,25 @@ fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Ex
                 span,
             };
         } else if consume_named(state, "tkLParen") {
-            let arguments = expression_list(state)?;
+            let arguments = match slice_or_arguments(state)? {
+                Ok(arguments) => arguments,
+                Err((start, end, step)) => {
+                    state.slices = true;
+                    let span = Span {
+                        line: value.span().line,
+                        start: value.span().start,
+                        end: previous_end(state),
+                    };
+                    value = Expr::Slice {
+                        base: Box::new(value),
+                        start,
+                        end,
+                        step,
+                        span,
+                    };
+                    continue;
+                }
+            };
             let span = Span {
                 line: value.span().line,
                 start: value.span().start,
@@ -2416,6 +2826,50 @@ fn name_or_apply(state: &mut ParseState, name: String, start: Span) -> Result<Ex
             };
         } else {
             return Ok(value);
+        }
+    }
+}
+
+/// The parts of QuickrBASIC's `(start:end:step)` slice.
+type SliceParts = (Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>);
+
+/// After `(`: a parenthesized argument list, or under QuickrBASIC a slice,
+/// which has a colon where a list has a comma. Inside parentheses a colon
+/// cannot end a statement.
+fn slice_or_arguments(state: &mut ParseState) -> Result<Result<Vec<Expr>, SliceParts>, ParseResult> {
+    if !state.python_expressions {
+        return expression_list(state).map(Ok);
+    }
+    let part = |state: &mut ParseState| -> Result<Option<Box<Expr>>, ParseResult> {
+        if at_named(state, "tkColon") || at_named(state, "tkRParen") {
+            Ok(None)
+        } else {
+            expression(state, 0).map(|one| Some(Box::new(one)))
+        }
+    };
+    if consume_named(state, "tkRParen") {
+        return Ok(Ok(Vec::new()));
+    }
+    let first = part(state)?;
+    if consume_named(state, "tkColon") {
+        let end = part(state)?;
+        let step = if consume_named(state, "tkColon") { part(state)? } else { None };
+        if !consume_named(state, "tkRParen") {
+            return Err(ParseResult::BadSyntax);
+        }
+        return Ok(Err((first, end, step)));
+    }
+    let Some(first) = first else {
+        return Err(ParseResult::BadSyntax);
+    };
+    let mut values = vec![*first];
+    loop {
+        if consume_named(state, "tkComma") {
+            values.push(expression(state, 0)?);
+        } else if consume_named(state, "tkRParen") {
+            return Ok(Ok(values));
+        } else {
+            return Err(ParseResult::BadSyntax);
         }
     }
 }
@@ -2452,15 +2906,15 @@ fn unary(state: &mut ParseState) -> Option<Unary> {
 
 fn binary(state: &ParseState) -> Option<(Binary, u8, u8)> {
     let pair = match state.token().map(|token| &token.kind)? {
-        TokenKind::Comparison(op) => (*op, 60),
+        TokenKind::Comparison(op) => (*op, COMPARISON_BINDING),
         TokenKind::Reserved(id) if *id == named("tkIMP") => (Binary::Imp, 10),
         TokenKind::Reserved(id) if *id == named("tkEQV") => (Binary::Eqv, 20),
         TokenKind::Reserved(id) if *id == named("tkXOR") => (Binary::Xor, 30),
         TokenKind::Reserved(id) if *id == named("tkOR") => (Binary::Or, 40),
         TokenKind::Reserved(id) if *id == named("tkAND") => (Binary::And, 50),
-        TokenKind::Reserved(id) if *id == named("tkEQ") => (Binary::Eq, 60),
-        TokenKind::Reserved(id) if *id == named("tkLT") => (Binary::Less, 60),
-        TokenKind::Reserved(id) if *id == named("tkGT") => (Binary::Greater, 60),
+        TokenKind::Reserved(id) if *id == named("tkEQ") => (Binary::Eq, COMPARISON_BINDING),
+        TokenKind::Reserved(id) if *id == named("tkLT") => (Binary::Less, COMPARISON_BINDING),
+        TokenKind::Reserved(id) if *id == named("tkGT") => (Binary::Greater, COMPARISON_BINDING),
         TokenKind::Reserved(id) if *id == named("tkAdd") => (Binary::Add, 70),
         TokenKind::Reserved(id) if *id == named("tkMinus") => (Binary::Subtract, 70),
         TokenKind::Reserved(id) if *id == named("tkMOD") => (Binary::Modulo, 75),

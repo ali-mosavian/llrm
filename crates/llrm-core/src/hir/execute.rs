@@ -838,6 +838,22 @@ impl<'p> Machine<'p> {
                 };
                 vec![Scalar::Int(result)]
             }
+            // An array descriptor's adjusted offset is an address in the
+            // model: adding a scaled subscript moves along its object.
+            Op::Add if matches!((&args[0], &args[1]), (Scalar::Address(_), Scalar::Int(_)) | (Scalar::Int(_), Scalar::Address(_))) => {
+                let ((Scalar::Address(address), Scalar::Int(displacement)) | (Scalar::Int(displacement), Scalar::Address(address))) =
+                    (&args[0], &args[1])
+                else {
+                    unreachable!("guard matched")
+                };
+                vec![Scalar::Address(Address { offset: address.offset + *displacement as i64, ..address.clone() })]
+            }
+            // A selector joined to an offset: the offset already carries its
+            // object, and the selector is nominal.
+            Op::Concat => match &args[1] {
+                Scalar::Address(address) => vec![Scalar::Address(address.clone())],
+                _ => return fail("concat of plain words has no object to address"),
+            },
             Op::Add | Op::Fadd => vec![arithmetic(&args, i128::wrapping_add, |a, b| a + b)?],
             Op::Sub | Op::Fsub => vec![arithmetic(&args, i128::wrapping_sub, |a, b| a - b)?],
             Op::Mul | Op::Fmul => vec![arithmetic(&args, i128::wrapping_mul, |a, b| a * b)?],
@@ -1071,6 +1087,9 @@ fn span(where_: &Location<'_>, length: usize) -> Outcome<std::ops::Range<usize>>
     }
 }
 
+/// The segment a far pointer's high word reads as.
+const NOMINAL_SEGMENT: i128 = 0x1000;
+
 fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     let type_ = where_.type_;
     span(where_, type_.width as usize)?;
@@ -1090,6 +1109,11 @@ fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     }
     if let Some(address) = cells.pointers.get(&(where_.offset, type_.width)) {
         return Ok(Scalar::Address(address.clone()));
+    }
+    // A far pointer's segment word, which array code tests to see whether
+    // an array is allocated: any real segment is nonzero.
+    if type_.width == 2 && cells.pointers.contains_key(&(where_.offset - 2, 4)) {
+        return Ok(Scalar::Int(NOMINAL_SEGMENT));
     }
     let data = &cells.bytes[span(where_, type_.width as usize)?];
     match type_.kind {

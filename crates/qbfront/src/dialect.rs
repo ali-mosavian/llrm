@@ -43,6 +43,51 @@ impl Dialect {
         self == Self::Quickr
     }
 
+    /// `x += e` and the other augmented assignments.
+    pub fn augmented_assignment(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `BREAK` and `CONTINUE` act on the innermost loop.
+    pub fn loop_control(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `FOR item IN iterable`.
+    pub fn for_each(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// Every array dimension starts at 0.
+    pub fn zero_based_arrays(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `a IF c ELSE b`, `x [NOT] IN y` and chained comparisons.
+    pub fn python_expressions(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `RETURN value` in a FUNCTION.
+    pub fn return_values(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// `a, b = b, a` and FUNCTIONs `AS (t1, t2)`.
+    pub fn tuples(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// A FUNCTION `AS record`, returned through a hidden BYREF parameter.
+    pub fn record_results(self) -> bool {
+        self == Self::Quickr
+    }
+
+    /// Whole-array assignment and FUNCTIONs `AS t()`.
+    pub fn array_values(self) -> bool {
+        self == Self::Quickr
+    }
+
     /// `OPTION EXPLICIT` holds for every module.
     pub fn explicit_declarations(self) -> bool {
         self == Self::Quickr

@@ -1,6 +1,6 @@
-' QuickrBASIC's f-string support, compiled into the programs that use
-' f-strings. Every name here begins QUICKR_, which programs cannot use, and
-' each is PRIVATE, so modules that each use f-strings do not collide.
+' QuickrBASIC's f-string and slice support, compiled into the programs that
+' use either. Every name here begins QUICKR_, which programs cannot use, and
+' each is PRIVATE, so modules that each use them do not collide.
 ' The compiler parses each format spec; these only lay the value out.
 
 ' The digits of a whole, non-negative value below 2 ^ 53 in base 2 to 16.
@@ -376,4 +376,57 @@ PRIVATE FUNCTION QUICKR_TEXT$ (text AS STRING, fill AS STRING, align AS STRING, 
     cut = text
     IF precision >= 0 THEN cut = LEFT$(text, precision)
     QUICKR_TEXT$ = QUICKR_PAD$("", cut, fill, align, wide, "", 0)
+END FUNCTION
+
+' A slice bound as Python normalizes it: `fallback` when not `given`, else
+' counted from the end when negative, then held within `low` to `high`.
+PRIVATE FUNCTION QUICKR_BOUND% (BYVAL index AS INTEGER, BYVAL given AS INTEGER, BYVAL fallback AS INTEGER, BYVAL size AS INTEGER, BYVAL low AS INTEGER, BYVAL high AS INTEGER)
+    IF NOT given THEN RETURN fallback
+    IF index < 0 THEN index += size
+    RETURN low IF index < low ELSE high IF index > high ELSE index
+END FUNCTION
+
+' The positions `text(first:last:stride)` takes, as Python's
+' slice.indices gives them: the first, and how many.
+PRIVATE FUNCTION QUICKR_SPAN (text AS STRING, BYVAL first AS INTEGER, BYVAL hasFirst AS INTEGER, BYVAL last AS INTEGER, BYVAL hasLast AS INTEGER, BYVAL stride AS INTEGER) AS (INTEGER, INTEGER)
+    DIM size AS INTEGER, low AS INTEGER, high AS INTEGER
+    size = LEN(text)
+    IF stride = 0 THEN ERROR 5
+    IF stride > 0 THEN
+        low = QUICKR_BOUND%(first, hasFirst, 0, size, 0, size)
+        high = QUICKR_BOUND%(last, hasLast, size, size, 0, size)
+        IF high <= low THEN RETURN low, 0
+        RETURN low, (high - low - 1) \ stride + 1
+    END IF
+    low = QUICKR_BOUND%(first, hasFirst, size - 1, size, -1, size - 1)
+    high = QUICKR_BOUND%(last, hasLast, -1, size, -1, size - 1)
+    IF low <= high THEN RETURN low, 0
+    RETURN low, (low - high - 1) \ -stride + 1
+END FUNCTION
+
+' `text(first:last:stride)`.
+PRIVATE FUNCTION QUICKR_SLICE$ (text AS STRING, BYVAL first AS INTEGER, BYVAL hasFirst AS INTEGER, BYVAL last AS INTEGER, BYVAL hasLast AS INTEGER, BYVAL stride AS INTEGER)
+    DIM at AS INTEGER, count AS INTEGER, taken AS STRING
+    at, count = QUICKR_SPAN(text, first, hasFirst, last, hasLast, stride)
+    IF stride = 1 THEN RETURN MID$(text, at + 1, count)
+    taken = ""
+    FOR k IN RANGE(count)
+        taken += MID$(text, at + k * stride + 1, 1)
+    NEXT
+    RETURN taken
+END FUNCTION
+
+' `text` with `text(first:last:stride) = value` done: a plain slice
+' is replaced by `value` whatever its length; an extended slice needs as
+' many characters as it has, and has each replaced.
+PRIVATE FUNCTION QUICKR_SPLICE$ (text AS STRING, BYVAL first AS INTEGER, BYVAL hasFirst AS INTEGER, BYVAL last AS INTEGER, BYVAL hasLast AS INTEGER, BYVAL stride AS INTEGER, value AS STRING)
+    DIM at AS INTEGER, count AS INTEGER, spliced AS STRING
+    at, count = QUICKR_SPAN(text, first, hasFirst, last, hasLast, stride)
+    IF stride = 1 THEN RETURN LEFT$(text, at) + value + MID$(text, at + count + 1)
+    IF LEN(value) <> count THEN ERROR 5
+    spliced = text
+    FOR k IN RANGE(count)
+        MID$(spliced, at + k * stride + 1, 1) = MID$(value, k + 1, 1)
+    NEXT
+    RETURN spliced
 END FUNCTION

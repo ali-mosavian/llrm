@@ -156,6 +156,11 @@ for `UNSIGNED INTEGER` and `DOUBLE` for `UNSIGNED LONG`.
 assigned it is a warning. The program still compiles, and the variable reads
 as zero.
 
+### Arrays
+
+Every array dimension starts at 0. A bound is only the upper one: `lower TO
+upper` and `OPTION BASE 1` are errors, and `LBOUND` is the constant 0.
+
 ### Procedure frames
 
 A procedure frames itself with `push bp`, `mov bp,sp` and `sub sp`, in place
@@ -193,3 +198,90 @@ itself is BASIC, in `crates/qbfront/src/semantic/prelude.bas`, which the
 compiler adds to programs that use f-strings. Its procedures reserve names
 beginning `QUICKR_`. Numbers are formatted from their exact decimal
 expansion, so `f`, `e`, `g` and `%` match Python digit for digit.
+
+### Augmented assignment
+
+`x op= value` means `x = x op (value)` for `+ - * / \ ^ MOD AND OR XOR`.
+The target's subscripts are evaluated once, so `a(f()) += 1` calls `f` once.
+
+### BREAK and CONTINUE
+
+`BREAK` leaves the innermost `FOR`, `WHILE` or `DO` loop. `CONTINUE` starts its
+next iteration: a `FOR` steps its counter first, and a `DO … LOOP WHILE` runs
+its test. Both names are reserved.
+
+### FOR … IN
+
+`FOR x IN iterable … NEXT` runs its body once per element, with `x`
+holding a copy: assigning `x` changes neither the iterable nor the iteration.
+`AS type` declares `x`, and several loops may declare it with the same type.
+Without it, an undeclared `x` takes the type of the elements: an array's
+element type, STRING for a string, and INTEGER for `RANGE`, or LONG when a
+bound is LONG, unsigned or floating.
+
+| Iterable | Elements |
+|---|---|
+| `a()` or `a` | each element of one-dimensional array `a`, live |
+| `RANGE(stop)`, `RANGE(start, stop[, step])` | Python's `range`; `x` must be an integer |
+| any string expression | each character of a copy taken before the loop |
+| `f(…)`, a FUNCTION `AS t()` | each element of the array it returns |
+
+`RANGE` evaluates its arguments once, in order.
+
+### Conditional, IN and chained comparisons
+
+`a IF c ELSE b` evaluates `c`, then only the arm it picks. It binds loosest
+and nests to the right: `x IF p ELSE y IF q ELSE z`. Both arms are strings or
+both are numbers, which take the wider type.
+
+`x IN (v1, v2, …)` compares `x` with each value until one is equal. `x IN s`
+tests whether string `s` contains `x`, and `x IN a()` (or `x IN a`) whether an
+element of array `a` equals `x`. `NOT IN` is the negation. Each is `-1` or `0`.
+
+`a < b <= c` means `a < b AND b <= c`, with `b` evaluated once and `c` not at
+all when `a < b` is false. Any run of `=`, `<>`, `<`, `<=`, `>`, `>=` chains
+this way. A parenthesized comparison is a value again, so `(a < b) < c` keeps
+QB's meaning.
+
+### RETURN value
+
+In a FUNCTION, `RETURN value` sets the result and leaves, as
+`name = value: EXIT FUNCTION` does. A bare `RETURN` still ends a GOSUB, and
+`RETURN label` is not available in a FUNCTION.
+
+### Tuples
+
+`a, b = x, y` evaluates every value, then assigns the targets left to right,
+so `a, b = b, a` swaps. A FUNCTION `AS (t1, t2, …)` returns several values:
+`RETURN x, y` inside it, and `q, r = f(…)` at the call. It compiles as a SUB
+with a hidden BYREF parameter per result; the caller passes temporaries and
+assigns them to the targets. A tuple is only a FUNCTION's result type.
+
+### Record results
+
+A FUNCTION `AS record` returns a record. It compiles as a SUB with a hidden
+BYREF parameter the caller points at a zeroed temporary, so fields the
+FUNCTION does not set are zero. Assigning the FUNCTION's name, or a field of
+it, sets the result, and a call can stand anywhere a record can:
+`p = make(1, 2)`, `make(1, 2).x`, or an argument.
+
+### Array values
+
+Arrays are values. `a() = b()` redimensions dynamic array `a` to `b`'s
+bounds and copies each element. A FUNCTION `AS t()` returns an array: it
+compiles as a SUB with a hidden BYREF array parameter. `a() = f(…)` erases
+`a` and passes it as that parameter, so the result is built in place with no
+copy; when the arguments name `a`, the result goes to a temporary first.
+`RETURN r()` copies `r` into the result. `FOR x IN f(…)` iterates a
+returned array. Only one-dimensional arrays are copied, and the target of an
+array assignment must be dynamic: `DIM a() AS LONG`.
+
+### String slices
+
+`s(start:end:step)` is Python's slice of string `s`, counting from 0: `s(1:3)`,
+`s(:2)`, `s(-3:)`, `s(::-1)`. Each part is optional, a negative index counts
+from the end, and bounds outside the string are clamped. A slice can follow a
+call, `f$(x)(1:)`, and another slice. Assigning to a slice splices:
+`s(1:3) = "xyz"` replaces those characters whatever the new length, and an
+extended slice such as `s(::2)` takes exactly as many characters as it has.
+The slices run in the QuickrBASIC prelude.
