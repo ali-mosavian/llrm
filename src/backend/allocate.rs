@@ -18,7 +18,7 @@ use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
-use crate::backend::{coalesce, constrain, datagroup, spiller, spillplacement, splitkit, target};
+use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit, target};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -732,31 +732,71 @@ pub fn allocate(
     Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, None)?.0)
 }
 
-/// A value's range divided in allocation: the piece `fresh` holds `region`.
-#[derive(Clone, Debug)]
-pub struct Split {
-    pub value: u32,
-    pub fresh: u32,
-    pub region: splitkit::Region,
-    /// Whether the piece's references outweigh its copies. One that does
-    /// not pays only by letting the rest of the value into a register.
-    pub pays: bool,
-}
-
-/// `allocate`, splitting a value that can neither be placed nor evict around
-/// the region split placement chooses, as `RAGreedy::tryRegionSplit` does;
-/// the pieces then compete again. The splits are virtual: carve them into
-/// the body before using the assignment.
-/// `settled` are the values an earlier split made, or left behind: as
-/// LLVM's `RS_Split2` and `RS_Spill`, they are never split again.
-pub fn planned(
+/// `allocate`, splitting and spilling as it goes, as LLVM's greedy allocator
+/// does: a split is carved and a spill rewritten into the body the moment it
+/// is chosen, and the pieces and reloads join the queue. The body returned
+/// holds every value in a register; the set is what went to the stack.
+pub fn rewritten(
     body: &LirBody,
     pinned: Option<&IndexMap<u32, Register>>,
     unspillable: Option<&BTreeSet<u32>>,
-    settled: &BTreeSet<u32>,
+    protected: Option<&BTreeSet<u32>>,
     cpu: ProfileOrName<'_>,
-) -> Result<(Assignment, Vec<Split>), Error> {
-    _allocated(body, pinned, unspillable, None, None, cpu, Some(settled))
+    frame: &mut Frame,
+    splitting: bool,
+) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
+    _allocated(body, pinned, unspillable, protected, None, cpu, Some((frame, splitting)))
+}
+
+/// What the allocator knows of a body, recomputed whenever it rewrites it.
+struct Facts {
+    index: Indexes,
+    live: IndexMap<u32, Interval>,
+    masks: Masks,
+    widths: IndexMap<u32, u32>,
+    confined: Classes,
+    hints: IndexMap<u32, Vec<u32>>,
+}
+
+impl Facts {
+    fn of(body: &LirBody, profile: &Profile, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
+        let index = ranges::indexed(body);
+        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
+        for one in unspillable {
+            if let Some(interval) = live.get_mut(one) {
+                if interval.size() <= RELOAD {
+                    interval.weight = INF;
+                }
+            }
+        }
+        for one in protected {
+            if let Some(interval) = live.get_mut(one) {
+                interval.weight = INF;
+            }
+        }
+        let masks = _masks(body, &index);
+        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected), hints: _copy_hints(body) }
+    }
+}
+
+/// The values whose register a rewrite made them share with another, lose
+/// to a point that destroys it, or leave their class: the later of each pair.
+fn _overlapping(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    for held in union.values() {
+        let mut kept: Vec<u32> = Vec::new();
+        for value in held {
+            let Some(mine) = facts.live.get(value) else { continue };
+            let width = facts.widths.get(value).copied().unwrap_or(4);
+            let outside = facts.confined.get(value).is_some_and(|class| !class.iter().any(|one| _whole(*one) == _whole(r#where[value])));
+            if outside || kept.iter().any(|other| facts.live[other].overlaps(mine)) || _clobbered(mine, r#where[value], &facts.masks, width) {
+                out.insert(*value);
+            } else {
+                kept.push(*value);
+            }
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -767,40 +807,23 @@ fn _allocated(
     protected: Option<&BTreeSet<u32>>,
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
-    splitting: Option<&BTreeSet<u32>>,
-) -> Result<(Assignment, Vec<Split>), Error> {
+    rewrite: Option<(&mut Frame, bool)>,
+) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
+    let splitting = rewrite.as_ref().is_some_and(|(_, splitting)| *splitting);
+    let mut rewrite: Option<&mut Frame> = rewrite.map(|(frame, _)| frame);
     let profile = targets::profile(cpu).map_err(Error::Value)?;
-    let index = ranges::indexed(body);
-    let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
-    let masks = _masks(body, &index);
-    let data_free = !datagroup::names_data_segment(body);
-    let mut widths = _widest(body);
-    let mut splits: Vec<Split> = Vec::new();
-    let mut pieces: BTreeSet<u32> = splitting.cloned().unwrap_or_default();
-    let mut fresh = splitkit::_next_value(body);
-    let mut placing: Option<(spillplacement::Bundles, (Live, Live))> = None;
-    for one in unspillable.into_iter().flatten() {
-        if let Some(interval) = live.get_mut(one) {
-            if interval.size() <= RELOAD {
-                interval.weight = INF;
-            }
-        }
-    }
+    let mut body = body.clone();
+    let data_free = !datagroup::names_data_segment(&body);
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
-    for one in protected {
-        if let Some(interval) = live.get_mut(one) {
-            interval.weight = INF;
-        }
-    }
-    let mut confined = classes(body, protected);
-    let fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
-    let hints = _copy_hints(body);
-    let wanted = _wanted(&hints, &fixed);
-    let mut claims: IndexMap<Register, Vec<u32>> = IndexMap::default();
-    for (one, register) in &wanted {
-        claims.entry(*register).or_default().push(*one);
-    }
+    let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    let mut facts = Facts::of(&body, profile, &unspillable, protected);
+    // Every value this allocation has known: a new one is numbered above them.
+    let mut floor = splitkit::_next_value(&body);
+    let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
+    // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
+    let mut pieces: BTreeSet<u32> = BTreeSet::new();
+    let mut placing: Option<(spillplacement::Bundles, (Live, Live))> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -812,7 +835,7 @@ fn _allocated(
     let mut cascades: IndexMap<u32, i64> = IndexMap::default();
     let mut newest = 1;
 
-    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>| {
+    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>, fixed: &IndexMap<u32, Register>| {
         Reverse(Queued(
             !fixed.contains_key(&value),
             -_priority(live.get(&value), stage.get(&value).copied().unwrap_or(Stage::Assign)),
@@ -820,27 +843,35 @@ fn _allocated(
         ))
     };
 
-    let mut queue: BinaryHeap<Reverse<Queued>> = _values(body).into_iter().map(|one| queued(one, &live, &stage)).collect();
+    let mut queue: BinaryHeap<Reverse<Queued>> =
+        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed)).collect();
+    // How many entries each value has in the queue.
+    let mut waiting: IndexMap<u32, usize> = IndexMap::default();
+    for Reverse(Queued(_, _, one)) in &queue {
+        *waiting.entry(*one).or_insert(0) += 1;
+    }
+    let mut wanted = _wanted(&facts.hints, &fixed);
+    let mut fenced: BTreeSet<u32> = fixed.keys().copied().chain(protected.iter().copied()).collect();
     let mut seen = 0;
-    let fenced: BTreeSet<u32> = fixed.keys().copied().chain(protected.iter().copied()).collect();
     while !queue.is_empty() && seen < BUDGET {
         seen += 1;
         let Reverse(Queued(_flexible, _prio, value)) = queue.pop().expect("queue is not empty");
+        *waiting.entry(value).or_insert(1) -= 1;
         if r#where.contains_key(&value) || spilled.contains(&value) {
             continue;
         }
         let at = *stage.entry(value).or_insert(Stage::Assign);
-        let Some(mine) = live.get(&value).cloned() else {
+        let Some(mine) = facts.live.get(&value).cloned() else {
             continue;
         };
         let mut order: Vec<Register> = match fixed.get(&value) {
-            None => target::order(confined.get(&value)),
+            None => target::order(facts.confined.get(&value)),
             Some(register) => vec![*register],
         };
         if !data_free {
             order.retain(|one| _whole(*one) != *target::DATA_SEGMENT);
         }
-        if protected.contains(&value) && _reserves_word_base(body, value, &confined) {
+        if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined) {
             let word: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
             order = order
                 .iter()
@@ -851,7 +882,7 @@ fn _allocated(
         }
         if !fixed.contains_key(&value) {
             let mut votes: IndexMap<Register, i64> = IndexMap::default();
-            for other in hints.get(&value).into_iter().flatten() {
+            for other in facts.hints.get(&value).into_iter().flatten() {
                 if let Some(register) = fixed.get(other).or_else(|| r#where.get(other)) {
                     *votes.entry(_whole(*register)).or_insert(0) += 1;
                 }
@@ -861,16 +892,12 @@ fn _allocated(
                     *votes.entry(*register).or_insert(0) += 1;
                 }
             }
-            let claimed: BTreeSet<Register> = claims
+            let claimed: BTreeSet<Register> = wanted
                 .iter()
-                .filter(|(_, others)| {
-                    others.iter().any(|other| {
-                        *other != value
-                            && !r#where.contains_key(other)
-                            && live.get(other).is_some_and(|theirs| theirs.overlaps(&mine))
-                    })
+                .filter(|(other, _)| {
+                    **other != value && !r#where.contains_key(*other) && facts.live.get(*other).is_some_and(|theirs| theirs.overlaps(&mine))
                 })
-                .map(|(register, _)| *register)
+                .map(|(_, register)| *register)
                 .collect();
             order.sort_by_key(|register| {
                 (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
@@ -889,8 +916,8 @@ fn _allocated(
         // The data segment register only once the selectors run out: holding
         // a value there costs a restore and a prefix on every data access.
         order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
-        let width = widths.get(&value).copied().unwrap_or(4);
-        if let Some(got) = _free(&mine, &order, &union, &live, &masks, width) {
+        let width = facts.widths.get(&value).copied().unwrap_or(4);
+        if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
             r#where.insert(value, got);
             union.entry(_whole(got)).or_default().push(value);
             stage.insert(value, Stage::Done);
@@ -902,20 +929,20 @@ fn _allocated(
                 if fixed.contains_key(&other) {
                     return false;
                 }
-                let elsewhere: Vec<Register> = target::order(confined.get(&other))
+                let elsewhere: Vec<Register> = target::order(facts.confined.get(&other))
                     .into_iter()
                     .filter(|one| _whole(*one) != _whole(register))
                     .filter(|one| data_free || _whole(*one) != *target::DATA_SEGMENT)
                     .collect();
-                _free(&live[&other], &elsewhere, &union, &live, &masks, widths.get(&other).copied().unwrap_or(4))
+                _free(&facts.live[&other], &elsewhere, &union, &facts.live, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4))
                     .is_some()
             };
             let evicted = _evict(
                 &mine,
                 &order,
                 &union,
-                &live,
-                &masks,
+                &facts.live,
+                &facts.masks,
                 &movable,
                 &fenced,
                 width,
@@ -934,7 +961,8 @@ fn _allocated(
                     r#where.shift_remove(&one);
                     cascades.insert(one, cascades[&value]);
                     stage.insert(one, Stage::Assign);
-                    queue.push(queued(one, &live, &stage));
+                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
                 union.entry(_whole(got)).or_default().push(value);
@@ -942,100 +970,81 @@ fn _allocated(
                 continue;
             }
             stage.insert(value, Stage::Split);
-            queue.push(queued(value, &live, &stage));
+            queue.push(queued(value, &facts.live, &stage, &fixed));
+            *waiting.entry(value).or_insert(0) += 1;
             continue;
         }
 
         let bound = fixed.contains_key(&value) || mine.weight == INF;
-        if splitting.is_some() && at == Stage::Split && !pieces.contains(&value) && !bound {
-            let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(body), self::live(body)));
+        // `trySplit`, carved at once: the pieces and the rest compete again.
+        let mut rewritten: Option<Vec<u32>> = None;
+        if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
+            let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
             let occupied = splitkit::Occupied {
                 segments: union
                     .iter()
                     .map(|(register, held)| {
-                        (*register, held.iter().filter(|other| **other != value).flat_map(|other| live[other].segments.clone()).collect())
+                        (*register, held.iter().filter(|other| **other != value).flat_map(|other| facts.live[other].segments.clone()).collect())
                     })
                     .collect(),
-                masks: &masks,
+                masks: &facts.masks,
             };
             let sets = (&live_sets.0, &live_sets.1);
-            // `trySplit`: a range in one block splits locally; any other by
-            // region, and failing that block by block.
-            let region: Vec<splitkit::Region> = match splitkit::local(body, value, &index, sets, &order, &occupied, width) {
+            // A range in one block splits locally; any other by region, and
+            // failing that block by block. Only a piece that pays is carved.
+            let regions: Vec<splitkit::Region> = match splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width) {
                 Some(found) => vec![found],
                 None => {
-                    let placed = splitkit::placed(body, value, &index, sets, bundles, &order, &occupied, width);
-                    if placed.is_empty() { splitkit::per_block(body, value, sets) } else { placed }
+                    let placed = splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width);
+                    if placed.is_empty() { splitkit::per_block(&body, value, sets) } else { placed }
                 }
             };
-            let mut rest = mine.clone();
-            let mut divided = false;
-            // Each piece's class, and the rest's, from the references it
-            // keeps: LLVM's `recomputeRegClass`. The rest of a value only an
-            // address confined may take any register.
-            let mut scratch = body.clone();
+            let regions: Vec<splitkit::Region> = regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect();
+            for region in &regions {
+                crate::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
+            }
+            let mut cut = body.clone();
             let mut moves: Vec<splitkit::Moved> = Vec::new();
             let mut made: Vec<u32> = Vec::new();
-            for region in region {
-                let (piece, remaining) = splitkit::divided(body, &index, &rest, &region, fresh);
-                if piece.segments.is_empty() || remaining.segments.is_empty() {
-                    continue;
-                }
-                let moved = moves.iter().fold(region.clone(), |region, moved| region.moved(moved));
-                let Some((cut, shifted)) = splitkit::carved_moving(&scratch, value, fresh, width, &moved) else {
-                    continue;
-                };
-                scratch = cut;
-                moves.push(shifted);
-                rest = remaining;
-                live.insert(fresh, piece);
-                widths.insert(fresh, width);
-                stage.insert(fresh, Stage::Assign);
-                pieces.insert(fresh);
-                let pays = splitkit::pays(body, value, &region, sets);
-                splits.push(Split { value, fresh, region, pays });
-                made.push(fresh);
-                fresh += 1;
-                divided = true;
-            }
-            if divided {
-                let recomputed = classes(&scratch, protected);
-                for one in made.iter().copied().chain([value]) {
-                    match recomputed.get(&one) {
-                        Some(class) => confined.insert(one, class.clone()),
-                        None => confined.shift_remove(&one),
-                    };
-                }
-                for one in made {
-                    queue.push(queued(one, &live, &stage));
+            for region in regions {
+                let fresh = splitkit::_next_value(&cut).max(floor);
+                floor = fresh + 1;
+                let moved = moves.iter().fold(region, |region, moved| region.moved(moved));
+                if let Some((next, shifted)) = splitkit::carved_moving(&cut, value, fresh, width, &moved) {
+                    cut = next;
+                    moves.push(shifted);
+                    made.push(fresh);
                 }
             }
-            if divided {
-                // The rest may only take a free register or spill; the pieces compete again.
-                live.insert(value, rest);
+            if !made.is_empty() {
+                body = cut;
+                pieces.extend(made.iter().copied().chain([value]));
+                for one in &made {
+                    stage.insert(*one, Stage::Assign);
+                }
+                // The rest may only take a free register or spill.
                 stage.insert(value, Stage::Spill);
-                pieces.insert(value);
-                queue.push(queued(value, &live, &stage));
-                continue;
+                made.push(value);
+                rewritten = Some(made);
             }
         }
-        {
+        if rewritten.is_none() {
             // Last chance: move what holds a register rather than spill.
             let choices = |other: u32| -> Vec<Register> {
                 let mut order = match fixed.get(&other) {
-                    None => target::order(confined.get(&other)),
+                    None => target::order(facts.confined.get(&other)),
                     Some(register) => vec![*register],
                 };
                 order.retain(|one| data_free || _whole(*one) != *target::DATA_SEGMENT);
                 order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
                 order
             };
-            let wide = |other: u32| widths.get(&other).copied().unwrap_or(4);
+            let wide = |other: u32| facts.widths.get(&other).copied().unwrap_or(4);
             let mut coloring = Coloring {
                 union: &mut union,
                 r#where: &mut r#where,
-                live: &live,
-                masks: &masks,
+                live: &facts.live,
+                masks: &facts.masks,
                 order: &choices,
                 width: &wide,
                 fenced: &fenced,
@@ -1046,19 +1055,83 @@ fn _allocated(
                 stage.insert(value, Stage::Done);
                 continue;
             }
+            if let Some(register) = fixed.get(&value) {
+                return Err(Unplaced(format!("value#{value} cannot be placed in fixed {}", register.repr())).into());
+            }
+            if mine.weight == INF {
+                return Err(Unplaced(format!("value#{value} cannot be spilled and no register is free for it")).into());
+            }
+            cost += mine.weight;
+            stage.insert(value, Stage::Done);
+            match rewrite.as_deref_mut() {
+                None => {
+                    spilled.insert(value);
+                    continue;
+                }
+                // InlineSpiller: the value and the siblings worth sharing its
+                // slot go to the stack now; their reloads join the queue.
+                Some(frame) => {
+                    // A sibling may already hold a register: it gives it up,
+                    // since sharing the slot makes the copies between them free.
+                    let mut chosen = BTreeSet::from([value]);
+                    let settled: BTreeSet<u32> = fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
+                    chosen.extend(spiller::siblings(&body, &chosen, Some(frame), &settled)?);
+                    crate::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
+                    for one in &chosen {
+                        if let Some(register) = r#where.shift_remove(one) {
+                            union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
+                        }
+                    }
+                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor)?;
+                    body = spilt;
+                    // A value the spiller keeps (a load from its own home
+                    // cell) is now as short as a reload, and is placed as one.
+                    let kept: BTreeSet<u32> = _values(&body).into_iter().filter(|one| chosen.contains(one)).collect();
+                    for one in &chosen {
+                        if kept.contains(one) {
+                            stage.insert(*one, Stage::Assign);
+                        } else {
+                            spilled.insert(*one);
+                            stage.insert(*one, Stage::Done);
+                        }
+                    }
+                    made.extend(kept);
+                    unspillable.extend(made.iter().copied());
+                    rewritten = Some(made.into_iter().collect());
+                }
+            }
         }
-        if let Some(register) = fixed.get(&value) {
-            return Err(Unplaced(format!("value#{value} cannot be placed in fixed {}", register.repr())).into());
+        // The body changed: every fact about it is recomputed, and whatever
+        // the change left sharing a register competes again.
+        let Some(made) = rewritten else { continue };
+        floor = floor.max(splitkit::_next_value(&body));
+        facts = Facts::of(&body, profile, &unspillable, protected);
+        placing = None;
+        for (one, register) in constrain::required(&body)? {
+            fixed.entry(one).or_insert(register);
         }
-        if mine.weight == INF {
-            return Err(Unplaced(format!("value#{value} cannot be spilled and no register is free for it")).into());
+        wanted = _wanted(&facts.hints, &fixed);
+        fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
+        let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
+        let clashing = _overlapping(&union, &r#where, &facts);
+        for one in gone.iter().chain(&clashing) {
+            if let Some(register) = r#where.shift_remove(one) {
+                union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
+            }
         }
-        spilled.insert(value);
-        cost += mine.weight;
-        stage.insert(value, Stage::Done);
+        // What the rewrite made or moved competes again; the rest still waits.
+        let changed: BTreeSet<u32> = made.iter().chain(&gone).chain(&clashing).copied().collect();
+        for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
+            if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
+                queue.push(queued(one, &facts.live, &stage, &fixed));
+                *waiting.entry(one).or_insert(0) += 1;
+            }
+        }
     }
-
-    Ok((Assignment { r#where, spilled, cost, optimal: false, why: "greedy with eviction".to_owned() }, splits))
+    if seen >= BUDGET {
+        crate::debug!("regalloc", "{}: out of budget with {} queued", body.name, queue.len());
+    }
+    Ok((Assignment { r#where, spilled: if rewrite.is_some() { BTreeSet::new() } else { spilled.clone() }, cost, optimal: false, why: "greedy with eviction".to_owned() }, body, spilled))
 }
 
 /// Allocate one evaluated retention plan, or discard that plan.
@@ -1395,75 +1468,12 @@ pub struct RegAlloc {
 impl RegAlloc {
     pub const NAME: &'static str = "regalloc";
 
-    /// How many times a body may be spilled and re-allocated.
-    pub const ROUNDS: usize = 12;
-
-    /// How many times region splitting may carve and plan again in one round.
-    pub const SPLIT_PASSES: usize = 6;
-
     pub fn new(
         pinned: Option<&IndexMap<u32, Register>>,
         frame: Option<Rc<RefCell<Frame>>>,
         cpu: ProfileOrName<'_>,
     ) -> Result<Self, String> {
         Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone() })
-    }
-
-    /// Allocate with region splits, carve them, and allocate the carved body
-    /// preferring the planned registers: kept when the traffic it spills and
-    /// the copies it adds, both weighted by loop depth, are below `got`'s.
-    fn _region_split(&self, body: &LirBody, reloads: &BTreeSet<u32>, got: &Assignment, settled: &mut BTreeSet<u32>) -> Result<Option<(LirBody, Assignment)>, Error> {
-        let mut cut = body.clone();
-        let mut plan = None;
-        let before = settled.clone();
-        // Each carve lets the pieces evict; what they evict splits in the next pass.
-        for _ in 0..Self::SPLIT_PASSES {
-            let (found, splits) = match planned(&cut, Some(&self.pinned), Some(reloads), settled, (&self.cpu).into()) {
-                Ok(found) => found,
-                Err(Error::Unplaced(_)) => break,
-                Err(other) => return Err(other),
-            };
-            let widths = _widest(&cut);
-            let mut next = cut.clone();
-            // A piece that found no register would only add copies between two spills.
-            // Each carve moves the positions the later regions were planned at.
-            let mut moves: Vec<splitkit::Moved> = Vec::new();
-            let kept = |split: &&Split| {
-                found.r#where.contains_key(&split.fresh) && (split.pays || found.r#where.contains_key(&split.value))
-            };
-            for split in splits.iter().filter(kept) {
-                let region = moves.iter().fold(split.region.clone(), |region, moved| region.moved(moved));
-                if let Some((carved, moved)) = splitkit::carved_moving(&next, split.value, split.fresh, widths.get(&split.value).copied().unwrap_or(4), &region) {
-                    next = carved;
-                    moves.push(moved);
-                    settled.extend([split.value, split.fresh]);
-                }
-            }
-            plan = Some(found);
-            if next == cut {
-                break;
-            }
-            cut = next;
-        }
-        let Some(plan) = plan.filter(|_| cut != *body) else {
-            *settled = before;
-            return Ok(None);
-        };
-        let after = match allocate(&cut, Some(&self.pinned), Some(reloads), None, Some(&plan.r#where), (&self.cpu).into()) {
-            Ok(after) => after,
-            Err(Error::Unplaced(_)) => {
-                *settled = before;
-                return Ok(None);
-            }
-            Err(other) => return Err(other),
-        };
-        let (was, now) = (_traffic(body, &got.spilled), _traffic(&cut, &after.spilled) + _added(body, &cut));
-        crate::debug!("regalloc", "  region split: traffic {was} -> {now} (spilled {} added {})", _traffic(&cut, &after.spilled), _added(body, &cut));
-        if now >= was {
-            *settled = before;
-            return Ok(None);
-        }
-        Ok(Some((cut, after)))
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -1522,210 +1532,105 @@ impl RegAlloc {
         }
         let mut prefer = self.pinned.clone();
         prefer.extend(fixed.iter().map(|(value, register)| (*value, *register)));
-        let mut reloads: BTreeSet<u32> = fixed.keys().copied().collect();
-        let mut retained: BTreeSet<u32> = BTreeSet::new();
-
-        // Values a region split made or left behind, never split again: LLVM's stages.
-        let mut settled: BTreeSet<u32> = BTreeSet::new();
-        for round in 0..Self::ROUNDS {
-            let abandoned: BTreeSet<usize> = body
-                .blocks
-                .iter()
-                .flat_map(|block| &block.insns)
-                .filter(|one| _unread_move(one))
-                .map(ranges::key)
-                .collect();
-            body = spiller::_remove_abandoned(&body, &abandoned);
-            self.pinned = prefer.clone();
-            self.pinned.extend(constrain::required(&body)?);
-            let (answer, now) = _assigned_plan(&body, &self.pinned, &reloads, &retained, &cpu)?;
-            let mut got = answer;
-            retained = now;
-            crate::debug!(
-                "regalloc",
-                "{}: round {}: {} insns, {} spilled",
-                body.name,
-                round + 1,
-                body.blocks.iter().map(|block| block.insns.len()).sum::<usize>(),
-                got.spilled.len()
-            );
-            let pinned = self.pinned.clone();
-            let trial_of = |candidate: &LirBody,
-                            unspillable: &BTreeSet<u32>,
-                            protected: &BTreeSet<u32>|
-             -> Result<Option<Assignment>, Error> {
-                match allocate(candidate, Some(&pinned), Some(unspillable), Some(protected), None, (&cpu).into()) {
-                    Ok(trial) => {
-                        crate::debug!("regalloc", "  trial allocation: {} spilled", trial.spilled.len());
-                        Ok(Some(trial))
-                    }
-                    Err(Error::Unplaced(_)) => Ok(None),
-                    Err(other) => Err(other),
-                }
-            };
-            if retained.is_empty() && !got.spilled.is_empty() {
-                if let Some((cut, after)) = self._region_split(&body, &reloads, &got, &mut settled)? {
-                    body = cut;
-                    got = after;
-                }
-            }
-            if !got.spilled.is_empty() {
-                let (separated, opened) = constrain::addressed(&body, &got.spilled);
-                if !opened.is_empty() {
-                    let trial = trial_of(&separated, &reloads, &retained)?;
-                    if let Some(trial) = trial {
-                        if opened.is_disjoint(&trial.spilled)
-                            && _traffic(&separated, &trial.spilled) < _traffic(&body, &got.spilled)
-                        {
-                            body = separated;
-                            got = trial;
-                        }
-                    }
-                }
-            }
-            if !got.spilled.is_empty() {
-                let (unfolded, opened) = spiller::unfolded_indexes(&body, &got.spilled);
-                if !opened.is_empty() {
-                    let trial = trial_of(&unfolded, &reloads, &retained)?;
-                    if let Some(trial) = trial {
-                        if _traffic(&unfolded, &trial.spilled) < _traffic(&body, &got.spilled) {
-                            body = unfolded;
-                            got = trial;
-                        }
-                    }
-                }
-            }
-            if retained.is_empty() && !got.spilled.is_empty() {
-                let (scoped, keep) = splitkit::loop_bases(&body, &got.spilled);
-                if !keep.is_empty() {
-                    let folded = _scoped_foldable_indexes(&scoped, &keep);
-                    let (mut opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
-                    if !opened.is_empty() {
-                        let mut opened_reloads = reloads.clone();
-                        let before = self.frame.as_ref().map(|frame| frame.borrow().saved());
-                        let mut trial = trial_of(&opened_body, &reloads, &keep)?;
-                        if let Some(found) = &trial {
-                            let rematerializable = spiller::rematerializable(&opened_body, &found.spilled);
-                            if !rematerializable.is_empty() {
-                                let (remade, made) =
-                                    spiller::spilled(&opened_body, &rematerializable, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
-                                if remade != opened_body {
-                                    opened_body = remade;
-                                    opened_reloads.extend(made);
-                                    trial = trial_of(&opened_body, &opened_reloads, &keep)?;
-                                }
-                            }
-                        }
-                        if let Some(trial) = trial.filter(|trial| {
-                            keep.is_disjoint(&trial.spilled)
-                                && _traffic(&opened_body, &trial.spilled) + _added(&scoped, &opened_body)
-                                    < _traffic(&body, &got.spilled)
-                        }) {
-                            body = opened_body;
-                            retained = keep.clone();
-                            got = trial;
-                            reloads = opened_reloads;
-                        } else if let (Some(frame), Some(before)) = (&self.frame, &before) {
-                            frame.borrow_mut().restore(before);
-                        }
-                    }
-                    if retained.is_empty() {
-                        // If the unfolded indexes still do not fit, commit
-                        // them to slots and consume those slots directly in
-                        // the identical dying-base adds.
-                        let before = self.frame.as_ref().map(|frame| frame.borrow().saved());
-                        let (prepared, made) = if folded.is_empty() {
-                            (scoped.clone(), BTreeSet::new())
-                        } else {
-                            spiller::spilled(&scoped, &folded, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?
-                        };
-                        let with: BTreeSet<u32> = reloads.union(&made).copied().collect();
-                        let trial = trial_of(&prepared, &with, &keep)?;
-                        // The candidate may spill ordinary cold values into
-                        // normal slots. Admit it only when the whole
-                        // pre-folded trial lowers weighted traffic --
-                        // including its own folded slots, whose values
-                        // `prepared` no longer names.
-                        let slot_traffic = match &self.frame {
-                            Some(frame) => _slot_traffic(&prepared, &frame.borrow(), &folded),
-                            None => 0.0,
-                        };
-                        if let Some(trial) = trial.filter(|trial| {
-                            keep.is_disjoint(&trial.spilled)
-                                && _traffic(&prepared, &trial.spilled) + slot_traffic < _traffic(&body, &got.spilled)
-                        }) {
-                            body = prepared;
-                            retained = keep.clone();
-                            got = trial;
-                            reloads = with;
-                        } else if let (Some(frame), Some(before)) = (&self.frame, &before) {
-                            frame.borrow_mut().restore(before);
-                        }
-                    }
-                }
-                if retained.is_empty() {
-                    let candidates = _retainable_bases(&body, &got.spilled);
-                    let mut ordered: Vec<(f64, u32)> = candidates
-                        .iter()
-                        .map(|value| (-_traffic(&body, &BTreeSet::from([*value])), *value))
-                        .collect();
-                    ordered.sort_by(|one, other| {
-                        one.0.partial_cmp(&other.0).expect("traffic is never NaN").then(one.1.cmp(&other.1))
-                    });
-                    for (_traffic_key, candidate) in ordered {
-                        let mut keep = retained.clone();
-                        keep.insert(candidate);
-                        let Some(trial) = trial_of(&body, &reloads, &keep)? else {
-                            continue;
-                        };
-                        let mut recoverable = spiller::rematerializable(&body, &trial.spilled);
-                        recoverable.extend(spiller::foldable_indexes(&body, &trial.spilled));
-                        if keep.is_disjoint(&trial.spilled)
-                            && trial.spilled.is_subset(&recoverable)
-                            && _traffic(&body, &trial.spilled) < _traffic(&body, &got.spilled)
-                        {
-                            retained = keep;
-                            got = trial;
-                        }
-                    }
-                }
-            }
-            if got.spilled.is_empty() {
-                return applied(&body, &got).map(|placed| datagroup::restored(&placed, data_free));
-            }
-            if !retained.is_empty() {
-                let (spilt, made) = spiller::spilled(&body, &got.spilled, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
-                body = spilt;
-                reloads.extend(made);
-                continue;
-            }
-            let rematerializable = spiller::rematerializable(&body, &got.spilled);
-            if !rematerializable.is_empty() {
-                let (remade, made) = spiller::spilled(&body, &rematerializable, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
-                if remade != body {
-                    body = remade;
-                    reloads.extend(made);
-                    continue;
-                }
-            }
-            let fixed: BTreeSet<u32> = self
-                .pinned
-                .keys()
-                .copied()
-                .chain(reloads.iter().copied())
-                .chain(retained.iter().copied())
-                .collect();
-            let mut chosen = got.spilled.clone();
-            chosen.extend(spiller::siblings(&body, &got.spilled, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut(), &fixed)?);
-            let (spilt, made) = spiller::spilled(&body, &chosen, self.frame.as_ref().map(|one| one.borrow_mut()).as_deref_mut())?;
-            body = spilt;
-            reloads.extend(made);
-        }
+        let reloads: BTreeSet<u32> = fixed.keys().copied().collect();
+        let abandoned: BTreeSet<usize> =
+            body.blocks.iter().flat_map(|block| &block.insns).filter(|one| _unread_move(one)).map(ranges::key).collect();
+        body = spiller::_remove_abandoned(&body, &abandoned);
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body)?);
-        let (answer, _retained) = _assigned_plan(&body, &self.pinned, &reloads, &retained, &cpu)?;
-        applied(&body, &answer).map(|placed| datagroup::restored(&placed, data_free))
+        let frame = Rc::clone(self.frame.as_ref().expect("made above"));
+        let start = frame.borrow().saved();
+        // One allocation per candidate body, each splitting and spilling as
+        // it goes; the one whose output costs least is kept.
+        let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+            let mut pins = prefer.clone();
+            pins.extend(constrain::required(candidate)?);
+            let (got, out, spilled) =
+                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &mut frame.borrow_mut(), splitting)?;
+            Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved() })
+        };
+        let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
+        crate::debug!("regalloc", "{}: {} insns, {} spilled, cost {}", body.name, best.out.insns().len(), best.spilled.len(), best.cost);
+        let spilled = best.spilled.clone();
+        if !spilled.is_empty() {
+            // Other shapes of the same body, which the base allocation's spills
+            // suggest: each is kept only if its output is cheaper.
+            let mut candidates: Vec<(LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+            let (separated, opened) = constrain::addressed(&body, &spilled);
+            if !opened.is_empty() {
+                candidates.push((separated, reloads.clone(), BTreeSet::new(), opened));
+            }
+            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
+            if !opened.is_empty() {
+                candidates.push((unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            }
+            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
+            if !keep.is_empty() {
+                let folded = _scoped_foldable_indexes(&scoped, &keep);
+                let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
+                if !opened.is_empty() {
+                    candidates.push((opened_body, reloads.clone(), keep.clone(), keep.clone()));
+                }
+                candidates.push((scoped, reloads.clone(), keep.clone(), keep.clone()));
+            }
+            for candidate in _retainable_bases(&body, &spilled) {
+                let keep = BTreeSet::from([candidate]);
+                candidates.push((body.clone(), reloads.clone(), keep.clone(), keep));
+            }
+            // Splitting is priced one value at a time, against registers its
+            // pieces may later lose; the whole output without it is the check.
+            let whole = candidates.len();
+            candidates.push((body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            for (at, (candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
+                for splitting in [true, false] {
+                    // The base run was this body with splitting.
+                    if at == whole && splitting {
+                        continue;
+                    }
+                    frame.borrow_mut().restore(&start);
+                    let trial = match run(&candidate, &unspillable, &protected, splitting) {
+                        Ok(trial) => trial,
+                        Err(Error::Unplaced(_)) => continue,
+                        Err(other) => return Err(other),
+                    };
+                    crate::debug!("regalloc", "  trial: {} spilled, cost {}", trial.spilled.len(), trial.cost);
+                    if kept.is_disjoint(&trial.spilled) && trial.cost < best.cost {
+                        best = trial;
+                    }
+                }
+            }
+        }
+        frame.borrow_mut().restore(&best.slots);
+        applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free))
     }
+}
+
+/// One finished allocation: its output, what that costs, and the frame it left.
+struct Outcome {
+    cost: f64,
+    got: Assignment,
+    out: LirBody,
+    spilled: BTreeSet<u32>,
+    slots: (IndexMap<frames::SlotKey, i64>, IndexMap<i64, i64>),
+}
+
+/// What a body costs to run: its instructions and memory operands, each
+/// weighted by its loop depth. Alternatives differ only in what the
+/// allocator added, so this is the cost of that.
+fn _emitted(body: &LirBody) -> f64 {
+    let deep = ranges::depths(body);
+    body.blocks
+        .iter()
+        .map(|block| {
+            let memory: usize = block
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
+                .sum();
+            ranges::level(deep.get(&block.at).copied().unwrap_or(0)) * (block.insns.len() + memory) as f64
+        })
+        .sum()
 }
 
 impl LIRTransform for RegAlloc {
@@ -1791,13 +1696,12 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
                 .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
         );
     }
-    let near = coalesce::_interference(body);
     let deep = ranges::depths(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
             || impure.contains(&out_of)
-            || near.get(&into).is_some_and(|found| found.contains(&out_of))
+            || live.get(&into).zip(live.get(&out_of)).is_some_and(|(one, other)| one.overlaps(other))
         {
             continue;
         }
@@ -2743,6 +2647,19 @@ mod tests {
         assert_eq!(placed.get(&3), Some(&Register::AX));
         assert_eq!(placed.get(&1), Some(&Register::BX));
         assert_eq!(placed.get(&2), Some(&Register::CX));
+    }
+
+    /// A rewrite can leave a value's class narrower than the register it
+    /// holds: kept, a pointer in AX reached the encoder as `mov [di+si]`.
+    #[test]
+    fn test_an_assignment_outside_its_rewritten_class_is_evicted() {
+        let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+        let body = _one_block(vec![_mov(1, 5, 0), _load(4, 2, cell, vec![1])]);
+        let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
+        let facts = Facts::of(&body, profile, &BTreeSet::new(), &BTreeSet::new());
+        let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
+        let placed = IndexMap::from_iter([(1, Register::AX)]);
+        assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
     }
 
     /// A failed recoloring must leave every holder where it was.

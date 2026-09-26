@@ -89,6 +89,17 @@ pub fn spilled(
     values: &BTreeSet<u32>,
     frame: Option<&mut Frame>,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    spilled_from(body, values, frame, 0)
+}
+
+/// `spilled`, numbering the values it makes from `floor` at least: an
+/// allocation in progress still knows values the body no longer names.
+pub fn spilled_from(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+    frame: Option<&mut Frame>,
+    floor: u32,
+) -> Result<(LirBody, BTreeSet<u32>), Error> {
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
     }
@@ -100,7 +111,7 @@ pub fn spilled(
             &mut owned
         }
     };
-    let mut fresh = _next_value(body);
+    let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let constants = _constants(body, values);
     let addresses = _addresses(body, values);
@@ -124,6 +135,7 @@ pub fn spilled(
         .collect();
     // Before any cell names a slot.
     _color_slots(body, &stored, &_widest(body, &stored), frame)?;
+    let narrow = _literals(body, &stored, true);
     let (body, next, short) = _short_update_runs(body, &stored, frame, fresh)?;
     fresh = next;
     made.extend(short);
@@ -175,7 +187,8 @@ pub fn spilled(
             }
             let mut remade: IndexMap<u32, u32> = IndexMap::default();
             for value in one.uses.clone() {
-                if (!constants.contains_key(&value)
+                let constant = constants.get(&value).or(narrow.get(&value).filter(|imm| _width(&one, value) <= imm.width));
+                if (constant.is_none()
                     && !addresses.contains_key(&value)
                     && !extensions.contains_key(&value)
                     && !frame_loads.contains_key(&value)
@@ -186,7 +199,7 @@ pub fn spilled(
                     continue;
                 }
                 remade.insert(value, fresh);
-                let inserted = if let Some(constant) = constants.get(&value) {
+                let inserted = if let Some(constant) = constant {
                     _inserted(
                         &one,
                         _mov(Loc::Held(Held { value: fresh, width: constant.width }), Loc::Imm(constant.clone())),
@@ -531,8 +544,7 @@ fn _color_slots(
     widths: &IndexMap<u32, u32>,
     frame: &mut Frame,
 ) -> Result<(), Error> {
-    let live = ranges::intervals(body, None);
-    let mut colors = _existing_colors(body, frame);
+    let (mut colors, live) = _existing_colors(body, frame);
     let by_home: IndexMap<i64, usize> = colors.iter().enumerate().map(|(at, (home, _, _))| (*home, at)).collect();
     // `siblings()` may reserve one home for a copy web before this batch.
     for value in values {
@@ -550,6 +562,7 @@ fn _color_slots(
     let mut pending: Vec<u32> =
         values.iter().copied().filter(|value| !frame.slots.contains_key(&SlotKey::from(*value))).collect();
     pending.sort_by_key(|value| (-i64::from(widths[value].max(WORD)), *value));
+    let copies = _copied_with(body, &pending.iter().copied().collect());
     for value in pending {
         let width = widths[&value];
         let capacity = width.max(WORD);
@@ -557,9 +570,21 @@ fn _color_slots(
             frame.slot(value, width)?;
             continue;
         };
-        let color = colors
+        let fits = |one: &(i64, u32, Vec<Interval>)| one.1 >= capacity && one.2.iter().all(|other| !interval.overlaps(other));
+        // A slot the value is copied to or from makes that copy vanish.
+        let partners: Vec<i64> = copies
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .filter_map(|partner| match partner {
+                Err(home) => Some(*home),
+                Ok(other) => frame.slots.get(&SlotKey::from(*other)).copied(),
+            })
+            .collect();
+        let color = partners
             .iter()
-            .position(|one| one.1 >= capacity && one.2.iter().all(|other| !interval.overlaps(other)));
+            .find_map(|home| colors.iter().position(|one| one.0 == *home && fits(one)))
+            .or_else(|| colors.iter().position(fits));
         let Some(color) = color else {
             let home = frame.slot(value, width)?;
             colors.push((home, capacity, vec![interval.clone()]));
@@ -574,16 +599,43 @@ fn _color_slots(
     Ok(())
 }
 
-/// Spill-slot colors already present in the current rewritten body.
+/// What each of `values` is copied to or from: another value, or a frame cell's home.
+fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Result<u32, i64>>> {
+    let mut copies: IndexMap<u32, Vec<Result<u32, i64>>> = IndexMap::default();
+    let side = |loc: &Loc| match loc {
+        Loc::Held(held) => Some(Ok(held.value)),
+        Loc::Mem(Mem { addr: Some(addr), base: None, index: None, .. }) if addr.space == Space::Frame => Some(Err(addr.disp)),
+        _ => None,
+    };
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        let ([into], [from]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op != Operation::Move || what.name.as_deref() != Some("mov") {
+            continue;
+        }
+        let (Some(into), Some(from)) = (side(into), side(from)) else { continue };
+        for (this, other) in [(into, from), (from, into)] {
+            if let Ok(value) = this {
+                if values.contains(&value) {
+                    copies.entry(value).or_default().push(other);
+                }
+            }
+        }
+    }
+    copies
+}
+
+/// Spill-slot colors already present in the current rewritten body, and
+/// every value's interval: one liveness pass answers both.
 ///
 /// Python numbers each home's pseudo-value below every held value, which is
 /// negative; `u32` cannot say that, so they are numbered in the same order
 /// at the top of the range instead. Nothing compares them with a real value.
-fn _existing_colors(body: &LirBody, frame: &mut Frame) -> Vec<(i64, u32, Vec<Interval>)> {
+fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
-        return Vec::new();
+        return (Vec::new(), ranges::intervals(body, None));
     }
     let first = u32::MAX - homes.len() as u32;
     let pseudo: IndexMap<i64, u32> =
@@ -646,7 +698,7 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> Vec<(i64, u32, Vec<Int
         frame.capacities.insert(home, i64::from(capacities[&home]));
         colors.push((home, capacities[&home], occupants));
     }
-    colors
+    (colors, live)
 }
 
 /// Spill candidates whose value can be reconstructed without a slot.
@@ -667,10 +719,10 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
     if !_constants(body, &only).contains_key(&value) && !_addresses(body, &only).contains_key(&value) {
         return None;
     }
-    let mut defining = body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.defines.contains(&value));
-    let one = defining.next()?;
-    let alone = defining.next().is_none()
-        && one.defines == [value]
+    let defining: Vec<Arc<Insn>> =
+        body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.defines.contains(&value)).cloned().collect();
+    let one = _one_definition(&defining)?;
+    let alone = one.defines == [value]
         && one.uses.is_empty()
         && one.requires.is_empty()
         && one.delivers.is_empty()
@@ -1541,17 +1593,49 @@ fn _group_source(one: &Insn) -> Option<Held> {
     }
     let what = one.what.as_ref()?;
     if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-        if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-            if dest.width == source.width && one.uses == [source.value] && one.defines == [dest.value] {
+        match (what.dests.as_slice(), what.sources.as_slice()) {
+            ([Loc::Held(dest)], [Loc::Held(source)])
+                if dest.width == source.width && one.uses == [source.value] && one.defines == [dest.value] =>
+            {
                 return Some(*source);
             }
+            // Into a spilled value's slot.
+            ([Loc::Mem(dest)], [Loc::Held(source)])
+                if dest.width == source.width && one.uses == [source.value] && one.defines.is_empty() =>
+            {
+                return Some(*source);
+            }
+            _ => {}
         }
     }
     None
 }
 
+/// The definition every one of `defining` repeats, if they all do the same.
+/// A split remakes a value where each piece ends, so a remakeable value can
+/// have several definitions that are one.
+fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
+    let first = defining.first()?;
+    let alike = |one: &Insn| {
+        one.what == first.what
+            && one.defines == first.defines
+            && one.uses == first.uses
+            && one.clobbers == first.clobbers
+            && one.requires == first.requires
+            && one.delivers == first.delivers
+            && one.group == first.group
+    };
+    defining.iter().all(|one| alike(one)).then_some(first)
+}
+
 /// Literal values, including full-width copies with one unambiguous definition.
 pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> {
+    _literals(body, values, false)
+}
+
+/// `_constants`, and also those some instruction reads wider than the literal:
+/// those are remade only where read at its width.
+fn _literals(body: &LirBody, values: &BTreeSet<u32>, any_width: bool) -> IndexMap<u32, Imm> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     let mut excluded: BTreeSet<u32> = BTreeSet::new();
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
@@ -1574,10 +1658,12 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
     // point below reaches the same answer in any order.
     let mut sources: IndexMap<u32, Loc> = IndexMap::default();
     for (value, defining) in &definitions {
-        if excluded.contains(value) || defining.len() != 1 {
+        if excluded.contains(value) {
             continue;
         }
-        let one = &defining[0];
+        let Some(one) = _one_definition(defining) else {
+            continue;
+        };
         let Some(what) = &one.what else {
             continue;
         };
@@ -1598,7 +1684,9 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
             Loc::Held(held) => (held.width, vec![held.value]),
             _ => continue,
         };
-        if into.width == source_width && one.uses == source_uses && widths.get(value).copied().unwrap_or(0) <= source_width
+        if into.width == source_width
+            && one.uses == source_uses
+            && (any_width || widths.get(value).copied().unwrap_or(0) <= source_width)
         {
             sources.insert(*value, source.clone());
         }
@@ -1635,10 +1723,9 @@ fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> 
 
     let mut result = IndexMap::default();
     for (value, defining) in &definitions {
-        if defining.len() != 1 {
+        let Some(one) = _one_definition(defining) else {
             continue;
-        }
-        let one = &defining[0];
+        };
         let Some(what) = &one.what else {
             continue;
         };
@@ -2063,7 +2150,7 @@ mod tests {
     use iced_x86::Register;
     use crate::support::hash::IndexMap;
 
-    use super::{_color_slots, _constants, spilled};
+    use super::{_color_slots, _constants, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::omfwrite;
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -2472,6 +2559,50 @@ mod tests {
         assert_eq!(as_held(&what(&result[n - 1]).sources[1]).value, result[n - 2].defines[0]);
     }
 
+    /// A split remakes a constant where its piece ends, so the rest of the
+    /// value has one identical definition per piece; the spiller gave it a
+    /// stack slot, and COPPER reloaded 0 inside a loop.
+    #[test]
+    fn test_a_constant_defined_twice_alike_is_rematerialized_without_a_frame_slot() {
+        let result = _out(&_body(vec![_constant(20, (0, 3)), _add(2, 1, 0x100), _constant(20, (4, 7)), _add(3, 1, 0x100)]), &[1]);
+        assert!(!result.iter().filter_map(|one| one.what.as_ref()).any(|what| operands(what).any(is_mem)), "{result:?}");
+    }
+
+    /// One wide read of a constant made every read of it a reload: COPPER's
+    /// zero, copied once into a 32-bit value, was loaded from its slot in a loop.
+    #[test]
+    fn test_a_constant_read_wider_once_is_remade_at_its_narrow_reads() {
+        let wide = insn(4, (4, 4), semantics(Operation::Move, "mov", vec![held(3, 4)], vec![held(1, 4)]), &[3], &[1]);
+        let result = _out(&_body(vec![_constant(20, (0, 3)), wide, _add(2, 1, 0x100)]), &[1]);
+        let reads = result.iter().filter(|one| what(one).sources.iter().any(is_mem)).count();
+        assert_eq!(reads, 1, "{result:?}");
+        let n = result.len();
+        assert_eq!(what(&result[n - 2]).sources, [imm(20, 2)], "{result:?}");
+    }
+
+    /// A parallel copy into an already spilled value hid the constant it
+    /// copies: COPPER's zero took a slot and was reloaded in a loop.
+    #[test]
+    fn test_a_constant_copied_into_a_slot_by_a_parallel_copy_is_remade() {
+        let slot = Frame::new(0).cell(9u32, 2).expect("a slot");
+        let into = semantics(Operation::Move, "mov", vec![Loc::Mem(slot)], vec![held(1, 2)]);
+        let grouped = Insn { group: Some(7), ..insn(4, (4, 4), into, &[], &[1]) };
+        let result = _out(&_body(vec![_constant(20, (0, 3)), grouped, _add(2, 1, 0x100)]), &[1]);
+        let reads = result.iter().filter(|one| what(one).sources.iter().any(is_mem)).count();
+        assert_eq!(reads, 0, "{result:?}");
+        assert!(result.iter().any(|one| one.group == Some(7) && what(one).sources == [imm(20, 2)]), "{result:?}");
+    }
+
+    /// The allocator names values the body no longer holds; a reload
+    /// numbered from the body alone took one of those names, and the
+    /// allocator left the reload unplaced.
+    #[test]
+    fn test_a_spill_numbers_its_reloads_above_the_floor_it_is_given() {
+        let body = _body(vec![_move(1, 10, None, 0x10), _add(11, 1, 0x12), _add(12, 1, 0x14)]);
+        let (_, made) = spilled_from(&body, &set(&[1]), Some(&mut Frame::new(0)), 100).expect("spills");
+        assert!(!made.is_empty() && made.iter().all(|one| *one >= 100), "{made:?}");
+    }
+
     fn _frame_address(disp: i64, disp_width: u32) -> Address {
         Address { through: Register::BP, offset: disp, disp_width, ..Address::new(Some(Addr::new(Space::Frame, disp))) }
     }
@@ -2673,6 +2804,24 @@ mod tests {
         let (first, _made) = spilled(&_overlapping(), &set(&[1]), Some(&mut frame)).expect("spills");
         spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
         assert_ne!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
+    }
+
+    /// A value copied from one spilled earlier took the first free slot, not
+    /// its source's, so the copy stayed as a load and a store: CYCLEBLOBS
+    /// shifted six slots down a chain at each loop entry.
+    #[test]
+    fn test_a_later_spill_shares_the_slot_it_is_copied_from() {
+        let body = _body(vec![
+            _move(3, 30, None, 0x10),
+            _move(1, 10, None, 0x12),
+            _add(31, 3, 0x14),
+            _move(2, 1, None, 0x16),
+            _add(21, 2, 0x18),
+        ]);
+        let mut frame = Frame::new(0);
+        let (first, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame)).expect("spills");
+        _color_slots(&first, &set(&[2]), &IndexMap::from_iter([(2, 2)]), &mut frame).expect("colors");
+        assert_eq!(frame.slots[&slot(2)], frame.slots[&slot(1)]);
     }
 
     #[test]

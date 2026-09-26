@@ -16,9 +16,11 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
 
-**The allocator prices spills the later passes undo.** `_traffic` charges a memory operand per reference of a spilled value, but spillforward and loopslots then delete many of those reloads. Every accept-or-reject gate built on it (region split, trials) judges against a cost the output does not pay: PARTICLE's selector was priced at 117 and cost 0 after loopslots. Guard: none yet. The spiller must own reload placement so the gate asks the same fact.
+**The allocator prices spills the later passes undo.** `_traffic` charges a memory operand per reference of a spilled value, but spillforward and loopslots then delete many of those reloads. Every accept-or-reject gate built on it (region split, trials) judges against a cost the output does not pay: PARTICLE's selector was priced at 117 and cost 0 after loopslots. Guard: the driver now compares whole outputs by executed instructions and memory operands; spill weights inside one allocation still price what later passes undo.
 
-**Batch acceptance hides good splits behind bad ones.** A round's splits are carved together and kept only if total traffic falls. Adding single-instruction pieces changed the plan, so CYCLEBLOBS' region split went from accepted to rejected (21765 → 24804) and took every good split with it. Guard: a piece is carved only if its references outweigh its copies, or if the rest of the value got a register. Single-instruction pieces are gone until they are priced.
+**Batch acceptance hid good splits behind bad ones.** A round's splits were carved together and kept only if total traffic fell, so one bad piece rejected CYCLEBLOBS' good ones (21765 → 24804). Guard: allocation is incremental; each split is carved alone and only if it pays.
+
+**A split carved at once cannot be taken back.** Pieces that later spill leave their copies behind; carving in place made deedlines' stores rise 20k → 57k. Guard: every candidate body also runs without splitting and the cheaper output wins, at the price of one more allocation each (deedlines regalloc 5.1 → 13.6 s).
 
 ## Contracts
 
@@ -37,6 +39,18 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 **A credit that ignores what follows.** Strength reduction freed a counter whenever its scaled uses covered it, even with a symbolic trip count. Count-to-zero then had to take control through a pointer at a symbolic bias, which cost a register in every address and spilled (SUMTHREE 8 → 9). Guard: the credit applies only when a root can take control at a constant bias.
 
 ## Invariants of the machine form
+
+**The allocator knows values the body no longer names.** A reload numbered from the body alone reused such a name and was left unplaced. Guard: every rewrite numbers above the allocation's floor, with a test.
+
+**A rewrite narrows a value's class.** An assignment made before a split or spill can fall outside the class recomputed after it; kept, a pointer in AX reached the encoder as `mov [di+si]`. Guard: each rewrite evicts assignments outside their class, with a test.
+
+**Tail merging dropped virtual definitions.** Merging identical tails kept one tail's values, and the other tail's readers named nothing. Guard: merged tails rename to the kept tail's values, with a test.
+
+**Remaking a value needed one definition.** A split remakes a constant where each piece ends, so the rest has several identical definitions; one wider read or a parallel copy into a slot also hid the constant, and COPPER reloaded 0 in a loop. Guard: identical definitions count as one, narrow reads remake, and copies into slots count, each with a test.
+
+**Slots chosen one spill at a time lose copy affinity.** First fit put a copy's two ends in different slots, and CYCLEBLOBS shifted six slots down a chain at a loop entry. Guard: a spilled value prefers a slot it is copied to or from, with a test.
+
+**Fusion compared virtual names.** Load, add and store through the same `[si]` did not fuse when allocation had copied the pointer into SI again as a new value (DRAWBOB). Guard: fusion compares cells by the registers that carry them, with a test.
 
 **Value ids outlive the instructions that define them.** Deleting a reload in LIR left its readers naming the reload's value, and the verifier rejected the body. Registers are allocated, but `uses`, `requires` and segment selectors in memory operands still name values. Removing a definition means renaming what reads it.
 
