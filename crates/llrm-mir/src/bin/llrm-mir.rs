@@ -1,5 +1,5 @@
-//! `llrm-mir FILE`: reads MIR and writes it back, as `tools/mir-oracle.sh`
-//! compares with LLVM's own reading.
+//! `llrm-mir FILE`: reads and verifies MIR and writes it back, as
+//! `tools/mir-oracle.sh` compares with LLVM's own reading.
 
 use std::process::ExitCode;
 
@@ -17,6 +17,11 @@ fn main() -> ExitCode {
     };
     match llrm_mir::parse::module(&text) {
         Ok(module) => {
+            let problems = llrm_mir::verify::verify(&module);
+            if !problems.is_empty() {
+                problems.iter().for_each(|one| eprintln!("{path}: {one}"));
+                return ExitCode::FAILURE;
+            }
             print!("{}", llrm_mir::print::module(&module));
             ExitCode::SUCCESS
         }
