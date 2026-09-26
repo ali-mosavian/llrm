@@ -7,6 +7,7 @@ description = "The Nib language frontend and language server"
 
 [dependencies]
 llrm-core = { workspace = true }
+llrm-mir = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }

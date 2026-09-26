@@ -886,6 +886,30 @@ pub fn parameter_offsets(function: &model::Function, parameter_types: &[&model::
     offsets
 }
 
+/// The ABI of the MIR a HIR program emits: a runtime routine linked by its
+/// own name and called by its contract, any other function by its
+/// frontend's object name.
+pub struct HirAbi {
+    pub runtime: model::RuntimeProfile,
+    /// Each function's object name, where it is not its HIR name.
+    pub objects: std::collections::BTreeMap<String, String>,
+}
+
+impl crate::backend::assemble::Abi for HirAbi {
+    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
+        let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
+        let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
+        _contract(name, cleanup, pushed, self.runtime).map_err(|error| error.0)
+    }
+
+    fn linked(&self, name: &str) -> String {
+        match name.strip_prefix(crate::hir::mir::RUNTIME) {
+            Some(routine) => routine.to_owned(),
+            None => self.objects.get(name).cloned().unwrap_or_else(|| name.to_owned()),
+        }
+    }
+}
+
 /// Turn one optimized semantic body into the backend's existing call form.
 pub fn physicalize(
     program: &model::Program,

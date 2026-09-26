@@ -1,3 +1,4 @@
+use crate::abi::qb::HirAbi;
 use crate::backend::assemble::{self, Abi};
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Unselected};
@@ -5,19 +6,8 @@ use crate::backend::masm;
 
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
 
-/// QB's: the runtime's measured contracts, and conservative ones for what
-/// it does not know; a runtime routine linked by its own name.
-struct Qb;
-
-impl Abi for Qb {
-    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<crate::abi::runtime::Contract, String> {
-        let cleanup = if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
-        crate::abi::qb::_contract(&self.linked(callee), cleanup, pushed, crate::hir::model::RuntimeProfile::Qb45).map_err(|error| error.0)
-    }
-
-    fn linked(&self, name: &str) -> String {
-        name.strip_prefix("llrm.qb.").unwrap_or(name).to_owned()
-    }
+fn qb() -> HirAbi {
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default() }
 }
 
 fn parsed(text: &str) -> llrm_mir::Module {
@@ -25,12 +15,12 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    let contracts = |callee: &str, pops: bool, pushed: i64| Qb.contract(callee, pops, pushed);
+    let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
     isel::selected(&parsed(text), name, &contracts)
 }
 
 fn assembled(text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), &Qb, "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
     masm::text(&module).expect("prints")
 }
 
@@ -482,7 +472,7 @@ fn test_initializers_are_bytes_and_relocations() {
 @rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    let names = crate::backend::globals::names(&module, &|name| Qb.linked(name)).expect("names");
+    let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
     let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
     assert_eq!(

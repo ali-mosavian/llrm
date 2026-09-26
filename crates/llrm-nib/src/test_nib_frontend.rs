@@ -1860,3 +1860,23 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
     let native = written(&directory, "native.nib", &text("@export(name=\"N$SIZE\")"));
     driver::parsed(&native, &Default::default(), None).expect("a native export takes a view");
 }
+
+/// Nib through the rich MIR: emitted, selected and assembled whole, the
+/// entry public and each function by its object name.
+#[test]
+fn test_a_program_compiles_through_the_rich_mir() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
+    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", ProfileOrName::Name("486")).expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            ".model medium", ".386", "public _main", ".data", ".code TWICE_TEXT",
+            "_twice proc far", "push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "add ax, ax", "pop bp", "retf", "_twice endp",
+            "_main proc far", "L1_0:", "mov ax, 21", "push ax", "call far ptr _twice", "add sp, 2", "retf", "_main endp",
+            "end",
+        ]
+    );
+}
