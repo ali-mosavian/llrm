@@ -1267,7 +1267,7 @@ fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
         if matches!(what.op, Operation::Branch | Operation::Jump | Operation::Call | Operation::Return) {
             return false;
         }
-        if matches!(what.name.as_deref(), Some("adc" | "sbb" | "rcl" | "rcr")) {
+        if what.name.as_deref().is_some_and(crate::backend::peephole::_reads_flags) {
             return false;
         }
         if matches!(what.name.as_deref(), Some("add" | "sub" | "and" | "or" | "xor" | "cmp" | "test")) {
@@ -2120,6 +2120,16 @@ mod tests {
 
     fn index_of(insns: &[Arc<Insn>], one: &Arc<Insn>) -> usize {
         insns.iter().position(|other| Arc::ptr_eq(other, one)).expect("present")
+    }
+
+    /// A hoisted index add may not land before a SETcc, which reads the
+    /// flags an earlier compare left: `setl` was read as neither reading
+    /// nor writing them, so the add behind it looked safe to hoist.
+    #[test]
+    fn test_an_index_add_is_not_hoisted_above_a_flag_reader() {
+        let set = insn(0x10, (0x10, 0x10), semantics(Operation::Unary, "setl", vec![held(1, 1)], vec![]), &[1], &[]);
+        let add = _add(2, 3, 0x11);
+        assert!(!super::_flags_overwritten(&[Arc::new(set), Arc::new(add)]));
     }
 
     #[test]

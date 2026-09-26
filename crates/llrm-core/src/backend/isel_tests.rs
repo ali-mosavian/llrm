@@ -217,7 +217,7 @@ no:
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
     for (body, why) in [
-        ("%c = icmp eq i16 %a, 0\n  %v = sext i1 %c to i16\n  ret i16 %v", "a comparison as a value"),
+        ("%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v", "arithmetic on an i1"),
         ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
     ] {
         let text = format!("define i16 @f(ptr %p, i16 %a) {{\n  {body}\n}}\n");
@@ -363,6 +363,55 @@ fn test_a_dword_result_leaves_in_dx_ax() {
             "mov eax, dword ptr [bp+6]",
             "inc eax",
             "shld edx, eax, 16",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
+
+#[test]
+fn test_comparisons_as_values() {
+    let text = "define i16 @f(i16 %a, i16 %b) {
+entry:
+  %lt = icmp slt i16 %a, %b
+  %basic = sext i1 %lt to i16
+  %eq = icmp eq i16 %a, 3
+  %c = zext i1 %eq to i16
+  %both = and i1 %lt, %eq
+  br i1 %both, label %yes, label %no
+yes:
+  %s = add i16 %basic, %c
+  ret i16 %s
+no:
+  ret i16 0
+}
+";
+    let got = listing(text, "f", &cdecl(2));
+    // An i1 is a byte of 0 or 1: sext is movzx and neg, BASIC's -1.
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov cx, word ptr [bp+6]",
+            "mov ax, word ptr [bp+8]",
+            "cmp cx, ax",
+            "setl bl",
+            "movzx ax, bl",
+            "neg ax",
+            "cmp cx, 3",
+            "sete dl",
+            "movzx cx, dl",
+            "and bl, dl",
+            "or bl, bl",
+            "jne L0_6",
+            "L0_8:",
+            "mov ax, 0",
+            "pop bp",
+            "retf",
+            "L0_6:",
+            "add ax, cx",
             "pop bp",
             "retf",
         ]

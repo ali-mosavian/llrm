@@ -2864,7 +2864,7 @@ const _FLAG_READERS: [&str; 16] = [
     "salc",
 ];
 
-fn _reads_flags(name: &str) -> bool {
+pub(crate) fn _reads_flags(name: &str) -> bool {
     _FLAG_READERS.contains(&name) || ["j", "set", "cmov", "loop"].iter().any(|prefix| name.starts_with(prefix))
 }
 

@@ -1583,6 +1583,18 @@ pub fn emit(
         }
         return None;
     }
+    // SETcc reads only the flags a compare left.
+    if op == Operation::Unary && dests.len() == 1 && sources.is_empty() && name.starts_with("set") {
+        let code = _code(&format!("{}_RM8", name.to_uppercase()))?;
+        return match &dests[0] {
+            Loc::Reg(into) if into.width == 1 => _assemble(&raised(create_reg(code, into.register)), at, true),
+            Loc::Mem(cell) if cell.width == 1 => {
+                let (built, relocated) = operand_of(cell)?;
+                _assemble(&raised(create_mem(code, built)), at, relocated)
+            }
+            _ => None,
+        };
+    }
     if op == Operation::Unary && dests.len() == 1 && sources.len() == 1 {
         return match &dests[0] {
             Loc::Reg(into) => unary(name, into.register, at),

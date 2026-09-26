@@ -342,6 +342,8 @@ impl Selector<'_> {
     /// A value's width in bytes, if a register holds it.
     fn width(&self, ty: TypeId) -> Result<u32, Unselected> {
         match self.types().get(ty) {
+            // An i1 is a byte holding 0 or 1, as LLVM stores one.
+            Type::Int(1) => Ok(1),
             Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
             Type::Pointer(0) => Ok(self.layout.pointer(0).bits / 8),
             _ => refuse(format!("a {} value", self.types().display(ty))),
@@ -599,6 +601,9 @@ impl Selector<'_> {
                     _ => return refuse(instruction.opcode.mnemonic()),
                 };
                 let ty = instruction.ty;
+                if self.types().int_bits(ty) == Some(1) && !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
+                    return refuse("arithmetic on an i1");
+                }
                 let (mut a, mut b) = (operands[0], operands[1]);
                 if commutes && matches!(a, Operand::Constant(_)) {
                     std::mem::swap(&mut a, &mut b);
@@ -615,11 +620,33 @@ impl Selector<'_> {
             Opcode::Cast(op) => {
                 let from = type_of(operands[0]);
                 let (to, from_width) = (self.width(instruction.ty)?, self.width(from)?);
+                let boolean = self.types().int_bits(from) == Some(1);
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: to };
                 let what = match op {
+                    CastOp::Trunc if self.types().int_bits(instruction.ty) == Some(1) => {
+                        let source = self.held(operands[0], from, at, out)?;
+                        let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
+                        semantics(Operation::Binary, "and", vec![Loc::Held(result)], vec![Loc::Held(Held { width: 1, ..source }), one])
+                    }
                     CastOp::Trunc => {
                         let source = self.held(operands[0], from, at, out)?;
                         semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: to, ..source })])
+                    }
+                    // An i1's byte is already 0 or 1: its sign extension is its negation.
+                    CastOp::SExt | CastOp::ZExt if boolean => {
+                        let source = self.held(operands[0], from, at, out)?;
+                        let widened = if *op == CastOp::SExt { Held { value: self.fresh(), width: to } } else { result };
+                        let what = if to == 1 {
+                            semantics(Operation::Move, "mov", vec![Loc::Held(widened)], vec![Loc::Held(source)])
+                        } else {
+                            semantics(Operation::Extend, "movzx", vec![Loc::Held(widened)], vec![Loc::Held(source)])
+                        };
+                        if *op == CastOp::ZExt {
+                            what
+                        } else {
+                            out.push(insn(at, what));
+                            semantics(Operation::Unary, "neg", vec![Loc::Held(result)], vec![Loc::Held(widened)])
+                        }
                     }
                     CastOp::SExt | CastOp::ZExt => {
                         let source = self.held(operands[0], from, at, out)?;
@@ -635,7 +662,13 @@ impl Selector<'_> {
                 out.push(insn(at, what));
             }
             Opcode::ICmp(_) if self.fused.contains(&inst) => {}
-            Opcode::ICmp(_) => return refuse("a comparison as a value"),
+            // SETcc, as LLVM selects a comparison it keeps as a value.
+            Opcode::ICmp(_) => {
+                let predicate = self.compare(inst, at, out)?;
+                let result = Held { value: self.value(instruction.result.expect("a result")), width: 1 };
+                let name = format!("set{}", &condition_code(predicate)[1..]);
+                out.push(insn(at, semantics(Operation::Unary, &name, vec![Loc::Held(result)], vec![])));
+            }
             Opcode::Br => match operands[..] {
                 [Operand::Block(target)] => {
                     out.push(insn(at, jump(block_at[&target])));
@@ -644,20 +677,15 @@ impl Selector<'_> {
                     out.push(insn(at, jump(block_at[&taken])));
                 }
                 [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
-                    let Some(compare) = self.fused_compare(condition) else {
-                        return refuse("a branch on a value no comparison made");
+                    let predicate = match self.fused_compare(condition) {
+                        Some(compare) => self.compare(compare, at, out)?,
+                        None => {
+                            let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
+                            let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
+                            out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
+                            IntPredicate::Ne
+                        }
                     };
-                    let compare_ty = type_of(function.instruction(compare).operands[0]);
-                    let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { unreachable!("fused") };
-                    let (mut a, mut b) = (function.instruction(compare).operands[0], function.instruction(compare).operands[1]);
-                    let mut predicate = predicate;
-                    if matches!(a, Operand::Constant(_)) {
-                        std::mem::swap(&mut a, &mut b);
-                        predicate = swapped(predicate);
-                    }
-                    let a = Loc::Held(self.held(a, compare_ty, at, out)?);
-                    let b = self.source(b, compare_ty, at, out)?;
-                    out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
                     let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, condition_code(predicate), vec![], vec![]) };
                     out.push(insn(at, branch));
                 }
@@ -686,6 +714,23 @@ impl Selector<'_> {
             _ => return refuse(instruction.opcode.mnemonic()),
         }
         Ok(())
+    }
+
+    /// `cmp` of a comparison's operands, a constant second; the predicate
+    /// that holds of them as ordered.
+    fn compare(&mut self, inst: InstId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<IntPredicate, Unselected> {
+        let instruction = self.function.instruction(inst);
+        let Opcode::ICmp(mut predicate) = instruction.opcode else { unreachable!("a comparison") };
+        let (mut a, mut b) = (instruction.operands[0], instruction.operands[1]);
+        let ty = self.function.operand_type(&self.module.context, a).expect("a typed operand");
+        if matches!(a, Operand::Constant(_)) {
+            std::mem::swap(&mut a, &mut b);
+            predicate = swapped(predicate);
+        }
+        let a = Loc::Held(self.held(a, ty, at, out)?);
+        let b = self.source(b, ty, at, out)?;
+        out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
+        Ok(predicate)
     }
 
     fn fused_compare(&self, condition: ValueId) -> Option<InstId> {
