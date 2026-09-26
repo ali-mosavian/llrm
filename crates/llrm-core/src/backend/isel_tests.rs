@@ -19,8 +19,11 @@ fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     isel::selected(&parsed(text), name, &contracts)
 }
 
+/// The module's text, once its object is written: a listing that does not
+/// encode is no listing.
 fn assembled(text: &str) -> String {
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
+    crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -765,3 +768,28 @@ small:
         ]
     );
 }
+
+/// A float function x87 computes in one instruction is that instruction.
+/// frndint, fsin and fcos listed but did not encode.
+#[test]
+fn test_float_functions_are_x87_instructions() {
+    let text = "declare double @llvm.sqrt.f64(double)
+declare double @llvm.rint.f64(double)
+declare double @llvm.fabs.f64(double)
+declare double @llvm.sin.f64(double)
+declare double @llvm.cos.f64(double)
+define double @f(double %x) addrspace(1) {
+  %a = call double @llvm.sqrt.f64(double %x)
+  %b = call double @llvm.rint.f64(double %a)
+  %c = call double @llvm.fabs.f64(double %b)
+  %d = call double @llvm.sin.f64(double %c)
+  %e = call double @llvm.cos.f64(double %d)
+  ret double %e
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "fld qword ptr [bp+6]", "fsqrt", "frndint", "fabs", "fsin", "fcos", "pop bp", "retf"]
+    );
+}
+

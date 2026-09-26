@@ -9,7 +9,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
 use crate::abi::runtime::Contract;
@@ -1115,6 +1115,20 @@ impl Selector<'_, '_> {
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                Some(Intrinsic::Unary(function)) => {
+                    let name = match function {
+                        FloatFunction::Fabs => "fabs",
+                        FloatFunction::Sqrt => "fsqrt",
+                        FloatFunction::Rint => "frndint",
+                        FloatFunction::Sin => "fsin",
+                        FloatFunction::Cos => "fcos",
+                        other => return refuse(format!("{other:?}")),
+                    };
+                    let a = self.float(arguments[0])?;
+                    let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                    out.push(insn(at, semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)])));
+                    Ok(())
+                }
                 // Rounds as the machine's default mode does: fistp.
                 Some(Intrinsic::LRint) => {
                     let result = instruction.result.expect("lrint's value");
