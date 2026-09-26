@@ -321,17 +321,9 @@ impl Selector<'_> {
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return Ok(None) };
         let instruction = self.function.instruction(inst);
         let Opcode::GetElementPtr { source } = instruction.opcode else { return Ok(None) };
-        let context = &self.module.context;
-        let indices: Vec<Option<i128>> = instruction.operands[1..]
-            .iter()
-            .map(|&one| {
-                let bits = self.function.operand_type(context, one).and_then(|ty| self.types().int_bits(ty)).unwrap_or(64);
-                self.constant(one, bits.div_ceil(8)).map(i128::from)
-            })
-            .collect();
-        let (offset, variable) = self.layout.collect_offset(self.types(), source, &indices);
+        let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
         if !variable.is_empty() {
-            return refuse("a variable index");
+            return Ok(None);
         }
         let offset = offset as i64;
         let pointer = match self.pointer(instruction.operands[0])? {
@@ -340,6 +332,111 @@ impl Selector<'_> {
         };
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
+    }
+
+    /// A GEP's indices, each a constant or `None`.
+    fn indices(&self, inst: InstId) -> Vec<Option<i128>> {
+        let context = &self.module.context;
+        self.function.instruction(inst).operands[1..]
+            .iter()
+            .map(|&one| {
+                let bits = self.function.operand_type(context, one).and_then(|ty| self.types().int_bits(ty)).unwrap_or(64);
+                self.constant(one, bits.div_ceil(8)).map(i128::from)
+            })
+            .collect()
+    }
+
+    /// A GEP with a variable index, computed into a register: each index
+    /// taken to the pointer's index width, as LLVM sign-extends or
+    /// truncates it, scaled, and added to the base.
+    fn indexed(&mut self, inst: InstId, source: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let width = self.width(instruction.ty)?;
+        let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
+        let mut sum: Option<Held> = None;
+        for (position, scale) in variable {
+            let index = instruction.operands[1 + position];
+            let index_ty = function.operand_type(&self.module.context, index).expect("a typed index");
+            let mut held = self.held(index, index_ty, at, out)?;
+            if held.width > width {
+                held.width = width;
+            } else if held.width < width {
+                let wide = Held { value: self.fresh(), width };
+                out.push(insn(at, semantics(Operation::Extend, "movsx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
+                held = wide;
+            }
+            if scale != 1 {
+                let scaled = Held { value: self.fresh(), width };
+                let what = if scale.is_power_of_two() {
+                    let shift = Loc::Imm(Imm { value: i64::from(scale.trailing_zeros()), width: 1, address: None });
+                    semantics(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(held), shift])
+                } else {
+                    let factor = Loc::Imm(Imm { value: scale as i64, width, address: None });
+                    semantics(Operation::Multiply, "imul", vec![Loc::Held(scaled)], vec![Loc::Held(held), factor])
+                };
+                out.push(insn(at, what));
+                held = scaled;
+            }
+            sum = Some(match sum {
+                None => held,
+                Some(before) => {
+                    let added = Held { value: self.fresh(), width };
+                    out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(added)], vec![Loc::Held(before), Loc::Held(held)])));
+                    added
+                }
+            });
+        }
+        let start = match self.pointer(instruction.operands[0])? {
+            Pointer::Based { base, offset: 0 } if offset == 0 => base,
+            pointer => {
+                let moved = match pointer {
+                    Pointer::Frame(disp) => Pointer::Frame(disp + offset as i64),
+                    Pointer::Based { base, offset: was } => Pointer::Based { base, offset: was + offset as i64 },
+                };
+                let start = Held { value: self.fresh(), width };
+                out.push(insn(at, self.address(moved, start)));
+                start
+            }
+        };
+        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        let sum = sum.expect("a variable index");
+        out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
+        Ok(())
+    }
+
+    /// `div` and `idiv` divide dx:ax, the high word made by `cwd` or zero,
+    /// and leave both quotient and remainder.
+    fn divide(&mut self, op: BinaryOp, inst: InstId, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let at = self.ats[&inst];
+        let ty = instruction.ty;
+        let width = self.width(ty)?;
+        if !matches!(width, 2 | 4) {
+            return refuse("a byte division");
+        }
+        let dividend = self.held(instruction.operands[0], ty, at, out)?;
+        let divisor = self.held(instruction.operands[1], ty, at, out)?;
+        let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let high = Held { value: self.fresh(), width };
+        out.push(insn(
+            at,
+            if signed {
+                semantics(Operation::Extend, if width == 2 { "cwd" } else { "cdq" }, vec![Loc::Held(high)], vec![Loc::Held(dividend)])
+            } else {
+                semantics(Operation::Move, "mov", vec![Loc::Held(high)], vec![Loc::Imm(Imm { value: 0, width, address: None })])
+            },
+        ));
+        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: self.fresh(), width });
+        let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
+        let what = semantics(
+            Operation::Divide,
+            if signed { "idiv" } else { "div" },
+            vec![Loc::Held(quotient), Loc::Held(remainder)],
+            vec![Loc::Held(high), Loc::Held(dividend), Loc::Held(divisor)],
+        );
+        out.push(insn(at, what));
+        Ok(())
     }
 
     fn memory(pointer: Pointer, width: u32) -> Mem {
@@ -363,8 +460,10 @@ impl Selector<'_> {
         let type_of = |operand: Operand| function.operand_type(&self.module.context, operand).expect("a typed operand");
         match &instruction.opcode {
             Opcode::Alloca { .. } => {}
-            Opcode::GetElementPtr { .. } => {
-                self.folded(instruction.result.expect("an address"))?;
+            Opcode::GetElementPtr { source } => {
+                if self.folded(instruction.result.expect("an address"))?.is_none() {
+                    self.indexed(inst, *source, at, out)?;
+                }
             }
             Opcode::Load { volatile, .. } => {
                 let width = self.width(instruction.ty)?;
@@ -389,9 +488,7 @@ impl Selector<'_> {
                     BinaryOp::Or => (Operation::Binary, "or", true),
                     BinaryOp::Xor => (Operation::Binary, "xor", true),
                     BinaryOp::Mul => (Operation::Multiply, "imul", true),
-                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if self.constant(operands[1], 1).is_none() => {
-                        return refuse("a shift by a variable count");
-                    }
+                    BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem => return self.divide(*op, inst, out),
                     BinaryOp::Shl => (Operation::Binary, "shl", false),
                     BinaryOp::LShr => (Operation::Binary, "shr", false),
                     BinaryOp::AShr => (Operation::Binary, "sar", false),
@@ -403,7 +500,11 @@ impl Selector<'_> {
                     std::mem::swap(&mut a, &mut b);
                 }
                 let a = Loc::Held(self.held(a, ty, at, out)?);
-                let b = self.source(b, ty, at, out)?;
+                let b = match (self.source(b, ty, at, out)?, name) {
+                    // A shift counts from cl: its count is a byte.
+                    (Loc::Held(count), "shl" | "shr" | "sar") => Loc::Held(Held { width: 1, ..count }),
+                    (b, _) => b,
+                };
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
                 out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
             }
@@ -456,7 +557,8 @@ impl Selector<'_> {
                 _ => return refuse("a branch on a constant"),
             },
             Opcode::Ret => {
-                let mut one = Insn::new(at, Some((at, at)), Some(semantics(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+                let what = semantics(Operation::Return, "", vec![], vec![]);
+                let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
                 if let Some(&value) = operands.first() {
                     let held = self.held(value, type_of(value), at, out)?;
                     let Some(&register) = convention.returns.first() else { return refuse("a result the convention has no register for") };

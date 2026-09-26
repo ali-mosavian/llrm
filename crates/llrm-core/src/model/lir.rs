@@ -45,6 +45,8 @@ pub struct Insn {
     pub rematerialized: bool,
     /// Its memory access must happen exactly as written.
     pub volatile: bool,
+    /// A return that reads only its `requires` and the epilogue's registers.
+    pub reads_complete: bool,
 }
 
 impl Insn {
@@ -79,6 +81,7 @@ impl Insn {
             frame_adjust: false,
             rematerialized: false,
             volatile: false,
+            reads_complete: false,
         }
     }
 
@@ -99,6 +102,13 @@ impl Insn {
     #[must_use]
     pub fn volatile(&self) -> bool {
         self.volatile || self.op.as_ref().is_some_and(|op| op.volatile)
+    }
+
+    /// Whether it reads no register beyond its `requires` and the
+    /// epilogue's: its own mark, or its MIR operation's.
+    #[must_use]
+    pub fn reads_complete(&self) -> bool {
+        self.reads_complete || self.op.as_ref().is_some_and(|op| op.reads_complete)
     }
 
     /// Whether nothing may move across it or merge with it.
