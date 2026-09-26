@@ -14,8 +14,14 @@ use llrm_mir::{
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
-/// indexing by 16 bits, and 16-bit alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-i32:16-i64:16";
+/// indexing by 16 bits, 16-bit segments, and 16-bit alignment.
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16";
+
+/// A far pointer's address space.
+const FAR: u32 = 1;
+/// A segment's: a cast from a far pointer gives its segment, and one back
+/// gives segment:0.
+const SEGMENT: u32 = 2;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
@@ -45,8 +51,8 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
             8 => types.intern(Type::Float(FloatKind::Double)),
             _ => return Err(format!("a {}-byte float", hir.width)),
         },
-        TypeKind::Pointer if hir.address == AddressKind::Segment => types.int(16),
-        TypeKind::Pointer => types.ptr(if hir.width == 4 { 1 } else { 0 }),
+        TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
+        TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
 }
@@ -133,9 +139,10 @@ fn emit_module(hir: &model::Module) -> Emitted {
     Emitted { module, refused }
 }
 
-/// A data object's type: its bytes, with each relocation a pointer or, for
-/// a near one into far data, the far address's offset. A far pointer's
-/// integer form is segment:offset, so its low word is the offset.
+/// A data object's type: its bytes, with each relocation a pointer, a
+/// segment, or, for a near one into far data, the far address's offset. A
+/// far pointer's integer form is segment:offset, so its low word is the
+/// offset.
 fn data_type(types: &mut Types, object: &model::DataObject, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
     let byte = types.int(8);
     let mut fields = Vec::new();
@@ -148,7 +155,8 @@ fn data_type(types: &mut Types, object: &model::DataObject, objects: &HashMap<i6
         fields.push(match (relocation.address, target.address) {
             (AddressKind::Near, AddressKind::Far) => types.int(16),
             (AddressKind::Near, _) => types.ptr(0),
-            (AddressKind::Far, _) => types.ptr(1),
+            (AddressKind::Far, _) => types.ptr(FAR),
+            (AddressKind::Segment, _) => types.ptr(SEGMENT),
             (other, _) => return Err(format!("a {other} relocation in its data")),
         });
         at = relocation.at + relocation_width(relocation.address);
@@ -192,7 +200,7 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
     };
     let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
-    module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { 1 } else { 0 };
+    module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
     global
 }
 
@@ -212,7 +220,7 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, objects: &H
             members.push(bytes(context, at, relocation.at));
         }
         let target = data[&relocation.target];
-        let space = if objects[&relocation.target].address == AddressKind::Far { 1 } else { 0 };
+        let space = if objects[&relocation.target].address == AddressKind::Far { FAR } else { 0 };
         let mut address = target;
         if relocation.addend != 0 {
             let ty = context.types.ptr(space);
@@ -221,11 +229,16 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, objects: &H
             address = context.constant(Constant { ty, kind: ConstantKind::Expr(ConstantExpr::GetElementPtr { source: byte, inbounds: false, operands }) });
         }
         let cast = |context: &mut llrm_mir::Context, op, ty| context.constant(Constant { ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op, value: address }) });
+        let wanted = match relocation.address {
+            AddressKind::Far => FAR,
+            AddressKind::Segment => SEGMENT,
+            _ => space,
+        };
         members.push(match (relocation.address, space) {
-            (AddressKind::Near, 1) => cast(context, CastOp::PtrToInt, i16),
-            (AddressKind::Far, 0) => {
-                let far = context.types.ptr(1);
-                cast(context, CastOp::AddrSpaceCast, far)
+            (AddressKind::Near, FAR) => cast(context, CastOp::PtrToInt, i16),
+            _ if wanted != space => {
+                let ty = context.types.ptr(wanted);
+                cast(context, CastOp::AddrSpaceCast, ty)
             }
             _ => address,
         });
