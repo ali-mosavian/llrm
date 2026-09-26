@@ -2119,6 +2119,7 @@ END SUB
     let start = regex::Regex::new(r"(?m)^S proc").unwrap().find(&text).unwrap_or_else(|| panic!("{text}")).start();
     let procedure = &text[start..start + text[start..].find(" endp").expect("S endp")];
     let body = backward_loop(procedure);
+    eprintln!("{procedure}");
     assert!(!body.contains("[bp"), "{body}");
     let (before, after) = procedure.split_at(procedure.find(&body).expect("the loop"));
     assert!(before.contains("push bp") && after.contains("pop bp"), "{procedure}");
@@ -2159,6 +2160,36 @@ fn test_a_loop_doubles_an_index_with_add_not_the_three_clock_shift() {
         .find(|one| one.contains("S%"))
         .unwrap_or_else(|| panic!("{text}"));
     assert!(!regex::Regex::new(r"s[ah]l \w+, 1\n").unwrap().is_match(body), "{body}");
+}
+
+#[test]
+fn test_a_slot_an_x87_store_writes_stays_in_memory() {
+    // Parking a register around qbdemo's sprite loop gave its `fistp` slot a
+    // register home, and `fistp ax` does not encode: the compile failed.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "SPRITE.BAS", b"DEFINT A-Z\r\n'$DYNAMIC\r\nDIM SHARED b(32, 32) AS INTEGER\r\nFOR x = 0 TO 32\r\nFOR y = 0 TO 32\r\nb(x, y) = 16 - SQR((16 - x) ^ 2 + (16 - y) ^ 2)\r\nIF b(x, y) < 0 THEN b(x, y) = 0\r\nNEXT\r\nNEXT\r\nPRINT b(3, 4)\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    assert!(!regex::Regex::new(r"fistp [a-z]{2}\n").unwrap().is_match(&text), "{text}");
+}
+
+#[test]
+fn test_a_register_live_through_a_loop_is_parked_for_its_counters() {
+    // qbdemo's PLASMA kept two counters in [bp] every trip: di held a value
+    // the loop never touched, and BP alone could take only one of them.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "PLASMA.BAS", b"DEFINT A-Z\r\nDECLARE SUB plasma (totalframes%)\r\nDECLARE SUB updpalplasma (f%)\r\nDIM SHARED totalframecount AS INTEGER\r\nplasma 2\r\nEND\r\nSUB plasma (totalframes)\r\nDIM unf(320), unfunf(320)\r\nDIM sine(512)\r\nDIM fuh(128, 128)\r\nDEF SEG = &HA000\r\nFOR x = 0 TO 512\r\nsine(x) = SIN(x * 3.14 / 256) * 32 + 32\r\nNEXT\r\nFOR f = 1 TO totalframes\r\n FOR x = 0 TO 320\r\n  unf(x) = sine((x + f) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n NEXT\r\n o = 0\r\n FOR y = 0 TO 128\r\n  unf2 = sine((y * 7 + f * 5) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n  FOR x = 0 TO 128\r\n   fuh(x, y) = unf(x) + unf2\r\n   o = o + 1\r\n  NEXT\r\n NEXT\r\n FOR x = 0 TO 320\r\n  unf(x) = sine((x * 11 + f * 7) AND 511) + sine((3 * x + 7 * f + 3) AND 511)\r\n  unfunf(x) = sine((x * 4 + f * 5) AND 511) + sine((9 * x + 2 * f + 371) AND 511)\r\n NEXT\r\n o = 0\r\n FOR y = 0 TO 199\r\n  unf2 = sine((y * 11 + f * 6) AND 511) + sine((y * 14 + f * 11 + 1943) AND 511)\r\n  unf3 = sine((y * 9 + f * 4) AND 511) + sine((y * 17 + f * 23 + 1943) AND 511)\r\n  FOR x = 0 TO 319\r\n   POKE o, fuh((unf(x) + unf2) AND 127, (unfunf(x) + unf3) AND 127)\r\n   o = o + 1\r\n  NEXT\r\n NEXT\r\n updpalplasma f\r\n totalframecount = totalframecount + 1\r\n IF INKEY$ > \"\" THEN EXIT SUB\r\nNEXT\r\nEND SUB\r\nSUB updpalplasma (f%)\r\nOUT &H3C8, f%\r\nEND SUB\r\n");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = listing(&program);
+    let start = text.find("PLASMA proc").unwrap_or_else(|| panic!("{text}"));
+    let procedure = &text[start..start + text[start..].find(" endp").expect("PLASMA endp")];
+    let body = jumps(procedure, true)
+        .into_iter()
+        .filter_map(|(at, end, label)| procedure.find(&format!("{label}:\n")).filter(|begun| *begun < at).map(|begun| &procedure[begun..end]))
+        .find(|one| one.matches(", 1022").count() == 4)
+        .unwrap_or_else(|| panic!("{procedure}"));
+    eprintln!("{procedure}");
+    assert!(!body.contains("[bp"), "{body}");
 }
 
 #[test]

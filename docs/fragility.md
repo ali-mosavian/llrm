@@ -36,6 +36,8 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **Value ids outlive the instructions that define them.** Deleting a reload in LIR left its readers naming the reload's value, and the verifier rejected the body. Registers are allocated, but `uses`, `requires` and segment selectors in memory operands still name values. Removing a definition means renaming what reads it.
 
+**A home must be an operand the instruction takes.** Loopslots swapped a slot for a register in every instruction that touched it, including `fistp`, which stores only to memory. No loop reached that case until parking freed a register in one, and the object writer then failed on `fistp ax`. Guard: a slot takes a register only if every instruction touching it still encodes, with a test.
+
 **BP is the runtime's frame chain.** Error handling walks it; a loop may hold a value in BP only when it cannot call, trap or touch x87 state, and only between `push bp` and `pop bp` on every entry and exit edge.
 
 **DS is a register the program model reserves only at calls.** Between the points that need the data group, the allocator may give DS an array's selector, so every call site must restore it; nothing but the call contract enforces that.

@@ -10,6 +10,9 @@
 //! call, trap or touch x87 state, since the runtime walks the BP chain when
 //! it raises an error. A spill slot's address is never taken, so no pointer
 //! reaches any slot this moves.
+//!
+//! A register live through the loop but untouched in it is one more, parked
+//! on the stack: pushed on entry and popped on exit.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +25,7 @@ use crate::analysis::intervals::{self as ranges, _graph};
 use crate::analysis::loops::{self, Loop};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
-use crate::backend::{liveness, spiller};
+use crate::backend::{liveness, select, spiller};
 use crate::backend::peephole::{_lanes, Lanes};
 use crate::backend::target;
 use crate::support::hash::IndexMap;
@@ -56,7 +59,8 @@ impl LIRTransform for LoopSlots {
             return Ok(body);
         };
         let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == 2).map(|(at, _)| *at).collect();
-        Ok(promoted(&hoisted(&body, &spills), &spills, &self.cpu.operations))
+        let park = self.cpu.cost("push_r")? + self.cpu.cost("pop_r")?;
+        Ok(promoted(&hoisted(&body, &spills), &spills, &self.cpu.operations, park))
     }
 }
 
@@ -211,21 +215,27 @@ fn reads_plainly(one: &Insn, root: Register, effect: &liveness::Effect) -> bool 
         })
 }
 
-/// Registers the loop leaves free: `None` for untouched, or `Some` of the
-/// reloads and their readers when it only reloads a slot for the next use.
+/// How the loop leaves a register free.
+enum Hold {
+    Untouched,
+    /// It only reloads a slot for the next use: the reloads and their readers.
+    Folded(Vec<(usize, usize, i64)>),
+    /// Untouched but live through the loop: saved around it, at this width.
+    Parked(u32),
+}
+
+/// Registers the loop leaves free, untouched ones first, parked ones last.
 fn free(
     body: &LirBody,
     one: &Loop,
     index: &BTreeMap<i64, usize>,
     live_into: &IndexMap<i64, Lanes>,
     exits: &BTreeSet<i64>,
-) -> Vec<(Register, Option<Vec<(usize, usize, i64)>>)> {
+) -> Vec<(Register, Hold)> {
     let mut out = Vec::new();
     'roots: for root in ROOTS {
         let lanes = _lanes(root);
-        if [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes)) {
-            continue;
-        }
+        let through = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes));
         let mut folded = Vec::new();
         for at in &one.body {
             let block = &body.blocks[index[at]];
@@ -237,6 +247,9 @@ fn free(
                 if effect.reads.is_disjoint(&lanes) && effect.writes.is_disjoint(&lanes) {
                     continue;
                 }
+                if through {
+                    continue 'roots;
+                }
                 if let Some(from) = reload_of(insn, root) {
                     reloaded = Some(from);
                     folded.push((index[at], position, from));
@@ -247,11 +260,30 @@ fn free(
                 }
             }
         }
-        out.push((root, (!folded.is_empty()).then_some(folded)));
+        let wide = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, 2)))));
+        out.push((
+            root,
+            match (through, folded.is_empty()) {
+                (true, _) => Hold::Parked(if wide { 4 } else { WORD }),
+                (false, true) => Hold::Untouched,
+                (false, false) => Hold::Folded(folded),
+            },
+        ));
     }
-    // Untouched registers first: they cost nothing to take.
-    out.sort_by_key(|(_, folded)| folded.is_some());
+    // Untouched registers cost nothing to take; parked ones a push and a pop.
+    out.sort_by_key(|(_, hold)| match hold {
+        Hold::Untouched => 0,
+        Hold::Folded(_) => 1,
+        Hold::Parked(_) => 2,
+    });
     out
+}
+
+fn folds(hold: &Hold) -> &[(usize, usize, i64)] {
+    match hold {
+        Hold::Folded(folded) => folded,
+        _ => &[],
+    }
 }
 
 fn made(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
@@ -281,6 +313,17 @@ fn rewritten(one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
         ..what.clone()
     };
     Arc::new(Insn { what: Some(what), spill_reload: false, spill_store: false, ..(**one).clone() })
+}
+
+/// Whether `one` still encodes with slot `at` in a register: an x87 store
+/// or a far-pointer load takes only memory.
+fn registrable(one: &Arc<Insn>, at: i64) -> bool {
+    let touched = touch(one);
+    if !touched.reads.contains(&at) && !touched.writes.contains(&at) {
+        return true;
+    }
+    let homes = BTreeMap::from([(at, word(Register::DI))]);
+    rewritten(one, &homes).what.as_ref().is_some_and(|what| select::emit(what, 0, None, false, false, None).is_some())
 }
 
 /// What holding a slot in a register saves each trip: a reload whose
@@ -424,7 +467,7 @@ pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.
-pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) -> LirBody {
+pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
     let graph = _graph(&body.blocks);
     let predecessors = loops::predecessors(&graph);
     let mut found = loops::loops(&graph, Some(body.entry));
@@ -466,11 +509,12 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
         let registers = free(body, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
-            .flat_map(|(_, folded)| folded.iter().flatten().map(|(block, position, _)| (*block, *position)))
+            .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
             .collect::<BTreeSet<_>>();
         // Most saved first.
         let mut ranked = slots
             .iter()
+            .filter(|at| insns().all(|insn| registrable(insn, **at)))
             .map(|at| {
                 let mut saved = 0;
                 for block in &one.body {
@@ -489,8 +533,9 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
         let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);
         let mut homes = BTreeMap::<i64, Loc>::new();
         let mut hosts = BTreeMap::<i64, usize>::new();
-        for (host, ((saved, at), (root, _))) in ranked.iter().zip(&registers).enumerate() {
-            let cost = entered * costs.load + if stored(*at) { left * costs.store } else { 0 };
+        for (host, ((saved, at), (root, hold))) in ranked.iter().zip(&registers).enumerate() {
+            let parked = if matches!(hold, Hold::Parked(_)) { (entered + left) * park } else { 0 };
+            let cost = entered * costs.load + if stored(*at) { left * costs.store } else { 0 } + parked;
             if saved * ranges::PER_LEVEL > cost {
                 homes.insert(*at, word(*root));
                 hosts.insert(*at, host);
@@ -509,7 +554,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
             let before = homes.len();
             let unfolded = hosts
                 .iter()
-                .filter(|(_, host)| registers[**host].1.iter().flatten().any(|(_, _, from)| !homes.contains_key(from)))
+                .filter(|(_, host)| folds(&registers[**host].1).iter().any(|(_, _, from)| !homes.contains_key(from)))
                 .map(|(at, _)| *at)
                 .collect::<Vec<_>>();
             for at in unfolded {
@@ -527,13 +572,20 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
             .values()
             .flat_map(|host| {
                 let root = registers[*host].0;
-                registers[*host].1.iter().flatten().map(move |(block, position, from)| (*block, *position, *from, root))
+                folds(&registers[*host].1).iter().map(move |(block, position, from)| (*block, *position, *from, root))
             })
             .collect::<Vec<_>>();
         if homes.is_empty() {
             continue;
         }
         let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if reg.register == Register::BP));
+        let parked = hosts
+            .values()
+            .filter_map(|host| match &registers[*host] {
+                (root, Hold::Parked(width)) => Some(Loc::Reg(Reg { register: target::named(*root, i64::from(*width)), width: *width })),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         for at in &one.body {
             let block = &blocks[index[at]];
             let mut insns = Vec::new();
@@ -570,6 +622,10 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
             let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
             let mut place = insns.len() - usize::from(jumps);
             let near = insns.get(place.saturating_sub(1)).map_or(*at, |insn| insn.at);
+            for register in &parked {
+                insns.insert(place, made(near, Operation::Push, "push", vec![], vec![register.clone()]));
+                place += 1;
+            }
             for (slot, home) in &homes {
                 let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(*slot))]);
                 if matches!(home, Loc::Reg(reg) if reg.register == Register::BP) {
@@ -597,6 +653,10 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts) 
                     insns.insert(place, made(near, Operation::Move, "mov", vec![Loc::Mem(cell(*slot))], vec![home.clone()]));
                     place += 1;
                 }
+            }
+            for register in parked.iter().rev() {
+                insns.insert(place, made(near, Operation::Pop, "pop", vec![register.clone()], vec![]));
+                place += 1;
             }
             blocks[index[to]] = block.with_insns(insns);
         }
