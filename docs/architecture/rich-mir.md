@@ -234,31 +234,35 @@ which proves their attributes, so they come with step 4.
   whole with the reason.
 - A lint checks that raised MIR makes no poison BASIC defines, before any
   pass can exploit it.
-- An adapter lowers MIR through the old backend, so the e2e answers check
-  the new MIR, and `lli` agrees with them where it can run.
 
 HIR, the common frontend of QB source and Nib, emits MIR first
 (`llrm_hir::mir`), as clang's CodeGen emits LLVM IR: data objects become
 globals, local places allocas, calls to routines the module does not
-declare `@llrm.qb.*` calls. `tools/hir-mir-corpus.sh` emits the QB suite,
-has `llrm-mir` and `opt` verify each module, and counts the refusals by
-reason.
+declare `@llrm.qb.*` calls. `tools/hir-mir-corpus.sh` emits the QB suite
+and the Nib fixtures, has `llrm-mir` and `opt` verify each module, and
+counts the refusals by reason.
 
 The lint is `llrm_mir::lint::poison`: a raise's MIR holds no `poison`
 constant, no flag but a GEP's `inbounds`, and no use of an alloca before
 a store of its whole type. HIR's frame starts zeroed, so the emitter zeroes
 each local, one alloca per group of places that overlap.
 
-### 5. Port the passes
+### 5. Lower from MIR
 
-- One pass at a time onto MIR, against `.ll` fixtures and the interpreter.
+- Lowering reads only MIR and the side tables -- a call's ABI, a data
+  object's placement -- into the existing LIR, so unoptimized e2e answers
+  check the new MIR, and `lli` agrees with them where it can run.
+
+An adapter into the old MIR was planned here; it needed the old MIR's call
+ABIs, frame references and flags, a second lowering that this step would
+delete, so the permanent one comes first.
+
+### 6. Port the passes
+
+- One pass at a time onto MIR, against `.ll` fixtures, the interpreter and
+  the e2e answers, with quality judged by `docs/measurement/targets.md`.
   Where LLVM has the pass, llrm's follows it.
 - Representation changes stay apart from optimization-policy changes.
-
-### 6. Lower from MIR
-
-- Lowering reads only MIR and the side tables; step 4's adapter goes after
-  output parity.
 
 ### 7. Delete the old MIR
 
