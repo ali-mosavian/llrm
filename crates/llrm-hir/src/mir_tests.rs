@@ -144,3 +144,21 @@ fn a_far_pointer_offset_is_a_gep_at_the_index_width() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("  %1 = getelementptr i8, ptr addrspace(1) %0, i16 6\n  ret ptr addrspace(1) %1\n"), "{text}");
 }
+
+/// `CINT(x)`: BASIC rounds to nearest, ties to even, as `llvm.lrint` does.
+#[test]
+fn a_float_converted_to_an_integer_is_rounded() {
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
+    let convert = Instruction::new(1, Op::Convert, vec![2], vec![Operand::value_ref(1)]);
+    let block = Block::new(1, vec![convert], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "ROUND%", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %1 = call i16 @llvm.lrint.i16.f64(double %0)\n  ret i16 %1\n"), "{text}");
+}
