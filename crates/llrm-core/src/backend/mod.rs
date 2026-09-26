@@ -25,6 +25,7 @@ pub mod jumps;
 pub mod lanes;
 pub mod layout;
 pub mod liveness;
+pub mod globals;
 pub mod isel;
 #[cfg(test)]
 mod isel_tests;

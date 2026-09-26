@@ -1586,9 +1586,13 @@ fn _clobbers(
     if op.kind != Kind::Call {
         return BTreeSet::new();
     }
-    let contract = _contract(op, calls, contracts);
+    call_clobbers(&_contract(op, calls, contracts))
+}
+
+/// The registers a call under `contract` destroys.
+pub fn call_clobbers(contract: &runtime::Contract) -> BTreeSet<Register> {
     let names = _names();
-    let disturbed = runtime::disturbs(&contract);
+    let disturbed = runtime::disturbs(contract);
     // A contract is about the 8086 and names no FS or GS; one reaching user
     // code, or written for the 386, runs code that may use them.
     let mut out: BTreeSet<Register> = if disturbed == *runtime::EVERY || contract.i386 {
@@ -1623,10 +1627,15 @@ fn _clobbered_high(
     if op.kind != Kind::Call {
         return BTreeSet::new();
     }
-    if !_contract(op, calls, contracts).i386 {
+    call_clobbered_high(&_contract(op, calls, contracts))
+}
+
+/// The registers a call under `contract` keeps only the 16-bit half of.
+pub fn call_clobbered_high(contract: &runtime::Contract) -> BTreeSet<Register> {
+    if !contract.i386 {
         return BTreeSet::new();
     }
-    let whole: BTreeSet<Register> = _clobbers(op, calls, contracts, None).into_iter().map(ir::root).collect();
+    let whole: BTreeSet<Register> = call_clobbers(contract).into_iter().map(ir::root).collect();
     target::AVAILABLE.into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
 }
 

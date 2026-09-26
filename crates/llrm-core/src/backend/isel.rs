@@ -11,7 +11,8 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, IntPredicate, Module, Opcode, Type, TypeId};
 
-use crate::backend::lower::{_read, _written};
+use crate::abi::runtime::Contract;
+use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
@@ -35,6 +36,19 @@ pub enum Home {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unselected(pub String);
 
+/// A function's LIR, and the calls it makes: each call's callee by the
+/// call's `at`, and which of them are far.
+#[derive(Clone, Debug)]
+pub struct Selected {
+    pub body: LirBody,
+    pub calls: IndexMap<i64, String>,
+    pub far: BTreeSet<i64>,
+}
+
+/// A call's contract, asked of the ABI that knows the callee: its name,
+/// whether it pops its own arguments, and how many bytes were pushed.
+pub type Contracts<'c> = &'c dyn Fn(&str, bool, i64) -> Result<Contract, String>;
+
 fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
 }
@@ -45,9 +59,11 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 enum Pointer {
     Frame(i64),
     Based { base: Held, offset: i64 },
+    /// A near global's symbol, and a displacement from it.
+    Global { space: Space, index: i64, offset: i64 },
 }
 
-pub fn selected(module: &Module, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
+pub fn selected(module: &Module, name: &str, convention: &Convention, contracts: Contracts<'_>) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -70,11 +86,15 @@ pub fn selected(module: &Module, name: &str, convention: &Convention) -> Result<
         chains: IndexMap::default(),
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
+        contracts,
+        calls: IndexMap::default(),
+        far: BTreeSet::new(),
     };
-    selector.body(name, convention)
+    let body = selector.body(name, convention)?;
+    Ok(Selected { body, calls: selector.calls, far: selector.far })
 }
 
-struct Selector<'m> {
+struct Selector<'m, 'c> {
     module: &'m Module,
     function: &'m Function,
     layout: DataLayout,
@@ -96,9 +116,12 @@ struct Selector<'m> {
     chains: IndexMap<InstId, Vec<i64>>,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
+    contracts: Contracts<'c>,
+    calls: IndexMap<i64, String>,
+    far: BTreeSet<i64>,
 }
 
-impl Selector<'_> {
+impl Selector<'_, '_> {
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
         let layout = function.layout();
@@ -379,9 +402,15 @@ impl Selector<'_> {
             out.push(insn(at, what));
             return Ok(held);
         }
-        let Operand::Value(value) = operand else { return refuse("a global's address") };
-        match self.folded(value)? {
-            None => Ok(Held { value: self.value(value), width }),
+        let pointer = match operand {
+            Operand::Value(value) => self.folded(value)?,
+            _ => Some(self.global(operand)?),
+        };
+        match pointer {
+            None => {
+                let Operand::Value(value) = operand else { unreachable!("a constant is folded") };
+                Ok(Held { value: self.value(value), width })
+            }
             Some(pointer) => {
                 let held = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(pointer, held)));
@@ -401,12 +430,16 @@ impl Selector<'_> {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
+            Pointer::Global { space, index, offset } => {
+                let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
+                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])
+            }
         }
     }
 
     /// Where a pointer operand points.
     fn pointer(&mut self, operand: Operand) -> Result<Pointer, Unselected> {
-        let Operand::Value(value) = operand else { return refuse("a constant address") };
+        let Operand::Value(value) = operand else { return self.global(operand) };
         if let Some(pointer) = self.folded(value)? {
             return Ok(pointer);
         }
@@ -432,12 +465,19 @@ impl Selector<'_> {
             return Ok(None);
         }
         let offset = offset as i64;
-        let pointer = match self.pointer(instruction.operands[0])? {
-            Pointer::Frame(disp) => Pointer::Frame(disp + offset),
-            Pointer::Based { base, offset: was } => Pointer::Based { base, offset: was + offset },
-        };
+        let pointer = self.pointer(instruction.operands[0])?.moved(offset);
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
+    }
+
+    /// A near global's address, and a constant displacement from it.
+    fn global(&self, operand: Operand) -> Result<Pointer, Unselected> {
+        let Operand::Constant(id) = operand else { unreachable!("a constant") };
+        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(Unselected)?;
+        if self.module.global(global).address_space != 0 {
+            return refuse("a far global");
+        }
+        Ok(Pointer::Global { space: crate::backend::globals::space(self.module, global), index: i64::from(global.0), offset })
     }
 
     /// A GEP's indices, each a constant or `None`.
@@ -496,10 +536,7 @@ impl Selector<'_> {
         let start = match self.pointer(instruction.operands[0])? {
             Pointer::Based { base, offset: 0 } if offset == 0 => base,
             pointer => {
-                let moved = match pointer {
-                    Pointer::Frame(disp) => Pointer::Frame(disp + offset as i64),
-                    Pointer::Based { base, offset: was } => Pointer::Based { base, offset: was + offset as i64 },
-                };
+                let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(moved, start)));
                 start
@@ -548,6 +585,7 @@ impl Selector<'_> {
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
             Pointer::Frame(disp) => frame(disp, width),
+            Pointer::Global { space, index, offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
         }
     }
@@ -711,7 +749,100 @@ impl Selector<'_> {
                 }
                 out.push(Arc::new(one));
             }
+            Opcode::Call(info) => self.call(inst, info.calling_convention, at, out)?,
+            // Nothing runs after it: the block ends with what came before.
+            Opcode::Unreachable => {}
             _ => return refuse(instruction.opcode.mnemonic()),
+        }
+        Ok(())
+    }
+
+    /// A direct call: its arguments pushed as its convention orders them,
+    /// its result delivered in ax or dx:ax, and what its contract says it
+    /// destroys and who pops.
+    fn call(&mut self, inst: InstId, convention: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let (callee, arguments) = instruction.operands.split_last().expect("a callee");
+        let Operand::Constant(callee) = *callee else { return refuse("an indirect call") };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return refuse("a call of a constant") };
+        let global = self.module.global(global);
+        let name = global.name.clone().unwrap_or_default();
+        if llrm_mir::intrinsics::is_reserved(&name) {
+            return refuse(format!("@{name}"));
+        }
+        let far = match global.address_space {
+            0 => false,
+            1 => true,
+            other => return refuse(format!("code in address space {other}")),
+        };
+        // C pushes right to left and its caller pops; BASIC pushes left to right and pops its own.
+        let (in_order, pops) = match convention {
+            0 => (false, false),
+            llrm_mir::opcode::BASIC => (true, true),
+            other => return refuse(format!("calling convention {other}")),
+        };
+        let mut order: Vec<usize> = (0..arguments.len()).collect();
+        if !in_order {
+            order.reverse();
+        }
+        let mut pushed = 0;
+        for index in order {
+            let argument = arguments[index];
+            let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            let mut held = self.held(argument, ty, at, out)?;
+            if held.width == 1 {
+                let word = Held { value: self.fresh(), width: 2 };
+                out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(word)], vec![Loc::Held(held)])));
+                held = word;
+            }
+            pushed += i64::from(held.width);
+            out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
+        }
+        let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
+        let mut delivers = Vec::new();
+        let mut result = None;
+        if let Some(value) = instruction.result {
+            let width = self.width(instruction.ty)?;
+            let held = Held { value: self.value(value), width };
+            if width == 4 {
+                // dx:ax, joined into the dword register the value lives in.
+                let (low, high) = (Held { value: self.fresh(), width: 2 }, Held { value: self.fresh(), width: 2 });
+                delivers = vec![(low, Register::EAX), (high, Register::EDX)];
+                result = Some((held, low, high));
+            } else {
+                delivers = vec![(held, Register::EAX)];
+            }
+        }
+        let what = semantics(Operation::Call, "call", vec![], vec![]);
+        out.push(Arc::new(Insn {
+            clobbers: call_clobbers(&contract),
+            clobbers_high: call_clobbered_high(&contract),
+            defines: delivers.iter().map(|(held, _)| held.value).collect(),
+            delivers,
+            ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        }));
+        self.calls.insert(at, name);
+        if far {
+            self.far.insert(at);
+        }
+        if contract.caller_cleanup > 0 {
+            let sp = Loc::Reg(crate::model::ir::Reg { register: Register::SP, width: 2 });
+            let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
+        }
+        if let Some((held, low, high)) = result {
+            let (wide_low, wide_high, shifted) = (self.fresh(), self.fresh(), self.fresh());
+            let dword = |value| Held { value, width: 4 };
+            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+            for what in [
+                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_low))], vec![Loc::Held(low)]),
+                semantics(Operation::Extend, "movzx", vec![Loc::Held(dword(wide_high))], vec![Loc::Held(high)]),
+                semantics(Operation::Binary, "shl", vec![Loc::Held(dword(shifted))], vec![Loc::Held(dword(wide_high)), sixteen]),
+                semantics(Operation::Binary, "or", vec![Loc::Held(held)], vec![Loc::Held(dword(shifted)), Loc::Held(dword(wide_low))]),
+            ] {
+                out.push(insn(at, what));
+            }
         }
         Ok(())
     }
@@ -737,6 +868,16 @@ impl Selector<'_> {
         match self.function.value(condition).def {
             ValueDef::Instruction(inst) if self.fused.contains(&inst) => Some(inst),
             _ => None,
+        }
+    }
+}
+
+impl Pointer {
+    fn moved(self, by: i64) -> Pointer {
+        match self {
+            Pointer::Frame(disp) => Pointer::Frame(disp + by),
+            Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
+            Pointer::Global { space, index, offset } => Pointer::Global { space, index, offset: offset + by },
         }
     }
 }
