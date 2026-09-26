@@ -860,35 +860,22 @@ pub fn _reachable(body: &LirBody, blocks: Vec<LirBlock>) -> LirBody {
         reached.insert(one);
         work.extend(by_at[&one].succ.iter().copied());
     }
-    // An optimizer may make a decoded region unreachable while leaving its
-    // byte ownership on inert NOTHING anchors.  Those anchors emit no code,
-    // but layout still needs them to prove that every source byte was
-    // deliberately replaced.  Dropping the block made a fully unrolled BC
-    // loop refuse fresh emission with an apparent hole in its source map.
-    // Keep only genuinely inert orphan blocks; unreachable machine work still
-    // disappears as before.
-    let ownership: HashSet<i64> = blocks
-        .iter()
-        .filter(|block| {
-            !reached.contains(&block.at)
-                && !block.insns.is_empty()
-                && block
-                    .insns
-                    .iter()
-                    .all(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing))
-                && block.insns.iter().any(|one| {
-                    one.covers.is_some_and(|(start, end)| start < end) || !one.spread.is_empty()
-                })
-        })
-        .map(|block| block.at)
-        .collect();
-    body.with_blocks(blocks
+    // An unreachable block's work goes and its source bytes stay, as
+    // byte-only markers: layout must account for every byte. Dropped whole,
+    // a fully unrolled BC loop left a hole in its source map, and a threaded
+    // `jmp` passage lost its three bytes.
+    body.with_blocks(
+        blocks
             .iter()
-            .filter(|block| reached.contains(&block.at) || ownership.contains(&block.at))
-            .map(|block| {
-                if ownership.contains(&block.at) { LirBlock { succ: Vec::new(), ..block.clone() } } else { block.clone() }
+            .filter_map(|block| {
+                if reached.contains(&block.at) {
+                    return Some(block.clone());
+                }
+                let kept: Vec<Arc<Insn>> = block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
+                (!kept.is_empty()).then(|| LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) })
             })
-            .collect())
+            .collect(),
+    )
 }
 
 #[cfg(test)]

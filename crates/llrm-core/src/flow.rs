@@ -127,13 +127,32 @@ pub enum Checked {
 /// Run one machine phase and verify what it returned.
 pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
+    let owned = body.owned_bytes();
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+    let now = body.owned_bytes();
+    if now != owned {
+        let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
+        let listed = |bytes: Vec<i64>| bytes.iter().map(|one| format!("{one:#x}")).collect::<Vec<_>>().join(" ");
+        return Err(Checked::Malformed(Malformed(format!("{stage}: lost source bytes [{}], gained [{}]", listed(lost), listed(gained)))));
+    }
     if stage == "jumps" && crate::support::debug::enabled("cost") {
         llrm_support::debug!("cost", "{}", crate::backend::executed::summary(&body));
     }
     Ok(body)
+}
+
+/// What sorted `one` has that sorted `other` lacks, counting repeats.
+fn difference(one: &[i64], other: &[i64]) -> Vec<i64> {
+    let mut other = other.iter().peekable();
+    one.iter()
+        .filter(|&&byte| {
+            while other.next_if(|&&next| next < byte).is_some() {}
+            other.next_if_eq(&&byte).is_none()
+        })
+        .copied()
+        .collect()
 }
 
 #[cfg(test)]
@@ -164,6 +183,33 @@ mod tests {
             body.blocks[0].insns = vec![Arc::new(broken)];
             Ok(body)
         }
+    }
+
+    struct DropsBytes;
+
+    impl LIRTransform for DropsBytes {
+        fn class_name(&self) -> &'static str {
+            "DropsBytes"
+        }
+
+        fn transform(&mut self, mut body: LirBody) -> Result<LirBody, String> {
+            body.blocks[0].insns.remove(0);
+            Ok(body)
+        }
+    }
+
+    /// jumps deleted a block holding only a source `jmp`, and its three
+    /// bytes had no owner; nothing noticed.
+    #[test]
+    fn test_a_phase_that_loses_source_bytes_is_malformed() {
+        let jump = ir::Semantics { name: Some("jmp".into()), target: Some(1), ..ir::Semantics::new(Operation::Jump) };
+        let returned = ir::Semantics { name: Some("ret".into()), ..ir::Semantics::new(Operation::Return) };
+        let block = LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])), Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![]))]);
+        let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false) else {
+            panic!("the gate let three source bytes go");
+        };
+        assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
     }
 
     #[test]
