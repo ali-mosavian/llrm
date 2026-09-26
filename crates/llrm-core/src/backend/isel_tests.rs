@@ -634,6 +634,27 @@ define i16 @f() addrspace(1) {{
     );
 }
 
+/// A far null is offset 0, selector 0: runtime.nib's errors.say stored one
+/// and isel refused it as "an address of no global".
+#[test]
+fn test_a_far_null_is_two_zero_words() {
+    let text = "declare void @take(ptr addrspace(1))
+define void @f() addrspace(1) {
+  %cell = alloca ptr addrspace(1)
+  store ptr addrspace(1) null, ptr %cell
+  call void @take(ptr addrspace(1) null)
+  ret void
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov ax, 0", "mov bx, 0", "mov word ptr [bp-4], ax", "mov word ptr [bp-2], bx",
+            "push bx", "push ax", "call take", "add sp, 4", "leave", "retf",
+        ]
+    );
+}
+
 /// A far pointer is its offset and selector, as a type legalizer expands a
 /// value no register holds: accessed through es, pushed selector first,
 /// returned in dx:ax, and a near pointer made far in DGROUP.
