@@ -35,7 +35,7 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    program.modules.iter().map(emit_module).collect()
+    program.modules.iter().map(|one| emit_module(one, program.array_order)).collect()
 }
 
 type Emit<T> = Result<T, String>;
@@ -69,6 +69,7 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
 }
 
 struct Tables<'h> {
+    array_order: model::ArrayOrder,
     types: HashMap<i64, &'h model::Type>,
     callables: HashMap<&'h str, &'h model::Callable>,
     /// Each data object's global, by its id: a place's symbol.
@@ -77,10 +78,11 @@ struct Tables<'h> {
     callees: HashMap<String, ConstantId>,
 }
 
-fn emit_module(hir: &model::Module) -> Emitted {
+fn emit_module(hir: &model::Module, array_order: model::ArrayOrder) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut tables = Tables {
+        array_order,
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
@@ -430,21 +432,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Operand::PlaceRef(one) => {
                 let place = self.places[&one.place];
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?;
-                let pointer = match place.storage {
-                    Storage::Local => match self.slots.get(&place.id) {
-                        Some(&slot) => slot,
-                        None => {
-                            let slot = self.b.alloca(ty, "");
-                            self.slots.insert(place.id, slot);
-                            slot
-                        }
-                    },
-                    Storage::Parameter => return Err("a parameter-storage place".to_owned()),
-                    _ => {
-                        let global = Value::Constant(self.tables.data[&place.symbol]);
-                        self.offset(global, place.offset, false)
-                    }
-                };
+                Ok((self.base(place)?, ty, place.volatile))
+            }
+            Operand::ArrayElement(one) => {
+                let place = self.places[&one.place];
+                let element = self.tables.types[&place.r#type].element.ok_or("an array element of a non-array")?;
+                let (pointer, ty) = self.element(place, &one.indices, 0, element)?;
+                Ok((pointer, ty, place.volatile))
+            }
+            Operand::ProjectedPlace(one) => {
+                let place = self.places[&one.place];
+                let (pointer, ty) = self.element(place, &one.indices, one.offset, one.r#type)?;
                 Ok((pointer, ty, place.volatile))
             }
             Operand::IndirectPlace(one) => {
@@ -452,11 +450,65 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
                 Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile))
             }
-            Operand::ArrayElement(_) => Err("an array element".to_owned()),
-            Operand::ProjectedPlace(_) => Err("a projected place".to_owned()),
             Operand::DescriptorPlace(_) => Err("a string descriptor field".to_owned()),
             Operand::ValueRef(_) | Operand::Constant(_) => Err("a value where a place belongs".to_owned()),
         }
+    }
+
+    /// Where a place starts.
+    fn base(&mut self, place: &model::Place) -> Emit<Value> {
+        match place.storage {
+            Storage::Local => {
+                if let Some(&slot) = self.slots.get(&place.id) {
+                    return Ok(slot);
+                }
+                let ty = stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?;
+                let slot = self.b.alloca(ty, "");
+                self.slots.insert(place.id, slot);
+                Ok(slot)
+            }
+            Storage::Parameter => Err("a parameter-storage place".to_owned()),
+            _ => {
+                let global = Value::Constant(self.tables.data[&place.symbol]);
+                Ok(self.offset(global, place.offset, false))
+            }
+        }
+    }
+
+    /// The element of an array place that `indices` name, `offset` bytes
+    /// in, holding `ty`; no index names the place itself. The frontend
+    /// promises the element is inside the array.
+    fn element(&mut self, place: &model::Place, indices: &[Operand], offset: i64, ty: i64) -> Emit<(Value, TypeId)> {
+        let base = self.base(place)?;
+        let stored = stored_type(&mut self.b.context.types, self.tables.types[&ty])?;
+        if indices.is_empty() {
+            return Ok((self.offset(base, offset, true), stored));
+        }
+        let array = self.tables.types[&place.r#type];
+        let element = self.tables.types[&array.element.ok_or("an indexed non-array")?];
+        let element = stored_type(&mut self.b.context.types, element)?;
+        let mut dimensions: Vec<(&Operand, &(i64, i64))> = indices.iter().zip(&array.bounds).collect();
+        if self.tables.array_order == model::ArrayOrder::ColumnMajor {
+            dimensions.reverse();
+        }
+        let mut linear: Option<Value> = None;
+        for (index, &(lower, upper)) in dimensions {
+            let index = self.value(index)?;
+            let bits = self.b.context.types.int_bits(self.b.type_of(index)).ok_or("a non-integer index")?;
+            let first = self.b.int(bits, i128::from(lower));
+            let adjusted = self.b.binary(BinaryOp::Sub, index, first, Flags::default(), "");
+            linear = Some(match linear {
+                None => adjusted,
+                Some(previous) => {
+                    let count = self.b.int(bits, i128::from(upper - lower + 1));
+                    let scaled = self.b.binary(BinaryOp::Mul, previous, count, Flags::default(), "");
+                    self.b.binary(BinaryOp::Add, scaled, adjusted, Flags::default(), "")
+                }
+            });
+        }
+        let linear = linear.expect("an index");
+        let pointer = self.b.gep(element, base, &[linear], Flags::INBOUNDS, "");
+        Ok((self.offset(pointer, offset, true), stored))
     }
 
     /// `pointer` advanced by `offset` bytes.

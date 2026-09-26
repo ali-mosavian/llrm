@@ -72,3 +72,28 @@ fn relocated_data_becomes_pointers_in_its_initializer() {
         ]
     );
 }
+
+/// `DIM a(1 TO 3, 0 TO 4)`, column-major: `a(i, j)` is element
+/// `j * 3 + (i - 1)`.
+#[test]
+fn an_array_element_is_its_linear_index_into_the_array() {
+    use crate::model::{ArrayElement, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
+    let element = Operand::ArrayElement(ArrayElement { place: 1, indices: vec![Operand::value_ref(1), Operand::value_ref(2)] });
+    let load = Instruction::new(1, Op::Load, vec![3], vec![element]);
+    let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let places = vec![Place::new(1, "A", 2, Storage::Local, -30)];
+    let mut function = Function::new(1, "AT%", 1, values, places, vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    let mut array = Type::new(2, "array", TypeKind::Array, 30);
+    (array.element, array.rank, array.bounds) = (Some(1), 2, vec![(1, 3), (0, 4)]);
+    program.modules[0].types.push(array);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = "  %2 = alloca [30 x i8]\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
+    assert!(text.contains(body), "{text}");
+}
