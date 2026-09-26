@@ -257,6 +257,12 @@ An adapter into the old MIR was planned here; it needed the old MIR's call
 ABIs, frame references and flags, a second lowering that this step would
 delete, so the permanent one comes first.
 
+`backend::isel` is that lowering: it selects instructions over virtual
+registers, folds allocas and constant GEPs into addressing modes, and keeps
+a branch's only comparison as flags. What an instruction does to memory is
+the `Insn`'s own answer (`volatile`, `barrier`, `unmodeled_write`), not the
+old MIR operation's.
+
 ### 6. Port the passes
 
 - One pass at a time onto MIR, against `.ll` fixtures, the interpreter and

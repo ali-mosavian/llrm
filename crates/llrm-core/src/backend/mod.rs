@@ -25,6 +25,9 @@ pub mod jumps;
 pub mod lanes;
 pub mod layout;
 pub mod liveness;
+pub mod isel;
+#[cfg(test)]
+mod isel_tests;
 pub mod lower;
 pub mod lower_floats;
 pub mod lower_int64;

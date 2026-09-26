@@ -199,6 +199,7 @@ dependencies = [
  "indexmap",
  "llrm-cycles",
  "llrm-hir",
+ "llrm-mir",
  "llrm-omf",
  "llrm-support",
  "num-bigint",
