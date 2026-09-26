@@ -12,7 +12,6 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
-use crate::analysis::effects;
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
 use crate::analysis::regions;
 use crate::backend::allocate::Error;
@@ -775,12 +774,12 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
             return false;
         }
     }
+    if one.unmodeled_write() {
+        return true;
+    }
     let Some(op) = op else {
         return false;
     };
-    if effects::unmodeled_write(op) {
-        return true;
-    }
     for reference in &op.stores {
         if _in_frame(cell) && reference.excludes.contains(&mir::WHOLE_FRAME) {
             continue;
@@ -2184,7 +2183,8 @@ mod tests {
 
     #[test]
     fn test_parameter_is_reloaded_across_what_spares_the_frame() {
-        for between in ["call sparing the frame", "call", "call unstated", "pointer store sparing the frame", "pointer store"]
+        for between in
+            ["call sparing the frame", "call", "call unstated", "call with no MIR", "pointer store sparing the frame", "pointer store"]
         {
             let param = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
             let load = insn(
@@ -2209,7 +2209,8 @@ mod tests {
                 }
                 let mut middle =
                     insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
-                middle.op = Some(Arc::new(site));
+                // A call lowered from the new MIR carries no old operation: it may write anything.
+                middle.op = (between != "call with no MIR").then(|| Arc::new(site));
                 middle.clobbers = BTreeSet::from([Register::EAX]);
                 middle
             } else {
