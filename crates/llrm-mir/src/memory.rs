@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use crate::context::{ConstantKind, Context, GlobalId};
-use crate::module::{Function, GlobalKind, InstId, Module, Operand};
+use crate::datalayout::DataLayout;
+use crate::module::{Function, GlobalKind, InstId, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -76,4 +77,15 @@ pub fn of(context: &Context, callees: &Callees, function: &Function, inst: InstI
         }
         _ => Effects::NONE,
     }
+}
+
+/// Whether nothing writes the memory `pointer` points into while the
+/// function runs: it lies in a `noalias readonly` parameter's, as LLVM's
+/// `getModRefInfoMask` finds.
+pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, pointer: Operand) -> bool {
+    let (Operand::Value(base), _) = crate::valuetracking::underlying(context, layout, function, pointer) else { return false };
+    let ValueDef::Argument(at) = function.value(base).def else { return false };
+    let attrs = &function.parameter_attrs[at as usize];
+    let has = |flag: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag));
+    has("noalias") && has("readonly")
 }

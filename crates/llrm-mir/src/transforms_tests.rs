@@ -335,3 +335,91 @@ b4:
 "
     );
 }
+
+/// A load from a `noalias readonly` parameter reads what nobody writes
+/// while the function runs, so a call between two loads leaves the first
+/// current.
+#[test]
+fn test_earlycse_reuses_a_load_no_write_reaches() {
+    let text = "declare void @write()
+
+define i16 @g(ptr noalias readonly %v, ptr %w) {
+b1:
+  %0 = load i16, ptr %v
+  %1 = load i16, ptr %w
+  call void @write()
+  %2 = load i16, ptr %v
+  %3 = load i16, ptr %w
+  %4 = add i16 %0, %2
+  %5 = add i16 %1, %3
+  %6 = add i16 %4, %5
+  ret i16 %6
+}
+";
+    let out = through(&["earlycse"], text);
+    assert_eq!(out.matches("load i16, ptr %v").count(), 1, "{out}");
+    assert_eq!(out.matches("load i16, ptr %w").count(), 2, "{out}");
+}
+
+/// matmul8 reloaded each view descriptor's shape and data pointer in its
+/// innermost loop, 30024 instructions to the old path's 15344: a load that
+/// may run anywhere, of memory the loop cannot write, leaves the loop. One
+/// through a plain pointer, in a loop that stores, stays.
+#[test]
+fn test_licm_hoists_an_invariant_load_from_a_conditional_block() {
+    let text = "define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %7, %b4 ]
+  %1 = icmp slt i16 %0, %n
+  br i1 %1, label %b3, label %b5
+
+b3:
+  %2 = getelementptr i8, ptr %v, i16 2
+  %3 = load i16, ptr %2
+  %4 = load i16, ptr %w
+  %5 = add i16 %3, %4
+  %6 = getelementptr i16, ptr %out, i16 %0
+  store i16 %5, ptr %6
+  br label %b4
+
+b4:
+  %7 = add i16 %0, 1
+  br label %b2
+
+b5:
+  ret void
+}
+";
+    assert_eq!(
+        through(&["licm"], text),
+        "define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
+b1:
+  %0 = getelementptr i8, ptr %v, i16 2
+  %1 = load i16, ptr %0
+  br label %b2
+
+b2:
+  %2 = phi i16 [ 0, %b1 ], [ %7, %b4 ]
+  %3 = icmp slt i16 %2, %n
+  br i1 %3, label %b3, label %b5
+
+b3:
+  %4 = load i16, ptr %w
+  %5 = add i16 %1, %4
+  %6 = getelementptr i16, ptr %out, i16 %2
+  store i16 %5, ptr %6
+  br label %b4
+
+b4:
+  %7 = add i16 %2, 1
+  br label %b2
+
+b5:
+  ret void
+}
+"
+    );
+}

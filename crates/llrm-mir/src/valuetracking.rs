@@ -2,8 +2,9 @@
 //! every pass and selector to ask.
 
 use crate::context::{signed, ConstantKind, Context};
+use crate::datalayout::DataLayout;
 use crate::module::{Function, Operand, ValueDef};
-use crate::opcode::{BinaryOp, CastOp, Opcode};
+use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 
 /// How deep a question recurses, as LLVM's `MaxAnalysisRecursionDepth`.
 const DEPTH: u32 = 6;
@@ -57,4 +58,55 @@ fn _sign_bits(context: &Context, function: &Function, operand: Operand, depth: u
         }
         _ => 1,
     }
+}
+
+/// The object `pointer` points into, through every GEP and address space
+/// cast, and how far into it when every step is constant: LLVM's
+/// `getUnderlyingObject` and `GetPointerBaseWithConstantOffset` in one.
+pub fn underlying(context: &Context, layout: &DataLayout, function: &Function, pointer: Operand) -> (Operand, Option<i64>) {
+    let mut at = pointer;
+    let mut offset = Some(0_i64);
+    for _ in 0..DEPTH {
+        let Operand::Value(value) = at else { break };
+        let ValueDef::Instruction(inst) = function.value(value).def else { break };
+        let instruction = function.instruction(inst);
+        match instruction.opcode {
+            Opcode::GetElementPtr { source } => {
+                let indices: Vec<Option<i128>> = instruction.operands[1..]
+                    .iter()
+                    .map(|&one| match one {
+                        Operand::Constant(id) => match context.get(id).kind {
+                            ConstantKind::Int(bits) => Some(signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64))),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect();
+                let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+                offset = offset.filter(|_| variable.is_empty()).map(|one| one + constant as i64);
+            }
+            Opcode::Cast(CastOp::AddrSpaceCast) => {}
+            _ => break,
+        }
+        at = instruction.operands[0];
+    }
+    (at, offset)
+}
+
+/// Whether `bytes` bytes at `pointer` can be read whether or not the
+/// program would: LLVM's `isDereferenceablePointer`.
+pub fn dereferenceable(context: &Context, layout: &DataLayout, function: &Function, pointer: Operand, bytes: u64) -> bool {
+    let (base, Some(offset)) = underlying(context, layout, function, pointer) else { return false };
+    let Operand::Value(value) = base else { return false };
+    let size = match function.value(value).def {
+        ValueDef::Argument(at) => function.parameter_attrs[at as usize].iter().find_map(|attr| match attr {
+            Attribute::Int(name, bytes) if name == "dereferenceable" => Some(*bytes),
+            _ => None,
+        }),
+        ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
+            Opcode::Alloca { allocated, .. } if function.instruction(inst).operands.is_empty() => Some(layout.alloc_size(&context.types, allocated)),
+            _ => None,
+        },
+    };
+    size.is_some_and(|size| offset >= 0 && offset as u64 + bytes <= size)
 }

@@ -1,6 +1,7 @@
 //! Redundancy removed down the dominator tree: LLVM's EarlyCSE. A pure
 //! instruction equal to one that dominates it is that one; a load of what a
-//! dominating load read or store wrote, with no write since, is that value;
+//! dominating load read or store wrote, with no write since or none
+//! possible, is that value;
 //! and a branch's condition is known on each edge it takes into a block
 //! with no other way in.
 
@@ -143,8 +144,9 @@ impl Cse<'_, '_> {
             }
             Opcode::Load { volatile: false, .. } => {
                 let (pointer, ty, result) = (instruction.operands[0], instruction.ty, instruction.result.expect("a load's value"));
+                let unwritten = |generation| generation == scope.generation || memory::invariant(self.unit.context, self.unit.layout, function, pointer);
                 match scope.memory.get(&(pointer, ty)) {
-                    Some(&(value, generation)) if generation == scope.generation => self.replace(inst, value),
+                    Some(&(value, generation)) if unwritten(generation) => self.replace(inst, value),
                     _ => {
                         scope.memory.insert((pointer, ty), (Operand::Value(result), scope.generation));
                     }
