@@ -17,19 +17,27 @@ fn cdecl(parameters: usize) -> Convention {
     Convention { parameters: (0..parameters).map(|at| Home::Frame(6 + 2 * at as i64)).collect(), returns: vec![Register::EAX] }
 }
 
-fn selected(text: &str, name: &str, convention: &Convention) -> Result<crate::model::lir::LirBody, Unselected> {
+/// QB's contracts: the runtime's measured ones, and conservative ones for
+/// what it does not know.
+fn contracts(name: &str, pops: bool, pushed: i64) -> Result<crate::abi::runtime::Contract, String> {
+    let cleanup = if pops { crate::hir::model::StackCleanup::Callee } else { crate::hir::model::StackCleanup::Caller };
+    let name = name.strip_prefix("llrm.qb.").unwrap_or(name);
+    crate::abi::qb::_contract(name, cleanup, pushed, crate::hir::model::RuntimeProfile::Qb45).map_err(|error| error.0)
+}
+
+fn selected(text: &str, name: &str, convention: &Convention) -> Result<isel::Selected, Unselected> {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
-    isel::selected(&module, name, convention)
+    isel::selected(&module, name, convention, &contracts)
 }
 
 /// The procedure's instructions, through every machine phase.
 fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
-    let body = selected(text, name, convention).expect("selects");
+    let isel::Selected { body, calls, far } = selected(text, name, convention).expect("selects");
     let mut body = flow::verified(body, "isel", true).expect("verified");
-    let frame = Rc::new(RefCell::new(frame::of(&body, None, "", None).expect("a frame")));
+    let frame = Rc::new(RefCell::new(frame::of(&body, Some(&calls), "", None).expect("a frame")));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), None, false, ProfileOrName::Name("486")).expect("phases") {
+    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(&calls), false, ProfileOrName::Name("486")).expect("phases") {
         if phase.class_name() == "Prologue" {
             continue;
         }
@@ -42,12 +50,13 @@ fn listing(text: &str, name: &str, convention: &Convention) -> Vec<String> {
         }
     }
     let body = masm::cleaned_returns(&addressvalues::converted(&body), 0).expect("returns");
+    let callees = calls.iter().map(|(at, callee)| (*at, masm::Callee::new(callee.clone(), far.contains(at)))).collect();
     let reserve = {
         let frame = frame.borrow();
         -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor)
     };
     let procedure =
-        masm::Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None };
+        masm::Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None };
     let module = masm::Module {
         code: "T_TEXT".to_owned(),
         names: IndexMap::default(),
@@ -221,7 +230,7 @@ fn test_what_is_not_selected_yet_is_refused() {
         ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
     ] {
         let text = format!("define i16 @f(ptr %p, i16 %a) {{\n  {body}\n}}\n");
-        assert_eq!(selected(&text, "f", &cdecl(2)), Err(Unselected(why.to_owned())), "{body}");
+        assert_eq!(selected(&text, "f", &cdecl(2)).err(), Some(Unselected(why.to_owned())), "{body}");
     }
 }
 
@@ -412,6 +421,48 @@ no:
             "retf",
             "L0_6:",
             "add ax, cx",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
+
+#[test]
+fn test_calls_push_as_their_convention_orders() {
+    let text = "declare cc1000 i16 @basic(i16, i8) addrspace(1)
+declare i32 @c(i16, i16)
+define i32 @f(i16 %a) {
+  %b = trunc i16 %a to i8
+  %x = call cc1000 addrspace(1) i16 @basic(i16 %a, i8 %b)
+  %y = call i32 @c(i16 %x, i16 5)
+  ret i32 %y
+}
+";
+    let convention = Convention { parameters: vec![Home::Frame(6)], returns: vec![Register::EAX, Register::EDX] };
+    let got = listing(text, "f", &convention);
+    // BASIC's far callee pops `a`, then the byte widened; C's near one is popped by its caller.
+    assert_eq!(
+        got,
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov bl, al",
+            "push ax",
+            "movzx ax, bl",
+            "push ax",
+            "call far ptr basic",
+            "mov bx, 5",
+            "push bx",
+            "push ax",
+            "call c",
+            "add sp, 4",
+            "movzx ebx, ax",
+            "movzx eax, dx",
+            "shl eax, 16",
+            "or eax, ebx",
+            "shld edx, eax, 16",
             "pop bp",
             "retf",
         ]
