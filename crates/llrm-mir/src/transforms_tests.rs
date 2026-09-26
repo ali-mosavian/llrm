@@ -81,3 +81,48 @@ b1:
 ";
     assert_eq!(optimized(text), print::module(&parse::module(text).unwrap()));
 }
+
+/// Nib's frontend spells a condition `icmp`, `sext i1` to i8, `icmp ne 0`,
+/// and scales an index by `mul 1`: three instructions where one decides.
+#[test]
+fn test_instcombine_takes_the_frontends_booleans_and_scales_apart() {
+    let text = "define i16 @f(i16 %i, i16 %n) {
+b1:
+  %0 = icmp ult i16 %i, %n
+  %1 = sext i1 %0 to i8
+  %2 = icmp ne i8 %1, 0
+  br i1 %2, label %b2, label %b3
+
+b2:
+  %3 = mul i16 %n, 1
+  %4 = mul i16 %i, %3
+  %5 = mul i16 %4, 4
+  %6 = sub i16 %5, 3
+  %7 = add i16 %6, 1
+  %8 = add i16 2, 3
+  %9 = add i16 %7, %8
+  ret i16 %9
+
+b3:
+  ret i16 0
+}
+";
+    assert_eq!(
+        optimized(text),
+        "define i16 @f(i16 %i, i16 %n) {
+b1:
+  %0 = icmp ult i16 %i, %n
+  br i1 %0, label %b2, label %b3
+
+b2:
+  %1 = mul i16 %i, %n
+  %2 = shl i16 %1, 2
+  %3 = add i16 %2, 3
+  ret i16 %3
+
+b3:
+  ret i16 0
+}
+"
+    );
+}

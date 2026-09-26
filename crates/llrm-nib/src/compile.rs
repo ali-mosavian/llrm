@@ -363,7 +363,12 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
     }
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
-    assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)
+    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
+    // Beside the MIR stages, what they became.
+    if let Some(directory) = std::env::var_os("LLRM_MIR_STAGES") {
+        std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    }
+    Ok(assembled)
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,

@@ -185,6 +185,12 @@ impl Function {
         self.changes.push(Change::Rewritten(inst));
     }
 
+    /// Replaces an instruction's flags.
+    pub fn set_flags(&mut self, inst: InstId, flags: Flags) {
+        self.instructions[inst.0 as usize].flags = flags;
+        self.changes.push(Change::Rewritten(inst));
+    }
+
     fn replace_uses(&mut self, uses: Vec<Use>, with: Operand) {
         for one in uses {
             self.set_operand(one.user, one.index as usize, with);

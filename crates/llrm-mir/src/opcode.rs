@@ -55,6 +55,23 @@ pub enum IntPredicate {
     Sle,
 }
 
+impl IntPredicate {
+    /// The predicate that holds with the operands exchanged.
+    pub fn swapped(self) -> Self {
+        match self {
+            Self::Ugt => Self::Ult,
+            Self::Uge => Self::Ule,
+            Self::Ult => Self::Ugt,
+            Self::Ule => Self::Uge,
+            Self::Sgt => Self::Slt,
+            Self::Sge => Self::Sle,
+            Self::Slt => Self::Sgt,
+            Self::Sle => Self::Sge,
+            same => same,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FloatPredicate {
     False,
