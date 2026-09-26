@@ -274,6 +274,29 @@ fn test_unreachable_inert_source_ownership_survives_threading() {
     assert_eq!(result.blocks[1].insns, [owned]);
 }
 
+/// A threaded passage's source `jmp` keeps its bytes. Dropped with its block,
+/// it left a hole that made the emitter refuse 11 corpus builds, which then
+/// shipped unoptimized.
+#[test]
+fn test_a_threaded_source_jump_keeps_its_bytes() {
+    let owned = Arc::new(Insn { covers: Some((7, 10)), ..(*_jump(7, 9)).clone() });
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]),
+            block(4, vec![_return(4)], vec![]),
+            block(7, vec![owned], vec![9]),
+            block(9, vec![_return(9)], vec![]),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    assert_eq!(result.blocks[0].succ, [9, 4]);
+    assert_eq!(result.owned_bytes(), [7, 8, 9]);
+}
+
 /// A carried, non-generated LIR occurrence can have no contiguous `covers` span.
 #[test]
 fn test_unreachable_inert_carrier_without_a_byte_span_does_not_crash_threading() {
