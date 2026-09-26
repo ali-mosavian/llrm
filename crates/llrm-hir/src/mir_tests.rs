@@ -97,3 +97,50 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     let body = "  %2 = alloca [30 x i8]\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
     assert!(text.contains(body), "{text}");
 }
+
+/// A far pointer taken apart and put back together.
+#[test]
+fn a_far_pointer_is_a_segment_and_an_offset() {
+    use crate::model::AddressKind;
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
+    let instructions = vec![
+        Instruction::new(1, Op::PointerSegment, vec![2], vec![Operand::value_ref(1)]),
+        Instruction::new(2, Op::PointerOffset, vec![3], vec![Operand::value_ref(1)]),
+        Instruction::new(3, Op::Concat, vec![4], vec![Operand::value_ref(2), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(4)], Vec::new()));
+    let mut function = Function::new(1, "JOIN", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = "  %1 = addrspacecast ptr addrspace(1) %0 to ptr addrspace(2)\n  %2 = ptrtoint ptr addrspace(2) %1 to i16\n  %3 = ptrtoint ptr addrspace(1) %0 to i16\n  %4 = inttoptr i16 %2 to ptr addrspace(2)\n  %5 = addrspacecast ptr addrspace(2) %4 to ptr addrspace(1)\n  %6 = getelementptr i8, ptr addrspace(1) %5, i16 %3\n  ret ptr addrspace(1) %6\n";
+    assert!(text.contains(body), "{text}");
+}
+
+/// A far pointer advanced by a displacement moves its offset alone: a GEP
+/// at the far space's 16-bit index width.
+#[test]
+fn a_far_pointer_offset_is_a_gep_at_the_index_width() {
+    use crate::model::AddressKind;
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }];
+    let advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 6)]);
+    let block = Block::new(1, vec![advance], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "NEXT", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %1 = getelementptr i8, ptr addrspace(1) %0, i16 6\n  ret ptr addrspace(1) %1\n"), "{text}");
+}
