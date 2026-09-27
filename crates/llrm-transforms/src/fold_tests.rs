@@ -1,0 +1,361 @@
+//! Adapted from llrm-core's `optimize/transform_tests.rs` (`folded_tests`)
+//! and the tests of `analysis/consts_tests.rs` that waited for this port,
+//! each body now MIR text run by llrm-mir's interpreter.
+
+use llrm_analysis::testing::{DOS, layout};
+use llrm_mir::module::Module;
+use llrm_mir::passes::ModulePass;
+
+use super::{Fold, folded};
+use crate::testing::{parsed, printed, results};
+
+/// @f folded; whether anything changed.
+fn fold(module: &mut Module) -> bool {
+    let (layout, id) = (layout(module), module.named("f").expect("@f"));
+    folded(module, &layout, id)
+}
+
+/// `text` folded is `expected`, and computes what it did on `inputs`.
+fn check(text: &str, expected: &str, inputs: &[&[i128]]) {
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    assert_eq!(fold(&mut module), text != expected, "{text}");
+    assert_eq!(printed(&module), expected);
+    assert_eq!(results(&module, inputs), before);
+}
+
+/// LNGMXX retained invariant division by 7 because its constant divisor
+/// stayed opaque to LICM.
+#[test]
+fn divisor_constants_propagate_without_reordering() {
+    for divisor in [7, -1] {
+        check(
+            &format!(
+                "define i32 @f(i32 %x) {{
+b0:
+  %k = add i32 {divisor}, 0
+  %q = sdiv i32 %x, %k
+  ret i32 %q
+}}
+"
+            ),
+            &format!(
+                "define i32 @f(i32 %x) {{
+b0:
+  %k = add i32 {divisor}, 0
+  %q = sdiv i32 %x, {divisor}
+  ret i32 %q
+}}
+"
+            ),
+            &[&[0], &[100], &[-50]],
+        );
+    }
+}
+
+#[test]
+fn test_signed_widening_produces_a_whole_long_constant() {
+    for number in [0_i64, 1, 32767, 32768, 65535] {
+        let expected = (number ^ 0x8000) - 0x8000;
+        check(
+            &format!(
+                "define i32 @f() {{
+b0:
+  %w = sext i16 {number} to i32
+  ret i32 %w
+}}
+"
+            ),
+            &format!(
+                "define i32 @f() {{
+b0:
+  %w = sext i16 {expected} to i32
+  ret i32 {expected}
+}}
+"
+            ),
+            &[&[]],
+        );
+    }
+}
+
+/// NDMAX's zero displacement should fold without taking its base for an
+/// integer offset.
+#[test]
+fn test_pointer_displacement_constants_preserve_order_and_width() {
+    check(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = alloca [4 x i16]
+  %d = sub i16 %x, %x
+  %q = getelementptr i8, ptr %a, i16 %d
+  store i16 %x, ptr %q
+  %v = load i16, ptr %a
+  ret i16 %v
+}
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %a = alloca [4 x i16]
+  %d = sub i16 %x, %x
+  %q = getelementptr i8, ptr %a, i16 0
+  store i16 %x, ptr %q
+  %v = load i16, ptr %a
+  ret i16 %v
+}
+",
+        &[&[5], &[-9]],
+    );
+}
+
+/// NESTED kept constant loop bounds in registers; propagating them must
+/// not reverse a subtraction or a compare.
+#[test]
+fn test_constant_subtraction_preserves_operand_order() {
+    check(
+        "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 2, 3
+  %r = sub i16 %b, %x
+  %s = sub i16 %x, %b
+  %t = sub i16 %b, %b
+  %c = icmp slt i16 %b, %x
+  %z = zext i1 %c to i16
+  %u = add i16 %r, %s
+  %v = add i16 %u, %t
+  %w = add i16 %v, %z
+  ret i16 %w
+}
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 2, 3
+  %r = sub i16 5, %x
+  %s = sub i16 %x, 5
+  %t = sub i16 5, 5
+  %c = icmp slt i16 5, %x
+  %z = zext i1 %c to i16
+  %u = add i16 %r, %s
+  %v = add i16 %u, 0
+  %w = add i16 %v, %z
+  ret i16 %w
+}
+",
+        &[&[0], &[5], &[6], &[-3]],
+    );
+}
+
+/// A known factor is the multiply's constant operand, on the right.
+#[test]
+fn test_a_known_factor_becomes_a_multiply_operand() {
+    check(
+        "define i16 @f(i16 %x) {
+b0:
+  %f = add i16 10, 10
+  %m = mul i16 %f, %x
+  %n = mul i16 %x, %f
+  %s = add i16 %m, %n
+  ret i16 %s
+}
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %f = add i16 10, 10
+  %m = mul i16 %x, 20
+  %n = mul i16 %x, 20
+  %s = add i16 %m, %n
+  ret i16 %s
+}
+",
+        &[&[0], &[3], &[-7]],
+    );
+}
+
+/// A division of two known numbers is its quotient or remainder.
+#[test]
+fn test_a_division_of_numbers_is_its_answer() {
+    check(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = sub i16 0, 7
+  %q = sdiv i16 %a, 2
+  %r = srem i16 %a, 2
+  %u = udiv i16 %a, 2
+  %s = add i16 %q, %r
+  %t = add i16 %s, %u
+  ret i16 %t
+}
+",
+        "define i16 @f(i16 %x) {
+b0:
+  %a = sub i16 0, 7
+  %q = sdiv i16 -7, 2
+  %r = srem i16 -7, 2
+  %u = udiv i16 -7, 2
+  %s = add i16 -3, -1
+  %t = add i16 %s, 32764
+  ret i16 %t
+}
+",
+        &[&[0]],
+    );
+}
+
+/// A division that may trap stays: by a value that may be zero, by zero,
+/// and the one quotient that overflows.
+#[test]
+fn test_a_division_that_may_trap_stays() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  %zero = sub i16 %x, %x
+  %a = udiv i16 100, %x
+  %b = udiv i16 100, %zero
+  %c = sdiv i16 -32768, -1
+  %s = add i16 %a, %b
+  %t = add i16 %s, %c
+  ret i16 %t
+}
+";
+    let mut module = parsed(text);
+    fold(&mut module);
+    let printed = printed(&module);
+    for kept in ["udiv i16 100, %x", "udiv i16 100, 0", "sdiv i16 -32768, -1", "add i16 %a, %b", "add i16 %s, %c"] {
+        assert!(printed.contains(kept), "{kept}\n{printed}");
+    }
+}
+
+/// What a store put in a cell is what a plain load after it reads; a
+/// volatile load, and a load after a call that may write, stay.
+#[test]
+fn test_a_load_of_a_known_cell_is_its_number() {
+    check(
+        &format!(
+            "{DOS}@g = global i16 0
+
+define void @clobber() {{
+b0:
+  store i16 1, ptr @g
+  ret void
+}}
+
+define i16 @f(i16 %x) {{
+b0:
+  store i16 9, ptr @g
+  %a = load i16, ptr @g
+  %v = load volatile i16, ptr @g
+  call void @clobber()
+  %b = load i16, ptr @g
+  %s = add i16 %a, %v
+  %t = add i16 %s, %b
+  ret i16 %t
+}}
+"
+        ),
+        &format!(
+            "{DOS}@g = global i16 0
+
+define void @clobber() {{
+b0:
+  store i16 1, ptr @g
+  ret void
+}}
+
+define i16 @f(i16 %x) {{
+b0:
+  store i16 9, ptr @g
+  %a = load i16, ptr @g
+  %v = load volatile i16, ptr @g
+  call void @clobber()
+  %b = load i16, ptr @g
+  %s = add i16 %v, 9
+  %t = add i16 %s, %b
+  ret i16 %t
+}}
+"
+        ),
+        &[&[0]],
+    );
+}
+
+/// A pure operation a join feeds, known on each edge, becomes a join of
+/// its numbers; one reading an unknown value too stays.
+#[test]
+fn test_an_operation_on_a_join_is_folded_on_its_edges() {
+    check(
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+  %y = add i16 %p, %x
+  %s = add i16 %p, 10
+  %t = add i16 %s, %y
+  ret i16 %t
+}
+",
+        "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+  %s1 = phi i16 [ 11, %b1 ], [ 12, %b2 ]
+  %y = add i16 %p, %x
+  %t = add i16 %s1, %y
+  ret i16 %t
+}
+",
+        &[&[0, 5], &[1, 5], &[1, -20]],
+    );
+}
+
+/// Nothing known, nothing changes.
+#[test]
+fn test_a_body_of_unknowns_is_unchanged() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = mul i16 %x, %x
+  br label %b2
+
+b2:
+  %r = phi i16 [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %r
+}
+";
+    check(text, text, &[&[3, 0], &[3, 1]]);
+}
+
+/// The pass puts a compare folding left constant-first back in order.
+#[test]
+fn test_fold_leaves_compares_canonical() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 2, 3
+  %c = icmp slt i16 %b, %x
+  %z = zext i1 %c to i16
+  ret i16 %z
+}
+",
+    );
+    let before = results(&module, &[&[4], &[5], &[6]]);
+    assert_eq!(Fold.run(&mut module), vec![module.named("f").unwrap()]);
+    assert!(printed(&module).contains("icmp sgt i16 %x, 5"));
+    assert_eq!(results(&module, &[&[4], &[5], &[6]]), before);
+}

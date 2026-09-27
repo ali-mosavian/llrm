@@ -3,8 +3,13 @@
 //! its facts and names nothing about the machine.
 
 pub mod canonical;
+#[cfg(test)]
+mod corpus_tests;
 pub mod cfg;
+pub mod dead;
+pub mod decide;
 pub mod edges;
+pub mod fold;
 pub mod gvn;
 pub mod inline;
 pub mod interprocedural;

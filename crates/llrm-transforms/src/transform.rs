@@ -9,8 +9,8 @@
 //!   word halves and copied between registers; here every value is whole
 //!   and nothing is a copy, so `stands` (what a copy numbered as) is the
 //!   substitution itself.
-//! - `live` and `halves`: which half of a value was read. A value is read
-//!   when it has users; `gvn` asked only about flags.
+//! - `halves`: which half of a value was read; a value here is whole.
+//!   `live` is here for Dead.
 //! - `reused_divides`, `divided_twice`: one divide had two answers, one
 //!   dead. `sdiv` and `srem` are separate here, and two equal divides are
 //!   one expression `subexpressions` finds.
@@ -54,13 +54,43 @@ use llrm_analysis::alias::{self, Effect, Procedure};
 use llrm_analysis::memory::{self, MemRef};
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
-use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
+use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::memory::Callees;
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
+
+/// Values something that stays reads, to a fixed point.
+pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeSet<ValueId> {
+    let mut alive = BTreeSet::new();
+    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
+    while let Some(inst) = pending.pop() {
+        for &operand in &function.instruction(inst).operands {
+            if let Operand::Value(value) = operand
+                && alive.insert(value)
+                && let ValueDef::Instruction(defining) = function.value(value).def
+            {
+                pending.push(defining);
+            }
+        }
+    }
+    alive
+}
+
+/// `module`'s datalayout.
+pub(crate) fn layout(module: &Module) -> Result<DataLayout, String> {
+    module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse)
+}
+
+/// Every function of `module` that has a body.
+pub(crate) fn bodies(module: &Module) -> Vec<GlobalId> {
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
+}
 
 /// The comparison supplying `branch`'s condition: the `icmp` in `block`
 /// that defines it.
