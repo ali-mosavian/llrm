@@ -376,7 +376,7 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         let mut shift: Vec<usize> = Vec::with_capacity(block.insns.len() + 1);
-        let end = if block.insns.last().is_some_and(|one| _terminates(one)) { block.insns.len() - 1 } else { block.insns.len() };
+        let end = _tail(block);
         for position in 0..=block.insns.len() {
             let beside = block.insns.get(position).or(block.insns.last());
             if let (Some(beside), Some(copies)) = (beside, inserted.get(&(block.at, position))) {
@@ -600,8 +600,12 @@ fn _positions(index: &Indexes, block: &LirBlock, slots: (i64, i64)) -> (i64, i64
 
 /// Where a split can last be placed in `block`: before its terminator.
 fn _last_split(block: &LirBlock) -> i64 {
-    let length = block.insns.len() as i64;
-    if block.insns.last().is_some_and(|one| _terminates(one)) { length - 1 } else { length }
+    _tail(block) as i64
+}
+
+/// Where `block`'s closing jumps start: a two-way block ends `jcc; jmp`.
+fn _tail(block: &LirBlock) -> usize {
+    block.insns.len() - block.insns.iter().rev().take_while(|one| _terminates(one)).count()
 }
 
 /// `addSplitConstraints`: use blocks want the value in a register at the
@@ -1068,6 +1072,29 @@ mod tests {
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
         let live = intervals::intervals(&cut, None);
         assert!(!live[&9].overlaps(&live[&7]));
+    }
+
+    /// A two-way block ends `jne; jmp` once phis are copies: the copy into a
+    /// region both its successors are in went between the two, where only
+    /// the jump's edge ran it, and RegAlloc refused nbody's block.
+    #[test]
+    fn test_a_copy_at_a_block_end_goes_before_both_its_branches() {
+        let branch = _insn(0x19, sem(Operation::Branch, "jne", vec![], vec![], Some(0x30)), &[], &[]);
+        let body = body(
+            "one",
+            vec![
+                block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]),
+                block(0x10, vec![add(0x10, 3), jump(0x11, 0x18)], &[0x18]),
+                block(0x18, vec![move_imm(0x18, 7, 2), branch, jump(0x1a, 0x20)], &[0x30, 0x20]),
+                block(0x20, vec![push(0x20, 3), push(0x21, 7)], &[]),
+                block(0x30, vec![push(0x30, 3)], &[]),
+            ],
+        );
+        let cut = carved(&body, 3, 9, 2, &region(&body, &[0x20, 0x30])).expect("cut");
+        for block in &cut.blocks {
+            let first = block.insns.iter().position(|one| super::_terminates(one)).unwrap_or(block.insns.len());
+            assert!(block.insns[first..].iter().all(|one| super::_terminates(one)), "{:#?}", block.insns);
+        }
     }
 
     fn read(values: &HashMap<u32, i64>, operand: &Loc) -> i64 {
