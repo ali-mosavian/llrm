@@ -15,8 +15,7 @@
 //!   is `Applied::dump`, a file per changed step of each body.
 //! - `Where`'s segment, BC blocks and object file went with the BC
 //!   frontend; its index scales and address forms were strength's, which
-//!   prices neither here. The machine's facts are `Applied`'s numbers and
-//!   `target`.
+//!   prices neither here. The machine's facts are `target`'s.
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
 //!   Hoist's store sinking is loopmotion's pass.
 //! - llrm-mir's InstCombine joins SROA at the boundaries: see `pipeline`.
@@ -125,11 +124,7 @@ pub struct Applied {
     pub options: Options,
     /// The one pass to run, by name.
     pub only: Option<String>,
-    /// Integer values that fit in registers.
-    pub registers: i64,
-    /// Those that stay live across an ordinary call.
-    pub call_registers: i64,
-    /// What analyses ask of the machine, its prices included.
+    /// What analyses ask of the machine: its prices and registers.
     pub target: Option<Rc<dyn Machine>>,
     /// Where each body's changed steps are written, `N/NNN-stage.ll`, the
     /// Nth body run; the manager writes the module after it there.
@@ -169,10 +164,10 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(hoist::Hoist),
         Box::new(loopmotion::LoopMotion),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn { registers: applied.registers }),
+        Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(strength::Strength { costs: applied.costs(), registers: applied.registers, call_registers: applied.call_registers }),
+        Box::new(strength::Strength),
         Box::new(algebraic::Algebraic),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),

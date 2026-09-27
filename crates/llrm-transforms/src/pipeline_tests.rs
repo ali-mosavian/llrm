@@ -8,7 +8,7 @@ const FUEL: u64 = 2_000_000;
 
 #[test]
 fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
-    let applied = Applied { registers: 6, call_registers: 2, ..Applied::default() };
+    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos)), ..Applied::default() };
     let mut ran = 0;
     for (name, mut module) in corpus() {
         let entry = module.named("main").filter(|&id| module.global(id).function().is_some_and(|one| !one.is_declaration() && one.parameters().is_empty()));

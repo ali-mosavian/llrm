@@ -383,10 +383,10 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
 }
 
 /// The configured machine as MIR analyses ask it: its foreign memory, and
-/// the prices of `arch`.
+/// the prices and registers of `profile`.
 struct Target {
     machine: &'static llrm_core::abi::machine::Machine,
-    arch: String,
+    profile: &'static targets::Profile,
 }
 
 impl llrm_mir::target::Machine for Target {
@@ -395,18 +395,24 @@ impl llrm_mir::target::Machine for Target {
     }
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_cycles::target::costs(&self.arch)
+        llrm_cycles::target::costs(&self.profile.name)
+    }
+
+    fn registers(&self) -> i64 {
+        self.profile.register_capacity
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.profile.call_register_capacity
     }
 }
 
-/// The rich MIR pipeline configured by `target` alone, as `flow::optimized`
+/// The rich MIR pipeline configured by `profile` alone, as `flow::optimized`
 /// configures the old one. `LLRM_MIR_STAGES` names where its steps go.
 // The other frontend has the same; its home is llrm-core's `flow`.
-fn rich_pipeline(target: &targets::Profile) -> llrm_transforms::pipeline::Applied {
+fn rich_pipeline(profile: &'static targets::Profile) -> llrm_transforms::pipeline::Applied {
     llrm_transforms::pipeline::Applied {
-        registers: target.register_capacity,
-        call_registers: target.call_register_capacity,
-        target: Some(Rc::new(Target { machine: llrm_core::abi::machine::current(), arch: target.name.clone() })),
+        target: Some(Rc::new(Target { machine: llrm_core::abi::machine::current(), profile })),
         dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
         ..Default::default()
     }
