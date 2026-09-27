@@ -113,6 +113,13 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
     Some(Slice::new(linear(), start, end - width + 1, 1, width).expect("a foreign span holds one access"))
 }
 
+/// The linear bytes `reference` names where its selector's range under
+/// `known` lands it wholly in memory the machine keeps no program data in.
+pub fn foreign_provenance(reference: &MemRef, known: &BTreeMap<ValueId, Interval>, program: Option<&ProgramProxy>) -> Option<Provenance> {
+    let slice = foreign(reference, Some(known), program)?;
+    Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
+}
+
 /// What `reference` may name under `facts`: its linear bytes when its
 /// segment lands it in foreign memory, else its provenance narrowed.
 fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Result<Option<Provenance>, RegionError> {

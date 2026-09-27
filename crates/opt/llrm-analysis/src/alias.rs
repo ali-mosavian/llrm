@@ -51,7 +51,7 @@ use crate::globalsaa;
 use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
-use crate::regions::ByteRange;
+use crate::regions::{self, ByteRange};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(MemoryObject::new(MemoryKind::Nonlocal)));
@@ -1529,6 +1529,15 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
                         restrict: current.restrict.clone(),
                     });
                 }
+            }
+        }
+        // A far access whose selector's range lands it in foreign memory
+        // names those linear bytes, whatever its pointer's provenance.
+        if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
+            let lookup = |value: ValueId| bounded.get(&at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
+            let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
+            if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
+                got = Some(foreign);
             }
         }
         Ok(MemRef { provenance: got, ..reference.clone() })

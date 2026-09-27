@@ -53,6 +53,13 @@ pub(super) fn listing(program: &Program) -> String {
     masm::text(&assembled(program).expect("assembles")).expect("prints")
 }
 
+/// `listing` on the default route: the rich MIR, selected by isel.
+pub(super) fn rich_listing(program: &Program) -> String {
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+    let module = qb_compile::assembled_by(program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
+    masm::text(&module).expect("prints")
+}
+
 /// `qb_compile.object_bytes(program, name)`.
 pub(super) fn object_bytes(program: &Program, name: &str) -> Result<Vec<u8>, CompileError> {
     qb_compile::object_bytes(program, Path::new(name), None, &O2())
