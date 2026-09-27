@@ -5,6 +5,7 @@
 pub mod canonical;
 pub mod cfg;
 pub mod edges;
+pub mod gvn;
 pub mod inline;
 pub mod interprocedural;
 pub mod lcssa;
