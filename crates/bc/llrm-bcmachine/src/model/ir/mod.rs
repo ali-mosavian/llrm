@@ -635,6 +635,11 @@ fn register_repr(register: Register) -> String {
 }
 
 impl Operation {
+    /// An x87 stack instruction.
+    pub const fn is_x87(self) -> bool {
+        matches!(self, Self::FloatLoad | Self::FloatStore | Self::FloatArith | Self::FloatArithPop | Self::FloatUnary)
+    }
+
     /// The member name.
     pub const fn name(self) -> &'static str {
         match self {

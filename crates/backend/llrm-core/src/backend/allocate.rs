@@ -1839,7 +1839,7 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
         for one in &block.insns {
             let Some(what) = &one.what else { continue };
             let frame = what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)));
-            let float = matches!(what.op, Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary);
+            let float = what.op.is_x87();
             let cause = match () {
                 _ if one.spill_reload => "reload",
                 _ if one.spill_store => "store",
