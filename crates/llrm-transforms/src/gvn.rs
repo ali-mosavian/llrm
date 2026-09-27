@@ -45,12 +45,11 @@ use crate::lcssa::{arms, from_arms, place_phi};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loadjoins, transform};
 
-/// The single value-reuse pass: scalar GVN and memory-aware PRE.
+/// The single value-reuse pass: scalar GVN and memory-aware PRE. The
+/// target's registers price it (`profit::registers`); none leaves pricing
+/// out.
 #[derive(Default)]
-pub struct Gvn {
-    /// Integer values that fit in registers; 0 leaves pricing out.
-    pub registers: i64,
-}
+pub struct Gvn;
 
 impl FunctionPass for Gvn {
     fn name(&self) -> &'static str {
@@ -62,13 +61,13 @@ impl FunctionPass for Gvn {
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
         // Numbering leaves the CFG alone: every candidate has these trips.
-        let trips = if self.registers == 0 {
+        let trips = if profit::registers(analyses.outer()).0 == 0 {
             IndexMap::default()
         } else {
             let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
             profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()), &facts)
         };
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, self.registers, &trips)) {
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &trips)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -84,8 +83,8 @@ impl FunctionPass for Gvn {
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, registers: i64, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), registers, trips)?;
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer).0, trips)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;

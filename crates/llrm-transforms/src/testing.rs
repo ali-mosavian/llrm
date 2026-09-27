@@ -92,3 +92,29 @@ pub fn summarized(module: &Module, pass: impl llrm_mir::passes::FunctionPass + '
 pub fn bodies(module: &Module) -> Vec<GlobalId> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
 }
+
+/// A target of the given prices and registers, and no foreign memory.
+#[derive(Default)]
+pub struct Tuned {
+    pub costs: crate::profit::OperationCosts,
+    pub registers: i64,
+    pub call_registers: i64,
+}
+
+impl llrm_mir::target::Machine for Tuned {
+    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> crate::profit::OperationCosts {
+        self.costs.clone()
+    }
+
+    fn registers(&self) -> i64 {
+        self.registers
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.call_registers
+    }
+}

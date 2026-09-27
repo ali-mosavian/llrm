@@ -550,27 +550,6 @@ b3:
     assert!(!printed.contains("%i =") && printed.contains("icmp ne i16 %lsr.iv"), "{printed}");
 }
 
-/// A target with six registers and a multiply as cheap as an add.
-struct Crowded;
-
-impl llrm_mir::target::Machine for Crowded {
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
-        None
-    }
-
-    fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
-    }
-
-    fn registers(&self) -> i64 {
-        6
-    }
-
-    fn call_registers(&self) -> i64 {
-        2
-    }
-}
-
 /// The pass prices pressure on the target's registers: with six, three
 /// cheap multiplies stay rather than take a recurrence each; strength
 /// used to leave pressure unpriced whatever the target.
@@ -586,5 +565,5 @@ fn test_strength_prices_the_target_registers() {
         printed(&module).matches("lsr.iv.next").count()
     };
     assert_eq!(recurrences(None), 4);
-    assert_eq!(recurrences(Some(std::rc::Rc::new(Crowded))), 0);
+    assert_eq!(recurrences(Some(std::rc::Rc::new(crate::testing::Tuned { registers: 6, call_registers: 2, ..Default::default() }))), 0);
 }

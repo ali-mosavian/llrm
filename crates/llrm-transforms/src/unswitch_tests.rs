@@ -166,27 +166,6 @@ fn test_unswitch_rejects_semantic_work_without_a_target_price() {
     assert_eq!(through(&text, Some("choose"), OperationCosts::default()), (false, printed(&parsed(&text))));
 }
 
-/// A target where division is dear.
-struct DearDivide;
-
-impl llrm_mir::target::Machine for DearDivide {
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
-        None
-    }
-
-    fn costs(&self) -> OperationCosts {
-        OperationCosts { divide: 1000, ..OperationCosts::default() }
-    }
-
-    fn registers(&self) -> i64 {
-        0
-    }
-
-    fn call_registers(&self) -> i64 {
-        0
-    }
-}
-
 /// Re-optimizes a candidate into a copy of the function it holds.
 struct Replace(llrm_mir::module::Function);
 
@@ -216,5 +195,5 @@ fn test_unswitch_prices_at_the_target_costs() {
         printed(&module) != printed(&parsed(&text))
     };
     assert!(kept(None));
-    assert!(!kept(Some(std::rc::Rc::new(DearDivide))));
+    assert!(!kept(Some(std::rc::Rc::new(crate::testing::Tuned { costs: OperationCosts { divide: 1000, ..OperationCosts::default() }, ..Default::default() }))));
 }
