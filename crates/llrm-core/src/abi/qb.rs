@@ -14,6 +14,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::abi::runtime::{self, Contract, Control};
+use crate::backend::assemble::Registers;
 use crate::backend::pointers;
 use crate::hir::lower::Lowered;
 use crate::hir::model;
@@ -317,6 +318,17 @@ pub fn _contract(
     cleanup: model::StackCleanup,
     pushed: i64,
     family: model::RuntimeProfile,
+) -> Result<Contract, AbiError> {
+    _contract_keeping(name, cleanup, pushed, family, &BTreeSet::new())
+}
+
+/// `_contract`, a call no runtime contract describes keeping `preserved`.
+fn _contract_keeping(
+    name: &str,
+    cleanup: model::StackCleanup,
+    pushed: i64,
+    family: model::RuntimeProfile,
+    preserved: &BTreeSet<runtime::Reg>,
 ) -> Result<Contract, AbiError> {
     let resume_label = name.starts_with("$QB$RESA:");
     let restore_label = name.starts_with("$QB$RSTB:");
@@ -853,8 +865,10 @@ pub fn _contract(
         inputs: Some(BTreeSet::new()),
         i386: true,
         evidence: "QB source ABI: stack-only far call; cleanup and argument widths \
-                   come from verified HIR, while memory and clobbers remain conservative"
+                   come from verified HIR, clobbers from the calling convention, while \
+                   memory remains conservative"
             .to_owned(),
+        clobbers: runtime::EVERY.difference(preserved).copied().collect(),
         ..runtime::worst(name)
     })
 }
@@ -894,13 +908,42 @@ pub struct HirAbi {
     pub runtime: model::RuntimeProfile,
     /// Each function's object name, where it is not its HIR name.
     pub objects: std::collections::BTreeMap<String, String>,
+    /// The registers a call no runtime contract describes keeps.
+    pub preserved: BTreeSet<runtime::Reg>,
+}
+
+impl HirAbi {
+    /// `program`'s calls: its runtime's, and its own by their symbols.
+    pub fn of(program: &model::Program) -> Result<Self, String> {
+        let functions = program.modules.iter().flat_map(|module| &module.functions);
+        Ok(Self {
+            runtime: program.runtime,
+            objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
+            preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+/// A runtime routine's register interface beside its stack block. B$HARY
+/// takes the subscripts and their count pushed and the descriptor in BX,
+/// and answers the element's address in ES:BX: PDS71 PDHUGE.OBJ 0047..0055
+/// sets BX last and uses ES:BX at once.
+pub fn registers(name: &str) -> Option<Registers> {
+    match name {
+        "B$HARY" => Some(Registers { arguments: vec![Register::BX], results: vec![Register::BX, Register::ES] }),
+        _ => None,
+    }
 }
 
 impl crate::backend::assemble::Abi for HirAbi {
+    fn registers(&self, callee: &str) -> Option<Registers> {
+        registers(callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee))
+    }
+
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
-        _contract(name, cleanup, pushed, self.runtime).map_err(|error| error.0)
+        _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
     fn linked(&self, name: &str) -> String {
@@ -1270,12 +1313,13 @@ pub fn physicalize(
             let ordered: Vec<Arg> = site.order.iter().map(|index| operation.args[*index as usize].clone()).collect();
             let mut fixed_arguments: Vec<Arg> = Vec::new();
             let mut stack_arguments = ordered.clone();
-            if name == "B$HARY" {
-                if ordered.len() < 3 || _bytes(&ordered[ordered.len() - 1])? != 2 {
-                    return Err(AbiError("B$HARY needs subscripts, rank, and one near descriptor".into()));
+            if let Some(registers) = registers(&name) {
+                let stacked = ordered.len().saturating_sub(registers.arguments.len());
+                if stacked < 2 || ordered[stacked..].iter().map(_bytes).collect::<Result<Vec<_>, _>>()?.iter().any(|&bytes| bytes != 2) {
+                    return Err(AbiError(format!("{name} needs subscripts, rank, and one near descriptor")));
                 }
-                stack_arguments = ordered[..ordered.len() - 1].to_vec();
-                fixed_arguments = ordered[ordered.len() - 1..].to_vec();
+                stack_arguments = ordered[..stacked].to_vec();
+                fixed_arguments = ordered[stacked..].to_vec();
             }
             // A float is held extended; the callee's parameter type says the
             // format it is passed in.
@@ -1418,17 +1462,16 @@ pub fn physicalize(
                 && semantic_type.is_some_and(|type_| type_.kind == model::TypeKind::Float)
                 && site.cleanup == model::StackCleanup::Callee
                 && site.float_return == model::FloatReturn::Pointer;
-            if name == "B$HARY" {
-                if operation.results.len() != 2
+            if let Some(registers) = registers(&name) {
+                if operation.results.len() != registers.results.len()
                     || operation.results.iter().any(|one| !matches!(one, Arg::Held(held) if held.width == 2))
                 {
-                    return Err(AbiError("B$HARY needs explicit INTEGER offset and selector results".into()));
+                    return Err(AbiError(format!("{name} needs explicit INTEGER offset and selector results")));
                 }
-                let (Arg::Held(offset), Arg::Held(selector)) = (&operation.results[0], &operation.results[1]) else {
-                    unreachable!()
-                };
-                origins.insert(offset.value.variable, Register::BX);
-                origins.insert(selector.value.variable, Register::ES);
+                for (result, register) in operation.results.iter().zip(&registers.results) {
+                    let Arg::Held(held) = result else { unreachable!() };
+                    origins.insert(held.value.variable, *register);
+                }
                 let uses = fixed_arguments
                     .iter()
                     .filter_map(|one| match one {
@@ -1578,4 +1621,20 @@ pub fn physicalize(
         },
         inline,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::assemble::Abi;
+
+    /// A C call clobbered SI and DI when the driver asked the QB defaults
+    /// instead of the program's calling convention.
+    #[test]
+    fn test_a_call_no_runtime_contract_describes_keeps_the_convention_s_registers() {
+        let program = model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) };
+        let contract = HirAbi::of(&program).unwrap().contract("_strlen", false, 2).unwrap();
+        assert!(contract.clobbers.contains(&runtime::Reg::Ax));
+        assert!(!contract.clobbers.contains(&runtime::Reg::Si) && !contract.clobbers.contains(&runtime::Reg::Di));
+    }
 }

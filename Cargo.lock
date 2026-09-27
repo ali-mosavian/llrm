@@ -207,7 +207,6 @@ dependencies = [
  "llrm-cycles",
  "llrm-mir",
  "llrm-omf",
- "llrm-qb",
  "llrm-transforms",
 ]
 

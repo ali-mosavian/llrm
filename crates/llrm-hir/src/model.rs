@@ -763,6 +763,12 @@ pub struct Program {
     /// The functions code outside the program calls whatever their
     /// linkage: the runtime's way into it.
     pub entries: Vec<String>,
+    /// The registers, by their 16-bit whole, a call keeps where no runtime
+    /// contract says otherwise: the calling convention's.
+    pub preserved: Vec<String>,
+    /// The segment of the constants the compiler makes; None: the default
+    /// data segment.
+    pub constant_segment: Option<String>,
 }
 
 impl Program {
@@ -779,6 +785,8 @@ impl Program {
             zeroed_locals: true,
             promises: RuntimePromises::default(),
             entries: Vec::new(),
+            preserved: Vec::new(),
+            constant_segment: None,
         }
     }
 }

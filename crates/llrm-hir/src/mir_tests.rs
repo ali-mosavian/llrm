@@ -50,9 +50,34 @@ fn a_call_repeats_its_callees_convention() {
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
+    // Pushed in another order, its arguments are passed so the convention
+    // pushes them as the site does: PDS's B$HARY pushes its subscripts in
+    // record order and was refused.
     function.calls = vec![site(vec![0, 1])];
     let emitted = emit(&program(function)).remove(0);
-    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "a call to B$NEAR pushing [0, 1]".to_owned())]);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %0, i16 %2)"), "{text}");
+}
+
+/// A call answering in two registers returns one aggregate, each result a
+/// field of it: B$HARY's offset and selector, of which the second was lost.
+#[test]
+fn a_call_with_two_results_returns_an_aggregate() {
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4, 5], vec![Operand::value_ref(3)]);
+    call.callee = Some("B$PAIR".to_owned());
+    function.values.extend([Value { id: 4, r#type: 1 }, Value { id: 5, r#type: 1 }]);
+    let add = Instruction::new(3, Op::Add, vec![6], vec![Operand::value_ref(4), Operand::value_ref(5)]);
+    function.values.push(Value { id: 6, r#type: 1 });
+    function.blocks[0].instructions.extend([call, add]);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(6)];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= call addrspace(1) { i16, i16 } @llrm.qb.B$PAIR(i16 %2)"), "{text}");
+    assert!(text.contains("extractvalue { i16, i16 } %3, 0") && text.contains("extractvalue { i16, i16 } %3, 1"), "{text}");
 }
 
 /// A refused internal function was left `declare internal`, which LLVM
