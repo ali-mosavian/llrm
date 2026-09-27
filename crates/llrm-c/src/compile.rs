@@ -2,7 +2,7 @@
 //! the backend, to an object or jwasm source.
 //!
 //! ```text
-//! llrm-c pal.cgs -o pal.obj [--dump DIR] [--opt]
+//! llrm-c pal.cgs -o pal.obj [--dump DIR] [--opt | --isel]
 //! ```
 //!
 //! Stages not yet ported stop with [`CompileError::NotPorted`], naming the
@@ -17,15 +17,16 @@ use std::collections::BTreeSet;
 use llrm_core::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{hir, libfunc, raise_hir, stream};
+use super::{hir, libfunc, raise_hir, raise_mir, stream};
 use llrm_core::analysis::{alias, interprocedural};
 use llrm_core::optimize::interprocedural as module;
 use llrm_core::optimize::rotate;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use llrm_core::abi::runtime;
 use llrm_core::backend::{
-    cpu, executed, frame, jumps, lower, lower_int64, masm, omfwrite,
+    assemble, cpu, executed, frame, globals, jumps, lower, lower_int64, masm, omfwrite,
 };
 use llrm_core::flow;
 use llrm_core::model::lir;
@@ -370,6 +371,77 @@ pub fn assembled(
     Ok(built)
 }
 
+/// Each call's contract and each MIR name's symbol, as isel asks them.
+struct MediumModel;
+
+impl assemble::Abi for MediumModel {
+    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<runtime::Contract, String> {
+        Ok(raise_hir::medium_model(callee.to_owned(), !pops, pushed))
+    }
+
+    fn linked(&self, name: &str) -> String {
+        name.to_owned()
+    }
+}
+
+/// C through the rich MIR: raised by `raise_mir`, optimized by llrm-mir's
+/// pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
+pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> Result<masm::Module, CompileError> {
+    let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
+    let unit = hir::unit(&stream::parse(text))?;
+    let raise_mir::Emitted { module: mut mir, segments } = raise_mir::emitted(&unit)?;
+    write(dump, "raised.ll", || llrm_mir::print::module(&mir))?;
+    let problems = llrm_mir::verify::verify(&mir);
+    if !problems.is_empty() {
+        return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
+    }
+    llrm_mir::transforms::optimized(&mut mir)?;
+    write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
+    let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Name(target))?;
+    // Data where the stream placed it, isel's float constants after DGROUP's.
+    let pool = built.data.drain(..).flat_map(|(_, items)| items).skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K")));
+    let pool: Vec<masm::Datum> = pool.collect();
+    for (segment, names) in &segments {
+        let mut items = Vec::new();
+        for name in names {
+            let Some(global) = mir.named(name) else { continue };
+            let llrm_mir::GlobalKind::Variable(variable) = &mir.global(global).kind else { continue };
+            if let Some(to) = variable.align {
+                items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
+            }
+            for datum in globals::datums(&mir, global, &built.names)? {
+                items.push(match datum {
+                    masm::Datum::Bytes(bytes) if segment == "_BSS" => masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None }),
+                    datum => datum,
+                });
+            }
+            if mir.global(global).linkage == llrm_mir::Linkage::External {
+                built.publics.push(name.clone());
+            }
+        }
+        built.data.push((segment.clone(), items));
+    }
+    if !pool.is_empty() {
+        built.data.push(("CONST".to_owned(), pool));
+    }
+    for (at, global) in mir.globals.iter().enumerate() {
+        if let llrm_mir::GlobalKind::Variable(variable) = &global.kind
+            && variable.initializer.is_none()
+        {
+            let name = built.names[&(Space::External, at as i64)].clone();
+            built.externs.push((name, if global.address_space == 0 { "byte" } else { "far-byte" }.to_owned()));
+        }
+    }
+    built.externs.sort();
+    built.private = unit.segments.values().filter(|one| one.attr & hir::PRIVATE != 0).map(|one| one.name.clone()).collect();
+    write(dump, "cost", || built.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
+    if dump.is_some() {
+        let text = masm::text(&built)?;
+        write(dump, "asm", || text)?;
+    }
+    Ok(built)
+}
+
 /// Internal procedure symbols used as values rather than direct callees.
 fn _address_taken_procedures(unit: &hir::Unit) -> BTreeSet<String> {
     let mut direct = BTreeSet::new();
@@ -693,7 +765,7 @@ fn _constant_initializers(unit: &hir::Unit) -> Vec<(MemRef, Const)> {
 }
 
 /// `bytes.fromhex(raw)`.
-fn hex_bytes(raw: &str) -> Vec<u8> {
+pub(crate) fn hex_bytes(raw: &str) -> Vec<u8> {
     let digits: Vec<char> = raw.chars().filter(|one| !one.is_whitespace()).collect();
     digits
         .chunks(2)
@@ -810,6 +882,7 @@ struct Args {
     cpu: String,
     options: Options,
     include: Vec<String>,
+    isel: bool,
 }
 
 /// The code-generator stream wccq records for one C file.
@@ -844,12 +917,13 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
 }
 
 const USAGE: &str =
-    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--cpu CPU] [-O {s,2}] source";
+    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--isel] [--cpu CPU] [-O {s,2}] source";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut output, mut dump, mut opt, mut cpu) =
         (None, None, None, false, "386".to_owned());
     let mut include = Vec::new();
+    let mut isel = false;
     let mut options = llrm_core::model::passes::O2();
     let mut rest = argv.iter();
     while let Some(one) = rest.next() {
@@ -863,6 +937,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
+            "--isel" => isel = true,
             "--cpu" => cpu = value("--cpu")?,
             level if level.starts_with("-O") => {
                 let text = if level.len() > 2 { level[2..].to_owned() } else { value("-O")? };
@@ -884,6 +959,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         cpu,
         options,
         include,
+        isel,
     })
 }
 
@@ -911,7 +987,11 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?;
+        let built = if args.isel {
+            selected(&text, module, args.dump.as_deref(), &args.cpu)?
+        } else {
+            assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?
+        };
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             fs::write(&output, omfwrite::written(&built, name)?)?;
@@ -1144,5 +1224,14 @@ mod tests {
         let recorded = super::recorded(&source, &[]).expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
+    }
+
+    /// Watcom types a void function as an int whose returns give none;
+    /// raised as `ret i16 poison`, isel refused all of qmove.
+    #[test]
+    fn test_a_void_function_is_selected() {
+        let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, "486");
+        assert!(built.is_ok(), "{:?}", built.err());
     }
 }
