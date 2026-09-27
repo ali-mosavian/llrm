@@ -586,6 +586,14 @@ impl MemRef {
         Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
     }
 
+    /// Whether the access names its bytes outright rather than reaching
+    /// them through a value: a fixed displacement in an object, or canonical
+    /// provenance. An unresolved pointer or index does not.
+    pub fn named(&self) -> bool {
+        let canonical = self.provenance.as_ref().is_some_and(|provenance| !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind != MemoryKind::Unknown));
+        canonical || (self.object && self.addr().is_some())
+    }
+
     /// The bytes a call to `llvm.memset` of a constant length fills, as
     /// LLVM's `MemoryLocation::getForDest` names them: a write like a
     /// store's.
