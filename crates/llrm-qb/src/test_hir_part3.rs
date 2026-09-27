@@ -2309,6 +2309,21 @@ fn test_a_module_compiles_through_the_rich_mir() {
     assert!(fade.contains("in al, dx") && fade.contains("out dx, al"), "{fade}");
 }
 
+/// B$ENRA zero-fills a SUB's locals, so zeroing them again is dead: the
+/// rich route filled runtime-frame-stack's 4096-byte string with `rep stosd`,
+/// 265 instructions the old route never ran.
+#[test]
+fn test_the_runtime_frame_zeroes_the_locals() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "zeroed.bas", b"DECLARE SUB Report (n AS LONG)\nCALL Report(1)\nSUB Report (n AS LONG)\nDIM buffer AS STRING * 4096\nDIM counts(3) AS INTEGER\nbuffer = \"X\"\ncounts(n) = 1\nPRINT buffer; counts(1)\nEND SUB\n");
+    let program = parsed_as(&source, "qb45", "qb45");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::abi::machine::BUILT_IN).expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let report = between(&text, "REPORT proc", "endp");
+    assert!(report.contains("call far ptr B$ENRA"), "{report}");
+    assert!(!report.contains("stos") && !report.lines().any(|line| line.contains("ptr [bp-") && line.trim().ends_with(", 0")), "{report}");
+}
+
 /// Seven suite programs refused DATA on the rich route.
 #[test]
 fn test_data_statements_compile_through_the_rich_mir() {

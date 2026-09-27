@@ -128,7 +128,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         names.insert((globals::space(&module, global), i64::from(global.0)), HEADER.to_owned());
     }
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu: profile, segments: &Segments::of(machine), runtime: runtime.value(), basic: true };
+    let target = Target { cpu: profile, segments: &Segments::of(machine), runtime: runtime.value(), basic: true, zeroed: true };
     let mut procedures = Vec::new();
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     // The runtime enters the module right after its header.

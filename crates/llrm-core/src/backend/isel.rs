@@ -248,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -308,6 +308,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         edges: IndexMap::default(),
         chains: IndexMap::default(),
         merges: IndexMap::default(),
+        zeroed,
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
         abi,
@@ -406,6 +407,8 @@ struct Selector<'m, 'c, 'p> {
     /// Branches on the `and` (true) or `or` of two compares: a compare and
     /// a branch each, the second in the block of `chains`.
     merges: IndexMap<InstId, (bool, InstId, InstId)>,
+    /// The frame starts its locals zeroed, as B$ENRA zero-fills them.
+    zeroed: bool,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
     /// Each call's contract and register interface, from the ABI that
@@ -460,6 +463,10 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.private = crate::model::mir::outside(&reach);
+        if self.zeroed {
+            let prezeroed = self.prezeroed();
+            self.consumed.extend(prezeroed);
+        }
         for &block in layout {
             let from = block_at[&block];
             let terminator = function.terminator(block).expect("a terminator");
@@ -992,6 +999,50 @@ impl Selector<'_, '_, '_> {
             })
             .collect();
         (default, cases)
+    }
+
+    /// The entry block's zero writes to a local nothing has touched yet:
+    /// what the zeroed frame already holds. A local's address is its
+    /// alloca's, so nothing reaches it before the alloca's first user.
+    fn prezeroed(&self) -> BTreeSet<InstId> {
+        let function = self.function;
+        let mut out = BTreeSet::new();
+        let Some(&entry) = function.layout().first() else { return out };
+        let order: IndexMap<InstId, usize> = function.block(entry).instructions().iter().enumerate().map(|(index, &inst)| (inst, index)).collect();
+        for (&inst, &index) in &order {
+            let Some(local) = self.zero_write(inst) else { continue };
+            if function.users(local).iter().all(|one| one.user == inst || out.contains(&one.user) || order.get(&one.user).is_none_or(|&at| at > index)) {
+                out.insert(inst);
+            }
+        }
+        out
+    }
+
+    /// The local `inst` fills with zeros, where it is a store or memset of
+    /// zero straight to an alloca.
+    fn zero_write(&self, inst: InstId) -> Option<ValueId> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let zero = |operand: Operand| match operand {
+            Operand::Constant(one) => matches!(self.module.context.get(one).kind, ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Null | ConstantKind::Zero),
+            _ => false,
+        };
+        let (value, destination) = match instruction.opcode {
+            Opcode::Store { volatile: false, .. } => (instruction.operands[0], instruction.operands[1]),
+            Opcode::Call(_) => {
+                let [destination, value, _, volatile, Operand::Constant(callee)] = instruction.operands[..] else { return None };
+                let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+                let name = self.module.global(global).name.as_deref()?;
+                if Intrinsic::named(name) != Some(Intrinsic::MemSet) || !zero(volatile) {
+                    return None;
+                }
+                (value, destination)
+            }
+            _ => return None,
+        };
+        let Operand::Value(local) = destination else { return None };
+        let ValueDef::Instruction(alloca) = function.value(local).def else { return None };
+        (zero(value) && matches!(function.instruction(alloca).opcode, Opcode::Alloca { .. })).then_some(local)
     }
 
     /// The branch `inst`'s condition as the `and` (true) or `or` of two
