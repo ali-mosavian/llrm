@@ -1027,3 +1027,52 @@ fn test_every_corpus_derived_formula_names_a_counter_of_its_loop() {
     }
     assert!(found > 100, "{found} formulas");
 }
+
+/// An inner loop from `%s`, a phi the outer loop carries: its entry value,
+/// then the counter as it left plus `rewind`. Rewound by the 8 it advanced,
+/// `%s` is always `%start` and each run takes 4 trips; by 6, later runs
+/// take 3, so no count holds.
+#[test]
+fn a_start_rewound_to_its_entry_value_is_counted_from_it() {
+    for (rewind, count, trips) in [(-8, Some(4), 12), (-6, None, 10)] {
+        let parsed = Parsed::new(&format!(
+            "define i32 @f(i32 %x) {{
+b0:
+  %start = add i32 %x, 5
+  %bound = add i32 %start, 8
+  br label %b1
+
+b1:
+  %s = phi i32 [ %start, %b0 ], [ %reset, %b4 ]
+  %o = phi i16 [ 0, %b0 ], [ %onext, %b4 ]
+  %t = phi i32 [ 0, %b0 ], [ %n, %b4 ]
+  br label %b2
+
+b2:
+  %cur = phi i32 [ %s, %b1 ], [ %fol, %b3 ]
+  %n = phi i32 [ %t, %b1 ], [ %n1, %b3 ]
+  %done = icmp eq i32 %cur, %bound
+  br i1 %done, label %b4, label %b3
+
+b3:
+  %fol = add i32 %cur, 2
+  %n1 = add i32 %n, 1
+  br label %b2
+
+b4:
+  %reset = add i32 %cur, {rewind}
+  %onext = add i16 %o, 1
+  %again = icmp slt i16 %onext, 3
+  br i1 %again, label %b1, label %b5
+
+b5:
+  ret i32 %n
+}}
+"
+        ));
+        let inner = loops::loops(&cfg::graph(parsed.function()), None).into_iter().min_by_key(|one| one.body.len()).unwrap();
+        let facts = consts::known(&parsed.unit(), None, None, None);
+        assert_eq!(trip_count(&parsed.unit(), &inner, &facts), count.map(BigInt::from), "{rewind}");
+        assert_eq!(parsed.run(&[(0, 32)], 1_000), Some(trips), "{rewind}");
+    }
+}
