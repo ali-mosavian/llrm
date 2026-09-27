@@ -7,9 +7,12 @@ use std::sync::Arc;
 
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::valuetracking::sign_bits;
-use llrm_mir::{BinaryOp, CastOp};
+use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
-use super::{insn, refuse, semantics, Selector, Unselected};
+use iced_x86::Register;
+
+use super::{condition_code, insn, refuse, semantics, swapped, Selector, Test, Unselected};
+use crate::backend::lower::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Insn, LirBlock};
 
@@ -52,7 +55,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// An i64 operand's halves, each in a register.
-    fn wide(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Pair, Unselected> {
+    pub(super) fn wide(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Pair, Unselected> {
         if let Some(bits) = self.constant(operand, 8) {
             let low = self.made(Operation::Move, "mov", vec![Self::dword(bits as u32 as i64)], at, out);
             let high = self.made(Operation::Move, "mov", vec![Self::dword((bits >> 32) as u32 as i64)], at, out);
@@ -70,6 +73,17 @@ impl Selector<'_, '_, '_> {
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
         let result = instruction.result.expect("a cast's value");
+        // fild reads a qword: the pair stored, low dword first.
+        if op == CastOp::SIToFP && self.is_float(to) {
+            let (low, high) = self.wide(operand, at, out)?;
+            let cell = self.temporary(8);
+            for (half, by) in [(low, 0), (high, 4)] {
+                self.put(semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], vec![Loc::Held(half)]), at, out);
+            }
+            let into = Held { value: self.value(result), width: super::FLOAT };
+            self.float_loaded(into, "fild", cell, 8, false, at, out);
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
@@ -145,14 +159,13 @@ impl Selector<'_, '_, '_> {
                 let crossed = self.made(Operation::Binary, "add", vec![Loc::Held(first), Loc::Held(second)], at, out);
                 (low, self.made(Operation::Binary, "add", vec![Loc::Held(carried), Loc::Held(crossed)], at, out))
             }
-            BinaryOp::SDiv | BinaryOp::SRem if self.constant(right, 8).is_some_and(|bits| bits > 1 && (bits as u64).is_power_of_two()) => {
-                let shift = (self.constant(right, 8).expect("a constant") as u64).trailing_zeros() as i64;
-                let dividend = self.wide(left, at, out)?;
-                self.divided_by_power(op == BinaryOp::SDiv, dividend, shift, at, out)
-            }
-            BinaryOp::SDiv | BinaryOp::SRem if self.narrow(right) => {
-                let (dividend, divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
-                self.divided(op == BinaryOp::SDiv, dividend, divisor, at, out)
+            BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem => {
+                let partner = self.paired.get(&inst).copied();
+                let (mine, other) = self.wide_division(op, left, right, partner.is_some(), at, out)?;
+                if let (Some(partner), Some(other)) = (partner, other) {
+                    self.wides.insert(partner, other);
+                }
+                mine
             }
             _ => return refuse(format!("an i64 {}", instruction.opcode.mnemonic())),
         };
@@ -219,6 +232,99 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// An i64 comparison as flags: equality by the halves' differences
+    /// or-ed, an order by `sub` and `sbb` of the halves, whose flags a
+    /// less-than or at-least reads; a greater-than compares the other way.
+    pub(super) fn wide_compare(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
+        let predicate = match predicate {
+            IntPredicate::Sgt | IntPredicate::Sle | IntPredicate::Ugt | IntPredicate::Ule => {
+                return self.wide_compare(swapped(predicate), b, a, at, out);
+            }
+            predicate => predicate,
+        };
+        let a = self.wide(a, at, out)?;
+        // A constant's halves are immediates.
+        let b = match self.constant(b, 8) {
+            Some(bits) => (Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)),
+            None => {
+                let (low, high) = self.wide(b, at, out)?;
+                (Loc::Held(low), Loc::Held(high))
+            }
+        };
+        let mut flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
+            let into = selector.fresh_held(4);
+            selector.put(semantics(Operation::Binary, name, vec![Loc::Held(into)], sources.to_vec()), at, out);
+            into
+        };
+        match predicate {
+            IntPredicate::Eq | IntPredicate::Ne => {
+                let low = flags(self, "xor", [Loc::Held(a.0), b.0], out);
+                let high = flags(self, "xor", [Loc::Held(a.1), b.1], out);
+                flags(self, "or", [Loc::Held(low), Loc::Held(high)], out);
+            }
+            _ => {
+                flags(self, "sub", [Loc::Held(a.0), b.0], out);
+                flags(self, "sbb", [Loc::Held(a.1), b.1], out);
+            }
+        }
+        Ok(Test::One(condition_code(predicate)))
+    }
+
+    /// An i64 quotient or remainder, and with `both` the other: a signed
+    /// division by a power of two shifts, by an i32 two dword divisions,
+    /// and any other the helper, which makes both at once.
+    fn wide_division(&mut self, op: BinaryOp, left: Operand, right: Operand, both: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(Pair, Option<Pair>), Unselected> {
+        let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let quotient = matches!(op, BinaryOp::SDiv | BinaryOp::UDiv);
+        let power = self.constant(right, 8).filter(|&bits| bits > 1 && (bits as u64).is_power_of_two()).map(|bits| (bits as u64).trailing_zeros() as i64);
+        if let Some(shift) = power.filter(|_| signed) {
+            let dividend = self.wide(left, at, out)?;
+            let mine = self.divided_by_power(quotient, dividend, shift, at, out);
+            return Ok((mine, both.then(|| self.divided_by_power(!quotient, dividend, shift, at, out))));
+        }
+        if signed && self.narrow(right) {
+            let (dividend, divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
+            let mine = self.divided(quotient, dividend, divisor, at, out);
+            return Ok((mine, both.then(|| self.divided(!quotient, dividend, divisor, at, out))));
+        }
+        let (quotients, remainders) = self.divided_by_helper(signed, left, right, at, out)?;
+        Ok(if quotient { (quotients, Some(remainders)) } else { (remainders, Some(quotients)) })
+    }
+
+    /// An i64 divided by a variable, by the old route's inline 386 helpers
+    /// (`lower_int64`): edx:eax by ecx:ebx, the quotient left in edx:eax and
+    /// the remainder in ecx:ebx; a divisor whose high dword is 0 takes the
+    /// helper for a dword, which reads no ecx.
+    fn divided_by_helper(&mut self, signed: bool, left: Operand, right: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(Pair, Pair), Unselected> {
+        use crate::backend::lower_int64::{_helper, _four_clobbers, _four_inputs, _SDIV, _SDIV_CONST32, _UDIV, _UDIV_CONST32};
+        use crate::abi::runtime::Reg;
+        let dividend = self.wide(left, at, out)?;
+        let dword = self.constant(right, 8).is_some_and(|bits| bits >> 32 == 0);
+        let divisor = self.wide(right, at, out)?;
+        let (name, code, requires, inputs) = if dword {
+            let (name, code) = if signed { ("__I8D32", &*_SDIV_CONST32) } else { ("__U8D32", &*_UDIV_CONST32) };
+            (name, code, vec![(dividend.0, Register::EAX), (divisor.0, Register::EBX), (dividend.1, Register::EDX)], std::collections::BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Dx]))
+        } else {
+            let (name, code) = if signed { ("__I8D", &*_SDIV) } else { ("__U8D", &*_UDIV) };
+            (name, code, vec![(dividend.0, Register::EAX), (divisor.0, Register::EBX), (divisor.1, Register::ECX), (dividend.1, Register::EDX)], _four_inputs())
+        };
+        let contract = _helper(name, inputs, _four_clobbers());
+        let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
+        let delivers = vec![(quotient.0, Register::EAX), (quotient.1, Register::EDX), (remainder.0, Register::EBX), (remainder.1, Register::ECX)];
+        out.push(Arc::new(Insn {
+            clobbers: call_clobbers(&contract),
+            clobbers_high: call_clobbered_high(&contract),
+            uses: requires.iter().map(|(held, _)| held.value).collect(),
+            requires,
+            defines: delivers.iter().map(|(held, _)| held.value).collect(),
+            delivers,
+            ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+        }));
+        self.calls.insert(at, name.to_owned());
+        self.inline.insert(at, code.to_vec());
+        Ok((quotient, remainder))
+    }
+
     /// A signed i64 divided by an i32 sign-extended: the magnitudes by two
     /// unsigned divides, high dword then low, and the sign put back. Neither
     /// divide overflows; a zero divisor faults as a 32-bit one does.
@@ -241,10 +347,11 @@ impl Selector<'_, '_, '_> {
             let signed = self.made(Operation::Binary, "xor", vec![Loc::Held(sign), Loc::Held(divisor_sign)], at, out);
             return self.negated_if(lower, upper, signed, at, out);
         }
-        // The remainder takes the dividend's sign, and is below 2^31.
+        // The remainder takes the dividend's sign, and is below 2^31: its
+        // high dword is its low's sign, 0 for a zero remainder of any dividend.
         let flipped = self.made(Operation::Binary, "xor", vec![Loc::Held(remainder), Loc::Held(sign)], at, out);
         let low = self.made(Operation::Binary, "sub", vec![Loc::Held(flipped), Loc::Held(sign)], at, out);
-        (low, sign)
+        (low, self.made(Operation::Binary, "sar", vec![Loc::Held(low), Self::count(31)], at, out))
     }
 
     /// A signed i64 divided by `2^shift`, as LLVM's BuildSDIVPow2: a

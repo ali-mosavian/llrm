@@ -582,7 +582,8 @@ define i16 @f(i16 %a) addrspace(1) {
 }
 
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
-/// first; beyond that `rep stosd` through es:di, the tail stored.
+/// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
+/// `stosb`, as the old route's `_fill`.
 #[test]
 fn test_a_memset_is_stores_or_a_string_fill() {
     let text = |size: u32| {
@@ -627,8 +628,8 @@ define i16 @f() addrspace(1) {{
             "mov eax, 16843009",
             "mov cx, 17",
             "rep stosd",
+            "stosw",
             "pop es",
-            "mov word ptr [bp-2], 257",
             "mov ax, word ptr [bp-70]",
             "pop di",
             "leave",
@@ -1945,4 +1946,140 @@ done:
     let got = listing(text, "copy");
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
+}
+
+/// An i64 converted to a float is `fild qword` of its pair stored, as the
+/// old route's C `_wide` did; isel refused "SIToFP from an i64".
+#[test]
+fn test_an_i64_to_a_float_is_filds_qword() {
+    let text = "define float @f(i32 %x) addrspace(1) {
+  %w = zext i32 %x to i64
+  %f = sitofp i64 %w to float
+  ret float %f
+}
+";
+    let got = inner(text);
+    let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
+    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+}
+
+/// A far global is `seg name:offset name`, and a memset of a variable
+/// length `rep stosd` then `rep stosb` through it, as the old route made
+/// C's `fill_far`; isel refused "a far global", then the variable length.
+#[test]
+fn test_a_far_globals_variable_memset_is_a_string_fill_through_its_segment() {
+    let text = "@g = internal addrspace(1) global [64 x i8] zeroinitializer
+declare void @llvm.memset.p1.i16(ptr addrspace(1), i8, i16, i1)
+
+define void @f(i16 %n) addrspace(1) {
+  call void @llvm.memset.p1.i16(ptr addrspace(1) @g, i8 0, i16 %n, i1 false)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let from = got.iter().position(|line| line == "L0_0:").expect("the body") + 1;
+    assert_eq!(
+        got[from..from + 11],
+        [
+            "mov bx, word ptr [bp+6]",
+            "mov cx, bx",
+            "shr cx, 2",
+            "and bx, 3",
+            "mov di, offset g",
+            "pushw seg g",
+            "pop es",
+            "mov eax, 0",
+            "rep stosd",
+            "mov cx, bx",
+            "rep stosb",
+        ]
+    );
+}
+
+/// A far global's element is read through its segment and offset, as the
+/// old route made C's `peek`.
+#[test]
+fn test_a_far_globals_element_is_read_through_its_segment() {
+    let text = "@s = internal addrspace(1) global [16 x i8] zeroinitializer
+
+define i16 @f(i16 %i) addrspace(1) {
+  %o = shl i16 %i, 1
+  %e = getelementptr inbounds i8, ptr addrspace(1) @s, i16 %o
+  %v = load i16, ptr addrspace(1) %e
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert_eq!(got[4..10], ["mov bx, word ptr [bp+6]", "add bx, bx", "pushw seg s", "pop es", "mov si, offset s", "mov ax, word ptr es:[bx+si]"], "{got:?}");
+}
+
+/// An i64 is a pair of dwords wherever it goes: a parameter's two cells,
+/// a phi per dword, edx:eax out of a call and a return, and a comparison's
+/// halves or-ed. isel refused "a i64 value"; C's fib64 kept both
+/// Fibonacci terms in registers as the old route did.
+#[test]
+fn test_an_i64_is_a_dword_pair_through_phis_calls_and_returns() {
+    let text = "define i64 @f(i64 %x, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %a = phi i64 [ 0, %entry ], [ %b, %loop ]
+  %b = phi i64 [ %x, %entry ], [ %c, %loop ]
+  %i = phi i16 [ %n, %entry ], [ %j, %loop ]
+  %c = add i64 %a, %b
+  %j = sub i16 %i, 1
+  %more = icmp ne i16 %j, 0
+  br i1 %more, label %loop, label %done
+done:
+  ret i64 %b
+}
+
+define i16 @g() addrspace(1) {
+  %v = call addrspace(1) i64 @f(i64 1, i16 9)
+  %d = icmp ne i64 %v, 34
+  %r = zext i1 %d to i16
+  ret i16 %r
+}
+";
+    let f = listing(text, "f");
+    let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
+    assert!(f[add + 1].starts_with("adc e") && !f.iter().any(|line| line.contains("[bp-")), "{f:?}");
+    let g = listing(text, "g");
+    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
+        assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
+    }
+}
+
+/// An i64 remainder's high dword is its low's sign: taken as the
+/// dividend's, a zero remainder of a negative dividend was -2^32, and C's
+/// euclid64 crunch went wrong on its third round.
+#[test]
+fn test_an_i64_remainders_high_dword_is_its_low_dwords_sign() {
+    let text = "define i64 @f(i64 %x) addrspace(1) {
+  %r = srem i64 %x, 7
+  ret i64 %r
+}
+";
+    let got = listing(text, "f");
+    let tail = &got[got.len() - 6..];
+    assert!(tail.windows(2).any(|two| two[0].starts_with("mov edx, e") && two[1] == "sar edx, 31") || tail.contains(&"cdq".to_owned()), "{got:?}");
+}
+
+/// An i64 divided by a variable is the old route's inline helper,
+/// edx:eax by ecx:ebx laid down in place of a call; isel refused "an
+/// i64 urem", and C's gcd64 with it. A quotient and remainder of the same
+/// operands share one.
+#[test]
+fn test_an_i64_divided_by_a_variable_is_the_inline_helper() {
+    let text = "define i64 @f(i64 %x, i64 %y) addrspace(1) {
+  %q = udiv i64 %x, %y
+  %r = urem i64 %x, %y
+  %s = add i64 %q, %r
+  ret i64 %s
+}
+";
+    let got = listing(text, "f");
+    let helper = got.iter().filter(|line| line.starts_with("db 066h,009h,0c9h,075h,02ah")).count();
+    assert_eq!(helper, 1, "{got:?}");
+    assert!(got.iter().any(|line| line == "add eax, ebx") && got.iter().any(|line| line == "adc edx, ecx"), "{got:?}");
 }

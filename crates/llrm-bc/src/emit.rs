@@ -175,9 +175,17 @@ pub struct Emitter<'b, 'm, 'u> {
     top: Operand,
     deepest: i64,
     layout: Option<Layout>,
+    /// What each push still standing in this block stored, by its depth
+    /// and width: a pop or an argument reads it back as that value.
+    pushes: HashMap<i64, (Operand, i64)>,
     live_in: IndexMap<usize, Flag>,
     /// The instruction being emitted.
     pub insn: Option<Insn>,
+    /// This block's nodes before its transfer, the one being emitted, and
+    /// how many after it a recognizer consumed.
+    run: Vec<&'b Node>,
+    cursor: usize,
+    consumed: usize,
 }
 
 fn poison(b: &mut Builder, ty: TypeId) -> Operand {
@@ -221,8 +229,12 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
         top,
         deepest: 0,
         layout: None,
+        pushes: HashMap::new(),
         live_in: flagged::live_in(&body.blocks),
         insn: None,
+        run: Vec::new(),
+        cursor: 0,
+        consumed: 0,
     };
     emitter.run()
 }
@@ -385,6 +397,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         };
         self.current.clear();
         self.bits.clear();
+        self.pushes.clear();
         self.depth = entry.depth;
         self.frame = entry.frame;
         self.floats = entry.floats;
@@ -393,8 +406,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             Some((last, rest)) if is_transfer(last) => (Some(*last), rest),
             _ => (None, &nodes[..]),
         };
-        for node in rest {
+        self.run = rest.to_vec();
+        let mut index = 0;
+        while let Some(&node) = self.run.get(index) {
+            (self.cursor, self.consumed) = (index, 0);
             self.node(node)?;
+            index += 1 + self.consumed;
             if let Node::Call(call) = node {
                 if self.unit.facts.contract(call.insn.at).is_some_and(never_returns) {
                     self.ends.insert(self.block, (self.current.clone(), self.bits.clone()));
@@ -521,6 +538,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     /// `high:low` as one value twice as wide.
     pub fn join(&mut self, low: Operand, high: Operand) -> Operand {
+        if let Some(whole) = crate::longs::whole(self, low, high) {
+            return whole;
+        }
         let bits = self.bits_of(low);
         let wide = self.b.context.types.int(bits * 2);
         let low = self.cast(CastOp::ZExt, low, wide);
@@ -528,6 +548,21 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let shift = self.b.int(bits * 2, i128::from(bits));
         let high = self.binary(BinaryOp::Shl, high, shift);
         self.binary(BinaryOp::Or, high, low)
+    }
+
+    /// The body being emitted.
+    pub fn body(&self) -> &'b BodyFacts {
+        self.body
+    }
+
+    /// The `n`th node after the one being emitted, in its block.
+    pub fn ahead(&self, n: usize) -> Option<&'b Node> {
+        self.run.get(self.cursor + n).copied()
+    }
+
+    /// Owns the next `n` nodes too: the core raise does not see them.
+    pub fn consume(&mut self, n: usize) {
+        self.consumed = n;
     }
 
     pub fn bits_of(&self, value: Operand) -> u32 {
@@ -1169,7 +1204,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     pub fn read(&mut self, loc: &Loc) -> Emit<Operand> {
         match loc {
             Loc::Reg(reg) => match reg.register {
-                Register::DS | Register::SS => {
+                register if self.unit.objects.names_data(register) => {
                     let selector = self.selector()?;
                     let word = self.b.context.types.int(16);
                     Ok(self.cast(CastOp::PtrToInt, selector, word))
@@ -1179,10 +1214,23 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                     let word = self.b.context.types.int(16);
                     Ok(self.cast(CastOp::PtrToInt, es, word))
                 }
+                Register::CS => {
+                    let code = self.unit.objects.code().ok_or("reads cs, with no code segment")?;
+                    let (segment, word) = (self.b.context.types.ptr(SEGMENT), self.b.context.types.int(16));
+                    let selector = self.cast(CastOp::AddrSpaceCast, Operand::Constant(code), segment);
+                    Ok(self.cast(CastOp::PtrToInt, selector, word))
+                }
                 register => self.register(register),
             },
             Loc::Imm(imm) => match imm.address {
                 None => Ok(self.b.int(imm.width * 8, i128::from(imm.value))),
+                Some(address) if imm.width == 2 && address.space == Space::Segment && !self.unit.objects.in_dgroup(address.index) => {
+                    // An offset into a far segment: its far pointer's low word.
+                    let far = self.unit.objects.far_address(self.b.context, address.index, address.disp).ok_or("an address outside DGROUP")?;
+                    let (long, word) = (self.b.context.types.int(32), self.b.context.types.int(16));
+                    let whole = self.cast(CastOp::PtrToInt, Operand::Constant(far), long);
+                    Ok(self.cast(CastOp::Trunc, whole, word))
+                }
                 Some(address) if imm.width == 2 => {
                     let pointer = self.symbol(address)?;
                     let word = self.b.context.types.int(16);
@@ -1234,7 +1282,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     fn symbol(&mut self, address: Addr) -> Emit<Operand> {
         match address.space {
             Space::Segment => {
-                if !self.unit.facts.found.dgroup.contains(address.index) {
+                if !self.unit.objects.in_dgroup(address.index) {
                     return Err("an address outside DGROUP".to_owned());
                 }
                 let object = self.unit.objects.at(address.index, address.disp).ok_or("an address past its segment")?.clone();
@@ -1284,30 +1332,35 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 None => pointer,
             });
         }
-        match segment {
-            Register::DS | Register::SS => {
-                let pointer = match resolved {
-                    Some(address) => self.symbol(address)?,
-                    None => {
-                        let ptr = self.b.context.types.ptr(0);
-                        let at = self.plus(sum, disp);
-                        return Ok(self.cast(CastOp::IntToPtr, at, ptr));
-                    }
-                };
+        match (segment, resolved) {
+            (segment, Some(address)) if self.unit.objects.names_data(segment) => {
+                let pointer = self.symbol(address)?;
                 Ok(match sum {
                     Some(sum) => self.indexed(pointer, sum),
                     None => pointer,
                 })
             }
+            (Register::ES, Some(_)) => Err("es: with a relocated displacement".to_owned()),
+            (segment, None) if segment == Register::ES || self.unit.objects.names_data(segment) => {
+                let at = self.plus(sum, disp);
+                self.segmented(segment, at)
+            }
+            (other, _) => Err(format!("{}: memory", name(other))),
+        }
+    }
+
+    /// The address `segment:offset`, the offset a word.
+    pub fn segmented(&mut self, segment: Register, offset: Operand) -> Emit<Operand> {
+        match segment {
+            segment if self.unit.objects.names_data(segment) => {
+                let ptr = self.b.context.types.ptr(0);
+                Ok(self.cast(CastOp::IntToPtr, offset, ptr))
+            }
             Register::ES => {
-                if resolved.is_some() {
-                    return Err("es: with a relocated displacement".to_owned());
-                }
                 let es = self.get(Var::Es);
                 let far = self.b.context.types.ptr(FAR);
                 let base = self.cast(CastOp::AddrSpaceCast, es, far);
-                let at = self.plus(sum, disp);
-                Ok(self.indexed(base, at))
+                Ok(self.indexed(base, offset))
             }
             other => Err(format!("{}: memory", name(other))),
         }
@@ -1351,9 +1404,36 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         };
         self.depth += bytes;
         self.deepest = self.deepest.max(self.depth);
-        let slot = self.slot(self.depth);
+        let depth = self.depth;
+        self.pushes.retain(|&at, &mut (_, width)| at - width >= depth || at <= depth - bytes);
+        self.pushes.insert(depth, (value, bytes));
+        let slot = self.slot(depth);
         self.b.store(value, slot, false);
         Ok(())
+    }
+
+    /// The pushed bytes above `depth` are gone.
+    fn forget_above(&mut self, depth: i64) {
+        self.pushes.retain(|&at, _| at <= depth);
+    }
+
+    /// The `width` bytes at `depth`: those of what a push stored, or a load.
+    fn pushed(&mut self, depth: i64, width: u32) -> Operand {
+        let found = self.pushes.iter().map(|(&at, &(value, bytes))| (at - depth, value, bytes)).find(|&(offset, _, bytes)| offset >= 0 && offset + i64::from(width) <= bytes);
+        if let Some((offset, value, bytes)) = found {
+            if offset == 0 && bytes == i64::from(width) {
+                return value;
+            }
+            if let Some(constant) = self.constant(value) {
+                return self.b.int(width * 8, i128::from(constant >> (8 * offset)));
+            }
+            let (by, ty) = (self.b.int(self.bits_of(value), i128::from(8 * offset)), self.b.context.types.int(width * 8));
+            let shifted = self.binary(BinaryOp::LShr, value, by);
+            return self.cast(CastOp::Trunc, shifted, ty);
+        }
+        let slot = self.slot(depth);
+        let ty = self.b.context.types.int(width * 8);
+        self.b.load(ty, slot, false, "")
     }
 
     pub fn pop(&mut self, width: u32) -> Emit<Operand> {
@@ -1361,10 +1441,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         if self.depth < bytes {
             return Err("pops what it did not push".to_owned());
         }
-        let slot = self.slot(self.depth);
-        let ty = self.b.context.types.int(width * 8);
-        let value = self.b.load(ty, slot, false, "");
+        let value = self.pushed(self.depth, width);
         self.depth -= bytes;
+        self.forget_above(self.depth);
         Ok(value)
     }
 
@@ -1378,9 +1457,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         if depth > self.depth || depth < i64::from(width) {
             return Err("reads arguments it did not push".to_owned());
         }
-        let slot = self.slot(depth);
-        let ty = self.b.context.types.int(width * 8);
-        Ok(self.b.load(ty, slot, false, ""))
+        Ok(self.pushed(depth, width))
     }
 
     pub fn depth(&self) -> i64 {
@@ -1392,6 +1469,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             return Err("a call pops what was not pushed".to_owned());
         }
         self.depth -= bytes;
+        self.forget_above(self.depth);
         Ok(())
     }
 
@@ -1432,6 +1510,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             return Ok(());
         }
+        self.runtime_call(callee, at, None)
+    }
+
+    /// A call of runtime routine `callee`, which pops `stack` bytes where
+    /// its declaration does not say.
+    pub fn runtime_call(&mut self, callee: &str, at: usize, stack: Option<i64>) -> Emit<()> {
         let contract = self.unit.facts.contract(at).ok_or_else(|| format!("{callee} has no contract"))?.clone();
         let spec = match self.unit.callees.named.get(callee) {
             Some(Ok(spec)) => spec.clone(),
@@ -1443,14 +1527,14 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         for &root in &spec.inputs {
             arguments.push(if direct.contains(&root) { self.register(word(root))? } else { self.b.int(16, 0) });
         }
-        let words = spec.stack / 2;
-        for index in 0..words {
-            let depth = if spec.pops { self.depth - spec.stack + 2 + 2 * index } else { self.depth - 2 * index };
+        let stack = stack.unwrap_or(spec.stack);
+        for index in 0..stack / 2 {
+            let depth = if spec.pops { self.depth - stack + 2 + 2 * index } else { self.depth - 2 * index };
             arguments.push(self.stack_word(depth, 2)?);
         }
         let answered = self.b.call_as(spec.convention, spec.ty, Operand::Constant(spec.reference), &arguments, "");
         if spec.pops {
-            self.popped(spec.stack)?;
+            self.popped(stack)?;
         }
         let disturbed: Vec<Register> =
             llrm_bcmachine::abi::runtime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();

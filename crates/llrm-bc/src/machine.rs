@@ -20,6 +20,8 @@ use llrm_bcmachine::objectfile::cvinfo;
 use llrm_bcmachine::objectfile::module::{self, Module};
 use llrm_bcmachine::support::hash::IndexMap;
 
+use crate::pairs::{self, Pair};
+
 /// The registers that become values, rooted.
 pub const TRACKED: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
@@ -169,6 +171,8 @@ pub struct BodyFacts {
     pub nodes: IndexMap<i64, Arc<Node>>,
     /// A procedure's interface, or why it has none; None for another body.
     pub interface: Option<Result<Interface, String>>,
+    /// Its longs' pairs of nodes, by the first's address.
+    pub pairs: BTreeMap<i64, Pair>,
 }
 
 impl BodyFacts {
@@ -279,7 +283,8 @@ impl<'m> Facts<'m> {
                 all.iter().filter(|block| one.body.ranges.iter().any(|&(lo, hi)| lo <= block.at && block.at < hi)).cloned().collect();
             let mine = reachable(raising_control::terminal_edges(mine, &contracts), one.body.seed);
             let interface = (one.body.kind == BodyKind::Procedure).then(|| interface(&nodes, procedures.get(&one.body.seed)));
-            bodies.push((BodyFacts { body: one.body, blocks: mine, nodes, interface: None }, interface));
+            let pairs = pairs::found(&mine, &nodes);
+            bodies.push((BodyFacts { body: one.body, blocks: mine, nodes, interface: None, pairs }, interface));
         }
         // Without CodeView, a procedure answers in what its callers read after it.
         let mut read: BTreeMap<String, Words> = BTreeMap::new();
