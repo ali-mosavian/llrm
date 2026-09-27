@@ -20,6 +20,7 @@ pub mod loopclone;
 pub mod loopsimplify;
 pub mod profit;
 pub mod promote;
+pub mod strength;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
