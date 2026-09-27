@@ -58,7 +58,8 @@ pub fn runtime(emitted: &[(&Emitted, &model::Module)], promises: &model::Runtime
 /// `promises` of each one's named cells, those only a reference naming
 /// them reaches: `!llrm.named` lists them, and each routine a module
 /// declares that runs no program code is `nocallback` with an
-/// `!llrm.writes` node of the named cells it writes.
+/// `!llrm.writes` node of the named cells it writes; one that raises no
+/// error is `nounwind`.
 pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model::RuntimePromises) -> Emit<Module> {
     let mut out = Module { datalayout: modules.first().and_then(|(module, _)| module.datalayout.clone()), ..Module::default() };
     let node = |out: &mut Module, globals: Vec<GlobalId>| {
@@ -94,15 +95,19 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     });
     let mut writes = Vec::new();
     for (module, global, name, routine) in routines {
-        let Some(cells) = promises.writes(routine) else { continue };
-        if out.named(name).is_some() {
+        let cells = promises.writes(routine);
+        let nounwind = promises.nounwind.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
-        function.attrs.push(Attribute::Flag("nocallback".to_owned()));
-        let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
-        writes.push(node(&mut out, written));
+        function.attrs.extend(cells.is_some().then(|| Attribute::Flag("nocallback".to_owned())));
+        function.attrs.extend(nounwind.then(|| Attribute::Flag("nounwind".to_owned())));
+        if let Some(cells) = cells {
+            let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
+            writes.push(node(&mut out, written));
+        }
     }
     if !writes.is_empty() {
         out.named_metadata.push(("llrm.writes".to_owned(), writes));

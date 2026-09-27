@@ -245,7 +245,7 @@ impl _Plain for model::DataRelocation {
 plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", readonly => "readonly",
     relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
 plain_record!(CellWriters, None, cell => "cell", routines => "routines");
-plain_record!(RuntimePromises, None, calling_back => "calling_back", writers => "writers");
+plain_record!(RuntimePromises, None, calling_back => "calling_back", writers => "writers", nounwind => "nounwind");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
     data => "data", callables => "callables");
 /// Float semantics are written only when they are the machine's, as before
@@ -1096,8 +1096,15 @@ static RUNTIME_PROMISES: _Record = _Record {
     fields: &[
         ("calling_back", _Hint::Union(&[_Hint::Tuple(&_Hint::Str), _Hint::NoneType]), false),
         ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
+        ("nounwind", _Hint::Tuple(&_Hint::Str), false),
     ],
-    build: |args| _object(model::RuntimePromises { calling_back: _default(args, "calling_back", None)?, writers: _default(args, "writers", Vec::new())? }),
+    build: |args| {
+        _object(model::RuntimePromises {
+            calling_back: _default(args, "calling_back", None)?,
+            writers: _default(args, "writers", Vec::new())?,
+            nounwind: _default(args, "nounwind", Vec::new())?,
+        })
+    },
 };
 
 static PROGRAM: _Record = _Record {

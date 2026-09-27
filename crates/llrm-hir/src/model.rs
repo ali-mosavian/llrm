@@ -655,15 +655,23 @@ pub struct RuntimePromises {
     pub calling_back: Option<Vec<String>>,
     /// Each named cell's writers.
     pub writers: Vec<CellWriters>,
+    /// The routines that raise no error.
+    pub nounwind: Vec<String>,
 }
 
 impl RuntimePromises {
     /// The promises of a runtime whose `calling_back` routines may run the
-    /// program's code, and whose named cells `writers` write.
-    pub fn of<'a, 'b, W: IntoIterator<Item = &'b str>>(calling_back: impl IntoIterator<Item = &'a str>, writers: impl IntoIterator<Item = (&'b str, W)>) -> Self {
+    /// program's code, whose named cells `writers` write, and whose
+    /// `nounwind` routines raise no error.
+    pub fn of<'a, 'b, 'c, W: IntoIterator<Item = &'b str>>(
+        calling_back: impl IntoIterator<Item = &'a str>,
+        writers: impl IntoIterator<Item = (&'b str, W)>,
+        nounwind: impl IntoIterator<Item = &'c str>,
+    ) -> Self {
         Self {
             calling_back: Some(calling_back.into_iter().map(str::to_owned).collect()),
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
+            nounwind: nounwind.into_iter().map(str::to_owned).collect(),
         }
     }
 
