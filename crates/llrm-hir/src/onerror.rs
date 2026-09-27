@@ -3,7 +3,9 @@
 //! A function with an error handler has the personality `PERSONALITY`. Each
 //! call in it that may raise an error while trapping is on is an invoke to
 //! its one landing pad, where the handler starts, and the pad's selector is
-//! ERR. `ONERROR`, `void (i1)`, turns trapping on or off. The handler runs
+//! ERR. `ONERROR`, `void (i1)`, turns trapping on or off for the module's
+//! handler, `ONLOCALERROR` for the procedure's own, which the runtime keeps
+//! in its frame and forgets when it returns. The handler runs
 //! with it off, so an error it raises ends the program, as the runtime ends
 //! one raised inside its own handler: the pad turns it off first, and each
 //! RESUME back on for the handler ON ERROR GOTO last named.
@@ -20,12 +22,14 @@ use crate::mir::FAR;
 
 pub const PERSONALITY: &str = "llrm.qb.personality";
 pub const ONERROR: &str = "llrm.qb.onerror";
+pub const ONLOCALERROR: &str = "llrm.qb.onlocalerror";
 /// ERR outside the handler: the runtime's error number.
 pub const ERR: &str = "llrm.qb.B$FERR";
 
 /// What a handled function's code refers to.
 #[derive(Clone, Copy, Debug)]
 pub struct Handled {
+    /// `ONERROR`, or `ONLOCALERROR` for a procedure's own handler.
     pub onerror: ConstantId,
     pub onerror_type: TypeId,
     /// The landing pad's type, `{ptr, i32}`.
@@ -34,9 +38,10 @@ pub struct Handled {
     pub lines: (ConstantId, TypeId),
 }
 
-/// Gives `function` the personality, declares ON ERROR GOTO, and keeps
-/// `lines`, each statement's BASIC line in the order a site numbers them.
-pub fn handled(module: &mut Module, function: GlobalId, lines: &[i64]) -> Result<Handled, String> {
+/// Gives `function` the personality, declares ON ERROR GOTO -- ON LOCAL
+/// ERROR GOTO where `local` -- and keeps `lines`, each statement's BASIC
+/// line in the order a site numbers them.
+pub fn handled(module: &mut Module, function: GlobalId, lines: &[i64], local: bool) -> Result<Handled, String> {
     let name = module.global(function).name.clone().unwrap_or_default();
     let i16 = module.context.types.int(16);
     let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
@@ -51,7 +56,7 @@ pub fn handled(module: &mut Module, function: GlobalId, lines: &[i64]) -> Result
     let onerror_type = types.intern(Type::Function { returns: void, parameters: vec![flag], variadic: false });
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
     let personality = declared(module, PERSONALITY, personality_type, 0, &[])?;
-    let onerror = declared(module, ONERROR, onerror_type, BASIC, &["nounwind"])?;
+    let onerror = declared(module, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
     let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else { return Err("a handler outside a function".to_owned()) };
     handled.personality = Some(personality);
     Ok(Handled { onerror, onerror_type, pad, lines })

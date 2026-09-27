@@ -2406,6 +2406,21 @@ fn the_pad_goes_to_the_handler_named_last() {
     assert!(matches!(main.instruction(last).opcode, llrm_mir::Opcode::Switch), "{}", llrm_mir::print::module(&emitted.module));
 }
 
+/// ON LOCAL ERROR: the SUB's own handler is its landing pad, registered by
+/// the local intrinsic. Was refused as "ON LOCAL ERROR, whose handler is a
+/// procedure's".
+#[test]
+fn a_procedures_own_handler_is_its_landing_pad() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "LOCAL.BAS", b"DECLARE SUB s ()\nCALL s\nEND\nSUB s\nON LOCAL ERROR GOTO h\nERROR 53\nEXIT SUB\nh:\nRESUME NEXT\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@llrm.qb.onlocalerror(i1 true)") && !text.contains("@llrm.qb.onerror("), "{text}");
+    assert!(text.contains("landingpad"), "{text}");
+}
+
 /// Outside the handler ERL is the runtime's, which knows no line of the
 /// recompiled code.
 #[test]

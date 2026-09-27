@@ -520,6 +520,21 @@ evidence = '''
 rt/error.asm: `cProc B$OEGA,<FAR,PUBLIC>` with parmD erradr -- the ON ERROR GOTO statement handler. It sets OFD_ONERROR in the module's own data, and its header says `erradr == 0 and an error is in progress, will jump to B$SERR instead of returning`: OEGA_10 does `MOV BP,[BP]` / `ADD SP,8` and `JMP B$SERR ;Process error (Never Returns)`, which is the path into the user's handler.
 '''
 
+["B$OEGP"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = false
+error_handling = true
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+BCL71ENR.LIB and VBDCL10E.LIB error 0046: ON LOCAL ERROR GOTO, one word, the handler's offset in the caller's code segment. It stores it in the caller's frame, [bx-0Eh] / [bx-10h] under `MOV BX,[BP]`, and RETF 2; with 0 while that frame's handler runs it jumps to the path OEGA_10 takes into B$SERR, as B$OEGA does. QB 4.5 has none.
+'''
+
 ["B$OGTA"]
 cleanup = -1
 control = "inline-table"

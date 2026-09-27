@@ -126,8 +126,8 @@ impl Body<'_, '_, '_> {
         }
         if let Some(registered) = callee.strip_prefix(REGISTER) {
             let (handler, scope) = registered.split_once(':').ok_or("an ON ERROR marker without its scope")?;
-            if scope != "G" {
-                return Err("ON LOCAL ERROR, whose handler is a procedure's, which is not selected yet".to_owned());
+            if (scope == "L") != self.function.error_handler_local {
+                return Err("ON ERROR and ON LOCAL ERROR in one procedure".to_owned());
             }
             let handler: i64 = handler.parse().map_err(|_| "an ON ERROR marker without its handler")?;
             let handling = self.handling.as_ref().ok_or("an ON ERROR GOTO in a SUB, whose errors are not selected yet")?;

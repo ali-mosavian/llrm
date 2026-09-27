@@ -201,7 +201,7 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
     for &(index, _, global) in &functions {
         if facts.bodies[index].handler.is_some() {
             let lines: Vec<i64> = facts.statements.iter().map(|&(_, line)| line).collect();
-            handled.insert(index, llrm_hir::onerror::handled(&mut module, global, &lines).map_err(module_refusal)?);
+            handled.insert(index, llrm_hir::onerror::handled(&mut module, global, &lines, false).map_err(module_refusal)?);
         }
     }
     // An intrinsic raises no BASIC error.

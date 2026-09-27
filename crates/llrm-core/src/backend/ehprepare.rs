@@ -21,17 +21,18 @@ use llrm_mir::{GlobalId, Module, TypeId};
 
 use llrm_hir::mir::FAR;
 use llrm_hir::onerror::ERR;
-pub use llrm_hir::onerror::{ONERROR, PERSONALITY};
+pub use llrm_hir::onerror::{ONERROR, ONLOCALERROR, PERSONALITY};
 /// The module's registered handler: keeps ERR, then resumes at the pad.
 pub const LANDING: &str = "$QB$LANDING";
 /// The ERR the landing kept, which the pad's selector reads.
 pub const LANDED: &str = "$QB$LANDED";
 /// The runtime's ON ERROR GOTO and RESUME NEXT.
 const REGISTER: &str = "llrm.qb.B$OEGA";
+const REGISTER_LOCAL: &str = "llrm.qb.B$OEGP";
 const RESUME: &str = "llrm.qb.B$RESN";
 
-/// Prepares the function of `module` with the QB personality, or refuses
-/// what the one module handler cannot yet serve.
+/// Prepares each function of `module` with the QB personality, or refuses
+/// what the handlers cannot yet serve.
 pub fn prepared(module: &mut Module) -> Result<(), String> {
     // An intrinsic raises no BASIC error.
     let nounwind: BTreeSet<GlobalId> = module
@@ -40,69 +41,72 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
         .map(|(id, _, _)| id)
         .collect();
     let handled: Vec<GlobalId> = module.functions().filter(|(_, _, function)| personality(module, function)).map(|(id, _, _)| id).collect();
-    let onerror = module.named(ONERROR);
+    let registrations: Vec<GlobalId> = [ONERROR, ONLOCALERROR].into_iter().filter_map(|one| module.named(one)).collect();
+    let registers = |function: &Function| function.walk().any(|(_, inst)| callee(&module.context, function, inst).is_some_and(|one| registrations.contains(&one)));
+    // The module's handler takes an error raised anywhere in the module, on
+    // the frame of the procedure that raised it; a procedure's own handler
+    // only those its frame raises.
+    let moduled = module.named(ONERROR).is_some_and(|onerror| module.functions().any(|(_, _, function)| function.walk().any(|(_, inst)| callee(&module.context, function, inst) == Some(onerror))));
     for (id, global, function) in module.functions() {
         if handled.contains(&id) || function.is_declaration() {
             continue;
         }
         let name = global.name.as_deref().unwrap_or_default();
-        if function.walk().any(|(_, inst)| onerror.is_some() && callee(&module.context, function, inst) == onerror) {
+        if registers(function) {
             return Err(format!("@{name} registers an error handler but has no {PERSONALITY}"));
         }
-        if !handled.is_empty() && function.walk().any(|(_, inst)| unwinds(&module.context, &nounwind, function, inst)) {
+        if moduled && function.walk().any(|(_, inst)| unwinds(&module.context, &nounwind, function, inst)) {
             return Err(format!(
                 "@{name} may raise an error, which the runtime hands to the module's handler on @{name}'s own frame: errors raised inside SUBs are not selected yet"
             ));
         }
     }
-    let [owner] = handled[..] else {
-        return if handled.is_empty() { Ok(()) } else { Err("error handlers in more than one procedure are not selected yet".to_owned()) };
-    };
-    let name = module.global(owner).name.clone().unwrap_or_default();
-    let why = |what: String| format!("@{name}: {what}");
-    let Some(pad) = module.global(owner).function().map(pad).transpose().map_err(why)?.flatten() else {
-        // Every call here that may raise is an invoke to the pad: with none, nothing lands.
-        let (context, function) = module.function_mut(&name).expect("the handled function");
-        return unregistered(context, function, onerror);
-    };
-    let register = declare(module)?;
-    let routine = module.named(REGISTER).expect("declared");
-    let routine = module.reference(routine);
-    let landing = module.named(LANDING).expect("declared");
-    let landing = module.reference(landing);
-    let landed = module.named(LANDED).expect("declared");
-    let landed = module.reference(landed);
-    let null = Constant { ty: module.context.types.ptr(FAR), kind: ConstantKind::Null };
-    let null = module.context.constant(null);
-    let (context, function) = module.function_mut(&name).expect("the handled function");
-    if function.walk().any(|(_, inst)| function.instruction(inst).opcode == Opcode::Resume) {
-        return Err(why("a landing pad that resumes unwinding: an error its handler passes on is not selected yet".to_owned()));
-    }
-    // Where trapping may be on, every call that may raise is an invoke to the
-    // pad: the runtime would land a call's error there with no site stored.
-    let on = trapping(context, function, onerror);
-    for &block in function.layout() {
-        let mut trapped = on[&block];
-        for &inst in function.block(block).instructions() {
-            if trapped && matches!(function.instruction(inst).opcode, Opcode::Call(_)) && unwinds(context, &nounwind, function, inst) {
-                return Err(why("a call that may raise an error where ON ERROR is on, which is no invoke to the pad".to_owned()));
-            }
-            trapped = trapping_after(context, function, onerror, inst, trapped);
+    let mut pads = Vec::new();
+    for &id in &handled {
+        let name = module.global(id).name.clone().unwrap_or_default();
+        let why = |what: String| format!("@{name}: {what}");
+        let function = module.global(id).function().expect("a function");
+        if function.walk().any(|(_, inst)| function.instruction(inst).opcode == Opcode::Resume) {
+            return Err(why("a landing pad that resumes unwinding: an error its handler passes on is not selected yet".to_owned()));
         }
+        // Where trapping may be on, every call that may raise is an invoke to
+        // the pad: the runtime would land a call's error there with no site stored.
+        let on = trapping(&module.context, function, &registrations);
+        for &block in function.layout() {
+            let mut trapped = on[&block];
+            for &inst in function.block(block).instructions() {
+                if trapped && matches!(function.instruction(inst).opcode, Opcode::Call(_)) && unwinds(&module.context, &nounwind, function, inst) {
+                    return Err(why("a call that may raise an error where ON ERROR is on, which is no invoke to the pad".to_owned()));
+                }
+                trapped = trapping_after(&module.context, function, &registrations, inst, trapped);
+            }
+        }
+        pads.push((name.clone(), pad(function).map_err(why)?));
     }
-    registered(context, function, onerror, (register, routine), landing, null).map_err(why)?;
-    selected(context, function, pad, landed).map_err(why)?;
-    demote_phis(context, function, pad).map_err(why)?;
-    demote_live(context, function, pad).map_err(why)
+    let routines = if pads.iter().any(|(_, pad)| pad.is_some()) { Some(declare(module)?) } else { None };
+    for (name, pad) in pads {
+        let why = |what: String| format!("@{name}: {what}");
+        let (context, function) = module.function_mut(&name).expect("a handled function");
+        // Every call here that may raise is an invoke to the pad: with none, nothing lands.
+        let (Some(pad), Some(routines)) = (pad, &routines) else {
+            unregistered(context, function, &registrations).map_err(why)?;
+            continue;
+        };
+        registered(context, function, routines).map_err(why)?;
+        selected(context, function, pad, routines.landed).map_err(why)?;
+        demote_phis(context, function, pad).map_err(why)?;
+        demote_live(context, function, pad).map_err(why)?;
+    }
+    Ok(())
 }
 
 /// Whether trapping may be on where each block starts: off at entry, on
 /// where the runtime lands, and as each ON ERROR leaves it.
-fn trapping(context: &Context, function: &Function, onerror: Option<GlobalId>) -> BTreeMap<BlockId, bool> {
+fn trapping(context: &Context, function: &Function, registrations: &[GlobalId]) -> BTreeMap<BlockId, bool> {
     let mut on: BTreeMap<BlockId, bool> = function.layout().iter().map(|&block| (block, false)).collect();
     let mut pending: Vec<BlockId> = function.layout().to_vec();
     while let Some(block) = pending.pop() {
-        let out = function.block(block).instructions().iter().fold(on[&block], |trapped, &inst| trapping_after(context, function, onerror, inst, trapped));
+        let out = function.block(block).instructions().iter().fold(on[&block], |trapped, &inst| trapping_after(context, function, registrations, inst, trapped));
         for next in function.successors(block) {
             if out && !on[&next] {
                 on.insert(next, true);
@@ -113,12 +117,12 @@ fn trapping(context: &Context, function: &Function, onerror: Option<GlobalId>) -
     on
 }
 
-fn trapping_after(context: &Context, function: &Function, onerror: Option<GlobalId>, inst: InstId, trapped: bool) -> bool {
+fn trapping_after(context: &Context, function: &Function, registrations: &[GlobalId], inst: InstId, trapped: bool) -> bool {
     let instruction = function.instruction(inst);
     if matches!(instruction.opcode, Opcode::LandingPad { .. }) {
         return true;
     }
-    if onerror.is_none() || callee(context, function, inst) != onerror {
+    if !callee(context, function, inst).is_some_and(|one| registrations.contains(&one)) {
         return trapped;
     }
     !matches!(instruction.operands[0], Operand::Constant(one) if context.get(one).kind == ConstantKind::Int(0))
@@ -174,15 +178,31 @@ fn landing_pad(function: &Function, block: BlockId) -> Option<InstId> {
     function.block(block).instructions().iter().copied().find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
-/// The runtime routines the landing and a registration call, and the
-/// landing itself and the ERR it keeps; B$OEGA's function type.
-fn declare(module: &mut Module) -> Result<TypeId, String> {
+/// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
+/// the landing's far address, and its ON LOCAL ERROR GOTO, B$OEGP with its
+/// offset, each by its function type; the landing, null, and the ERR it keeps.
+struct Routines {
+    onerror: Option<(GlobalId, TypeId, ConstantId)>,
+    onlocal: Option<(GlobalId, TypeId, ConstantId)>,
+    landing: ConstantId,
+    null: ConstantId,
+    landed: ConstantId,
+}
+
+/// The runtime routines the landing and the registrations call, and the
+/// landing itself and the ERR it keeps.
+fn declare(module: &mut Module) -> Result<Routines, String> {
     let types = &mut module.context.types;
     let (void, i16, far) = (types.void(), types.int(16), types.ptr(FAR));
     let register = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![far], variadic: false });
+    let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![i16], variadic: false });
     let asked = types.intern(llrm_mir::Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
     let nothing = types.intern(llrm_mir::Type::Function { returns: void, parameters: Vec::new(), variadic: false });
-    for (name, ty, attrs) in [(REGISTER, register, &[][..]), (ERR, asked, &["nounwind"][..]), (RESUME, nothing, &["noreturn", "nounwind"][..])] {
+    let mut routines = vec![(ERR, asked, &["nounwind"][..]), (RESUME, nothing, &["noreturn", "nounwind"][..])];
+    let (onerror, onlocal) = (module.named(ONERROR), module.named(ONLOCALERROR));
+    routines.extend(onerror.map(|_| (REGISTER, register, &[][..])));
+    routines.extend(onlocal.map(|_| (REGISTER_LOCAL, local, &[][..])));
+    for (name, ty, attrs) in routines {
         if let Some(one) = module.named(name) {
             let declared = module.global(one).function().map(|function| function.ty);
             if declared != Some(ty) {
@@ -198,15 +218,19 @@ fn declare(module: &mut Module) -> Result<TypeId, String> {
     let id = module.add_function(LANDING, nothing, Linkage::Internal)?;
     runtime(module, id, &["naked", "noreturn", "nounwind"]);
     let [err, resume, landed] = [ERR, RESUME, LANDED].map(|one| module.named(one).expect("declared"));
-    let [err, resume, landed] = [err, resume, landed].map(|one| Operand::Constant(module.reference(one)));
+    let [err, resume, landed] = [err, resume, landed].map(|one| module.reference(one));
     let mut b = module.builder(id);
     let entry = b.block("");
     b.position(entry);
-    let code = b.call_as(BASIC, asked, err, &[], "").expect("ERR");
-    b.store(code, landed, false);
-    b.call_as(BASIC, nothing, resume, &[], "");
+    let code = b.call_as(BASIC, asked, Operand::Constant(err), &[], "").expect("ERR");
+    b.store(code, Operand::Constant(landed), false);
+    b.call_as(BASIC, nothing, Operand::Constant(resume), &[], "");
     b.unreachable();
-    Ok(register)
+    let landing = module.reference(id);
+    let null = module.context.constant(Constant { ty: far, kind: ConstantKind::Null });
+    let mut routine = |registration: Option<GlobalId>, name: &str, ty: TypeId| registration.map(|one| (one, ty, module.reference(module.named(name).expect("declared"))));
+    let (onerror, onlocal) = (routine(onerror, REGISTER, register), routine(onlocal, REGISTER_LOCAL, local));
+    Ok(Routines { onerror, onlocal, landing, null, landed })
 }
 
 /// A far function by BASIC's convention, as the runtime's are.
@@ -219,24 +243,44 @@ fn runtime(module: &mut Module, id: GlobalId, attrs: &[&str]) {
 }
 
 /// Each ON ERROR gone, where no call lands.
-fn unregistered(context: &Context, function: &mut Function, onerror: Option<GlobalId>) -> Result<(), String> {
-    let sites: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| onerror.is_some() && callee(context, function, inst) == onerror).collect();
-    sites.into_iter().try_for_each(|inst| function.erase(inst).map_err(|error| error.to_string()))
+fn unregistered(context: &Context, function: &mut Function, registrations: &[GlobalId]) -> Result<(), String> {
+    let sites: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst).is_some_and(|one| registrations.contains(&one))).collect();
+    sites.into_iter().try_for_each(|inst| function.erase(inst))
 }
 
-/// Each ON ERROR a call of B$OEGA with the landing, or with null.
-fn registered(context: &mut Context, function: &mut Function, onerror: Option<GlobalId>, (ty, routine): (TypeId, ConstantId), landing: ConstantId, null: ConstantId) -> Result<(), String> {
-    let Some(onerror) = onerror else { return Ok(()) };
-    let sites: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(onerror)).collect();
+/// Each ON ERROR a call of B$OEGA with the landing or null; each ON LOCAL
+/// ERROR one of B$OEGP with the landing's offset or 0.
+fn registered(context: &mut Context, function: &mut Function, routines: &Routines) -> Result<(), String> {
+    let registrations = [routines.onerror, routines.onlocal];
+    let sites: Vec<(InstId, (GlobalId, TypeId, ConstantId))> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let called = callee(context, function, inst)?;
+            registrations.into_iter().flatten().find(|&(one, _, _)| one == called).map(|routine| (inst, routine))
+        })
+        .collect();
     let void = context.types.void();
-    for inst in sites {
+    for (inst, (registration, ty, routine)) in sites {
         let instruction = function.instruction(inst);
         if !matches!(instruction.opcode, Opcode::Call(_)) {
             return Err("an ON ERROR that is an invoke".to_owned());
         }
-        let target = match instruction.operands[0] {
-            Operand::Constant(one) => Operand::Constant(if context.get(one).kind == ConstantKind::Int(0) { null } else { landing }),
+        let on = match instruction.operands[0] {
+            Operand::Constant(one) => context.get(one).kind != ConstantKind::Int(0),
             _ => return Err("an ON ERROR whose handler is not constant".to_owned()),
+        };
+        let target = if Some(registration) == routines.onlocal.map(|(one, _, _)| one) {
+            // The runtime keeps a procedure's handler as an offset in its code segment.
+            let i16 = context.types.int(16);
+            if on {
+                let offset = function.create_instruction(Opcode::Cast(CastOp::PtrToInt), i16, vec![Operand::Constant(routines.landing)], Flags::default(), None);
+                function.insert(offset, Position::Before(inst))?;
+                Operand::Value(function.instruction(offset).result.expect("a value"))
+            } else {
+                Operand::Constant(context.int(i16, 0))
+            }
+        } else {
+            Operand::Constant(if on { routines.landing } else { routines.null })
         };
         let info = CallInfo { function_type: ty, calling_convention: BASIC, return_attrs: Vec::new(), argument_attrs: vec![Vec::new()], attrs: Vec::new(), tail: Default::default() };
         let made = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![target, Operand::Constant(routine)], Flags::default(), None);

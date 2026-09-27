@@ -6,6 +6,7 @@ const DECLARED: &str = r#"
 declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
 declare cc1000 void @llrm.qb.B$CEND() addrspace(1) noreturn nounwind
 declare cc1000 void @llrm.qb.onerror(i1) addrspace(1) nounwind
+declare cc1000 void @llrm.qb.onlocalerror(i1) addrspace(1) nounwind
 declare i32 @llrm.qb.personality(...) addrspace(1)
 "#;
 
@@ -152,4 +153,29 @@ entry:
     prepared(&mut module).expect("prepared");
     let text = printed(&module);
     assert!(!text.contains("call cc1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA"), "{text}");
+}
+
+/// ON LOCAL ERROR: a SUB's own handler, which the runtime keeps in the SUB's
+/// frame by its offset, lands only what that frame raises, so main's calls
+/// stay calls. Was refused as "ON LOCAL ERROR, whose handler is a
+/// procedure's", and a second handled procedure as "error handlers in more
+/// than one procedure".
+#[test]
+fn a_procedures_own_handler_registers_the_landings_offset() {
+    let local = HANDLED.replace("@main()", "@SUB()").replace("@llrm.qb.onerror(", "@llrm.qb.onlocalerror(");
+    let main = r#"
+define void @main() addrspace(1) {
+entry:
+  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 1)
+  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  unreachable
+}
+"#;
+    let mut module = parsed(&format!("{local}{main}"));
+    prepared(&mut module).expect("prepared");
+    assert!(llrm_mir::verify::verify(&module).is_empty());
+    let text = printed(&module);
+    assert!(text.contains("ptrtoint ptr addrspace(1) @$QB$LANDING to i16"), "{text}");
+    assert!(text.contains("@llrm.qb.B$OEGP(i16 %"), "{text}");
+    assert!(text.contains("@llrm.qb.B$OEGP(i16 0)"), "{text}");
 }

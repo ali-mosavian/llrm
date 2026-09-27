@@ -310,7 +310,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             (None, _) => Ok(None),
             (Some(_), Ok(rows)) => {
                 let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
-                onerror::handled(&mut module, global, &lines).map(Some)
+                onerror::handled(&mut module, global, &lines, function.error_handler_local).map(Some)
             }
             (Some(_), Err(why)) => Err(why.clone()),
         };
