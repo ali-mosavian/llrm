@@ -260,3 +260,78 @@ b0:
     let after = printed(&module);
     assert!(!after.contains("store i16 1") && after.contains("ret i16 %x"), "{after}");
 }
+
+/// A bounds error's path ends in `unreachable`: nothing after it reads,
+/// and its noreturn call reads only what escaped before it, as LLVM's DSE
+/// ignores such exits. The zeroed slot, overwritten on the other path and
+/// only then handed out, loses its memset. Each bounds check kept T028's.
+#[test]
+fn test_a_path_to_unreachable_reads_only_what_escaped_before() {
+    let text = "declare void @use(ptr)
+
+declare void @error() noreturn
+
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca [4 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 4, i1 false)
+  store i16 %x, ptr %s
+  %bad = icmp sgt i16 %x, 100
+  br i1 %bad, label %b2, label %b1
+
+b1:
+  %s2 = getelementptr inbounds i8, ptr %s, i16 2
+  store i16 1, ptr %s2
+  call void @use(ptr %s)
+  ret i16 %x
+
+b2:
+  call void @error()
+  unreachable
+}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("call void @llvm.memset") && after.matches("store i16").count() == 2, "{after}");
+}
+
+
+/// A load through a pointer read from memory, before the slot's address
+/// escapes, cannot read the slot: LLVM's `EarliestEscapeInfo`. The memset
+/// the later stores overwrite goes. T028's `update` read `v[i]` through
+/// its slice's data pointer between the zeroing and the stores.
+#[test]
+fn test_a_load_before_the_escape_does_not_read_the_slot() {
+    let text = "declare void @use(ptr)
+
+define void @f(ptr %p) {
+b0:
+  %s = alloca [4 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 4, i1 false)
+  %q = load ptr, ptr %p
+  %v = load i16, ptr %q
+  store i16 %v, ptr %s
+  %s2 = getelementptr inbounds i8, ptr %s, i16 2
+  store i16 1, ptr %s2
+  call void @use(ptr %s)
+  ret void
+}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("call void @llvm.memset") && after.matches("store i16").count() == 2, "{after}");
+}

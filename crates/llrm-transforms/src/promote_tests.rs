@@ -673,3 +673,26 @@ b3:
     );
     assert_eq!(loads(&module), 1, "{}", printed(&module));
 }
+
+/// A cell keeps its `!tbaa` type when a write is asked about it: segld's
+/// global stayed in memory past a far store typed `allocation`.
+#[test]
+fn a_write_of_another_tbaa_type_leaves_a_cell_available() {
+    let body = "@t = internal global i16 0
+
+define i16 @f(ptr addrspace(1) %far, i16 %v) {
+b0:
+  store i16 %v, ptr @t, !tbaa !2
+  store i16 1, ptr addrspace(1) %far, !tbaa !4
+  %x = load i16, ptr @t, !tbaa !2
+  ret i16 %x
+}
+
+!0 = !{!\"llrm hir\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!\"allocation\", !0, i64 0}
+!4 = !{!3, !3, i64 0}
+";
+    forwarded(body, &[]);
+}

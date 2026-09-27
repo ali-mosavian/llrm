@@ -438,8 +438,11 @@ fn test_capture_decides_what_nonlocal_reaches() {
     let nonlocal = MemoryObject::new(MemoryKind::Nonlocal);
     let unknown = MemoryObject::new(MemoryKind::Unknown);
     assert!(!memory::objects_may_alias(&nonlocal, &private));
-    assert!(memory::objects_may_alias(&unknown, &private));
+    // A pointer no fact follows reaches only what escaped (`_lost`
+    // publishes the rest); the old route's unknown x86 operand met it too.
+    assert!(!memory::objects_may_alias(&unknown, &private));
     assert!(!memory::objects_may_alias(&unknown, &unaddressed));
+    assert!(memory::objects_may_alias(&unknown, &MemoryObject { captured: true, ..private.clone() }));
     assert!(memory::objects_may_alias(&unaddressed, &unaddressed));
 }
 
@@ -630,4 +633,34 @@ fn a_congruence_holds_across_the_counters_wrap() {
 
 fn parsed_module(text: &str) -> Module {
     parsed(&format!("{DOS}{text}"))
+}
+
+/// A slot zeroed by `memset` and only later made to hold `&inner`: the
+/// memset may only write through its argument, so it reads no pointer out
+/// of the slot and publishes nothing, and a call between the two does not
+/// reach `inner`. Lending the slot published what it would later hold, so
+/// every bounds error in T028's `update` read its zeroed samples.
+#[test]
+fn a_write_only_argument_publishes_nothing_it_will_hold() {
+    let parsed = Parsed::new(
+        "declare void @external()
+
+declare void @use(ptr)
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+
+define void @f() {
+b0:
+  %slot = alloca [4 x i8]
+  %inner = alloca [4 x i8]
+  call void @llvm.memset.p0.i16(ptr %slot, i8 0, i16 4, i1 false)
+  call void @external()
+  store ptr %inner, ptr %slot
+  call void @use(ptr %slot)
+  ret void
+}
+",
+    );
+    let effects = parsed.effects(&IndexMap::default());
+    assert!(!writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4)));
 }

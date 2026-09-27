@@ -90,8 +90,8 @@ pub struct PointsTo {
     pub escaped_before: EscapedBefore,
 }
 
-/// Objects escaped before each call, kept as bits over one numbering and
-/// named only when asked: most solves never read them.
+/// Objects escaped before each call, load and store, kept as bits over one
+/// numbering and named only when asked: most solves never read them.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EscapedBefore {
     objects: Rc<IndexSet<MemoryObject>>,
@@ -101,6 +101,19 @@ pub struct EscapedBefore {
 impl EscapedBefore {
     pub fn get(&self, at: &InstId) -> Option<BTreeSet<MemoryObject>> {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
+    }
+
+    /// Whether the access `reference` at `at`, through a pointer no fact
+    /// follows or one only to what escaped, cannot reach `cell`: every byte
+    /// of it is in frame objects not escaped before `at`. LLVM's
+    /// `EarliestEscapeInfo`.
+    pub fn apart(&self, at: InstId, reference: &MemRef, cell: &MemRef) -> bool {
+        let Some(bits) = self.at.get(&at) else { return false };
+        // No provenance is a pointer no fact follows: `_lost` publishes what
+        // it came from.
+        let escaping = reference.provenance.as_ref().is_none_or(|one| one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal)));
+        let unreached = |object: &MemoryObject| object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one));
+        escaping && cell.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
     }
 }
 
@@ -1178,9 +1191,16 @@ pub fn points_to(
                             Some(selected) => Ok(selected.iter().map(_index).collect::<Result<Vec<_>, _>>()?.contains(&(index as i64))),
                         }
                     };
+                    // Nor can it read a pointer out of what it may only write.
+                    let through = _allowed(unit, inst).through;
+                    let reads = |index: usize| through.get(index).is_none_or(|one| one.reads);
                     for (index, one) in actual.iter().enumerate() {
                         let objects = one.slices.iter().map(|one| one.object.clone());
-                        if kept(index)? { newly.extend(objects) } else { lent.extend(objects) }
+                        if kept(index)? {
+                            newly.extend(objects)
+                        } else if reads(index) {
+                            lent.extend(objects)
+                        }
                     }
                 } else {
                     // The callee's own address is no argument.
@@ -1260,7 +1280,7 @@ pub fn points_to(
         let mut state = entering(block.at, &out);
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
             state.union_with(&bits_of(escapes));
-            if calls.contains(&inst) {
+            if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
                 before.insert(inst, state.clone());
             }
         }

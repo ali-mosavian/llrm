@@ -28,6 +28,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, IndexMap};
 
+use crate::alias::EscapedBefore;
 use crate::cellmap::CellMap;
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
@@ -245,6 +246,7 @@ struct Solve<'a, 'u> {
     unit: &'a Unit<'u>,
     accesses: &'a Accesses,
     private: Option<&'a dyn Fn(&MemRef) -> bool>,
+    escaped: Option<&'a EscapedBefore>,
     stored: Stored,
 }
 
@@ -285,17 +287,18 @@ impl Solve<'_, '_> {
 
             // Anything this reads or writes puts the cells it may touch back in doubt.
             for reference in loads.iter().chain(stores) {
-                self.clobber(&mut overwritten, reference, shielded && (call || !reference.named()));
+                self.clobber(&mut overwritten, inst, reference, shielded && (call || !reference.named()));
             }
         }
         (found, overwritten)
     }
 
-    /// Forget the cells an access through `reference` may touch; an
-    /// `unnamed` one cannot reach a private cell.
-    fn clobber(&self, overwritten: &mut Bits, reference: &MemRef, unnamed: bool) {
+    /// Forget the cells an access through `reference` at `inst` may touch;
+    /// an `unnamed` one cannot reach a private cell.
+    fn clobber(&self, overwritten: &mut Bits, inst: InstId, reference: &MemRef, unnamed: bool) {
         let stored = &self.stored;
-        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at));
+        let apart = |at: usize| self.escaped.is_some_and(|escaped| escaped.apart(inst, reference, &stored.cells[at]));
+        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at)) && !apart(*at);
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
             None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
             Some(buckets) => buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
@@ -322,9 +325,16 @@ impl Solve<'_, '_> {
 ///
 /// A block with no successor starts from nothing: the caller may read the
 /// cell -- unless `private` says nothing outside the function can, in which
-/// case it starts from every such cell stored here.
+/// case it starts from every such cell stored here. One ending in
+/// `unreachable` starts from every cell.
 pub fn dead_stores(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Vec<InstId> {
-    let solve = Solve { unit, accesses, private, stored: Stored::new(unit, accesses, private) };
+    dead_stores_escaping(unit, accesses, private, None)
+}
+
+/// `dead_stores`, an access through a pointer no fact follows sparing a
+/// frame cell whose object had not escaped by then, as `escaped` says.
+pub fn dead_stores_escaping(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>, escaped: Option<&EscapedBefore>) -> Vec<InstId> {
+    let solve = Solve { unit, accesses, private, escaped, stored: Stored::new(unit, accesses, private) };
     let stored = &solve.stored;
     let mut every = stored.none();
     (0..stored.cells.len()).for_each(|at| every.insert(at));
@@ -355,8 +365,10 @@ pub fn dead_stores(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&Me
                     }
                 });
             }
-            // No successor at all: only the caller may read it.
-            let out = out.unwrap_or_else(|| unread.clone());
+            // No successor at all: only the caller may read it -- and after an
+            // `unreachable` nothing does, as LLVM's DSE skips such exits; the
+            // noreturn call before it reads what escaped by then.
+            let out = out.unwrap_or_else(|| if aborts(unit, block.at) { every.clone() } else { unread.clone() });
             let (mine, start) = match last.get(&block.at) {
                 Some((seen, mine, start)) if *seen == out => (mine.clone(), start.clone()),
                 _ => {
@@ -373,6 +385,11 @@ pub fn dead_stores(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&Me
         }
     }
     unit.function.walk().map(|(_, inst)| inst).filter(|inst| found.contains(inst)).collect()
+}
+
+/// Whether block `at` ends in `unreachable`.
+fn aborts(unit: &Unit, at: i64) -> bool {
+    unit.function.terminator(cfg::block(at)).is_some_and(|last| unit.function.instruction(last).opcode == Opcode::Unreachable)
 }
 
 /// Loads in `want` that a known value can serve instead of memory.

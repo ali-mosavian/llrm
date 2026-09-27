@@ -161,3 +161,57 @@ done:
     assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), before, "{after}");
     assert!(!after.contains(" phi "), "{after}");
 }
+
+/// A private static a loop stores between reads of a far array goes out of
+/// the loop: sum_three stored it after every element.
+#[test]
+fn a_static_stored_between_far_reads_leaves_the_loop() {
+    let text = format!(
+        "{}@t = internal global [2 x i8] zeroinitializer
+
+define i16 @f(ptr %desc, i16 %n) {{
+b0:
+  store i16 0, ptr @t, !tbaa !2
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %s2, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %segat = getelementptr i8, ptr %desc, i16 2
+  %seg = load i16, ptr %segat
+  %offat = getelementptr i8, ptr %desc, i16 10
+  %off = load i16, ptr %offat
+  %twice = mul i16 %i, 2
+  %at = add i16 %off, %twice
+  %near = inttoptr i16 %seg to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %near to ptr addrspace(1)
+  %e = getelementptr i8, ptr addrspace(1) %far, i16 %at
+  %v = load i16, ptr addrspace(1) %e
+  %s1 = add i16 %acc, %v
+  store i16 %s1, ptr @t, !tbaa !2
+  %v2 = load i16, ptr addrspace(1) %e
+  %s2 = add i16 %s1, %v2
+  store i16 %s2, ptr @t, !tbaa !2
+  %inext = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}}
+
+!0 = !{{!\"llrm hir\"}}
+!1 = !{{!\"place\", !0, i64 0}}
+!2 = !{{!1, !1, i64 0}}
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = crate::testing::parsed(&text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let after = crate::testing::printed(&module);
+    let body = after.split("b2:").nth(1).unwrap_or("");
+    assert!(!body.split("\n\n").next().unwrap_or("").contains("store i16"), "{after}");
+}

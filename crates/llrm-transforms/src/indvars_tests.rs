@@ -455,3 +455,58 @@ fn rewinding_the_corpus_loses_no_trip_count() {
     assert!(fired > 0, "the corpus rewinds somewhere");
 }
 
+
+/// A counter the loop stores beside a pointer it steps: the loop ends on
+/// its own compare until the pointer's byte offset may count to zero.
+fn pointer_beside_a_stored_counter() -> String {
+    format!(
+        "{}@a = internal global [8200 x i8] zeroinitializer
+
+define i16 @f(i16 %x) {{
+b0:
+  br label %b1
+
+b1:
+  %v = phi i16 [ 1, %b0 ], [ %vnext, %b2 ]
+  %p = phi ptr [ @a, %b0 ], [ %pnext, %b2 ]
+  %go = icmp ne i16 %v, 81
+  br i1 %go, label %b2, label %b3
+
+b2:
+  store i16 %v, ptr %p
+  %pnext = getelementptr i8, ptr %p, i16 100
+  %vnext = add i16 %v, 1
+  br label %b1
+
+b3:
+  %at = getelementptr i8, ptr @a, i16 500
+  %got = load i16, ptr %at
+  ret i16 %got
+}}
+",
+        llrm_analysis::testing::DOS
+    )
+}
+
+/// The pointer counts its offset to zero, as the old route's byte index
+/// did; it kept a second compare against the counter's bound.
+#[test]
+fn a_pointer_beside_a_stored_counter_counts_its_offset_to_zero() {
+    let (changed, module) = through(&pointer_beside_a_stored_counter(), &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap());
+    let after = printed(&module);
+    assert!(changed && !after.contains("%p ="), "{after}");
+    assert!(after.contains("phi i16 [ -8000, %b0 ]") && after.contains("icmp ne i16 %v, 81") == false, "{after}");
+}
+
+/// Strength leaves a loop counted to zero alone: it carried the offset's
+/// address as a pointer again and ended the loop on the counter, and the
+/// pipeline cycled until it gave up.
+#[test]
+fn strength_leaves_a_pointer_counted_to_zero() {
+    let mut module = parsed(&pointer_beside_a_stored_counter());
+    let before = results(&module, &[&[0]]);
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_cycles::target::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, &[&[0]]), before, "{after}");
+    assert!(after.contains(", 0\n") && !after.contains("%p ="), "{after}");
+}
