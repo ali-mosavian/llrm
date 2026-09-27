@@ -643,6 +643,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     let mut procedures = Vec::new();
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     let mut rows = Vec::new();
+    let mut handled = false;
     // The runtime enters the module right after its header.
     let order = std::iter::once(main).chain((0..module.globals.len() as u32).map(GlobalId).filter(|&id| id != main));
     for id in order {
@@ -659,7 +660,13 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
         rows.extend(procedure.body.blocks.first().map(|entry| super::entry_row(procedures.len(), entry.at)));
         rows.extend(landing.map(|at| super::landing_row(procedures.len(), at)));
+        handled |= landing.is_some();
         procedures.push(procedure);
+    }
+    // A row states a line, and BC keeps rows only for a module that handles
+    // errors: without one, the runtime reports a fault "No line number".
+    if !handled {
+        rows.clear();
     }
     procedures.push(super::statement_table(&rows));
     let mut data = Vec::new();
