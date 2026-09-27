@@ -14,7 +14,12 @@ fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
     for (name, mut module) in corpus() {
         let entry = module.named("main").filter(|&id| module.global(id).function().is_some_and(|one| !one.is_declaration() && one.parameters().is_empty()));
         let before = entry.map(|_| interpret::run(&module, "main", Vec::new(), FUEL));
-        Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &applied))
+        // @main is run below, so it is the program's entry, internal or not.
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("main".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), entered)
             .and_then(|done| done)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         if let Some(Ok(before)) = before {
