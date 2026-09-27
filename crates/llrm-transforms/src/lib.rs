@@ -10,6 +10,7 @@ pub mod counting;
 pub mod dead;
 pub mod decide;
 pub mod edges;
+pub mod fill;
 pub mod fold;
 pub mod gvn;
 pub mod inline;
