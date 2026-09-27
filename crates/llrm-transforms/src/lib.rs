@@ -19,6 +19,9 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod globalopt;
 pub mod fold;
+pub mod globaldce;
+#[cfg(test)]
+mod globaldce_tests;
 pub mod gvn;
 pub mod hoist;
 pub mod indvars;

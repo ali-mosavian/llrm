@@ -79,14 +79,19 @@ pub trait Analysis: 'static {
     const NAME: &'static str;
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result;
 
+    /// Whether the result reads `analyses.outer()`, itself or through what
+    /// it builds on. One that does not outlives a change to the module.
+    const READS_OUTER: bool = true;
+
     /// Whether a pass returning `preserved` left the result true: when it
-    /// names this analysis. One derived from others asks after them, as
-    /// LLVM's `Result::invalidate` does.
+    /// names this analysis, or keeps the function and the result reads
+    /// nothing else. One derived from others asks after them, as LLVM's
+    /// `Result::invalidate` does.
     fn preserved(preserved: &PreservedAnalyses) -> bool
     where
         Self: Sized,
     {
-        preserved.kept::<Self>()
+        preserved.kept::<Self>() || (!Self::READS_OUTER && preserved.function)
     }
 }
 
@@ -140,6 +145,7 @@ pub struct Dominators;
 
 impl Analysis for Dominators {
     type Result = DominatorTree;
+    const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
     fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> DominatorTree {
         DominatorTree::new(function)
@@ -151,6 +157,7 @@ pub struct Loops;
 
 impl Analysis for Loops {
     type Result = crate::loops::LoopInfo;
+    const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> crate::loops::LoopInfo {
         crate::loops::LoopInfo::new(function, &analyses.get::<Dominators>(context, layout, function))
@@ -162,6 +169,7 @@ pub struct ScalarEvolution;
 
 impl Analysis for ScalarEvolution {
     type Result = crate::scalarevolution::Evolution;
+    const READS_OUTER: bool = false;
     const NAME: &'static str = "scalar-evolution";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> crate::scalarevolution::Evolution {
         crate::scalarevolution::Evolution::new(context, function, &analyses.get::<Loops>(context, layout, function))
@@ -173,15 +181,23 @@ impl Analysis for ScalarEvolution {
 pub struct PreservedAnalyses {
     all: bool,
     kept: HashSet<TypeId>,
+    /// The function itself unchanged, whatever else did.
+    function: bool,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::new() }
+        Self { all: true, kept: HashSet::new(), function: true }
     }
 
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// What a change to the module leaves of a function it did not change:
+    /// every analysis reading only the function.
+    pub fn function() -> Self {
+        Self { function: true, ..Self::default() }
     }
 
     pub fn preserve<A: Analysis>(mut self) -> Self {
@@ -463,12 +479,13 @@ impl ModuleAnalyses {
         self.functions.get(&id)?.cached::<A>()
     }
 
-    /// Function `id`'s manager under `outer`, emptied where `outer` is not
-    /// the one its results read.
+    /// Function `id`'s manager under `outer`, keeping only what reads no
+    /// outer facts where `outer` is not the one its results read.
     pub fn manager(&mut self, id: GlobalId, outer: &Rc<Outer>) -> &mut Analyses {
         let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
         if !Rc::ptr_eq(&cache.outer, outer) {
-            *cache = Analyses::new(Rc::clone(outer));
+            cache.invalidate(&PreservedAnalyses::function());
+            cache.outer = Rc::clone(outer);
         }
         cache
     }

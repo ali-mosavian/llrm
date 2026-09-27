@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The rich-MIR corpus that llrm-analysis's corpus tests read: each program's
 # MIR as HIR emits it (emitted/NAME.ll) and after llrm_mir's pipeline
-# (optimized/NAME.ll, the last LLRM_MIR_STAGES dump of an --isel compile).
+# (optimized/NAME.ll, the last LLRM_MIR_STAGES dump of a compile).
 # Covers tests/suite (qb-), the QuickBASIC demos in $QBDEMOS (demo-), Nib's
 # fixtures and examples (nib-) and its runtime (nib-runtime). A program is
 # left out when a function is refused or the module fails the verifier, and
@@ -31,7 +31,7 @@ add() {
   fi
   kept "$work/$name.ll" "$out/emitted/$name.ll" || return
   mkdir -p "$work/$name.stages"
-  LLRM_MIR_STAGES=$work/$name.stages "$@" -o "$work/$name.obj" --isel >/dev/null 2>"$work/$name.compile"
+  LLRM_MIR_STAGES=$work/$name.stages "$@" -o "$work/$name.obj" >/dev/null 2>"$work/$name.compile"
   local last; last=$(ls "$work/$name.stages"/[0-9]*.ll 2>/dev/null | tail -1)
   if [ "$(basename "${last:-none}")" = "$pipeline_end" ]; then kept "$last" "$out/optimized/$name.ll"; else echo "no optimized $name: $(head -1 "$work/$name.compile")"; fi
 }
@@ -53,7 +53,7 @@ nib() {
 }
 # The pipeline's last pass, as the stage dumps name it.
 mkdir "$work/probe"
-LLRM_MIR_STAGES=$work/probe "$bin/llrm-qb" "$root/tests/suite/addrm.bas" -o "$work/probe.obj" --isel >/dev/null 2>&1
+LLRM_MIR_STAGES=$work/probe "$bin/llrm-qb" "$root/tests/suite/addrm.bas" -o "$work/probe.obj" >/dev/null 2>&1
 pipeline_end=$(ls "$work/probe" | tail -1)
 for source in "$root"/tests/suite/*.bas; do
   qb "qb-$(basename "$source" .bas)" "$source"

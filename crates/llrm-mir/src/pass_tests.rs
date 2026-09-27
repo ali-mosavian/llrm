@@ -273,3 +273,37 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     passes.add(Empty);
     assert_eq!(passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(), Some("empty claims to preserve bodies but changed them"));
 }
+
+thread_local! {
+    static HELD: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Records whether dominators were still held, then asks for them.
+struct Probe;
+
+impl FunctionPass for Probe {
+    fn name(&self) -> &'static str {
+        "probe"
+    }
+
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        HELD.with_borrow_mut(|held| held.push(analyses.cached::<Dominators>().is_some()));
+        analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::all()
+    }
+}
+
+/// Dominators read only their function; a change to another global's
+/// declaration emptied @f's whole manager and recomputed them.
+#[test]
+fn a_change_to_the_module_keeps_what_reads_only_the_function() {
+    let text = "declare i16 @g()\n\ndefine i16 @f() {\nentry:\n  %x = call i16 @g()\n  ret i16 %x\n}\n";
+    let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    HELD.with_borrow_mut(Vec::clear);
+    let mut passes = PassManager::default();
+    passes.add(Probe);
+    passes.add_module(MarkReadonly);
+    passes.add(Probe);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    assert_eq!(HELD.take(), [false, true]);
+}

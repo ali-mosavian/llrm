@@ -2,7 +2,7 @@
 //! executable, plus `tools/modernstages.py`'s `--dump DIR`.
 //!
 //! ```text
-//! llrm-nib SOURCE [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--isel]
+//! llrm-nib SOURCE [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy]
 //! ```
 //!
 //! Without `-o`, the object goes beside the source unless `--dump` is given.
@@ -10,8 +10,8 @@
 //! name, for a linker that drops unreferenced ones (jwlink's `option
 //! eliminate`); Microsoft LINK wants each name defined once. With
 //! `--used-by`, only the exports those objects name stay exported, and the
-//! rest is dropped with whatever only they call. `--isel` compiles through
-//! the rich MIR and its instruction selection, with no MIR passes yet.
+//! rest is dropped with whatever only they call. `--legacy` compiles through
+//! the old MIR, for a program the rich MIR refuses.
 
 use std::path::PathBuf;
 
@@ -22,7 +22,7 @@ use llrm_core::backend::omfwrite::CodeLayout;
 use llrm_core::flow;
 use llrm_core::model::passes::{Options, O2};
 
-const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--isel] [--machine MACHINE] source";
+const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] [--machine MACHINE] source";
 
 struct Arguments {
     source: PathBuf,
@@ -33,7 +33,7 @@ struct Arguments {
     layout: CodeLayout,
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
-    isel: bool,
+    legacy: bool,
     /// The target: the built-in DOS on `nib::CPU` unless `--machine` names another.
     machine: llrm_core::abi::machine::Machine,
 }
@@ -43,7 +43,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
     let mut frontend = super::Frontend::default();
-    let mut isel = false;
+    let mut legacy = false;
     let mut machine = nib::machine();
     let mut at = 0;
     while at < argv.len() {
@@ -66,7 +66,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
-            "--isel" => isel = true,
+            "--legacy" => legacy = true,
             "--machine" => machine = llrm_core::abi::machine::Machine::load(std::path::Path::new(&value("--machine")?))?,
             "-O" => options = flow::level_option(&value("-O")?)?,
             _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
@@ -77,7 +77,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend, isel, machine })
+    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend, legacy, machine })
 }
 
 /// The symbols `objects` import.
@@ -112,10 +112,10 @@ pub fn main(argv: &[String]) -> i32 {
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        let bytes = if args.isel {
-            nib::written_from_mir(&program, &args.entry, &args.source, args.layout, &args.machine)?
-        } else {
+        let bytes = if args.legacy {
             nib::written_as(&program, &args.entry, &args.source, &args.options, args.layout)?
+        } else {
+            nib::written_from_mir(&program, &args.entry, &args.source, args.layout, &args.machine)?
         };
         std::fs::write(&output, &bytes).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());

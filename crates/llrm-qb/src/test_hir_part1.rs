@@ -118,6 +118,12 @@ fn test_qb_cli_reads_the_machine_it_is_given() {
     assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").machine, *llrm_core::abi::machine::BUILT_IN);
 }
 
+#[test]
+fn test_qb_cli_compiles_through_the_rich_mir_unless_told_legacy() {
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").route, crate::compile::Route::Selected);
+    assert_eq!(parse_args(&argv(&["probe.bas", "--legacy"])).expect("parses").route, crate::compile::Route::Lowered);
+}
+
 /// The SYS stage showcase crashed when FSTP carried its target through effects only.
 #[test]
 fn test_lir_stage_formats_operandless_x87_store_as_intel() {

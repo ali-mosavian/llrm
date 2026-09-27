@@ -82,6 +82,18 @@ impl Context {
         Some(self.constant(Constant { ty, kind }))
     }
 
+    /// Each global's constant naming the global `renumbered` gives, or
+    /// poison where it gives none: a global gone, as LLVM's RAUW with
+    /// poison before erasing it.
+    pub fn renumber_globals(&mut self, renumbered: &dyn Fn(GlobalId) -> Option<GlobalId>) {
+        for constant in &mut self.constants {
+            if let ConstantKind::Global(global) = constant.kind {
+                constant.kind = renumbered(global).map_or(ConstantKind::Poison, ConstantKind::Global);
+            }
+        }
+        self.interned = self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
+    }
+
     /// `value` modulo the width of the integer type `ty`.
     pub fn int(&mut self, ty: TypeId, value: i128) -> ConstantId {
         let bits = self.types.int_bits(ty).expect("an integer constant has an integer type");

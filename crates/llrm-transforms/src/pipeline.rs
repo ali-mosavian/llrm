@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globalopt, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
+    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
     rotate, strength, unroll, unswitch,
 };
 
@@ -199,6 +199,9 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
     });
+    // What no live code names any more goes before selection, as LLVM runs
+    // GlobalDCE after inlining.
+    manager.add_program(globaldce::GlobalDce);
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);

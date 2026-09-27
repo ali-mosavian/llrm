@@ -34,6 +34,7 @@ b0:
     Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
-    assert!(after.contains("@c = internal constant") && after.contains("@w = internal global"), "{after}");
+    // @c, folded into its one load, is dead and gone.
+    assert!(!after.contains("@c = internal global") && after.contains("@w = internal global"), "{after}");
     assert!(!after.contains("load i16, ptr %at") && after.contains("load i16, ptr @w"), "{after}");
 }
