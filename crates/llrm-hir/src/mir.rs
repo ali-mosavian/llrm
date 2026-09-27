@@ -129,10 +129,11 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         tags: Tags::new(&mut module),
     };
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
+    let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
     let mut data = HashMap::new();
     for object in &hir.data {
-        let layout = data_type(&mut module.context.types, object, &objects);
+        let layout = data_type(&mut module.context.types, object, sizes[&object.id], &objects);
         let global = declare_data(&mut module, object, layout.as_ref().ok().copied());
         data.insert(object.id, global);
         match layout {
@@ -143,7 +144,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         tables.data.insert(object.id, reference);
     }
     for (object, global) in defined {
-        let initializer = data_initializer(&mut module, object, &objects, &tables.data);
+        let initializer = data_initializer(&mut module, object, sizes[&object.id], &objects, &tables.data);
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
@@ -192,7 +193,21 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
 /// segment, or, for a near one into far data, the far address's offset. A
 /// far pointer's integer form is segment:offset, so its low word is the
 /// offset.
-fn data_type(types: &mut Types, object: &model::DataObject, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
+/// Each data object's size: its bytes, or as far as a place over it
+/// reaches, since the frontend puts each place inside its object. A
+/// runtime's variable has no bytes here.
+fn sizes(hir: &model::Module, types: &HashMap<i64, &model::Type>) -> HashMap<i64, i64> {
+    let mut sizes: HashMap<i64, i64> = hir.data.iter().map(|one| (one.id, one.bytes.len() as i64)).collect();
+    let places = hir.functions.iter().flat_map(|function| &function.places).filter(|place| !matches!(place.storage, Storage::Local | Storage::Parameter));
+    for place in places {
+        if let Some(size) = sizes.get_mut(&place.symbol) {
+            *size = (*size).max(place.offset + place.extent.unwrap_or(types[&place.r#type].width));
+        }
+    }
+    sizes
+}
+
+fn data_type(types: &mut Types, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
     let byte = types.int(8);
     let mut fields = Vec::new();
     let mut at = 0;
@@ -210,9 +225,8 @@ fn data_type(types: &mut Types, object: &model::DataObject, objects: &HashMap<i6
         });
         at = relocation.at + relocation_width(relocation.address);
     }
-    let count = object.bytes.len() as i64;
-    if fields.is_empty() || count > at {
-        fields.push(types.intern(Type::Array { element: byte, count: (count - at) as u64 }));
+    if fields.is_empty() || size > at {
+        fields.push(types.intern(Type::Array { element: byte, count: (size - at) as u64 }));
     }
     Ok(if fields.len() == 1 { fields[0] } else { types.intern(Type::Struct { fields, packed: true }) })
 }
@@ -253,11 +267,11 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
     global
 }
 
-fn data_initializer(module: &mut Module, object: &model::DataObject, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>) -> ConstantId {
+fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>) -> ConstantId {
     let context = &mut module.context;
     let (byte, i16) = (context.types.int(8), context.types.int(16));
     let bytes = |context: &mut llrm_mir::Context, from: i64, to: i64| {
-        let slice: Vec<u8> = object.bytes[from as usize..to as usize].iter().map(|&one| one as u8).collect();
+        let slice: Vec<u8> = (from as usize..to as usize).map(|at| object.bytes.get(at).map_or(0, |&one| one as u8)).collect();
         let ty = context.types.intern(Type::Array { element: byte, count: slice.len() as u64 });
         let kind = if slice.iter().all(|&one| one == 0) { ConstantKind::Zero } else { ConstantKind::Bytes(slice) };
         context.constant(Constant { ty, kind })
@@ -293,9 +307,8 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, objects: &H
         });
         at = relocation.at + relocation_width(relocation.address);
     }
-    let count = object.bytes.len() as i64;
-    if members.is_empty() || count > at {
-        members.push(bytes(context, at, count));
+    if members.is_empty() || size > at {
+        members.push(bytes(context, at, size));
     }
     if members.len() == 1 {
         return members[0];

@@ -152,6 +152,28 @@ fn a_far_pointer_is_a_segment_and_an_offset() {
     assert!(text.contains(body), "{text}");
 }
 
+/// A runtime's variable comes with no bytes; `b$seg` was `[0 x i8]`, so no
+/// load of it was safe to hoist. A place over it says how far it reaches.
+#[test]
+fn an_external_object_is_as_large_as_its_places() {
+    use crate::model::{DataLinkage, DataObject, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 1 }];
+    let load = Instruction::new(1, Op::Load, vec![1], vec![Operand::place_ref(1)]);
+    let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(1)], Vec::new()));
+    let mut place = Place::new(1, "b$seg", 1, Storage::External, 0);
+    place.symbol = 3;
+    let function = Function::new(1, "SEG%", 1, values, vec![place], vec![block], 1);
+    let mut program = program(function);
+    let mut segment = DataObject::new(3, "b$seg", Vec::new());
+    segment.linkage = DataLinkage::External;
+    program.modules[0].data = vec![segment];
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@b$seg = global [2 x i8]"), "{text}");
+}
+
 /// plasma reloaded each array's segment word every iteration: HIR's
 /// promise that a far allocation is disjoint from every place was dropped.
 /// An allocation's element and a word read through a place's own address
