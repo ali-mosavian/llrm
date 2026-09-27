@@ -2244,3 +2244,39 @@ fn test_parameters_passed_in_the_frame_are_refused() {
         assert!(selected(&text, "f").is_err(), "a call's {attribute}");
     }
 }
+
+/// A call writes what its MIR says it may: a double loaded from a cell the
+/// callee is handed is not read again after the call, which may change it.
+/// isel's calls listed nothing, and floatassign read the cell again.
+#[test]
+fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
+    let text = "@out = internal global double 0.0
+declare void @g(ptr) addrspace(1)
+define void @f(double %a) addrspace(1) {
+  %x = alloca double
+  store double %a, ptr %x
+  %v = load double, ptr %x
+  call addrspace(1) void @g(ptr %x)
+  %w = fadd double %v, %v
+  store double %w, ptr @out
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
+    assert!(!got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+    // A cell no call can reach is still read again rather than saved.
+    let private = text.replace("declare void @g(ptr)", "declare void @g()").replace("@g(ptr %x)", "@g()");
+    let got = listing(&private, "f");
+    let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+}
+
+/// A store of poison stores nothing, as LLVM's DAGCombiner drops it: the
+/// memory may then hold anything. isel refused it as "an address of no
+/// global".
+#[test]
+fn test_a_store_of_poison_stores_nothing() {
+    let text = "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
+    assert!(!listing(text, "f").iter().any(|line| line.starts_with("mov")));
+}
