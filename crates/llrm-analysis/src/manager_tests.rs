@@ -130,7 +130,7 @@ b0:
         let r = value(function(&module, "f"), "r");
         let got = Rc::new(RefCell::new(None));
         let mut passes = PassManager::default();
-        passes.target = dos.then(|| Rc::new(Dos) as Rc<dyn Machine>);
+        passes.target = dos.then(|| Rc::new(Dos::default()) as Rc<dyn Machine>);
         passes.require::<Summaries>();
         let into = Rc::clone(&got);
         passes.add(step(

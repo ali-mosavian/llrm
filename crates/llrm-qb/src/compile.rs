@@ -1629,9 +1629,9 @@ impl Rich {
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        // The one MIR target, real-mode DOS at 486 prices.
+        let profile = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
         let applied = llrm_transforms::pipeline::Applied {
-            target: Some(Rc::new(llrm_cycles::target::Dos)),
+            target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
             dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
             ..Default::default()
         };

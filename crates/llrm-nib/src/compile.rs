@@ -370,9 +370,9 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
-    // The rich route's target is the one MIR target, real-mode DOS at 486 prices.
+    let profile = targets::profile(cpu)?;
     let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
         dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
         ..Default::default()
     };

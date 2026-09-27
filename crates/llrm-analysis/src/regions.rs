@@ -492,7 +492,7 @@ pub(crate) mod tests {
 
     /// `module` alone, a program for real-mode DOS.
     pub fn dos(module: &Module) -> std::rc::Rc<llrm_mir::program::ProgramProxy> {
-        llrm_mir::program::ProgramProxy::of(module, std::rc::Rc::new(Dos))
+        llrm_mir::program::ProgramProxy::of(module, std::rc::Rc::new(Dos::default()))
     }
 
     /// Every access `@f` of `text` makes, in order.

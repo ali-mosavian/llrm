@@ -465,7 +465,7 @@ b0:
         let reused = |dos: bool| {
             let mut module = parsed(&text);
             let layout = llrm_analysis::testing::layout(&module);
-            let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_cycles::target::Dos));
+            let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_cycles::target::Dos::default()));
             let program = dos.then_some(&*program);
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
             let accesses = Accesses::resolved(&Unit { program, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();

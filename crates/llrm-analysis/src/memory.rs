@@ -467,9 +467,14 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
                 None => Some(1),
                 Some(&count) => unit.int_constant(count).map(|bits| bits as i64),
             };
+            // Only a reference naming an alloca reaches it until its address
+            // is exposed.
+            let exposed = crate::frameescape::exposes(unit.function, value);
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
+                addressed: exposed,
+                captured: exposed,
                 ..MemoryObject::new(MemoryKind::Frame)
             })
         }

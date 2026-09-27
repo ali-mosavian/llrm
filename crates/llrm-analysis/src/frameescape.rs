@@ -116,6 +116,32 @@ pub fn analysed(function: &Function) -> Escapes {
     Escapes { origins, exposed }
 }
 
+/// Whether `alloca`'s address is exposed, as `analysed` finds it: it
+/// reaches, through moves and phis, an operand that is not an access's
+/// own pointer.
+pub fn exposes(function: &Function, alloca: ValueId) -> bool {
+    let mut seen = BTreeSet::from([alloca]);
+    let mut pending = vec![alloca];
+    while let Some(value) = pending.pop() {
+        for one in function.users(value) {
+            let instruction = function.instruction(one.user);
+            let moves = instruction.opcode == Opcode::Phi || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
+            if !moves {
+                if accessed(function, one.user) == Some(one.index as usize) {
+                    continue;
+                }
+                return true;
+            }
+            if let Some(result) = instruction.result
+                && seen.insert(result)
+            {
+                pending.push(result);
+            }
+        }
+    }
+    false
+}
+
 /// `side`'s three answers.
 #[derive(Clone, Copy, PartialEq)]
 enum Side {

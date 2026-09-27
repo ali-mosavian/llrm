@@ -99,7 +99,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
     let records = records.to_vec();
     let (mut module, placement) = llrm_bc::raise_placed(found).map_err(|refusal| refusal.to_string())?;
     let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
         dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
         ..Default::default()
     };

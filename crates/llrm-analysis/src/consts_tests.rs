@@ -285,7 +285,8 @@ fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
 
 #[test]
 fn a_call_that_may_write_anything_forgets_every_cell() {
-    let parsed = Parsed::new(AROUND_A_CALL);
+    // The cell's address is exposed: an unexposed alloca no call reaches.
+    let parsed = Parsed::new(&AROUND_A_CALL.replace("@g()", "@g(ptr %a)").replace("void @g(ptr %a)\n\ndefine", "void @g(ptr)\n\ndefine"));
     assert_eq!(parsed.solved("r", &Calls::default()), None);
     let unknown = reaching(&parsed, Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
     assert_eq!(parsed.solved("r", &unknown), None);

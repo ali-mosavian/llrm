@@ -5,9 +5,30 @@ use llrm_mir::target::{Machine, OperationCosts};
 
 use crate::timings;
 
-/// Real-mode DOS on a 486: its prices, and its foreign memory -- VGA and
-/// text video memory, and the ROMs above.
-pub struct Dos;
+/// Real-mode DOS on one CPU: its prices and registers, and its foreign
+/// memory -- VGA and text video memory, and the ROMs above.
+pub struct Dos {
+    pub costs: OperationCosts,
+    pub registers: i64,
+    pub call_registers: i64,
+}
+
+impl Default for Dos {
+    /// On a 486, with the old profile's `register_capacity` and
+    /// `call_register_capacity`.
+    fn default() -> Self {
+        Self { costs: costs("486"), registers: 6, call_registers: 2 }
+    }
+}
+
+impl Dos {
+    /// On the CPU whose instruction forms cost `table` clocks, with
+    /// `prefix` per operand-size prefix.
+    pub fn priced(table: &[(String, i64)], prefix: i64, registers: i64, call_registers: i64) -> Self {
+        let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
+        Self { costs: operations(cost, prefix), registers, call_registers }
+    }
+}
 
 impl Machine for Dos {
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
@@ -26,16 +47,15 @@ impl Machine for Dos {
     }
 
     fn costs(&self) -> OperationCosts {
-        costs("486")
+        self.costs.clone()
     }
 
-    // The old profile's `register_capacity` and `call_register_capacity`.
     fn registers(&self) -> i64 {
-        6
+        self.registers
     }
 
     fn call_registers(&self) -> i64 {
-        2
+        self.call_registers
     }
 }
 
@@ -43,7 +63,12 @@ impl Machine for Dos {
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
     let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
-    let cost = |kind: &str| timings::COST[kind][at];
+    operations(|kind| timings::COST[kind][at], timings::PREFIX[at])
+}
+
+/// The price of each operation, as the instructions lowering picks for it
+/// cost `cost(kind)` clocks.
+fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
     OperationCosts {
         add: cost("alu_rr"),
         multiply: cost("mul_r16"),
@@ -54,7 +79,7 @@ pub fn costs(arch: &str) -> OperationCosts {
         store: cost("mov_mr"),
         memory_update: cost("alu_mr"),
         branch: cost("jcc"),
-        prefix: timings::PREFIX[at],
+        prefix,
         r#move: cost("mov_rr"),
         call: cost("call_far"),
         return_: cost("ret_far"),
@@ -81,7 +106,7 @@ mod tests {
     /// fill's setup around `rep stos`.
     #[test]
     fn dos_prices_the_486() {
-        let costs = Dos.costs();
+        let costs = Dos::default().costs();
         assert_eq!((costs.divide, costs.multiply, costs.prefix, costs.fill_cell), (24, 13, 1, 4));
     }
 }

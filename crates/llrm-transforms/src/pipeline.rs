@@ -8,9 +8,8 @@
 //!
 //! What changed with the IR:
 //! - A pass reports a change by preserving less than every analysis; the
-//!   old compared bodies. Arenas never shrink, so no earlier state compares
-//!   equal and the old repeated-state check has nothing to catch: the
-//!   size-scaled round limit stops an oscillator.
+//!   old compared bodies. Arenas never shrink, so the repeated-state check
+//!   compares printed bodies instead.
 //! - The stage records are the manager's change log (`recorded`); `watch`
 //!   is `Applied::dump`, a file per changed step of each body.
 //! - `Where`'s segment, BC blocks and object file went with the BC
@@ -34,6 +33,7 @@ use llrm_graph::loops;
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
+use llrm_mir::print;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::target::Machine;
 
@@ -319,6 +319,9 @@ impl Fixed {
         // Passes wait by stage; each settled round admits the next.
         let last = if self.only { 0 } else { self.passes.iter().map(|one| settles_after(one.name())).max().unwrap_or(0) };
         let mut stage = 0;
+        // Separately reject a repeated state, so an oscillator fails at once
+        // instead of consuming the limit.
+        let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
         for iteration in 0..limit {
             let before = run.version;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
@@ -348,6 +351,9 @@ impl Fixed {
             if self.only || run.version == before {
                 run.settled(unit, analyses);
                 return Ok(());
+            }
+            if !history.insert(print::body(unit.context, unit.function)) {
+                return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }
         Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
