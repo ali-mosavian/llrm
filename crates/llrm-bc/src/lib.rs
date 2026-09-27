@@ -76,13 +76,9 @@ impl Raised {
     }
 }
 
-/// The module raised whole, or the first function refused.
-pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Module, Refusal> {
-    raise_placed(found, machine).map(|raised| raised.module)
-}
-
-/// `raise`, its runtime, and where the object put its globals.
-pub fn raise_placed(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
+/// The module raised whole, with its runtime and where the object put its
+/// globals, or the first function refused.
+pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
     let raised = raise_each(found, machine)?;
     let refused = raised.refusals().next();
     match refused {

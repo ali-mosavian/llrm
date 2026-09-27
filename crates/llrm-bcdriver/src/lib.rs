@@ -103,7 +103,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         }
     }
     let records = records.to_vec();
-    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise_placed(found, machine).map_err(|refusal| refusal.to_string())?;
+    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise(found, machine).map_err(|refusal| refusal.to_string())?;
     let options = llrm_core::driver::Options::of(machine.clone());
     let mut program = llrm_core::driver::linked(vec![module], runtime, &options)?;
     llrm_core::driver::optimized(&mut program, &options)?;
