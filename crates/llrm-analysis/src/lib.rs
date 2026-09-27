@@ -8,6 +8,7 @@
 pub mod cfg;
 pub mod effects;
 pub mod frameescape;
+pub mod interprocedural;
 pub mod pointerfacts;
 #[cfg(test)]
 pub mod testing;
