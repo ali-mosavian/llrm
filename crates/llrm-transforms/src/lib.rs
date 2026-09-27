@@ -3,6 +3,7 @@
 //! its facts and names nothing about the machine.
 
 pub mod canonical;
+pub mod cfg;
 pub mod edges;
 pub mod lcssa;
 pub mod lcssamerges;
