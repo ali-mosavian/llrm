@@ -513,8 +513,9 @@ impl Selector<'_, '_, '_> {
     /// Where x87 reads or writes only memory, the cell a value comes from or
     /// goes to is the operand, as the old route placed a MIR cell operand
     /// (`lower::_place`): an integer load only `sitofp` reads is `fild`'s
-    /// cell, and a conversion only a store reads is stored by `fistp`,
-    /// `fisttp` or `fstp` into the store's cell.
+    /// cell, a float load only a comparison reads second is `fcom`'s, and a
+    /// conversion only a store reads is stored by `fistp`, `fisttp` or
+    /// `fstp` into the store's cell.
     fn fold(&mut self, inst: InstId) {
         let function = self.function;
         let instruction = function.instruction(inst);
@@ -523,6 +524,17 @@ impl Selector<'_, '_, '_> {
                 let ValueDef::Instruction(load) = function.value(value).def else { return };
                 let fild = matches!(self.types().int_bits(function.value(value).ty), Some(16 | 32));
                 if fild && matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, inst) {
+                    self.cells.insert(load);
+                }
+            }
+            (Opcode::FCmp(predicate), Some(_)) => {
+                let Some((swapped, _)) = float_conditions(*predicate) else { return };
+                let Operand::Value(value) = instruction.operands[usize::from(!swapped)] else { return };
+                let ValueDef::Instruction(load) = function.value(value).def else { return };
+                // A comparison a branch reads is made beside the branch.
+                let Some(block) = function.parent(inst) else { return };
+                let at = if self.fused.contains(&inst) { function.terminator(block).expect("a terminator") } else { inst };
+                if matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, at) {
                     self.cells.insert(load);
                 }
             }
@@ -1879,8 +1891,15 @@ impl Selector<'_, '_, '_> {
         let instruction = self.function.instruction(inst);
         let Some((swapped, test)) = float_conditions(predicate) else { return refuse(format!("fcmp {predicate:?}")) };
         let (a, b) = if swapped { (instruction.operands[1], instruction.operands[0]) } else { (instruction.operands[0], instruction.operands[1]) };
-        let (a, b) = (self.float(a, at, out)?, self.float(b, at, out)?);
-        out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), Loc::Held(b)])));
+        let b = match self.cell(b) {
+            Some(load) => {
+                let loaded = self.function.instruction(load);
+                Loc::Mem(Self::memory(self.pointer(loaded.operands[0])?, self.size(loaded.ty)?))
+            }
+            None => Loc::Held(self.float(b, at, out)?),
+        };
+        let a = self.float(a, at, out)?;
+        out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), b])));
         Ok(test)
     }
 

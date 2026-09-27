@@ -1743,3 +1743,38 @@ fn test_a_quotient_and_remainder_are_one_division() {
 ";
     assert_eq!(inner(different).iter().filter(|one| one.starts_with("idiv")).count(), 2, "{:?}", inner(different));
 }
+
+/// A float load only a comparison reads second is `fcom`'s operand, as the
+/// old route compared a cell: it was loaded, exchanged and popped with the
+/// other.
+#[test]
+fn test_a_float_load_compared_second_is_the_comparisons_operand() {
+    let compared = |test: &str| {
+        inner(&format!(
+            "define i16 @f(double %x, ptr %p) addrspace(1) {{\n  %w = load double, ptr %p\n  %c = fcmp {test}\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        ))
+    };
+    assert_eq!(compared("ogt double %x, %w")[..3], ["fld qword ptr [bp+6]", "mov bx, word ptr [bp+14]", "fcomp qword ptr [bx]"]);
+    // Compared first, the cell would have to be st(0): it is loaded.
+    assert!(compared("olt double %x, %w").contains(&"fld qword ptr [bx]".to_owned()), "{:?}", compared("olt double %x, %w"));
+}
+
+/// A comparison a branch reads is made beside the branch: a store between
+/// them may change the cell, so the load stays where it was.
+#[test]
+fn test_a_float_load_before_a_store_is_not_compared_after_it() {
+    let text = "define i16 @f(double %x, ptr %p) addrspace(1) {
+  %w = load double, ptr %p
+  %c = fcmp ogt double %x, %w
+  store double 0.0, ptr %p
+  br i1 %c, label %y, label %n
+y:
+  ret i16 1
+n:
+  ret i16 0
+}
+";
+    let got = inner(text);
+    let (load, store) = (got.iter().position(|one| one == "fld qword ptr [bx]"), got.iter().position(|one| one.starts_with("mov dword ptr [bx]")));
+    assert!(load.is_some() && load < store, "{got:?}");
+}
