@@ -22,6 +22,7 @@ pub mod manager;
 pub mod memory;
 pub mod memoryssa;
 pub mod noreturn;
+pub mod observers;
 pub mod occurrence;
 pub mod pointerfacts;
 pub mod ranges;
