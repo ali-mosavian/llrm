@@ -9,8 +9,11 @@ use crate::testing::{managed, parsed, printed, results};
 /// `for (i = 0; i < n; i++) s += BODY`, the loop's value `%v`.
 fn looped(body: &str) -> String {
     format!(
-        "define void @g() {{
+        "@w = global i16 0
+
+define void @g() {{
 b0:
+  store i16 1, ptr @w
   ret void
 }}
 
@@ -69,9 +72,11 @@ fn test_a_value_already_scaled_plus_base_is_left() {
     assert_eq!(after, before);
 }
 
-/// The old hoist refused a loop holding a call, so a base there stays put.
+/// A call, even one that writes memory, disturbs no base: a base is
+/// arithmetic on values the loop does not define, which hoisting moves
+/// across any call.
 #[test]
-fn test_a_loop_holding_a_call_is_left() {
-    let (before, after) = spelled(&looped("  call void @g()\n  %a = sub i16 %i, %k\n  %v = mul i16 %a, 2\n"));
-    assert_eq!(after, before);
+fn test_a_call_that_writes_memory_leaves_the_base_spelled() {
+    let (_, after) = spelled(&looped("  call void @g()\n  %a = sub i16 %i, %k\n  %v = mul i16 %a, 2\n"));
+    assert!(after.contains("  %0 = mul i16 %i, 2\n  %1 = mul i16 %k, -2\n  %2 = add i16 %0, %1\n"), "{after}");
 }
