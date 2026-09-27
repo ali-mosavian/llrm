@@ -34,7 +34,7 @@ use std::sync::LazyLock;
 
 use llrm_graph::loops;
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{InstId, Operand, ValueId};
+use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
@@ -425,10 +425,20 @@ fn _index(index: &Option<Identity>) -> Result<i64, String> {
     }
 }
 
+/// The summary `known` holds of `name`, where the body it describes is the
+/// one that runs: LLVM's `hasExactDefinition`. A weak or linkonce body may
+/// be replaced by another.
+fn _summary<'s>(unit: &Unit, known: &'s IndexMap<String, Summary>, name: &str) -> Option<&'s Summary> {
+    let global = unit.globals.iter().find(|one| one.name.as_deref() == Some(name));
+    let replaceable = global.is_some_and(|one| one.function().is_some() && !matches!(one.linkage, Linkage::External | Linkage::Internal | Linkage::Private | Linkage::ExternWeak));
+    (!replaceable).then(|| known.get(name)).flatten()
+}
+
 /// Transitive per-procedure mod/ref and capture summaries to a fixed point.
 ///
 /// `known` supplies established external semantics, such as C library
-/// functions. A body in this compilation unit always takes precedence.
+/// functions. A body in this compilation unit always takes precedence; one
+/// that may be replaced describes no call.
 pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>) -> Result<IndexMap<String, Summary>, String> {
     let direct = procedures.iter().map(|(name, one)| Ok((name.clone(), _direct_summary(&one.unit)?))).collect::<Result<Vec<_>, String>>()?;
     let mut result = known.cloned().unwrap_or_default();
@@ -444,7 +454,7 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
             let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
             for at in call_sites(&procedure.unit) {
                 let target = procedure.calls.get(&at);
-                let callee = target.and_then(|target| result.get(target));
+                let callee = target.and_then(|target| _summary(&procedure.unit, &result, target));
                 let actual = _actuals(procedure, &facts, at);
                 let Some(callee) = callee else {
                     let (read, written) = _unknown_visible(procedure, &facts, at, &actual)?;
@@ -496,7 +506,8 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     // Capture is part of escape flow. Unknown callees may retain every
     // pointer actual; known callees retain only the parameters their fixed
     // point summary says they capture.
-    let captures = procedure.calls.iter().map(|(at, target)| (*at, known.get(target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+    let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(&procedure.unit, known, target));
+    let captures = procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
 
     let reference = |one: &Slice| {
@@ -506,8 +517,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     let mut out = IndexMap::default();
     for at in call_sites(&procedure.unit) {
         let actual = _actuals(procedure, &facts, at);
-        let target = procedure.calls.get(&at);
-        let mut effect = match target.and_then(|target| known.get(target)) {
+        let mut effect = match callee(&at) {
             Some(callee) => callee.instantiated(&actual),
             None => {
                 let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual)?;

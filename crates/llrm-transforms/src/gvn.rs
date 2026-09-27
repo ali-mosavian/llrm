@@ -76,7 +76,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registe
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything.
 fn _numbered(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let accesses = transform::_accesses(&memory::Unit::within(unit.context, unit.layout, unit.function, outer))?;
+    let accesses = transform::_accesses(&memory::Unit::within(unit.context, unit.layout, unit.function, outer), outer)?;
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, bool), String> {
         let mut function = function.clone();
         // `transform::forwarded(avoid_store_crossing)` goes here once

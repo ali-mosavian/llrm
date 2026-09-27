@@ -50,7 +50,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::alias::{self, Effect, Procedure};
+use llrm_analysis::alias::{self, Effect};
+use llrm_analysis::manager;
 use llrm_analysis::memory::{self, MemRef};
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
@@ -58,6 +59,7 @@ use llrm_mir::context::Context;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::passes::Outer;
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
 
@@ -165,11 +167,11 @@ pub struct _Accesses {
     pub reading: BTreeSet<InstId>,
 }
 
-/// `unit`'s accesses, as `alias::annotated` and `alias::calls_annotated`
-/// find them; a call's callee is summarized by nothing.
-pub fn _accesses(unit: &memory::Unit) -> Result<_Accesses, String> {
+/// `unit`'s accesses, as `alias::annotated` and `manager::call_effects`
+/// find them; `outer` is its module.
+pub fn _accesses(unit: &memory::Unit, outer: &Outer) -> Result<_Accesses, String> {
     let references = alias::annotated(unit)?;
-    let calls = alias::calls_annotated(&Procedure::of(*unit), &IndexMap::default())?;
+    let calls = manager::call_effects(unit, outer)?;
     let reading = calls.keys().copied().filter(|&call| !memory::unmodeled_write(unit, call)).collect();
     Ok(_Accesses { references, calls, reading })
 }
@@ -349,7 +351,7 @@ mod tests {
     fn subexpressions_of(module: &mut Module) -> bool {
         let layout = DataLayout::default();
         let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-        let accesses = _accesses(&Unit::of(module, &layout, function)).unwrap();
+        let accesses = _accesses(&Unit::of(module, &layout, function), &llrm_mir::passes::Outer::of(module, None)).unwrap();
         subexpressions(f(module), &accesses, false).unwrap()
     }
 

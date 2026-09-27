@@ -76,10 +76,21 @@ impl Analysis for CallEffects {
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let outer = analyses.outer();
-        let summaries = outer.cached::<Summaries>().ok_or("call effects need the module's summaries: require `Summaries`")?;
-        let summaries = Result::as_ref(&*summaries).map_err(String::clone)?;
-        alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)
+        outer.cached::<Summaries>().ok_or("call effects need the module's summaries: require `Summaries`")?;
+        call_effects(&Unit::within(context, layout, function, outer), outer)
     }
+}
+
+/// What each call of `unit` reads and writes, its callee as `Summaries`
+/// says where `outer` holds it, and otherwise as its attributes alone do.
+pub fn call_effects(unit: &Unit, outer: &Outer) -> Result<IndexMap<InstId, Effect>, String> {
+    let summaries = outer.cached::<Summaries>();
+    let none = IndexMap::default();
+    let known = match summaries.as_deref() {
+        Some(found) => found.as_ref().map_err(String::clone)?,
+        None => &none,
+    };
+    alias::calls_annotated(&Procedure::of(*unit), known)
 }
 
 /// Every value known without solving memory: `consts::known` of no calls.
