@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::{GlobalsAA, Summaries};
+use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -188,11 +188,12 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
+    manager.require_program::<ProgramSummaries>();
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
-    manager.add_module(Interprocedural {
+    manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
     });

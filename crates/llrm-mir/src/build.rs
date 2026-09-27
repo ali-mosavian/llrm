@@ -38,6 +38,28 @@ impl Module {
         self.add(name, linkage, GlobalKind::Variable(variable))
     }
 
+    /// Global `id` of `from` declared here under its name, external: none
+    /// where its type is one only `from` has.
+    pub fn declared(&mut self, from: &Module, id: GlobalId) -> Result<Option<GlobalId>, String> {
+        let global = from.global(id);
+        let name = global.name.as_deref().ok_or("an unnamed global")?;
+        let declared = match &global.kind {
+            GlobalKind::Variable(variable) => {
+                let Some(ty) = self.context.types.imported(&from.context.types, variable.ty) else { return Ok(None) };
+                self.add_variable(name, GlobalVariable { ty, constant: variable.constant, initializer: None, align: variable.align }, Linkage::External)?
+            }
+            GlobalKind::Function(function) => {
+                let Some(ty) = self.context.types.imported(&from.context.types, function.ty) else { return Ok(None) };
+                let declared = self.add_function(name, ty, Linkage::External)?;
+                let GlobalKind::Function(one) = &mut self.globals[declared.0 as usize].kind else { unreachable!("a function") };
+                one.calling_convention = function.calling_convention;
+                declared
+            }
+        };
+        self.globals[declared.0 as usize].address_space = global.address_space;
+        Ok(Some(declared))
+    }
+
     /// The constant pointer to a global.
     pub fn reference(&mut self, global: GlobalId) -> ConstantId {
         let ty = self.context.types.ptr(self.global(global).address_space);

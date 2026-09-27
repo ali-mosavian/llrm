@@ -22,7 +22,7 @@ use llrm_core::backend::omfwrite::CodeLayout;
 use llrm_core::flow;
 use llrm_core::model::passes::{Options, O2};
 
-const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--isel] source";
+const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--isel] [--machine MACHINE] source";
 
 struct Arguments {
     source: PathBuf,
@@ -34,6 +34,8 @@ struct Arguments {
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
     isel: bool,
+    /// The target: the built-in DOS on `nib::CPU` unless `--machine` names another.
+    machine: llrm_core::abi::machine::Machine,
 }
 
 fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -42,6 +44,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut used_by = Vec::new();
     let mut frontend = super::Frontend::default();
     let mut isel = false;
+    let mut machine = nib::machine();
     let mut at = 0;
     while at < argv.len() {
         let argument = argv[at].as_str();
@@ -64,6 +67,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "--isel" => isel = true,
+            "--machine" => machine = llrm_core::abi::machine::Machine::load(std::path::Path::new(&value("--machine")?))?,
             "-O" => options = flow::level_option(&value("-O")?)?,
             _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -73,7 +77,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend, isel })
+    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend, isel, machine })
 }
 
 /// The symbols `objects` import.
@@ -109,7 +113,7 @@ pub fn main(argv: &[String]) -> i32 {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
         let bytes = if args.isel {
-            nib::written_from_mir(&program, &args.entry, &args.source, args.layout)?
+            nib::written_from_mir(&program, &args.entry, &args.source, args.layout, &args.machine)?
         } else {
             nib::written_as(&program, &args.entry, &args.source, &args.options, args.layout)?
         };
