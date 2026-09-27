@@ -1611,7 +1611,7 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
 }
 ";
     let divides = |cpu: &str| inner_on(cpu, text).iter().filter(|one| one.starts_with("idiv")).count();
-    assert_eq!((divides("P5"), divides("386")), (0, 2));
+    assert_eq!((divides("P5"), divides("386")), (0, 1));
 }
 
 /// A word, and an unsigned dword, divided by a constant stay divisions:
@@ -1712,4 +1712,34 @@ done:
 }
 ";
     assert_eq!(listing(text, "f").last().map(String::as_str), Some("call far ptr panic"));
+}
+
+/// A quotient and remainder of the same operands are one division, as the
+/// old route's divmod: C's `q = x / y; r = x % y` divided twice.
+#[test]
+fn test_a_quotient_and_remainder_are_one_division() {
+    let text = "define i16 @f(i16 %x, i16 %y) addrspace(1) {
+  %q = sdiv i16 %x, %y
+  %r = srem i16 %x, %y
+  %s = add i16 %q, %r
+  ret i16 %s
+}
+";
+    assert_eq!(inner(text).iter().filter(|one| one.starts_with("idiv")).count(), 1, "{:?}", inner(text));
+    let reciprocal = "define i32 @f(i32 %x) addrspace(1) {
+  %q = sdiv i32 %x, 10
+  %r = srem i32 %x, 10
+  %s = add i32 %q, %r
+  ret i32 %s
+}
+";
+    assert_eq!(inner_on("P5", reciprocal).iter().filter(|one| one.starts_with("imul")).count(), 1, "{:?}", inner_on("P5", reciprocal));
+    let different = "define i16 @f(i16 %x, i16 %y) addrspace(1) {
+  %q = sdiv i16 %x, %y
+  %r = srem i16 %y, %x
+  %s = add i16 %q, %r
+  ret i16 %s
+}
+";
+    assert_eq!(inner(different).iter().filter(|one| one.starts_with("idiv")).count(), 2, "{:?}", inner(different));
 }

@@ -239,6 +239,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         words: IndexMap::default(),
         tested: BTreeSet::new(),
         consumed: BTreeSet::new(),
+        paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
         cpu,
         pending: IndexMap::default(),
@@ -283,8 +284,12 @@ struct Selector<'m, 'c, 'p> {
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
     /// ANDs only a comparison with zero reads: a `test`.
     tested: BTreeSet<InstId>,
-    /// What another instruction's selection made: a narrowed load's readers.
+    /// What another instruction's selection made: a narrowed load's
+    /// readers, the second of a quotient and remainder.
     consumed: BTreeSet<InstId>,
+    /// A division whose remainder, or remainder whose quotient, a later
+    /// instruction of its block is: that instruction's value.
+    paired: IndexMap<InstId, ValueId>,
     /// What each callee does to memory.
     callees: llrm_mir::memory::Callees,
     /// What each instruction costs, where a choice depends on it.
@@ -388,6 +393,7 @@ impl Selector<'_, '_, '_> {
                 self.fold(inst);
                 self.narrowed(inst);
                 self.test(inst);
+                self.pair(inst);
             }
             self.phis_from(block)?;
         }
@@ -589,6 +595,33 @@ impl Selector<'_, '_, '_> {
         let registers = anding.operands.iter().all(|one| matches!(one, Operand::Value(_)));
         if anding.opcode == Opcode::Binary(BinaryOp::And) && registers && matches!(self.types().int_bits(anding.ty), Some(16 | 32)) && self.only_reader(value, inst) {
             self.tested.insert(and);
+        }
+    }
+
+    /// A quotient and a remainder of the same operands in one block are
+    /// one division, which leaves both, as the old route's divmod is.
+    fn pair(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let partner = match instruction.opcode {
+            Opcode::Binary(BinaryOp::SDiv) => BinaryOp::SRem,
+            Opcode::Binary(BinaryOp::SRem) => BinaryOp::SDiv,
+            Opcode::Binary(BinaryOp::UDiv) => BinaryOp::URem,
+            Opcode::Binary(BinaryOp::URem) => BinaryOp::UDiv,
+            _ => return,
+        };
+        if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32)) {
+            return;
+        }
+        let Some(block) = function.parent(inst) else { return };
+        let later = function.block(block).instructions().iter().skip_while(|&&one| one != inst).skip(1);
+        let found = later.copied().find(|&one| {
+            let other = function.instruction(one);
+            other.opcode == Opcode::Binary(partner) && other.operands == instruction.operands && !self.consumed.contains(&one)
+        });
+        if let Some(one) = found {
+            self.paired.insert(inst, function.instruction(one).result.expect("a result"));
+            self.consumed.insert(one);
         }
     }
 
@@ -1038,7 +1071,11 @@ impl Selector<'_, '_, '_> {
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
-        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: self.fresh(), width });
+        let other = match self.paired.get(&inst) {
+            Some(&partner) => self.value(partner),
+            None => self.fresh(),
+        };
+        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: other, width });
         let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
         // A signed division by a constant is a multiply by its reciprocal
         // where the target prices that cheaper, as the old route's
@@ -1049,7 +1086,7 @@ impl Selector<'_, '_, '_> {
                 next += 1;
                 next
             };
-            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result).map_err(Unselected)?;
+            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result || self.paired.contains_key(&inst)).map_err(Unselected)?;
             self.next = next;
             if let Some(parts) = reciprocal {
                 out.extend(parts.into_iter().map(|what| insn(at, what)));
