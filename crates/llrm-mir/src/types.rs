@@ -60,6 +60,24 @@ impl Types {
         &self.types[id.0 as usize]
     }
 
+    /// `ty` of `from`, interned here: none for an identified struct, whose
+    /// body is `from`'s own.
+    pub fn imported(&mut self, from: &Types, ty: TypeId) -> Option<TypeId> {
+        let one = match from.get(ty).clone() {
+            Type::Named(_) => return None,
+            Type::Array { element, count } => Type::Array { element: self.imported(from, element)?, count },
+            Type::Vector { element, count } => Type::Vector { element: self.imported(from, element)?, count },
+            Type::Struct { fields, packed } => Type::Struct { fields: fields.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?, packed },
+            Type::Function { returns, parameters, variadic } => Type::Function {
+                returns: self.imported(from, returns)?,
+                parameters: parameters.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?,
+                variadic,
+            },
+            other => other,
+        };
+        Some(self.intern(one))
+    }
+
     pub fn void(&mut self) -> TypeId {
         self.intern(Type::Void)
     }

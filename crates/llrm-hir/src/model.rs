@@ -663,6 +663,57 @@ impl Module {
     }
 }
 
+/// A runtime cell only a reference naming it reaches, and the routines
+/// that write it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellWriters {
+    pub cell: String,
+    pub routines: Vec<String>,
+}
+
+/// What the runtime the program links against promises of its routines,
+/// which their declarations state.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RuntimePromises {
+    /// The routines that may run the program's own code; any other runs
+    /// none. None: every one may.
+    pub calling_back: Option<Vec<String>>,
+    /// Each named cell's writers.
+    pub writers: Vec<CellWriters>,
+    /// The routines that raise no error.
+    pub nounwind: Vec<String>,
+    /// The routines that only read what their pointer arguments reach and
+    /// keep none of them, by their own names: C's strlen.
+    pub reads_arguments: Vec<String>,
+}
+
+impl RuntimePromises {
+    /// The promises of a runtime whose `calling_back` routines may run the
+    /// program's code, whose named cells `writers` write, and whose
+    /// `nounwind` routines raise no error.
+    pub fn of<'a, 'b, 'c, W: IntoIterator<Item = &'b str>>(
+        calling_back: impl IntoIterator<Item = &'a str>,
+        writers: impl IntoIterator<Item = (&'b str, W)>,
+        nounwind: impl IntoIterator<Item = &'c str>,
+    ) -> Self {
+        Self {
+            calling_back: Some(calling_back.into_iter().map(str::to_owned).collect()),
+            writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
+            nounwind: nounwind.into_iter().map(str::to_owned).collect(),
+            reads_arguments: Vec::new(),
+        }
+    }
+
+    /// The named cells `routine` writes; none where it may run the
+    /// program's code.
+    pub fn writes(&self, routine: &str) -> Option<Vec<String>> {
+        if self.calling_back.as_ref()?.iter().any(|one| one == routine) {
+            return None;
+        }
+        Some(self.writers.iter().filter(|one| one.routines.iter().any(|writer| writer == routine)).map(|one| one.cell.clone()).collect())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub dialect: Dialect,
@@ -676,6 +727,10 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
+    pub promises: RuntimePromises,
+    /// The functions code outside the program calls whatever their
+    /// linkage: the runtime's way into it.
+    pub entries: Vec<String>,
 }
 
 impl Program {
@@ -690,6 +745,8 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             zeroed_locals: true,
+            promises: RuntimePromises::default(),
+            entries: Vec::new(),
         }
     }
 }

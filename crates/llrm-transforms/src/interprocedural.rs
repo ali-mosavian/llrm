@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/interprocedural.rs`: the whole-module
+//! Adapted from llrm-core's `optimize/interprocedural.rs`: the whole-program
 //! step a frontend runs once every body has reached its own fixed point:
 //! inline, carry constants across direct calls, drop dead pure calls and
 //! the tails of terminal ones, and send each changed body back through its
@@ -9,124 +9,147 @@
 //!
 //! What changed with the IR: a call names its callee and carries its
 //! actuals, so the old `Procedure`'s call, parameter, constant and argument
-//! tables have no counterpart and a procedure is its `GlobalId`; a
-//! procedure has every caller in the module when its linkage is `internal`
-//! or `private`, not by a parameter. A body changes in place, so the
-//! pipeline takes the module, its analyses and the body's id. `propagated`, the calls
-//! whose return was carried, has nothing to hold: a carried return leaves
-//! the call's result unread. The old `Module` is `Proved`, the name being
-//! llrm-mir's. `Interprocedural` is the step as a `ModulePass`.
+//! tables have no counterpart and a procedure is its module and
+//! `GlobalId`; a procedure has every caller in the program when the program
+//! does not export it, not by a parameter. A body changes in place, so the
+//! pipeline takes the module, its analyses and the body's id. `propagated`,
+//! the calls whose return was carried, has nothing to hold: a carried
+//! return leaves the call's result unread. The old `Module` is `Proved`,
+//! the name being llrm-mir's. `Interprocedural` is the step as a
+//! `ProgramPass`.
 //!
 //! The old module had no tests of its own.
 
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::manager::{GlobalsAA, Summaries};
+use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
-use llrm_mir::callgraph::CallGraphAnalysis;
+use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::passes::{Declarations, ModuleAnalyses, ModulePass, PreservedAnalyses};
+use llrm_mir::passes::{Declarations, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
 use crate::inline;
 use crate::profit::OperationCosts;
 
-/// What the step proved about the module.
+/// What the step proved about the program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Proved {
-    /// Private procedures that cannot return.
-    pub noreturn: BTreeSet<GlobalId>,
+    /// Procedures no outside code calls that cannot return.
+    pub noreturn: BTreeSet<Defined>,
     /// Procedures a root still calls, roots included.
-    pub reachable: BTreeSet<GlobalId>,
+    pub reachable: BTreeSet<Defined>,
 }
 
-/// The step as a module pass: `pipeline` is each changed body's pipeline.
-/// The program's target prices inlining, and the roots are the bodies
-/// something outside the module may call.
+/// The step as a program pass: `pipeline` is each changed body's pipeline.
+/// The program's target prices inlining, and the roots are the bodies it
+/// exports.
 pub struct Interprocedural {
     pub pipeline: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
     /// What the last run proved.
     pub proved: Option<Proved>,
 }
 
-impl ModulePass for Interprocedural {
+impl ProgramPass for Interprocedural {
     fn name(&self) -> &'static str {
         "interprocedural"
     }
 
-    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
-        let changed = RefCell::new(BTreeSet::new());
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        let costs = analyses.program().target.costs();
-        let roots = roots(module);
+        let costs = program.target.costs();
+        let roots = roots(program);
+        let mut modules = managers(program, analyses);
         let proved = optimized::<String>(
-            module,
-            analyses,
+            program,
+            &mut modules,
             &roots,
             &costs,
             &mut |module, analyses, id, stage| {
-                changed.borrow_mut().insert(id);
                 pipeline(module, analyses, id, stage);
                 Ok(())
             },
-            &mut |_, id, _| {
-                changed.borrow_mut().insert(id);
-                Ok(())
-            },
-        )
-        .unwrap_or_else(|error| panic!("interprocedural: {error}"));
+            &mut |_, _, _| Ok(()),
+        )?;
         self.proved = Some(proved);
-        changed.into_inner().into_iter().collect()
+        analyses.invalidate();
+        Ok(())
     }
 }
 
-/// The bodies something outside the module may call.
-fn roots(module: &Module) -> BTreeSet<GlobalId> {
-    module
-        .functions()
-        .filter(|(_, global, function)| !function.is_declaration() && !matches!(global.linkage, Linkage::Internal | Linkage::Private))
-        .map(|(id, _, _)| id)
+/// Each module's analyses under `analyses`' program results, summaries
+/// kept for the function passes to read.
+pub fn managers(program: &Program, analyses: &mut ProgramAnalyses) -> Vec<ModuleAnalyses> {
+    analyses.get::<ProgramSummaries>(program);
+    (0..program.modules.len())
+        .map(|at| {
+            let mut one = ModuleAnalyses::new(analyses.proxy(program, at));
+            one.require::<Summaries>();
+            one
+        })
         .collect()
 }
 
-/// Every defined procedure, in module order.
-fn procedures(module: &Module) -> Vec<GlobalId> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
+/// The bodies code outside the program may call.
+pub fn roots(program: &Program) -> BTreeSet<Defined> {
+    defined(program).filter(|&(at, id)| program.exports.exported(program.modules[at].global(id))).collect()
 }
 
-/// Defined procedures whose every caller is in the module.
-fn private(module: &Module) -> BTreeSet<GlobalId> {
-    module
-        .functions()
-        .filter(|(_, global, function)| !function.is_declaration() && matches!(global.linkage, Linkage::Internal | Linkage::Private))
-        .map(|(id, _, _)| id)
-        .collect()
+/// Every defined procedure, in program order.
+fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
+    program.modules.iter().enumerate().flat_map(|(at, module)| module.functions().filter(|(_, _, function)| !function.is_declaration()).map(move |(id, _, _)| (at, id)))
 }
 
-/// Run the whole-module step over `module`, its module analyses those
-/// `analyses` holds; each edit drops them.
+/// Defined procedures of module `at`, in module order.
+fn procedures(program: &Program, at: usize) -> Vec<GlobalId> {
+    defined(program).filter(|&(one, _)| one == at).map(|(_, id)| id).collect()
+}
+
+/// Defined procedures no outside code calls: every caller is in the program.
+fn unexported(program: &Program) -> BTreeSet<Defined> {
+    defined(program).filter(|&(at, id)| !program.exports.exported(program.modules[at].global(id))).collect()
+}
+
+/// Module `at`'s procedures every caller of which is in the module: no
+/// outside code, and no other module, calls them.
+fn private(program: &Program, at: usize) -> BTreeSet<GlobalId> {
+    let others: BTreeSet<Defined> = program
+        .modules
+        .iter()
+        .enumerate()
+        .filter(|&(other, _)| other != at)
+        .flat_map(|(other, module)| (0..module.globals.len() as u32).filter_map(move |id| program.definition(other, GlobalId(id))))
+        .collect();
+    unexported(program).into_iter().filter(|&(one, id)| one == at && !others.contains(&(at, id))).map(|(_, id)| id).collect()
+}
+
+/// Run the whole-program step over `program`, each module's analyses
+/// those `modules` holds; each edit drops its module's.
 ///
 /// `reoptimised(module, analyses, id, stage)` runs procedure `id`'s
 /// pipeline again on a body `stage` changed; `spliced` sees a body straight
-/// after inlining, before that.
+/// after inlining, before that. A callee is inlined from its own module
+/// only.
 pub fn optimized<E: From<String>>(
-    module: &mut Module,
-    analyses: &mut ModuleAnalyses,
-    roots: &BTreeSet<GlobalId>,
+    program: &mut Program,
+    modules: &mut [ModuleAnalyses],
+    roots: &BTreeSet<Defined>,
     costs: &OperationCosts,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
-    let procedures = procedures(module);
-    let private = private(module);
+    let count = program.modules.len();
+    let procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
+    let private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
+    let unexported = unexported(program);
     let edited = |analyses: &mut ModuleAnalyses, bodies: &[GlobalId]| {
         for &id in bodies {
             analyses.changed(id);
@@ -138,30 +161,30 @@ pub fn optimized<E: From<String>>(
     // point; the splice's result goes straight back through the pipeline.
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
-    let bodies = stamped(module, analyses).map_err(E::from)?;
-    if !bodies.is_empty() {
-        edited(analyses, &bodies);
-    }
-    let pure = facts::stated_pure(module);
+    stamped_all(program, modules).map_err(E::from)?;
+    let pure: Vec<BTreeSet<GlobalId>> = program.modules.iter().map(facts::stated_pure).collect();
     let mut inline_round = 0;
     loop {
-        let counts = inline::call_counts(module);
-        let available = inline::candidates(module, &counts, &private, &pure, costs);
         let mut changed = false;
-        for &id in &procedures {
-            let caller = module.global(id).function().expect("a procedure");
-            let constants = facts::current_call_constants(&module.context, caller);
-            let constant = inline::constant_sites(module, caller, &constants, &private, &pure, costs);
-            let (context, function) = function_mut(module, id);
-            if !inline::expanded(context, function, &available, Some(&constant))? {
-                continue;
+        for at in 0..count {
+            let module = &mut program.modules[at];
+            let counts = inline::call_counts(module);
+            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs);
+            for &id in &procedures[at] {
+                let caller = module.global(id).function().expect("a procedure");
+                let constants = facts::current_call_constants(&module.context, caller);
+                let constant = inline::constant_sites(module, caller, &constants, &private[at], &pure[at], costs);
+                let (context, function) = function_mut(module, id);
+                if !inline::expanded(context, function, &available, Some(&constant))? {
+                    continue;
+                }
+                edited(&mut modules[at], &[id]);
+                let stage = format!("inline{inline_round}");
+                spliced(module, id, &stage)?;
+                reoptimised(module, &mut modules[at], id, &format!("{stage}."))?;
+                changed = true;
+                inline_round += 1;
             }
-            edited(analyses, &[id]);
-            let stage = format!("inline{inline_round}");
-            spliced(module, id, &stage)?;
-            reoptimised(module, analyses, id, &format!("{stage}."))?;
-            changed = true;
-            inline_round += 1;
         }
         if !changed {
             break;
@@ -171,113 +194,166 @@ pub fn optimized<E: From<String>>(
     let mut return_round = 0;
 
     // Materialize every newly constant result.
-    let propagate_constant_returns = |module: &mut Module,
-                                      analyses: &mut ModuleAnalyses,
+    let propagate_constant_returns = |program: &mut Program,
+                                      modules: &mut [ModuleAnalyses],
                                       return_round: &mut i64,
                                       reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>|
      -> Result<(), E> {
-            loop {
-                let returns = facts::constant_returns(module);
-                let mut changed = false;
-                for &id in &procedures {
-                    let (context, function) = function_mut(module, id);
-                    if !facts::propagate_returns(context, function, &returns) {
+        loop {
+            let returns = facts::program_returns(program);
+            let mut changed = false;
+            for at in 0..count {
+                for &id in &procedures[at] {
+                    let (context, function) = function_mut(&mut program.modules[at], id);
+                    if !facts::propagate_returns(context, function, &returns[at]) {
                         continue;
                     }
-                    edited(analyses, &[id]);
-                    reoptimised(module, analyses, id, &format!("ipa{return_round}."))?;
+                    edited(&mut modules[at], &[id]);
+                    reoptimised(&mut program.modules[at], &mut modules[at], id, &format!("ipa{return_round}."))?;
                     changed = true;
                 }
-                if !changed {
-                    return Ok(());
-                }
-                *return_round += 1;
             }
-        };
+            if !changed {
+                return Ok(());
+            }
+            *return_round += 1;
+        }
+    };
 
     // A return fact may make the actual of a different direct call
     // constant.  Alternate that current-MIR proof with return propagation
     // until neither side discovers a new fact.
-    propagate_constant_returns(module, analyses, &mut return_round, reoptimised)?;
+    propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
     let mut argument_round = 0;
     loop {
-        let constants = facts::constant_parameters(module, &private);
+        let constants = facts::program_parameters(program, &unexported);
         let mut changed = false;
-        for &id in &procedures {
-            let Some(constants_for_body) = constants.get(&id) else {
-                continue;
-            };
-            let (context, function) = function_mut(module, id);
-            if !facts::specialize_parameters(context, function, constants_for_body) {
-                continue;
+        for at in 0..count {
+            for &id in &procedures[at] {
+                let Some(constants_for_body) = constants[at].get(&id) else {
+                    continue;
+                };
+                let (context, function) = function_mut(&mut program.modules[at], id);
+                if !facts::specialize_parameters(context, function, constants_for_body) {
+                    continue;
+                }
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, &format!("ipa-args{argument_round}."))?;
+                changed = true;
             }
-            edited(analyses, &[id]);
-            reoptimised(module, analyses, id, &format!("ipa-args{argument_round}."))?;
-            changed = true;
         }
         if changed {
             argument_round += 1;
-            propagate_constant_returns(module, analyses, &mut return_round, reoptimised)?;
+            propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
         }
 
         // A single current-MIR constant may be worth cloning even where
         // another caller keeps the private body dynamic.
-        let counts = inline::call_counts(module);
-        let available = inline::candidates(module, &counts, &private, &pure, costs);
         let mut inlined = false;
-        for &id in &procedures {
-            let caller = module.global(id).function().expect("a procedure");
-            let current = facts::current_call_constants(&module.context, caller);
-            let constant = inline::constant_sites(module, caller, &current, &private, &pure, costs);
-            let (context, function) = function_mut(module, id);
-            if !inline::expanded(context, function, &available, Some(&constant))? {
-                continue;
+        for at in 0..count {
+            let module = &mut program.modules[at];
+            let counts = inline::call_counts(module);
+            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs);
+            for &id in &procedures[at] {
+                let caller = module.global(id).function().expect("a procedure");
+                let current = facts::current_call_constants(&module.context, caller);
+                let constant = inline::constant_sites(module, caller, &current, &private[at], &pure[at], costs);
+                let (context, function) = function_mut(module, id);
+                if !inline::expanded(context, function, &available, Some(&constant))? {
+                    continue;
+                }
+                edited(&mut modules[at], &[id]);
+                reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
+                inlined = true;
             }
-            edited(analyses, &[id]);
-            reoptimised(module, analyses, id, &format!("ipa-inline{argument_round}."))?;
-            inlined = true;
         }
         if inlined {
-            propagate_constant_returns(module, analyses, &mut return_round, reoptimised)?;
+            propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
         }
         if !changed && !inlined {
             break;
         }
     }
     // Propagation may have left a body doing less than it states.
-    let bodies = stamped(module, analyses).map_err(E::from)?;
-    if !bodies.is_empty() {
-        edited(analyses, &bodies);
-    }
-    let declarations = analyses.get::<Declarations>(module);
-    for &id in &procedures {
-        let (context, function) = function_mut(module, id);
-        if facts::remove_dead_pure_calls(context, &declarations, function) {
-            edited(analyses, &[id]);
-            reoptimised(module, analyses, id, "ipa-pure.")?;
+    stamped_all(program, modules).map_err(E::from)?;
+    for at in 0..count {
+        let declarations = modules[at].get::<Declarations>(&program.modules[at]);
+        for &id in &procedures[at] {
+            let (context, function) = function_mut(&mut program.modules[at], id);
+            if facts::remove_dead_pure_calls(context, &declarations, function) {
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-pure.")?;
+            }
         }
     }
     // A direct private body whose every path stops makes the tail of every
     // call site unreachable: keep the physical call, remove only the code
     // that would require it to return, and repeat.
     let noreturn = loop {
-        let declarations = analyses.get::<Declarations>(module);
-        let noreturn = facts::noreturn_procedures(module, &declarations, &private);
+        let declarations: Vec<_> = (0..count).map(|at| modules[at].get::<Declarations>(&program.modules[at])).collect();
+        let noreturn = facts::program_noreturn(program, &declarations.iter().map(|one| one.as_slice()).collect::<Vec<_>>(), &unexported);
         let mut changed = false;
-        for &id in &procedures {
-            let (context, function) = function_mut(module, id);
-            if !facts::terminal_calls(context, &declarations, function, &noreturn) {
-                continue;
+        for at in 0..count {
+            let local = program.local(at, &noreturn);
+            for &id in &procedures[at] {
+                let (context, function) = function_mut(&mut program.modules[at], id);
+                if !facts::terminal_calls(context, &declarations[at], function, &local) {
+                    continue;
+                }
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-noreturn.")?;
+                changed = true;
             }
-            edited(analyses, &[id]);
-            reoptimised(module, analyses, id, "ipa-noreturn.")?;
-            changed = true;
         }
         if !changed {
             break noreturn;
         }
     };
-    Ok(Proved { noreturn, reachable: reachable(module, &procedures, roots) })
+    Ok(Proved { noreturn, reachable: reachable(program, roots) })
+}
+
+/// `stamped` over every module, callees' modules first, each body's
+/// attributes then stated on every declaration of it; the analyses of the
+/// modules it changed dropped.
+pub fn stamped_all(program: &mut Program, modules: &mut [ModuleAnalyses]) -> Result<(), String> {
+    let mut order: Vec<usize> = Vec::new();
+    for (at, _) in CallGraph::of(program).bottom_up() {
+        if !order.contains(&at) {
+            order.push(at);
+        }
+    }
+    order.extend((0..program.modules.len()).filter(|at| !order.contains(at)).collect::<Vec<_>>());
+    for at in order {
+        let bodies = stamped(&mut program.modules[at], &mut modules[at])?;
+        if bodies.is_empty() {
+            continue;
+        }
+        for &id in &bodies {
+            modules[at].changed(id);
+        }
+        modules[at].invalidate(&PreservedAnalyses::none());
+        for id in bodies {
+            for other in published(program, at, id) {
+                modules[other].invalidate(&PreservedAnalyses::none());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Body `id` of module `at`'s attributes stated on each other module's
+/// declaration of it; the modules changed.
+fn published(program: &mut Program, at: usize, id: GlobalId) -> Vec<usize> {
+    let mut changed = Vec::new();
+    for other in (0..program.modules.len()).filter(|&other| other != at) {
+        let declared: Vec<GlobalId> = (0..program.modules[other].globals.len() as u32).map(GlobalId).filter(|&one| program.definition(other, one) == Some((at, id))).collect();
+        for one in declared {
+            if program.restate(at, id, other, one) && !changed.contains(&other) {
+                changed.push(other);
+            }
+        }
+    }
+    changed
 }
 
 /// Each body whose definition is exact stamped with what it is proved to
@@ -421,24 +497,26 @@ pub(crate) fn function_mut(module: &mut Module, id: GlobalId) -> (&mut llrm_mir:
 
 /// Procedures a surviving direct call reaches from `roots`; all of them
 /// when there are no roots.
-fn reachable(module: &Module, procedures: &[GlobalId], roots: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    let defined = procedures.iter().copied().collect::<BTreeSet<_>>();
+fn reachable(program: &Program, roots: &BTreeSet<Defined>) -> BTreeSet<Defined> {
+    let every = defined(program).collect::<BTreeSet<_>>();
     if roots.is_empty() {
-        return defined;
+        return every;
     }
     let mut reached = BTreeSet::new();
-    let mut pending = roots.intersection(&defined).copied().collect::<Vec<_>>();
-    while let Some(id) = pending.pop() {
-        if !reached.insert(id) {
+    let mut pending = roots.intersection(&every).copied().collect::<Vec<_>>();
+    while let Some((at, id)) = pending.pop() {
+        if !reached.insert((at, id)) {
             continue;
         }
+        let module = &program.modules[at];
         let function = module.global(id).function().expect("a procedure");
         pending.extend(
             function
                 .walk()
                 .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
                 .filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, function, inst))
-                .filter(|target| defined.contains(target) && !reached.contains(target)),
+                .filter_map(|target| program.definition(at, target))
+                .filter(|target| every.contains(target) && !reached.contains(target)),
         );
     }
     reached

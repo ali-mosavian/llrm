@@ -1594,18 +1594,11 @@ impl Rich {
         if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
             return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
         }
-        let family = program.runtime.value();
-        let writes = |routine: &str| llrm_core::abi::runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect());
-        let emitted = hir::mir::emit_promised(program, Some(&hir::mir::Runtime { writes: &writes })).swap_remove(0);
-        if let Some((name, why)) = emitted.refused.first() {
-            return emission(format!("@{name}: {why}"));
-        }
-        let profile = targets::profile(ProfileOrName::Name(&machine.cpu)).map_err(CompileError::Value)?;
-        let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
-        let mut mir = llrm_mir::program::Program::new(vec![emitted.module], profile.target()).map_err(CompileError::Value)?;
-        llrm_transforms::pipeline::applied(&mut mir, &applied).map_err(CompileError::Value)?;
+        let options = llrm_core::driver::Options::of(machine.clone());
+        let (mut mir, mut data) = llrm_core::driver::emitted(program, &options).map_err(|why| EmissionError(why))?;
+        llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
-        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
+        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects } })
     }
 
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {

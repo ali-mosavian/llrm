@@ -52,10 +52,11 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         functions.push(Body::function(&module, &mut types, &mut callables, proc, at as i64 + 1)?);
     }
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
-    let callables = callables.into_values().filter(|one| !defined.contains(one.name.as_str())).collect();
+    let callables: Vec<h::Callable> = callables.into_values().filter(|one| !defined.contains(one.name.as_str())).collect();
+    let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, ..h::Module::new(1, name, types, functions) };
-    Ok(h::Program { zeroed_locals: false, ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module]) })
+    Ok(h::Program { zeroed_locals: false, promises, ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module]) })
 }
 
 // ---- data ----

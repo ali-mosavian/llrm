@@ -283,6 +283,20 @@ impl _Plain for model::Module {
         Json::Dict(out)
     }
 }
+plain_record!(CellWriters, None, cell => "cell", routines => "routines");
+// `reads_arguments` only when made, so that promises read as they always have.
+impl _Plain for model::RuntimePromises {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("calling_back".to_owned(), self.calling_back._plain());
+        out.insert("writers".to_owned(), self.writers._plain());
+        out.insert("nounwind".to_owned(), self.nounwind._plain());
+        if !self.reads_arguments.is_empty() {
+            out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
+        }
+        Json::Dict(out)
+    }
+}
 /// Float semantics are written only when they are the machine's, as before
 /// they existed.
 impl _Plain for model::Program {
@@ -300,6 +314,12 @@ impl _Plain for model::Program {
         }
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
+        }
+        if self.promises != model::RuntimePromises::default() {
+            out.insert("promises".to_owned(), self.promises._plain());
+        }
+        if !self.entries.is_empty() {
+            out.insert("entries".to_owned(), self.entries._plain());
         }
         Json::Dict(out)
     }
@@ -619,6 +639,8 @@ macro_rules! made_records {
 }
 
 made_records!(
+    CellWriters,
+    RuntimePromises,
     Promise,
     Type,
     Place,
@@ -1135,6 +1157,30 @@ static ALIAS_CLASS: _Record = _Record {
     },
 };
 
+static CELL_WRITERS: _Record = _Record {
+    name: "CellWriters",
+    fields: &[("cell", _Hint::Str, true), ("routines", _Hint::Tuple(&_Hint::Str), true)],
+    build: |args| _object(model::CellWriters { cell: _required(args, "cell")?, routines: _required(args, "routines")? }),
+};
+
+static RUNTIME_PROMISES: _Record = _Record {
+    name: "RuntimePromises",
+    fields: &[
+        ("calling_back", _Hint::Union(&[_Hint::Tuple(&_Hint::Str), _Hint::NoneType]), false),
+        ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
+        ("nounwind", _Hint::Tuple(&_Hint::Str), false),
+        ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+    ],
+    build: |args| {
+        _object(model::RuntimePromises {
+            calling_back: _default(args, "calling_back", None)?,
+            writers: _default(args, "writers", Vec::new())?,
+            nounwind: _default(args, "nounwind", Vec::new())?,
+            reads_arguments: _default(args, "reads_arguments", Vec::new())?,
+        })
+    },
+};
+
 static PROGRAM: _Record = _Record {
     name: "Program",
     fields: &[
@@ -1147,6 +1193,8 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
+        ("entries", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1159,6 +1207,8 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            promises: _default(args, "promises", model::RuntimePromises::default())?,
+            entries: _default(args, "entries", Vec::new())?,
         })
     },
 };

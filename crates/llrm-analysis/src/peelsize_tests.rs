@@ -51,6 +51,7 @@ impl Parsed {
 fn summing(trips: u32, start: &str, work: &str) -> Parsed {
     Parsed::new(&format!(
         "declare void @g()
+declare void @h(i16, i16, i16, i16, i16, i16)
 
 define i16 @f(i16 %x) {{
 b0:
@@ -96,10 +97,14 @@ fn past_max_completely_peel_times_nothing_is_copied() {
     assert!(summing(17, "0", "").admitted(&Limits { max_unroll_iterations: 0, ..Limits::default() }));
 }
 
+/// A call is priced, one and its arguments, not refused: GCC's refusal
+/// kept FPDEEP's three PRINT trips rolled, nothing downstream folding `i`.
 #[test]
-fn a_call_left_on_the_path_refuses_growth() {
-    assert!(!summing(8, "%x", "  call void @g()\n").admitted(&Limits::default()));
-    assert!(summing(8, "%x", "").admitted(&Limits::default()));
+fn a_call_on_the_path_is_priced_not_refused() {
+    let tight = Limits { max_unrolled_operations: 20, ..Limits::default() };
+    assert!(summing(8, "%x", "  call void @g()\n").admitted(&Limits::default()));
+    assert!(summing(8, "%x", "  call void @g()\n").admitted(&tight));
+    assert!(!summing(8, "%x", "  call void @h(i16 %i, i16 %i, i16 %i, i16 %i, i16 %i, i16 %i)\n").admitted(&tight));
 }
 
 /// Eight unknown adds and the rolled work boosting the budget fourfold:

@@ -448,14 +448,11 @@ fn ports_are_the_targets_intrinsics() {
     assert!(text.contains("%2 = call i16 @llrm.ia16.in.i16(i16 %0)\n  call void @llrm.ia16.out.i16(i16 %0, i16 %2)"), "{text}");
 }
 
-/// The runtime's promise was the old raise's `WRITERS` table alone, so the
-/// rich MIR took every routine to write b$seg and to run program code. It
-/// is stated on the declarations: DEF SEG writes b$seg, INKEY$ writes none
-/// of the named cells, and a routine that may run program code promises
-/// nothing.
-#[test]
-fn a_runtime_promise_is_stated_on_its_routines() {
-    use crate::mir::{Runtime, emit_promised};
+/// A module calling DEF SEG, INKEY$ and RUN, with b$seg named, linked
+/// against the runtime `promises` states: its runtime module's text and
+/// the linked module's.
+fn promised(promises: &crate::model::RuntimePromises) -> (String, String) {
+    use crate::mir::{emit, runtime};
     use crate::model::{DataLinkage, DataObject};
     let call = |id, callee: &str| {
         let mut call = Instruction::new(id, Op::Call, Vec::new(), Vec::new());
@@ -468,20 +465,42 @@ fn a_runtime_promise_is_stated_on_its_routines() {
     let mut segment = DataObject::new(3, "b$seg", vec![0, 0]);
     (segment.linkage, segment.addressed) = (DataLinkage::External, false);
     program.modules[0].data = vec![segment];
-    let writes = |routine: &str| match routine {
-        "B$DSEG" => Some(vec!["b$seg".to_owned()]),
-        "B$INKY" => Some(Vec::new()),
-        _ => None,
-    };
-    let emitted = emit_promised(&program, Some(&Runtime { writes: &writes })).remove(0);
-    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
-    let text = llrm_mir::print::module(&emitted.module);
+    let emitted = emit(&program).remove(0);
+    let runtime = runtime(&[(&emitted, &program.modules[0])], promises).unwrap();
+    let text = llrm_mir::print::module(&runtime);
     assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&text).unwrap()), text);
-    assert!(text.contains("!llrm.named = !{!5}\n!llrm.writes = !{!6, !7}\n"), "{text}");
-    assert!(text.contains("!5 = !{ptr @b$seg}\n!6 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!7 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{text}");
+    let linked = llrm_mir::program::Program::new(vec![emitted.module], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().with_runtime(runtime).unwrap();
+    assert_eq!(llrm_mir::verify::verify(&linked.modules[0]), Vec::<String>::new());
+    (text, llrm_mir::print::module(&linked.modules[0]))
+}
+
+/// `routine`'s declaration in `text`.
+fn declaration<'t>(text: &'t str, routine: &str) -> &'t str {
+    text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"))
+}
+
+/// The runtime's promise was the old raise's `WRITERS` table alone, so the
+/// rich MIR took every routine to write b$seg and to run program code. It
+/// is stated in the runtime module and so on the declarations: DEF SEG
+/// writes b$seg, INKEY$ writes none of the named cells, and a routine that
+/// may run program code promises nothing.
+#[test]
+fn a_runtime_promise_is_stated_on_its_routines() {
+    let (runtime, text) = promised(&crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], []));
+    assert!(runtime.contains("!llrm.named = !{!0}\n!llrm.writes = !{!1, !2}\n"), "{runtime}");
+    assert!(runtime.contains("!0 = !{ptr @b$seg}\n!1 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!2 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{runtime}");
     for (routine, promised) in [("B$DSEG", true), ("B$INKY", true), ("B$RUN", false)] {
-        let line = text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"));
-        assert_eq!(line.contains("nocallback"), promised, "{line}");
+        assert_eq!(declaration(&text, routine).contains("nocallback"), promised, "{text}");
+    }
+}
+
+/// The HIR emitter had no fact to state `nounwind` by, so a call to a
+/// routine that raises no error was taken to unwind.
+#[test]
+fn a_routine_that_raises_no_error_is_nounwind() {
+    let (_, text) = promised(&crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], ["B$INKY", "B$RUN"]));
+    for (routine, promised) in [("B$DSEG", false), ("B$INKY", true), ("B$RUN", true)] {
+        assert_eq!(declaration(&text, routine).contains("nounwind"), promised, "{text}");
     }
 }
 
@@ -587,4 +606,13 @@ fn a_call_through_a_functions_address() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%3 = call addrspace(1) i16 @\"DIFF%\"(i16 %2, i16 %0)"), "{text}");
+}
+
+/// A routine that only reads what its arguments reach: C's strlen.
+#[test]
+fn a_routine_reading_its_arguments_is_argmem_read() {
+    let module = llrm_mir::parse::module("declare i16 @_strlen(ptr)\ndeclare void @_puts(ptr)\n").unwrap();
+    let promises = crate::model::RuntimePromises { reads_arguments: vec!["_strlen".to_owned()], ..Default::default() };
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
 }

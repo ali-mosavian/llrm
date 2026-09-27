@@ -11,7 +11,9 @@ use std::rc::Rc;
 
 use crate::context::GlobalId;
 use crate::datalayout::DataLayout;
-use crate::module::{GlobalValue, Linkage, Module};
+use crate::module::{Function, GlobalKind, GlobalValue, Linkage, Module};
+use crate::opcode::Attribute;
+use crate::types::Types;
 use crate::target::Machine;
 
 /// DGROUP as the program links it: its member segments, the addresses cut
@@ -49,11 +51,45 @@ impl SegmentLayout {
     }
 }
 
+/// Which of the program's globals code outside it may reach.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Exports {
+    /// The names it may link to. None: every one a module does not keep to
+    /// itself, as when the program is part of a larger link.
+    pub linked: Option<BTreeSet<String>>,
+    /// The functions it calls whatever their linkage: the entry points and
+    /// what the runtime calls back.
+    pub entries: BTreeSet<String>,
+}
+
+impl Exports {
+    /// `linked` alone: the program is the whole link but its runtime.
+    pub fn closed(linked: BTreeSet<String>) -> Self {
+        Self { linked: Some(linked), entries: BTreeSet::new() }
+    }
+
+    /// Whether outside code may reach `global`.
+    pub fn exported(&self, global: &GlobalValue) -> bool {
+        let named = |names: &BTreeSet<String>| global.name.as_ref().is_some_and(|name| names.contains(name));
+        match &self.linked {
+            _ if named(&self.entries) => true,
+            _ if matches!(global.linkage, Linkage::Internal | Linkage::Private) => false,
+            None => true,
+            Some(names) => named(names),
+        }
+    }
+}
+
 pub struct Program {
     pub modules: Vec<Module>,
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
+    pub exports: Exports,
+    /// Declarations alone, of the routines and cells of the runtime the
+    /// program links against, with what the frontend knows of them:
+    /// attributes, and `!llrm.named` and `!llrm.writes`.
+    pub runtime: Rc<Module>,
 }
 
 impl Program {
@@ -69,7 +105,34 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        Ok(Self { modules, layout, target, segments })
+        Ok(Self { modules, layout, target, segments, exports: Exports::default(), runtime: Rc::default() })
+    }
+
+    /// The program linked against `runtime`: each module's declaration of
+    /// what it declares and no module defines takes its attributes, as
+    /// LLVM's InferFunctionAttrs states a library's.
+    pub fn with_runtime(mut self, runtime: Module) -> Result<Self, String> {
+        if let Some(one) = runtime.globals.iter().find(|one| defines(one)) {
+            return Err(format!("the runtime defines @{}", one.name.as_deref().unwrap_or_default()));
+        }
+        for at in 0..self.modules.len() {
+            for id in (0..self.modules[at].globals.len() as u32).map(GlobalId) {
+                let Some(promise) = self.modules[at].global(id).name.as_deref().and_then(|name| runtime.named(name)) else { continue };
+                if self.definition(at, id).is_some() {
+                    continue;
+                }
+                let (GlobalKind::Function(promise), module) = (&runtime.global(promise).kind, &mut self.modules[at]) else { continue };
+                let GlobalKind::Function(declaration) = &mut module.globals[id.0 as usize].kind else { continue };
+                promised(declaration, &mut module.context.types, promise, &runtime.context.types);
+            }
+        }
+        self.runtime = Rc::new(runtime);
+        Ok(self)
+    }
+
+    /// The program with only `exports` named from outside.
+    pub fn exporting(self, exports: Exports) -> Self {
+        Self { exports, ..self }
     }
 
     /// `f` over `module` as a program of its own, handed back after.
@@ -86,10 +149,109 @@ impl Program {
         let named = || self.modules.iter().enumerate().filter_map(|(at, module)| Some((at, module.named(name)?)));
         named().find(|&(at, id)| defines(self.modules[at].global(id))).or_else(|| named().next())
     }
+
+    /// `constant` of module `from` in module `to`'s context: none where it
+    /// names what only `from` has.
+    pub fn imported(&mut self, from: usize, constant: crate::context::ConstantId, to: usize) -> Option<crate::context::ConstantId> {
+        if from == to {
+            return Some(constant);
+        }
+        let (source, target) = self.pair(from, to);
+        target.context.imported(&source.context, constant)
+    }
+
+    /// Body `id` of module `from`'s attributes as declaration `declared` of
+    /// module `to`'s; whether that changed it.
+    pub fn restate(&mut self, from: usize, id: GlobalId, to: usize, declared: GlobalId) -> bool {
+        let (source, target) = self.pair(from, to);
+        let (GlobalKind::Function(body), GlobalKind::Function(declaration)) = (&source.global(id).kind, &mut target.globals[declared.0 as usize].kind) else { return false };
+        restated(declaration, &mut target.context.types, body, &source.context.types)
+    }
+
+    /// Module `from`, and module `to` to change; they differ.
+    fn pair(&mut self, from: usize, to: usize) -> (&Module, &mut Module) {
+        assert_ne!(from, to, "two modules");
+        if from < to {
+            let (low, high) = self.modules.split_at_mut(to);
+            (&low[from], &mut high[0])
+        } else {
+            let (low, high) = self.modules.split_at_mut(from);
+            (&high[0], &mut low[to])
+        }
+    }
+
+    /// Module `at`'s globals that stand for one of `defined`: its own, and
+    /// its declarations of another module's.
+    pub fn local(&self, at: usize, defined: &BTreeSet<(usize, GlobalId)>) -> BTreeSet<GlobalId> {
+        (0..self.modules[at].globals.len() as u32).map(GlobalId).filter(|&id| self.definition(at, id).is_some_and(|one| defined.contains(&one))).collect()
+    }
+
+    /// The definition global `id` of module `at` is: itself where it
+    /// defines it, else the one another module defines under its name. A
+    /// global a module keeps to itself is defined there or nowhere.
+    pub fn definition(&self, at: usize, id: GlobalId) -> Option<(usize, GlobalId)> {
+        let global = self.modules[at].global(id);
+        if defines(global) {
+            return Some((at, id));
+        }
+        if matches!(global.linkage, Linkage::Internal | Linkage::Private) {
+            return None;
+        }
+        let name = global.name.as_deref()?;
+        self.modules.iter().enumerate().filter(|&(other, _)| other != at).find_map(|(other, module)| {
+            let found = module.named(name)?;
+            let one = module.global(found);
+            (defines(one) && !matches!(one.linkage, Linkage::Internal | Linkage::Private)).then_some((other, found))
+        })
+    }
 }
 
-fn defines(global: &GlobalValue) -> bool {
-    global.function().is_none_or(|function| !function.is_declaration())
+/// `attrs` of `from`'s types in `types`; none where one names a type
+/// `types` cannot hold.
+fn attributes(types: &mut Types, from: &Types, attrs: &[Attribute]) -> Option<Vec<Attribute>> {
+    attrs.iter().map(|one| one.imported(types, from)).collect()
+}
+
+/// `body`'s attributes, of `from`'s types, as `declaration`'s in `types`;
+/// whether that changed it. One naming a type `types` cannot hold leaves
+/// it as it was.
+fn restated(declaration: &mut Function, types: &mut Types, body: &Function, from: &Types) -> bool {
+    let (Some(attrs), Some(return_attrs), Some(parameter_attrs)) = (
+        attributes(types, from, &body.attrs),
+        attributes(types, from, &body.return_attrs),
+        body.parameter_attrs.iter().map(|one| attributes(types, from, one)).collect::<Option<Vec<_>>>(),
+    ) else {
+        return false;
+    };
+    let changed = (&attrs, &parameter_attrs, &return_attrs) != (&declaration.attrs, &declaration.parameter_attrs, &declaration.return_attrs);
+    (declaration.attrs, declaration.parameter_attrs, declaration.return_attrs) = (attrs, parameter_attrs, return_attrs);
+    changed
+}
+
+/// `promise`'s attributes, of `from`'s types, added to `declaration`'s own
+/// in `types`.
+fn promised(declaration: &mut Function, types: &mut Types, promise: &Function, from: &Types) {
+    let add = |types: &mut Types, own: &mut Vec<Attribute>, promised: &[Attribute]| {
+        for one in promised.iter().filter_map(|one| one.imported(types, from)) {
+            if !own.contains(&one) {
+                own.push(one);
+            }
+        }
+    };
+    add(types, &mut declaration.attrs, &promise.attrs);
+    add(types, &mut declaration.return_attrs, &promise.return_attrs);
+    for (own, promised) in declaration.parameter_attrs.iter_mut().zip(&promise.parameter_attrs) {
+        add(types, own, promised);
+    }
+}
+
+/// Whether `global` is a definition: a function with a body, or a variable
+/// with an initializer or storage of its own.
+pub fn defines(global: &GlobalValue) -> bool {
+    match &global.kind {
+        crate::module::GlobalKind::Function(function) => !function.is_declaration(),
+        crate::module::GlobalKind::Variable(variable) => variable.initializer.is_some() || !matches!(global.linkage, Linkage::External | Linkage::ExternWeak),
+    }
 }
 
 /// What other modules may resolve against `module`: each global it does
@@ -133,8 +295,16 @@ impl ProgramAnalyses {
 
     /// What a module reads of `program`: its shared state and the results
     /// computed.
-    pub fn proxy(&self, program: &Program) -> Rc<ProgramProxy> {
-        Rc::new(ProgramProxy { layout: program.layout.clone(), target: Rc::clone(&program.target), segments: program.segments.clone(), results: self.cache.clone() })
+    pub fn proxy(&self, program: &Program, module: usize) -> Rc<ProgramProxy> {
+        Rc::new(ProgramProxy {
+            layout: program.layout.clone(),
+            target: Rc::clone(&program.target),
+            segments: program.segments.clone(),
+            exports: program.exports.clone(),
+            runtime: Rc::clone(&program.runtime),
+            module,
+            results: self.cache.clone(),
+        })
     }
 }
 
@@ -152,6 +322,10 @@ pub struct ProgramProxy {
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
+    pub exports: Exports,
+    pub runtime: Rc<Module>,
+    /// The module reading it, by its index in the program.
+    pub module: usize,
     results: HashMap<TypeId, Rc<dyn Any>>,
 }
 
@@ -160,7 +334,7 @@ impl ProgramProxy {
     /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, results: HashMap::new() })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::default(), runtime: Rc::default(), module: 0, results: HashMap::new() })
     }
 
     /// `P`'s result, if computed: LLVM's `getCachedResult`.

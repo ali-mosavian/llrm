@@ -114,6 +114,47 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("call void"), "{after}");
 }
 
+/// A zeroed slot whose every byte some later store writes, no one store
+/// all of them: the memset goes, as LLVM's DSE merges overwritten
+/// intervals. HIR's zeroed frames kept one memset per initialized local.
+#[test]
+fn test_a_memset_the_stores_together_overwrite_goes() {
+    for (last, gone) in [(6, true), (4, false)] {
+        let text = format!(
+            "define i16 @f(i16 %x) {{
+b0:
+  %s = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+  store i16 %x, ptr %s
+  %s2 = getelementptr inbounds i8, ptr %s, i16 2
+  store i16 1, ptr %s2
+  %s4 = getelementptr inbounds i8, ptr %s, i16 4
+  store i16 2, ptr %s4
+  %sl = getelementptr inbounds i8, ptr %s, i16 {last}
+  store i16 3, ptr %sl
+  %s6 = getelementptr inbounds i8, ptr %s, i16 6
+  %v = load i16, ptr %s6
+  %w = load i16, ptr %s
+  %r = add i16 %v, %w
+  ret i16 %r
+}}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+"
+        );
+        let before = parsed(&text);
+        let mut module = before.clone();
+        let mut manager = PassManager::default();
+        manager.verify_each = true;
+        manager.require::<Summaries>();
+        manager.add(Dse);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
+        assert_eq!(!after.contains("call void"), gone, "{after}");
+    }
+}
+
 /// A slot read back through its far address kept in another slot, at an
 /// unresolved offset: the load may reach an unknown object too, but it
 /// names this one, so its stores stay. They went (priced_fill), and the sum
