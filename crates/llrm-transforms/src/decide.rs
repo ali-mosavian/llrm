@@ -34,6 +34,7 @@ use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_graph::loops;
@@ -58,7 +59,7 @@ impl FunctionPass for Decide {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        let decided = decided(unit.context, unit.layout, unit.function, analyses.outer()).unwrap_or_else(|error| panic!("decide: {error}"));
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -66,8 +67,17 @@ impl FunctionPass for Decide {
 /// `function` threaded, and each branch whose way is known a jump that
 /// way; `outer` is its module and target. Whether anything changed.
 pub fn decided(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
+}
+
+/// `decided`, `analyses` holding what is known of `function`.
+fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> Result<bool, String> {
     let threaded = _threaded(context, function);
-    let decisions = _decisions(&Unit::within(context, layout, function, outer))?;
+    if threaded {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let held = Held::of(context, layout, function, analyses, true);
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -91,7 +101,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let nonnull = |value: ValueId| {
         pointing.contains(&value)
             && alias::nonnull_by_definition(unit, value)
-                .unwrap_or_else(|| pointers.get_or_init(|| alias::pointers(unit)).as_ref().is_ok_and(|facts| facts.nonnull(value)))
+                .unwrap_or_else(|| pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value)))
     };
     let successors =
         |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));
@@ -233,15 +243,15 @@ pub fn _executable_successors(
 /// Loop-simplify form keeps a loop's one entry edge, its one back edge and
 /// its dedicated exits as blocks of their own.
 pub fn _threaded(context: &mut Context, function: &mut Function) -> bool {
-    let Some(entry) = function.entry() else {
+    if function.entry().is_none() {
         return false;
-    };
+    }
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
     let none = BTreeSet::new();
     let mut loop_edges = BTreeSet::new();
-    for loop_ in loops::loops(&graph, Some(cfg::id(entry))) {
+    for loop_ in cfg::Shape::of(function).loops {
         let outside = predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
         if let [parent] = outside[..]
             && *known[&parent] == [loop_.header]

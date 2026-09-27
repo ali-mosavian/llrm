@@ -6,7 +6,6 @@
 //! every caller only looks them up.  `irreducible` keeps block order where
 //! its DFS start order depends on it.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -76,63 +75,21 @@ pub fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BT
     dominance(blocks, entry).named()
 }
 
-/// What dominance and loops of one CFG shape came to: LLVM's `CFGAnalyses`,
-/// which every pass that leaves the CFG alone preserves. Keyed by the shape
-/// itself -- entry, and each block's address and successors in order -- so a
-/// pass that changes only operations finds them, and no pass has to say so.
-struct Shaped {
-    entry: Option<i64>,
-    shape: Vec<(i64, Vec<i64>)>,
-    dominance: Option<Rc<Dominance>>,
-    loops: Option<Rc<Vec<Loop>>>,
+/// Dominance as the walks here read it: nothing dominates a block the entry
+/// does not reach.
+pub trait Dominates {
+    fn reachable(&self, at: i64) -> bool;
+    fn dominates(&self, dominator: i64, at: i64) -> bool;
 }
 
-/// Shapes remembered: a transaction alternates between few of them.
-const REMEMBERED: usize = 8;
-
-thread_local! {
-    static SHAPES: RefCell<Vec<Shaped>> = const { RefCell::new(Vec::new()) };
-}
-
-/// `read` of `blocks`' shape, from `compute` on first asking.
-fn shaped<N: Node, T: Clone>(
-    blocks: &[N],
-    entry: Option<i64>,
-    read: impl Fn(&Shaped) -> Option<T>,
-    write: impl FnOnce(&mut Shaped, T),
-    compute: impl FnOnce() -> T,
-) -> T {
-    let same = |one: &Shaped| {
-        one.entry == entry
-            && one.shape.len() == blocks.len()
-            && one.shape.iter().zip(blocks).all(|((at, succ), block)| *at == block.at() && succ.as_slice() == block.succ())
-    };
-    let found = SHAPES.with(|shapes| {
-        let mut shapes = shapes.borrow_mut();
-        let index = shapes.iter().position(same)?;
-        let one = shapes.remove(index);
-        let answer = read(&one);
-        shapes.insert(0, one);
-        answer
-    });
-    if let Some(found) = found {
-        return found;
+impl Dominates for Dominance {
+    fn reachable(&self, at: i64) -> bool {
+        Dominance::reachable(self, at)
     }
-    let computed = compute();
-    SHAPES.with(|shapes| {
-        let mut shapes = shapes.borrow_mut();
-        if !shapes.first().is_some_and(same) {
-            shapes.insert(0, Shaped {
-                entry,
-                shape: blocks.iter().map(|block| (block.at(), block.succ().to_vec())).collect(),
-                dominance: None,
-                loops: None,
-            });
-            shapes.truncate(REMEMBERED);
-        }
-        write(&mut shapes[0], computed.clone());
-    });
-    computed
+
+    fn dominates(&self, dominator: i64, at: i64) -> bool {
+        Dominance::dominates(self, dominator, at)
+    }
 }
 
 /// Each block's dominators as bits over the sorted block addresses; naming
@@ -166,13 +123,7 @@ impl Dominance {
 }
 
 pub fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
-    shaped(
-        blocks,
-        entry,
-        |one| one.dominance.clone(),
-        |one, found| one.dominance = Some(found),
-        || Rc::new(_dominance(blocks, entry)),
-    )
+    Rc::new(_dominance(blocks, entry))
 }
 
 fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
@@ -256,7 +207,7 @@ pub struct Loop {
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
-pub fn back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
+pub fn back_edges<N: Node>(blocks: &[N], dominance: &impl Dominates) -> Vec<(i64, i64)> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = Vec::new();
     for block in blocks {
@@ -295,23 +246,12 @@ pub fn _body(latch: i64, header: i64, preds: &BTreeMap<i64, BTreeSet<i64>>) -> B
 /// Back edges sharing a header are one loop whose body is the union of
 /// theirs.
 pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
-    let found = shaped(
-        blocks,
-        entry,
-        |one| one.loops.clone(),
-        |one, found| one.loops = Some(found),
-        || Rc::new(_loops(blocks, entry)),
-    );
-    Vec::clone(&found)
-}
-
-fn _loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
     let doms = dominance(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
     let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for (latch, header) in back_edges(blocks, &doms) {
+    for (latch, header) in back_edges(blocks, &*doms) {
         latches.entry(header).or_default().insert(latch);
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));
     }
@@ -329,9 +269,13 @@ fn _loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 /// Decided by actually cutting the edges and looking for a remaining cycle,
 /// not by address order.
 pub fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
-    let doms = dominance(blocks, entry);
+    irreducible_under(blocks, &*dominance(blocks, entry))
+}
+
+/// `irreducible`, of dominance found already.
+pub fn irreducible_under<N: Node>(blocks: &[N], doms: &impl Dominates) -> BTreeSet<i64> {
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
-    let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
+    let cut = back_edges(blocks, doms).into_iter().collect::<BTreeSet<_>>();
     let forward = blocks
         .iter()
         .filter(|block| known.contains(&block.at()))

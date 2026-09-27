@@ -25,7 +25,6 @@
 use llrm_analysis::consts::{Calls, Known};
 use llrm_analysis::floatfacts::{self, Finite, Format};
 use llrm_analysis::manager;
-use llrm_analysis::memory::Unit;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Operand, ValueId};
@@ -41,7 +40,7 @@ impl FunctionPass for FloatFold {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
-        if folded(unit.context, unit.layout, unit.function, analyses.outer(), &calls) {
+        if _folded(unit.context, unit.layout, unit.function, analyses, &calls) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -53,9 +52,20 @@ impl FunctionPass for FloatFold {
 /// `outer` is its module and target, `calls` what each call writes.
 /// Whether anything changed.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
+    _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls)
+}
+
+/// `folded`, `analyses` holding what is known of `function`.
+pub(crate) fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
     let (facts, conversions) = {
-        let unit = Unit::within(context, layout, function, outer);
-        let facts = floatfacts::known(&unit, calls, None);
+        // The manager's solve, where it was of these writes.
+        let solved = (*calls == manager::writes(context, layout, function, analyses)).then(|| analyses.get::<manager::FloatFacts>(context, layout, function));
+        let held = manager::Held::of(context, layout, function, analyses, true);
+        let unit = held.unit(context, layout, function, analyses.outer());
+        let facts = match solved {
+            Some(solved) => solved.facts.clone(),
+            None => floatfacts::known(&unit, calls, None),
+        };
         let conversions = floatfacts::converted(&unit, calls, Some(&facts));
         (facts, conversions)
     };

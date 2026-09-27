@@ -100,7 +100,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
     let graph = cfg::graph(function);
     let mut found = None;
-    for loop_ in loops::loops(&graph, function.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(function).loops {
         let unit = memory::Unit::within(context, layout, function, analyses.outer());
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;

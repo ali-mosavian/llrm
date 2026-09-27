@@ -62,3 +62,47 @@ fn nothing_in_the_corpus_nests_past_four_loops() {
     let deepest = graphs().iter().map(|(_, graph)| loops::depth(graph, None).values().copied().max().unwrap_or(0)).max().unwrap();
     assert_eq!(deepest, 4);
 }
+
+#[test]
+fn the_managed_shape_is_what_the_graph_walks_find() {
+    // Dominance and loops are `Dominators` and `Loops`, read as the graph
+    // walks read them: the views must answer exactly as those walks did.
+    let odd = crate::testing::parsed(
+        "define void @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br i1 %c, label %b2, label %b4
+
+b2:
+  br i1 %c, label %b1, label %b3
+
+b3:
+  br i1 %c, label %b3, label %b0x
+
+b0x:
+  br i1 %c, label %b3, label %b4
+
+b4:
+  ret void
+
+dead:
+  br i1 %c, label %dead, label %b1
+}
+",
+    );
+    let mut modules = corpus();
+    modules.push(("odd".to_owned(), odd));
+    for (name, module) in &modules {
+        for (_, _, function) in module.functions().filter(|(_, _, function)| function.entry().is_some()) {
+            let graph = cfg::graph(function);
+            let shape = cfg::Shape::of(function);
+            assert_eq!(shape.loops, loops::loops(&graph, None), "{name}");
+            assert_eq!(shape.dominance.dominators(function), loops::dominators(&graph, None), "{name}");
+            assert_eq!(shape.dominance.immediate_dominators(function), loops::immediate_dominators(&graph, None), "{name}");
+            assert_eq!(shape.dominance.frontiers(function), loops::frontiers(&graph, None), "{name}");
+            assert_eq!(shape.dominance.irreducible(function), loops::irreducible(&graph, None), "{name}");
+        }
+    }
+}

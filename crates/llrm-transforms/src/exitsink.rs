@@ -17,7 +17,7 @@
 //! These are new.
 
 use llrm_analysis::cfg;
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Opcode};
@@ -38,7 +38,7 @@ pub fn sunk(function: &mut Function) -> bool {
 /// An exit's phi of one input from `loop_`, and the add or subtract in
 /// the loop that input is, which nothing else reads.
 fn _sinkable(function: &Function) -> Option<(Loop, InstId, InstId)> {
-    for loop_ in loops::loops(&cfg::graph(function), None) {
+    for loop_ in cfg::Shape::of(function).loops {
         for &block in function.layout().iter().filter(|&&block| !loop_.body.contains(&cfg::id(block))) {
             for phi in edges::phis(function, block) {
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };

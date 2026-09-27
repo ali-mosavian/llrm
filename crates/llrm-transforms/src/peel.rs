@@ -22,7 +22,6 @@ use std::collections::BTreeSet;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
-use llrm_graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Function;
@@ -74,7 +73,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
-    for loop_ in loops::loops(&cfg::graph(&closed), closed.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(&closed).loops {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
         };

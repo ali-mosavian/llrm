@@ -18,7 +18,7 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -26,7 +26,7 @@ use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
 use crate::cfg;
-use crate::consts::{self, Known, masked};
+use crate::consts::{Known, masked};
 use crate::memory::{MemRef, Unit};
 use crate::noreturn;
 use crate::occurrence::{operations, phis};
@@ -553,7 +553,7 @@ pub fn derived(unit: &Unit, loop_: &Loop, found: Option<&IndexMap<ValueId, Affin
     if found.is_empty() {
         return Vec::new();
     }
-    let facts = consts::known(unit, None, None, None);
+    let facts = unit.registers();
     let still = invariant(unit.function, &loop_.body);
 
     let mut direct = IndexMap::<InstId, Derived>::default();
@@ -587,7 +587,7 @@ pub fn derived(unit: &Unit, loop_: &Loop, found: Option<&IndexMap<ValueId, Affin
 /// Every loop of the function, with its counters and what they derive.
 pub fn of(unit: &Unit) -> Vec<(Loop, IndexMap<ValueId, Affine>, Vec<Derived>)> {
     let mut result = Vec::new();
-    for loop_ in loops::loops(&cfg::graph(unit.function), None) {
+    for loop_ in unit.shape().loops.iter().cloned() {
         let found = basics(unit, &loop_);
         if found.is_empty() {
             continue;
@@ -691,8 +691,8 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     let facts = match facts {
         Some(facts) => facts,
         None => {
-            computed = consts::known(unit, None, None, None);
-            &computed
+            computed = unit.registers();
+            &*computed
         }
     };
     let Some(shape) = _control(function, loop_) else { return Vec::new() };
@@ -1130,14 +1130,12 @@ pub fn advances(unit: &Unit, loop_: &Loop) -> IndexMap<ValueId, BigInt> {
 /// an access through `inbounds` GEPs is promised that.
 fn _inbounds_trips(unit: &Unit, loop_: &Loop, latch: i64) -> Option<BigInt> {
     let step = advances(unit, loop_);
-    let dominators = loops::dominators(&cfg::graph(unit.function), None);
-    let empty = BTreeSet::new();
-    let every = dominators.get(&latch).unwrap_or(&empty);
+    let shape = unit.shape();
     loop_
         .body
         .iter()
         // The header also runs the final, failing test: n + 1 times.
-        .filter(|at| every.contains(at) && **at != loop_.header)
+        .filter(|at| shape.dominance.dominates(**at, latch) && **at != loop_.header)
         .flat_map(|&at| unit.function.block(cfg::block(at)).instructions())
         .filter_map(|&inst| MemRef::of(unit, inst))
         .filter(|reference| reference.inbounds)
@@ -1196,7 +1194,7 @@ pub fn trips_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId,
 
 /// A counted loop whose first iteration and finite exit are proven.
 pub fn nonempty(unit: &Unit, loop_: &Loop) -> bool {
-    trip_count(unit, loop_, &consts::known(unit, None, None, None)).is_some()
+    trip_count(unit, loop_, &unit.registers()).is_some()
 }
 
 /// The proof in which `counter` decides when `loop` leaves.
@@ -1418,8 +1416,8 @@ pub fn zero_terminating_control<'a>(
     let facts = match facts {
         Some(facts) => facts,
         None => {
-            computed = consts::known(unit, None, None, None);
-            &computed
+            computed = unit.registers();
+            &*computed
         }
     };
     let step = _signed(&candidate.step, facts, width)?;

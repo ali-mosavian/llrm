@@ -296,7 +296,7 @@ pub fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width:
 /// predecessor's facts narrowed by that edge, or else from its immediate
 /// dominator's, and each edge is applied once.
 pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
-    dominated_edges_with(unit, &consts::known(unit, None, None, None))
+    dominated_edges_with(unit, &unit.registers())
 }
 
 /// `dominated_edges`, given what `consts::known` finds without memory.
@@ -307,7 +307,7 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let immediate = loops::immediate_dominators(&graph, Some(cfg::id(entry)));
+    let immediate = unit.shape().dominance.immediate_dominators(function);
     let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
@@ -357,7 +357,7 @@ pub type Facts = IndexMap<i64, IndexMap<ValueId, Interval>>;
 /// dominate the block. A block in no counted loop keeps the facts of the
 /// branch edges that dominate it.
 pub fn bounded(unit: &Unit) -> Result<Facts, String> {
-    bounded_with(unit, &consts::known(unit, None, None, None))
+    bounded_with(unit, &unit.registers())
 }
 
 /// `bounded`, given what `consts::known` finds without memory.
@@ -365,9 +365,9 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let dominators = loops::dominators(&graph, None);
+    let shape = unit.shape();
     let mut result = Facts::default();
-    for loop_ in loops::loops(&graph, None) {
+    for loop_ in &shape.loops {
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -427,7 +427,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                     let parents = predecessors.get(&successor).ok_or_else(|| successor.to_string())?;
                     if parents.len() == 1
                         && parents.contains(&block.at)
-                        && dominators.get(&at).is_some_and(|dominating| dominating.contains(&successor))
+                        && shape.dominance.dominates(successor, at)
                         && let Some(narrowed) = on_edge(unit, cfg::block(block.at), cfg::block(successor), &scoped, Some(&facts))?
                     {
                         scoped = narrowed;
@@ -579,7 +579,7 @@ fn _exact_sum(unit: &Unit, value: ValueId, at: i64, scoped: &Facts, bits: u32, d
 /// Every value `consts` knows without solving memory, as the singleton
 /// interval an alias query reads.
 pub fn constants(unit: &Unit) -> IndexMap<ValueId, Interval> {
-    intervals(&consts::known(unit, None, None, None))
+    intervals(&unit.registers())
 }
 
 /// Each known value as the interval of it alone.

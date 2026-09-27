@@ -540,14 +540,14 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
     if !function.walk().any(|(_, inst)| stores(inst)) {
         return Vec::new();
     }
-    let Some(entry) = function.entry() else {
+    if function.entry().is_none() {
         return Vec::new();
-    };
+    }
     let graph = cfg::graph(function);
     let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
     let predecessors = loops::predecessors(&graph);
     let mut exits = Vec::new();
-    for loop_ in loops::loops(&graph, Some(cfg::id(entry))) {
+    for loop_ in &unit.shape().loops {
         if loop_.body.len() != 2 || loop_.latches.len() != 1 {
             continue;
         }
@@ -608,8 +608,7 @@ pub fn exit_cells(unit: &Unit, calls: &Calls) -> IndexMap<(i64, i64), Cells> {
     }
     let function = unit.function;
     let graph = cfg::graph(function);
-    let entry = function.entry().map(cfg::id);
-    let regions = loops::loops(&graph, entry).into_iter().map(|loop_| (loop_.header, loop_.body)).collect::<IndexMap<_, _>>();
+    let regions = unit.shape().loops.iter().map(|loop_| (loop_.header, loop_.body.clone())).collect::<IndexMap<_, _>>();
     let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
     let mut queries = consts::memory_queries(*unit, &IndexMap::default());
     let mut edges = IndexMap::default();

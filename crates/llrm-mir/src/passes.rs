@@ -79,6 +79,16 @@ pub trait Analysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
     const NAME: &'static str;
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result;
+
+    /// Whether a pass returning `preserved` left the result true: when it
+    /// names this analysis. One derived from others asks after them, as
+    /// LLVM's `Result::invalidate` does.
+    fn preserved(preserved: &PreservedAnalyses) -> bool
+    where
+        Self: Sized,
+    {
+        preserved.kept::<Self>()
+    }
 }
 
 /// A fact about the whole module, as LLVM's `GlobalsAA`: computed before
@@ -155,6 +165,11 @@ impl PreservedAnalyses {
         self.all
     }
 
+    /// Whether `A` is kept, named or with everything.
+    pub fn kept<A: Analysis>(&self) -> bool {
+        self.keeps(TypeId::of::<A>())
+    }
+
     fn keeps(&self, analysis: TypeId) -> bool {
         self.all || self.kept.contains(&analysis)
     }
@@ -221,6 +236,7 @@ trait Cached {
     fn name(&self) -> &'static str;
     fn as_any(&self) -> &dyn Any;
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool;
+    fn preserved(&self, preserved: &PreservedAnalyses) -> bool;
 }
 
 struct Entry<A: Analysis>(Rc<A::Result>);
@@ -236,6 +252,10 @@ impl<A: Analysis> Cached for Entry<A> {
 
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool {
         *self.0 == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+    }
+
+    fn preserved(&self, preserved: &PreservedAnalyses) -> bool {
+        A::preserved(preserved)
     }
 }
 
@@ -274,7 +294,7 @@ impl Analyses {
     /// Drops what `preserved` does not keep: LLVM's
     /// `FunctionAnalysisManager::invalidate`, for a pass running others.
     pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
-        self.cache.retain(|key, _| preserved.keeps(*key));
+        self.cache.retain(|_, entry| entry.preserved(preserved));
     }
 
     /// The cached analyses a fresh computation disagrees with.

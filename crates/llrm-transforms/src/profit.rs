@@ -23,7 +23,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::cfg;
 use llrm_analysis::consts::Known;
 use llrm_analysis::{induction, memory};
-use llrm_graph::loops;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
@@ -112,8 +111,8 @@ pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: 
 /// that replaces the conventional ten.
 pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> IndexMap<i64, i64> {
     let mut trips = IndexMap::default();
-    for loop_ in loops::loops(&cfg::graph(unit.function), unit.function.entry().map(cfg::id)) {
-        if let Some(count) = induction::trip_count(unit, &loop_, facts).and_then(|count| count.to_i64()) {
+    for loop_ in &unit.shape().loops {
+        if let Some(count) = induction::trip_count(unit, loop_, facts).and_then(|count| count.to_i64()) {
             trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
         }
     }
@@ -126,7 +125,7 @@ pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> 
     let mut frequency = graph.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
-    for loop_ in loops::loops(&graph, function.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(function).loops {
         let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
         if exact.len() > 1 {
             return None;

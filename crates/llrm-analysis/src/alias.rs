@@ -46,7 +46,7 @@ use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
-use crate::consts::{self, Known};
+use crate::consts::Known;
 use crate::globalsaa;
 use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
@@ -937,8 +937,8 @@ pub fn points_to(
     let none = BTreeSet::new();
     // A pointer value is otherwise an exact byte slice. Natural-loop joins
     // are the one place those exact facts can grow without a program bound.
-    let entry = function.entry().map(cfg::id);
-    let dominance = loops::dominance(&graph, entry);
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
@@ -1383,7 +1383,7 @@ fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
-    congruences_with(unit, &consts::known(unit, None, None, None))
+    congruences_with(unit, &unit.registers())
 }
 
 /// `congruences`, given what `consts::known` finds without memory.
@@ -1391,8 +1391,8 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
     let function = unit.function;
     let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
     let zero = BigInt::from(0);
-    for loop_ in loops::loops(&cfg::graph(function), None) {
-        for affine in induction::basics(unit, &loop_).values() {
+    for loop_ in &unit.shape().loops {
+        for affine in induction::basics(unit, loop_).values() {
             let width = affine.start.width();
             let (Some(start), Some(step)) = (induction::_signed(&affine.start, &constants, width), induction::_signed(&affine.step, &constants, width)) else {
                 continue;
@@ -1453,7 +1453,7 @@ fn reduced(modulus: BigInt, residue: BigInt, width: u32) -> (BigInt, BigInt) {
 /// Attach solved provenance to every access of the function: each load's
 /// and store's, narrowed where a range bounds its index.
 pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
-    annotated_with(unit, &points_to(unit, None, None)?, &consts::known(unit, None, None, None))
+    annotated_with(unit, &*unit.pointers()?, &unit.registers())
 }
 
 /// `annotated`, given the points-to facts and what `consts::known` finds

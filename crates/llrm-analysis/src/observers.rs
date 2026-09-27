@@ -24,7 +24,15 @@
 
 use std::collections::BTreeSet;
 
+use std::borrow::Cow;
+
+use llrm_mir::context::Context;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::Function;
+use llrm_mir::passes::{Analyses, Analysis};
+
 use crate::alias::PointsTo;
+use crate::manager::Pointers;
 use crate::memory::{MemRef, MemoryKind, MemoryObject, Unit};
 
 /// A test for the cells no call and no exit of `unit`'s function can
@@ -33,6 +41,15 @@ use crate::memory::{MemRef, MemoryKind, MemoryObject, Unit};
 /// naming it.
 pub fn private<'a>(unit: Unit<'a>, pointers: &'a PointsTo) -> impl Fn(&MemRef) -> bool + 'a {
     let published = _published(&unit, pointers);
+    _private(unit, pointers, Cow::Owned(published))
+}
+
+/// `private`, `published` being the manager's `Published`.
+pub fn private_of<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: &'a BTreeSet<MemoryObject>) -> impl Fn(&MemRef) -> bool + 'a {
+    _private(unit, pointers, Cow::Borrowed(published))
+}
+
+fn _private<'a>(unit: Unit<'a>, pointers: &'a PointsTo, published: Cow<'a, BTreeSet<MemoryObject>>) -> impl Fn(&MemRef) -> bool + 'a {
     move |reference: &MemRef| {
         let provenance = reference.provenance.clone().or_else(|| pointers.reference(&unit, reference));
         provenance.is_some_and(|provenance| {
@@ -44,6 +61,20 @@ pub fn private<'a>(unit: Unit<'a>, pointers: &'a PointsTo) -> impl Fn(&MemRef) -
                         && !published.contains(&one.object)
                 })
         })
+    }
+}
+
+/// `_published`: the objects `private` rules out.
+pub struct Published;
+
+impl Analysis for Published {
+    type Result = Result<BTreeSet<MemoryObject>, String>;
+    const NAME: &'static str = "published";
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let pointers = analyses.get::<Pointers>(context, layout, function);
+        let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
+        Ok(_published(&Unit::within(context, layout, function, analyses.outer()), pointers))
     }
 }
 
