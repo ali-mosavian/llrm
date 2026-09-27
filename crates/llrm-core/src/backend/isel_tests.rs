@@ -1946,3 +1946,18 @@ done:
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
 }
+
+/// An i64 converted to a float is `fild qword` of its pair stored, as the
+/// old route's C `_wide` did; isel refused "SIToFP from an i64".
+#[test]
+fn test_an_i64_to_a_float_is_filds_qword() {
+    let text = "define float @f(i32 %x) addrspace(1) {
+  %w = zext i32 %x to i64
+  %f = sitofp i64 %w to float
+  ret float %f
+}
+";
+    let got = inner(text);
+    let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
+    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+}

@@ -70,6 +70,17 @@ impl Selector<'_, '_, '_> {
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
         let result = instruction.result.expect("a cast's value");
+        // fild reads a qword: the pair stored, low dword first.
+        if op == CastOp::SIToFP && self.is_float(to) {
+            let (low, high) = self.wide(operand, at, out)?;
+            let cell = self.temporary(8);
+            for (half, by) in [(low, 0), (high, 4)] {
+                self.put(semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], vec![Loc::Held(half)]), at, out);
+            }
+            let into = Held { value: self.value(result), width: super::FLOAT };
+            self.float_loaded(into, "fild", cell, 8, false, at, out);
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
