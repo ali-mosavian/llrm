@@ -148,6 +148,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
+        // Temporary, until canonical and algebraic own its folds.
         // Kept from llrm-mir, at the structural boundaries: no ported pass
         // folds `icmp ne (sext i1 %c), 0`, the HIR's boolean test, to `%c`,
         // and a loop exiting on it is not counted. In the fixed point it
