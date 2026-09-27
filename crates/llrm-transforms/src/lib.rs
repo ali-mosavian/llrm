@@ -6,6 +6,7 @@ pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
 pub mod cfg;
+pub mod counting;
 pub mod dead;
 pub mod decide;
 pub mod edges;
