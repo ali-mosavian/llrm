@@ -212,7 +212,7 @@ pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, St
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
     let target = applied.target.clone();
     manager.add_module(Interprocedural {
-        costs: applied.costs(),
+        target: applied.target.clone(),
         roots: roots(module),
         pipeline: Box::new(move |module, id, _| rerun(module, id, &mut again, target.clone()).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
