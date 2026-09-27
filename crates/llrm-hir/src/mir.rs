@@ -584,6 +584,34 @@ fn operand_type(operand: &Operand, values: &HashMap<i64, i64>, places: &HashMap<
     }
 }
 
+/// `function`'s blocks, each after its dominators -- reverse postorder, the
+/// unreachable ones last -- so a value is emitted before its uses whatever
+/// the HIR's block order.
+fn emission_order(function: &model::Function) -> Vec<&model::Block> {
+    let blocks: HashMap<i64, &model::Block> = function.blocks.iter().map(|block| (block.id, block)).collect();
+    let successors = |block: &model::Block| {
+        let terminator = &block.terminator;
+        terminator.targets.iter().chain(terminator.cases.iter().map(|(_, target)| target)).copied().collect::<Vec<_>>()
+    };
+    let mut seen = std::collections::HashSet::from([function.entry]);
+    let mut postorder = Vec::new();
+    let mut stack = vec![(blocks[&function.entry], successors(blocks[&function.entry]).into_iter())];
+    while let Some((block, next)) = stack.last_mut() {
+        match next.find(|target| seen.insert(*target)) {
+            Some(target) => {
+                let target = blocks[&target];
+                stack.push((target, successors(target).into_iter()));
+            }
+            None => {
+                postorder.push(*block);
+                stack.pop();
+            }
+        }
+    }
+    let unreachable = function.blocks.iter().filter(|block| !seen.contains(&block.id));
+    postorder.into_iter().rev().chain(unreachable).collect()
+}
+
 struct Body<'b, 'm, 'h> {
     b: &'b mut Builder<'m>,
     tables: &'b Tables<'h>,
@@ -625,13 +653,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn run(&mut self) -> Emit<()> {
         let entry = self.function.blocks.iter().find(|one| one.id == self.function.entry).ok_or("no entry block")?;
         let order = std::iter::once(entry).chain(self.function.blocks.iter().filter(|one| one.id != self.function.entry));
-        for block in order.clone() {
+        for block in order {
             let id = self.b.block(&format!("b{}", block.id));
             self.blocks.insert(block.id, id);
         }
         self.b.position(self.blocks[&entry.id]);
         self.allocate()?;
-        for block in order {
+        for block in emission_order(self.function) {
             self.b.position(self.blocks[&block.id]);
             for instruction in &block.instructions {
                 self.instruction(instruction)?;
