@@ -1,5 +1,6 @@
 //! Copied from llrm-core's `analysis/loops_tests.rs`, the port of
-//! `tests/test_loops.py`. The corpus tests stay there: they read BC objects.
+//! `tests/test_loops.py`. Its corpus tests read the rich-MIR corpus in
+//! llrm-analysis's `corpus_tests.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
