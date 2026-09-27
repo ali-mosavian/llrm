@@ -538,6 +538,8 @@ pub struct Function {
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
     pub promises: Vec<Promise>,
+    /// The name it links by, where not its own.
+    pub symbol: Option<String>,
 }
 
 /// What the language promises of a pointer parameter, as LLVM's
@@ -577,6 +579,7 @@ impl Function {
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
             promises: Vec::new(),
+            symbol: None,
         }
     }
 }

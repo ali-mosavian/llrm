@@ -225,6 +225,9 @@ impl _Plain for model::Function {
         if !self.promises.is_empty() {
             out.insert("promises".to_owned(), self.promises._plain());
         }
+        if self.symbol.is_some() {
+            out.insert("symbol".to_owned(), self.symbol._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -985,6 +988,7 @@ static FUNCTION: _Record = _Record {
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
         ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
+        ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Function {
@@ -1003,6 +1007,7 @@ static FUNCTION: _Record = _Record {
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
             promises: _default(args, "promises", Vec::new())?,
+            symbol: _default(args, "symbol", None)?,
         })
     },
 };
