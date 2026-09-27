@@ -210,16 +210,16 @@ const ENDS: [i64; 6] = [0, 1, 0x7F, 0x80, 0xFE, 0xFF];
 /// wherever given, and a pre-tested loop leaves with its `exit_value`.
 #[test]
 fn test_every_counted_loop_runs_its_proved_trips() {
-    for shape in ["pre", "post", "post-stepped"] {
+    for (shape, split) in [("pre", false), ("post", false), ("post-stepped", false), ("post", true), ("post-stepped", true)] {
         for step in [1, -1, 3, -3] {
             let mut proved = BTreeSet::new();
             for test in TESTS {
                 for start in ENDS {
                     for bound in ENDS {
                         for mirrored in [false, true] {
-                            let parsed = looped(Some(start), Some(bound), test, step, Shape { mirrored, ..shaped(shape, 8) });
+                            let parsed = looped(Some(start), Some(bound), test, step, Shape { mirrored, split, ..shaped(shape, 8) });
                             let proofs = parsed.counted(false);
-                            let where_ = (shape, step, test, start, bound, mirrored);
+                            let where_ = (shape, split, step, test, start, bound, mirrored);
                             let Some(result) = parsed.run(&[(0, 8), (0, 8)], 4_000) else {
                                 assert!(proofs.is_empty(), "{where_:?}");
                                 continue;
@@ -244,7 +244,7 @@ fn test_every_counted_loop_runs_its_proved_trips() {
             }
             // Every test whose direction the step can end is proved somewhere.
             let ending = TESTS.into_iter().filter(|&test| test == IntPredicate::Ne || _ascending(test) == (step > 0)).map(spelled).collect::<BTreeSet<_>>();
-            assert_eq!(proved, ending, "{shape} {step}");
+            assert_eq!(proved, ending, "{shape} {split} {step}");
         }
     }
 }
