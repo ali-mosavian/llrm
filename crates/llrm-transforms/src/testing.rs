@@ -58,6 +58,36 @@ pub fn managed(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 
     printed(module)
 }
 
+/// @h writes only what its argument points to, which only its summary
+/// says: a call to it without `Summaries` may write anything.
+pub const WRITES_ITS_ARGUMENT: &str = "@g = global [64 x i8] zeroinitializer
+@k = global i16 0
+
+define void @h(ptr %s) {
+b0:
+  store i16 9, ptr %s
+  ret void
+}
+
+";
+
+/// `module` through `pass` under a pass manager that requires `Summaries`
+/// where `summaries`, as LLVM's `RequireAnalysisPass`, or a bare one;
+/// printed. @f computes what it did on `inputs`.
+pub fn summarized(module: &Module, pass: impl llrm_mir::passes::FunctionPass + 'static, summaries: bool, inputs: &[&[i128]]) -> String {
+    let mut after = module.clone();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.verify_each = true;
+    if summaries {
+        manager.require::<llrm_analysis::manager::Summaries>();
+    }
+    manager.add(pass);
+    manager.run(&mut after).unwrap();
+    let text = printed(&after);
+    assert_eq!(results(&after, inputs), results(module, inputs), "{text}");
+    text[text.find("@f(").expect("@f")..].to_owned()
+}
+
 /// Every function of `module` that has a body.
 pub fn bodies(module: &Module) -> Vec<GlobalId> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()

@@ -9,9 +9,8 @@
 //! unreachable.
 //!
 //! The copy budgets are peelsize's `Limits`, which count instructions. The
-//! one machine number is `costs`: a function with an instruction the target
-//! does not price is left alone (`profit::priced`). The target in `outer`
-//! carries no costs yet, so they are the pass's, as `Gvn`'s and `Unswitch`'s.
+//! one machine number is the target's costs: a function with an instruction
+//! the target does not price is left alone (`profit::priced`).
 //!
 //! What changed with the IR: the old stage records and `watch` hook are the
 //! pass manager's dump and change log. Dropped:
@@ -31,12 +30,11 @@ use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use crate::profit::{self, OperationCosts};
+use crate::profit;
 use crate::{lcssa, loopclone};
 
 #[derive(Default)]
 pub struct Peel {
-    pub costs: OperationCosts,
     pub limits: Limits,
 }
 
@@ -46,7 +44,7 @@ impl FunctionPass for Peel {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match optimized(unit, analyses, &self.costs, &self.limits) {
+        match optimized(unit, analyses, &self.limits) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("peel: {error}"),
@@ -56,7 +54,8 @@ impl FunctionPass for Peel {
 
 /// Every exact loop `peelsize::admitted` prices as worth it peeled, once
 /// each; whether any was.
-pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, costs: &OperationCosts, limits: &Limits) -> Result<bool, String> {
+pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
+    let costs = &profit::costs(analyses.outer());
     if !profit::priced(unit.context, unit.function, unit.callees, costs) {
         return Ok(false);
     }

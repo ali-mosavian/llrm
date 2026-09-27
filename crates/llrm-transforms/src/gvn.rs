@@ -21,7 +21,8 @@
 //! exception.
 //!
 //! What each instruction touches is `memoryssa::Accesses`, asked once
-//! before anything changes: the pass needs `Summaries` required.
+//! before anything changes; without `Summaries` required, every call is
+//! to an unknown callee.
 //! `reused_divides` has no counterpart (see `transform`).
 //!
 //! The old module had no tests of its own; `subexpressions`' are in
@@ -47,7 +48,6 @@ use crate::{edges, loadjoins, transform};
 /// The single value-reuse pass: scalar GVN and memory-aware PRE.
 #[derive(Default)]
 pub struct Gvn {
-    pub costs: OperationCosts,
     /// Integer values that fit in registers; 0 leaves pricing out.
     pub registers: i64,
 }
@@ -68,7 +68,7 @@ impl FunctionPass for Gvn {
             let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
             profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()), &facts)
         };
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &self.costs, self.registers, &trips)) {
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, self.registers, &trips)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -84,8 +84,8 @@ impl FunctionPass for Gvn {
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, costs, registers, trips)?;
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, registers: i64, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), registers, trips)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
@@ -100,7 +100,7 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
         let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, avoid_store_crossing)?;
-        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing)?;
+        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, outer.target.as_deref())?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;

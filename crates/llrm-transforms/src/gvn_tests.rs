@@ -282,3 +282,14 @@ b3:
     assert!(reloads("1"));
     assert!(!reloads("%n"));
 }
+
+/// Without `Summaries` required the pass runs, as an LLVM function pass
+/// does without a cached outer result: every call unknown, so less
+/// precise. It panicked.
+#[test]
+fn a_bare_pass_manager_takes_every_call_for_unknown() {
+    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f() {\nb0:\n  %a = load i16, ptr @g\n  call void @h(ptr @k)\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n"));
+    let precise = crate::testing::summarized(&module, Gvn::default(), true, &[&[]]);
+    let bare = crate::testing::summarized(&module, Gvn::default(), false, &[&[]]);
+    assert!(precise.contains("%r = add i16 %a, %a") && !bare.contains("%r = add i16 %a, %a"), "{precise}\n{bare}");
+}
