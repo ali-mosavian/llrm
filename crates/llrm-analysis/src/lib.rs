@@ -4,7 +4,11 @@
 //!
 //! llrm-core's `analysis/flags.rs` has no port: it is liveness of x86 flags
 //! over BC instructions, and MIR carries a carry or overflow as a value.
+//! Nor has `analysis/manager.rs`: llrm-mir's `passes::Analyses` is LLVM's
+//! analysis manager. The memory analyses cannot be its analyses yet, as
+//! `Analysis::run` sees no module metadata or globals.
 
+pub mod alias;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
