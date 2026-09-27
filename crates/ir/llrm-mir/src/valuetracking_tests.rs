@@ -1,4 +1,4 @@
-use crate::valuetracking::sign_bits;
+use crate::valuetracking::{alignment, sign_bits};
 use crate::{parse, GlobalKind};
 
 /// The sign bits of what `@f` returns.
@@ -22,4 +22,25 @@ fn test_sign_bits_follow_extension_shifts_and_products() {
     assert_eq!(returned("  ret i64 -1"), 64);
     assert_eq!(returned("  ret i64 65535"), 48);
     assert_eq!(returned("  ret i64 %w"), 1);
+}
+
+/// The alignment of what `@f` returns, in a module with a word-aligned
+/// `@w` and an unaligned `@b`.
+fn aligned(body: &str) -> u64 {
+    let module = parse::module(&format!("@w = global [100 x i8] zeroinitializer, align 2\n@b = global [100 x i8] zeroinitializer\ndefine ptr @f(i16 %i) {{\n{body}\n}}\n")).expect("parses");
+    let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else { unreachable!() };
+    let ret = function.terminator(function.entry().expect("an entry")).expect("a return");
+    let layout = crate::datalayout::DataLayout::default();
+    alignment(&module.context, &layout, &module.globals, function, function.instruction(ret).operands[0])
+}
+
+/// An element of a word-aligned word array is word aligned wherever its
+/// index is: what lets hoist show a word read cannot cross offset FFFFh.
+#[test]
+fn test_alignment_is_the_object_s_less_what_each_index_may_add() {
+    assert_eq!(aligned("  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  ret ptr %p"), 2);
+    assert_eq!(aligned("  %d = mul i16 %i, 2\n  %p = getelementptr i8, ptr @w, i16 %d\n  %q = getelementptr i8, ptr %p, i16 1280\n  ret ptr %q"), 2);
+    assert_eq!(aligned("  %p = getelementptr i8, ptr @w, i16 %i\n  ret ptr %p"), 1);
+    assert_eq!(aligned("  %p = getelementptr inbounds i16, ptr @w, i16 %i\n  %q = getelementptr i8, ptr %p, i16 1\n  ret ptr %q"), 1);
+    assert_eq!(aligned("  %p = getelementptr inbounds i32, ptr @b, i16 %i\n  ret ptr %p"), 1);
 }
