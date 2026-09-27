@@ -6,6 +6,7 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod addresses;
 pub mod copies;
 pub mod division;
 pub mod emit;
@@ -27,7 +28,7 @@ use llrm_mir::{GlobalKind, Linkage, Module, Type};
 
 use crate::emit::Unit;
 use crate::machine::{Answer, Facts, function_name};
-use crate::objects::Objects;
+use crate::objects::{Carving, Objects};
 
 /// A function the raise cannot express, and why. `<module>` names one
 /// that fails before any function.
@@ -135,7 +136,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         }
         functions.push((index, name, global));
     }
-    let objects = Objects::build(&facts, &mut module).map_err(module_refusal)?;
+    let objects = Objects::build(&Carving::of(&facts), found, &mut module).map_err(module_refusal)?;
     let interfaces = runtime::interfaces(&facts);
     let callees = runtime::declare(&facts, &mut module, &interfaces);
     let family = found_module::family(&found.records);
@@ -145,7 +146,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         let body = &facts.bodies[index];
         let outcome = {
             let mut builder = module.builder(global);
-            emit::function(&mut builder, &unit, body)
+            emit::function(&mut builder, &unit, body).map(|()| addresses::attribute(builder.function, builder.context, &objects))
         };
         if outcome.is_err() {
             let GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
