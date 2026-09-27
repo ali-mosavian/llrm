@@ -1629,7 +1629,13 @@ impl Rich {
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        llrm_mir::transforms::optimized(&mut emitted.module).map_err(CompileError::Value)?;
+        // The one MIR target, real-mode DOS at 486 prices.
+        let applied = llrm_transforms::pipeline::Applied {
+            target: Some(Rc::new(llrm_cycles::target::Dos)),
+            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            ..Default::default()
+        };
+        llrm_transforms::pipeline::applied(&mut emitted.module, &applied).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
         Ok(Rich { mir: emitted.module, data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
     }

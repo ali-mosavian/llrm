@@ -384,7 +384,7 @@ impl assemble::Abi for MediumModel {
     }
 }
 
-/// C through the rich MIR: raised by `raise_mir`, optimized by llrm-mir's
+/// C through the rich MIR: raised by `raise_mir`, optimized by the ported
 /// pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> Result<masm::Module, CompileError> {
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
@@ -395,7 +395,13 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> 
     if !problems.is_empty() {
         return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
     }
-    llrm_mir::transforms::optimized(&mut mir)?;
+    // The one MIR target, real-mode DOS at 486 prices.
+    let applied = llrm_transforms::pipeline::Applied {
+        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+        ..Default::default()
+    };
+    llrm_transforms::pipeline::applied(&mut mir, &applied)?;
     write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
     let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Name(target))?;
     // Data where the stream placed it, isel's float constants after DGROUP's.
