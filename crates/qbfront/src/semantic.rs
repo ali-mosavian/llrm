@@ -228,6 +228,8 @@ struct Function {
     error_handler_local: bool,
     external_entries: Vec<u32>,
     linkage: &'static str,
+    // Each pointer parameter's dereferenceable bytes.
+    promises: Vec<(u32, usize)>,
     // Each element pointer whose offset is its array's first byte plus a
     // non-negative in-object offset: the pointer's origin value.
     origins: BTreeMap<u32, u32>,
@@ -461,6 +463,9 @@ fn built(
         compiler.position = source_position(procedure.span);
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
+        // A reference parameter names a whole object: a descriptor of rank
+        // one at least, or a variable of its type.
+        let mut promises = Vec::new();
         for parameter in &procedure.parameters {
             let parameter_type = compiler.named_type(
                 &parameter.declaration.name,
@@ -486,6 +491,16 @@ fn built(
             let value = compiler.value(value_type);
             parameters.push(value);
             parameter_bytes += compiler.width(value_type).max(2);
+            let referenced = if is_array {
+                14 + 4
+            } else if parameter.segmented || parameter.by_value {
+                0
+            } else {
+                compiler.width(parameter_type)
+            };
+            if referenced > 0 {
+                promises.push((value, referenced));
+            }
             if is_array {
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
@@ -605,6 +620,7 @@ fn built(
                 "internal"
             },
         );
+        compiler.functions.last_mut().expect("the saved function").promises = promises;
     }
     Ok(compiler)
 }
@@ -1380,6 +1396,7 @@ impl Compiler {
             error_handler_local: self.error_handler_local,
             external_entries,
             linkage,
+            promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
         });
@@ -9272,6 +9289,17 @@ impl Compiler {
                     out,
                     ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
                     place.offset, place.storage, place.symbol, place.type_id
+                )
+                .unwrap();
+            }
+            out.push_str("],\"promises\":[");
+            for (index, (parameter, bytes)) in function.promises.iter().enumerate() {
+                if index != 0 {
+                    out.push(',');
+                }
+                write!(
+                    out,
+                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false,\"unaliased\":false}}"
                 )
                 .unwrap();
             }
