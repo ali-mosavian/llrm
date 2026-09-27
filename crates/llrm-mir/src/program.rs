@@ -49,11 +49,34 @@ impl SegmentLayout {
     }
 }
 
+/// Which of the program's globals code outside it may name.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum Exports {
+    /// Every one a module does not keep to itself: the program is part of
+    /// a larger link.
+    #[default]
+    Open,
+    /// These names alone: the program is the whole link but its runtime.
+    Closed(BTreeSet<String>),
+}
+
+impl Exports {
+    /// Whether outside code may name `global`.
+    pub fn exported(&self, global: &GlobalValue) -> bool {
+        match self {
+            _ if matches!(global.linkage, Linkage::Internal | Linkage::Private) => false,
+            Exports::Open => true,
+            Exports::Closed(names) => global.name.as_ref().is_some_and(|name| names.contains(name)),
+        }
+    }
+}
+
 pub struct Program {
     pub modules: Vec<Module>,
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
+    pub exports: Exports,
 }
 
 impl Program {
@@ -69,7 +92,12 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        Ok(Self { modules, layout, target, segments })
+        Ok(Self { modules, layout, target, segments, exports: Exports::Open })
+    }
+
+    /// The program with only `exports` named from outside.
+    pub fn exporting(self, exports: Exports) -> Self {
+        Self { exports, ..self }
     }
 
     /// `f` over `module` as a program of its own, handed back after.
@@ -86,10 +114,34 @@ impl Program {
         let named = || self.modules.iter().enumerate().filter_map(|(at, module)| Some((at, module.named(name)?)));
         named().find(|&(at, id)| defines(self.modules[at].global(id))).or_else(|| named().next())
     }
+
+    /// The definition global `id` of module `at` is: itself where it
+    /// defines it, else the one another module defines under its name. A
+    /// global a module keeps to itself is defined there or nowhere.
+    pub fn definition(&self, at: usize, id: GlobalId) -> Option<(usize, GlobalId)> {
+        let global = self.modules[at].global(id);
+        if defines(global) {
+            return Some((at, id));
+        }
+        if matches!(global.linkage, Linkage::Internal | Linkage::Private) {
+            return None;
+        }
+        let name = global.name.as_deref()?;
+        self.modules.iter().enumerate().filter(|&(other, _)| other != at).find_map(|(other, module)| {
+            let found = module.named(name)?;
+            let one = module.global(found);
+            (defines(one) && !matches!(one.linkage, Linkage::Internal | Linkage::Private)).then_some((other, found))
+        })
+    }
 }
 
-fn defines(global: &GlobalValue) -> bool {
-    global.function().is_none_or(|function| !function.is_declaration())
+/// Whether `global` is a definition: a function with a body, or a variable
+/// with an initializer or storage of its own.
+pub fn defines(global: &GlobalValue) -> bool {
+    match &global.kind {
+        crate::module::GlobalKind::Function(function) => !function.is_declaration(),
+        crate::module::GlobalKind::Variable(variable) => variable.initializer.is_some() || !matches!(global.linkage, Linkage::External | Linkage::ExternWeak),
+    }
 }
 
 /// What other modules may resolve against `module`: each global it does
@@ -133,8 +185,15 @@ impl ProgramAnalyses {
 
     /// What a module reads of `program`: its shared state and the results
     /// computed.
-    pub fn proxy(&self, program: &Program) -> Rc<ProgramProxy> {
-        Rc::new(ProgramProxy { layout: program.layout.clone(), target: Rc::clone(&program.target), segments: program.segments.clone(), results: self.cache.clone() })
+    pub fn proxy(&self, program: &Program, module: usize) -> Rc<ProgramProxy> {
+        Rc::new(ProgramProxy {
+            layout: program.layout.clone(),
+            target: Rc::clone(&program.target),
+            segments: program.segments.clone(),
+            exports: program.exports.clone(),
+            module,
+            results: self.cache.clone(),
+        })
     }
 }
 
@@ -152,6 +211,9 @@ pub struct ProgramProxy {
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
+    pub exports: Exports,
+    /// The module reading it, by its index in the program.
+    pub module: usize,
     results: HashMap<TypeId, Rc<dyn Any>>,
 }
 
@@ -160,7 +222,7 @@ impl ProgramProxy {
     /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, results: HashMap::new() })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::Open, module: 0, results: HashMap::new() })
     }
 
     /// `P`'s result, if computed: LLVM's `getCachedResult`.

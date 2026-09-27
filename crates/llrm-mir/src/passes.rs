@@ -554,6 +554,8 @@ pub struct PassManager {
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
     pub(crate) required: Vec<Kind>,
+    /// Program analyses computed before each module's run.
+    pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
 }
 
 impl PassManager {
@@ -573,6 +575,14 @@ impl PassManager {
         }
     }
 
+    /// Computes program analysis `P` before each module's run, for the
+    /// module's analyses to read through their program proxy.
+    pub fn require_program<P: crate::program::ProgramAnalysis>(&mut self) {
+        self.program_required.push(|program, analyses| {
+            analyses.get::<P>(program);
+        });
+    }
+
     /// Runs every pass over every defined function of each module, in
     /// order.
     pub fn run(&mut self, program: &mut Program) -> Result<Vec<Stage>, String> {
@@ -585,16 +595,20 @@ impl PassManager {
     }
 
     /// Each module's run reads the program results computed before it; a
-    /// change to what the module exports drops them.
+    /// module the run changed drops them.
     fn managed(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<Vec<Stage>, String> {
         let mut stages = Vec::new();
         for at in 0..program.modules.len() {
+            for require in &self.program_required {
+                require(program, analyses);
+            }
             let before = interface(&program.modules[at]);
-            let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program)) };
-            stages.extend(self.over(at, &mut program.modules[at], &mut modules)?);
-            if interface(&program.modules[at]) != before {
+            let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program, at)) };
+            let made = self.over(at, &mut program.modules[at], &mut modules)?;
+            if made.iter().any(|one| !one.changes.is_empty()) || interface(&program.modules[at]) != before {
                 analyses.invalidate();
             }
+            stages.extend(made);
         }
         Ok(stages)
     }
