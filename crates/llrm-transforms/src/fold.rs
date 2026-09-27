@@ -14,8 +14,7 @@
 //!   other. A commutative operation still takes its constant on the right.
 //! - An edge fold put a copy of each number in its parent; a phi here takes
 //!   the constant, so the parent's terminator no longer matters.
-//! - Fold runs over the module: consts solves memory with its globals, which
-//!   a function pass's `Unit` does not carry.
+//! - consts reads the module's globals through the outer proxy.
 //!
 //! Dropped, no rich MIR analogue: `_constant_update` (a read-modify-write of
 //! a cell); `_symbol_copies` and the symbol half of `_literal_of` (a
@@ -40,40 +39,31 @@ use llrm_analysis::cfg;
 use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::memory::Unit;
 use llrm_graph::loops;
-use llrm_mir::context::GlobalId;
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, InstId, Module, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
-use llrm_mir::passes::ModulePass;
+use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::canonical;
 use crate::edges;
-use crate::interprocedural::function_mut;
 use crate::lcssa::{arms, from_arms, operations};
-use crate::transform::{bodies, layout};
 
-/// `folded` on every body, then the canonical forms, as the old Fold.
+/// `folded`, then the canonical forms, as the old Fold.
 pub struct Fold;
 
-impl ModulePass for Fold {
+impl FunctionPass for Fold {
     fn name(&self) -> &'static str {
         "fold"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        let layout = layout(module).unwrap_or_else(|error| panic!("fold: {error}"));
-        bodies(module)
-            .into_iter()
-            .filter(|&id| {
-                let folded = folded(module, &layout, id);
-                let (context, function) = function_mut(module, id);
-                let swapped = canonical::compares(context, function);
-                folded | swapped | canonical::identities(context, function)
-            })
-            .collect()
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let folded = folded(unit.context, unit.layout, unit.function, analyses.outer());
+        let swapped = canonical::compares(unit.context, unit.function);
+        if folded | swapped | canonical::identities(unit.context, unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -84,16 +74,15 @@ struct _EdgeFold {
     numbers: Vec<(BlockId, BigInt)>,
 }
 
-/// Each known value of body `id` replaced by its number, and one join
-/// expression folded on its edges. Whether anything changed.
-pub fn folded(module: &mut Module, layout: &DataLayout, id: GlobalId) -> bool {
+/// Each known value of `function` replaced by its number, and one join
+/// expression folded on its edges; `outer` is its module and target.
+/// Whether anything changed.
+pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
     let (values, edge) = {
-        let function = module.global(id).function().expect("a body");
-        let unit = Unit::of(module, layout, function);
+        let unit = Unit::within(context, layout, function, outer);
         let facts = consts::known(&unit, Some(&Calls::default()), None, None);
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };
-    let (context, function) = function_mut(module, id);
     let mut rewritten = BTreeSet::new();
     for (value, number) in &values {
         rewritten.extend(function.users(*value).iter().map(|one| one.user));

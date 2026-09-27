@@ -1,17 +1,18 @@
 //! Adapted from llrm-core's `optimize/transform_tests.rs` (`d_tests`), each
 //! body now MIR text run by llrm-mir's interpreter.
 
-use llrm_analysis::testing::layout;
+use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
-use llrm_mir::passes::ModulePass;
+use llrm_mir::passes::Outer;
 
 use super::{_threaded, Decide, decided};
-use crate::testing::{parsed, printed, results};
+use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f decided; whether anything changed.
 fn decide(module: &mut Module) -> bool {
-    let (layout, id) = (layout(module), module.named("f").expect("@f"));
-    decided(module, &layout, id).expect("decides")
+    let (layout, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    decided(context, &layout, function, &outer).expect("decides")
 }
 
 /// `text` decided is `expected`, and computes what it did on `inputs`.
@@ -305,9 +306,8 @@ b2:
 }
 ",
     );
-    assert_eq!(Decide.run(&mut module), vec![module.named("f").unwrap()]);
     assert_eq!(
-        printed(&module),
+        managed(&mut module, Decide),
         "define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 1, 1
@@ -315,4 +315,14 @@ b0:
 }
 "
     );
+}
+
+/// Under the pass manager Decide still reads @peek's `readonly`: without
+/// the module's globals it took the call for a writer and left the branch.
+#[test]
+fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided() {
+    let text = ACROSS_READONLY_CALL.replace("  ret i16 %v\n", "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n");
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let after = managed(&mut module, Decide);
+    assert!(!after.contains("br i1"), "{after}");
 }

@@ -32,7 +32,7 @@ use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_support::hash::IndexMap;
 
 use crate::lcssa::{arms, from_arms, place_phi};
@@ -52,8 +52,8 @@ impl FunctionPass for Gvn {
         "gvn"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
-        match optimized(unit, &self.costs, self.registers) {
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        match optimized(unit, analyses.outer(), &self.costs, self.registers) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("gvn: {error}"),
@@ -62,9 +62,10 @@ impl FunctionPass for Gvn {
 }
 
 /// Number values, reuse dominating providers, and complete join PRE;
-/// whether anything changed.
-pub fn optimized(unit: &mut Unit, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let numbered = _numbered(unit, costs, registers)?;
+/// whether anything changed. `outer` is what the analyses read of the
+/// module and target.
+pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
+    let numbered = _numbered(unit, outer, costs, registers)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !numbered)?;
@@ -74,17 +75,8 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, registers: i64) -> Res
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything.
-fn _numbered(unit: &mut Unit, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    // The pass sees no other global, so a global's extent and a callee's
-    // attributes stay unknown, and so every access through them may overlap.
-    let accesses = transform::_accesses(&memory::Unit {
-        machine: None,
-        context: unit.context,
-        layout: unit.layout,
-        metadata: unit.metadata,
-        globals: &[],
-        function: unit.function,
-    })?;
+fn _numbered(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
+    let accesses = transform::_accesses(&memory::Unit::within(unit.context, unit.layout, unit.function, outer))?;
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, bool), String> {
         let mut function = function.clone();
         // `transform::forwarded(avoid_store_crossing)` goes here once

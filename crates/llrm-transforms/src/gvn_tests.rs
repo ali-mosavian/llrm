@@ -154,3 +154,30 @@ fn test_gvn_numbers_then_joins() {
     assert!(after.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{after}");
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
+
+/// Under the pass manager a load through a global is served across a
+/// call to a `readonly` callee. The pass once saw no globals, so it took
+/// the callee for one that may write and loaded @g again.
+#[test]
+fn a_load_through_a_global_is_reused_across_a_readonly_call() {
+    let mut module = parsed(
+        "@g = global i16 0
+
+declare i16 @peek() readonly
+
+define i16 @f() {
+b0:
+  %a = load i16, ptr @g
+  %p = call i16 @peek()
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+    );
+    let mut manager = PassManager::default();
+    manager.add(Gvn::default());
+    manager.run(&mut module).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("  %r = add i16 %a, %a\n"), "{after}");
+}

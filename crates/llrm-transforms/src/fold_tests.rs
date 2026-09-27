@@ -4,15 +4,16 @@
 
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::module::Module;
-use llrm_mir::passes::ModulePass;
+use llrm_mir::passes::Outer;
 
 use super::{Fold, folded};
-use crate::testing::{parsed, printed, results};
+use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 
 /// @f folded; whether anything changed.
 fn fold(module: &mut Module) -> bool {
-    let (layout, id) = (layout(module), module.named("f").expect("@f"));
-    folded(module, &layout, id)
+    let (layout, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    folded(context, &layout, function, &outer)
 }
 
 /// `text` folded is `expected`, and computes what it did on `inputs`.
@@ -355,7 +356,15 @@ b0:
 ",
     );
     let before = results(&module, &[&[4], &[5], &[6]]);
-    assert_eq!(Fold.run(&mut module), vec![module.named("f").unwrap()]);
-    assert!(printed(&module).contains("icmp sgt i16 %x, 5"));
+    assert!(managed(&mut module, Fold).contains("icmp sgt i16 %x, 5"));
     assert_eq!(results(&module, &[&[4], &[5], &[6]]), before);
+}
+
+/// Under the pass manager Fold still reads @peek's `readonly`: without the
+/// module's globals it took the call for a writer and kept the load.
+#[test]
+fn a_cell_kept_across_a_readonly_call_is_folded() {
+    let mut module = parsed(&format!("{DOS}{ACROSS_READONLY_CALL}"));
+    let after = managed(&mut module, Fold);
+    assert!(after.contains("  ret i16 7\n"), "{after}");
 }

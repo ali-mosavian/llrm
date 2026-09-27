@@ -17,7 +17,7 @@
 //! "allocation" now, which `typed_apart` reads.
 //!
 //! Which linear memory holds no program data is the target's fact:
-//! `Machine`.
+//! `Machine`, which the pass manager hands analyses as `Outer::target`.
 //!
 //! Tests skipped, the lattice's: `hierarchy_coarse_dgroup_meets_linked_static_but_stack_does_not`,
 //! `one_hole_covers_but_the_union_of_holes_does_not`,
@@ -49,14 +49,7 @@ use crate::ranges::{Interval, covering};
 
 const FLOOR: i64 = -(1_i64 << 31);
 
-/// Where the target keeps no program data, as linear addresses: old
-/// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
-/// video memory and ROM); any other none.
-pub trait Machine {
-    /// The linear bytes that `width`-byte accesses at `selectors` and
-    /// `offsets` (unsigned words) reach, where foreign memory holds them all.
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)>;
-}
+pub use llrm_mir::target::Machine;
 
 /// Failure to express a narrowed slice in `Slice`'s endpoints. Refusing
 /// retains conservatism; wrapping would narrow it.

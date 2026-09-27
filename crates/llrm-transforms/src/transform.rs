@@ -54,10 +54,9 @@ use llrm_analysis::alias::{self, Effect, Procedure};
 use llrm_analysis::memory::{self, MemRef};
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
-use llrm_mir::context::{Context, GlobalId};
-use llrm_mir::datalayout::DataLayout;
+use llrm_mir::context::Context;
 use llrm_mir::memory::Callees;
-use llrm_mir::module::{BlockId, Function, InstId, Instruction, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
@@ -80,16 +79,6 @@ pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeS
         }
     }
     alive
-}
-
-/// `module`'s datalayout.
-pub(crate) fn layout(module: &Module) -> Result<DataLayout, String> {
-    module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse)
-}
-
-/// Every function of `module` that has a body.
-pub(crate) fn bodies(module: &Module) -> Vec<GlobalId> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
 }
 
 /// The comparison supplying `branch`'s condition: the `icmp` in `block`
