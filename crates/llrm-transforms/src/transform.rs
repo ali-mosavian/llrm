@@ -138,10 +138,11 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
 // By mnemonic, each old kind's instruction: `sub` is also Neg, `xor` Not,
 // `getelementptr` PtrOffset and Address, `icmp` each comparison, the casts
 // Convert, SignExtend and Extract. FixedMul, Smulhi and Concat were
-// machine idioms with no one instruction; Copy has none.
-pub const _PURE: [&str; 18] = [
+// machine idioms with no one instruction; Copy has none. The pointer casts
+// are the rich MIR's own: a segment made a pointer twice is one pointer.
+pub const _PURE: [&str; 22] = [
     "add", "sub", "mul", "getelementptr", "udiv", "sdiv", "urem", "srem", "and", "or", "xor", "shl", "lshr", "ashr",
-    "trunc", "zext", "sext", "icmp",
+    "trunc", "zext", "sext", "icmp", "inttoptr", "ptrtoint", "bitcast", "addrspacecast",
 ];
 
 /// The old `op.floating` kinds `_computation` took: arithmetic and the

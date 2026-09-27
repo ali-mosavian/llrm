@@ -18,7 +18,7 @@ use llrm_bcmachine::abi::runtime::{self, Control, Memory};
 use llrm_bcmachine::frontends::bc::declen::Insn;
 use llrm_bcmachine::model::ir::nodes::{Call, Node};
 use llrm_bcmachine::model::ir::{Loc, Operation, Semantics};
-use llrm_bcmachine::objectfile::{module, omf};
+use llrm_bcmachine::objectfile::module;
 use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, FloatKind, FloatPredicate, Module, Operand, Type, TypeId};
 
 use crate::emit::{Bit, Emit, Emitter, Var};
@@ -242,7 +242,7 @@ fn instruction(emitter: &mut Emitter, insn: &Insn, what: &Semantics) -> Emit<()>
 /// inputs and clobbers.
 fn trusted(emitter: &Emitter, name: &str, at: usize) -> Emit<()> {
     let found = emitter.unit.facts.found;
-    if !omf::externals(&found.records).iter().any(|one| one == "FIDRQQ") {
+    if !module::emulated(&found.records) {
         return Err(format!("{name} outside the FP emulator's protocol"));
     }
     if module::defines(&found.records, found.seg).contains(name) {

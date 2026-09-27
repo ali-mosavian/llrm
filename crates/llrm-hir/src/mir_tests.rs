@@ -86,9 +86,9 @@ fn a_call_with_two_results_returns_an_aggregate() {
 fn a_refused_function_is_an_external_declaration() {
     let mut function = difference();
     function.linkage = FunctionLinkage::Internal;
-    function.error_handler = Some(1);
+    function.external_entries = vec![function.entry + 1];
     let emitted = emit(&program(function)).remove(0);
-    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "an ON ERROR handler".to_owned())]);
+    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "an alternate entry".to_owned())]);
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
 

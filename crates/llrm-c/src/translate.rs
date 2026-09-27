@@ -56,7 +56,16 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, ..h::Module::new(1, name, types, functions) };
-    Ok(h::Program { zeroed_locals: false, promises, ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module]) })
+    // Borland's medium model: a call keeps what its contract does not clobber;
+    // the compiler's constants go in CONST.
+    let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
+    Ok(h::Program {
+        zeroed_locals: false,
+        promises,
+        preserved: preserved.iter().map(|one| one.value().to_owned()).collect(),
+        constant_segment: Some("CONST".to_owned()),
+        ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module])
+    })
 }
 
 // ---- data ----

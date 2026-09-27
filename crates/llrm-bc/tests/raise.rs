@@ -7,7 +7,7 @@ use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, GlobalKind, GlobalVaria
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
@@ -383,4 +383,34 @@ fn a_push_after_the_prologue_is_no_register_save() {
         }
     }
     assert!(printed >= 3);
+}
+
+/// The module's error handler is its main function's one landing pad, every
+/// call that may raise an invoke to it; each RESUME form and a label /V
+/// polls events at before its statement. It was refused as a body the
+/// runtime enters by its own protocol.
+#[test]
+fn an_error_handler_is_the_main_bodys_landing_pad() {
+    for stem in ["onerr", "divmod"] {
+        for config in ["q-o", "p-g2", "v-g3", "q-evt", "p-evt", "v-evt"] {
+            let fixture = format!("{stem}-{config}.obj");
+            let module = raised(&fixture);
+            let (_, _, main) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("main")).expect("main");
+            assert!(main.personality.is_some(), "{fixture}");
+            let opcodes: Vec<&Opcode> = main.walk().map(|(_, inst)| &main.instruction(inst).opcode).collect();
+            assert_eq!(opcodes.iter().filter(|one| matches!(one, Opcode::LandingPad { .. })).count(), 1, "{fixture}");
+            assert!(opcodes.iter().any(|one| matches!(one, Opcode::Invoke(_))), "{fixture}");
+        }
+    }
+}
+
+/// nbody's only floats are `VAL(COMMAND$)` through `B$FVAL`, `B$FCMD` and
+/// `B$FIST`: no inline FP instruction, so no FIDRQQ, and main was refused as
+/// "B$FIST outside the FP emulator's protocol" although BC asked for BCOM45.
+#[test]
+fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/nbody-q-o.obj");
+    let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    assert!(llrm_mir::verify::verify(&module).is_empty());
 }

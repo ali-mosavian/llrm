@@ -11,7 +11,7 @@ use llrm_mir::{CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, InstI
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
@@ -194,7 +194,8 @@ fn def_seg_is_a_store_the_runtime_leaves_alone() {
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let raised = llrm_bc::raise_each(&found, &llrm_bcmachine::abi::machine::BUILT_IN).expect("raises");
     assert!(raised.outcomes.iter().any(|(name, outcome)| name == "RENDER" && outcome.is_ok()));
-    let module = raised.module;
+    let program = llrm_mir::program::Program::new(vec![raised.module], std::rc::Rc::new(llrm_mir::target::Neutral)).and_then(|one| one.with_runtime(raised.runtime)).expect("links");
+    let module = &program.modules[0];
     let cell = module.named("b$seg").expect("named");
     let render = module.global(module.named("RENDER").expect("raised")).function().expect("a function");
     let stored = render.walk().any(|(_, inst)| {
@@ -203,9 +204,9 @@ fn def_seg_is_a_store_the_runtime_leaves_alone() {
             && matches!(one.operands[..], [Operand::Constant(value), Operand::Constant(pointer)]
                 if module.context.get(value).kind == ConstantKind::Int(0xA000) && module.context.get(pointer).kind == ConstantKind::Global(cell))
     });
-    assert!(stored, "{}", llrm_mir::print::module(&module));
-    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let globals = llrm_analysis::globalsaa::analysis(&module, &mut analyses).expect("analyzes");
+    assert!(stored, "{}", llrm_mir::print::module(module));
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    let globals = llrm_analysis::globalsaa::analysis(module, &mut analyses).expect("analyzes");
     assert!(globals.tracked(cell));
     let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_bc::RUNTIME))).1.contains(&cell);
     assert!(!writes("B$ERAS") && writes("B$DSG0"));

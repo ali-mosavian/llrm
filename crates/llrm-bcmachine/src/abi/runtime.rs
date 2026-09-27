@@ -621,13 +621,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 ),
             ),
             (
-                "B$SPAC",
-                concat!(
-                    "farstr strfcn.asm 0182 passes AL=20h and CX=[BP+6] to local 0191; ",
-                    "OR CX,CX there kills arithmetic flags before allocation or an error tail."
-                ),
-            ),
-            (
                 "B$RND0",
                 concat!(
                     "random.asm 0000 calls local 0033; MUL CX at 003b sets CF/OF, ",
@@ -975,17 +968,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 ),
             ),
             (
-                "B$LEFT",
-                Some(4),
-                concat!(
-                    "farstr/strfcn.asm 00dd..00f3: descriptor/count at BP+8/+6; first ",
-                    "dependency RefString (strutil.asm 0013) overwrites arithmetic flags ",
-                    "at 0016 before branching. Two internal words passed to substring ",
-                    "wrapper 0113, whose RET 4 balances them; POP BP / RETF 4 at 00f2. ",
-                    "Allocation, temporary deletion and errors remain unknown."
-                ),
-            ),
-            (
                 "B$RGHT",
                 Some(4),
                 concat!(
@@ -1018,26 +1000,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                     "(gwini.asm 00a7..00e0, RETF), balanced by PUSH CS / near CALL. ",
                     "Both normal paths restore DS/DI/SI/BP then RETF 2 at 020c. ",
                     "Allocation, aliases, register preservation and error effects remain unknown."
-                ),
-            ),
-            (
-                "B$FASC",
-                Some(2),
-                concat!(
-                    "farstr/strfcn.asm 004e..0062: RefStringArgLast first, then a byte read ",
-                    "or ERR_FC for empty strings. DelTempSH -> DelString -> FreeDataPpv can ",
-                    "delete a temporary. Normal return POP BP / RETF 2; RefString's OR AX,AX ",
-                    "replaces incoming flags. No purity or heap preservation claim."
-                ),
-            ),
-            (
-                "B$FCHR",
-                Some(2),
-                concat!(
-                    "farstr/stcore.asm 0264..027c: AlcTmpSH first (strutil.asm 00fe; CMP BX ",
-                    "at 0103 overwrites flags before dependencies), then writes the byte or ",
-                    "tails ERR_FC for a nonzero high byte. Normal POP DI/BP / RETF 2. ",
-                    "Allocation/error dependencies stay unknown; all GP inputs retained."
                 ),
             ),
             (
@@ -1439,6 +1401,32 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                      Library hashes and scope: docs/optimizations/event-entry-blocker.md. "
                     ) + &CONTRACTS["B$EVCK"].evidence,
                     ..CONTRACTS["B$EVCK"].clone()
+                },
+            );
+        }
+
+        // VBDOS's strings are far: B$RefString and B$AlcTmpSH load ES with the
+        // string's segment, and none of these restores it. Otherwise their
+        // VBDCL10E.LIB code has the table's effects, and LMEM's B$FResizePpv,
+        // B$FReallocPpv and B$FreeDataPpv save SI, DI and DS.
+        for (_name, _evidence) in [
+            ("B$SPAC", "strfcn.asm 0182..01a3: PUSH DI around B$AlcTmpSH, which returns the data in ES:DI, then REP STOSB; RETF 2."),
+            ("B$FCHR", "stcore.asm 0264..0280: PUSH DI, B$AlcTmpSH before the range check, the byte stored through ES:DI; RETF 2."),
+            ("B$FASC", "strfcn.asm 004e..0063: B$RefStringArgLast, a byte read through ES:BX, B$DelTempSH; RETF 2."),
+            ("B$LEFT", "strfcn.asm 00dd..00f6: B$RefString, then helper 0113..0181, which saves DI, SI and DS around B$AlcTmpSH or reuse of the top temp; RETF 4."),
+            ("B$LTRM", "strfcn.asm 0232..0254: PUSH DI, B$RefStringArgLast, REPE SCASB through ES:DI, helper 011d; RETF 2."),
+            ("B$SCAT", "stcore.asm 0117..01b1: PUSH SI/DI/DS, B$RefString on both operands, B$AlcTmpSH or B$ReallocTemp; the shared exit at 0099 pops DS/DI/SI and RETF 4."),
+            ("B$SASS", "stcore.asm 0025..00b2: PUSH SI/DI/DS, B$RefString and B$ReallocHandle, which loads ES; POP DS/DI/SI / RETF 4."),
+        ] {
+            let base = CONTRACTS[_name].clone();
+            let mut clobbers = base.clobbers.clone();
+            clobbers.insert(Reg::Es);
+            variants.insert(
+                (_name, "vbdos"),
+                Contract {
+                    clobbers,
+                    evidence: format!("VBDCL10E.LIB {_evidence} ") + &base.evidence,
+                    ..base
                 },
             );
         }
@@ -2486,6 +2474,57 @@ mod tests {
         }
     }
 
+    /// Unestablished, RESUME and RESUME label read every register, and the
+    /// raise refused /V objects over a dead high word of EAX.
+    #[test]
+    fn test_resume_reads_only_its_label() {
+        for family in ["qb45", "pds71", "vbdos"] {
+            assert_eq!(one("B$RES0", family).inputs, Some(BTreeSet::new()));
+            assert_eq!(one("B$RESA", family).inputs, Some(BTreeSet::from([Reg::Ax])));
+        }
+    }
+
+    /// VBDOS's SPACE$, CHR$, ASC and LEFT$ were worst case, conceding si, di
+    /// and ds, which their code saves.
+    #[test]
+    fn test_vbdos_string_functions_keep_si_di_and_ds() {
+        for (name, cleanup) in [("B$SPAC", 2), ("B$FCHR", 2), ("B$FASC", 2), ("B$LEFT", 4)] {
+            let got = one(name, "vbdos");
+            assert!(got.established, "{name}");
+            assert_eq!(got.cleanup, Some(cleanup), "{name}");
+            assert_eq!(got.inputs, Some(BTreeSet::new()), "{name}");
+            assert_eq!(
+                got.clobbers,
+                BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags]),
+                "{name}"
+            );
+        }
+    }
+
+    /// VBDOS's LTRIM$, concatenation and assignment were said to keep es,
+    /// which B$RefString leaves as the string's segment.
+    #[test]
+    fn test_vbdos_far_strings_clobber_es() {
+        for name in ["B$LTRM", "B$SCAT", "B$SASS"] {
+            assert!(one(name, "vbdos").clobbers.contains(&Reg::Es), "{name}");
+            assert!(!one(name, "qb45").clobbers.contains(&Reg::Es), "{name}");
+        }
+    }
+
+    /// Unestablished, SPACE$, CHR$, ASC and LEFT$ conceded si and di,
+    /// which callers keep live across them. VBDOS's are variants.
+    #[test]
+    fn test_string_functions_keep_si_and_di() {
+        for name in ["B$SPAC", "B$FCHR", "B$FASC", "B$LEFT"] {
+            for family in ["qb45", "pds71"] {
+                let got = one(name, family);
+                assert!(got.established, "{name} {family}");
+                assert!(!got.clobbers.contains(&Reg::Si), "{name} {family}");
+                assert!(!got.clobbers.contains(&Reg::Di), "{name} {family}");
+            }
+        }
+    }
+
     #[test]
     fn test_the_routines_that_touch_no_caller_memory() {
         for name in ABSORBED.into_iter().chain(["B$DSEG", "B$FERR"]) {
@@ -2739,9 +2778,6 @@ mod tests {
             ("B$LNIN", Some(10)),
             ("B$ERS1", Some(2)),
             ("B$RTRM", Some(2)),
-            ("B$FASC", Some(2)),
-            ("B$FCHR", Some(2)),
-            ("B$LEFT", Some(4)),
             ("B$RGHT", Some(4)),
             ("B$FMKI", Some(2)),
             ("B$FMKL", Some(4)),

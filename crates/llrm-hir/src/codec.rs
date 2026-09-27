@@ -228,6 +228,9 @@ impl _Plain for model::Function {
         if !self.promises.is_empty() {
             out.insert("promises".to_owned(), self.promises._plain());
         }
+        if self.symbol.is_some() {
+            out.insert("symbol".to_owned(), self.symbol._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -320,6 +323,12 @@ impl _Plain for model::Program {
         }
         if !self.entries.is_empty() {
             out.insert("entries".to_owned(), self.entries._plain());
+        }
+        if !self.preserved.is_empty() {
+            out.insert("preserved".to_owned(), self.preserved._plain());
+        }
+        if self.constant_segment.is_some() {
+            out.insert("constant_segment".to_owned(), self.constant_segment._plain());
         }
         Json::Dict(out)
     }
@@ -1040,6 +1049,7 @@ static FUNCTION: _Record = _Record {
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
         ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
+        ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Function {
@@ -1058,6 +1068,7 @@ static FUNCTION: _Record = _Record {
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
             promises: _default(args, "promises", Vec::new())?,
+            symbol: _default(args, "symbol", None)?,
         })
     },
 };
@@ -1195,6 +1206,8 @@ static PROGRAM: _Record = _Record {
         ("zeroed_locals", _Hint::Bool, false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
         ("entries", _Hint::Tuple(&_Hint::Str), false),
+        ("preserved", _Hint::Tuple(&_Hint::Str), false),
+        ("constant_segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1209,6 +1222,8 @@ static PROGRAM: _Record = _Record {
             zeroed_locals: _default(args, "zeroed_locals", true)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
             entries: _default(args, "entries", Vec::new())?,
+            preserved: _default(args, "preserved", Vec::new())?,
+            constant_segment: _default(args, "constant_segment", None)?,
         })
     },
 };

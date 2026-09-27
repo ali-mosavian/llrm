@@ -314,8 +314,19 @@ fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String
         .iter()
         .filter_map(|(&inst, key)| candidates.get_full(key).filter(|(_, _, ty)| accessed(unit, inst) == Some(**ty)).map(|(slot, ..)| (inst, slot)))
         .collect::<HashMap<_, _>>();
+    // A cell's `!tbaa` type, where every access of it agrees: what keeps a
+    // write of another type from reaching it.
+    let mut typed = IndexMap::<&Key, Option<Option<String>>>::default();
+    for (inst, key) in keys.iter().filter(|(_, key)| candidates.contains_key(*key)) {
+        let one = refs[inst].typed.clone();
+        let agreed = typed.entry(key).or_insert_with(|| Some(one.clone()));
+        if agreed.as_ref() != Some(&one) {
+            *agreed = None;
+        }
+    }
+    let typed = candidates.keys().map(|key| typed.get(key).cloned().flatten().flatten()).collect::<Vec<_>>();
     let calls = manager::call_effects(unit, outer)?.into_iter().map(|(at, effect)| (at, effect.stores)).collect();
-    let usable = _available(unit, &Facts { refs, calls }, &candidates, &slots);
+    let usable = _available(unit, &Facts { refs, calls }, &candidates, &typed, &slots);
 
     let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();
     let renumbered = used.iter().enumerate().map(|(new, &old)| (old, new)).collect::<HashMap<_, _>>();
@@ -327,14 +338,14 @@ fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String
 
 /// Loads a stored value reaches on every path, with no write between that
 /// may reach its cell.
-fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, typed: &[Option<String>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
     let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
-    let refs = cells.iter().map(|(key, &ty)| _reference(key, unit.layout.store_size(&unit.context.types, ty) as u32)).collect::<Vec<_>>();
+    let refs = cells.iter().zip(typed).map(|((key, &ty), typed)| MemRef { typed: typed.clone(), .._reference(key, unit.layout.store_size(&unit.context.types, ty) as u32) }).collect::<Vec<_>>();
     // The cells whose address a value is part of: its definition, a phi's
     // on a back edge among them, moves them.
     let mut based = HashMap::<ValueId, Vec<usize>>::default();

@@ -402,3 +402,34 @@ b4:
     );
     assert!(after.contains("br i1 true, label %b2, label %b3") && after.contains("select i1 true") && after.contains("zext i1 false"), "{after}");
 }
+
+/// A segment made a far pointer twice is one pointer: segld's load of
+/// `a(i)` went through a second cast pair, so no store was seen to reach it.
+#[test]
+fn a_pointer_cast_twice_is_one_value() {
+    let text = format!(
+        "{}@d = internal global i16 0
+
+define i16 @f(i16 %v) {{
+b0:
+  %s = load i16, ptr @d
+  %p1 = inttoptr i16 %s to ptr addrspace(2)
+  %f1 = addrspacecast ptr addrspace(2) %p1 to ptr addrspace(1)
+  store i16 %v, ptr addrspace(1) %f1
+  %p2 = inttoptr i16 %s to ptr addrspace(2)
+  %f2 = addrspacecast ptr addrspace(2) %p2 to ptr addrspace(1)
+  %x = load i16, ptr addrspace(1) %f2
+  ret i16 %x
+}}
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = parsed(&text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
+}

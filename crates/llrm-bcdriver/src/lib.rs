@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use llrm_core::abi::machine::{self, Machine};
 use llrm_core::abi::qb::HirAbi;
+use llrm_core::driver;
 use llrm_core::backend::assemble::{self, Abi, Target};
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self, ProfileOrName};
@@ -27,7 +28,7 @@ use llrm_core::support::hash::IndexMap;
 use llrm_mir::{GlobalId, GlobalKind, Module};
 use llrm_omf::module::{self as found_module, Family};
 use llrm_omf::omf::{self, Record};
-use llrm_qb::compile;
+use llrm_core::driver::basic;
 
 /// The main body's symbol, as the QB route names it.
 const MAIN: &str = "$QB$MAIN";
@@ -37,7 +38,7 @@ const HEADER: &str = "$QB$HEADER";
 const HEADER_BYTES: usize = 0x30;
 
 /// Each segment the module header names, by the word that names it and
-/// the label `compile::written_basic` fixes it up to.
+/// the label `basic::written_basic` fixes it up to.
 const NAMED: [(usize, &str, &str); 5] =
     [(12, "BC_DS", "$QB$DS"), (14, "BC_DATA", "$QB$DATA"), (16, "BC_FT", "$QB$FT"), (24, "COMMON", "$QB$COMMON"), (32, "BC_CN", "$QB$CN")];
 /// The header word naming the statement table, which is written afresh.
@@ -103,15 +104,11 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         }
     }
     let records = records.to_vec();
-    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise_placed(found, machine).map_err(|refusal| refusal.to_string())?;
+    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise(found, machine).map_err(|refusal| refusal.to_string())?;
     let options = llrm_core::driver::Options::of(machine.clone());
     let mut program = llrm_core::driver::linked(vec![module], runtime, &options)?;
     llrm_core::driver::optimized(&mut program, &options)?;
     let module = program.modules.pop().expect("one module");
-    let errors = llrm_mir::verify::verify(&module);
-    if let Some(first) = errors.first() {
-        return Err(format!("the pipeline left invalid MIR: {first}"));
-    }
     let runtime = match found_module::family(&records) {
         Family::Quickbasic => RuntimeProfile::Qb45,
         Family::Pds => RuntimeProfile::Pds71,
@@ -119,7 +116,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         other => return Err(format!("a {other:?} object")),
     };
     let (code_segment, code_name, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
-    let abi = HirAbi { runtime, objects: Default::default() };
+    let abi = HirAbi { runtime, objects: Default::default(), preserved: Default::default() };
     let mut names = globals::names(&module, &|name| abi.linked(name))?;
     names.extend(llrm_core::hir::lower::symbol_names());
     let main = module.named("main").ok_or("no main body")?;
@@ -136,6 +133,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     // The runtime enters the module right after its header.
     let order = std::iter::once(main).chain((0..module.globals.len() as u32).map(GlobalId).filter(|&id| id != main));
+    let mut rows = Vec::new();
     for id in order {
         let global = module.global(id);
         let GlobalKind::Function(function) = &global.kind else { continue };
@@ -143,13 +141,14 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
             continue;
         }
         let name = global.name.clone().unwrap_or_default();
-        let procedure = procedure(&module, &name, id, &names, &abi, &pool, &target, runtime)?;
+        let (procedure, landing) = procedure(&module, &name, id, &names, &abi, &pool, &target, runtime)?;
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
         }
+        rows.extend(landing.map(|at| driver::landing_row(procedures.len(), at)));
         procedures.push(procedure);
     }
-    procedures.push(compile::_statement_procedure(&[]));
+    procedures.push(driver::statement_table(&rows));
     let mut data = data_segments(&module, &placement, &segments, code_segment, &names)?;
     // The constants isel keeps in memory go where BC keeps its own, as the
     // QB route places them.
@@ -159,6 +158,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         names.insert((Space::Segment, id), label.clone());
         pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
+    pooled.extend(driver::landed_data(&module));
     if !pooled.is_empty() {
         match data.iter_mut().find(|(name, _)| name == CONSTANTS) {
             Some((_, datums)) => datums.extend(pooled),
@@ -184,7 +184,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         requests: Default::default(),
     };
     let header = header(found, &records, code_segment, &segments)?;
-    compile::written_basic(&assembled, header, name).map_err(|error| error.to_string())
+    basic::written_basic(&assembled, header, name)
 }
 
 /// A defined function selected, through the machine phases, and framed as
@@ -200,18 +200,24 @@ fn procedure(
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
     runtime: RuntimeProfile,
-) -> Result<masm::Procedure, String> {
+) -> Result<(masm::Procedure, Option<i64>), String> {
     let machined = assemble::machined(module, name, abi, pool, target)?;
-    let finalized = llrm_qb::inline_x87::finalized(&machined.body, machined.popped)?;
+    let finalized = basic::finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let is_main = names[&(Space::Segment, i64::from(id.0))] == MAIN;
-    let (body, framed) = if is_main && machined.reserve == 0 {
-        compile::_initialize_frame(&finalized.body, 0).map_err(|error| error.to_string())?
+    let (body, framed) = if !driver::framed(module, id) {
+        (finalized.body, IndexMap::default())
+    } else if is_main && machined.reserve == 0 {
+        basic::_initialize_frame(&finalized.body, 0)?
     } else {
-        compile::_runtime_frame(&finalized.body, machined.reserve, runtime, 0).map_err(|error| error.to_string())?
+        basic::_runtime_frame(&finalized.body, machined.reserve, runtime, 0)?
     };
     callees.extend(framed);
     for (at, callee) in &machined.calls {
+        if let Some(code) = machined.inline.get(at) {
+            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+            continue;
+        }
         let linked = match module.named(callee) {
             Some(one) => names[&(globals::space(module, one), i64::from(one.0))].clone(),
             None => abi.linked(callee),
@@ -219,7 +225,7 @@ fn procedure(
         callees.insert(*at, masm::Callee::new(linked, machined.far.contains(at)));
     }
     let global = module.global(id);
-    Ok(masm::Procedure {
+    let procedure = masm::Procedure {
         name: names[&(Space::Segment, i64::from(id.0))].clone(),
         public: !is_main && global.linkage == llrm_mir::Linkage::External,
         far: true,
@@ -228,7 +234,8 @@ fn procedure(
         reserve: 0,
         callees,
         interrupt: None,
-    })
+    };
+    Ok((procedure, machined.landing))
 }
 
 /// Each data segment the object had, in its order, holding its objects'

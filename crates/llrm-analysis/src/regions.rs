@@ -259,10 +259,11 @@ pub fn overlapping(
 }
 
 /// Python `mir._unescaped`: whether only a reference naming its objects can
-/// reach what `ref` names.
+/// reach what `ref` names. An uncaptured object is one too: a pointer no
+/// fact follows reaches only what escaped, as `alias::_lost` publishes.
 fn _unescaped(reference: &MemRef) -> bool {
     reference.provenance.as_ref().is_some_and(|provenance| {
-        !provenance.slices.is_empty() && !provenance.slices.iter().any(|one| one.object.addressed || one.object.kind == MemoryKind::Absolute)
+        !provenance.slices.is_empty() && !provenance.slices.iter().any(|one| (one.object.addressed && one.object.captured) || one.object.kind == MemoryKind::Absolute)
     })
 }
 

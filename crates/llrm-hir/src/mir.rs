@@ -14,6 +14,9 @@ use llrm_mir::{
 };
 
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
+use crate::onerror::{self, Handled};
+
+mod handling;
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
 /// indexing by 16 bits, 16-bit segments, and 16-bit alignment.
@@ -41,7 +44,7 @@ pub struct Emitted {
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
     // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
     let zeroed = program.zeroed_locals && program.dialect != model::Dialect::Quickr;
-    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed)).collect()
+    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises.nounwind)).collect()
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
@@ -230,9 +233,11 @@ struct Tables<'h> {
     callees: HashMap<String, ConstantId>,
     /// Each callee's calling convention, which its calls repeat.
     conventions: HashMap<String, u32>,
+    /// The runtime routines that raise no error.
+    nounwind: &'h [String],
 }
 
-fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool) -> Emitted {
+fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String]) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut tables = Tables {
@@ -246,6 +251,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         conventions: HashMap::new(),
         tags: Tags::new(&mut module),
         classes: HashMap::new(),
+        nounwind,
     };
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
@@ -297,10 +303,25 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
             refused.push((function.name.clone(), why));
         }
     }
+    let statements = hir.statements();
     for (function, global) in functions {
         let Some(global) = global else { continue };
+        let handled = match (function.error_handler, &statements) {
+            (None, _) => Ok(None),
+            (Some(_), Ok(_)) => onerror::handled(&mut module, global).map(Some),
+            (Some(_), Err(why)) => Err(why.clone()),
+        };
+        let handled = match handled {
+            Ok(handled) => handled,
+            Err(why) => {
+                module.globals[global.0 as usize].linkage = Linkage::External;
+                refused.push((function.name.clone(), why));
+                continue;
+            }
+        };
         let mut builder = module.builder(global);
-        let emitted = Body::new(&mut builder, &tables, function).and_then(|mut body| body.run());
+        let rows = statements.as_deref().unwrap_or_default();
+        let emitted = Body::new(&mut builder, &tables, function).and_then(|mut body| body.run(handled, rows));
         if emitted.is_err() {
             builder.function.delete_body();
         }
@@ -606,6 +627,9 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             }
         }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call || three_way(instruction.op).is_some()) else { continue };
+        if handling::owns(callee) {
+            continue;
+        }
         let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
             Some(site) => {
                 let abi = convention(site.cleanup, site.distance)?;
@@ -804,14 +828,14 @@ struct Body<'b, 'm, 'h> {
     objects: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
+    handling: Option<handling::Handling>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn new(b: &'b mut Builder<'m>, tables: &'b Tables<'h>, function: &'h model::Function) -> Emit<Self> {
-        if function.error_handler.is_some() {
-            return Err("an ON ERROR handler".to_owned());
-        }
-        if function.external_entries.iter().any(|&one| one != function.entry) {
+        // The runtime enters a handled function's statements where RESUME
+        // continues; any other entry is not selected.
+        if function.error_handler.is_none() && function.external_entries.iter().any(|&one| one != function.entry) {
             return Err("an alternate entry".to_owned());
         }
         let values = function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect();
@@ -826,10 +850,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             frame: HashMap::new(),
             objects: Vec::new(),
             addresses: HashMap::new(),
+            handling: None,
         })
     }
 
-    fn run(&mut self) -> Emit<()> {
+    fn run(&mut self, handled: Option<Handled>, statements: &[model::Statement]) -> Emit<()> {
         let entry = self.function.blocks.iter().find(|one| one.id == self.function.entry).ok_or("no entry block")?;
         let order = std::iter::once(entry).chain(self.function.blocks.iter().filter(|one| one.id != self.function.entry));
         for block in order {
@@ -838,17 +863,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         }
         self.b.position(self.blocks[&entry.id]);
         self.allocate()?;
+        if let Some(handled) = handled {
+            self.handle(handled, statements)?;
+        }
         for block in emission_order(self.function) {
             self.b.position(self.blocks[&block.id]);
+            self.enter_block(block.id);
             for instruction in &block.instructions {
                 self.instruction(instruction)?;
             }
-            self.terminator(&block.terminator)?;
+            // RESUME label ended the block itself.
+            let current = self.b.current().expect("a placed block");
+            if self.b.function.terminator(current).is_none() {
+                self.terminator(&block.terminator)?;
+            }
             if block.cold {
                 mark_cold(self.b.function, self.blocks[&block.id]);
             }
         }
-        Ok(())
+        self.close_handling()
     }
 
     /// An alloca for each group of local places that overlap, each zeroed
@@ -1313,7 +1346,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         self.b.context.types.intern(Type::Struct { fields, packed: false })
                     }
                 };
-                if let Some(result) = self.call(callee, &arguments, returns) {
+                let result = match self.handling_call(callee, returns)? {
+                    Some(result) => result,
+                    None => {
+                        let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
+                        let ty = function_type(&mut self.b.context.types, returns, parameters);
+                        let convention = self.tables.conventions[callee];
+                        let raises = !self.tables.nounwind.iter().any(|one| one == callee);
+                        let callee = Value::Constant(self.tables.callees[callee]);
+                        self.raising_call(instruction.id, raises, convention, ty, callee, &arguments)?
+                    }
+                };
+                if let Some(result) = result {
                     if instruction.results.len() > 1 {
                         for (index, &one) in instruction.results.iter().enumerate() {
                             let field = self.b.extract_value(result, index as u32, "");
