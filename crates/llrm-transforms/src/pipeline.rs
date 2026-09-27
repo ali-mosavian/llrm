@@ -2,7 +2,9 @@
 //! `pipeline`, `applied`, `recorded`, `Applied` and `_Transaction` (with
 //! `_applied` and `_transacted`), on llrm-mir's pass manager. The
 //! transaction is `Fixed`, one function pass; `applied` runs it under a
-//! manager that requires `Summaries` and verifies the module after it.
+//! manager that requires `Summaries` and verifies the module after it,
+//! then the whole-module step, `Interprocedural`, which runs it again on
+//! each body it changes.
 //!
 //! What changed with the IR:
 //! - A pass reports a change by preserving less than every analysis; the
@@ -18,11 +20,13 @@
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
 //!   Hoist's store sinking is loopmotion's pass, and Strength's
 //!   `loopexit::evaluated` is loopexit's.
+//! - llrm-mir's InstCombine joins SROA at the boundaries: see `pipeline`.
 //! - `flow::optimized`'s rule that an irreducible body is not promoted is
 //!   here: promotion needs dominators.
 //! - The old `_Transaction` verified nothing; `applied`'s manager verifies
 //!   the module after the pipeline.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -30,10 +34,13 @@ use llrm_analysis::cfg;
 use llrm_analysis::manager::Summaries;
 use llrm_analysis::peelsize::Limits;
 use llrm_graph::loops;
+use llrm_mir::context::GlobalId;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
-use llrm_mir::passes::{Analyses, FunctionPass, PassManager, PreservedAnalyses, Stage, Unit};
+use llrm_mir::passes::{Analyses, FunctionPass, Outer, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::target::Machine;
 
+use crate::interprocedural::Interprocedural;
 use crate::profit::OperationCosts;
 use crate::{
     affine, algebraic, dead, decide, dse, fill, floatloop, fold, gvn, hoist, lcssa, loopexit, loopmotion, loopsimplify, peel, promote,
@@ -142,6 +149,11 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
+        // Kept from llrm-mir, at the structural boundaries: no ported pass
+        // folds `icmp ne (sext i1 %c), 0`, the HIR's boolean test, to `%c`,
+        // and a loop exiting on it is not counted. In the fixed point it
+        // removes LCSSA's single-arm phis, which LCSSA puts back.
+        Box::new(llrm_mir::transforms::instcombine::InstCombine),
         Box::new(fold::Fold),
         Box::new(decide::Decide),
         Box::new(loopsimplify::LoopSimplify),
@@ -197,7 +209,46 @@ pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, St
     manager.target = applied.target.clone();
     manager.require::<Summaries>();
     manager.add(Fixed::new(applied));
+    // Once every body has reached its own fixed point, as the old Nib
+    // driver's whole-module step: a body it changes goes back through.
+    let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
+    let target = applied.target.clone();
+    manager.add_module(Interprocedural {
+        costs: applied.costs.clone(),
+        roots: roots(module),
+        pipeline: Box::new(move |module, id, _| rerun(module, id, &mut again, target.clone()).unwrap_or_else(|error| panic!("pipeline: {error}"))),
+        proved: None,
+    });
+    // Pending: rotate, after the fixed point as the old drivers ran it.
     manager.run(module)
+}
+
+/// The bodies something outside the module may call.
+fn roots(module: &Module) -> BTreeSet<GlobalId> {
+    module
+        .functions()
+        .filter(|(_, global, function)| !function.is_declaration() && !matches!(global.linkage, Linkage::Internal | Linkage::Private))
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
+/// `fixed` over body `id` alone, as the manager runs a function pass.
+fn rerun(module: &mut Module, id: GlobalId, fixed: &mut Fixed, target: Option<Rc<dyn Machine>>) -> Result<(), String> {
+    let layout = match &module.datalayout {
+        Some(text) => DataLayout::parse(text)?,
+        None => DataLayout::default(),
+    };
+    let mut outer = Outer::of(module, target);
+    outer.require::<Summaries>(module, &layout);
+    let callees = llrm_mir::memory::callees(module);
+    let sizes = llrm_mir::valuetracking::sizes(module, &layout);
+    let Module { context, globals, metadata, .. } = module;
+    let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
+        return Err(format!("@{}: not a function", id.0));
+    };
+    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes };
+    fixed.run(&mut unit, &mut Analyses::new(Rc::new(outer)));
+    Ok(())
 }
 
 /// The pipeline over one body, the old `_Transaction`: the structural
@@ -226,8 +277,9 @@ impl Fixed {
         };
         let passes = pipeline(applied).into_iter().filter(|one| only.is_none_or(|only| one.name() == only));
         // SROA establishes the scalar memory shape at structural
-        // boundaries; it is not a member of the scalar fixed point.
-        let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
+        // boundaries, InstCombine the HIR's; neither is a member of the
+        // scalar fixed point.
+        let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| matches!(one.name(), "sroa" | "instcombine"));
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         // A candidate is judged after the whole pipeline, unswitching off.

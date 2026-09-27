@@ -351,25 +351,27 @@ pub fn assembled(
     })
 }
 
-/// The same through the rich MIR: the HIR emitted as MIR, then selected
-/// and assembled whole. It runs no MIR passes yet.
+/// The same through the rich MIR: the HIR emitted as MIR, optimized, then
+/// selected and assembled whole.
 pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrName<'static>) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
     let module = &program.modules[0];
+    let target = targets::profile(cpu)?;
     let emitted = hir::mir::emit(program).swap_remove(0);
     if let Some((name, why)) = emitted.refused.first() {
         return Err(format!("@{name}: {why}"));
     }
     let mut mir = emitted.module;
-    llrm_mir::transforms::optimized(&mut mir)?;
-    // The entry is public for the runtime to call; a library has none.
+    // The entry is public for the runtime to call; a library has none. The
+    // pipeline's whole-module step reads who may call what.
     match mir.named(entry) {
         Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,
         None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
+    llrm_transforms::pipeline::applied(&mut mir, &rich_pipeline(target))?;
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
     let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
@@ -378,6 +380,52 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
     }
     Ok(assembled)
+}
+
+/// The machine's foreign memory, as MIR analyses ask it.
+struct Foreign(&'static llrm_core::abi::machine::Machine);
+
+impl llrm_mir::target::Machine for Foreign {
+    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+}
+
+/// The rich MIR pipeline configured by `target` alone, as `flow::optimized`
+/// configures the old one. `LLRM_MIR_STAGES` names where its steps go.
+// Shared with the other frontend's copy; its home is llrm-core's `flow`.
+fn rich_pipeline(target: &targets::Profile) -> llrm_transforms::pipeline::Applied {
+    let costs = &target.operations;
+    llrm_transforms::pipeline::Applied {
+        registers: target.register_capacity,
+        call_registers: target.call_register_capacity,
+        costs: llrm_transforms::profit::OperationCosts {
+            add: costs.add,
+            multiply: costs.multiply,
+            divide: costs.divide,
+            shift: costs.shift,
+            address: costs.address,
+            load: costs.load,
+            store: costs.store,
+            memory_update: costs.memory_update,
+            branch: costs.branch,
+            prefix: costs.prefix,
+            r#move: costs.r#move,
+            call: costs.call,
+            return_: costs.return_,
+            float_add: costs.float_add,
+            float_multiply: costs.float_multiply,
+            float_divide: costs.float_divide,
+            float_load: costs.float_load,
+            float_store: costs.float_store,
+            extend: costs.extend,
+            fill: costs.fill,
+            fill_cell: costs.fill_cell,
+        },
+        target: Some(Rc::new(Foreign(llrm_core::abi::machine::current()))),
+        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+        ..Default::default()
+    }
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
