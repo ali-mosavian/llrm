@@ -223,6 +223,7 @@ pub fn assembled(
             BTreeSet::new(),
             Some(&legalized.contracts),
             ProfileOrName::Profile(target),
+            &llrm_core::backend::target::BUILT_IN,
             lower::Lowered {
                 hints: Some(&legalized.hints),
                 pointer_model: Some(physical.pointer_model.clone()),
@@ -243,6 +244,7 @@ pub fn assembled(
             Some(&legalized.calls),
             false,
             ProfileOrName::Profile(target),
+            &llrm_core::backend::target::BUILT_IN,
         )?;
         for phase in phases.iter_mut() {
             if phase.class_name() == "Prologue" {
@@ -377,7 +379,7 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
     let mir = mir.modules.pop().expect("one module");
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
-    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
+    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu, &llrm_core::backend::target::BUILT_IN)?;
     // Beside the MIR stages, what they became.
     if let Some(directory) = std::env::var_os("LLRM_MIR_STAGES") {
         std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;

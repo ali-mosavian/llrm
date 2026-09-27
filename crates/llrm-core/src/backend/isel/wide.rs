@@ -323,8 +323,8 @@ impl Selector<'_, '_, '_> {
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![(quotient.0, Register::EAX), (quotient.1, Register::EDX), (remainder.0, Register::EBX), (remainder.1, Register::ECX)];
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract),
-            clobbers_high: call_clobbered_high(&contract),
+            clobbers: call_clobbers(&contract, self.segments),
+            clobbers_high: call_clobbered_high(&contract, self.segments),
             uses: requires.iter().map(|(held, _)| held.value).collect(),
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),

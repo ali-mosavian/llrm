@@ -20,6 +20,7 @@ use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::abi::qb::HirAbi;
 use llrm_core::backend::assemble::{self, Abi};
+use llrm_core::backend::target::Segments;
 use llrm_core::backend::{addressvalues, frame, globals, lower, masm, omfwrite};
 use llrm_core::flow;
 use llrm_core::hir::lower::Lowered;
@@ -1539,6 +1540,7 @@ fn _lowered_machine(
         rotate::entered(&Rc::new(machine_body)).map_err(|error| CompileError::Value(error.to_string()))?;
     let rotated = Lowered { body: mir::MirBody::clone(&machine_body), ..physical.lowered.clone() };
     _observe(observer, "rotated-mir", StageValue::Lowered(&rotated), Some(function), None)?;
+    let segments = Segments::of(llrm_core::abi::machine::current());
     let low = lower::lowered(
         &body.name,
         &machine_body,
@@ -1546,6 +1548,7 @@ fn _lowered_machine(
         BTreeSet::new(),
         Some(&physical.contracts),
         ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+        &segments,
         lower::Lowered {
             occurrences: Some(empty_occurrences),
             hints: Some(&physical.hints),
@@ -1574,6 +1577,7 @@ fn _lowered_machine(
         Some(&physical.calls),
         true,
         ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+        &segments,
     )?;
     for phase in phases.iter_mut() {
         // masm.Procedure owns a native BP frame and reserves the complete
@@ -1639,7 +1643,8 @@ impl Rich {
 
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
         let cpu = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
-        let target = assemble::Target { cpu, runtime: program.runtime.value(), basic: true };
+        let segments = Segments::of(llrm_core::abi::machine::current());
+        let target = assemble::Target { cpu, segments: &segments, runtime: program.runtime.value(), basic: true };
         let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
         let machined = assemble::machined(&self.mir, &function.name, &contracts, pool, &target).map_err(CompileError::Value)?;
         let final_ = finalized(&machined.body, machined.popped)?;

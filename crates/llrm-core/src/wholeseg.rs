@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::abi::{nativecalls, runtime};
 use crate::analysis::noreturn;
 use crate::backend::cpu::{self as targets, ProfileOrName};
-use crate::backend::{frame as frames, lower, nativeframe, omfwrite, pointers};
+use crate::backend::{frame as frames, lower, nativeframe, omfwrite, pointers, target};
 use crate::flow;
 use crate::frontends::bc::blocks::{self as split, Block, CodeMap, code_map};
 use crate::frontends::bc::{extent, fppatches};
@@ -428,6 +428,7 @@ pub fn _through_lir<'w>(
             absorbed.clone(),
             Some(contracts),
             cpu,
+            &target::BUILT_IN,
             lower::Lowered {
                 coverage: source.coverage.clone(),
                 nodes: source.nodes.clone(),
@@ -457,7 +458,7 @@ pub fn _through_lir<'w>(
         };
         let mut in_ssa = true;
         let mut phases =
-            flow::machine(&low.pins, Some(Rc::new(RefCell::new(frame))), None, Some(&found.calls), basic_semantics, cpu)
+            flow::machine(&low.pins, Some(Rc::new(RefCell::new(frame))), None, Some(&found.calls), basic_semantics, cpu, &target::BUILT_IN)
                 .map_err(value_error)?;
         for phase in &mut phases {
             if phase.class_name() == "PhiElimination" {

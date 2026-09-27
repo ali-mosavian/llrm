@@ -58,6 +58,7 @@ fn machine(
         BTreeSet::new(),
         Some(contracts),
         "386",
+        &llrm_core::backend::target::BUILT_IN,
         lower_mir::Lowered { occurrences: Some(&occurrences), pointer_model, ..Default::default() },
     )
     .expect("lowers")
