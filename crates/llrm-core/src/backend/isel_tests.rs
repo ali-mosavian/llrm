@@ -782,8 +782,7 @@ define void @f() addrspace(1) {
     assert_eq!(
         listing(text, "f"),
         [
-            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov ax, 0", "mov bx, 0", "mov word ptr [bp-4], ax", "mov word ptr [bp-2], bx",
-            "pushd 0", "call take", "add sp, 4", "leave", "retf",
+            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov word ptr [bp-4], 0", "mov word ptr [bp-2], 0", "pushd 0", "call take", "add sp, 4", "leave", "retf",
         ]
     );
 }
@@ -2316,4 +2315,24 @@ fn test_zero_minus_a_value_is_a_neg() {
     let got = listing_on("386", text, "f");
     assert!(got.iter().any(|line| line.starts_with("neg")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("sub")), "{got:?}");
+}
+
+/// An address known at link time is stored as immediates, as the old route
+/// stores it: lru's four far pointers each went through two registers.
+#[test]
+fn test_a_constant_address_is_stored_as_immediates() {
+    let text = "@g = internal global i16 0
+@near = internal global ptr null
+@far = internal global ptr addrspace(1) null
+define void @f() addrspace(1) {
+  store ptr @g, ptr @near
+  %a = addrspacecast ptr @g to ptr addrspace(1)
+  store ptr addrspace(1) %a, ptr @far
+  store ptr addrspace(1) null, ptr getelementptr (i8, ptr @far, i16 4)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let moves: Vec<&String> = got.iter().filter(|line| line.starts_with("mov")).collect();
+    assert!(moves.iter().all(|line| line.starts_with("mov word ptr") || line.starts_with("mov dword ptr")), "{got:?}");
 }

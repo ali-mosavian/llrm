@@ -1032,7 +1032,53 @@ impl Selector<'_, '_, '_> {
         if let Some(value) = self.constant(operand, width) {
             return Ok(Loc::Imm(Imm { value, width, address: None }));
         }
+        if let Some(symbol) = self.symbol(operand)? {
+            return Ok(symbol);
+        }
         Ok(Loc::Held(self.held(operand, ty, at, out)?))
+    }
+
+    /// A near address the linker resolves, as an immediate: a global's,
+    /// at a constant offset.
+    fn symbol(&mut self, operand: Operand) -> Result<Option<Loc>, Unselected> {
+        let ty = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
+        if !matches!(self.types().get(ty), Type::Pointer(0)) {
+            return Ok(None);
+        }
+        let pointer = match operand {
+            Operand::Value(value) => self.folded(value)?,
+            _ => Some(self.global(operand)?),
+        };
+        Ok(match pointer {
+            Some(Pointer::Global { space, index, offset, base: None }) => {
+                Some(Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, offset) }) }))
+            }
+            _ => None,
+        })
+    }
+
+    /// A far pointer's offset and selector words as immediates, where the
+    /// pointer is a constant: a number, null among them, or near data's
+    /// address in DGROUP.
+    fn far_words(&mut self, operand: Operand) -> Result<Option<[Loc; 2]>, Unselected> {
+        if let Some(bits) = self.constant(operand, 4) {
+            return Ok(Some([bits & 0xFFFF, (bits >> 16) & 0xFFFF].map(|value| Loc::Imm(Imm { value, width: 2, address: None }))));
+        }
+        let Operand::Value(value) = operand else { return Ok(None) };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return Ok(None) };
+        let instruction = self.function.instruction(inst);
+        if instruction.opcode != Opcode::Cast(CastOp::AddrSpaceCast) {
+            return Ok(None);
+        }
+        let Some(offset) = self.symbol(instruction.operands[0])? else { return Ok(None) };
+        let (space, index) = crate::hir::lower::DGROUP;
+        Ok(Some([offset, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })]))
+    }
+
+    /// Whether every reader of `value` stores it.
+    fn only_stored(&self, value: ValueId) -> bool {
+        let users = self.function.users(value);
+        !users.is_empty() && users.iter().all(|one| matches!(self.function.instruction(one.user).opcode, Opcode::Store { .. }) && one.index == 0)
     }
 
     /// An operand in a register, made there if it is not one already.
@@ -1570,6 +1616,9 @@ impl Selector<'_, '_, '_> {
         let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
         let mov = |into: Held, from: Loc| insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from]));
         if self.is_far(to) {
+            if self.only_stored(result) && self.far_words(Operand::Value(result))?.is_some() {
+                return Ok(());
+            }
             let pair = match (op, self.types().get(from).clone()) {
                 (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
                     let offset = self.held(operand, from, at, out)?;
@@ -1814,10 +1863,13 @@ impl Selector<'_, '_, '_> {
                 self.fars.insert(instruction.result.expect("a load's value"), (Some(offset), selector));
             }
             Opcode::Store { volatile, .. } if self.is_far(type_of(operands[0])) => {
-                let (offset, selector) = self.far(operands[0], at, out)?;
+                let words = match self.far_words(operands[0])? {
+                    Some(words) => words,
+                    None => self.far(operands[0], at, out).map(|(offset, selector)| [Loc::Held(offset), Loc::Held(selector)])?,
+                };
                 let pointer = self.pointer(operands[1])?;
-                for (held, by) in [(offset, 0), (selector, 2)] {
-                    let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![Loc::Held(held)]);
+                for (word, by) in words.into_iter().zip([0, 2]) {
+                    let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![word]);
                     out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
                 }
             }
