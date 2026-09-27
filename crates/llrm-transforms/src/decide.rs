@@ -19,10 +19,7 @@
 //!
 //! Dropped, no rich MIR analogue: the memory a compare's operand read
 //! (`held`: a load is its own instruction, and its fact consts'), and the
-//! case width checks (a switch's cases are its condition's type). Waiting
-//! for their ports: a pointer compared with null (`alias`'s nonnull), and
-//! `ranges::bounded` (induction's); until then a two-way branch one arm of
-//! which the dominating edges rule out asks `ranges::dominated_edges`.
+//! case width checks (a switch's cases are its condition's type).
 //!
 //! Tests, in `decide_tests.rs`: `test_empty_jump_threading_preserves_phi_inputs_and_effects`
 //! is ported. The other old tests of `_outcome`, `_switch_target` and
@@ -31,13 +28,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_graph::loops;
-use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::context::{ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueId};
@@ -98,9 +96,19 @@ pub fn decided(module: &mut Module, layout: &DataLayout, id: GlobalId) -> Result
 fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     let facts = consts::known(unit, Some(&Calls::default()), None, None);
-    let successors = |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states);
+    // Points-to only for a pointer compared with null, as LLVM asks
+    // isKnownNonZero of one value rather than solving every pointer.
+    let pointers = std::cell::OnceCell::new();
+    let pointing = alias::may_point(unit);
+    let nonnull = |value: ValueId| {
+        pointing.contains(&value)
+            && alias::nonnull_by_definition(unit, value)
+                .unwrap_or_else(|| pointers.get_or_init(|| alias::pointers(unit)).as_ref().is_ok_and(|facts| facts.nonnull(value)))
+    };
+    let successors =
+        |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));
     let facts = constant_cycles::propagated(unit, &facts, Some(&successors));
-    let scoped = ranges::dominated_edges(unit)?;
+    let scoped = ranges::bounded(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else {
@@ -114,7 +122,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
         let [_, Operand::Block(taken), Operand::Block(other)] = instruction.operands[..] else {
             continue;
         };
-        let mut answer = _outcome(unit, block, &facts);
+        let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none()
             && let Some(scope) = scoped.get(&cfg::id(block))
         {
@@ -167,8 +175,9 @@ pub fn _taken(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 }
 
 /// Whether `block`'s conditional branch is taken: its condition is known,
-/// or the compare that makes it has two known operands.
-pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>) -> Option<bool> {
+/// the compare that makes it has two known operands, or it compares with
+/// null a pointer `nonnull` says is not.
+pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>, nonnull: Option<&dyn Fn(ValueId) -> bool>) -> Option<bool> {
     let branch = unit.function.terminator(block)?;
     let instruction = unit.function.instruction(branch);
     if instruction.opcode != Opcode::Br || instruction.operands.len() != 3 {
@@ -181,9 +190,19 @@ pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>) -
     let Opcode::ICmp(predicate) = compare.opcode else {
         unreachable!("_comparison finds an icmp")
     };
-    let left = consts::_operand(unit, compare.operands[0], facts, None)?;
-    let right = consts::_operand(unit, compare.operands[1], facts, None)?;
-    Some(_taken(predicate, &left, &right))
+    let (left, right) = (consts::_operand(unit, compare.operands[0], facts, None), consts::_operand(unit, compare.operands[1], facts, None));
+    if let (Some(left), Some(right)) = (&left, &right) {
+        return Some(_taken(predicate, left, right));
+    }
+    if !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+        return None;
+    }
+    let null = |one: Operand| matches!(one, Operand::Constant(id) if unit.context.get(id).kind == ConstantKind::Null);
+    let pointer = match compare.operands[..] {
+        [Operand::Value(pointer), other] | [other, Operand::Value(pointer)] if null(other) => pointer,
+        _ => return None,
+    };
+    nonnull?(pointer).then_some(predicate == IntPredicate::Ne)
 }
 
 /// Where the switch `inst` goes, where its condition is known and its
@@ -212,7 +231,13 @@ pub fn _switch_target(unit: &Unit, inst: InstId, facts: &IndexMap<ValueId, Known
 
 /// The successors of block `at` that can run, given what is known so far;
 /// `None` while its condition is still pending.
-pub fn _executable_successors(unit: &Unit, at: i64, facts: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>) -> Option<Vec<i64>> {
+pub fn _executable_successors(
+    unit: &Unit,
+    at: i64,
+    facts: &IndexMap<ValueId, Known>,
+    states: &IndexMap<ValueId, State>,
+    nonnull: Option<&dyn Fn(ValueId) -> bool>,
+) -> Option<Vec<i64>> {
     let function = unit.function;
     let block = cfg::block(at);
     let all = function.successors(block).into_iter().map(cfg::id).collect::<Vec<_>>();
@@ -230,7 +255,7 @@ pub fn _executable_successors(unit: &Unit, at: i64, facts: &IndexMap<ValueId, Kn
     let [condition, Operand::Block(taken), Operand::Block(other)] = instruction.operands[..] else {
         return Some(all);
     };
-    if let Some(answer) = _outcome(unit, block, facts) {
+    if let Some(answer) = _outcome(unit, block, facts, nonnull) {
         return Some(vec![cfg::id(if answer { taken } else { other })]);
     }
     let compared = transform::_comparison(function, block, last).map(|compare| function.instruction(compare).operands.clone()).unwrap_or_default();

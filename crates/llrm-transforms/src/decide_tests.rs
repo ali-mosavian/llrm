@@ -316,3 +316,80 @@ b0:
 "
     );
 }
+
+/// Whether @f still has a block named `name`.
+fn has(module: &Module, name: &str) -> bool {
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    function.layout().iter().any(|&one| function.block(one).name.as_deref() == Some(name))
+}
+
+/// `i < -5` inside `for i = 0 to 9`: only the counted loop's range, not the
+/// header's edge, says it never holds.
+#[test]
+fn a_branch_the_counted_loops_range_rules_out_is_decided() {
+    let mut module = parsed(
+        "define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b4 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b4 ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %neg = icmp slt i16 %i, -5
+  br i1 %neg, label %b3, label %b4
+
+b3:
+  %u = add i16 %s, 100
+  br label %b4
+
+b4:
+  %t = phi i16 [ %s, %b2 ], [ %u, %b3 ]
+  %next = add i16 %i, 1
+  br label %b1
+
+b5:
+  ret i16 %s
+}
+",
+    );
+    let before = results(&module, &[&[]]);
+    decide(&mut module);
+    assert!(!has(&module, "b3"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[]]), before);
+}
+
+/// A pointer to an object compared with null: never equal. A parameter may be null.
+#[test]
+fn a_pointer_to_an_object_is_never_null() {
+    for (pointer, predicate, decided) in [
+        ("%a", "eq", true),
+        ("%a", "ne", true),
+        ("%q", "eq", true), // an object's, through points-to
+        ("%p", "eq", false),
+    ] {
+        let mut module = parsed(&format!(
+            "define i16 @f(ptr %p) {{
+b0:
+  %a = alloca [4 x i16]
+  %q = getelementptr i8, ptr %a, i16 2
+  %c = icmp {predicate} ptr {pointer}, null
+  br i1 %c, label %yes, label %no
+
+yes:
+  ret i16 1
+
+no:
+  ret i16 2
+}}
+"
+        ));
+        decide(&mut module);
+        let gone = if predicate == "eq" { "yes" } else { "no" };
+        assert_eq!(!has(&module, gone), decided, "{pointer} {predicate}: {}", printed(&module));
+        assert!(has(&module, if predicate == "eq" { "no" } else { "yes" }));
+    }
+}
