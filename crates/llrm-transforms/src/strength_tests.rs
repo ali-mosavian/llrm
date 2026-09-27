@@ -492,3 +492,22 @@ fn every_corpus_reduction_verifies_and_settles() {
     }
     assert!(fired > 0, "the corpus multiplies a counter somewhere");
 }
+
+/// The emitted corpus holds no phi: each counter lives in an `alloca`,
+/// loaded in the header and stored in the latch, so induction finds no
+/// counter. Promoted, the same loops reduce.
+#[test]
+fn emitted_counters_reduce_once_promoted() {
+    let (mut alone, mut promoted) = (0, 0);
+    for (_, mut module) in llrm_analysis::testing::corpus().into_iter().filter(|(name, _)| name.starts_with("emitted/")) {
+        let mut before = module.clone();
+        alone += managed(&mut before, Strength::default()).matches("lsr.iv.next").count();
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::promote::Promote);
+        manager.add(Strength::default());
+        manager.run(&mut module).unwrap();
+        promoted += printed(&module).matches("lsr.iv.next").count();
+    }
+    assert_eq!(alone, 0);
+    assert!(promoted > 0);
+}
