@@ -438,12 +438,17 @@ fn _address(
         .map(|&one| known(one).and_then(|bits| u128::try_from(bits).ok()).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128))))
         .collect::<Vec<_>>();
     let (constant, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
-    let width = unit.layout.pointer(unit.space(pointer)?).index_bits;
+    // An index wider than the pointer's is truncated to it, so its low
+    // bits are the address's: the formula is in the index's width.
+    let mut width = unit.layout.pointer(unit.space(pointer)?).index_bits;
+    let mut wider = None::<u32>;
     for (at, scale) in variable {
         let Operand::Value(index) = op.operands[1 + at] else { return None };
-        if unit.int_bits(Operand::Value(index)) != Some(width) {
+        let bits = unit.int_bits(Operand::Value(index))?;
+        if bits < width || wider.is_some_and(|wider| wider != bits) {
             return None;
         }
+        wider = Some(bits);
         let scale = BigInt::from(scale);
         match forms.get(&index) {
             Some((counter, form_scale, terms)) if of.as_ref().is_none_or(|of| of == counter) => {
@@ -451,10 +456,11 @@ fn _address(
                 by += form_scale * &scale;
                 offsets.extend(terms.iter().map(|(one, coefficient)| (one.clone(), coefficient * &scale)));
             }
-            None if still.contains(index) => offsets.push((AffineOperand::Value(index, width), scale)),
+            None if still.contains(index) => offsets.push((AffineOperand::Value(index, bits), scale)),
             _ => return None,
         }
     }
+    width = wider.unwrap_or(width);
     let of = of?;
     if of.start.width() != width {
         return None;

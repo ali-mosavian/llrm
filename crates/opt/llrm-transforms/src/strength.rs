@@ -10,10 +10,11 @@
 //! loops inside it left it.
 //!
 //! Dropped, with no rich-MIR counterpart:
-//! - x86 address forms: `AddressForm`, `_indexable`, `_indexed`,
-//!   `_addressed`, `_legal_form`, `_paired`, `_secondary_indexes`,
-//!   `_widened` and `_rebased`. Which address folds a counter as an index
-//!   is isel's.
+//! - x86 address forms: `_indexable`, `_indexed`, `_addressed`,
+//!   `_legal_form`, `_paired`, `_secondary_indexes`, `_widened` and
+//!   `_rebased`. Which address a counter indexes is `indexing`'s one
+//!   decision a counter, on the target's `AddressForm`s; spelling it is
+//!   isel's.
 //! - Flags: `_stepping_point` and `_live_conditions` kept the step off a
 //!   live compare. An `icmp` is a value, so the step goes before the
 //!   latch's branch, and every candidate reads the header's value.
@@ -63,8 +64,9 @@ use llrm_mir::{Constant, ConstantKind};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::{dead, exitsink, indvars, ivshare, loopexit};
+use crate::{dead, exitsink, indexing, indvars, ivshare, loopexit};
 use crate::profit::{self, OperationCosts};
+use llrm_mir::target::AddressForm;
 
 /// Strength reduction, priced on the target's costs and registers
 /// (`profit::costs`, `profit::registers`).
@@ -102,12 +104,15 @@ impl FunctionPass for Strength {
 
 /// One loop's reductions, decided before anything changes.
 struct Plan {
+    loop_: Loop,
     header: BlockId,
     preheader: BlockId,
     latch: BlockId,
     chosen: Vec<Derived>,
     /// Each credited bare root, with the rest of its stride class.
     classes: Vec<(Derived, Vec<Derived>)>,
+    /// Each counter an address form asks wider: its domain, and the bits.
+    widened: Vec<(Affine, (BigInt, BigInt), u32)>,
 }
 
 /// Every multiply of a counter by an invariant, and every formula like it,
@@ -121,6 +126,7 @@ struct Plan {
 pub fn reduced(unit: &mut Unit, outer: &Outer, facts: &IndexMap<ValueId, Known>, control_recurrences: bool) -> bool {
     let costs = &profit::costs(outer);
     let (registers, call_registers) = profit::registers(outer);
+    let forms = outer.target().address_forms();
     let mut changed = false;
     let mut found = None::<Vec<Formulas>>;
     let mut visited = BTreeSet::<i64>::new();
@@ -129,7 +135,7 @@ pub fn reduced(unit: &mut Unit, outer: &Outer, facts: &IndexMap<ValueId, Known>,
         let current = found.get_or_insert_with(|| induction::of(&view));
         let Some(index) = current.iter().position(|(one, _, _)| !visited.contains(&one.header)) else { break };
         visited.insert(current[index].0.header);
-        let Some(plan) = _plan(&view, facts, &current[index..=index], registers, call_registers, costs, control_recurrences) else { continue };
+        let Some(plan) = _plan(&view, facts, &current[index..=index], registers, call_registers, costs, &forms, control_recurrences) else { continue };
         if _applied(unit, &plan) {
             changed = true;
             found = None;
@@ -159,6 +165,11 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> bool {
         unit.function.replace_all_uses_with(answer, recurrence);
         carried.insert(one.op, recurrence);
         changed = true;
+    }
+    // A counter an address form reads wider is widened once its formulas
+    // are carried.
+    for (counter, domain, bits) in &plan.widened {
+        changed |= indvars::widened(unit.context, unit.function, &plan.loop_, counter, domain, *bits);
     }
     // A credited root carries its whole stride class: every other formula
     // of its counter and multiplier is an invariant plus the root, however
@@ -196,6 +207,7 @@ fn _plan(
     registers: i64,
     call_registers: i64,
     costs: &OperationCosts,
+    forms: &[AddressForm],
     control_recurrences: bool,
 ) -> Option<Plan> {
     let function = view.function;
@@ -208,13 +220,7 @@ fn _plan(
     } else {
         BTreeSet::new()
     };
-    // Carrying an address its counter indexes by bytes swaps one step for
-    // another and holds one register more, unless the counter then dies.
-    let group = &groups[&loop_.header].iter().filter(|one| !_indexed(one) || credits.contains(&one.op)).cloned().collect::<Vec<_>>();
-    if group.is_empty() {
-        return None;
-    }
-    let mut room = group.len() as i64;
+    let mut room = groups[&loop_.header].len() as i64;
     let mut capacity = registers;
     let calls = loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions()).any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)));
     if call_registers != 0 && calls {
@@ -225,6 +231,21 @@ fn _plan(
         // a tighter loop.
         let pressure = liveness::pressure(function, None, Some(&loop_.body)) as i64;
         room = 0.max((capacity - basics.len() as i64 - _RESERVE).min(capacity - pressure));
+    }
+    // An address a counter indexes is left to it.
+    let mut indexed = BTreeSet::new();
+    let mut widened = Vec::new();
+    for counter in basics.values() {
+        let domain = induction::domain(view, loop_, counter, facts);
+        let Some(found) = indexing::indexing(function, loop_, counter, derived, forms, costs, room, domain.is_some()) else { continue };
+        indexed.extend(found.indexed);
+        if let (Some(bits), Some(domain)) = (found.widened, domain) {
+            widened.push((counter.clone(), domain, bits));
+        }
+    }
+    let group = &groups[&loop_.header].iter().filter(|one| !indexed.contains(&one.op)).cloned().collect::<Vec<_>>();
+    if group.is_empty() && widened.is_empty() {
+        return None;
     }
     // A derived recurrence which can replace its source loop counter does
     // not consume another recurrence slot.
@@ -248,7 +269,7 @@ fn _plan(
         .filter(|one| _bare(one) && credits.contains(&one.op))
         .map(|root| (root.clone(), group.iter().filter(|one| one.op != root.op && _same_stride(function, root, one)).cloned().collect()))
         .collect();
-    Some(Plan { header: cfg::block(loop_.header), preheader, latch: cfg::block(*latch), chosen, classes })
+    Some(Plan { loop_: loop_.clone(), header: cfg::block(loop_.header), preheader, latch: cfg::block(*latch), chosen, classes, widened })
 }
 
 /// The loop's one way in, where that way leads nowhere else.
@@ -396,11 +417,6 @@ struct _Replacement {
 }
 
 /// A formula that is its counter times its multiplier and nothing more.
-/// An invariant pointer plus the counter itself, give or take a constant.
-fn _indexed(one: &Derived) -> bool {
-    one.pointer.is_some() && matches!(&one.by, AffineOperand::Const(by) if by.n == BigInt::from(1)) && one.offsets.iter().all(|(term, _)| matches!(term, AffineOperand::Const(_)))
-}
-
 fn _bare(one: &Derived) -> bool {
     one.offsets.is_empty() && one.pointer.is_none()
 }

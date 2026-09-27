@@ -575,3 +575,48 @@ fn a_counter_read_only_after_the_loop_dies() {
     let after = printed(&module);
     assert!(changed && after.contains("add i16 %got, 81") && !after.contains("%p ="), "{after}");
 }
+
+/// A word counter indexing a dword array, widened: the wide counter is the
+/// address's index, its product and test are rebuilt wide, and a value
+/// reading the counter takes its truncation. Unwidened, every scaled index
+/// needed a register and a shift of its own.
+#[test]
+fn test_a_widened_counter_indexes_and_tests_wide() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [16 x i32]
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i32 [ 0, %entry ], [ %t, %body ]
+  %m = mul nsw i16 %i, 4
+  %p = getelementptr inbounds i8, ptr %a, i16 %m
+  %x = zext i16 %i to i32
+  %y = add i32 %x, %n
+  store i32 %y, ptr %p
+  %v = load i32, ptr %p
+  %t = add i32 %s, %v
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, 16
+  br i1 %c, label %body, label %done
+done:
+  ret i32 %t
+}
+";
+    let (changed, module) = through(text, &[&[5], &[-3]], |context, layout, function, analyses| {
+        let facts = analyses.fresh().get::<llrm_analysis::manager::Registers>(context, layout, function);
+        let (loop_, counter, domain) = {
+            let view = llrm_analysis::memory::Unit::within(context, layout, function, analyses.outer());
+            let (loop_, basics, _) = llrm_analysis::induction::of(&view).into_iter().next().expect("a loop");
+            let counter = basics.values().next().expect("a counter").clone();
+            let domain = llrm_analysis::induction::domain(&view, &loop_, &counter, &facts).expect("a domain");
+            (loop_, counter, domain)
+        };
+        super::widened(context, function, &loop_, &counter, &domain, 32)
+    });
+    assert!(changed);
+    let text = printed(&module);
+    assert!(text.contains("getelementptr inbounds i8, ptr %a, i32"), "{text}");
+    assert!(text.contains("icmp ult i32"), "{text}");
+    assert!(text.contains("trunc i32"), "{text}");
+}

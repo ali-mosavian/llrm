@@ -24,6 +24,7 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod gvn;
 pub mod hoist;
+pub mod indexing;
 pub mod indvars;
 pub mod inline;
 pub mod interprocedural;

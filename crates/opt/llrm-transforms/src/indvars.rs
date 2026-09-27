@@ -42,7 +42,7 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
@@ -962,6 +962,167 @@ fn _rebased(seeds: &mut Seeds, uses: &[Use], bias: &AffineOperand, width: u32) -
         }
     }
     out
+}
+
+// ------------------------------------------------------------------ widened
+
+/// `counter`, a header phi of `loop_`, recomputed `bits` wide, as LLVM's
+/// WidenIV: its step, and every address, compare and constant product or
+/// sum only addresses read, are rebuilt wide; any other reader takes the
+/// truncation. `domain` is induction's proof of the values it takes on a
+/// trip; the step must stay within the narrow signed range, so the wide
+/// value is the narrow one sign-extended. Whether it widened.
+pub fn widened(context: &mut Context, function: &mut Function, loop_: &Loop, counter: &Affine, domain: &(BigInt, BigInt), bits: u32) -> bool {
+    let Some(phi) = _defining(function, counter.value) else { return false };
+    let narrow = counter.start.width();
+    let (Some(preheader), [latch]) = (_preheader(function, loop_), &loop_.latches.iter().copied().collect::<Vec<_>>()[..]) else { return false };
+    let latch = cfg::block(*latch);
+    let AffineOperand::Const(step) = &counter.step else { return false };
+    let step = _signed(&step.n, narrow);
+    let half = BigInt::from(1) << (narrow - 1);
+    let (low, high) = domain;
+    let unwrapped = low + step.clone().min(BigInt::zero()) >= -half.clone() && high + step.clone().max(BigInt::zero()) < half;
+    let (Some(start), Some(Operand::Value(next))) = (_from(function, phi, preheader), _from(function, phi, latch)) else { return false };
+    let Some(stepped) = _defining(function, next) else { return false };
+    let step_op = function.instruction(stepped);
+    let adds = step_op.opcode == Opcode::Binary(BinaryOp::Add) && step_op.operands.contains(&Operand::Value(counter.value));
+    if narrow >= bits || function.instruction(phi).opcode != Opcode::Phi || !unwrapped || !adds {
+        return false;
+    }
+    let wide = context.types.int(bits);
+    let wide_start = match start {
+        Operand::Constant(id) => match context.get(id).kind {
+            llrm_mir::ConstantKind::Int(raw) => _constant(context, &_signed(&BigInt::from(raw), narrow), bits),
+            _ => return false,
+        },
+        _ => {
+            let before = function.terminator(preheader).expect("a preheader's branch");
+            _placed(function, Opcode::Cast(CastOp::SExt), wide, vec![start], Position::Before(before))
+        }
+    };
+    let poison = Operand::Constant(context.constant(llrm_mir::Constant { ty: wide, kind: llrm_mir::ConstantKind::Poison }));
+    let wide_phi = function.create_instruction(Opcode::Phi, wide, from_arms(&[(wide_start, preheader), (poison, latch)]), Flags::default(), None);
+    function.insert(wide_phi, Position::Before(phi)).expect("a placed phi");
+    let wide_counter = Operand::Value(function.instruction(wide_phi).result.expect("a phi's value"));
+    let increment = _constant(context, &step, bits);
+    let wide_next = _placed(function, Opcode::Binary(BinaryOp::Add), wide, vec![wide_counter, increment], Position::Before(stepped));
+    let arm = function.instruction(wide_phi).operands.iter().position(|&one| one == poison).expect("the latch's arm");
+    function.set_operand(wide_phi, arm, wide_next);
+    let header = cfg::block(loop_.header);
+    let after_phis = function.block(header).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminated header");
+    let trips = [(counter.value, wide_counter, (low.clone(), high.clone()), Position::Before(after_phis)), (next, wide_next, (low + &step, high + &step), Position::Before(stepped))];
+    for (value, with, range, at) in trips {
+        _rewidened(context, function, value, with, &range, at, &[phi, stepped], bits);
+    }
+    true
+}
+
+/// Each reader of narrow `value` reading `with`, its `bits`-wide
+/// sign-extension, instead; `range` is what `value` takes. `skip` are the
+/// counter's own phi and step, which die.
+#[allow(clippy::too_many_arguments)]
+fn _rewidened(context: &mut Context, function: &mut Function, value: ValueId, with: Operand, range: &(BigInt, BigInt), at: Position, skip: &[InstId], bits: u32) {
+    let wide = context.types.int(bits);
+    let mut truncated = None;
+    for one in function.users(value).to_vec() {
+        if skip.contains(&one.user) {
+            continue;
+        }
+        let user = function.instruction(one.user).clone();
+        let other = user.operands.iter().copied().find(|&operand| operand != Operand::Value(value));
+        match user.opcode {
+            // An address truncates its index to its own width: any wider
+            // spelling of the same low bits names the same byte.
+            Opcode::GetElementPtr { .. } if one.index != 0 => function.set_operand(one.user, one.index as usize, with),
+            Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl))
+                if _only_indexes(function, &user) && other.is_some_and(|other| matches!(other, Operand::Constant(_))) && (op != BinaryOp::Shl || one.index == 0) =>
+            {
+                let mut operands = user.operands.clone();
+                operands[one.index as usize] = with;
+                if let Some(Operand::Constant(id)) = other {
+                    let position = 1 - one.index as usize;
+                    let llrm_mir::ConstantKind::Int(raw) = context.get(id).kind else { continue };
+                    let narrow = function.operand_type(context, Operand::Value(value)).and_then(|ty| match context.types.get(ty) {
+                        llrm_mir::Type::Int(width) => Some(*width),
+                        _ => None,
+                    });
+                    let Some(narrow) = narrow else { continue };
+                    operands[position] = _constant(context, &_signed(&BigInt::from(raw), narrow), bits);
+                }
+                let rebuilt = _placed(function, user.opcode.clone(), wide, operands, Position::Before(one.user));
+                let Operand::Value(result) = rebuilt else { unreachable!("an operation's value") };
+                let old = user.result.expect("a value");
+                // Its own readers are addresses, which take the wide value.
+                for reader in function.users(old).to_vec() {
+                    function.set_operand(reader.user, reader.index as usize, Operand::Value(result));
+                }
+            }
+            Opcode::ICmp(predicate) if _widenable(context, predicate, other, range) => {
+                let mut operands = user.operands.clone();
+                operands[one.index as usize] = with;
+                let position = 1 - one.index as usize;
+                if let Operand::Constant(id) = operands[position] {
+                    let llrm_mir::ConstantKind::Int(raw) = context.get(id).kind else { continue };
+                    let narrow = function.operand_type(context, Operand::Value(value)).and_then(|ty| match context.types.get(ty) {
+                        llrm_mir::Type::Int(width) => Some(*width),
+                        _ => None,
+                    });
+                    let Some(narrow) = narrow else { continue };
+                    operands[position] = _constant(context, &_signed(&BigInt::from(raw), narrow), bits);
+                }
+                let bit = user.ty;
+                let rebuilt = _placed(function, user.opcode.clone(), bit, operands, Position::Before(one.user));
+                function.replace_all_uses_with(user.result.expect("a bit"), rebuilt);
+            }
+            _ => {
+                let narrow = function.value(value).ty;
+                let cut = *truncated.get_or_insert_with(|| _placed(function, Opcode::Cast(CastOp::Trunc), narrow, vec![with], at));
+                function.set_operand(one.user, one.index as usize, cut);
+            }
+        }
+    }
+}
+
+/// Whether every reader of `op`'s value takes it as an address's index.
+fn _only_indexes(function: &Function, op: &llrm_mir::module::Instruction) -> bool {
+    op.result.is_some_and(|result| {
+        let users = function.users(result);
+        !users.is_empty() && users.iter().all(|one| one.index != 0 && matches!(function.instruction(one.user).opcode, Opcode::GetElementPtr { .. }))
+    })
+}
+
+/// Whether a compare by `predicate` of a value in `range` with `other`
+/// answers the same on both sign-extended: always for a signed or equality
+/// test of a constant; for an unsigned one where both are non-negative.
+fn _widenable(context: &Context, predicate: IntPredicate, other: Option<Operand>, range: &(BigInt, BigInt)) -> bool {
+    let Some(Operand::Constant(id)) = other else { return false };
+    let llrm_mir::ConstantKind::Int(raw) = context.get(id).kind else { return false };
+    let unsigned = matches!(predicate, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge);
+    let width = match context.types.get(context.get(id).ty) {
+        llrm_mir::Type::Int(width) => *width,
+        _ => return false,
+    };
+    !unsigned || (range.0 >= BigInt::zero() && _signed(&BigInt::from(raw), width) >= BigInt::zero())
+}
+
+/// `raw`, `width` bits, as a signed number.
+fn _signed(raw: &BigInt, width: u32) -> BigInt {
+    let raw = masked(raw, width);
+    if raw >= BigInt::from(1) << (width - 1) { raw - (BigInt::from(1) << width) } else { raw }
+}
+
+/// `n` as a `bits`-wide constant operand.
+fn _constant(context: &mut Context, n: &BigInt, bits: u32) -> Operand {
+    let ty = context.types.int(bits);
+    let raw = u128::try_from(masked(n, bits)).expect("a masked constant");
+    Operand::Constant(context.constant(llrm_mir::Constant { ty, kind: llrm_mir::ConstantKind::Int(raw) }))
+}
+
+/// `opcode` of `operands`, placed at `at`.
+fn _placed(function: &mut Function, opcode: Opcode, ty: llrm_mir::types::TypeId, operands: Vec<Operand>, at: Position) -> Operand {
+    let inst = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+    function.insert(inst, at).expect("a placed instruction");
+    Operand::Value(function.instruction(inst).result.expect("a value"))
 }
 
 #[cfg(test)]

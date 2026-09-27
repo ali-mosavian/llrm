@@ -1170,6 +1170,47 @@ mod tests {
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
+    /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
+    fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
+        let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        lines
+            .iter()
+            .enumerate()
+            .filter(|(_, one)| one.starts_with('j') && !one.starts_with("jmp"))
+            .filter_map(|(at, one)| {
+                let label = format!("{}:", one.split_whitespace().nth(1)?);
+                let top = lines[..at].iter().position(|line| *line == label)?;
+                Some(lines[top..=at].iter().map(|one| (*one).to_owned()).collect::<Vec<_>>())
+            })
+            .find(|body| body.iter().any(|one| one.starts_with(marker)))
+            .expect("the loop")
+    }
+
+    /// `strides` walks frame arrays of 1-, 2-, 4- and 8-byte elements with one
+    /// counter. Strength gave each stride its own pointer, and two of them lived
+    /// in the frame: loaded for every access and stepped in memory.
+    #[test]
+    fn test_arrays_of_several_strides_share_one_index() {
+        for function in ["_bench_strides3", "_bench_strides4"] {
+            let body = selected_loop("strides", function, "xor");
+            let registers: std::collections::BTreeSet<String> = body
+                .iter()
+                .filter_map(|one| Some(one.split_once('[')?.1.split_once(']')?.0.to_owned()))
+                .flat_map(|inside| inside.split(['+', '-', '*']).map(str::trim).map(str::to_owned).collect::<Vec<_>>())
+                .filter(|part| part.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && !matches!(part.as_str(), "bp" | "ebp"))
+                .filter(|part| ["ax", "bx", "cx", "dx", "si", "di"].iter().any(|name| part.ends_with(name)))
+                .collect();
+            // A pointer kept in the frame is stepped there: `add word ptr [bp-76h], 1`.
+            let stepped = body.iter().any(|one| ["add ", "sub ", "inc ", "dec "].iter().any(|op| one.strip_prefix(op).is_some_and(|rest| rest.split(',').next().unwrap_or("").contains("ptr ["))));
+            assert!(registers.len() == 1 && !stepped, "{function}: {registers:?}\n{body:#?}");
+        }
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
