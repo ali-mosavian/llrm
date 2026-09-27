@@ -1895,6 +1895,11 @@ impl Selector<'_, '_, '_> {
                     }
                     CastOp::Trunc => {
                         let source = self.held(operands[0], from, at, out)?;
+                        // A joined dword's low word is the word it was joined from.
+                        let source = match self.joins.get(&source.value) {
+                            Some(&(low, _)) if to <= 2 => low,
+                            _ => source,
+                        };
                         semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: to, ..source })])
                     }
                     // An i1's byte is already 0 or 1: its sign extension is its negation.

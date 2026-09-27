@@ -2288,3 +2288,17 @@ define i32 @f() addrspace(1) {
 ";
     assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
 }
+
+/// A word truncated from a dword that arrived as two words is its low word:
+/// struct_view's main joined its call's dx:ax result to return ax.
+#[test]
+fn test_a_word_truncated_from_a_joined_dword_is_its_low_word() {
+    let text = "declare i32 @g() addrspace(1)
+define i16 @f() addrspace(1) {
+  %r = call addrspace(1) i32 @g()
+  %t = trunc i32 %r to i16
+  ret i16 %t
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
+}
