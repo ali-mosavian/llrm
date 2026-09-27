@@ -192,7 +192,7 @@ fn _moved(
 fn _last_counter_value(unit: &Unit, inst: InstId, loop_: &Loop) -> Option<BigInt> {
     let Operand::Value(stored) = unit.function.instruction(inst).operands[0] else { return None };
     let counter = induction::basics(unit, loop_).get(&stored)?.clone();
-    let proof = induction::controlling(unit, loop_, &counter, &consts::known(unit, None, None, None))?;
+    let proof = induction::controlling(unit, loop_, &counter, &unit.registers())?;
     Some(masked(proof.last.as_ref()?, counter.start.width()))
 }
 

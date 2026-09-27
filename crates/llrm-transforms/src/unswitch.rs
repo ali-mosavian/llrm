@@ -35,7 +35,7 @@
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::{cfg, consts, memory, occurrence};
+use llrm_analysis::{cfg, memory, occurrence};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::context::Context;
@@ -95,7 +95,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
     let count = |state: &Function| cfg::Shape::of(state).loops.len();
     let price = |state: &Function| {
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
-        let trips = profit::proven_trips(&within, &consts::known(&within, None, None, None));
+        let trips = profit::proven_trips(&within, &within.registers());
         profit::weighted(unit.context, state, unit.callees, costs, Some(&trips))
     };
     let worse = match (price(unit.function), price(&candidate)) {

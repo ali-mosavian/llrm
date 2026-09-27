@@ -28,7 +28,6 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::consts;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::cfg;
@@ -136,7 +135,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
     let still = induction::invariant(function, &loop_.body);
     let (pointer, byte, bytes) = _stored(unit, callees, effect, &still)?;
 
-    let facts = consts::known(unit, None, None, None);
+    let facts = unit.registers();
     let Operand::Value(address) = pointer else { return None };
     let formula = induction::derived(unit, loop_, Some(&counters)).into_iter().find(|one| one.pointer.is_some() && function.instruction(one.op).result == Some(address))?;
     let width = formula.of.start.width();
