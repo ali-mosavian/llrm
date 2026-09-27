@@ -104,7 +104,10 @@ fn a_pooled_constant_joins_bcs_constants() {
 fn a_refusal_writes_nothing() {
     let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
     std::fs::create_dir_all(&out).expect("made");
-    let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), fixture("divmod-p-evt.obj")]
+    // Refused: INTO is unmodelled.
+    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/arridx-bounds-p-g2.obj");
+    assert!(refused.exists());
+    let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), refused]
         .iter()
         .map(|one| one.display().to_string())
         .chain(["-o".to_owned(), out.display().to_string()])
@@ -173,4 +176,15 @@ fn fpdeep_prints_constants_and_computes_no_float() {
         assert!(main.contains(&format!("@llrm.qb.B$PEI4(i16 0, i16 {n})")), "{n}\n{main}");
     }
     assert!(!["fmul", "fdiv", "fadd", "fsub"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
+}
+
+/// ON ERROR's landing stub, its inline helper and ERR's word are the
+/// module's own: `__LANDING` was left an external LINK could not resolve.
+#[test]
+fn a_handled_module_defines_its_landing() {
+    for name in ["onerr-q-o.obj", "onerr-v-g3.obj"] {
+        let externals = omf::externals(&recompiled(name));
+        assert!(externals.iter().any(|one| one == "B$OEGA"), "{name}: {externals:?}");
+        assert!(!externals.iter().any(|one| one == "__LANDING" || one.starts_with("$QB$")), "{name}: {externals:?}");
+    }
 }

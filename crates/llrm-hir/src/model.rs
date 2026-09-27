@@ -664,6 +664,35 @@ impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
         Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new() }
     }
+
+    /// The rows of the statement table, in source order; none without one.
+    pub fn statements(&self) -> Result<Vec<Statement>, String> {
+        let objects: Vec<&DataObject> = self.data.iter().filter(|one| one.name == STATEMENT_TABLE).collect();
+        let object = match objects[..] {
+            [] => return Ok(Vec::new()),
+            [one] => one,
+            _ => return Err("more than one statement table".to_owned()),
+        };
+        if object.linkage != DataLinkage::Internal || !object.readonly || !object.relocations.is_empty() || object.address != AddressKind::Near || object.bytes.len() % 14 != 0 {
+            return Err("the statement table has an invalid storage contract".to_owned());
+        }
+        let bytes: Vec<u8> = object.bytes.iter().map(|&one| one as u8).collect();
+        let word = |at: usize, size: usize| bytes[at..at + size].iter().rev().fold(0i64, |sum, &byte| (sum << 8) | i64::from(byte));
+        Ok((0..bytes.len()).step_by(14).map(|at| Statement { function: word(at, 4), block: word(at + 4, 4), instruction: word(at + 8, 4), line: word(at + 12, 2) }).collect())
+    }
+}
+
+/// The internal data object whose rows are where RESUME may continue.
+pub const STATEMENT_TABLE: &str = "$qb$statementTable";
+
+/// A statement the runtime may RESUME at: its function, the block it
+/// starts, its first instruction and its BASIC line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Statement {
+    pub function: i64,
+    pub block: i64,
+    pub instruction: i64,
+    pub line: i64,
 }
 
 /// A runtime cell only a reference naming it reaches, and the routines

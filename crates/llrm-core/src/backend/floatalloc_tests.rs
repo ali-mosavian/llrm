@@ -1428,3 +1428,24 @@ fn test_a_value_every_successor_spills_leaves_in_memory() {
     }
 }
 
+
+/// A value on the stack into a join that reads none is popped on the edge
+/// that brings it, not balanced by fillers on every other edge: qmove's
+/// early return made its other paths push five fillers and pop six.
+#[test]
+fn test_a_join_that_reads_no_float_takes_none_on_its_other_edges() {
+    let (source, cell) = (frame_cell(-10, 10), frame_cell(-20, 10));
+    let body = _body(vec![_load(1, &source), _store(&cell, 1)]);
+    let (load, store) = (body.insns()[0].clone(), body.insns()[1].clone());
+    let mut body = body;
+    body.blocks = vec![block(0, vec![load], vec![16, 48]), block(16, vec![store], vec![48]), block(48, vec![], vec![])];
+    let result = with_frame(&body, &mut Frame::new(-20));
+    for path in [vec![0, 16, 48], vec![0, 48]] {
+        let insns = _along(&result, &path);
+        assert!(insns.iter().all(|one| emits(what(one))), "{path:?}");
+        let loads = insns.iter().filter(|one| what(one).op == Operation::FloatLoad).count();
+        assert_eq!(loads, 1, "{path:?}: {insns:?}");
+        let (_, stack) = _x87(&insns, &[(&source, 1.5)]);
+        assert!(stack.is_empty(), "{path:?}");
+    }
+}

@@ -39,6 +39,10 @@ use crate::objects::Objects;
 use crate::runtime::Callees;
 use crate::sites;
 use crate::{FAR, SEGMENT};
+use llrm_hir::onerror::Handled;
+
+mod handling;
+pub use handling::owns;
 
 pub type Emit<T> = Result<T, String>;
 
@@ -58,6 +62,10 @@ pub struct Unit<'u> {
     pub main_frame: Option<(i64, i64)>,
     /// The bytes below BP the runtime's frame header takes.
     pub header: Option<i64>,
+    /// The callees that may raise an error.
+    pub raising: BTreeSet<ConstantId>,
+    /// ERR, where a body calls it.
+    pub err: Option<(ConstantId, TypeId)>,
 }
 
 /// A value the machine keeps.
@@ -198,6 +206,7 @@ pub struct Emitter<'b, 'm, 'u> {
     run: Vec<&'b Node>,
     cursor: usize,
     consumed: usize,
+    handling: Option<handling::Handling>,
 }
 
 fn poison(b: &mut Builder, ty: TypeId) -> Operand {
@@ -205,9 +214,10 @@ fn poison(b: &mut Builder, ty: TypeId) -> Operand {
 }
 
 /// Emits `body` into the function `b` builds.
-pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
+pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts, handled: Option<Handled>) -> Emit<()> {
     match body.body.kind {
         BodyKind::Main | BodyKind::Procedure => {}
+        BodyKind::ErrorHandler => return Err("a second ON ERROR GOTO handler: one per module is selected".to_owned()),
         other => return Err(format!("a {} is entered by the runtime's own protocol", other.value())),
     }
     if body.blocks.is_empty() {
@@ -252,52 +262,71 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
         run: Vec::new(),
         cursor: 0,
         consumed: 0,
+        handling: None,
     };
-    emitter.run()
+    emitter.run(handled)
 }
 
 impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
-    fn run(&mut self) -> Emit<()> {
+    fn run(&mut self, handled: Option<Handled>) -> Emit<()> {
         let entry = self.block;
         self.prologue()?;
         for block in &self.body.blocks {
             let id = self.b.block(&format!("b{:04x}", block.at));
             self.blocks.insert(block.at, id);
         }
+        match (handled, &self.body.handler) {
+            (Some(handled), Some(_)) => self.handle(handled),
+            (None, None) => {}
+            _ => return Err("an error handler without its personality".to_owned()),
+        }
         let seed = self.body.blocks[0].at;
         self.b.position(entry);
         self.ends.insert(entry, (self.current.clone(), self.bits.clone()));
         self.b.br(self.blocks[&seed]);
-        self.entries.insert(seed, Entry { depth: 0, frame: self.frame, floats: 0 });
+        // The runtime enters a statement RESUME continues at as it does the seed.
+        let state = Entry { depth: 0, frame: self.frame, floats: 0 };
+        for &at in std::iter::once(&seed).chain(&self.body.body.entries) {
+            self.entries.insert(at, state);
+        }
+        self.enter_handler()?;
         for block in self.order() {
             self.emit_block(block)?;
         }
+        self.close_handling()?;
         self.resolve()?;
         self.finish()
     }
 
-    /// Blocks in reverse postorder from the seed: each one's state on entry
-    /// is known before it.
+    /// Blocks in reverse postorder from each root -- the seed, the entries
+    /// RESUME makes, the handler's seed -- each one's state on entry known
+    /// before it.
     fn order(&self) -> Vec<&'b Block> {
         let by_at: BTreeMap<usize, &'b Block> = self.body.blocks.iter().map(|one| (one.at, one)).collect();
+        let roots = std::iter::once(self.body.blocks[0].at).chain(self.body.body.entries.iter().copied()).chain(self.body.handler.as_ref().map(|one| one.seed));
         let mut seen = BTreeSet::new();
-        let mut post = Vec::new();
-        let mut stack = vec![(self.body.blocks[0].at, 0usize)];
-        seen.insert(self.body.blocks[0].at);
-        while let Some((at, next)) = stack.pop() {
-            let succ = &by_at[&at].succ;
-            if next < succ.len() {
-                stack.push((at, next + 1));
-                let one = succ[next];
-                if by_at.contains_key(&one) && seen.insert(one) {
-                    stack.push((one, 0));
-                }
-            } else {
-                post.push(by_at[&at]);
+        let mut order = Vec::new();
+        for root in roots {
+            if !by_at.contains_key(&root) || !seen.insert(root) {
+                continue;
             }
+            let mut post = Vec::new();
+            let mut stack = vec![(root, 0usize)];
+            while let Some((at, next)) = stack.pop() {
+                let succ = &by_at[&at].succ;
+                if next < succ.len() {
+                    stack.push((at, next + 1));
+                    let one = succ[next];
+                    if by_at.contains_key(&one) && seen.insert(one) {
+                        stack.push((one, 0));
+                    }
+                } else {
+                    post.push(by_at[&at]);
+                }
+            }
+            order.extend(post.into_iter().rev());
         }
-        post.reverse();
-        post
+        order
     }
 
     /// The entry block: every variable a sentinel, the frame of a main
@@ -420,6 +449,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.depth = entry.depth;
         self.frame = entry.frame;
         self.floats = entry.floats;
+        if let (Some(handling), Some(handler)) = (self.handling.as_mut(), &self.body.handler) {
+            handling.inside = handler.blocks.contains(&block.at);
+        }
         let nodes: Vec<&Node> = self.body.nodes_of(block).map(|one| &**one).collect();
         let (last, rest) = match nodes.split_last() {
             Some((last, rest)) if is_transfer(last) || block.ends == Ends::Table => (Some(*last), rest),
@@ -429,8 +461,13 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let mut index = 0;
         while let Some(&node) = self.run.get(index) {
             (self.cursor, self.consumed) = (index, 0);
+            self.statement(span(node).0)?;
             self.node(node)?;
             index += 1 + self.consumed;
+            // What ended the block itself: a RESUME.
+            if self.b.function.terminator(self.block).is_some() {
+                return Ok(());
+            }
             if let Node::Call(call) = node {
                 if self.unit.facts.contract(call.insn.at).is_some_and(never_returns) {
                     self.ends.insert(self.block, (self.current.clone(), self.bits.clone()));
@@ -542,11 +579,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let above = self.b.icmp(IntPredicate::Ugt, index, limit, "");
         self.b.cond_br(above, raise, within);
         self.ends.insert(self.block, end.clone());
+        self.block = raise;
         self.b.position(raise);
         let code = self.b.int(16, crate::runtime::ILLEGAL_FUNCTION_CALL);
-        self.b.call_as(error.convention, error.ty, Operand::Constant(error.reference), &[code], "");
+        self.call_as(error.convention, error.ty, error.reference, &[code])?;
         self.b.unreachable();
-        self.ends.insert(raise, end.clone());
+        self.ends.insert(self.block, end.clone());
         let otherwise = self.enter(past)?;
         let mut cases = Vec::new();
         for (number, &target) in targets.iter().enumerate() {
@@ -1654,6 +1692,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         match callee {
             FRAME_ENTRY => return self.enter_frame(),
             FRAME_EXIT => return self.exit_frame(),
+            one if owns(one) => return self.handling_call(one, at),
             _ => {}
         }
         if let Some(procedure) = self.unit.procedures.get(callee).cloned() {
@@ -1664,7 +1703,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 let depth = self.depth - interface.popped + 2 + 2 * index;
                 arguments.push(self.stack_word(depth, 2)?);
             }
-            let answered = self.b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(reference), &arguments, "");
+            let answered = self.call_as(llrm_mir::opcode::BASIC, ty, reference, &arguments)?;
             self.popped(interface.popped)?;
             let why = format!("{callee} clobbers it");
             self.clobber(&TRACKED, &why);
@@ -1698,7 +1737,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             let depth = if spec.pops { self.depth - stack + 2 + 2 * index } else { self.depth - 2 * index };
             arguments.push(self.stack_word(depth, 2)?);
         }
-        let answered = self.b.call_as(spec.convention, spec.ty, Operand::Constant(spec.reference), &arguments, "");
+        let answered = self.call_as(spec.convention, spec.ty, spec.reference, &arguments)?;
         if spec.pops {
             self.popped(stack)?;
         }

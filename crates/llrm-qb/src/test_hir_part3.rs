@@ -2356,3 +2356,30 @@ fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
     }
     assert!(expected.is_subset(&found), "cold {expected:?}, noreturn found {found:?}");
 }
+
+/// The handler is __main's one landing pad, each call that may raise before
+/// it an invoke, and the rich route selects it; it was refused as "an ON
+/// ERROR handler".
+#[test]
+fn an_error_handler_is_the_main_bodys_landing_pad() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "HANDLED.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nPRINT c\nEND\nh:\nc = ERR\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    assert!(llrm_mir::verify::verify(&emitted.module).is_empty());
+    let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
+    let opcodes: Vec<&llrm_mir::Opcode> = main.walk().map(|(_, inst)| &main.instruction(inst).opcode).collect();
+    assert!(main.personality.is_some());
+    assert_eq!(opcodes.iter().filter(|one| matches!(one, llrm_mir::Opcode::LandingPad { .. })).count(), 1);
+    assert!(opcodes.iter().any(|one| matches!(one, llrm_mir::Opcode::Invoke(_))));
+}
+
+#[test]
+fn erl_is_refused_for_the_line_table_it_reads() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL")), "{:?}", emitted.refused);
+}

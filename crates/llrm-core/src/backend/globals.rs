@@ -46,12 +46,16 @@ pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMa
         } else {
             format!("G${at}")
         };
-        if global.address_space != 0 && matches!(global.kind, GlobalKind::Variable(_)) {
-            out.insert((Space::Group, segment_of(id)), format!("seg {symbol}"));
-        }
+        out.extend(segment_name(module, id, &symbol));
         out.insert((space(module, id), i64::from(id.0)), symbol);
     }
     Ok(out)
+}
+
+/// A far global's segment, named for `symbol`: a far pointer to code, as
+/// ON ERROR registers its handler, takes it.
+pub fn segment_name(module: &Module, id: GlobalId, symbol: &str) -> Option<((Space, i64), String)> {
+    (module.global(id).address_space != 0).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
 }
 
 fn is_symbol(name: &str) -> bool {

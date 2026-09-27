@@ -15,6 +15,7 @@ pub mod copysink;
 pub mod cpu;
 pub mod datagroup;
 pub mod division;
+pub mod ehprepare;
 pub mod farcall;
 pub mod farload;
 pub mod constpool;

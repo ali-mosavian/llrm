@@ -19,6 +19,9 @@ use crate::backend::cpu::{self, Profile, ProfileOrName};
 use crate::backend::masm;
 use crate::backend::target::Segments;
 use crate::hir::model;
+use crate::backend::ehprepare;
+use crate::model::ir::{Operation, Semantics};
+use crate::model::lir;
 use data::Placed;
 
 /// What a compile is for: the machine, whose CPU prices the choices, and
@@ -87,10 +90,13 @@ pub fn linked(modules: Vec<Module>, runtime: Module, options: &Options) -> Resul
     Ok(program)
 }
 
-/// `program` through the pipeline, each module verified after.
+/// `program` through the pipeline, then each module prepared for
+/// instruction selection: a landing pad made one the runtime enters. Each
+/// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
+    program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     verified(program, "the pipeline")
 }
 
@@ -99,5 +105,49 @@ fn verified(program: &Program, stage: &str) -> Result<(), String> {
     match program.modules.iter().find_map(|module| llrm_mir::verify::verify(module).into_iter().next()) {
         Some(first) => Err(format!("{stage} left invalid MIR: {first}")),
         None => Ok(()),
+    }
+}
+
+/// ON ERROR's part of assembly that no frontend lays out: ERR's word the
+/// landing stub keeps, as data for a DGROUP segment.
+pub fn landed_data(module: &Module) -> Vec<masm::Datum> {
+    if module.named(ehprepare::LANDED).is_none() {
+        return Vec::new();
+    }
+    vec![masm::Datum::Object(masm::Label { name: ehprepare::LANDED.to_owned() }), masm::Datum::Bytes(vec![0, 0])]
+}
+
+/// Whether a driver frames `function`: a naked one, as the landing stub,
+/// runs on the frame the runtime made.
+pub fn framed(module: &Module, function: GlobalId) -> bool {
+    !module.global(function).function().is_some_and(|one| one.attrs.iter().any(|attr| matches!(attr, llrm_mir::Attribute::Flag(flag) if flag == "naked")))
+}
+
+/// The statement-table row RESUME NEXT reaches a landing pad by: the pad's
+/// block `landing`, in the procedure assembled `number`th.
+pub fn landing_row(number: usize, landing: i64) -> (i64, i64, String, i64) {
+    (number as i64, 0, masm::label(number, landing), 0)
+}
+
+/// OF_STA's table: each row a statement's offset and BASIC line, ended by
+/// a zero word, as a procedure of inline data.
+pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
+    let mut code: Vec<masm::InlinePart> = Vec::new();
+    for (_procedure, _order, label, line) in rows {
+        code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
+        code.push(masm::InlinePart::Bytes((*line as u16).to_le_bytes().to_vec()));
+    }
+    code.push(masm::InlinePart::Bytes(vec![0, 0]));
+    let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
+    let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    let body = lir::LirBody::new("$QB$STAT", 1, vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)])], Default::default(), Default::default());
+    masm::Procedure {
+        name: "$QB$STAT".into(),
+        public: false,
+        far: false,
+        body,
+        reserve: 0,
+        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        interrupt: None,
     }
 }

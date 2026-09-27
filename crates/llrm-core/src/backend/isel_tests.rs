@@ -782,8 +782,7 @@ define void @f() addrspace(1) {
     assert_eq!(
         listing(text, "f"),
         [
-            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov ax, 0", "mov bx, 0", "mov word ptr [bp-4], ax", "mov word ptr [bp-2], bx",
-            "pushd 0", "call take", "add sp, 4", "leave", "retf",
+            "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov word ptr [bp-4], 0", "mov word ptr [bp-2], 0", "pushd 0", "call take", "add sp, 4", "leave", "retf",
         ]
     );
 }
@@ -2301,4 +2300,87 @@ define i16 @f() addrspace(1) {
 }
 ";
     assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
+}
+
+/// Zero minus a value is its negation: crc's `0 - (crc & 1)` cost a
+/// zeroing `xor` and a `sub` in each of its eight unrolled steps.
+#[test]
+fn test_zero_minus_a_value_is_a_neg() {
+    let text = "define i32 @f(i32 %a) addrspace(1) {
+  %m = and i32 %a, 1
+  %n = sub i32 0, %m
+  ret i32 %n
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.starts_with("neg")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("sub")), "{got:?}");
+}
+
+/// An address known at link time is stored as immediates, as the old route
+/// stores it: lru's four far pointers each went through two registers.
+#[test]
+fn test_a_constant_address_is_stored_as_immediates() {
+    let text = "@g = internal global i16 0
+@near = internal global ptr null
+@far = internal global ptr addrspace(1) null
+define void @f() addrspace(1) {
+  store ptr @g, ptr @near
+  %a = addrspacecast ptr @g to ptr addrspace(1)
+  store ptr addrspace(1) %a, ptr @far
+  store ptr addrspace(1) null, ptr getelementptr (i8, ptr @far, i16 4)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let moves: Vec<&String> = got.iter().filter(|line| line.starts_with("mov")).collect();
+    assert!(moves.iter().all(|line| line.starts_with("mov word ptr") || line.starts_with("mov dword ptr")), "{got:?}");
+}
+
+/// A dword that arrives in dx:ax is joined as the old route joins it,
+/// `shl eax, 16` and `shrd eax, edx, 16`: two zero extensions, a shift and
+/// an `or` cost parity/control two more instructions per call.
+#[test]
+fn test_a_dword_from_dx_ax_is_joined_by_shrd() {
+    let text = "declare i32 @g() addrspace(1)
+define i32 @f() addrspace(1) {
+  %a = call addrspace(1) i32 @g()
+  %b = mul i32 %a, 3
+  ret i32 %b
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.starts_with("shrd")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("movzx") || line.starts_with("or ")), "{got:?}");
+}
+
+/// A float constant argument is pushed as its bits, as a float constant is
+/// stored: qmove loaded each from the pool and stored it to a temporary to
+/// push it from there.
+#[test]
+fn test_a_float_constant_argument_is_pushed_as_its_bits() {
+    let text = "declare void @g(float, double) addrspace(1)
+define void @f() addrspace(1) {
+  call addrspace(1) void @g(float 2.5e-01, double 1.0e+01)
+  ret void
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("fld") || line.starts_with("fstp")), "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("push")).count(), 3, "{got:?}");
+}
+
+/// A pointer at offset 0 from a register is that register: string-array-
+/// element's descriptor offset was made by `add ax, 0`.
+#[test]
+fn test_a_pointer_at_offset_zero_adds_nothing() {
+    let text = "declare void @g(ptr) addrspace(1)
+define void @f(ptr %p) addrspace(1) {
+  %q = getelementptr i8, ptr %p, i16 0
+  call addrspace(1) void @g(ptr %q)
+  ret void
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("add") && line.ends_with(", 0")), "{got:?}");
 }

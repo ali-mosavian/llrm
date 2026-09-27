@@ -33,33 +33,6 @@ pub fn _reg(register: Register) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
 
-/// Emit MODULE_CODE.OF_STA's relocated (offset,line) rows and zero end.
-pub fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure {
-    let mut code: Vec<masm::InlinePart> = Vec::new();
-    for (_procedure, _order, label, line) in entries {
-        code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
-        code.push(masm::InlinePart::Bytes((*line as u16).to_le_bytes().to_vec()));
-    }
-    code.push(masm::InlinePart::Bytes(vec![0, 0]));
-    let instruction = lir::Insn::new(1, None, Some(_semantics(Operation::Call, "statement-table", vec![], vec![])), vec![], vec![]);
-    let body = lir::LirBody::new(
-        "$QB$STAT",
-        1,
-        vec![lir::LirBlock::new(1, vec![Arc::new(instruction)])],
-        IndexMap::default(),
-        IndexMap::default(),
-    );
-    masm::Procedure {
-        name: "$QB$STAT".into(),
-        public: false,
-        far: false,
-        body,
-        reserve: 0,
-        callees: IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
-        interrupt: None,
-    }
-}
-
 /// Zero a native frame as BASIC's runtime entry routines do.
 ///
 /// QB variables begin at zero, and runtime-managed string/array descriptors
