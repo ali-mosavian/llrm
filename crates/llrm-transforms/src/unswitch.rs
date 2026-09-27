@@ -23,9 +23,9 @@
 //! replaced the re-optimization are ported by passing it:
 //! `test_unswitch_rejects_a_candidate_without_loop_removal`,
 //! `test_unswitch_rejects_lower_count_but_higher_target_cost` and
-//! `test_unswitch_rejects_semantic_work_without_a_target_price`. Skipped:
-//! `test_unswitch_reoptimization_preserves_mir_target_costs`, since nothing
-//! is forwarded to passes the caller builds. Stay behind, reading BC
+//! `test_unswitch_rejects_semantic_work_without_a_target_price`;
+//! `test_unswitch_reoptimization_preserves_mir_target_costs` records what
+//! the candidate's passes read of the target. Stay behind, reading BC
 //! corpora (`ivarm-*.obj`, `ivproc-*.obj`):
 //! `test_production_ivarm_has_no_loop_and_stores_last_value`,
 //! `test_specialized_main_and_legacy_procedure_emit_together`,
