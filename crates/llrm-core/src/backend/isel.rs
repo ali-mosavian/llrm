@@ -19,6 +19,7 @@ use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Seman
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
+mod combined;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -401,6 +402,7 @@ impl Selector<'_, '_, '_> {
             }
             blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
         }
+        let blocks = combined::combined(blocks);
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;

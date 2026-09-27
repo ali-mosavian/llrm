@@ -366,8 +366,7 @@ no:
             "mov bp, sp",
             "L0_0:",
             "mov cx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "cmp cx, ax",
+            "cmp cx, word ptr [bp+8]",
             "setl bl",
             "movzx ax, bl",
             "neg ax",
@@ -413,8 +412,7 @@ define i32 @f(i16 %a) addrspace(1) {
             "movzx ax, bl",
             "push ax",
             "call far ptr basic",
-            "mov bx, 5",
-            "push bx",
+            "pushw 5",
             "push ax",
             "call c",
             "add sp, 4",
@@ -544,8 +542,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+6]",
-            "push ax",
+            "push word ptr [bp+6]",
             "call far ptr B$PEI2",
             "pop bp",
             "retf 2",
@@ -781,7 +778,7 @@ define void @f() addrspace(1) {
         listing(text, "f"),
         [
             "push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "mov ax, 0", "mov bx, 0", "mov word ptr [bp-4], ax", "mov word ptr [bp-2], bx",
-            "push bx", "push ax", "call take", "add sp, 4", "leave", "retf",
+            "pushd 0", "call take", "add sp, 4", "leave", "retf",
         ]
     );
 }
@@ -820,11 +817,9 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
             "mov word ptr [bp-4], bx",
             "mov bx, es",
             "mov word ptr [bp-2], bx",
-            "mov bx, offset buf",
-            "mov cx, DGROUP",
             "push ax",
-            "push cx",
-            "push bx",
+            "pushw DGROUP",
+            "push offset buf",
             "call take",
             "add sp, 6",
             "mov ax, word ptr [bp-4]",
@@ -1317,4 +1312,171 @@ define i16 @f(double %x) addrspace(1) {
 ";
     let got = listing(text, "f");
     assert!(got.contains(&"fistp word ptr [bp-2]".to_owned()) && got.contains(&"mov word ptr b, ax".to_owned()), "{got:?}");
+}
+
+/// The instructions between a procedure's label and its epilogue.
+fn inner(text: &str) -> Vec<String> {
+    let got = listing(text, "f");
+    let from = got.iter().position(|one| one.ends_with(':')).expect("a label") + 1;
+    got[from..].iter().take_while(|one| !one.starts_with("pop ") && *one != "leave" && *one != "retf").cloned().collect()
+}
+
+/// A load, its update and its store back to the cell are one instruction,
+/// as the old route's rmw selects: nbody kept each field in a temporary.
+#[test]
+fn test_an_update_stored_back_to_its_cell_is_one_instruction() {
+    let update = |operation: &str, ty: &str| {
+        inner(&format!(
+            "define void @f(ptr %p, {ty} %x) addrspace(1) {{\n  %v = load {ty}, ptr %p\n  %s = {operation} {ty} %v, %x\n  store {ty} %s, ptr %p\n  ret void\n}}\n"
+        ))
+    };
+    assert_eq!(update("add", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"]);
+    assert_eq!(update("sub", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"]);
+    assert_eq!(update("or", "i8"), ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"]);
+    let global = "@a = internal global i16 0
+define void @f() addrspace(1) {
+  %v = load i16, ptr @a
+  %s = add i16 %v, 3
+  store i16 %s, ptr @a
+  ret void
+}
+";
+    assert_eq!(inner(global), ["add word ptr a, 3"]);
+}
+
+/// `x - [p]` is no `sub [p], x`: the cell must be the left operand.
+#[test]
+fn test_a_subtraction_from_a_value_does_not_update_the_cell() {
+    let text = "define void @f(ptr %p, i16 %x) addrspace(1) {
+  %v = load i16, ptr %p
+  %s = sub i16 %x, %v
+  store i16 %s, ptr %p
+  ret void
+}
+";
+    assert_eq!(inner(text), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub ax, word ptr [bx]", "mov word ptr [bx], ax"]);
+}
+
+/// No update in memory where the store goes elsewhere, the loaded value is
+/// read again, or the accesses are volatile.
+#[test]
+fn test_an_update_is_not_one_instruction_unless_private_to_its_cell() {
+    let elsewhere = "define void @f(ptr %p, ptr %q, i16 %x) addrspace(1) {
+  %v = load i16, ptr %p
+  %s = add i16 %v, %x
+  store i16 %s, ptr %q
+  ret void
+}
+";
+    assert!(inner(elsewhere).iter().all(|one| !one.starts_with("add word ptr [")), "{:?}", inner(elsewhere));
+    let again = "define i16 @f(ptr %p, i16 %x) addrspace(1) {
+  %v = load i16, ptr %p
+  %s = add i16 %v, %x
+  store i16 %s, ptr %p
+  ret i16 %v
+}
+";
+    assert!(inner(again).iter().all(|one| !one.starts_with("add word ptr [")), "{:?}", inner(again));
+    let volatile = "define void @f(ptr %p, i16 %x) addrspace(1) {
+  %v = load volatile i16, ptr %p
+  %s = add i16 %v, %x
+  store volatile i16 %s, ptr %p
+  ret void
+}
+";
+    assert_eq!(inner(volatile), ["mov bx, word ptr [bp+6]", "mov cx, word ptr [bx]", "add cx, word ptr [bp+8]", "mov word ptr [bx], cx"]);
+}
+
+/// A load only a comparison reads is its operand, as comparefold selects;
+/// a zero-extended byte tested for zero is compared as the byte.
+#[test]
+fn test_a_load_only_a_comparison_reads_is_its_operand() {
+    let compared = |load: &str, test: &str| {
+        inner(&format!(
+            "define i16 @f(ptr %p) addrspace(1) {{\n  {load}\n  %c = icmp {test}\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
+        ))[..3]
+            .to_vec()
+    };
+    assert_eq!(compared("%v = load i16, ptr %p", "sgt i16 %v, 5"), ["mov bx, word ptr [bp+6]", "cmp word ptr [bx], 5", "jg L0_3"]);
+    assert_eq!(
+        compared("%v = load i8, ptr %p\n  %w = zext i8 %v to i16", "eq i16 %w, 0"),
+        ["mov bx, word ptr [bp+6]", "cmp byte ptr [bx], 0", "je L0_4"]
+    );
+}
+
+/// A byte compared as a signed word is never negative; as a byte it could
+/// be: its load stays a zero extension.
+#[test]
+fn test_a_zero_extended_byte_compared_signed_keeps_its_extension() {
+    let text = "define i16 @f(ptr %p) addrspace(1) {
+  %v = load i8, ptr %p
+  %w = zext i8 %v to i16
+  %c = icmp sgt i16 %w, 0
+  br i1 %c, label %y, label %n
+y:
+  ret i16 1
+n:
+  ret i16 0
+}
+";
+    assert!(inner(text).iter().all(|one| !one.starts_with("cmp byte ptr")), "{:?}", inner(text));
+}
+
+/// A load read again is not a comparison's operand.
+#[test]
+fn test_a_load_read_again_is_compared_from_its_register() {
+    let text = "define i16 @f(ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %c = icmp sgt i16 %v, 5
+  br i1 %c, label %y, label %n
+y:
+  ret i16 %v
+n:
+  ret i16 0
+}
+";
+    assert_eq!(inner(text)[..3], ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bx]", "cmp ax, 5"]);
+}
+
+/// A parameter pushed once is pushed from its frame cell, a constant as an
+/// immediate; one pushed twice is loaded once.
+#[test]
+fn test_an_argument_is_pushed_from_its_cell_only_when_read_once() {
+    let once = "declare void @take(i16, i16)
+define void @f(i16 %a) addrspace(1) {
+  call void @take(i16 %a, i16 7)
+  ret void
+}
+";
+    assert_eq!(inner(once), ["pushw 7", "push word ptr [bp+6]", "call take", "add sp, 4"]);
+    let twice = "declare void @take(i16, i16)
+define void @f(i16 %a) addrspace(1) {
+  call void @take(i16 %a, i16 %a)
+  ret void
+}
+";
+    assert_eq!(inner(twice), ["mov ax, word ptr [bp+6]", "push ax", "push ax", "call take", "add sp, 4"]);
+}
+
+/// A far pointer loaded through a register is one `les`, as farload
+/// selects, unless its selector is also read as a number.
+#[test]
+fn test_a_far_pointer_loaded_through_a_register_is_les() {
+    let text = "define i16 @f(ptr %p) addrspace(1) {
+  %q = load ptr addrspace(1), ptr %p
+  %v = load i16, ptr addrspace(1) %q
+  ret i16 %v
+}
+";
+    assert_eq!(inner(text), ["mov bx, word ptr [bp+6]", "les bx, dword ptr [bx]", "mov ax, word ptr es:[bx]"]);
+    let numeric = "define i32 @f(ptr %p) addrspace(1) {
+  %q = load ptr addrspace(1), ptr %p
+  %v = load i16, ptr addrspace(1) %q
+  %i = ptrtoint ptr addrspace(1) %q to i32
+  %w = zext i16 %v to i32
+  %r = add i32 %i, %w
+  ret i32 %r
+}
+";
+    assert!(inner(numeric).iter().all(|one| !one.starts_with("les")), "{:?}", inner(numeric));
 }
