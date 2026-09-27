@@ -90,13 +90,23 @@ pub fn canonical(unit: &mut Unit, analyses: &mut Analyses) -> bool {
                 _emitted(unit, Opcode::Binary(BinaryOp::Mul), int, vec![Operand::Value(*counter), by], one.op)
             }
         };
-        let base = _starts(unit, one, false, one.op);
-        let sum = match one.pointer {
-            Some(_) => {
-                let source = unit.context.types.int(8);
+        let source = unit.context.types.int(8);
+        let sum = match (one.pointer, _displacement(one)) {
+            // A constant displacement goes last, where an addressing mode
+            // takes it: an invariant base of its own would hold a register.
+            (Some(pointer), Some(displacement)) => {
+                let indexed = _emitted(unit, Opcode::GetElementPtr { source }, ty, vec![pointer, scaled], one.op);
+                let displacement = _operand(unit, &displacement);
+                _emitted(unit, Opcode::GetElementPtr { source }, ty, vec![indexed, displacement], one.op)
+            }
+            (Some(_), None) => {
+                let base = _starts(unit, one, false, one.op);
                 _emitted(unit, Opcode::GetElementPtr { source }, ty, vec![base, scaled], one.op)
             }
-            None => _emitted(unit, Opcode::Binary(BinaryOp::Add), ty, vec![scaled, base], one.op),
+            (None, _) => {
+                let base = _starts(unit, one, false, one.op);
+                _emitted(unit, Opcode::Binary(BinaryOp::Add), ty, vec![scaled, base], one.op)
+            }
         };
         unit.function.replace_all_uses_with(*answer, sum);
     }
@@ -112,7 +122,7 @@ fn _rewritable(view: &memory::Unit, loop_: &Loop, one: &Derived) -> Option<(Valu
         Some(_) => view.space(Operand::Value(answer)).map(|space| view.layout.pointer(space).index_bits),
         None => view.int_bits(Operand::Value(answer)),
     };
-    if width != Some(one.of.start.width()) || !one.offsets.iter().any(|(offset, _)| matches!(offset, AffineOperand::Value(..))) {
+    if width != Some(one.of.start.width()) || !one.offsets.iter().any(|(offset, _)| matches!(offset, AffineOperand::Value(..))) && _displacement(one).is_none() {
         return None;
     }
     let ValueDef::Instruction(phi) = function.value(one.of.value).def else { return None };
@@ -133,14 +143,36 @@ fn _rewritable(view: &memory::Unit, loop_: &Loop, one: &Derived) -> Option<(Valu
         },
         _ => true,
     };
+    let indexed = |operand: Operand| matches!(view.defining(operand), Some((_, made)) if matches!(made.opcode, Opcode::GetElementPtr { .. }) && matches!(made.operands[..], [base, index] if invariant(base) && scaled(index)));
     let spelled = match one.pointer {
-        Some(_) => matches!(op.opcode, Opcode::GetElementPtr { .. }) && matches!(op.operands[..], [base, index] if invariant(base) && scaled(index)),
+        Some(_) => {
+            matches!(op.opcode, Opcode::GetElementPtr { .. })
+                && match op.operands[..] {
+                    [base, index] => invariant(base) && scaled(index) || matches!(index, Operand::Constant(_)) && indexed(base),
+                    _ => false,
+                }
+        }
         None => {
             op.opcode == Opcode::Binary(BinaryOp::Add)
                 && matches!(&one.offsets[..], [(AffineOperand::Value(base, _), coefficient)] if *coefficient == BigInt::from(1) && op.operands.contains(&Operand::Value(*base)))
         }
     };
     (!spelled).then_some((one.of.value, answer))
+}
+
+/// The bytes an address adds to its base and scaled counter, where every
+/// other term is a nonzero constant.
+fn _displacement(one: &Derived) -> Option<AffineOperand> {
+    one.pointer?;
+    let width = one.of.start.width();
+    let mut sum = BigInt::from(0);
+    for (term, coefficient) in &one.offsets {
+        let AffineOperand::Const(known) = term else { return None };
+        sum += &known.n * coefficient;
+    }
+    let modulus = BigInt::from(1) << width;
+    let sum = (sum % &modulus + &modulus) % &modulus;
+    (sum != BigInt::from(0)).then(|| AffineOperand::constant(sum, width))
 }
 
 #[cfg(test)]

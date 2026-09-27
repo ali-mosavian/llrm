@@ -103,3 +103,15 @@ fn test_addresses_sharing_one_index_are_left() {
     let (before, after) = spelled(&text.replace("b0:\n  br label %b1", "b0:\n  %m = and i16 %k, 255\n  br label %b1"));
     assert_eq!(after, before);
 }
+
+/// deedlines' COPPER read `a(i + 1)` and `a(i - 1)` off one array: each
+/// folded its constant into a base of its own, a register or a frame cell
+/// a base, where an addressing mode takes the displacement for nothing.
+#[test]
+fn test_a_constant_offset_is_the_last_displacement_of_an_indexed_address() {
+    let text = looped("  %x = add i16 %i, 3\n  %p = getelementptr inbounds i16, ptr @a, i16 %x\n  %v = load i16, ptr %p\n");
+    let (_, after) = spelled(&text);
+    assert!(after.contains("  %0 = mul i16 %i, 2\n  %1 = getelementptr i8, ptr @a, i16 %0\n  %2 = getelementptr i8, ptr %1, i16 6\n"), "{after}");
+    let mut again = parsed(&after);
+    assert_eq!(managed(&mut again, Affine), after);
+}
