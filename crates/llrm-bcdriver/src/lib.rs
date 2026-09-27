@@ -27,7 +27,7 @@ use llrm_core::support::hash::IndexMap;
 use llrm_mir::{GlobalId, GlobalKind, Module};
 use llrm_omf::module::{self as found_module, Family};
 use llrm_omf::omf::{self, Record};
-use llrm_qb::compile;
+use llrm_core::driver::basic;
 
 /// The main body's symbol, as the QB route names it.
 const MAIN: &str = "$QB$MAIN";
@@ -37,7 +37,7 @@ const HEADER: &str = "$QB$HEADER";
 const HEADER_BYTES: usize = 0x30;
 
 /// Each segment the module header names, by the word that names it and
-/// the label `compile::written_basic` fixes it up to.
+/// the label `basic::written_basic` fixes it up to.
 const NAMED: [(usize, &str, &str); 5] =
     [(12, "BC_DS", "$QB$DS"), (14, "BC_DATA", "$QB$DATA"), (16, "BC_FT", "$QB$FT"), (24, "COMMON", "$QB$COMMON"), (32, "BC_CN", "$QB$CN")];
 /// The header word naming the statement table, which is written afresh.
@@ -149,7 +149,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         }
         procedures.push(procedure);
     }
-    procedures.push(compile::_statement_procedure(&[]));
+    procedures.push(basic::_statement_procedure(&[]));
     let mut data = data_segments(&module, &placement, &segments, code_segment, &names)?;
     // The constants isel keeps in memory go where BC keeps its own, as the
     // QB route places them.
@@ -184,7 +184,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         requests: Default::default(),
     };
     let header = header(found, &records, code_segment, &segments)?;
-    compile::written_basic(&assembled, header, name).map_err(|error| error.to_string())
+    basic::written_basic(&assembled, header, name)
 }
 
 /// A defined function selected, through the machine phases, and framed as
@@ -203,13 +203,13 @@ fn procedure(
 ) -> Result<masm::Procedure, String> {
     let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
     let machined = assemble::machined(module, name, &contracts, pool, target)?;
-    let finalized = llrm_qb::inline_x87::finalized(&machined.body, machined.popped)?;
+    let finalized = basic::finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let is_main = names[&(Space::Segment, i64::from(id.0))] == MAIN;
     let (body, framed) = if is_main && machined.reserve == 0 {
-        compile::_initialize_frame(&finalized.body, 0).map_err(|error| error.to_string())?
+        basic::_initialize_frame(&finalized.body, 0)?
     } else {
-        compile::_runtime_frame(&finalized.body, machined.reserve, runtime, 0).map_err(|error| error.to_string())?
+        basic::_runtime_frame(&finalized.body, machined.reserve, runtime, 0)?
     };
     callees.extend(framed);
     for (at, callee) in &machined.calls {

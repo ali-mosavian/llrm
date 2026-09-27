@@ -3,6 +3,8 @@
 //! runtime and optimized by the pipeline for the machine. It reads what
 //! the program states and never asks which frontend made it.
 
+pub mod basic;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 

@@ -311,7 +311,7 @@ fn _emitted_asm(program: &model::Program, module: &masm::Module, pretty: bool) -
         let heading = format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" });
         let ending = format!("{} endp", procedure.name);
         let mut lines = vec![heading.clone()];
-        for item in qb_compile::_basic_listing(procedure, number).map_err(|error| error.to_string())? {
+        for item in llrm_core::driver::basic::_basic_listing(procedure, number)? {
             match &item {
                 masm::Item::Label(masm::Label { name }) => lines.push(format!("{name}:")),
                 masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
