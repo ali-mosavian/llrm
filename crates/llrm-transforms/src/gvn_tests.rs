@@ -372,3 +372,34 @@ b0:
     ));
     crate::testing::summarized(&module, Gvn::default(), true, &[&[]]);
 }
+
+/// GVN's propagateEquality: below the edge a branch takes, its condition
+/// is that edge's constant. A bounds check CSE had merged was branched on
+/// again where it always held (T028's `update`), and lowering kept the
+/// bit alive in a register to test it twice.
+#[test]
+fn a_condition_is_known_below_the_edge_it_took() {
+    let after = managed(
+        "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %k = icmp ugt i16 %x, 1
+  br i1 %k, label %b1, label %b4
+
+b1:
+  br i1 %k, label %b2, label %b3
+
+b2:
+  %m = select i1 %k, i16 %y, i16 0
+  ret i16 %m
+
+b3:
+  ret i16 2
+
+b4:
+  %n = zext i1 %k to i16
+  ret i16 %n
+}
+",
+    );
+    assert!(after.contains("br i1 true, label %b2, label %b3") && after.contains("select i1 true") && after.contains("zext i1 false"), "{after}");
+}
