@@ -57,4 +57,34 @@ b3:
         assert_eq!(found.len(), 1);
         assert_eq!(block(found[0].header), function.layout()[1]);
     }
+
+    #[test]
+    fn a_switch_names_each_target_once_and_an_unreachable_block_stays_in_the_graph() {
+        let module = parsed("define void @f(i16 %s) {
+b1:
+  switch i16 %s, label %b2 [ i16 1, label %b2
+                            i16 2, label %b3 ]
+
+b2:
+  ret void
+
+b3:
+  ret void
+
+dead:
+  br label %b2
+}
+");
+        let function = function(&module, "f");
+        let [b1, b2, b3, dead] = [0, 1, 2, 3].map(|at| id(function.layout()[at]));
+        assert_eq!(
+            graph(function),
+            [
+                Block { at: b1, succ: vec![b2, b3] },
+                Block { at: b2, succ: vec![] },
+                Block { at: b3, succ: vec![] },
+                Block { at: dead, succ: vec![b2] },
+            ]
+        );
+    }
 }
