@@ -290,10 +290,11 @@ impl Selector<'_, '_, '_> {
             let signed = self.made(Operation::Binary, "xor", vec![Loc::Held(sign), Loc::Held(divisor_sign)], at, out);
             return self.negated_if(lower, upper, signed, at, out);
         }
-        // The remainder takes the dividend's sign, and is below 2^31.
+        // The remainder takes the dividend's sign, and is below 2^31: its
+        // high dword is its low's sign, 0 for a zero remainder of any dividend.
         let flipped = self.made(Operation::Binary, "xor", vec![Loc::Held(remainder), Loc::Held(sign)], at, out);
         let low = self.made(Operation::Binary, "sub", vec![Loc::Held(flipped), Loc::Held(sign)], at, out);
-        (low, sign)
+        (low, self.made(Operation::Binary, "sar", vec![Loc::Held(low), Self::count(31)], at, out))
     }
 
     /// A signed i64 divided by `2^shift`, as LLVM's BuildSDIVPow2: a

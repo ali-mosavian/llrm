@@ -2049,3 +2049,18 @@ define i16 @g() addrspace(1) {
         assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
     }
 }
+
+/// An i64 remainder's high dword is its low's sign: taken as the
+/// dividend's, a zero remainder of a negative dividend was -2^32, and C's
+/// euclid64 crunch went wrong on its third round.
+#[test]
+fn test_an_i64_remainders_high_dword_is_its_low_dwords_sign() {
+    let text = "define i64 @f(i64 %x) addrspace(1) {
+  %r = srem i64 %x, 7
+  ret i64 %r
+}
+";
+    let got = listing(text, "f");
+    let tail = &got[got.len() - 6..];
+    assert!(tail.windows(2).any(|two| two[0].starts_with("mov edx, e") && two[1] == "sar edx, 31") || tail.contains(&"cdq".to_owned()), "{got:?}");
+}
