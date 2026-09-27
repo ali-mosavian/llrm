@@ -200,6 +200,15 @@ impl Slice {
         Self::new(object, WHOLE_LOW, WHOLE_HIGH, 1, 1).expect("the fixed whole-object slice is valid")
     }
 
+    /// Every byte of `object`; none of a zero-byte one, which overlaps
+    /// nothing, as in LLVM.
+    pub fn every_byte(object: MemoryObject) -> Option<Self> {
+        match object.extent {
+            Some(extent) => Self::new(object, 0, extent, 1, 1).ok(),
+            None => Some(Self::whole(object)),
+        }
+    }
+
     pub fn shifted(&self, amount: i64) -> Self {
         Self::new(self.object.clone(), self.low + amount, self.high + amount, self.stride, self.width)
             .expect("shifting a valid slice retains its positive shape")
