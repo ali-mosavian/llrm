@@ -21,6 +21,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::effects;
@@ -35,10 +36,11 @@ use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{ModuleAnalysis, ModulePass};
+use llrm_mir::target::Machine;
 use llrm_mir::types::Type;
 
 use crate::inline;
-use crate::profit::OperationCosts;
+use crate::profit::{self, OperationCosts};
 
 /// What the step proved about the module.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,9 +51,10 @@ pub struct Proved {
     pub reachable: BTreeSet<GlobalId>,
 }
 
-/// The step as a module pass: `pipeline` is each changed body's pipeline.
+/// The step as a module pass: `pipeline` is each changed body's pipeline,
+/// `target` what prices inlining (`profit::target_costs`).
 pub struct Interprocedural {
-    pub costs: OperationCosts,
+    pub target: Option<Rc<dyn Machine>>,
     pub roots: BTreeSet<GlobalId>,
     pub pipeline: Box<dyn FnMut(&mut Module, GlobalId, &str)>,
     /// What the last run proved.
@@ -69,7 +72,7 @@ impl ModulePass for Interprocedural {
         let proved = optimized::<String>(
             module,
             &self.roots,
-            &self.costs,
+            &profit::target_costs(self.target.as_deref()),
             &mut |module, id, stage| {
                 changed.borrow_mut().insert(id);
                 pipeline(module, id, stage);

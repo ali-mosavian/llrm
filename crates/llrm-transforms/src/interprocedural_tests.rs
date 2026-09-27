@@ -173,7 +173,8 @@ fn test_the_step_runs_as_a_module_pass() {
     let mut module = parsed(HELPERS);
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add_module(Interprocedural { costs: OperationCosts { call: 4, ..OperationCosts::default() }, roots: BTreeSet::new(), pipeline: Box::new(|_, _, _| {}), proved: None });
+    let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
+    manager.add_module(Interprocedural { target: Some(std::rc::Rc::new(target)), roots: BTreeSet::new(), pipeline: Box::new(|_, _, _| {}), proved: None });
     let stages = manager.run(&mut module).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
