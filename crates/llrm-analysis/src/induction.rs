@@ -95,7 +95,9 @@ type Form = (Affine, BigInt, Vec<(AffineOperand, BigInt)>);
 
 /// The one proof of how many trips a loop makes, shared by every pass.
 ///
-///     i = start; loop { [i test bound?] body; i += step; [i test bound?] }
+/// ```text
+/// i = start; loop { [i test bound?] body; i += step; [i test bound?] }
+/// ```
 ///
 /// `test` continues the loop, counter first; `step` is a nonzero
 /// constant. A pre-tested loop tests the header value before each trip; a
