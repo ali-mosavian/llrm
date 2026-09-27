@@ -640,3 +640,36 @@ b0:
     assert_eq!(results(&internal, INPUTS), results(&module(&text("internal ")), INPUTS));
     assert_eq!(loads(&promoted("weak ")), 1);
 }
+
+/// matmul8's loop counters stayed in memory: a store through a pointer
+/// loaded from far memory was taken to reach an unescaped local.
+#[test]
+fn a_store_through_a_loaded_far_pointer_leaves_a_local_counter_promoted() {
+    let module = run(
+        "define void @f(ptr addrspace(1) noalias %p, i16 %n) {
+b0:
+  %c = alloca i16
+  store i16 0, ptr %c
+  br label %b1
+
+b1:
+  %i = load i16, ptr %c
+  %t = icmp ult i16 %i, %n
+  br i1 %t, label %b2, label %b3
+
+b2:
+  %q = load ptr addrspace(1), ptr addrspace(1) %p
+  store i16 %i, ptr addrspace(1) %q
+  %j = load i16, ptr %c
+  %k = add i16 %j, 1
+  store i16 %k, ptr %c
+  br label %b1
+
+b3:
+  ret void
+}
+",
+        false,
+    );
+    assert_eq!(loads(&module), 1, "{}", printed(&module));
+}
