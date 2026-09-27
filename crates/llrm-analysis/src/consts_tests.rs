@@ -590,3 +590,30 @@ b0:
     );
     assert_eq!(retyped.solved("r", &Calls::default()), None);
 }
+
+#[test]
+fn memory_facts_do_not_hang_on_which_function_was_solved_first() {
+    // Overlap buckets were once numbered in one process-wide table, shared by
+    // every function solved on the thread.
+    let module = |first: &str, second: &str| {
+        Parsed::new(&format!(
+            "@{first} = global [4 x i8] zeroinitializer
+@{second} = global [4 x i8] zeroinitializer
+
+define i16 @f() {{
+b0:
+  store i16 7, ptr @{first}
+  store i16 8, ptr @{second}
+  store i8 1, ptr getelementptr (i8, ptr @{second}, i16 2)
+  %a = load i16, ptr @{first}
+  ret i16 %a
+}}
+"
+        ))
+    };
+    let (one, two) = (module("g", "h"), module("h", "g"));
+    let solve = |parsed: &Parsed| known(&parsed.unit(), Some(&Calls::default()), None, None);
+    let (first, second) = (solve(&one), solve(&two));
+    assert_eq!(first.get(&one.value("a")), Some(&Known::new(7, 16)));
+    assert_eq!((solve(&two), solve(&one)), (second, first));
+}

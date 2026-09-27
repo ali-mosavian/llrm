@@ -56,7 +56,7 @@ use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
 use crate::memoryssa::{self, Accesses};
 use crate::ranges::{self, Interval};
-use crate::regions::{ByteRange, OverlapBucket, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
+use crate::regions::{ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
 
 type Binary = fn(&BigInt, &BigInt) -> BigInt;
 
@@ -95,6 +95,8 @@ pub struct _MemoryQueries<'a> {
     pub addressed: HashMap<MemRef, Rc<MemRef>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
+    /// The buckets `places` names, this epoch's own.
+    pub buckets: OverlapBuckets,
 }
 
 /// Cells indexed by this epoch's buckets; see `_MemoryQueries::owned`.
@@ -132,6 +134,7 @@ impl<'a> _MemoryQueries<'a> {
             addressed: HashMap::default(),
             overlaps: HashMap::default(),
             places: HashMap::default(),
+            buckets: OverlapBuckets::default(),
         }
     }
 
@@ -160,11 +163,11 @@ impl<'a> _MemoryQueries<'a> {
     /// Remembered: interning a bucket hashes its object.
     pub fn place(&mut self, where_: (Addr, u32)) -> (OverlapBucket, Option<ByteRange>) {
         if let Some(place) = self.places.get(&where_) {
-            return *place;
+            return place.clone();
         }
-        let bucket = object_bucket(object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
+        let bucket = object_bucket(&mut self.buckets, object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
         let place = (bucket, overlap_span(&self.cell(where_)));
-        self.places.insert(where_, place);
+        self.places.insert(where_, place.clone());
         place
     }
 
