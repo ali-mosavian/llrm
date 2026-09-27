@@ -5,6 +5,7 @@
 pub mod canonical;
 pub mod edges;
 pub mod inline;
+pub mod interprocedural;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loopclone;
