@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
-use llrm_analysis::{cfg, induction, noreturn};
+use llrm_analysis::{cfg, induction, noreturn, ranges};
 use llrm_graph::loops::Loop;
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
@@ -101,6 +101,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
         ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| !inside(block)),
     };
     let mut certain: Option<BTreeSet<InstId>> = None;
+    let mut bounded: Option<ranges::Facts> = None;
     let mut run: Vec<InstId> = Vec::new();
     let mut made: BTreeSet<ValueId> = BTreeSet::new();
     loop {
@@ -114,7 +115,11 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
                 Operand::Constant(_) => true,
                 Operand::Block(_) => false,
             });
-            if !ready || (_may_fault(unit, outer, inst) && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)) {
+            if !ready
+                || (_may_fault(unit, outer, inst)
+                    && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)
+                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded))
+            {
                 continue;
             }
             run.push(inst);
@@ -158,6 +163,24 @@ fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) => !_cannot_fault(unit, inst),
         _ => false,
     }
+}
+
+/// Whether `inst` loads only bytes inside its object wherever the
+/// preheader `into` enters the loop at `header`, its index's bounds on
+/// that edge as `ranges` finds them.
+fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>) -> bool {
+    if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
+        return false;
+    }
+    let memory = Unit::within(unit.context, unit.layout, unit.function, outer);
+    let Some(reference) = memory.reference(inst) else { return false };
+    if bounded.is_none() {
+        *bounded = Some(ranges::bounded(&memory).unwrap_or_default());
+    }
+    // What holds on the edge into the loop, as the preheader's branch narrows it.
+    let scope = bounded.as_ref().and_then(|facts| facts.get(&into)).cloned().unwrap_or_default();
+    let Ok(Some(known)) = ranges::on_edge(&memory, cfg::block(into), cfg::block(header), &scope, None) else { return false };
+    ranges::inside_object(&memory, &reference, &known.into_iter().collect())
 }
 
 /// Whether this divide can be performed where it might not have been: by a

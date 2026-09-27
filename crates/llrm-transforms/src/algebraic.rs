@@ -86,6 +86,7 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
     _mask_scaled(context, function, recurrences, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
+        || _casted_logic(context, function, inst)
         || _negated_difference(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
@@ -294,6 +295,30 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
         _ => return false,
     };
     _replace(function, inst, Opcode::Cast(op), vec![source]);
+    true
+}
+
+/// Logic of two like extensions from one type is that extension of the
+/// logic at the narrow type, as InstCombine's `foldCastedBitwiseLogic`:
+/// two frontend truths `and`ed, then tested, become one `i1` `and`.
+fn _casted_logic(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor), left, right, _)) = _binary(context, function, inst) else { return false };
+    let extended = |operand: Operand| {
+        let made = _definition(function, operand)?;
+        match function.instruction(made).opcode {
+            Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) => Some((kind, function.instruction(made).operands[0])),
+            _ => None,
+        }
+    };
+    let (Some((kind, one)), Some((other, two))) = (extended(left), extended(right)) else { return false };
+    let narrow = function.operand_type(context, one);
+    if kind != other || narrow.is_none() || narrow != function.operand_type(context, two) || !(_single_use(function, left) || _single_use(function, right)) {
+        return false;
+    }
+    let logic = function.create_instruction(Opcode::Binary(op), narrow.expect("typed"), vec![one, two], Flags::default(), None);
+    function.insert(logic, Position::Before(inst)).expect("a placed instruction");
+    let logic = Operand::Value(function.instruction(logic).result.expect("a value"));
+    _replace(function, inst, Opcode::Cast(kind), vec![logic]);
     true
 }
 
