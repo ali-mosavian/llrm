@@ -11,7 +11,9 @@ use std::rc::Rc;
 
 use crate::context::GlobalId;
 use crate::datalayout::DataLayout;
-use crate::module::{GlobalValue, Linkage, Module};
+use crate::module::{Function, GlobalKind, GlobalValue, Linkage, Module};
+use crate::opcode::Attribute;
+use crate::types::Types;
 use crate::target::Machine;
 
 /// DGROUP as the program links it: its member segments, the addresses cut
@@ -121,14 +123,28 @@ impl Program {
         if from == to {
             return Some(constant);
         }
-        let (source, target) = if from < to {
+        let (source, target) = self.pair(from, to);
+        target.context.imported(&source.context, constant)
+    }
+
+    /// Body `id` of module `from`'s attributes as declaration `declared` of
+    /// module `to`'s; whether that changed it.
+    pub fn restate(&mut self, from: usize, id: GlobalId, to: usize, declared: GlobalId) -> bool {
+        let (source, target) = self.pair(from, to);
+        let (GlobalKind::Function(body), GlobalKind::Function(declaration)) = (&source.global(id).kind, &mut target.globals[declared.0 as usize].kind) else { return false };
+        restated(declaration, &mut target.context.types, body, &source.context.types)
+    }
+
+    /// Module `from`, and module `to` to change; they differ.
+    fn pair(&mut self, from: usize, to: usize) -> (&Module, &mut Module) {
+        assert_ne!(from, to, "two modules");
+        if from < to {
             let (low, high) = self.modules.split_at_mut(to);
             (&low[from], &mut high[0])
         } else {
             let (low, high) = self.modules.split_at_mut(from);
             (&high[0], &mut low[to])
-        };
-        target.context.imported(&source.context, constant)
+        }
     }
 
     /// Module `at`'s globals that stand for one of `defined`: its own, and
@@ -155,6 +171,28 @@ impl Program {
             (defines(one) && !matches!(one.linkage, Linkage::Internal | Linkage::Private)).then_some((other, found))
         })
     }
+}
+
+/// `attrs` of `from`'s types in `types`; none where one names a type
+/// `types` cannot hold.
+fn attributes(types: &mut Types, from: &Types, attrs: &[Attribute]) -> Option<Vec<Attribute>> {
+    attrs.iter().map(|one| one.imported(types, from)).collect()
+}
+
+/// `body`'s attributes, of `from`'s types, as `declaration`'s in `types`;
+/// whether that changed it. One naming a type `types` cannot hold leaves
+/// it as it was.
+fn restated(declaration: &mut Function, types: &mut Types, body: &Function, from: &Types) -> bool {
+    let (Some(attrs), Some(return_attrs), Some(parameter_attrs)) = (
+        attributes(types, from, &body.attrs),
+        attributes(types, from, &body.return_attrs),
+        body.parameter_attrs.iter().map(|one| attributes(types, from, one)).collect::<Option<Vec<_>>>(),
+    ) else {
+        return false;
+    };
+    let changed = (&attrs, &parameter_attrs, &return_attrs) != (&declaration.attrs, &declaration.parameter_attrs, &declaration.return_attrs);
+    (declaration.attrs, declaration.parameter_attrs, declaration.return_attrs) = (attrs, parameter_attrs, return_attrs);
+    changed
 }
 
 /// Whether `global` is a definition: a function with a body, or a variable

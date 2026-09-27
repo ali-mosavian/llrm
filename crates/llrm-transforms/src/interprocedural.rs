@@ -344,17 +344,11 @@ pub fn stamped_all(program: &mut Program, modules: &mut [ModuleAnalyses]) -> Res
 /// Body `id` of module `at`'s attributes stated on each other module's
 /// declaration of it; the modules changed.
 fn published(program: &mut Program, at: usize, id: GlobalId) -> Vec<usize> {
-    let body = program.modules[at].global(id).function().expect("a body").declaration();
     let mut changed = Vec::new();
     for other in (0..program.modules.len()).filter(|&other| other != at) {
         let declared: Vec<GlobalId> = (0..program.modules[other].globals.len() as u32).map(GlobalId).filter(|&one| program.definition(other, one) == Some((at, id))).collect();
         for one in declared {
-            let (_, function) = function_mut(&mut program.modules[other], one);
-            let before = (function.attrs.clone(), function.parameter_attrs.clone(), function.return_attrs.clone());
-            function.attrs = body.attrs.clone();
-            function.parameter_attrs = body.parameter_attrs.clone();
-            function.return_attrs = body.return_attrs.clone();
-            if before != (function.attrs.clone(), function.parameter_attrs.clone(), function.return_attrs.clone()) && !changed.contains(&other) {
+            if program.restate(at, id, other, one) && !changed.contains(&other) {
                 changed.push(other);
             }
         }

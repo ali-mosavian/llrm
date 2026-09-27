@@ -207,6 +207,21 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
 
 /// Per module, a call to another module's body that always returns one
 /// constant kept its result unknown.
+/// Attributes were copied to another module's declaration with their
+/// type ids, which name other types there: `range(i16 ...)` read as
+/// another type.
+#[test]
+fn test_a_published_attribute_names_its_type_in_the_declaring_module() {
+    let small = parsed("define range(i16 0, 8) i16 @small(i16 %x) {\nb:\n  %y = and i16 %x, 7\n  ret i16 %y\n}\n");
+    let caller = parsed("@d = global double 0.0\n@b = global i8 0\n\ndeclare i16 @small(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @small(i16 %a)\n  ret i16 %y\n}\n");
+    let mut program = Program::new(vec![small, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    stamped_all(&mut program, &mut modules).unwrap();
+    let text = printed(&program.modules[1]);
+    let declaration = text.lines().find(|line| line.starts_with("declare")).unwrap();
+    assert!(declaration.starts_with("declare range(i16 0, 8) i16 @small(i16)"), "{text}");
+}
+
 #[test]
 fn test_a_constant_another_module_returns_reaches_its_callers() {
     let seven = parsed("define i16 @seven() {\nb:\n  ret i16 7\n}\n");
