@@ -25,7 +25,7 @@ fn a_function_becomes_its_llvm_ir() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     // With no ABI of its own, a procedure is far and C's.
-    assert!(text.ends_with("define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
+    assert!(text.contains("define i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {\nb1:\n  %2 = sub i16 %0, %1\n  ret i16 %2\n}\n"), "{text}");
 }
 
 /// A call carries its callee's calling convention, and a far callee lives
@@ -122,7 +122,7 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 30, i1 false)\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7\n  ret i16 %8\n";
+    let body = "  %2 = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 30, i1 false)\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7, !tbaa !2\n  ret i16 %8\n";
     assert!(text.contains(body), "{text}");
 }
 
@@ -150,6 +150,39 @@ fn a_far_pointer_is_a_segment_and_an_offset() {
     let text = llrm_mir::print::module(&emitted.module);
     let body = "  %1 = addrspacecast ptr addrspace(1) %0 to ptr addrspace(2)\n  %2 = ptrtoint ptr addrspace(2) %1 to i16\n  %3 = ptrtoint ptr addrspace(1) %0 to i16\n  %4 = inttoptr i16 %2 to ptr addrspace(2)\n  %5 = addrspacecast ptr addrspace(2) %4 to ptr addrspace(1)\n  %6 = getelementptr i8, ptr addrspace(1) %5, i16 %3\n  ret ptr addrspace(1) %6\n";
     assert!(text.contains(body), "{text}");
+}
+
+/// plasma reloaded each array's segment word every iteration: HIR's
+/// promise that a far allocation is disjoint from every place was dropped.
+/// An allocation's element and a word read through a place's own address
+/// carry the `!tbaa` tags that say so.
+#[test]
+fn an_allocation_and_a_place_are_tagged_apart() {
+    use crate::model::{AddressKind, IndirectPlace, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation });
+    let instructions = vec![
+        Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
+        Instruction::new(3, Op::Store, vec![], vec![indirect(1, 0, Some(1)), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let places = vec![Place::new(1, "D", 4, Storage::Local, -4)];
+    let mut function = Function::new(1, "FILL", 0, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    let mut descriptor = Type::new(4, "descriptor", TypeKind::Array, 4);
+    (descriptor.element, descriptor.rank, descriptor.bounds) = (Some(1), 1, vec![(0, 1)]);
+    program.modules[0].types.extend([far, Type::new(3, "near", TypeKind::Pointer, 2), descriptor]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !4\n"), "{text}");
+    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!3 = !{!\"allocation\", !0, i64 0}\n"), "{text}");
 }
 
 /// A far pointer advanced by a displacement moves its offset alone: a GEP

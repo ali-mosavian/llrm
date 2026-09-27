@@ -23,6 +23,8 @@ pub struct Unit<'a> {
     pub function: &'a mut Function,
     /// What each function in the module does to memory.
     pub callees: &'a crate::memory::Callees,
+    /// The module's metadata nodes.
+    pub metadata: &'a [crate::module::MetadataNode],
 }
 
 /// A fact about a function, computed on demand and cached until a pass
@@ -240,14 +242,14 @@ impl PassManager {
             };
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
-                let Module { context, globals, .. } = &mut *module;
+                let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
                 let analyses = caches.entry(id).or_default();
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees }, analyses);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata }, analyses);
                 analyses.invalidate(&preserved);
                 if self.verify_invalidation {
                     let stale = analyses.stale(context, &layout, function);

@@ -426,6 +426,49 @@ b5:
     );
 }
 
+/// plasma reloaded each array descriptor's segment word in its innermost
+/// loop, 13 instructions to the old path's 5: an element store and a
+/// descriptor load the frontend tags apart leave the load free to go.
+#[test]
+fn test_licm_hoists_a_load_its_loops_stores_are_tagged_apart_from() {
+    let text = "declare void @dim(ptr)
+
+define void @f(i16 %n) {
+b1:
+  %d = alloca [4 x i8]
+  call void @dim(ptr %d)
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %7, %b3 ]
+  %1 = icmp slt i16 %0, %n
+  br i1 %1, label %b3, label %b4
+
+b3:
+  %2 = getelementptr i8, ptr %d, i16 2
+  %3 = load i16, ptr %2, !tbaa !3
+  %4 = inttoptr i16 %3 to ptr addrspace(2)
+  %5 = addrspacecast ptr addrspace(2) %4 to ptr addrspace(1)
+  %6 = getelementptr i16, ptr addrspace(1) %5, i16 %0
+  store i16 %0, ptr addrspace(1) %6, !tbaa !4
+  %7 = add i16 %0, 1
+  br label %b2
+
+b4:
+  ret void
+}
+
+!0 = !{!\"qb\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!\"allocation\", !0, i64 0}
+!3 = !{!1, !1, i64 0}
+!4 = !{!2, !2, i64 0}
+";
+    let got = through(&["licm"], text);
+    let entry = &got[got.find("b1:").unwrap()..got.find("b2:").unwrap()];
+    assert!(entry.contains("load i16"), "{got}");
+}
+
 /// A fill's `a[i, j]` was `(i * 8 + j) * 4` each iteration, 768
 /// instructions to the old path's 69 in nested_fill: the address becomes a
 /// byte offset stepping by 4, and `i * 8` leaves the inner loop.

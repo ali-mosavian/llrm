@@ -1,10 +1,11 @@
 //! Loop-invariant code motion, as LLVM's LICM hoists: an instruction whose
 //! operands its loop does not define, safe to run whether or not the loop
 //! would, and reading no memory the loop may write, moves to the loop's
-//! preheader. Inner loops go first, so what leaves one can leave the next.
+//! preheader. What a write may touch, alias analysis says. Inner loops go first, so what leaves one can leave the next.
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::alias::{self, Alias, Location};
 use crate::context::ConstantKind;
 use crate::edit::Position;
 use crate::loops::Loop;
@@ -34,13 +35,18 @@ impl FunctionPass for Licm {
         // Inner loops come first.
         for one in loops.loops.iter().rev() {
             let Some(preheader) = preheader(unit.function, one) else { continue };
-            let writes = one.blocks.iter().flat_map(|&block| unit.function.block(block).instructions().to_vec()).any(|inst| memory::of(unit.context, unit.callees, unit.function, inst).writes);
+            let writes: Vec<InstId> = one
+                .blocks
+                .iter()
+                .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+                .filter(|&inst| memory::of(unit.context, unit.callees, unit.function, inst).writes)
+                .collect();
             let before = unit.function.terminator(preheader).expect("a terminator");
             // Down the dominator tree, so an operand hoists before its user.
             let mut stack = vec![one.header];
             while let Some(block) = stack.pop() {
                 for inst in unit.function.block(block).instructions().to_vec() {
-                    if invariant(unit, &one.blocks, inst) && safe(unit, inst, writes) {
+                    if invariant(unit, &one.blocks, inst) && safe(unit, inst, &writes) {
                         unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
                         changed = true;
                     }
@@ -76,8 +82,8 @@ fn invariant(unit: &Unit, blocks: &BTreeSet<BlockId>, inst: InstId) -> bool {
 }
 
 /// Whether `inst` may run where the loop would not have run it, in a loop
-/// that `writes` memory or not: LLVM's `isSafeToSpeculativelyExecute`.
-fn safe(unit: &Unit, inst: InstId, writes: bool) -> bool {
+/// whose writes are `writes`: LLVM's `isSafeToSpeculativelyExecute`.
+fn safe(unit: &Unit, inst: InstId, writes: &[InstId]) -> bool {
     let function = &*unit.function;
     let instruction = function.instruction(inst);
     match &instruction.opcode {
@@ -95,8 +101,21 @@ fn safe(unit: &Unit, inst: InstId, writes: bool) -> bool {
             let pointer = instruction.operands[0];
             let bytes = unit.layout.store_size(&unit.context.types, instruction.ty);
             valuetracking::dereferenceable(unit.context, unit.layout, function, pointer, bytes)
-                && (!writes || memory::invariant(unit.context, unit.layout, function, pointer))
+                && (memory::invariant(unit.context, unit.layout, function, pointer) || writes.iter().all(|&write| misses(unit, inst, write)))
         }
         _ => false,
     }
+}
+
+/// Whether the write `write` leaves what the load `load` reads alone: a
+/// store alias analysis puts elsewhere.
+fn misses(unit: &Unit, load: InstId, write: InstId) -> bool {
+    let function = &*unit.function;
+    let location = |inst: InstId, pointer: Operand, ty| Location { pointer, bytes: unit.layout.store_size(&unit.context.types, ty), tbaa: alias::tag(function, inst) };
+    let read = function.instruction(load);
+    let written = function.instruction(write);
+    let Opcode::Store { .. } = written.opcode else { return false };
+    let Some(stored) = function.operand_type(unit.context, written.operands[0]) else { return false };
+    let (a, b) = (location(load, read.operands[0], read.ty), location(write, written.operands[1], stored));
+    alias::alias(unit.context, unit.layout, unit.callees, unit.metadata, function, a, b) == Alias::No
 }

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::context::{Constant, ConstantKind};
-use crate::alias::{alias, captured, contains, object, Alias, Location, Object};
+use crate::alias::{self, alias, captured, contains, object, Alias, Location, Object};
 use crate::memory;
 use crate::module::{BlockId, InstId, Operand, ValueId};
 use crate::opcode::{BinaryOp, Flags, Opcode};
@@ -92,7 +92,7 @@ impl Cse<'_, '_> {
         let (base, offset) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, at.pointer);
         scope.memory.retain_mut(|known| {
             if memory::invariant(unit.context, unit.layout, unit.function, known.at().pointer)
-                || alias(unit.context, unit.layout, unit.callees, unit.function, known.at(), at) == Alias::No
+                || alias(unit.context, unit.layout, unit.callees, unit.metadata, unit.function, known.at(), at) == Alias::No
             {
                 return true;
             }
@@ -189,7 +189,7 @@ impl Cse<'_, '_> {
             }
             Opcode::Load { volatile: false, .. } => {
                 let (pointer, ty, result) = (instruction.operands[0], instruction.ty, instruction.result.expect("a load's value"));
-                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty) };
+                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty), tbaa: alias::tag(function, inst) };
                 match self.known(scope, at, ty) {
                     Some(value) => self.replace(inst, value),
                     None => scope.memory.push(Known::Value { at, ty, value: Operand::Value(result) }),
@@ -198,7 +198,7 @@ impl Cse<'_, '_> {
             Opcode::Store { volatile: false, .. } => {
                 let (value, pointer) = (instruction.operands[0], instruction.operands[1]);
                 let ty = function.operand_type(self.unit.context, value).expect("a stored value's type");
-                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty) };
+                let at = Location { pointer, bytes: self.unit.layout.store_size(&self.unit.context.types, ty), tbaa: alias::tag(function, inst) };
                 self.written(scope, at);
                 scope.memory.push(Known::Value { at, ty, value });
             }
@@ -216,7 +216,7 @@ impl Cse<'_, '_> {
                             _ => None,
                         };
                         let zero = matches!(byte, Operand::Constant(id) if self.unit.context.get(id).kind == ConstantKind::Int(0));
-                        let at = Location { pointer, bytes: bytes.unwrap_or(u64::MAX / 2) };
+                        let at = Location { pointer, bytes: bytes.unwrap_or(u64::MAX / 2), tbaa: None };
                         self.written(scope, at);
                         if zero && bytes.is_some() {
                             scope.memory.push(Known::Zero { at, holes: Vec::new() });
@@ -233,7 +233,7 @@ impl Cse<'_, '_> {
         let unit = &*self.unit;
         for known in scope.memory.iter().rev() {
             match known {
-                Known::Value { at: there, ty: stored, value } if *stored == ty && alias(unit.context, unit.layout, unit.callees, unit.function, *there, at) == Alias::Must => {
+                Known::Value { at: there, ty: stored, value } if *stored == ty && alias(unit.context, unit.layout, unit.callees, unit.metadata, unit.function, *there, at) == Alias::Must => {
                     return Some(*value);
                 }
                 Known::Zero { at: there, holes } if contains(unit.context, unit.layout, unit.function, *there, at) => {

@@ -2,12 +2,13 @@
 //! answers from their underlying objects: distinct identified objects do
 //! not overlap, one object's constant ranges overlap as they overlap, and
 //! a stack slot whose address never escapes is reached only through
-//! itself.
+//! itself. Where those leave it open, the accesses' `!tbaa` tags decide, as
+//! LLVM's TypeBasedAA does.
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::memory::{self, Callees};
-use crate::module::{Function, Operand, ValueDef, ValueId};
+use crate::module::{Function, InstId, MetadataId, MetadataNode, MetadataOperand, Operand, ValueDef, ValueId};
 use crate::opcode::{Attribute, Opcode};
 use crate::valuetracking::underlying;
 
@@ -18,14 +19,28 @@ pub enum Alias {
     Must,
 }
 
-/// `bytes` bytes at `pointer`.
+/// `bytes` bytes at `pointer`, accessed as the `!tbaa` tag `tbaa` says.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Location {
     pub pointer: Operand,
     pub bytes: u64,
+    pub tbaa: Option<MetadataId>,
 }
 
-pub fn alias(context: &Context, layout: &DataLayout, callees: &Callees, function: &Function, a: Location, b: Location) -> Alias {
+/// The `!tbaa` tag of the access `inst`.
+pub fn tag(function: &Function, inst: InstId) -> Option<MetadataId> {
+    function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa").map(|&(_, node)| node)
+}
+
+pub fn alias(context: &Context, layout: &DataLayout, callees: &Callees, metadata: &[MetadataNode], function: &Function, a: Location, b: Location) -> Alias {
+    match based(context, layout, callees, function, a, b) {
+        Alias::May if typed_apart(context, metadata, a.tbaa, b.tbaa) => Alias::No,
+        answer => answer,
+    }
+}
+
+/// What the pointers alone say.
+fn based(context: &Context, layout: &DataLayout, callees: &Callees, function: &Function, a: Location, b: Location) -> Alias {
     let (base_a, offset_a) = underlying(context, layout, function, a.pointer);
     let (base_b, offset_b) = underlying(context, layout, function, b.pointer);
     if base_a == base_b {
@@ -104,4 +119,38 @@ pub fn contains(context: &Context, layout: &DataLayout, function: &Function, out
         (Some(x), Some(y)) => base_outer == base_inner && x <= y && y + inner.bytes as i64 <= x + outer.bytes as i64,
         _ => false,
     }
+}
+
+/// Whether two tagged accesses touch different memory: under one root,
+/// neither's type is the other's or an ancestor of it. Only scalar tags,
+/// `!{!type, !type, i64 0}`, are read; any other tag may alias anything.
+fn typed_apart(context: &Context, metadata: &[MetadataNode], a: Option<MetadataId>, b: Option<MetadataId>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else { return false };
+    let (Some(a), Some(b)) = (scalar_type(context, metadata, a), scalar_type(context, metadata, b)) else { return false };
+    let (a, b) = (ancestors(metadata, a), ancestors(metadata, b));
+    a.last() == b.last() && !a.contains(&b[0]) && !b.contains(&a[0])
+}
+
+/// The type an access tag names, if it is a scalar tag.
+fn scalar_type(context: &Context, metadata: &[MetadataNode], tag: MetadataId) -> Option<MetadataId> {
+    match metadata.get(tag.0 as usize)?.operands[..] {
+        [MetadataOperand::Node(base), MetadataOperand::Node(access), MetadataOperand::Constant(offset), ..]
+            if base == access && context.get(offset).kind == ConstantKind::Int(0) =>
+        {
+            Some(access)
+        }
+        _ => None,
+    }
+}
+
+/// A type node and its parents, `!{!"name", !parent, i64 0}`, up to the root.
+fn ancestors(metadata: &[MetadataNode], node: MetadataId) -> Vec<MetadataId> {
+    let mut chain = vec![node];
+    while let Some(MetadataOperand::Node(parent)) = metadata.get(chain[chain.len() - 1].0 as usize).and_then(|one| one.operands.get(1)) {
+        if chain.contains(parent) {
+            break;
+        }
+        chain.push(*parent);
+    }
+    chain
 }

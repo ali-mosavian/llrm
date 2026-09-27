@@ -4,7 +4,7 @@
 use crate::context::{Constant, ConstantId, ConstantKind, Context, GlobalId};
 use crate::edit::Position;
 use crate::intrinsics;
-use crate::module::{BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, Linkage, Module, Operand, ValueData, ValueDef, ValueId};
+use crate::module::{BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, Linkage, MetadataId, Module, Operand, ValueData, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, CallInfo, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
 
@@ -87,6 +87,13 @@ impl Builder<'_> {
         let inst = self.function.create_instruction(opcode, ty, operands, flags, Some(name).filter(|one| !one.is_empty()));
         self.function.insert(inst, Position::End(self.block.expect("a position"))).expect("a placed block");
         self.function.instruction(inst).result.map(Operand::Value)
+    }
+
+    /// Attaches `node` as metadata of `kind` to the instruction just emitted.
+    pub fn attach(&mut self, kind: &str, node: MetadataId) {
+        let block = self.block.expect("a position");
+        let inst = *self.function.block(block).instructions().last().expect("an emitted instruction");
+        self.function.annotate(inst, kind, node);
     }
 
     fn value(&mut self, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags, name: &str) -> Operand {

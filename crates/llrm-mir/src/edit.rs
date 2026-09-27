@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::module::{Block, BlockId, Change, Function, InstId, Instruction, Operand, Use, ValueData, ValueDef, ValueId};
+use crate::module::{Block, BlockId, Change, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData, ValueDef, ValueId};
 use crate::opcode::{Flags, Opcode};
 use crate::types::TypeId;
 
@@ -245,6 +245,11 @@ impl Function {
         }
         self.erased[inst.0 as usize] = true;
         Ok(())
+    }
+
+    /// Attaches `node` to `inst` as metadata of `kind`.
+    pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
+        self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.

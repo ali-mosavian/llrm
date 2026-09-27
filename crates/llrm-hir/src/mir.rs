@@ -10,7 +10,7 @@ use llrm_mir::build::Builder;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
-    Linkage, Module, Operand as Value, Type, TypeId, Types,
+    Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand as Value, Type, TypeId, Types,
 };
 
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
@@ -74,8 +74,33 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
     }
 }
 
+/// The `!tbaa` access tags that mark HIR's promise that a far allocation
+/// is disjoint from every place: two siblings under one root.
+struct Tags {
+    place: MetadataId,
+    allocation: MetadataId,
+}
+
+impl Tags {
+    fn new(module: &mut Module) -> Self {
+        let zero = module.context.types.int(64);
+        let zero = MetadataOperand::Constant(module.context.int(zero, 0));
+        let mut node = |operands: Vec<MetadataOperand>| {
+            module.metadata.push(MetadataNode { distinct: false, operands });
+            MetadataId(module.metadata.len() as u32 - 1)
+        };
+        let root = node(vec![MetadataOperand::String("llrm hir".to_owned())]);
+        let mut tag = |name: &str| {
+            let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
+            node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
+        };
+        Tags { place: tag("place"), allocation: tag("allocation") }
+    }
+}
+
 struct Tables<'h> {
     array_order: model::ArrayOrder,
+    tags: Tags,
     /// Whether a frame starts zeroed.
     zeroed: bool,
     layout: DataLayout,
@@ -101,6 +126,7 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         data: HashMap::new(),
         callees: HashMap::new(),
         conventions: HashMap::new(),
+        tags: Tags::new(&mut module),
     };
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let mut defined = Vec::new();
@@ -556,6 +582,8 @@ struct Body<'b, 'm, 'h> {
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     objects: Vec<Value>,
+    /// Each value that is a place's address, and that place's size.
+    addresses: HashMap<i64, i64>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -577,6 +605,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             values,
             frame: HashMap::new(),
             objects: Vec::new(),
+            addresses: HashMap::new(),
         })
     }
 
@@ -658,8 +687,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Operand::ValueRef(one) => self.values.get(&one.value).copied().ok_or_else(|| format!("value {} used before its definition", one.value)),
             Operand::Constant(one) => self.constant(one),
             place => {
-                let (pointer, ty, volatile) = self.place(place)?;
-                Ok(self.b.load(ty, pointer, volatile, ""))
+                let (pointer, ty, volatile, tag) = self.place(place)?;
+                let loaded = self.b.load(ty, pointer, volatile, "");
+                self.tagged(tag);
+                Ok(loaded)
             }
         }
     }
@@ -682,37 +713,50 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok(Value::Constant(self.b.context.constant(Constant { ty, kind })))
     }
 
-    /// A place's address, what it holds, and whether it is volatile.
-    fn place(&mut self, operand: &Operand) -> Emit<(Value, TypeId, bool)> {
+    /// A place's address, what it holds, whether it is volatile, and the
+    /// `!tbaa` tag its accesses carry.
+    fn place(&mut self, operand: &Operand) -> Emit<(Value, TypeId, bool, Option<MetadataId>)> {
         match operand {
             Operand::PlaceRef(one) => {
                 let place = self.places[&one.place];
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&place.r#type])?;
-                Ok((self.base(place)?, ty, place.volatile))
+                Ok((self.base(place)?, ty, place.volatile, Some(self.tables.tags.place)))
             }
             Operand::ArrayElement(one) => {
                 let place = self.places[&one.place];
                 let element = self.tables.types[&place.r#type].element.ok_or("an array element of a non-array")?;
                 let (pointer, ty) = self.element(place, &one.indices, 0, element)?;
-                Ok((pointer, ty, place.volatile))
+                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
             }
             Operand::ProjectedPlace(one) => {
                 let place = self.places[&one.place];
                 let (pointer, ty) = self.element(place, &one.indices, one.offset, one.r#type)?;
-                Ok((pointer, ty, place.volatile))
+                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
             }
             Operand::IndirectPlace(one) => {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
-                Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile))
+                let inside = self.addresses.get(&one.base).is_some_and(|&size| one.offset >= 0 && one.offset + self.tables.types[&one.r#type].width <= size);
+                let tag = match one.allocation {
+                    Some(_) => Some(self.tables.tags.allocation),
+                    None => inside.then_some(self.tables.tags.place),
+                };
+                Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile, tag))
             }
             Operand::DescriptorPlace(one) => {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
                 let pointee = self.tables.types[&self.value_types[&one.base]].element.map(|element| self.tables.types[&element]);
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
-                Ok((self.offset(base, one.offset(pointee), false), ty, false))
+                Ok((self.offset(base, one.offset(pointee), false), ty, false, None))
             }
             Operand::ValueRef(_) | Operand::Constant(_) => Err("a value where a place belongs".to_owned()),
+        }
+    }
+
+    /// The access just emitted, tagged `tag`.
+    fn tagged(&mut self, tag: Option<MetadataId>) {
+        if let Some(tag) = tag {
+            self.b.attach("tbaa", tag);
         }
     }
 
@@ -870,18 +914,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.define(instruction, value);
             }
             Op::Store => {
-                let (pointer, _, volatile) = self.place(&instruction.operands[0])?;
+                let (pointer, _, volatile, tag) = self.place(&instruction.operands[0])?;
                 let value = self.value(&instruction.operands[1])?;
                 self.b.store(value, pointer, volatile);
+                self.tagged(tag);
             }
             Op::Address => {
-                let (pointer, _, _) = self.place(&instruction.operands[0])?;
+                let (pointer, _, _, _) = self.place(&instruction.operands[0])?;
                 let ty = self.result_type(instruction.results[0])?;
                 let pointer = match (self.b.context.types.get(self.b.type_of(pointer)), self.b.context.types.get(ty)) {
                     (Type::Pointer(from), Type::Pointer(to)) if from == to => pointer,
                     (Type::Pointer(_), Type::Pointer(_)) => self.b.cast(CastOp::AddrSpaceCast, pointer, ty, ""),
                     (_, other) => return Err(format!("an address as {other:?}")),
                 };
+                if let (Operand::PlaceRef(one), Some(&result)) = (&instruction.operands[0], instruction.results.first()) {
+                    let place = self.places[&one.place];
+                    self.addresses.insert(result, place.extent.unwrap_or(self.tables.types[&place.r#type].width));
+                }
                 self.define(instruction, pointer);
             }
             Op::Truncate | Op::SignExtend | Op::ZeroExtend | Op::Convert => {
