@@ -245,7 +245,8 @@ fn test_division_and_variable_shifts() {
 }
 
 /// A variable index is scaled, and an address only accesses read is their
-/// base plus it: `[bp+di-8]`, `[bx+si+2]`.
+/// base plus it: `[bp+di-8]`, `[bx+si+2]`. The frame cell's SS is BP's own,
+/// so no `ss:` override: it cost a byte and a clock at each access.
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -270,7 +271,7 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bx, word ptr [bp+6]",
             "mov si, word ptr [bp+8]",
             "lea di, [esi+esi]",
-            "mov word ptr ss:[bp+di-8], 5",
+            "mov word ptr [bp+di-8], 5",
             "add si, si",
             "mov ax, word ptr [bx+si+2]",
             "pop di",
@@ -1533,7 +1534,7 @@ fn test_an_address_only_accesses_read_is_base_plus_index() {
   ret i16 %v
 }
 ";
-    assert_eq!(inner(local), ["mov si, word ptr [bp+6]", "add si, si", "mov word ptr ss:[bp+si-16], 3", "mov ax, word ptr ss:[bp+si-16]"]);
+    assert_eq!(inner(local), ["mov si, word ptr [bp+6]", "add si, si", "mov word ptr [bp+si-16], 3", "mov ax, word ptr [bp+si-16]"]);
 }
 
 /// An array read only past its start by index is still reserved whole:

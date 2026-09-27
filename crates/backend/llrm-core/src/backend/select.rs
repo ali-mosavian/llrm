@@ -210,8 +210,15 @@ pub fn _displacement_size(base: Register, index: Register, value: i64) -> u32 {
     }
 }
 
+/// The override `seg` is through `base`: none where the base already
+/// selects it, as `ss:[bp+si]` is `[bp+si]` a byte and a clock dearer.
+pub fn overriding(base: Register, seg: Register) -> Register {
+    let default = if matches!(base, Register::BP | Register::EBP | Register::SP | Register::ESP) { Register::SS } else { Register::DS };
+    if seg == default { Register::None } else { seg }
+}
+
 fn memory_operand(base: Register, index: Register, scale: i64, displ: i64, displ_size: u32, seg: Register) -> MemoryOperand {
-    MemoryOperand::new(base, index, scale as u32, displ, displ_size, false, seg)
+    MemoryOperand::new(base, index, scale as u32, displ, displ_size, false, overriding(base, seg))
 }
 
 /// `what` as an encodable memory operand, and whether it is relocated.

@@ -676,7 +676,7 @@ pub fn _memory(cell: &ir::Mem, names: &IndexMap<(Space, i64), String>) -> Result
             return Ok(format!("{size}{segment}{symbol}{disp}{indexed}"));
         }
         Space::Literal if !registers.is_empty() => {
-            let segment = if address.segment == Register::None {
+            let segment = if crate::backend::select::overriding(cell.through, address.segment) == Register::None {
                 String::new()
             } else {
                 format!("{}:", target::name_of(address.segment))
