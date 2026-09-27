@@ -59,6 +59,11 @@ impl Machine for Dos {
     fn address_forms(&self) -> Vec<AddressForm> {
         self.address_forms.clone()
     }
+
+    /// The description's: `dos.toml` states when an access faults.
+    fn load_may_trap(&self, width: u64, align: u64) -> bool {
+        crate::machine::BUILT_IN.access_may_trap(width, align)
+    }
 }
 
 /// The two indexed addresses real mode has. A word one is bx or bp plus si

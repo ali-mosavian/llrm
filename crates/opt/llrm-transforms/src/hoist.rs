@@ -15,7 +15,8 @@
 //! - A call keeps only the loads it may write in the loop. The old
 //!   `motion_blocked` refused a whole loop holding a call, which clobbered
 //!   the machine's registers.
-//! - What may fault -- a load of what is not known dereferenceable, a
+//! - What may fault -- a load of what is not known dereferenceable and the
+//!   target says may trap at its alignment (`Machine::load_may_trap`), a
 //!   division by other than a constant neither 0 nor -1 -- moves only from
 //!   where the loop certainly runs it: `_guaranteed`, the old
 //!   `_guaranteed_float_work` asked of faults rather than of the x87
@@ -152,13 +153,15 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
 }
 
 /// Whether `inst` may fault where the loop would not have run it: a load of
-/// what is not known dereferenceable, or a division that may trap.
+/// what is not known dereferenceable, at an alignment the target says may
+/// trap; or a division that may trap.
 fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
         Opcode::Load { .. } => {
-            let bytes = unit.layout.store_size(&unit.context.types, instruction.ty);
-            !llrm_mir::valuetracking::dereferenceable(unit.context, unit.layout, outer.sizes(), unit.function, instruction.operands[0], bytes)
+            let (pointer, bytes) = (instruction.operands[0], unit.layout.store_size(&unit.context.types, instruction.ty));
+            !llrm_mir::valuetracking::dereferenceable(unit.context, unit.layout, outer.sizes(), unit.function, pointer, bytes)
+                && outer.target().load_may_trap(bytes, llrm_mir::valuetracking::alignment(unit.context, unit.layout, &outer.globals, unit.function, pointer))
         }
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) => !_cannot_fault(unit, inst),
         _ => false,

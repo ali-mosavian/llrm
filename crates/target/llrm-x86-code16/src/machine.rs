@@ -44,6 +44,8 @@ pub struct Machine {
     pub silent_ports: Vec<(i64, i64)>,
     /// The processor whose costs choose between equivalent code.
     pub cpu: String,
+    /// A multi-byte access crossing a segment's last offset faults.
+    pub segment_end_faults: bool,
 }
 
 impl Machine {
@@ -83,6 +85,7 @@ impl Machine {
                 })
                 .collect()
         };
+        let segment_end_faults = table.get("segment_end_faults").and_then(toml::Value::as_bool).ok_or("segment_end_faults is not a boolean")?;
         let cpu = table.get("cpu").and_then(toml::Value::as_str).ok_or("cpu is not a string")?;
         if !CPUS.contains(&cpu) {
             return Err(format!("cpu {cpu:?} is not one of {CPUS:?}"));
@@ -93,6 +96,7 @@ impl Machine {
             foreign: ranges("foreign")?,
             silent_ports: ranges("silent_ports")?,
             cpu: cpu.to_owned(),
+            segment_end_faults,
         })
     }
 
@@ -119,6 +123,13 @@ impl Machine {
             }
         }
         (end <= reached).then_some((start, end))
+    }
+
+    /// Whether a `width`-byte access at an offset a multiple of `align` may
+    /// trap. In real mode only one reaching past offset FFFFh may, where
+    /// that faults; the last such offset is `0x10000 - align`.
+    pub fn access_may_trap(&self, width: u64, align: u64) -> bool {
+        self.addressing != Addressing::Real || self.segment_end_faults && width > align
     }
 
     pub fn silent_port(&self, port: i64) -> bool {
@@ -157,5 +168,17 @@ mod tests {
         assert_eq!(dos.foreign_span((0xB801, 0xB801), every, 1), None);
         let protected = Machine { addressing: Addressing::Protected, ..dos };
         assert_eq!(protected.foreign_span((0xA000, 0xA000), every, 1), None);
+    }
+    /// A word read at an odd offset may be the one at FFFFh, which faults on
+    /// a 286 or later; an aligned one, or a byte, never traps in real mode.
+    #[test]
+    fn test_only_an_access_that_may_cross_offset_ffff_traps() {
+        let dos = Machine::parse(DOS).unwrap();
+        assert!(!dos.access_may_trap(1, 1) && !dos.access_may_trap(2, 2) && !dos.access_may_trap(4, 4) && !dos.access_may_trap(2, 8));
+        assert!(dos.access_may_trap(2, 1) && dos.access_may_trap(4, 2) && dos.access_may_trap(10, 8));
+        let wrapping = Machine { segment_end_faults: false, ..dos.clone() };
+        assert!(!wrapping.access_may_trap(4, 1));
+        let protected = Machine { addressing: Addressing::Protected, ..dos };
+        assert!(protected.access_may_trap(1, 1));
     }
 }

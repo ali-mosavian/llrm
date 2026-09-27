@@ -2579,3 +2579,29 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     assert!(items.iter().any(|item| matches!(item, masm::Datum::Label(label) if label.name == "F3%")), "{}", masm::text(&module).expect("prints"));
     assert_eq!(offset % 2, 0, "{}", masm::text(&module).expect("prints"));
 }
+
+/// deedlines' PLASMABLOBS read `fsin3%(y% - k%)` again on every pixel that
+/// took the rare branch: hoist runs a load the loop may skip only where it
+/// cannot fault, and a word read crossing offset FFFFh faults. A word
+/// array's element is word aligned, so it cannot cross.
+#[test]
+fn test_a_word_array_read_the_loop_may_skip_leaves_the_loop() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "DEFINT A-Z\r\nDECLARE SUB blobs ()\r\nDIM SHARED cd(100), f3(100), xp(3)\r\nblobs\r\nSUB blobs\r\nk = xp(1)\r\nFOR y = 0 TO 99\r\nDEF SEG = &HA000 + y\r\nFOR x = 0 TO 99\r\n\
+d = cd(x)\r\nIF d < 50 THEN POKE x, d ELSE POKE x, f3(y - k)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";
+    let listing = rich_listing(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"));
+    let lines = between(&listing, "BLOBS proc", "BLOBS endp").lines().collect::<Vec<_>>();
+    let store = lines.iter().position(|line| line.contains("byte ptr es:[")).expect("the POKE");
+    // The innermost loop: the nearest label above the POKE a later jump returns to.
+    let (top, bottom) = (0..store)
+        .rev()
+        .filter(|&at| lines[at].ends_with(':'))
+        .find_map(|at| {
+            let label = lines[at].trim_end_matches(':');
+            lines[store..].iter().position(|line| line.trim_start().starts_with('j') && line.ends_with(label)).map(|back| (at, store + back))
+        })
+        .expect("the pixel loop");
+    let inner = lines[top..=bottom].join("\n");
+    // Besides the frame, the loop reads only through a named array: `cd(x)`.
+    assert!(!inner.lines().any(|line| line.contains("ptr [") && !line.contains("ptr [bp")), "{inner}");
+}

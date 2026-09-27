@@ -23,6 +23,13 @@ pub trait Machine {
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
+
+    /// Whether a `width`-byte load at an address a multiple of `align` may
+    /// trap wherever it points. By default any may: only one known
+    /// dereferenceable runs where the program would not have run it.
+    fn load_may_trap(&self, _width: u64, _align: u64) -> bool {
+        true
+    }
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.

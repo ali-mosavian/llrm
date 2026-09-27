@@ -3,6 +3,14 @@
 # A far address is selector * 16 + offset.
 addressing = "real"
 
+# Whether a word or dword access crossing offset FFFFh faults, as it does on
+# a 286 or later (#GP, or #SS through ss), where an 8086 wraps. DOSBox-X
+# faults too, with its default `segment limits = true`. No other real-mode
+# access traps, whatever its selector and offset.
+# Sources: Intel 80386 Programmer's Reference Manual, 14.7 (Differences From
+# 8086); DOSBox-X src/cpu/core_normal/table_ea.h, `GetEADirect`.
+segment_end_faults = true
+
 # The processor code is priced for.
 cpu = "486"
 
