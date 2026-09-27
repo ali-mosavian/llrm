@@ -321,4 +321,145 @@ out:
             assert!(!found.contains_key(&value(f, name)), "{name}");
         }
     }
+
+    /// The names of `@f`'s exposed allocas.
+    fn exposed(text: &str) -> BTreeSet<String> {
+        let module = parsed(text);
+        let f = function(&module, "f");
+        analysed(f).exposed.iter().map(|&one| f.value(one).name.clone().unwrap()).collect()
+    }
+
+    fn names(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_slot_only_loaded_and_stored_through_does_not_escape() {
+        let found = exposed(
+            "define i16 @f(i16 %x) {
+b:
+  %slot = alloca i16
+  %high = getelementptr inbounds i8, ptr %slot, i16 1
+  store i16 %x, ptr %slot
+  store i8 0, ptr %high
+  %y = load i16, ptr %slot
+  ret i16 %y
+}
+",
+        );
+        assert_eq!(found, names(&[]));
+    }
+
+    #[test]
+    fn storing_a_slots_address_exposes_it_but_storing_through_it_does_not() {
+        let found = exposed(
+            "define void @f() {
+b:
+  %kept = alloca ptr
+  %leaked = alloca i16
+  store ptr %leaked, ptr %kept
+  ret void
+}
+",
+        );
+        assert_eq!(found, names(&["leaked"]));
+    }
+
+    #[test]
+    fn only_the_slot_passed_to_a_call_escapes() {
+        let found = exposed(
+            "declare void @sink(ptr addrspace(1))
+
+define void @f() {
+b:
+  %private = alloca i16
+  %passed = alloca i16
+  store i16 1, ptr %private
+  %far = addrspacecast ptr %passed to ptr addrspace(1)
+  call void @sink(ptr addrspace(1) %far)
+  ret void
+}
+",
+        );
+        assert_eq!(found, names(&["passed"]));
+    }
+
+    #[test]
+    fn a_select_or_compare_of_slots_exposes_every_slot_it_reads() {
+        let found = exposed(
+            "define i1 @f(i1 %c) {
+b:
+  %one = alloca i16
+  %two = alloca i16
+  %three = alloca i16
+  %either = select i1 %c, ptr %one, ptr %two
+  %same = icmp eq ptr %three, null
+  ret i1 %same
+}
+",
+        );
+        assert_eq!(found, names(&["one", "two", "three"]));
+    }
+
+    #[test]
+    fn a_phi_of_two_slots_is_framed_in_both_but_a_phi_with_a_parameter_is_not() {
+        let module = parsed(
+            "define void @f(i1 %c, ptr %p) {
+top:
+  %one = alloca i16
+  %two = alloca i16
+  br i1 %c, label %left, label %join
+
+left:
+  br label %join
+
+join:
+  %both = phi ptr [ %one, %top ], [ %two, %left ]
+  %mixed = phi ptr [ %one, %top ], [ %p, %left ]
+  store i16 0, ptr %both
+  store i16 0, ptr %mixed
+  ret void
+}
+",
+        );
+        let f = function(&module, "f");
+        let found = framed(f);
+        assert_eq!(found.get(&value(f, "both")), Some(&BTreeSet::from([value(f, "one"), value(f, "two")])));
+        assert!(!found.contains_key(&value(f, "mixed")));
+        assert!(analysed(f).exposed.is_empty(), "accessing through a phi exposes nothing");
+    }
+
+    #[test]
+    fn a_pointer_loaded_from_memory_is_not_framed() {
+        let module = parsed(
+            "define void @f() {
+b:
+  %box = alloca ptr
+  %slot = alloca i16
+  store ptr %slot, ptr %box
+  %back = load ptr, ptr %box
+  store i16 1, ptr %back
+  ret void
+}
+",
+        );
+        let f = function(&module, "f");
+        assert!(!framed(f).contains_key(&value(f, "back")), "memory hides where it points");
+        assert_eq!(analysed(f).exposed, BTreeSet::from([value(f, "slot")]));
+    }
+
+    #[test]
+    fn a_body_without_slots_has_no_origins() {
+        let module = parsed(
+            "define ptr @f(ptr %p) {
+b:
+  %q = getelementptr inbounds i8, ptr %p, i16 1
+  ret ptr %q
+}
+",
+        );
+        let f = function(&module, "f");
+        assert_eq!(analysed(f), Escapes { origins: IndexMap::default(), exposed: BTreeSet::new() });
+        assert!(framed(f).is_empty());
+    }
 }
