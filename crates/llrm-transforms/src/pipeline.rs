@@ -18,7 +18,6 @@
 //!   prices neither here. The machine's facts are `target`'s.
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
 //!   Hoist's store sinking is loopmotion's pass.
-//! - llrm-mir's InstCombine joins SROA at the boundaries: see `pipeline`.
 //! - `flow::optimized`'s rule that an irreducible body is not promoted is
 //!   here: promotion needs dominators.
 //! - The old `_Transaction` verified nothing; `applied`'s manager verifies
@@ -141,12 +140,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Aggregate/object leaves become ordinary SSA before any scalar or
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
-        // Temporary, until canonical and algebraic own its folds.
-        // Kept from llrm-mir, at the structural boundaries: no ported pass
-        // folds `icmp ne (sext i1 %c), 0`, the HIR's boolean test, to `%c`,
-        // and a loop exiting on it is not counted. In the fixed point it
-        // removes LCSSA's single-arm phis, which LCSSA puts back.
-        Box::new(llrm_mir::transforms::instcombine::InstCombine),
         Box::new(fold::Fold),
         Box::new(decide::Decide),
         Box::new(loopsimplify::LoopSimplify),
@@ -271,9 +264,8 @@ impl Fixed {
         };
         let passes = pipeline(applied).into_iter().filter(|one| only.is_none_or(|only| one.name() == only));
         // SROA establishes the scalar memory shape at structural
-        // boundaries, InstCombine the HIR's; neither is a member of the
-        // scalar fixed point.
-        let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| matches!(one.name(), "sroa" | "instcombine"));
+        // boundaries; it is no member of the scalar fixed point.
+        let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
         // A candidate is judged after the whole pipeline, unswitching off.
