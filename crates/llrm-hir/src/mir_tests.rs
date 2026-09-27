@@ -500,3 +500,14 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
+
+/// A FOR loop's step promises its counter fits, and the rich route dropped
+/// the promise: its add reached MIR without `nsw`.
+#[test]
+fn a_nowrap_promise_is_nsw() {
+    let mut function = difference();
+    function.blocks[0].instructions[0].op = Op::Add;
+    function.blocks[0].instructions[0].nowrap = true;
+    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
+}

@@ -1007,7 +1007,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let result = self.b.binary(binary, a, b, Flags::default(), "");
+            let flags = if instruction.nowrap && matches!(op, Op::Add | Op::Sub | Op::Mul) { Flags::NSW } else { Flags::default() };
+            let result = self.b.binary(binary, a, b, flags, "");
             self.define(instruction, result);
             return Ok(());
         }
@@ -1098,7 +1099,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a negated non-integer")?;
                 let zero = self.b.int(bits, 0);
-                let result = self.b.binary(BinaryOp::Sub, zero, value, Flags::default(), "");
+                let flags = if instruction.nowrap { Flags::NSW } else { Flags::default() };
+                let result = self.b.binary(BinaryOp::Sub, zero, value, flags, "");
                 self.define(instruction, result);
             }
             Op::Not => {
