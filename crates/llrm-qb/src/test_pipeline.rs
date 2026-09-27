@@ -125,3 +125,21 @@ mod decided_tests {
         assert_eq!(read.difference(&defined).collect::<Vec<_>>(), Vec::<&llrm_core::model::mir::Value>::new());
     }
 }
+
+/// A reference parameter names a whole object: an array's descriptor, of
+/// rank one at least, or a variable of its type. Unpromised, sum_three
+/// reloaded its descriptors every trip, as a load may fault.
+#[test]
+fn test_a_reference_parameter_is_dereferenceable() {
+    use crate::driver as qb_driver;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("REF.BAS");
+    let lines = ["DECLARE SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)", "SUB s (a() AS INTEGER, x AS LONG, BYVAL y AS INTEGER)", "x = a(y)", "END SUB"];
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    let emitted = llrm_core::hir::mir::emit(&program);
+    let text = llrm_mir::print::module(&emitted[0].module);
+    let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
+    assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
+}
