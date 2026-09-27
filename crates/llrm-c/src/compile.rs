@@ -395,9 +395,9 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> 
     if !problems.is_empty() {
         return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
     }
-    // The one MIR target, real-mode DOS at 486 prices.
+    let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
     let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
         dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
         ..Default::default()
     };

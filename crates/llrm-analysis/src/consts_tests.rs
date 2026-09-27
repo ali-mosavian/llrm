@@ -440,7 +440,8 @@ b0:
 }}
 "
         ));
-        let unit = Unit { machine: machine.then_some(&Dos as &dyn crate::regions::Machine), ..parsed.unit() };
+        let on = Dos::default();
+        let unit = Unit { machine: machine.then_some(&on as &dyn crate::regions::Machine), ..parsed.unit() };
         let got = known(&unit, Some(&Calls::default()), None, None).get(&parsed.value("r")).cloned();
         assert_eq!(got.is_some(), kept, "{selector} {machine}");
     }

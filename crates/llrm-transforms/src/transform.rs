@@ -465,7 +465,8 @@ b0:
         let reused = |dos: bool| {
             let mut module = parsed(&text);
             let layout = llrm_analysis::testing::layout(&module);
-            let machine = dos.then_some(&llrm_cycles::target::Dos as &dyn llrm_mir::target::Machine);
+            let on = llrm_cycles::target::Dos::default();
+            let machine = dos.then_some(&on as &dyn llrm_mir::target::Machine);
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
             let accesses = Accesses::resolved(&Unit { machine, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();
             subexpressions(f(&mut module), &accesses, false, machine).unwrap()

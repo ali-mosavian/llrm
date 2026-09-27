@@ -858,9 +858,9 @@ b0:
         let foreign = BTreeMap::from([(selector, interval(0xB800, 0xB800, 16))]);
         let ordinary = BTreeMap::from([(selector, interval(0x1234, 0x1234, 16))]);
 
-        assert!(!overlapping(near, text, None, Some(&foreign), Some(&Dos)).unwrap());
-        assert!(!may_alias(text, near, Some(&foreign), None, Some(&Dos)).unwrap());
-        assert!(overlapping(near, text, None, Some(&ordinary), Some(&Dos)).unwrap());
+        assert!(!overlapping(near, text, None, Some(&foreign), Some(&Dos::default())).unwrap());
+        assert!(!may_alias(text, near, Some(&foreign), None, Some(&Dos::default())).unwrap());
+        assert!(overlapping(near, text, None, Some(&ordinary), Some(&Dos::default())).unwrap());
         assert!(overlapping(near, text, None, Some(&foreign), None).unwrap());
     }
 
@@ -881,6 +881,6 @@ b0:
         let [near, text] = &accesses(&module, &dl)[..] else { panic!() };
         assert_eq!(text.selector, Some(0xB800));
         assert_eq!(text.root, Some(Operand::Value(value(function(&module, "f"), "far"))));
-        assert!(!overlapping(near, text, None, None, Some(&Dos)).unwrap());
+        assert!(!overlapping(near, text, None, None, Some(&Dos::default())).unwrap());
     }
 }
