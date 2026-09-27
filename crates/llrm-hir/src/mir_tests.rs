@@ -519,3 +519,100 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
+
+/// A FOR loop's step promises its counter fits, and the rich route dropped
+/// the promise: its add reached MIR without `nsw`.
+#[test]
+fn a_nowrap_promise_is_nsw() {
+    let mut function = difference();
+    function.blocks[0].instructions[0].op = Op::Add;
+    function.blocks[0].instructions[0].nowrap = true;
+    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
+}
+
+/// C's promises: a type's aliasing class tags its accesses, pointer
+/// arithmetic stays inbounds, truth is one, a restrict parameter has no
+/// size, locals start indeterminate, and a value-less return gives poison.
+#[test]
+fn a_languages_promises_reach_mir() {
+    use crate::model::{AliasClass, IndirectPlace, Place, Promise, Storage};
+    let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
+    boolean.signed = Some(false);
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
+    let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
+    advance.inbounds = true;
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None });
+    let instructions = vec![
+        advance,
+        Instruction::new(2, Op::Load, vec![3], vec![at]),
+        Instruction::new(3, Op::Lt, vec![4], vec![Operand::value_ref(3), Operand::constant(1, 0)]),
+        Instruction::new(4, Op::Store, vec![], vec![Operand::place_ref(1), Operand::value_ref(4)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
+    function.parameters = vec![1];
+    function.promises = vec![Promise { parameter: 1, bytes: 0, unaliased: true, readonly: false }];
+    let mut program = program(function);
+    program.zeroed_locals = false;
+    program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
+    program.modules[0].alias_classes = vec![
+        AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },
+        AliasClass { name: "int2".to_owned(), parent: Some("root".to_owned()), types: vec![1] },
+    ];
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    assert!(text.contains(body), "{text}");
+    assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
+}
+
+/// An exported object is defined, a literal private, and another module's
+/// object of no bytes only declared; each keeps its alignment.
+#[test]
+fn data_linkage_is_the_languages() {
+    use crate::model::{DataLinkage, DataObject};
+    let mut program = program(difference());
+    let mut exported = DataObject::new(1, "shown", vec![1, 0]);
+    (exported.linkage, exported.align) = (DataLinkage::Exported, Some(2));
+    let mut literal = DataObject::new(2, "L", vec![65, 0]);
+    (literal.linkage, literal.readonly) = (DataLinkage::Private, true);
+    let mut imported = DataObject::new(3, "elsewhere", Vec::new());
+    imported.linkage = DataLinkage::External;
+    program.modules[0].data = vec![exported, literal, imported];
+
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("@shown = global [2 x i8] c\"\\01\\00\", align 2\n@L = private constant [2 x i8] c\"A\\00\"\n@elsewhere = external global [0 x i8]\n"), "{text}");
+}
+
+/// A function's address, called through: C's function pointers.
+#[test]
+fn a_call_through_a_functions_address() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut address = Instruction::new(2, Op::Address, vec![4], Vec::new());
+    address.callee = Some("DIFF%".to_owned());
+    let call = Instruction::new(3, Op::Call, vec![5], vec![Operand::value_ref(4), Operand::value_ref(3), Operand::value_ref(1)]);
+    function.blocks[0].instructions.extend([address, call]);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(5)];
+    function.values.extend([Value { id: 4, r#type: 2 }, Value { id: 5, r#type: 1 }]);
+    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "far", TypeKind::Pointer, 4));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%3 = call addrspace(1) i16 @\"DIFF%\"(i16 %2, i16 %0)"), "{text}");
+}
+
+/// A routine that only reads what its arguments reach: C's strlen.
+#[test]
+fn a_routine_reading_its_arguments_is_argmem_read() {
+    let module = llrm_mir::parse::module("declare i16 @_strlen(ptr)\ndeclare void @_puts(ptr)\n").unwrap();
+    let promises = crate::model::RuntimePromises { reads_arguments: vec!["_strlen".to_owned()], ..Default::default() };
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
+}
