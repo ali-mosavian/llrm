@@ -116,6 +116,8 @@ pub struct Selected {
     pub body: LirBody,
     pub convention: Convention,
     pub calls: IndexMap<i64, String>,
+    /// The code laid down in place of each call to an inline helper.
+    pub inline: IndexMap<i64, Vec<u8>>,
     pub far: BTreeSet<i64>,
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
@@ -280,13 +282,14 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         inputs: BTreeSet::new(),
         contracts,
         calls: IndexMap::default(),
+        inline: IndexMap::default(),
         far: BTreeSet::new(),
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
         pool,
     };
     let body = selector.body(name, &convention)?;
-    Ok(Selected { body, convention, calls: selector.calls, far: selector.far, depth: selector.depth })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth })
 }
 
 struct Selector<'m, 'c, 'p> {
@@ -365,6 +368,8 @@ struct Selector<'m, 'c, 'p> {
     inputs: BTreeSet<u32>,
     contracts: Contracts<'c>,
     calls: IndexMap<i64, String>,
+    /// The code laid down in place of each call to an inline helper.
+    inline: IndexMap<i64, Vec<u8>>,
     far: BTreeSet<i64>,
     /// The blocks execution can reach.
     reachable: BTreeSet<BlockId>,
@@ -734,7 +739,7 @@ impl Selector<'_, '_, '_> {
             Opcode::Binary(BinaryOp::URem) => BinaryOp::UDiv,
             _ => return,
         };
-        if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32)) {
+        if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32 | 64)) {
             return;
         }
         let Some(block) = function.parent(inst) else { return };

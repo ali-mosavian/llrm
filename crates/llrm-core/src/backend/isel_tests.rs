@@ -2064,3 +2064,22 @@ fn test_an_i64_remainders_high_dword_is_its_low_dwords_sign() {
     let tail = &got[got.len() - 6..];
     assert!(tail.windows(2).any(|two| two[0].starts_with("mov edx, e") && two[1] == "sar edx, 31") || tail.contains(&"cdq".to_owned()), "{got:?}");
 }
+
+/// An i64 divided by a variable is the old route's inline helper,
+/// edx:eax by ecx:ebx laid down in place of a call; isel refused "an
+/// i64 urem", and C's gcd64 with it. A quotient and remainder of the same
+/// operands share one.
+#[test]
+fn test_an_i64_divided_by_a_variable_is_the_inline_helper() {
+    let text = "define i64 @f(i64 %x, i64 %y) addrspace(1) {
+  %q = udiv i64 %x, %y
+  %r = urem i64 %x, %y
+  %s = add i64 %q, %r
+  ret i64 %s
+}
+";
+    let got = listing(text, "f");
+    let helper = got.iter().filter(|line| line.starts_with("db 066h,009h,0c9h,075h,02ah")).count();
+    assert_eq!(helper, 1, "{got:?}");
+    assert!(got.iter().any(|line| line == "add eax, ebx") && got.iter().any(|line| line == "adc edx, ecx"), "{got:?}");
+}
