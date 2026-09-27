@@ -1197,3 +1197,124 @@ define void @f(i16 %i) addrspace(1) {
     let got = listing(text, "f");
     assert_eq!(got[3..6], ["mov bx, word ptr [bp+6]", "add bx, bx", "add word ptr a[bx], 1"], "{got:?}");
 }
+
+/// An integer x87 converts is read from memory: through a frame temporary,
+/// qbdemo's `x / i%` stored and reloaded every divisor.
+#[test]
+fn test_an_integer_load_only_a_conversion_reads_is_the_x87_operand() {
+    let text = "define double @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %q = fdiv double %x, %w
+  ret double %q
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+14]", "fild word ptr [bx]", "fdivr qword ptr [bp+6]", "pop bp", "retf"]
+    );
+}
+
+/// A load read again is in a register, and x87 reads that.
+#[test]
+fn test_an_integer_load_read_again_is_converted_from_its_register() {
+    let text = "define double @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %q = fdiv double %x, %w
+  %n = add i16 %v, 1
+  store i16 %n, ptr %p
+  ret double %q
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+}
+
+/// A store between the load and its conversion may change the cell: x87
+/// reads what the load read.
+#[test]
+fn test_an_integer_load_before_a_store_is_not_read_after_it() {
+    let text = "define double @f(double %x, ptr %p, ptr %r) addrspace(1) {
+  %v = load i16, ptr %p
+  store i16 0, ptr %r
+  %w = sitofp i16 %v to double
+  %q = fdiv double %x, %w
+  ret double %q
+}
+";
+    let got = listing(text, "f");
+    let (load, store) = (got.iter().position(|one| one == "mov ax, word ptr [bx]"), got.iter().position(|one| one == "mov word ptr [si], 0"));
+    assert!(load < store && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+}
+
+/// A volatile load is its own access, not an x87 operand.
+#[test]
+fn test_a_volatile_load_is_not_an_x87_operand() {
+    let text = "define double @f(double %x, ptr %p) addrspace(1) {
+  %v = load volatile i32, ptr %p
+  %w = sitofp i32 %v to double
+  %q = fmul double %x, %w
+  ret double %q
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"mov eax, dword ptr [bx]".to_owned()) && got.contains(&"fimul dword ptr [bp-4]".to_owned()), "{got:?}");
+}
+
+/// A conversion only a store reads is stored by x87 into the store's cell:
+/// fptosi, lrint and fptrunc each went through a frame temporary.
+#[test]
+fn test_a_conversion_only_a_store_reads_is_stored_by_x87() {
+    let text = "@b = internal global i16 0
+@o = internal global float 0.0
+declare i16 @llvm.lrint.i16.f64(double)
+define void @f(double %x) addrspace(1) {
+  %i = fptosi double %x to i16
+  store i16 %i, ptr @b
+  %j = call i16 @llvm.lrint.i16.f64(double %x)
+  store i16 %j, ptr @b
+  %t = fptrunc double %x to float
+  store float %t, ptr @o
+  ret void
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "sub sp, 4",
+            "L0_0:",
+            "fnstcw word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
+            "or ax, 3072",
+            "mov word ptr [bp-4], ax",
+            "fld qword ptr [bp+6]",
+            "fld st(0)",
+            "fldcw word ptr [bp-4]",
+            "fistp word ptr b",
+            "fldcw word ptr [bp-2]",
+            "fld st(0)",
+            "fistp word ptr b",
+            "fstp dword ptr o",
+            "leave",
+            "retf",
+        ]
+    );
+}
+
+/// A conversion read again is in a register, stored from there.
+#[test]
+fn test_a_conversion_read_again_is_stored_through_its_register() {
+    let text = "@b = internal global i16 0
+define i16 @f(double %x) addrspace(1) {
+  %i = fptosi double %x to i16
+  store i16 %i, ptr @b
+  %r = add i16 %i, 1
+  ret i16 %r
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"fistp word ptr [bp-2]".to_owned()) && got.contains(&"mov word ptr b, ax".to_owned()), "{got:?}");
+}
