@@ -79,6 +79,10 @@ pub struct Program {
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
     pub exports: Exports,
+    /// Declarations alone, of the routines and cells of the runtime the
+    /// program links against, with what the frontend knows of them:
+    /// attributes, and `!llrm.named` and `!llrm.writes`.
+    pub runtime: Rc<Module>,
 }
 
 impl Program {
@@ -94,7 +98,29 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        Ok(Self { modules, layout, target, segments, exports: Exports::Open })
+        Ok(Self { modules, layout, target, segments, exports: Exports::Open, runtime: Rc::default() })
+    }
+
+    /// The program linked against `runtime`: each module's declaration of
+    /// what it declares and no module defines takes its attributes, as
+    /// LLVM's InferFunctionAttrs states a library's.
+    pub fn with_runtime(mut self, runtime: Module) -> Result<Self, String> {
+        if let Some(one) = runtime.globals.iter().find(|one| defines(one)) {
+            return Err(format!("the runtime defines @{}", one.name.as_deref().unwrap_or_default()));
+        }
+        for at in 0..self.modules.len() {
+            for id in (0..self.modules[at].globals.len() as u32).map(GlobalId) {
+                let Some(promise) = self.modules[at].global(id).name.as_deref().and_then(|name| runtime.named(name)) else { continue };
+                if self.definition(at, id).is_some() {
+                    continue;
+                }
+                let (GlobalKind::Function(promise), module) = (&runtime.global(promise).kind, &mut self.modules[at]) else { continue };
+                let GlobalKind::Function(declaration) = &mut module.globals[id.0 as usize].kind else { continue };
+                promised(declaration, &mut module.context.types, promise, &runtime.context.types);
+            }
+        }
+        self.runtime = Rc::new(runtime);
+        Ok(self)
     }
 
     /// The program with only `exports` named from outside.
@@ -195,6 +221,23 @@ fn restated(declaration: &mut Function, types: &mut Types, body: &Function, from
     changed
 }
 
+/// `promise`'s attributes, of `from`'s types, added to `declaration`'s own
+/// in `types`.
+fn promised(declaration: &mut Function, types: &mut Types, promise: &Function, from: &Types) {
+    let add = |types: &mut Types, own: &mut Vec<Attribute>, promised: &[Attribute]| {
+        for one in promised.iter().filter_map(|one| one.imported(types, from)) {
+            if !own.contains(&one) {
+                own.push(one);
+            }
+        }
+    };
+    add(types, &mut declaration.attrs, &promise.attrs);
+    add(types, &mut declaration.return_attrs, &promise.return_attrs);
+    for (own, promised) in declaration.parameter_attrs.iter_mut().zip(&promise.parameter_attrs) {
+        add(types, own, promised);
+    }
+}
+
 /// Whether `global` is a definition: a function with a body, or a variable
 /// with an initializer or storage of its own.
 pub fn defines(global: &GlobalValue) -> bool {
@@ -251,6 +294,7 @@ impl ProgramAnalyses {
             target: Rc::clone(&program.target),
             segments: program.segments.clone(),
             exports: program.exports.clone(),
+            runtime: Rc::clone(&program.runtime),
             module,
             results: self.cache.clone(),
         })
@@ -272,6 +316,7 @@ pub struct ProgramProxy {
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
     pub exports: Exports,
+    pub runtime: Rc<Module>,
     /// The module reading it, by its index in the program.
     pub module: usize,
     results: HashMap<TypeId, Rc<dyn Any>>,
@@ -282,7 +327,7 @@ impl ProgramProxy {
     /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::Open, module: 0, results: HashMap::new() })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::Open, runtime: Rc::default(), module: 0, results: HashMap::new() })
     }
 
     /// `P`'s result, if computed: LLVM's `getCachedResult`.

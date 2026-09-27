@@ -4,8 +4,9 @@
 //!
 //! A global is tracked when no module lets its address escape -- alias's
 //! escape says so of every body, and no initializer holds it -- and either
-//! the program does not export it, or the frontend lists it in
-//! `!llrm.named`: the runtime names it but never hands its address out.
+//! the program does not export it, or the program's runtime module lists
+//! it in `!llrm.named`: the runtime names it but never hands its address
+//! out.
 //! A tracked global is uncaptured (`memory::global_object`), so no
 //! nonlocal reach meets it. What each body does to one, callees included,
 //! is in alias's summaries; a callee no summary describes reaches the
@@ -13,12 +14,14 @@
 //!
 //! - a body of the module: all of them;
 //! - otherwise the named ones it writes -- those its `!llrm.writes` node
-//!   lists, or all without one -- and, unless it is `nocallback`, what the
-//!   module's entries do, as it may call back into them.
+//!   in the runtime module lists, or all without one -- and, unless it is
+//!   `nocallback`, what the module's entries do, as it may call back into
+//!   them.
 //!
 //! `!llrm.named = !{!0}` with `!0 = !{ptr @g, ...}`; `!llrm.writes = !{!1,
 //! ...}` with `!1 = !{ptr @routine, ptr @g, ...}`: of the named globals,
-//! `@routine` writes by name only those listed.
+//! `@routine` writes by name only those listed. The runtime module's
+//! globals stand for each module's of the same names.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -117,6 +120,15 @@ fn listed(module: &Module, name: &str) -> Vec<(Option<GlobalId>, BTreeSet<Global
         .collect()
 }
 
+/// `runtime`'s `!llrm.named` cells and `!llrm.writes` lists, as
+/// `module`'s globals of the same names.
+fn promised(module: &Module, runtime: &Module) -> (BTreeSet<GlobalId>, BTreeMap<GlobalId, BTreeSet<GlobalId>>) {
+    let here = |id: GlobalId| runtime.global(id).name.as_deref().and_then(|name| module.named(name));
+    let named = listed(runtime, "llrm.named").into_iter().flat_map(|(first, rest)| first.into_iter().chain(rest)).filter_map(here).collect();
+    let writes = listed(runtime, "llrm.writes").into_iter().filter_map(|(routine, cells)| Some((here(routine?)?, cells.into_iter().filter_map(here).collect()))).collect();
+    (named, writes)
+}
+
 /// The globals an initializer or an instruction names other than as a
 /// call's callee.
 fn referenced(module: &Module) -> BTreeSet<GlobalId> {
@@ -168,8 +180,7 @@ pub fn analysis(module: &Module, analyses: &mut ModuleAnalyses) -> Result<Global
 /// body's shape as `shape` gives it.
 pub fn found(module: &Module, program: &ProgramProxy, elsewhere: &Elsewhere, shape: &mut dyn FnMut(GlobalId) -> Rc<Shape>) -> Result<Globals, String> {
     let layout = &program.layout;
-    let named = listed(module, "llrm.named").into_iter().flat_map(|(first, rest)| first.into_iter().chain(rest)).collect::<BTreeSet<_>>();
-    let writes = listed(module, "llrm.writes").into_iter().filter_map(|(routine, cells)| Some((routine?, cells))).collect();
+    let (named, writes) = promised(module, &program.runtime);
     // Outside code reaches a global by name only where the program exports
     // it, or the runtime names it.
     let unexported = |id: GlobalId, global: &GlobalValue| !program.exports.exported(global) && (defines(global) || elsewhere.defined.contains(&id));

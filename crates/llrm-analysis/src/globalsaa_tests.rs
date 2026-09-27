@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
+use llrm_mir::passes::{Analyses, ModuleAnalyses};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
@@ -21,6 +21,11 @@ fn kept(globals: &str, call: &str) -> Option<Known> {
 
 /// `kept`, or without `Summaries` what `manager::call_effects` leaves.
 fn kept_by(globals: &str, call: &str, summarized: bool) -> Option<Known> {
+    kept_under(globals, "", call, summarized)
+}
+
+/// `kept_by`, the program linked against the declarations `runtime`.
+fn kept_under(globals: &str, runtime: &str, call: &str, summarized: bool) -> Option<Known> {
     let module = parsed(&format!(
         "{DOS}{globals}
 define i16 @f() {{
@@ -33,16 +38,21 @@ b0:
 "
     ));
     let layout = layout(&module);
-    let mut outer = Outer::of(&module, None);
-    outer.require::<GlobalsAA>(&module);
-    let f = function(&module, "f");
+    let program = Program::new(vec![module], Rc::new(Neutral)).unwrap().with_runtime(parsed(&format!("{DOS}{runtime}"))).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    modules.require::<GlobalsAA>();
+    if summarized {
+        modules.require::<Summaries>();
+    }
+    let outer = modules.outer(module);
+    let f = function(module, "f");
     if !summarized {
         let unit = Unit::within(&module.context, &layout, f, &outer);
         let calls: Calls = call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
         return known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned();
     }
-    outer.require::<Summaries>(&module);
-    let known = Analyses::new(Rc::new(outer)).get::<ThroughMemory>(&module.context, &layout, f);
+    let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()
 }
 
@@ -130,7 +140,16 @@ fn a_body_no_summary_describes_may_write_every_tracked_global() {
     assert_eq!(kept_by(&quiet, "call void @writes()", false), None);
 }
 
-/// A runtime cell outside code names but never hands out, as QB's b$seg.
+/// A runtime cell outside code names but never hands out, as QB's b$seg,
+/// and the routines the program calls.
+const USED: &str = "@g = external global i16
+
+declare void @inkey()
+declare void @defseg()
+declare void @unlisted()
+";
+
+/// What the runtime module promises of them.
 const NAMED: &str = "@g = external global i16
 
 declare void @inkey() nocallback
@@ -149,17 +168,18 @@ declare void @unlisted() nocallback
 /// b$seg. Only b$seg's listed writers write it; a routine with no list may.
 #[test]
 fn a_named_global_is_kept_across_a_routine_that_does_not_write_it() {
-    assert_eq!(kept(NAMED, "call void @inkey()"), seven());
-    assert_eq!(kept(NAMED, "call void @defseg()"), None);
-    assert_eq!(kept(NAMED, "call void @unlisted()"), None);
+    let kept = |call| kept_under(USED, NAMED, call, true);
+    assert_eq!(kept("call void @inkey()"), seven());
+    assert_eq!(kept("call void @defseg()"), None);
+    assert_eq!(kept("call void @unlisted()"), None);
 }
 
 /// A routine that may run the program's code writes what it does.
 #[test]
 fn a_named_global_is_forgotten_across_a_routine_that_may_call_back() {
     let calling_back = NAMED.replace("declare void @inkey() nocallback", "declare void @inkey()");
-    let program = format!("{calling_back}\ndefine void @set() {{\nb0:\n  call void @defseg()\n  ret void\n}}\n");
-    assert_eq!(kept(&program, "call void @inkey()"), None);
+    let program = format!("{USED}\ndefine void @set() {{\nb0:\n  call void @defseg()\n  ret void\n}}\n");
+    assert_eq!(kept_under(&program, &calling_back, "call void @inkey()", true), None);
 }
 
 /// What `@f` of a program's second module returns, `@g` stored 7 before

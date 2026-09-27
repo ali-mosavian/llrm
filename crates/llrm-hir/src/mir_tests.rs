@@ -450,12 +450,12 @@ fn ports_are_the_targets_intrinsics() {
 
 /// The runtime's promise was the old raise's `WRITERS` table alone, so the
 /// rich MIR took every routine to write b$seg and to run program code. It
-/// is stated on the declarations: DEF SEG writes b$seg, INKEY$ writes none
-/// of the named cells, and a routine that may run program code promises
-/// nothing.
+/// is stated in the runtime module and so on the declarations: DEF SEG
+/// writes b$seg, INKEY$ writes none of the named cells, and a routine that
+/// may run program code promises nothing.
 #[test]
 fn a_runtime_promise_is_stated_on_its_routines() {
-    use crate::mir::{Runtime, emit_promised};
+    use crate::mir::{Runtime, emit, runtime};
     use crate::model::{DataLinkage, DataObject};
     let call = |id, callee: &str| {
         let mut call = Instruction::new(id, Op::Call, Vec::new(), Vec::new());
@@ -473,12 +473,15 @@ fn a_runtime_promise_is_stated_on_its_routines() {
         "B$INKY" => Some(Vec::new()),
         _ => None,
     };
-    let emitted = emit_promised(&program, Some(&Runtime { writes: &writes })).remove(0);
-    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
-    let text = llrm_mir::print::module(&emitted.module);
-    assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&text).unwrap()), text);
-    assert!(text.contains("!llrm.named = !{!5}\n!llrm.writes = !{!6, !7}\n"), "{text}");
-    assert!(text.contains("!5 = !{ptr @b$seg}\n!6 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!7 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{text}");
+    let emitted = emit(&program).remove(0);
+    let runtime = runtime(&emitted, &program.modules[0], &Runtime { writes: &writes }).unwrap();
+    let promises = llrm_mir::print::module(&runtime);
+    assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&promises).unwrap()), promises);
+    assert!(promises.contains("!llrm.named = !{!0}\n!llrm.writes = !{!1, !2}\n"), "{promises}");
+    assert!(promises.contains("!0 = !{ptr @b$seg}\n!1 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!2 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{promises}");
+    let linked = llrm_mir::program::Program::new(vec![emitted.module], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().with_runtime(runtime).unwrap();
+    assert_eq!(llrm_mir::verify::verify(&linked.modules[0]), Vec::<String>::new());
+    let text = llrm_mir::print::module(&linked.modules[0]);
     for (routine, promised) in [("B$DSEG", true), ("B$INKY", true), ("B$RUN", false)] {
         let line = text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"));
         assert_eq!(line.contains("nocallback"), promised, "{line}");

@@ -398,7 +398,8 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> 
     }
     let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
     let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
-    let mut program = llrm_mir::program::Program::new(vec![mir], profile.target())?;
+    let library = libfunc::library(&mir).map_err(hir::Unsupported)?;
+    let mut program = llrm_mir::program::Program::new(vec![mir], profile.target())?.with_runtime(library)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
     let mir = program.modules.pop().expect("one module");
     write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;

@@ -3,10 +3,10 @@
 //!
 //! `DEF SEG = x` is `push x / call B$DSEG`, whose whole body stores the
 //! pushed word into `b$seg` and leaves it in AX: here, that store. Every
-//! other routine's promise is stated as the HIR emitter states it: a cell
-//! `runtime::named_only` names is `!llrm.named`, and a routine that runs no
-//! program code writes only the named cells `runtime::named_writes` lists.
-//! GlobalsAA reads both.
+//! other routine's promise is stated in the runtime module as the HIR
+//! emitter states it: a cell `runtime::named_only` names is `!llrm.named`,
+//! and a routine that runs no program code writes only the named cells
+//! `runtime::named_writes` lists. GlobalsAA reads both.
 
 use std::collections::HashMap;
 
@@ -61,8 +61,9 @@ fn def_seg(emitter: &mut Emitter, cell: ConstantId) -> Emit<()> {
     emitter.set_register(Register::AX, value)
 }
 
-/// States which runtime cells are named and which routines write them.
-pub fn promise(module: &mut Module, facts: &Facts, objects: &Objects) {
+/// The runtime module: which runtime cells are named and which routines
+/// write them.
+pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Module, String> {
     let family = facts.family();
     let family = family.value();
     let externals = omf::externals(&facts.found.records);
@@ -85,5 +86,5 @@ pub fn promise(module: &mut Module, facts: &Facts, objects: &Objects) {
         }
         runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect())
     };
-    llrm_hir::mir::promise(module, &named, &llrm_hir::mir::Runtime { writes: &writes });
+    llrm_hir::mir::promised(module, &named, &llrm_hir::mir::Runtime { writes: &writes })
 }

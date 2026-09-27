@@ -1596,13 +1596,14 @@ impl Rich {
         }
         let family = program.runtime.value();
         let writes = |routine: &str| llrm_core::abi::runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect());
-        let emitted = hir::mir::emit_promised(program, Some(&hir::mir::Runtime { writes: &writes })).swap_remove(0);
+        let emitted = hir::mir::emit(program).swap_remove(0);
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
         let profile = targets::profile(ProfileOrName::Name(&machine.cpu)).map_err(CompileError::Value)?;
         let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
-        let mut mir = llrm_mir::program::Program::new(vec![emitted.module], profile.target()).map_err(CompileError::Value)?;
+        let runtime = hir::mir::runtime(&emitted, module, &hir::mir::Runtime { writes: &writes }).map_err(CompileError::Value)?;
+        let mut mir = llrm_mir::program::Program::new(vec![emitted.module], profile.target()).and_then(|one| one.with_runtime(runtime)).map_err(CompileError::Value)?;
         llrm_transforms::pipeline::applied(&mut mir, &applied).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
         Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
