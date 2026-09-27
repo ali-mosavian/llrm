@@ -112,7 +112,8 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let sizes = llrm_mir::valuetracking::sizes(&module, &layout);
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").unwrap();
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes };
+    let mut declared = llrm_mir::passes::Declared::default();
+    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
     let kept = optimized(&mut unit, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();

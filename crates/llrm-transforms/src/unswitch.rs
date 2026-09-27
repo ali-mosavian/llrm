@@ -86,6 +86,7 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn F
         callees: unit.callees,
         metadata: unit.metadata,
         sizes: unit.sizes,
+        declared: &mut *unit.declared,
     });
 
     let size = |state: &Function| occurrence::operations(state).count();

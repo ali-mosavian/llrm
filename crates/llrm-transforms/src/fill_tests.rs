@@ -2,10 +2,10 @@
 //! each body MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_analysis::testing::{DOS, layout};
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Declared, Outer};
 
-use super::filled;
-use crate::testing::{parsed, printed, results};
+use super::{Fill, filled};
+use crate::testing::{managed, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
 
@@ -16,8 +16,9 @@ fn fill(text: &str, inputs: &[&[i128]]) -> (String, bool) {
     let mut module = before.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let callees = llrm_mir::memory::callees(&module);
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = filled(context, &layout, &callees, function, &outer);
+    let changed = filled(context, &layout, &callees, function, &outer, &mut declared);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (after, changed)
@@ -120,11 +121,16 @@ fn a_value_the_loop_changes_is_kept() {
     kept(&looped("i8", "%n", body, "%e"), TRIPS);
 }
 
-/// A function pass declares nothing: with no memset declared, no fill.
+/// Under the pass manager, fill declares the memset the module lacks, as
+/// LLVM's `Intrinsic::getDeclaration` does.
 #[test]
-fn an_undeclared_memset_is_no_fill() {
+fn an_undeclared_memset_is_declared() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
-    kept(&looped("i8", "%n", body, "%e").replace(MEMSET, ""), TRIPS);
+    let before = parsed(&format!("{DOS}{}", looped("i8", "%n", body, "%e").replace(MEMSET, "")));
+    let mut module = before.clone();
+    let text = managed(&mut module, Fill);
+    assert!(text.contains("declare void @llvm.memset.p0.i16(ptr") && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65"), "{text}");
+    assert_eq!(results(&module, TRIPS), results(&before, TRIPS));
 }
 
 /// Trips times two bytes may wrap the index where no GEP is `inbounds`

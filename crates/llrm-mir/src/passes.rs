@@ -29,6 +29,46 @@ pub struct Unit<'a> {
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
     pub sizes: &'a crate::valuetracking::Sizes,
+    /// Functions the pass declares in the module.
+    pub declared: &'a mut Declared,
+}
+
+/// What a function pass declares in its module, as LLVM's
+/// `Intrinsic::getDeclaration` adds a declaration: its id at once, the
+/// declaration once the pass has run over the function.
+#[derive(Clone, Debug, Default)]
+pub struct Declared {
+    ids: HashMap<String, GlobalId>,
+    next: u32,
+    pending: Vec<(String, crate::types::TypeId)>,
+}
+
+impl Declared {
+    pub fn of(module: &Module) -> Self {
+        let ids = module.globals.iter().enumerate().filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32)))).collect();
+        Self { ids, next: module.globals.len() as u32, pending: Vec::new() }
+    }
+
+    /// The function `name` of type `ty`, declared where the module has none.
+    pub fn declare(&mut self, name: &str, ty: crate::types::TypeId) -> GlobalId {
+        if let Some(&id) = self.ids.get(name) {
+            return id;
+        }
+        let id = GlobalId(self.next);
+        self.next += 1;
+        self.ids.insert(name.to_owned(), id);
+        self.pending.push((name.to_owned(), ty));
+        id
+    }
+
+    /// The declarations made, added to `module`.
+    pub fn place(&mut self, module: &mut Module) -> Result<(), String> {
+        for (name, ty) in self.pending.drain(..) {
+            let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
+            assert_eq!(Some(&id), self.ids.get(&name), "declared in order");
+        }
+        Ok(())
+    }
 }
 
 /// A fact about a function, computed on demand and cached until a pass
@@ -375,6 +415,7 @@ impl PassManager {
             };
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = modules.keys().copied().collect();
+            let mut declared = Declared::of(module);
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
                 let Module { context, globals, metadata, .. } = &mut *module;
@@ -387,7 +428,7 @@ impl PassManager {
                 if !Rc::ptr_eq(&analyses.outer, &outer) {
                     *analyses = Analyses::new(Rc::clone(&outer));
                 }
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes }, analyses);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared }, analyses);
                 kept.retain(|one| preserved.keeps(*one));
                 analyses.invalidate(&preserved);
                 if self.verify_invalidation {
@@ -397,6 +438,7 @@ impl PassManager {
                     }
                 }
                 stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
+                declared.place(module)?;
             }
             if self.verify_invalidation {
                 let mut stale: Vec<&str> = self
