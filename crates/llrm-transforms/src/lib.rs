@@ -4,8 +4,12 @@
 
 pub mod canonical;
 pub mod edges;
+pub mod lcssa;
+pub mod lcssamerges;
 pub mod loopsimplify;
 pub mod profit;
+#[cfg(test)]
+pub mod testing;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
 // from `algebraic`).
