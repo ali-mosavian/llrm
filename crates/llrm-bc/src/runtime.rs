@@ -13,7 +13,8 @@ use std::collections::BTreeMap;
 
 use iced_x86::Register;
 use llrm_bcmachine::abi::runtime::{self, Contract, Control, Memory};
-use llrm_bcmachine::model::ir::nodes::Node;
+use llrm_bcmachine::frontends::bc::blocks;
+use llrm_bcmachine::model::ir::nodes::{Node, span};
 use llrm_bcmachine::support::hash::IndexMap;
 use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 
@@ -90,29 +91,51 @@ fn memory(contract: &Contract, writes_named: bool) -> Option<Attribute> {
 /// Declares every runtime routine the module's bodies call.
 pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String, Result<Interface, String>>) -> Callees {
     let mut sites_of: IndexMap<String, Vec<(usize, &Contract, Words)>> = IndexMap::default();
+    let mut dispatches = false;
     for body in &facts.bodies {
         let live = body.live_after(&facts.contracts);
         for node in body.nodes.values() {
-            let Node::Call(call) = &**node else { continue };
-            let name = call.name.as_str();
+            // The event-poll adapter's work is B$EVCK's.
+            let (name, at) = match &**node {
+                Node::Call(call) => (call.name.as_str(), call.insn.at),
+                other if facts.event_poll(other) => (EVENT_POLL, span(other).0),
+                _ => continue,
+            };
+            if blocks::INLINE_TABLE.contains(name) {
+                dispatches = true;
+                continue;
+            }
             if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) || name == crate::access::ADDRESS {
                 continue;
             }
-            let Some(contract) = facts.contract(call.insn.at) else { continue };
-            let after = live.get(&(call.insn.at as i64)).cloned().unwrap_or_default();
-            sites_of.entry(name.to_owned()).or_default().push((call.insn.at, contract, after));
+            let Some(contract) = facts.contract(at) else { continue };
+            let after = live.get(&(at as i64)).cloned().unwrap_or_default();
+            sites_of.entry(name.to_owned()).or_default().push((at, contract, after));
         }
     }
     let mut callees = Callees::default();
     let family = facts.family();
     for (name, sites) in sites_of {
-        let made = declared(module, &name, &sites, family.value());
+        let made = declared(module, &name, &sites, family.value(), facts.handlers);
         callees.named.insert(name, made);
+    }
+    // A dispatch out of its table's range is B$SERR's error.
+    if dispatches {
+        let contract = runtime::per_call(&IndexMap::from_iter([(0, ERROR.to_owned())]), facts.family().value(), &Default::default()).swap_remove(&0).expect("one contract");
+        let made = declared(module, ERROR, &[(0, &contract, Words::new())], family.value(), facts.handlers);
+        callees.named.insert(ERROR.to_owned(), made);
     }
     callees
 }
 
-fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)], family: &str) -> Result<Callee, String> {
+/// What the event-poll adapter calls, as QB 4.5 calls it directly.
+pub const EVENT_POLL: &str = "B$EVCK";
+/// The ERROR statement: raises the error its argument numbers.
+pub const ERROR: &str = "B$SERR";
+/// Illegal function call's error number.
+pub const ILLEGAL_FUNCTION_CALL: i128 = 5;
+
+fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)], family: &str, handlers: bool) -> Result<Callee, String> {
     let contract = sites[0].1;
     if !contract.established {
         return Err(format!("{name}'s contract is not established"));
@@ -123,7 +146,10 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
     if contract.error_handling {
         return Err(format!("{name} is ON ERROR machinery"));
     }
-    if !matches!(contract.control, Control::Returns | Control::Never) {
+    // A routine that may enter user code comes back once that code returns;
+    // with no handler of this module to enter, only other modules' code runs.
+    let returns = contract.control == Control::Unknown && contract.enters_user_code && !handlers;
+    if !matches!(contract.control, Control::Returns | Control::Never) && !returns {
         return Err(format!("{name}'s control is {}", contract.control.value()));
     }
     // A routine `arrays` sizes per site pops what that site pushed.

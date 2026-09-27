@@ -1,0 +1,140 @@
+//! The rich route, checked on what it writes.
+
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use llrm_omf::omf::{self, Record};
+
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/omf").join(name)
+}
+
+fn records(name: &str) -> Vec<Rc<Record>> {
+    omf::parse(&std::fs::read(fixture(name)).expect("reads")).expect("an object")
+}
+
+fn recompiled(name: &str) -> Vec<Rc<Record>> {
+    let data = std::fs::read(fixture(name)).expect("reads");
+    let written = llrm_bcdriver::compiled(&data, "386", name).unwrap_or_else(|why| panic!("{name}: {why}"));
+    omf::parse(&written).expect("parses")
+}
+
+/// A segment's index and image, by name.
+fn segment(records: &[Rc<Record>], name: &str) -> (i64, Vec<u8>) {
+    let segments = omf::segments(records);
+    let index = segments.iter().position(|one| one.as_ref().is_some_and(|(named, _)| named == name)).unwrap_or_else(|| panic!("no {name}"));
+    let size = segments[index].as_ref().expect("named").1;
+    (index as i64, omf::segment_image(records, index as i64, size))
+}
+
+/// The runtime enters the module at its header, which keeps every byte
+/// but the words LINK fills in.
+#[test]
+fn a_recompiled_module_keeps_its_header() {
+    let relocated = [10, 12, 14, 16, 24, 32, 0x22];
+    for name in ["cmpord-q-o.obj", "cmpord-p-g2.obj", "cmpord-v-g3.obj"] {
+        let (before, after) = (records(name), recompiled(name));
+        let (_, code_name, _) = omf::code_segment(&before).expect("code");
+        let (old, new) = (segment(&before, &code_name).1, segment(&after, &code_name).1);
+        let kept = |image: &[u8]| -> Vec<u8> { (0..0x30).filter(|&at| !relocated.iter().any(|&word| word == at || word + 1 == at)).map(|at| image[at]).collect() };
+        assert_eq!(kept(&new), kept(&old), "{name}");
+    }
+}
+
+/// Each header word LINK fixes up keeps its offset into its segment: OF_DS
+/// is BC_DS + 2, and READ read the first row's key as its text while it
+/// was BC_DS + 0 -- lngmxx printed "S= 0".
+#[test]
+fn a_header_word_keeps_its_offset_into_its_segment() {
+    for name in ["lngmxx-q-o.obj", "lngmxx-p-noo.obj", "lngmxx-v-g3.obj"] {
+        let named = |records: &[Rc<Record>]| -> Vec<(i64, String, i64)> {
+            let (code, code_name, _) = omf::code_segment(records).expect("code");
+            let (_, image) = segment(records, &code_name);
+            let segments = omf::segments(records);
+            let mut words: Vec<(i64, String, i64)> = omf::fixups(records)
+                .into_iter()
+                .filter(|one| one.seg == Some(code) && one.offset < 0x30 && one.target == "segment" && one.index != code)
+                .map(|one| {
+                    let at = one.offset as usize;
+                    let segment = segments[one.index as usize].as_ref().expect("named").0.clone();
+                    (one.offset, segment, one.disp + i64::from(u16::from_le_bytes([image[at], image[at + 1]])))
+                })
+                .collect();
+            words.sort();
+            words
+        };
+        assert_eq!(named(&recompiled(name)), named(&records(name)), "{name}");
+    }
+}
+
+/// RESTORE finds a DATA row by the code offset BC keyed it with. The
+/// recompile moves that code, so the keys stay the original offsets, as
+/// literals. Refused before: "BC_DS names code at ..., which the recompile
+/// moves".
+#[test]
+fn a_data_row_keeps_its_original_key() {
+    for name in ["lngmxx-p-noo.obj", "lngmxx-v-g3.obj"] {
+        let (before, after) = (records(name), recompiled(name));
+        let (code, _, _) = omf::code_segment(&before).expect("code");
+        let (index, old) = segment(&before, "BC_DS");
+        let word = |image: &[u8], at: i64| i64::from(u16::from_le_bytes([image[at as usize], image[at as usize + 1]]));
+        // The field holds the addend LINK adds the target's offset to.
+        let keys: Vec<(i64, i64)> = omf::fixups(&before).into_iter().filter(|one| one.seg == Some(index) && one.target == "segment" && one.index == code).map(|one| (one.offset, one.disp + word(&old, one.offset))).collect();
+        assert!(!keys.is_empty(), "{name} keys no DATA row");
+        let (written, image) = segment(&after, "BC_DS");
+        for (at, key) in keys {
+            assert_eq!(word(&image, at), key, "{name} at {at:#x}");
+            assert!(!omf::fixups(&after).iter().any(|one| one.seg == Some(written) && one.offset == at), "{name} relocates the key at {at:#x}");
+        }
+    }
+}
+
+/// A constant isel keeps in memory goes with BC's own, in BC_CN. Refused
+/// before: "a constant pool entry, which the BASIC data segments do not
+/// place yet".
+#[test]
+fn a_pooled_constant_joins_bcs_constants() {
+    let name = "fpcse-p-noo.obj";
+    let (before, after) = (records(name), recompiled(name));
+    assert!(segment(&after, "BC_CN").1.len() > segment(&before, "BC_CN").1.len());
+}
+
+/// One refused module fails its program, and nothing is written.
+#[test]
+fn a_refusal_writes_nothing() {
+    let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
+    std::fs::create_dir_all(&out).expect("made");
+    let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), fixture("divmod-p-evt.obj")]
+        .iter()
+        .map(|one| one.display().to_string())
+        .chain(["-o".to_owned(), out.display().to_string()])
+        .collect();
+    assert_eq!(llrm_bcdriver::main(&argv), 1);
+    assert_eq!(std::fs::read_dir(&out).expect("listed").count(), 0);
+    std::fs::remove_dir_all(&out).expect("removed");
+}
+
+/// A far pointer to DGROUP data, as an array descriptor holds, is DGROUP's
+/// selector and the group-relative offset. Written as one POINTER fixup it
+/// took its own segment's selector, which BASIC's code pairs with the
+/// group-relative offset: arrprm's SUB filled the wrong cells and printed
+/// " 0  0".
+#[test]
+fn a_far_pointer_to_dgroup_names_dgroup() {
+    for name in ["nestud-q-o.obj"] {
+        let far = |records: &[Rc<Record>]| -> (usize, usize) {
+            let found = llrm_omf::module::of(records).expect("a module");
+            let (code, _, _) = omf::code_segment(records).expect("code");
+            let segments = omf::segments(records);
+            // CodeView's segments are not written again.
+            let debug = |index: i64| segments[index as usize].as_ref().is_some_and(|(name, _)| name.starts_with("$$"));
+            let data: Vec<_> = omf::fixups(records).into_iter().filter(|one| one.seg.is_some_and(|seg| seg != code && !debug(seg))).collect();
+            let pointers = data.iter().filter(|one| one.loc == omf::LOC_PTR32 && one.target == "segment" && found.dgroup.members.contains(&one.index)).count();
+            let selectors = data.iter().filter(|one| one.loc == omf::LOC_BASE && one.target == "group").count();
+            (pointers, selectors)
+        };
+        let (before, after) = (far(&records(name)), far(&recompiled(name)));
+        assert!(before.0 > 0, "{name} holds no far pointer to DGROUP");
+        assert_eq!(after, (0, before.0), "{name}");
+    }
+}
