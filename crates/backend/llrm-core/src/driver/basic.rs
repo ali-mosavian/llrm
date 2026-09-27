@@ -801,7 +801,19 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
                     return Err(format!("{name} has a gap at {offset:#x}"));
                 }
                 match (module.named(global), at) {
-                    (Some(id), _) => globals::datums(module, id, names)?,
+                    (Some(id), _) => {
+                        // Where it says, as `data::Layout` lays a global down.
+                        let align = match &module.global(id).kind {
+                            GlobalKind::Variable(variable) => variable.align.unwrap_or(1) as i64,
+                            GlobalKind::Function(_) => 1,
+                        };
+                        let padding = (-offset).rem_euclid(align);
+                        if padding != 0 && at.is_some() {
+                            return Err(format!("{name} places @{global} at {offset:#x}, off its alignment {align}"));
+                        }
+                        let datums = globals::datums(module, id, names)?;
+                        if padding == 0 { datums } else { [vec![masm::Datum::Bytes(vec![0; padding as usize])], datums].concat() }
+                    }
                     // One the frontend placed nowhere in particular goes with its global.
                     (None, None) => continue,
                     (None, Some(_)) => return Err(format!("{name} holds @{global}, which the module lacks")),

@@ -210,6 +210,9 @@ struct DataObject {
     id: u32,
     name: String,
     bytes: Vec<u8>,
+    /// What its offset is a multiple of: a word array's is 2, what BASIC's
+    /// word-aligned data segments can promise.
+    align: u32,
     readonly: bool,
     relocations: Vec<DataRelocation>,
     linkage: &'static str,
@@ -1231,6 +1234,7 @@ impl Compiler {
             static_shapes: BTreeMap::new(),
             data: vec![
                 DataObject {
+                    align: 1,
                     id: 1,
                     name: "$data".into(),
                     bytes: Vec::new(),
@@ -1240,6 +1244,7 @@ impl Compiler {
                     address: "near",
                 },
                 DataObject {
+                    align: 1,
                     id: 2,
                     name: STATEMENT_TABLE_OBJECT.into(),
                     bytes: Vec::new(),
@@ -2246,7 +2251,7 @@ impl Compiler {
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (
                     0,
-                    self.module_data(module_symbol.clone(), descriptor_extent),
+                    self.module_data(module_symbol.clone(), descriptor_extent, 1),
                 )
             } else {
                 (
@@ -2316,7 +2321,7 @@ impl Compiler {
             let (descriptor_offset, descriptor_symbol) = if storage == "module" {
                 (
                     0,
-                    self.module_data(module_symbol.clone(), descriptor_extent),
+                    self.module_data(module_symbol.clone(), descriptor_extent, 1),
                 )
             } else {
                 (
@@ -2400,10 +2405,14 @@ impl Compiler {
                 declaration.name
             ));
         }
+        // A word array lies at an even offset, so no element read crosses
+        // offset FFFFh: its loads may run where the program would not.
+        let align = if array_element.is_some_and(|element| self.width(element) % 2 == 0) { 2 } else { 1 };
         let (place_offset, place_symbol) = if storage == "static" {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align,
                 id: symbol,
                 name: format!("{}$static", declaration.name),
                 bytes: vec![0; extent],
@@ -2414,7 +2423,7 @@ impl Compiler {
             });
             (0, symbol)
         } else if storage == "module" {
-            (0, self.module_data(module_symbol, extent))
+            (0, self.module_data(module_symbol, extent, align))
         } else {
             (
                 self.place_offset(storage, extent),
@@ -2509,10 +2518,11 @@ impl Compiler {
         }
     }
 
-    fn module_data(&mut self, name: String, extent: usize) -> u32 {
+    fn module_data(&mut self, name: String, extent: usize, align: u32) -> u32 {
         let symbol = self.next_module_data;
         self.next_module_data += 1;
         self.data.push(DataObject {
+            align,
             id: symbol,
             name,
             bytes: vec![0; extent],
@@ -2585,6 +2595,7 @@ impl Compiler {
         let lower_bias = lower_linear.unwrap_or(0) * element_width as i64;
         let adjusted_offset = data_offset as i64 - lower_bias;
         self.data.push(DataObject {
+            align: 1,
             id: symbol,
             name: format!("{name}$descriptor"),
             bytes,
@@ -3260,6 +3271,7 @@ impl Compiler {
                         let symbol = self.next_data;
                         self.next_data += 1;
                         self.data.push(DataObject {
+                            align: 1,
                             id: symbol,
                             name: format!("$input{symbol}"),
                             bytes: table,
@@ -3897,6 +3909,7 @@ impl Compiler {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align: 1,
                 id: symbol,
                 name: READ_DATA_OBJECT.into(),
                 bytes: Vec::new(),
@@ -5481,6 +5494,7 @@ impl Compiler {
         let symbol = self.next_data;
         self.next_data += 1;
         self.data.push(DataObject {
+            align: 1,
             id: symbol,
             name: format!("$ds{symbol}"),
             bytes: vec![0, 0],
@@ -8516,6 +8530,7 @@ impl Compiler {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align: 1,
                 id: symbol,
                 name: format!("{prefix}${}", self.next_place),
                 bytes: vec![0; extent],
@@ -8578,6 +8593,7 @@ impl Compiler {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align: 1,
                 id: symbol,
                 name: "b$seg".into(),
                 bytes: Vec::new(),
@@ -8643,6 +8659,7 @@ impl Compiler {
             let symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align: 1,
                 id: symbol,
                 name: format!("$float{symbol}"),
                 bytes,
@@ -8691,6 +8708,7 @@ impl Compiler {
                 let symbol = self.next_data;
                 self.next_data += 1;
                 self.data.push(DataObject {
+                    align: 1,
                     id: symbol,
                     name: "$fslSegment".into(),
                     bytes: vec![0, 0],
@@ -8715,6 +8733,7 @@ impl Compiler {
                 payload_bytes.push(0);
             }
             self.data.push(DataObject {
+                align: 1,
                 id: payload_symbol,
                 name: format!("$string{payload_symbol}$payload"),
                 bytes: payload_bytes,
@@ -8732,6 +8751,7 @@ impl Compiler {
             let descriptor_symbol = self.next_data;
             self.next_data += 1;
             self.data.push(DataObject {
+                align: 1,
                 id: descriptor_symbol,
                 name: format!("$string{payload_symbol}$descriptor"),
                 bytes: vec![0, 0, 0, 0],
@@ -8762,6 +8782,7 @@ impl Compiler {
                 literal.push(0);
             }
             self.data.push(DataObject {
+                align: 1,
                 id: payload_symbol,
                 name: format!("$string{payload_symbol}"),
                 bytes: literal,
@@ -9411,7 +9432,11 @@ impl Compiler {
             if index != 0 {
                 out.push(',');
             }
-            write!(out, "{{\"bytes\":[").unwrap();
+            out.push('{');
+            if object.align > 1 {
+                write!(out, "\"align\":{},", object.align).unwrap();
+            }
+            out.push_str("\"bytes\":[");
             for (byte_index, byte) in object.bytes.iter().enumerate() {
                 if byte_index != 0 {
                     out.push(',');

@@ -2553,3 +2553,29 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
+
+/// Load speculation takes a word array to lie at an even offset; placed
+/// after three bytes, it lay at an odd one.
+#[test]
+fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
+    let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
+    let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
+    let mut offset = 0;
+    for item in items {
+        match item {
+            masm::Datum::Label(label) | masm::Datum::Object(label) if label.name == "F3%" => break,
+            masm::Datum::Bytes(bytes) => offset += bytes.len() as i64,
+            masm::Datum::Pointer(pointer) => offset += if pointer.far { 4 } else { 2 },
+            masm::Datum::SegmentWord(_) => offset += 2,
+            masm::Datum::Fill(fill) => offset += fill.size,
+            masm::Datum::Align(align) => offset += (-offset).rem_euclid(align.to),
+            _ => {}
+        }
+    }
+    assert!(items.iter().any(|item| matches!(item, masm::Datum::Label(label) if label.name == "F3%")), "{}", masm::text(&module).expect("prints"));
+    assert_eq!(offset % 2, 0, "{}", masm::text(&module).expect("prints"));
+}
