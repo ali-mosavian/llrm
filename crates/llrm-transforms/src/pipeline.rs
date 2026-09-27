@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::Summaries;
+use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -185,6 +185,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
+    // As LLVM's O2 requires GlobalsAA before the function pipeline.
+    manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
@@ -269,9 +271,19 @@ impl Fixed {
             return Ok(run.settled(unit, analyses));
         }
         self.fixed(unit, analyses, run, "")?;
-        if !self.peelers.is_empty() && run.step(&mut *self.peelers[0], "peel", unit, analyses) {
+        // Again while a peel leaves fewer loops, as LLVM's loop pass manager
+        // revisits a parent once its child is gone: a loop whose inner loop
+        // was peeled may then be peeled itself.
+        let loops = |unit: &Unit| cfg::Shape::of(unit.function).loops.len();
+        let mut before = loops(unit);
+        while !self.peelers.is_empty() && run.step(&mut *self.peelers[0], "peel", unit, analyses) {
             self.scalarized(unit, analyses, run, "peeled");
             self.fixed(unit, analyses, run, "peeled-")?;
+            let after = loops(unit);
+            if after >= before {
+                break;
+            }
+            before = after;
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);

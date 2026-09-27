@@ -158,3 +158,18 @@ fn a_named_global_is_forgotten_across_a_routine_that_may_call_back() {
     let program = format!("{calling_back}\ndefine void @set() {{\nb0:\n  call void @defseg()\n  ret void\n}}\n");
     assert_eq!(kept(&program, "call void @inkey()"), None);
 }
+
+/// A call of a routine a pass declared after the outer facts were taken:
+/// it may call back. Indexing the outer globals by its id panicked.
+#[test]
+fn a_callee_declared_after_the_outer_facts_may_call_back() {
+    let taken = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  ret void\n}\n");
+    let now = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  call void @late()\n  ret void\n}\n\ndeclare void @late() nocallback\n");
+    let mut outer = Outer::of(&taken, None);
+    outer.require::<GlobalsAA>(&taken);
+    let layout = layout(&now);
+    let f = function(&now, "f");
+    let unit = Unit::within(&now.context, &layout, f, &outer);
+    let (_, call) = f.walk().next().expect("the call");
+    assert!(crate::globalsaa::calls_back(&unit, call));
+}
