@@ -461,11 +461,12 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
 /// variable index.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MemRef {
-    /// The pointer accessed.
-    pub pointer: Operand,
+    /// The pointer accessed; none for bytes a call's effect names by
+    /// object alone.
+    pub pointer: Option<Operand>,
     /// What `disp` and `base` are added to: a pointer no GEP, bitcast or
     /// near-far cast computed.
-    pub root: Operand,
+    pub root: Option<Operand>,
     /// Constant bytes added to `root`, wrapped to the index width.
     pub disp: i64,
     /// The one variable index added: old `base`.
@@ -500,8 +501,8 @@ impl MemRef {
         let space = unit.space(pointer).unwrap_or(0);
         let index_bits = unit.layout.pointer(space).index_bits;
         let mut made = Self {
-            pointer,
-            root: pointer,
+            pointer: Some(pointer),
+            root: Some(pointer),
             disp: 0,
             base: None,
             scale: 0,
@@ -518,10 +519,11 @@ impl MemRef {
             provenance: None,
         };
         let mut disp: i128 = 0;
+        let mut root = pointer;
         loop {
-            let Some(step) = step(unit, made.root) else { break };
+            let Some(step) = step(unit, root) else { break };
             match step {
-                Step::Through(inner) => made.root = inner,
+                Step::Through(inner) => root = inner,
                 Step::Offset { pointer: inner, constant, variable, inbounds } => {
                     match (variable, made.base) {
                         (None, _) => {}
@@ -534,14 +536,15 @@ impl MemRef {
                     }
                     disp += constant;
                     made.inbounds &= inbounds;
-                    made.root = inner;
+                    root = inner;
                 }
             }
         }
+        made.root = Some(root);
         made.disp = wrapped(disp, index_bits);
-        made.segment = segment(unit, made.root);
+        made.segment = segment(unit, root);
         made.selector = made.segment.and_then(|one| unit.int_constant(one)).map(|bits| bits as i64);
-        made.object = object_of(unit, made.root).is_some();
+        made.object = object_of(unit, root).is_some();
         made
     }
 
@@ -557,9 +560,33 @@ impl MemRef {
         Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
     }
 
+    /// `width` bytes of `provenance`'s objects that a call's effect names,
+    /// at no pointer: old `MemRef(None, width)`.
+    pub fn reach(width: u32, provenance: Provenance) -> Self {
+        Self {
+            pointer: None,
+            root: None,
+            disp: 0,
+            base: None,
+            scale: 0,
+            base_width: 0,
+            segment: None,
+            selector: None,
+            object: false,
+            space: 0,
+            index_bits: 16,
+            width,
+            typed: None,
+            inbounds: false,
+            volatile: false,
+            provenance: Some(provenance),
+        }
+    }
+
     /// Where every byte of this access is fixed: `root` plus `disp`.
     pub fn addr(&self) -> Option<Addr> {
-        (self.base.is_none() && self.segment.is_none()).then_some(Addr { root: self.root, disp: self.disp })
+        let root = self.root?;
+        (self.base.is_none() && self.segment.is_none()).then_some(Addr { root, disp: self.disp })
     }
 }
 
@@ -848,7 +875,7 @@ b0:
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];
-        assert_eq!((far.root, far.disp, far.base, far.scale), (Operand::Value(value(f, "far")), -2, Some(value(f, "i")), 2));
+        assert_eq!((far.root, far.disp, far.base, far.scale), (Some(Operand::Value(value(f, "far"))), -2, Some(value(f, "i")), 2));
         assert_eq!(far.segment, Some(Operand::Value(value(f, "sel"))));
         assert!(!far.object && far.inbounds && far.addr().is_none());
         let fixed = &loads[1];

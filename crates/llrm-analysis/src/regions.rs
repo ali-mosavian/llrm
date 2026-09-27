@@ -129,7 +129,7 @@ fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, mach
 
 /// Two accesses at one start, as their roots or their objects say.
 fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
-    if one.root == other.root {
+    if one.root.is_some() && one.root == other.root {
         return one.disp == other.disp && one.base == other.base && one.scale == other.scale && one.segment == other.segment;
     }
     let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) else {
@@ -369,7 +369,7 @@ pub fn overlap_bucket(reference: &MemRef) -> OverlapBucket {
         .as_ref()
         .filter(|provenance| provenance.slices.len() == 1)
         .map(|provenance| provenance.slices.first().expect("one slice").object.clone());
-    object_bucket(one, Some(_frame(reference)))
+    object_bucket(one, _frame(reference))
 }
 
 /// Python `mir.object_bucket`.
@@ -392,8 +392,10 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
     let mut reached = parts.objectless.iter().copied().collect::<Vec<_>>();
-    if let Some(buckets) = parts.frames.get(&Some(_frame(reference))) {
-        reached.extend(buckets.iter().copied());
+    if let Some(frame) = _frame(reference) {
+        if let Some(buckets) = parts.frames.get(&Some(frame)) {
+            reached.extend(buckets.iter().copied());
+        }
     }
     // A write names one or two objects: a list is cheaper than a set.
     let mut kinds = Vec::with_capacity(provenance.slices.len());
@@ -428,9 +430,9 @@ thread_local! {
     pub static PICKED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
-/// Python `mir._frame`.
-fn _frame(reference: &MemRef) -> Frame {
-    (reference.root, reference.base.map(|base| (base, reference.scale)))
+/// Python `mir._frame`: none for bytes named by object alone.
+fn _frame(reference: &MemRef) -> Option<Frame> {
+    Some((reference.root?, reference.base.map(|base| (base, reference.scale))))
 }
 
 /// Python `mir._displaced`: whether two references off one root and index
@@ -439,7 +441,7 @@ fn _frame(reference: &MemRef) -> Frame {
 /// LLVM's constant-offset GEP compare: a fact about values, so it holds
 /// whatever object either reference names.
 fn _displaced(one: &MemRef, other: &MemRef) -> Option<bool> {
-    let (one, other) = (_span(one), _span(other));
+    let (one, other) = (_span(one)?, _span(other)?);
     if one.0 != other.0 {
         return None;
     }
@@ -451,9 +453,9 @@ pub type ByteRange = (i128, i128);
 
 /// Python `mir._span`: the frame `_displaced` measures `reference` in and
 /// the bytes it covers there.
-fn _span(reference: &MemRef) -> (Frame, i128, i128) {
+fn _span(reference: &MemRef) -> Option<(Frame, i128, i128)> {
     let low = i128::from(reference.disp);
-    (_frame(reference), low, low + i128::from(reference.width))
+    Some((_frame(reference)?, low, low + i128::from(reference.width)))
 }
 
 /// Python `mir.displaced_span`: the frame and bytes where `overlapping`
@@ -463,7 +465,7 @@ fn _span(reference: &MemRef) -> (Frame, i128, i128) {
 /// None for an address off an index, which `covering` may widen before
 /// the displacements are compared.
 pub fn displaced_span(reference: &MemRef) -> Option<(Frame, i128, i128)> {
-    Some(_span(reference)).filter(|(frame, _, _)| frame.1.is_none())
+    _span(reference).filter(|(frame, _, _)| frame.1.is_none())
 }
 
 /// Python `mir.overlap_span`: `reference`'s bytes as `displaced_span`
@@ -904,7 +906,7 @@ b0:
         let dl = layout(&module);
         let [near, text] = &accesses(&module, &dl)[..] else { panic!() };
         assert_eq!(text.selector, Some(0xB800));
-        assert_eq!(text.root, Operand::Value(value(function(&module, "f"), "far")));
+        assert_eq!(text.root, Some(Operand::Value(value(function(&module, "f"), "far"))));
         assert!(!overlapping(near, text, None, None, Some(&Dos)).unwrap());
     }
 }
