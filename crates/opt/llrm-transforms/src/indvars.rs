@@ -494,7 +494,8 @@ fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, registers: 
 #[derive(Clone, Debug)]
 enum Use {
     /// Operand `index` of `inst` moves by the bias times `multiplier`: an
-    /// invariant added to the recurrence, or the other side of an equality.
+    /// invariant added to or taken from the recurrence, or the other side
+    /// of an equality.
     Operand { inst: InstId, index: usize, multiplier: BigInt },
     /// A `getelementptr` indexing by the recurrence times `multiplier` at
     /// operand `index`: its base moves by the bias times `multiplier`.
@@ -849,6 +850,10 @@ fn _uses(unit: &memory::Unit, loop_: &Loop, proof: &CountedLoop, candidate: &Aff
         match op.opcode {
             Opcode::Binary(BinaryOp::Add) if invariant(op.operands[1 - at]) && op.result.is_some_and(|one| same(Operand::Value(one))) => {
                 Some(Use::Operand { inst, index: 1 - at, multiplier: multiplier.clone() })
+            }
+            // `r - x` is `(r - b) - (x - b)`.
+            Opcode::Binary(BinaryOp::Sub) if at == 0 && invariant(op.operands[1]) && op.result.is_some_and(|one| same(Operand::Value(one))) => {
+                Some(Use::Operand { inst, index: 1, multiplier: -multiplier })
             }
             Opcode::Binary(BinaryOp::And) => {
                 let mask = unit.int_constant(op.operands[1 - at])?;
