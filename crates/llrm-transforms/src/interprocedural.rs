@@ -25,17 +25,14 @@ use std::collections::BTreeSet;
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::effects;
 use llrm_analysis::interprocedural as facts;
-use llrm_analysis::globalsaa;
-use llrm_analysis::manager::Summaries;
+use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
-use llrm_mir::callgraph::CallGraph;
+use llrm_mir::callgraph::CallGraphAnalysis;
 use llrm_mir::context::GlobalId;
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::datalayout::DataLayout;
-use llrm_mir::passes::{ModuleAnalyses, ModuleAnalysis, ModulePass, PreservedAnalyses};
-use llrm_mir::target::Neutral;
+use llrm_mir::passes::{Declarations, ModuleAnalyses, ModulePass, PreservedAnalyses};
 use llrm_mir::types::Type;
 
 use crate::inline;
@@ -135,7 +132,7 @@ pub fn optimized<E: From<String>>(
     // point; the splice's result goes straight back through the pipeline.
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
-    if !stamped(module).map_err(E::from)?.is_empty() {
+    if !stamped(module, analyses).map_err(E::from)?.is_empty() {
         edited(analyses);
     }
     let pure = facts::stated_pure(module);
@@ -241,10 +238,10 @@ pub fn optimized<E: From<String>>(
         }
     }
     // Propagation may have left a body doing less than it states.
-    if !stamped(module).map_err(E::from)?.is_empty() {
+    if !stamped(module, analyses).map_err(E::from)?.is_empty() {
         edited(analyses);
     }
-    let declarations = effects::declarations(module);
+    let declarations = analyses.get::<Declarations>(module);
     for &id in &procedures {
         let (context, function) = function_mut(module, id);
         if facts::remove_dead_pure_calls(context, &declarations, function) {
@@ -256,8 +253,8 @@ pub fn optimized<E: From<String>>(
     // call site unreachable: keep the physical call, remove only the code
     // that would require it to return, and repeat.
     let noreturn = loop {
-        let noreturn = facts::noreturn_procedures(module, &private);
-        let declarations = effects::declarations(module);
+        let declarations = analyses.get::<Declarations>(module);
+        let noreturn = facts::noreturn_procedures(module, &declarations, &private);
         let mut changed = false;
         for &id in &procedures {
             let (context, function) = function_mut(module, id);
@@ -287,28 +284,28 @@ pub fn optimized<E: From<String>>(
 ///   states it; `nounwind` where every call states it and no access can
 ///   fault (`interprocedural::cannot_fault`).
 ///
-/// Any other attribute already stated stays. The bodies stamped.
-pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
-    let layout = match &module.datalayout {
-        Some(text) => DataLayout::parse(text)?,
-        None => DataLayout::default(),
-    };
-    let mut neutral = ModuleAnalyses::of(module, std::rc::Rc::new(Neutral));
-    let known = Summaries::run(module, &mut neutral)?;
-    let globals = globalsaa::analysis(module, neutral.program())?;
-    let mut declarations = effects::declarations(module);
+/// Any other attribute already stated stays. The bodies stamped; the
+/// caller drops `analyses` when there are any.
+pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec<GlobalId>, String> {
+    let program = std::rc::Rc::clone(analyses.program());
+    let layout = &program.layout;
+    let known = analyses.get::<Summaries>(module);
+    let known = Result::as_ref(&*known).map_err(String::clone)?;
+    let globals = analyses.get::<GlobalsAA>(module);
+    let globals = Result::as_ref(&*globals).map_err(String::clone)?;
+    let mut declarations = (*analyses.get::<Declarations>(module)).clone();
     let mut changed = Vec::new();
-    for id in CallGraph::new(module).bottom_up() {
+    for id in analyses.get::<CallGraphAnalysis>(module).bottom_up() {
         let global = module.global(id);
         let exact = matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private);
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
         let Some(summary) = known.get(name) else { continue };
-        let procedure = Procedure::of(Unit::of(module, &layout, function).with_globals_aa(&globals));
-        let initialized = alias::initialized(&procedure, &known)?;
+        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals));
+        let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
         let states = |flag: &str| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, flag));
         let returns = facts::returns_without_looping(function) && states("willreturn");
-        let nounwind = states("nounwind") && facts::cannot_fault(module, &layout, function);
+        let nounwind = states("nounwind") && facts::cannot_fault(module, layout, function);
         let volatile = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }));
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {

@@ -3,7 +3,8 @@
 //! a pass asks, the manager computes once and drops what a pass did not
 //! preserve. An entry reads its module and target through the outer proxy
 //! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
-//! outside code reaches but by name, and alias's callee summaries.
+//! outside code reaches but by name, and alias's callee summaries, which
+//! ask it.
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -47,14 +48,14 @@ impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
-        // GlobalsAA's answer is found again.
+        let globals = analyses.get::<GlobalsAA>(module);
+        let globals = Result::as_ref(&*globals).map_err(String::clone)?;
         let program = analyses.program();
-        let globals = globalsaa::analysis(module, program)?;
         let procedures = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
             .filter_map(|(_, global, function)| {
-                Some((global.name.clone()?, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(&globals))))
+                Some((global.name.clone()?, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals))))
             })
             .collect();
         alias::summaries(&procedures, None)

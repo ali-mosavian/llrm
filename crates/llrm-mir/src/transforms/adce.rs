@@ -17,9 +17,10 @@ impl FunctionPass for Adce {
         "adce"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let callees = analyses.outer().callees();
         let function = &*unit.function;
-        let mut work: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| !memory::only_value(unit.context, unit.callees, function, inst)).collect();
+        let mut work: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| !memory::only_value(unit.context, callees, function, inst)).collect();
         let mut live: HashSet<InstId> = work.iter().copied().collect();
         while let Some(inst) = work.pop() {
             for operand in &function.instruction(inst).operands {

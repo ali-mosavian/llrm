@@ -27,11 +27,8 @@ pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
-    /// What each function in the module does to memory.
-    pub callees: &'a crate::memory::Callees,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
-    pub sizes: &'a crate::valuetracking::Sizes,
     /// Functions the pass declares in the module.
     pub declared: &'a mut Declared,
 }
@@ -92,6 +89,40 @@ pub trait ModuleAnalysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
     const NAME: &'static str;
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result;
+}
+
+/// What each function does to memory, as its attributes state it.
+pub struct CalleeEffects;
+
+impl ModuleAnalysis for CalleeEffects {
+    type Result = crate::memory::Callees;
+    const NAME: &'static str = "callee-effects";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        crate::memory::callees(module)
+    }
+}
+
+/// Each global variable's size in bytes.
+pub struct GlobalSizes;
+
+impl ModuleAnalysis for GlobalSizes {
+    type Result = crate::valuetracking::Sizes;
+    const NAME: &'static str = "global-sizes";
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        crate::valuetracking::sizes(module, &analyses.program().layout)
+    }
+}
+
+/// Every global as its declaration, by id: what a function may read of
+/// the others.
+pub struct Declarations;
+
+impl ModuleAnalysis for Declarations {
+    type Result = Vec<GlobalValue>;
+    const NAME: &'static str = "declarations";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        module.declarations()
+    }
 }
 
 /// LLVM's `DominatorTreeAnalysis`.
@@ -170,7 +201,7 @@ impl PreservedAnalyses {
 #[derive(Clone)]
 pub struct Outer {
     pub metadata: Vec<MetadataNode>,
-    pub globals: Vec<GlobalValue>,
+    pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
 }
@@ -179,12 +210,7 @@ impl Outer {
     /// `module`'s, a program of its own for `target`, or a neutral one:
     /// for analyses asked outside a pass manager.
     pub fn of(module: &Module, target: Option<Rc<dyn Machine>>) -> Self {
-        Self::within(module, ProgramProxy::of(module, target.unwrap_or_else(|| Rc::new(Neutral))))
-    }
-
-    /// `module`'s, of `program`.
-    pub fn within(module: &Module, program: Rc<ProgramProxy>) -> Self {
-        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(GlobalValue::declaration).collect(), program, modules: HashMap::new() }
+        (*ModuleAnalyses::of(module, target.unwrap_or_else(|| Rc::new(Neutral))).outer(module)).clone()
     }
 
     /// Computes `M` of `module`, for analyses asked outside a pass manager.
@@ -199,6 +225,16 @@ impl Outer {
 
     pub fn target(&self) -> &dyn Machine {
         &*self.program.target
+    }
+
+    /// What each function does to memory: `CalleeEffects`.
+    pub fn callees(&self) -> &crate::memory::Callees {
+        self.cached_ref::<CalleeEffects>().expect("every outer proxy holds the callees' effects")
+    }
+
+    /// Each global variable's size: `GlobalSizes`.
+    pub fn sizes(&self) -> &crate::valuetracking::Sizes {
+        self.cached_ref::<GlobalSizes>().expect("every outer proxy holds the globals' sizes")
     }
 
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
@@ -319,7 +355,8 @@ fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
 /// rerunning function passes share one.
 pub struct ModuleAnalyses {
     program: Rc<ProgramProxy>,
-    /// What every outer proxy holds.
+    /// What every outer proxy holds, beside the callees' effects, the
+    /// globals' sizes and declarations.
     required: Vec<Kind>,
     results: HashMap<TypeId, (Kind, Rc<dyn Any>)>,
     /// Results dropped, reused when computed again the same, so that an
@@ -382,8 +419,10 @@ impl ModuleAnalyses {
     /// What a function analysis reads of `module`: the same proxy as last
     /// time where nothing it holds changed.
     pub fn outer(&mut self, module: &Module) -> Rc<Outer> {
-        let modules: HashMap<TypeId, Rc<dyn Any>> = self.required.clone().into_iter().map(|kind| (kind.id, self.computed(kind, module))).collect();
-        let now = Outer { modules, ..Outer::within(module, Rc::clone(&self.program)) };
+        let every = [Kind::of::<CalleeEffects>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
+        let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()]).downcast::<Vec<GlobalValue>>().expect("keyed by its type");
+        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
@@ -515,8 +554,6 @@ impl PassManager {
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
             let outer = analyses.outer(module);
-            let callees = crate::memory::callees(module);
-            let sizes = crate::valuetracking::sizes(module, &layout);
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Module(pass) => {
@@ -551,7 +588,7 @@ impl PassManager {
                 if !Rc::ptr_eq(&cache.outer, &outer) {
                     *cache = Analyses::new(Rc::clone(&outer));
                 }
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared }, cache);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache);
                 kept.retain(|one| preserved.keeps(*one));
                 cache.invalidate(&preserved);
                 if self.verify_invalidation {

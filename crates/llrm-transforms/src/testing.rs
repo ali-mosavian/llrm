@@ -118,3 +118,9 @@ impl llrm_mir::target::Machine for Tuned {
         self.call_registers
     }
 }
+
+/// `interprocedural::stamped` over `module` alone, for no target.
+pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    crate::interprocedural::stamped(module, &mut analyses)
+}

@@ -8,6 +8,7 @@ use crate::context::{Constant, ConstantKind, Context, mask, signed};
 use crate::dominators::DominatorTree;
 use crate::edit::Position;
 use crate::interpret::{self, Val};
+use crate::memory::Callees;
 use crate::module::{InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
@@ -22,6 +23,7 @@ impl FunctionPass for InstCombine {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        let callees = analyses.outer().callees();
         let mut changed = false;
         loop {
             let mut round = false;
@@ -29,7 +31,7 @@ impl FunctionPass for InstCombine {
                 if unit.function.is_erased(inst) {
                     continue;
                 }
-                if dead(unit, inst) {
+                if dead(unit, callees, inst) {
                     unit.function.erase(inst).expect("nothing uses it");
                 } else if let Some(simpler) = simplified(unit, &tree, inst) {
                     let result = unit.function.instruction(inst).result.expect("a simplified value");
@@ -40,7 +42,7 @@ impl FunctionPass for InstCombine {
                 }
                 round = true;
             }
-            round |= removed_write_only_slots(unit);
+            round |= removed_write_only_slots(unit, callees);
             if !round {
                 break;
             }
@@ -52,9 +54,9 @@ impl FunctionPass for InstCombine {
 }
 
 /// An instruction nothing reads, whose only effect is its value.
-fn dead(unit: &Unit, inst: InstId) -> bool {
+fn dead(unit: &Unit, callees: &Callees, inst: InstId) -> bool {
     let function = &*unit.function;
-    function.instruction(inst).result.is_none_or(|result| function.users(result).is_empty()) && crate::memory::only_value(unit.context, unit.callees, function, inst)
+    function.instruction(inst).result.is_none_or(|result| function.users(result).is_empty()) && crate::memory::only_value(unit.context, callees, function, inst)
 }
 
 /// A constant operand as the interpreter holds values.
@@ -270,11 +272,11 @@ fn replaced(unit: &mut Unit, inst: InstId, new: InstId) -> bool {
 /// Stack slots only ever written, and what writes them, gone, as LLVM's
 /// InstCombine removes an alloca site nothing reads: through its address
 /// and addresses made from it, only stores into it and `memset`s of it.
-fn removed_write_only_slots(unit: &mut Unit) -> bool {
+fn removed_write_only_slots(unit: &mut Unit, callees: &Callees) -> bool {
     let slots: Vec<InstId> = unit.function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. })).collect();
     let mut changed = false;
     for slot in slots {
-        let Some(writes) = write_only(unit, slot) else { continue };
+        let Some(writes) = write_only(unit, callees, slot) else { continue };
         for inst in writes.into_iter().rev() {
             if let Some(result) = unit.function.instruction(inst).result {
                 let ty = unit.function.value(result).ty;
@@ -289,7 +291,7 @@ fn removed_write_only_slots(unit: &mut Unit) -> bool {
 }
 
 /// `slot` and everything reaching it, addresses first, if nothing reads it.
-fn write_only(unit: &Unit, slot: InstId) -> Option<Vec<InstId>> {
+fn write_only(unit: &Unit, callees: &Callees, slot: InstId) -> Option<Vec<InstId>> {
     let function = &*unit.function;
     let mut out = vec![slot];
     let mut at = 0;
@@ -303,7 +305,7 @@ fn write_only(unit: &Unit, slot: InstId) -> Option<Vec<InstId>> {
             let fine = match &instruction.opcode {
                 Opcode::GetElementPtr { .. } | Opcode::Cast(crate::opcode::CastOp::AddrSpaceCast) => one_use.index == 0,
                 Opcode::Store { volatile: false, .. } => one_use.index == 1,
-                Opcode::Call(_) => one_use.index == 0 && crate::memory::memset(unit.context, unit.callees, function, one_use.user).is_some(),
+                Opcode::Call(_) => one_use.index == 0 && crate::memory::memset(unit.context, callees, function, one_use.user).is_some(),
                 _ => false,
             };
             if !fine {

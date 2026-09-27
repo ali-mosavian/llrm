@@ -73,7 +73,7 @@ fn hoist_keeps_every_corpus_module_verifying_and_settles() {
     let mut changed = 0;
     for (name, mut module) in corpus() {
         let layout = llrm_analysis::testing::layout(&module);
-        let (callees, sizes, metadata) = (llrm_mir::memory::callees(&module), llrm_mir::valuetracking::sizes(&module, &layout), module.metadata.clone());
+        let metadata = module.metadata.clone();
         let mut outer = Outer::of(&module, None);
         outer.require::<llrm_analysis::manager::Summaries>(&module);
         let outer = std::rc::Rc::new(outer);
@@ -82,7 +82,7 @@ fn hoist_keeps_every_corpus_module_verifying_and_settles() {
             loop {
                 let mut declared = llrm_mir::passes::Declared::of(&module);
                 let (context, function) = function_mut(&mut module, id);
-                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
+                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
                 if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer))) {
                     break;
                 }

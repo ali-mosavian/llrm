@@ -1912,7 +1912,8 @@ define double @f() addrspace(1) {
 }
 ";
     let mut module = parsed(text);
-    llrm_transforms::interprocedural::stamped(&mut module).unwrap();
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    llrm_transforms::interprocedural::stamped(&mut module, &mut analyses).unwrap();
     let stamped = llrm_mir::print::module(&module);
     let stamped = stamped.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n");
     assert!(listing(&stamped, "f").iter().any(|line| line == "fild word ptr g"), "{stamped}");

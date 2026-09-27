@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::callgraph::CallGraph;
+use crate::callgraph::{CallGraph, CallGraphAnalysis};
 use crate::context::{Context, GlobalId};
 use crate::memory::callee;
 use crate::edit::Position;
@@ -24,8 +24,8 @@ impl ModulePass for Inline {
         "inline"
     }
 
-    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
-        let graph = CallGraph::new(module);
+    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
+        let graph = analyses.get::<CallGraphAnalysis>(module);
         let mut changed = Vec::new();
         for caller in graph.bottom_up() {
             let mut inlined = false;

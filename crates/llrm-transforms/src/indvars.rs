@@ -66,7 +66,7 @@ impl FunctionPass for CountToZero {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         match zeroed(unit.context, unit.layout, unit.function, analyses) {
             Ok(true) => {
-                dead::dead(unit.context, unit.callees, unit.function);
+                dead::dead(unit.context, analyses.outer().callees(), unit.function);
                 PreservedAnalyses::none()
             }
             Ok(false) => PreservedAnalyses::all(),

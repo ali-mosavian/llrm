@@ -3,14 +3,14 @@
 //! writes, its own stack aside, and `willreturn` where every loop counts
 //! to its bound and every callee comes back.
 
-use crate::callgraph::CallGraph;
+use crate::callgraph::CallGraphAnalysis;
 use crate::context::{Context, GlobalId};
 use crate::dominators::DominatorTree;
 use crate::loops::LoopInfo;
 use crate::memory::{self, Callees, Effects};
 use crate::module::{Function, GlobalKind, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
-use crate::passes::{ModuleAnalyses, ModulePass};
+use crate::passes::{CalleeEffects, ModuleAnalyses, ModulePass};
 use crate::scalarevolution::Evolution;
 use crate::valuetracking;
 
@@ -22,9 +22,9 @@ impl ModulePass for FunctionAttrs {
     }
 
     fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
-        let graph = CallGraph::new(module);
+        let graph = analyses.get::<CallGraphAnalysis>(module);
         let layout = analyses.program().layout.clone();
-        let mut callees = memory::callees(module);
+        let mut callees = (*analyses.get::<CalleeEffects>(module)).clone();
         let mut changed = Vec::new();
         for id in graph.bottom_up() {
             // A cycle of calls proves nothing about itself.

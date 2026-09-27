@@ -113,7 +113,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
                 Operand::Constant(_) => true,
                 Operand::Block(_) => false,
             });
-            if !ready || (_may_fault(unit, inst) && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)) {
+            if !ready || (_may_fault(unit, outer, inst) && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)) {
                 continue;
             }
             run.push(inst);
@@ -147,12 +147,12 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
 
 /// Whether `inst` may fault where the loop would not have run it: a load of
 /// what is not known dereferenceable, or a division that may trap.
-fn _may_fault(unit: &passes::Unit, inst: InstId) -> bool {
+fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
         Opcode::Load { .. } => {
             let bytes = unit.layout.store_size(&unit.context.types, instruction.ty);
-            !llrm_mir::valuetracking::dereferenceable(unit.context, unit.layout, unit.sizes, unit.function, instruction.operands[0], bytes)
+            !llrm_mir::valuetracking::dereferenceable(unit.context, unit.layout, outer.sizes(), unit.function, instruction.operands[0], bytes)
         }
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) => !_cannot_fault(unit, inst),
         _ => false,

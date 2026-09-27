@@ -56,7 +56,7 @@ impl FunctionPass for Fill {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if filled(unit.context, unit.layout, unit.callees, unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if filled(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 

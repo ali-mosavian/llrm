@@ -2338,7 +2338,7 @@ fn test_rich_route_keys_data_rows_by_position() {
 /// The MIR emitter dropped it, and noreturn found no such block cold.
 #[test]
 fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
-    use llrm_analysis::{effects, noreturn};
+    use llrm_analysis::noreturn;
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "bound.bas", b"N = 5\nREDIM A(N)\nPRINT UBOUND(A)\n");
     let program = parsed(&source);
@@ -2346,7 +2346,7 @@ fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
     assert!(!expected.is_empty(), "no cold HIR block");
     let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
-    let declarations = effects::declarations(&emitted.module);
+    let declarations = emitted.module.declarations();
     let mut found = BTreeSet::new();
     for (_, _, function) in emitted.module.functions() {
         for at in noreturn::cold(&emitted.module.context, &declarations, function, &BTreeSet::new()) {

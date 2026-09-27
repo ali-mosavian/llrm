@@ -32,7 +32,7 @@ use llrm_graph::loops;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
 use llrm_mir::print;
-use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, Outer, PassManager, PreservedAnalyses, Stage, Unit};
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
@@ -201,22 +201,18 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.run(program)
 }
 
-/// `fixed` over body `id` alone, as the manager runs a function pass, on
-/// the program `analyses` reads.
+/// `fixed` over body `id` alone, as the manager runs a function pass, its
+/// module's analyses those `analyses` holds.
 fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
-    let program = std::rc::Rc::clone(analyses.program());
-    let layout = program.layout.clone();
-    let mut outer = Outer::within(module, program);
-    outer.require::<Summaries>(module);
-    let callees = llrm_mir::memory::callees(module);
-    let sizes = llrm_mir::valuetracking::sizes(module, &layout);
+    let layout = analyses.program().layout.clone();
+    let outer = analyses.outer(module);
     let mut declared = Declared::of(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared };
-    fixed.run(&mut unit, &mut Analyses::new(std::rc::Rc::new(outer)));
+    let mut unit = Unit { context, layout: &layout, function, metadata, declared: &mut declared };
+    analyses.invalidate(&fixed.run(&mut unit, &mut Analyses::new(outer)));
     declared.place(module)
 }
 
@@ -394,7 +390,7 @@ impl Run {
         self.version += 1;
         let Some(directory) = &self.dump else { return };
         // The body beside every global's declaration, which is what it names.
-        let mut globals = analyses.outer().globals.clone();
+        let mut globals = analyses.outer().globals.to_vec();
         globals.push(GlobalValue {
             name: Some("pipeline.body".to_owned()),
             linkage: Linkage::Internal,

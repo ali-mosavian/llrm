@@ -28,7 +28,7 @@ fn private(module: &Module) -> BTreeSet<GlobalId> {
 /// The bodies of `module` its stamp states pure.
 fn pure(module: &Module) -> BTreeSet<GlobalId> {
     let mut stamped = module.clone();
-    crate::interprocedural::stamped(&mut stamped).unwrap();
+    crate::testing::stamped(&mut stamped).unwrap();
     stated_pure(&stamped)
 }
 

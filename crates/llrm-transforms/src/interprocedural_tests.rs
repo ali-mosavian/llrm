@@ -245,7 +245,7 @@ b:
 #[test]
 fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     let mut module = parsed(STAMPED);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     let text = printed(&module);
     let defined = text.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
     assert_eq!(
@@ -299,7 +299,7 @@ b:
     let loads = |call: &str, stamp: bool| {
         let mut module = parsed(&text(call));
         if stamp {
-            stamped(&mut module).unwrap();
+            crate::testing::stamped(&mut module).unwrap();
         }
         managed(&mut module, Promote);
         let f = module.function_mut("f").unwrap().1;
@@ -315,20 +315,20 @@ b:
 /// The bodies of `text` its stamp states pure, by name.
 fn pure(text: &str) -> BTreeSet<String> {
     let mut module = parsed(text);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     facts::stated_pure(&module).into_iter().map(|id| module.global(id).name.clone().unwrap()).collect()
 }
 
 /// The callees whose unused calls in `@uses` of `text`, stamped, go.
 fn dropped(text: &str) -> BTreeSet<String> {
     let mut module = parsed(text);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     let callees = |module: &Module| {
         let uses = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("uses")).expect("@uses").2;
         uses.walk().filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst)).map(|id| module.global(id).name.clone().unwrap()).collect::<BTreeSet<_>>()
     };
     let before = callees(&module);
-    let declarations = llrm_analysis::effects::declarations(&module);
+    let declarations = module.declarations();
     let (context, uses) = module.function_mut("uses").unwrap();
     facts::remove_dead_pure_calls(context, &declarations, uses);
     before.difference(&callees(&module)).cloned().collect()
@@ -581,7 +581,7 @@ b:
 fn the_corpus_is_stamped_as_it_was() {
     let mut lines = Vec::new();
     for (name, mut module) in llrm_analysis::testing::corpus() {
-        stamped(&mut module).unwrap();
+        crate::testing::stamped(&mut module).unwrap();
         let text = printed(&module);
         lines.extend(text.lines().filter(|line| line.starts_with("define")).map(|line| format!("{name} {}", line.trim_end_matches(" {"))));
     }

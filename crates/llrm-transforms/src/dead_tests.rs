@@ -178,7 +178,7 @@ b0:
 ";
     let calls = |module: &Module| printed(module).matches("call i16 @twice").count();
     let mut stamped = parsed(text);
-    crate::interprocedural::stamped(&mut stamped).unwrap();
+    crate::testing::stamped(&mut stamped).unwrap();
     let before = results(&stamped, &[&[3]]);
     assert!(deadened(&mut stamped));
     assert_eq!(calls(&stamped), 0);

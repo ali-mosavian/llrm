@@ -63,7 +63,7 @@ impl FunctionPass for FloatLoop {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
         let solved = analyses.get::<FloatFacts>(unit.context, unit.layout, unit.function);
-        if specialized(unit.context, unit.layout, unit.callees, unit.function, analyses.outer(), &calls, &solved) {
+        if specialized(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), &calls, &solved) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()

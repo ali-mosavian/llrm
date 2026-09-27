@@ -53,7 +53,7 @@ impl FunctionPass for LoopExit {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match evaluated(unit.context, unit.layout, unit.callees, unit.function, analyses.outer()) {
+        match evaluated(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer()) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopexit: {error}"),

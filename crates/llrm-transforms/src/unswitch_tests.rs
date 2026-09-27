@@ -108,13 +108,11 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let mut module = parsed(text);
     let replacement = replacement.map(|name| module.function_mut(name).expect("the replacement").1.clone());
     let layout = DataLayout::default();
-    let callees = llrm_mir::memory::callees(&module);
-    let sizes = llrm_mir::valuetracking::sizes(&module, &layout);
     let metadata = module.metadata.clone();
     let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
     let mut declared = llrm_mir::passes::Declared::default();
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
     let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();

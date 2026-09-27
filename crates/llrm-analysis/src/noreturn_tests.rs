@@ -65,7 +65,7 @@ b:
 ",
     );
     let both = names(&module, &["first", "second"]);
-    assert_eq!(inferred(&module, &both), both);
+    assert_eq!(inferred(&module, &module.declarations(), &both), both);
 }
 
 #[test]
@@ -86,8 +86,8 @@ b:
 }
 ",
     );
-    assert_eq!(inferred(&module, &names(&module, &["caller"])), BTreeSet::new());
-    assert_eq!(inferred(&module, &names(&module, &["caller", "spin"])), names(&module, &["caller", "spin"]));
+    assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["caller"])), BTreeSet::new());
+    assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["caller", "spin"])), names(&module, &["caller", "spin"]));
 }
 
 #[test]
@@ -116,7 +116,7 @@ r:
 }
 ",
     );
-    assert_eq!(inferred(&module, &names(&module, &["stops", "returns"])), names(&module, &["stops"]));
+    assert_eq!(inferred(&module, &module.declarations(), &names(&module, &["stops", "returns"])), names(&module, &["stops"]));
 }
 
 #[test]
@@ -251,10 +251,10 @@ b:
 "
         ));
         let bodies = names(&module, &["shutdown", "init", "main"]);
-        let proven = inferred(&module, &bodies);
+        let proven = inferred(&module, &module.declarations(), &bodies);
         assert_eq!(proven, if terminal { names(&module, &["shutdown", "main"]) } else { BTreeSet::new() });
 
-        let declarations = effects::declarations(&module);
+        let declarations = module.declarations();
         let sites = terminal_sites(&module.context, &declarations, function(&module, "shutdown"), &proven);
         let (context, shutdown) = module.function_mut("shutdown").unwrap();
         assert_eq!(after_terminal_calls(context, shutdown, &sites), terminal);
@@ -296,7 +296,7 @@ done:
 ",
     );
     let f = function(&module, "f");
-    let found = cold(&module.context, &effects::declarations(&module), f, &calls_to(&module, "f", "exit"));
+    let found = cold(&module.context, &module.declarations(), f, &calls_to(&module, "f", "exit"));
     assert_eq!(found, ats(&module, "f", &["fail", "exit", "trap", "warn"]));
 }
 
@@ -316,7 +316,7 @@ done:
 ",
     );
     let f = function(&module, "f");
-    assert_eq!(cold(&module.context, &effects::declarations(&module), f, &BTreeSet::new()), BTreeSet::new());
+    assert_eq!(cold(&module.context, &module.declarations(), f, &BTreeSet::new()), BTreeSet::new());
 }
 
 #[test]
@@ -338,7 +338,7 @@ b:
 ",
     );
     let f = function(&module, "f");
-    assert_eq!(cold(&module.context, &effects::declarations(&module), f, &calls_to(&module, "f", "exit")), BTreeSet::new());
+    assert_eq!(cold(&module.context, &module.declarations(), f, &calls_to(&module, "f", "exit")), BTreeSet::new());
 }
 
 #[test]
