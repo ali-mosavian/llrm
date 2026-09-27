@@ -2324,3 +2324,26 @@ fn test_data_statements_compile_through_the_rich_mir() {
         assert!(text.contains(&format!("dw {label}\n")), "{name}: no row keyed by {label}\n{text}");
     }
 }
+
+/// UBOUND's "subscript out of range" call may RESUME, so its block jumps on
+/// rather than stopping: only the frontend's `cold` says it never runs.
+/// The MIR emitter dropped it, and noreturn found no such block cold.
+#[test]
+fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
+    use llrm_analysis::{effects, noreturn};
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "bound.bas", b"N = 5\nREDIM A(N)\nPRINT UBOUND(A)\n");
+    let program = parsed(&source);
+    let expected: BTreeSet<String> = program.modules[0].functions.iter().flat_map(|function| &function.blocks).filter(|block| block.cold).map(|block| format!("b{}", block.id)).collect();
+    assert!(!expected.is_empty(), "no cold HIR block");
+    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let declarations = effects::declarations(&emitted.module);
+    let mut found = BTreeSet::new();
+    for (_, _, function) in emitted.module.functions() {
+        for at in noreturn::cold(&emitted.module.context, &declarations, function, &BTreeSet::new()) {
+            found.extend(function.block(llrm_analysis::cfg::block(at)).name.clone());
+        }
+    }
+    assert!(expected.is_subset(&found), "cold {expected:?}, noreturn found {found:?}");
+}

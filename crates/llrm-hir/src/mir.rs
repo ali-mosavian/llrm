@@ -10,7 +10,7 @@ use llrm_mir::build::Builder;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
-    Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand as Value, Type, TypeId, Types,
+    Function, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Opcode, Operand as Value, Position, Type, TypeId, Types,
 };
 
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
@@ -612,6 +612,25 @@ fn emission_order(function: &model::Function) -> Vec<&model::Block> {
     postorder.into_iter().rev().chain(unreachable).collect()
 }
 
+/// Marks each call in `block` `cold`, as LLVM marks a call site on a path
+/// the frontend expects never to run.
+fn mark_cold(function: &mut Function, block: BlockId) {
+    for inst in function.block(block).instructions().to_vec() {
+        let old = function.instruction(inst).clone();
+        let Opcode::Call(mut info) = old.opcode else { continue };
+        info.attrs.push(Attribute::Flag("cold".to_owned()));
+        let new = function.create_instruction(Opcode::Call(info), old.ty, old.operands, old.flags, None);
+        function.insert(new, Position::Before(inst)).expect("its call is placed");
+        for (kind, node) in old.metadata {
+            function.annotate(new, &kind, node);
+        }
+        if let (Some(from), Some(to)) = (old.result, function.instruction(new).result) {
+            function.replace_all_uses_with(from, Value::Value(to));
+        }
+        function.erase(inst).expect("its uses moved to the cold call");
+    }
+}
+
 struct Body<'b, 'm, 'h> {
     b: &'b mut Builder<'m>,
     tables: &'b Tables<'h>,
@@ -665,6 +684,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.instruction(instruction)?;
             }
             self.terminator(&block.terminator)?;
+            if block.cold {
+                mark_cold(self.b.function, self.blocks[&block.id]);
+            }
         }
         Ok(())
     }
