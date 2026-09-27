@@ -569,8 +569,10 @@ impl Selector<'_, '_, '_> {
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
         let unit = Unit::of(self.module, &self.layout, self.function);
-        let facts = llrm_analysis::consts::known(&unit, None, None, None);
-        let mut counts: Vec<(i64, i64)> = llrm_graph::loops::loops(&cfg::graph(self.function), None)
+        let facts = unit.registers();
+        let mut counts: Vec<(i64, i64)> = unit
+            .shape()
+            .loops
             .iter()
             .filter_map(|one| {
                 let header = block_at.get(&cfg::block(one.header))?;
