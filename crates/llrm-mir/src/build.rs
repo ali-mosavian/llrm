@@ -88,6 +88,11 @@ impl Builder<'_> {
         block
     }
 
+    /// The block instructions go to.
+    pub fn current(&self) -> Option<BlockId> {
+        self.block
+    }
+
     pub fn position(&mut self, block: BlockId) {
         self.block = Some(block);
     }
