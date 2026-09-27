@@ -255,6 +255,10 @@ pub enum Attribute {
     Memory(Vec<(Option<String>, String)>),
     /// `range(iN lower, upper)`: the half-open range of values, as bits.
     Range { ty: TypeId, lower: u128, upper: u128 },
+    /// `initializes((lower, upper), ...)`: the half-open byte ranges of a
+    /// pointer parameter's memory the function writes before reading, on
+    /// every path to a return.
+    Initializes(Vec<(i64, i64)>),
     Str(String, Option<String>),
 }
 

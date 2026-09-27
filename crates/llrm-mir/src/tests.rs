@@ -120,6 +120,13 @@ fn metadata_keeps_its_numbers_whatever_mentions_it_first() {
     assert_eq!(round(text), text);
 }
 
+/// LLVM's `initializes`, which MIR did not read.
+#[test]
+fn initializes_is_read_and_printed_as_llvm_spells_it() {
+    let text = "declare void @f(ptr initializes((0, 4), (8, 12)), ptr initializes((-2, 0)))\n";
+    assert_eq!(round(text), text);
+}
+
 #[test]
 fn every_invalid_fixture_is_refused_for_its_reason() {
     let fixtures = fixtures(true);
