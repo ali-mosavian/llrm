@@ -20,6 +20,7 @@ pub mod floatloop;
 pub mod fold;
 pub mod gvn;
 pub mod hoist;
+pub mod indvars;
 pub mod inline;
 pub mod interprocedural;
 pub mod ivshare;
@@ -34,6 +35,7 @@ pub mod peel;
 pub mod pipeline;
 pub mod profit;
 pub mod promote;
+pub mod rotate;
 pub mod strength;
 #[cfg(test)]
 pub mod testing;
