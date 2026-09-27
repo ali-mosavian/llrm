@@ -426,11 +426,6 @@ define i32 @f(i16 %a) addrspace(1) {
             "push ax",
             "call c",
             "add sp, 4",
-            "movzx ebx, ax",
-            "movzx eax, dx",
-            "shl eax, 16",
-            "or eax, ebx",
-            "shld edx, eax, 16",
             "pop bp",
             "retf",
         ]
@@ -2279,4 +2274,31 @@ define void @f(double %a) addrspace(1) {
 fn test_a_store_of_poison_stores_nothing() {
     let text = "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
     assert!(!listing(text, "f").iter().any(|line| line.starts_with("mov")));
+}
+
+/// A dword that arrived as two words leaves as those words: a call's dx:ax
+/// result returned as is was joined into one register and split back.
+#[test]
+fn test_a_dword_returned_as_it_arrived_is_not_joined() {
+    let text = "declare i32 @g() addrspace(1)
+define i32 @f() addrspace(1) {
+  %r = call addrspace(1) i32 @g()
+  ret i32 %r
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
+}
+
+/// A word truncated from a dword that arrived as two words is its low word:
+/// struct_view's main joined its call's dx:ax result to return ax.
+#[test]
+fn test_a_word_truncated_from_a_joined_dword_is_its_low_word() {
+    let text = "declare i32 @g() addrspace(1)
+define i16 @f() addrspace(1) {
+  %r = call addrspace(1) i32 @g()
+  %t = trunc i32 %r to i16
+  ret i16 %t
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
 }
