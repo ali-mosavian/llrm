@@ -143,10 +143,10 @@ b3:
     assert!(through(growing, Peel::default()).0);
 }
 
-/// A call stays once a trip: growth past it is refused, and @tick still
+/// A call is priced, not refused: the loop is peeled, and @tick still
 /// counts every trip.
 #[test]
-fn a_loop_with_a_call_is_not_peeled() {
+fn a_loop_with_a_call_is_peeled_at_its_price() {
     let text = "@count = global i16 0
 
 define void @tick() {
@@ -181,7 +181,9 @@ b3:
   ret i16 %r
 }
 ";
-    assert!(!through(text, Peel::default()).0);
+    let tight = Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
+    assert!(!through(text, tight).0);
+    assert!(through(text, Peel::default()).0);
 }
 
 /// A `select` has no target price, so nothing in its function is copied.

@@ -138,3 +138,38 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
         assert_eq!(after, (0, before.0), "{name}");
     }
 }
+
+/// FPDEEP's main once the pipeline has run, as MIR text.
+fn fpdeep() -> String {
+    let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
+    let mut module = llrm_bc::raise(&found).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let applied = llrm_transforms::pipeline::Applied { target: Some(Rc::new(llrm_cycles::target::Dos::default())), ..Default::default() };
+    llrm_transforms::pipeline::applied(&mut module, &applied).unwrap();
+    let text = llrm_mir::print::module(&module);
+    text[text.find("define void @main").expect("main")..].to_owned()
+}
+
+/// FPDEEP's `FOR i = 1 TO 3` around its PRINTs is copied out, each trip
+/// printing its own `i`; the old route's unroll test. Refused before as
+/// "contains call and code would grow".
+#[test]
+fn fpdeep_copies_out_its_print_loop() {
+    let main = fpdeep();
+    assert!(!main.contains(" phi "), "{main}");
+    for i in 1..=3 {
+        assert!(main.contains(&format!("@llrm.qb.B$PSI2(i16 {i})")), "{main}");
+    }
+}
+
+/// Every FPDEEP number is exact, so it prints constants and computes no
+/// float arithmetic; the old route's floatbounds, floatfold and literal
+/// tests.
+#[test]
+#[ignore = "p(i) reads through @BC_DATA.0002+4i miss the stores to the separately carved @BC_DATA.0006.., and loads of the never-written BC_CN literals do not fold"]
+fn fpdeep_prints_constants_and_computes_no_float() {
+    let main = fpdeep();
+    for n in [144, 6, 512, 784, 14, 768, 3600, 30, 896] {
+        assert!(main.contains(&format!("@llrm.qb.B$PEI4(i16 0, i16 {n})")), "{n}\n{main}");
+    }
+    assert!(!["fmul", "fdiv", "fadd", "fsub"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
+}
