@@ -17,6 +17,7 @@ pub mod interprocedural;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod loopexit;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod profit;
