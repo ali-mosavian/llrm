@@ -104,7 +104,10 @@ fn a_pooled_constant_joins_bcs_constants() {
 fn a_refusal_writes_nothing() {
     let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
     std::fs::create_dir_all(&out).expect("made");
-    let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), fixture("arridx-bounds-p-g2.obj")]
+    // Refused: INTO is unmodelled.
+    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/arridx-bounds-p-g2.obj");
+    assert!(refused.exists());
+    let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), refused]
         .iter()
         .map(|one| one.display().to_string())
         .chain(["-o".to_owned(), out.display().to_string()])
