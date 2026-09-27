@@ -2307,3 +2307,51 @@ fn test_a_module_compiles_through_the_rich_mir() {
     assert!(fade[call..].lines().nth(1).is_some_and(|line| line.trim().starts_with('j')), "{fade}");
     assert!(fade.contains("in al, dx") && fade.contains("out dx, al"), "{fade}");
 }
+
+/// Seven suite programs refused DATA on the rich route.
+#[test]
+fn test_data_statements_compile_through_the_rich_mir() {
+    for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
+        let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/suite/{name}.bas"));
+        let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+}
+
+/// RESTORE to a label and DATA after END were refused on the rich route:
+/// their DATA blocks were code entries, BC keying a row by its code. B$RSTB
+/// only compares keys, so the rich route keys a row by its position.
+#[test]
+fn test_rich_route_keys_data_rows_by_position() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).expect("compiles");
+    let text = masm::text(&rich).expect("prints");
+    let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
+    assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
+    assert!(text.contains("pushw 1\n    call far ptr B$RSTB"), "{text}");
+}
+
+/// UBOUND's "subscript out of range" call may RESUME, so its block jumps on
+/// rather than stopping: only the frontend's `cold` says it never runs.
+/// The MIR emitter dropped it, and noreturn found no such block cold.
+#[test]
+fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
+    use llrm_analysis::{effects, noreturn};
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "bound.bas", b"N = 5\nREDIM A(N)\nPRINT UBOUND(A)\n");
+    let program = parsed(&source);
+    let expected: BTreeSet<String> = program.modules[0].functions.iter().flat_map(|function| &function.blocks).filter(|block| block.cold).map(|block| format!("b{}", block.id)).collect();
+    assert!(!expected.is_empty(), "no cold HIR block");
+    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let declarations = effects::declarations(&emitted.module);
+    let mut found = BTreeSet::new();
+    for (_, _, function) in emitted.module.functions() {
+        for at in noreturn::cold(&emitted.module.context, &declarations, function, &BTreeSet::new()) {
+            found.extend(function.block(llrm_analysis::cfg::block(at)).name.clone());
+        }
+    }
+    assert!(expected.is_subset(&found), "cold {expected:?}, noreturn found {found:?}");
+}

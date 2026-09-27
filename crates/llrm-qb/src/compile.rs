@@ -287,23 +287,55 @@ fn _read_data_lines(module: &model::Module) -> Result<Vec<Vec<u8>>, CompileError
     Ok(lines)
 }
 
-/// Serialize the ordered keys consumed by QB45's B$RSTB search.
+/// Serialize the DATA rows, each after the key QB45's B$RSTB search compares.
 ///
-/// BC places a final code address before every DATA row and passes the
-/// matching address to B$RSTB. The frontend carries symbolic row labels until
-/// code layout; object emission then writes their literal offsets, as BC does.
-fn _read_data_items(module: &model::Module, labels: &IndexMap<i64, String>) -> Result<Vec<masm::Datum>, CompileError> {
+/// B$RSTB takes the first row whose key is at least its argument
+/// (rt/read.asm, RSTB_10), so keys need only ascend. BC's are the code
+/// offsets of labeled NOPs; `_labeled_data_keys` gives those.
+fn _read_data_items(module: &model::Module, keys: Vec<masm::Datum>) -> Result<Vec<masm::Datum>, CompileError> {
     let lines = _read_data_lines(module)?;
-    let have: BTreeSet<i64> = labels.keys().copied().collect();
-    if have != (0..lines.len() as i64).collect() {
-        return emission("DATA marker labels do not match the serialized DATA rows");
+    if keys.len() != lines.len() {
+        return emission("DATA keys do not match the serialized DATA rows");
     }
-    let mut items = Vec::new();
-    for (row, line) in lines.into_iter().enumerate() {
-        items.push(masm::Datum::Pointer(masm::Pointer { name: labels[&(row as i64)].clone(), offset: 0, far: false }));
-        items.push(masm::Datum::Bytes([line, vec![0]].concat()));
+    Ok(keys.into_iter().zip(lines).flat_map(|(key, line)| [key, masm::Datum::Bytes([line, vec![0]].concat())]).collect())
+}
+
+/// BC's DATA keys: the final code offset of each row's labeled NOP. The
+/// frontend carries symbolic row labels until code layout; object emission
+/// then writes their literal offsets, as BC does.
+fn _labeled_data_keys(data_keys: &IndexMap<i64, i64>, code_names: &IndexMap<i64, String>) -> Result<Vec<masm::Datum>, CompileError> {
+    if data_keys.values().any(|key| code_names[key].is_empty()) {
+        return emission("one or more DATA rows have no final code label");
     }
-    Ok(items)
+    Ok(data_keys.values().map(|key| masm::Datum::Pointer(masm::Pointer { name: code_names[key].clone(), offset: 0, far: false })).collect())
+}
+
+/// `program` with each DATA row keyed by its position in the table rather
+/// than a code label: no DATA marker, RESTORE passing the row to B$RSTB,
+/// and no DATA block a code entry.
+fn _positional_data(program: &model::Program) -> Result<model::Program, CompileError> {
+    let mut program = program.clone();
+    for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
+        let mut rows = BTreeSet::new();
+        for block in &mut function.blocks {
+            let before = block.instructions.len();
+            block.instructions.retain(|one| !one.callee.as_deref().is_some_and(|callee| callee.starts_with("$QB$DATA:")));
+            if block.instructions.len() != before {
+                rows.insert(block.id);
+            }
+            for instruction in &mut block.instructions {
+                let Some(callee) = instruction.callee.as_deref().filter(|callee| callee.starts_with("$QB$RSTB:")) else { continue };
+                let row = _parsed_target(callee, "$QB$RSTB:", "invalid RESTORE marker")?;
+                let [model::Operand::Constant(key)] = instruction.operands.as_mut_slice() else {
+                    return emission("RESTORE label lost its typed placeholder");
+                };
+                key.value = model::Number::Int(row);
+                instruction.callee = Some("B$RSTB".to_owned());
+            }
+        }
+        function.external_entries.retain(|entry| !rows.contains(entry));
+    }
+    Ok(program)
 }
 
 /// `struct.pack_into("<H", buffer, at, value)`.
@@ -1581,11 +1613,10 @@ struct Rich {
 }
 
 impl Rich {
-    fn new(program: &model::Program, module: &model::Module) -> Result<Self, CompileError> {
+    fn new(program: &model::Program) -> Result<Self, CompileError> {
+        let program = &_positional_data(program)?;
+        let module = &program.modules[0];
         // What the post-selection passes do not yet place in rich-MIR code.
-        if !_read_data_lines(module)?.is_empty() {
-            return emission("DATA statements are not selected from the rich MIR yet");
-        }
         if !_statement_metadata(module)?.is_empty() {
             return emission("a statement table is not selected from the rich MIR yet");
         }
@@ -1688,7 +1719,7 @@ pub fn assembled_by(
     let graphics = _graphics_dependencies(module);
     let functions: Vec<&model::Function> = module.functions.iter().collect();
     let rich = match route {
-        Route::Selected => Some(Rich::new(program, module)?),
+        Route::Selected => Some(Rich::new(program)?),
         Route::Lowered => None,
     };
     let semantic = if rich.is_some() {
@@ -1707,7 +1738,9 @@ pub fn assembled_by(
         module.callables.iter().filter(|one| one.defined).map(|one| _object_name(&one.name)).collect();
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     let data_rows = _read_data_lines(module)?;
-    let data_keys: IndexMap<i64, i64> = (0..data_rows.len() as i64).map(|row| (row, -(row + 1))).collect();
+    // The rich route keys each row by its position; only BC's labels need a code key.
+    let data_keys: IndexMap<i64, i64> =
+        if rich.is_some() { IndexMap::default() } else { (0..data_rows.len() as i64).map(|row| (row, -(row + 1))).collect() };
     let mut code_names: IndexMap<i64, String> = data_keys.values().map(|key| (*key, String::new())).collect();
     let statement_metadata = _statement_metadata(module)?;
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
@@ -1896,11 +1929,11 @@ pub fn assembled_by(
         names = rich.names(&names, pool.borrow().entries().map(|(_, id)| id));
     }
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
-    if data_keys.values().any(|key| code_names[key].is_empty()) {
-        return emission("one or more DATA rows have no final code label");
-    }
-    let read_data =
-        _read_data_items(module, &data_keys.iter().map(|(row, key)| (*row, code_names[key].clone())).collect())?;
+    let data_keys = match &rich {
+        Some(_) => (0..data_rows.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect(),
+        None => _labeled_data_keys(&data_keys, &code_names)?,
+    };
+    let read_data = _read_data_items(module, data_keys)?;
     let external_data: BTreeSet<String> = module
         .data
         .iter()

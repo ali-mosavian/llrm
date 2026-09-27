@@ -177,6 +177,7 @@ dependencies = [
 name = "llrm-analysis"
 version = "0.1.0"
 dependencies = [
+ "llrm-cycles",
  "llrm-graph",
  "llrm-mir",
  "llrm-support",
@@ -201,6 +202,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-core",
+ "llrm-mir",
  "num-bigint",
  "num-traits",
  "regex",
@@ -243,6 +245,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-mir",
  "llrm-support",
  "num-bigint",
  "num-traits",
@@ -303,6 +306,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-analysis",
  "llrm-core",
  "llrm-mir",
  "num-bigint",
@@ -334,6 +338,7 @@ name = "llrm-transforms"
 version = "0.1.0"
 dependencies = [
  "llrm-analysis",
+ "llrm-cycles",
  "llrm-graph",
  "llrm-mir",
  "llrm-support",

@@ -58,6 +58,7 @@ use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
+use llrm_mir::target::Machine;
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
 
@@ -158,7 +159,7 @@ pub fn _floating(opcode: &Opcode) -> bool {
 /// whether any went.
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool) -> Result<bool, String> {
+pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, machine: Option<&dyn Machine>) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let doms = loops::dominators(&graph, function.entry().map(cfg::id));
     let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
@@ -186,7 +187,7 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
                 continue;
             };
             let loads = matches!(op.opcode, Opcode::Load { .. });
-            if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses)) {
+            if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses, machine)) {
                 candidates.push((here, index, inst));
                 continue;
             }
@@ -294,23 +295,23 @@ pub fn _reaches(
 ///
 /// `accesses` says what each writes, a volatile access anything; a call
 /// writes its footprint. `regions::overlapping` decides against each
-/// write, and an answer it cannot give overlaps.
-pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses) -> bool {
-    _clear(one, between, accesses, |other| accesses.writes(other))
+/// write, on `machine`, and an answer it cannot give overlaps.
+pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
+    _clear(one, between, accesses, machine, |other| accesses.writes(other))
 }
 
 /// `_undisturbed`, a volatile access writing only its own bytes
 /// (`Accesses::stored`): the old hoist let a precise volatile store pass
 /// disjoint work.
-pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses) -> bool {
-    _clear(one, between, accesses, |other| accesses.stored(function, other))
+pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
+    _clear(one, between, accesses, machine, |other| accesses.stored(function, other))
 }
 
-fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
+fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, machine: Option<&dyn Machine>, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
-    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, None).unwrap_or(true);
+    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, machine).unwrap_or(true);
     between.iter().all(|&other| writes(other).is_some_and(|written| !written.iter().any(overlaps)))
 }
 
@@ -417,7 +418,7 @@ mod tests {
         let layout = DataLayout::default();
         let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
         let accesses = Accesses::resolved(&Unit::of(module, &layout, function), &IndexMap::default()).unwrap();
-        subexpressions(f(module), &accesses, false).unwrap()
+        subexpressions(f(module), &accesses, false, None).unwrap()
     }
 
     /// `text` numbered: its printed form, and whether anything went. What
@@ -440,6 +441,38 @@ mod tests {
     }
 
     const XY: &[&[i128]] = &[&[0, 0], &[3, 5], &[-7, 2], &[0x7fff, 1]];
+
+    /// A store to text memory misses @g on real-mode DOS: a load of @g is
+    /// reused across it where the target is asked. It was not asked.
+    #[test]
+    fn test_a_load_is_reused_across_a_store_to_foreign_memory() {
+        let text = format!(
+            "{}@g = global i16 0
+
+define i16 @f() {{
+b0:
+  %a = load i16, ptr @g
+  %s = inttoptr i16 -18432 to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  store i16 1, ptr addrspace(1) %far
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+",
+            llrm_analysis::testing::DOS
+        );
+        let reused = |dos: bool| {
+            let mut module = parsed(&text);
+            let layout = llrm_analysis::testing::layout(&module);
+            let machine = dos.then_some(&llrm_cycles::target::Dos as &dyn llrm_mir::target::Machine);
+            let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+            let accesses = Accesses::resolved(&Unit { machine, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();
+            subexpressions(f(&mut module), &accesses, false, machine).unwrap()
+        };
+        assert!(reused(true) && !reused(false));
+    }
+
 
     /// `text`'s @f forwarded, printed; what it returns for `XY` stays.
     fn forwarded_of(text: &str, avoid_store_crossing: bool) -> String {

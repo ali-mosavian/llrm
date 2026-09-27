@@ -166,7 +166,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
             assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit, None, None, None), "{at}");
             assert_eq!(*analyses.get::<DominatedEdges>(&module.context, &layout, function), ranges::dominated_edges(&unit), "{at}");
-            let effects = alias::calls_annotated(&Procedure::of(unit), summaries);
+            let effects = alias::calls_annotated(&Procedure::of(unit), summaries).map(|calls| super::stated(&module.context, &module.globals, function, calls));
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
             let calls: Calls = effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
             assert_eq!(*analyses.get::<ThroughMemory>(&module.context, &layout, function), Ok(consts::known(&unit, Some(&calls), None, None)), "{at}");

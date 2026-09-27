@@ -5,7 +5,7 @@ use llrm_graph::loops;
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
-use llrm_mir::passes::Unit;
+use llrm_mir::passes::{Outer, Unit};
 
 use super::{optimized, specialized};
 use crate::profit::OperationCosts;
@@ -111,9 +111,11 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let callees = llrm_mir::memory::callees(&module);
     let sizes = llrm_mir::valuetracking::sizes(&module, &layout);
     let metadata = module.metadata.clone();
+    let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes };
-    let kept = optimized(&mut unit, &costs, &mut |trial: &mut Unit| {
+    let mut declared = llrm_mir::passes::Declared::default();
+    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
+    let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();
         }
@@ -162,4 +164,67 @@ fn test_unswitch_rejects_lower_count_but_higher_target_cost() {
 fn test_unswitch_rejects_semantic_work_without_a_target_price() {
     let text = format!("{INVARIANT}{REPLACEMENTS}");
     assert_eq!(through(&text, Some("choose"), OperationCosts::default()), (false, printed(&parsed(&text))));
+}
+
+/// Re-optimizes a candidate into a copy of the function it holds.
+struct Replace(llrm_mir::module::Function);
+
+impl llrm_mir::passes::FunctionPass for Replace {
+    fn name(&self) -> &'static str {
+        "replace"
+    }
+
+    fn run(&mut self, unit: &mut Unit, _: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+        *unit.function = self.0.clone();
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The pass prices at the target's costs: a dear division sinks the
+/// candidate the neutral prices keep, where unswitch used to ignore it.
+#[test]
+fn test_unswitch_prices_at_the_target_costs() {
+    let text = format!("{INVARIANT}{REPLACEMENTS}");
+    let kept = |target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>| {
+        let mut module = parsed(&text);
+        let divide = module.function_mut("divide").unwrap().1.clone();
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.target = target;
+        manager.add(super::Unswitch { passes: vec![Box::new(Replace(divide))] });
+        manager.run(&mut module).unwrap();
+        printed(&module) != printed(&parsed(&text))
+    };
+    assert!(kept(None));
+    assert!(!kept(Some(std::rc::Rc::new(crate::testing::Tuned { costs: OperationCosts { divide: 1000, ..OperationCosts::default() }, ..Default::default() }))));
+}
+
+/// Records the target's prices and registers each candidate's passes see.
+struct Seen(std::rc::Rc<std::cell::RefCell<Vec<(OperationCosts, (i64, i64))>>>);
+
+impl llrm_mir::passes::FunctionPass for Seen {
+    fn name(&self) -> &'static str {
+        "seen"
+    }
+
+    fn run(&mut self, _: &mut Unit, analyses: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+        let outer = analyses.outer();
+        self.0.borrow_mut().push((crate::profit::costs(outer), crate::profit::registers(outer)));
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Specializing IVARM restarted optimization with default tuning: the
+/// candidate's passes see the target the pass runs under.
+#[test]
+fn test_unswitch_reoptimization_preserves_mir_target_costs() {
+    let costs = OperationCosts { add: 97, address: 89, load: 83, ..OperationCosts::default() };
+    let seen = std::rc::Rc::default();
+    let mut module = parsed(INVARIANT);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 }));
+    manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
+    manager.run(&mut module).unwrap();
+    let seen = seen.borrow();
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");
 }

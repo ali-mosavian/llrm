@@ -11,14 +11,14 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, InstId, Module, ValueId};
+use llrm_mir::module::{Function, GlobalValue, InstId, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
 use llrm_mir::target::Machine;
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
-use crate::floatfacts;
+use crate::{effects, floatfacts};
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -70,7 +70,9 @@ impl Analysis for Annotated {
 }
 
 /// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. An error where `Summaries` was not required.
+/// `alias::calls_annotated`. Where `Summaries` was not required, each
+/// call is to an unknown callee. Either way a call does no more than its
+/// attributes state (`effects::call`).
 pub struct CallEffects;
 
 impl Analysis for CallEffects {
@@ -78,10 +80,31 @@ impl Analysis for CallEffects {
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let outer = analyses.outer();
-        let summaries = outer.cached::<Summaries>().ok_or("call effects need the module's summaries: require `Summaries`")?;
-        let summaries = Result::as_ref(&*summaries).map_err(String::clone)?;
-        alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)
+        // As LLVM's function passes read an outer result only if cached:
+        // with no summaries, every callee is unknown.
+        let summaries = outer.cached::<Summaries>();
+        let none = IndexMap::default();
+        let summaries = match summaries.as_deref() {
+            Some(found) => found.as_ref().map_err(String::clone)?,
+            None => &none,
+        };
+        let calls = alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)?;
+        Ok(stated(context, &outer.globals, function, calls))
     }
+}
+
+/// `calls` held to what each call's attributes allow (`effects::call`).
+pub fn stated(context: &Context, globals: &[GlobalValue], function: &Function, mut calls: IndexMap<InstId, Effect>) -> IndexMap<InstId, Effect> {
+    for (&at, effect) in calls.iter_mut() {
+        let allowed = effects::call(context, globals, function, at);
+        if !allowed.reads {
+            effect.loads.clear();
+        }
+        if !allowed.writes {
+            effect.stores.clear();
+        }
+    }
+    calls
 }
 
 /// Every value known without solving memory: `consts::known` of no calls.
@@ -108,8 +131,8 @@ impl Analysis for Writes {
     }
 }
 
-/// `Writes`, or where `Summaries` was not required none: each call then
-/// writes what `memory::unmodeled_write` says.
+/// `Writes`, or where it failed none: each call then writes what
+/// `memory::unmodeled_write` says.
 pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Calls {
     Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
 }

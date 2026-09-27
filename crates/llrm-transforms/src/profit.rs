@@ -7,7 +7,7 @@
 //! than cheap.
 //!
 //! The machine's facts come in as parameters: each operation's price
-//! (`OperationCosts`), how many integer values fit in registers
+//! (`OperationCosts`, from the target: `costs`), how many integer values fit in registers
 //! (`capacity`), and that floating values do not take that room -- the old
 //! MIR's x87 width, here a floating type.
 //!
@@ -28,6 +28,7 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::passes::Outer;
 use llrm_mir::types::Type;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_traits::ToPrimitive;
@@ -35,58 +36,19 @@ use num_traits::ToPrimitive;
 // Trips assumed of a loop, and cells of a fill, whose count is not a number.
 pub const UNKNOWN_TRIPS: i64 = 10;
 
-/// Machine-neutral costs a MIR profitability decision may compare.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct OperationCosts {
-    pub add: i64,
-    pub multiply: i64,
-    pub divide: i64,
-    pub shift: i64,
-    pub address: i64,
-    pub load: i64,
-    pub store: i64,
-    pub memory_update: i64,
-    pub branch: i64,
-    pub prefix: i64,
-    pub r#move: i64,
-    pub call: i64,
-    pub return_: i64,
-    pub float_add: i64,
-    pub float_multiply: i64,
-    pub float_divide: i64,
-    pub float_load: i64,
-    pub float_store: i64,
-    pub extend: i64,
-    pub fill: i64,
-    pub fill_cell: i64,
+pub use llrm_mir::target::OperationCosts;
+
+/// What `outer`'s target prices each operation at; neutral unit prices
+/// where it names no target.
+pub fn costs(outer: &Outer) -> OperationCosts {
+    outer.target.as_ref().map_or_else(OperationCosts::default, |target| target.costs())
 }
 
-impl Default for OperationCosts {
-    fn default() -> Self {
-        Self {
-            add: 1,
-            multiply: 1,
-            divide: 1,
-            shift: 1,
-            address: 1,
-            load: 1,
-            store: 1,
-            memory_update: 1,
-            branch: 1,
-            prefix: 0,
-            r#move: 1,
-            call: 1,
-            return_: 1,
-            float_add: 1,
-            float_multiply: 1,
-            float_divide: 1,
-            float_load: 1,
-            float_store: 1,
-            extend: 1,
-            fill: 1,
-            fill_cell: 1,
-        }
-    }
+/// How many integer values `outer`'s target holds in registers, and how
+/// many across a call; 0 each where it names no target, which leaves
+/// pressure unpriced.
+pub fn registers(outer: &Outer) -> (i64, i64) {
+    outer.target.as_ref().map_or((0, 0), |target| (target.registers(), target.call_registers()))
 }
 
 fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
