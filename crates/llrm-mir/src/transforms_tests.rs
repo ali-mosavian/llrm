@@ -469,6 +469,34 @@ b4:
     assert!(entry.contains("load i16"), "{got}");
 }
 
+/// plasma's `o = o + 1` survived as a counter its loop carried for no
+/// one, an `inc` a pass: a phi cycle only itself reads goes.
+#[test]
+fn test_adce_removes_a_counter_only_its_own_cycle_reads() {
+    let text = "define void @f(i16 %n, ptr %out) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %4, %b3 ]
+  %1 = phi i16 [ 0, %b1 ], [ %3, %b3 ]
+  %2 = icmp slt i16 %0, %n
+  br i1 %2, label %b3, label %b4
+
+b3:
+  %3 = add i16 %1, 1
+  %4 = add i16 %0, 1
+  store i16 %0, ptr %out
+  br label %b2
+
+b4:
+  ret void
+}
+";
+    let got = optimized(text);
+    assert_eq!(got.matches("phi i16").count(), 1, "{got}");
+}
+
 /// A fill's `a[i, j]` was `(i * 8 + j) * 4` each iteration, 768
 /// instructions to the old path's 69 in nested_fill: the address becomes a
 /// byte offset stepping by 4, and `i * 8` leaves the inner loop.

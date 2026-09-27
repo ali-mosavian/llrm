@@ -8,7 +8,7 @@ use crate::context::{Constant, ConstantKind, Context, mask, signed};
 use crate::dominators::DominatorTree;
 use crate::edit::Position;
 use crate::interpret::{self, Val};
-use crate::module::{Function, InstId, Operand, ValueDef};
+use crate::module::{InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
 use crate::types::{Type, TypeId};
@@ -29,7 +29,7 @@ impl FunctionPass for InstCombine {
                 if unit.function.is_erased(inst) {
                     continue;
                 }
-                if dead(unit.function, inst) || crate::memory::removable(unit.context, unit.callees, unit.function, inst) {
+                if dead(unit, inst) {
                     unit.function.erase(inst).expect("nothing uses it");
                 } else if let Some(simpler) = simplified(unit, &tree, inst) {
                     let result = unit.function.instruction(inst).result.expect("a simplified value");
@@ -52,14 +52,9 @@ impl FunctionPass for InstCombine {
 }
 
 /// An instruction nothing reads, whose only effect is its value.
-fn dead(function: &Function, inst: InstId) -> bool {
-    let instruction = function.instruction(inst);
-    let pure = matches!(
-        instruction.opcode,
-        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-            | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. }
-    );
-    pure && instruction.result.is_some_and(|result| function.users(result).is_empty())
+fn dead(unit: &Unit, inst: InstId) -> bool {
+    let function = &*unit.function;
+    function.instruction(inst).result.is_none_or(|result| function.users(result).is_empty()) && crate::memory::only_value(unit.context, unit.callees, function, inst)
 }
 
 /// A constant operand as the interpreter holds values.

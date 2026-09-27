@@ -108,12 +108,16 @@ pub fn callee(context: &Context, function: &Function, inst: InstId) -> Option<Gl
     }
 }
 
-/// Whether `inst` is a call nothing needs: its value unread, touching no
-/// memory, to a function that always comes back.
-pub fn removable(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
-    let instruction = function.instruction(inst);
-    let Opcode::Call(_) = &instruction.opcode else { return false };
-    call_returns(context, callees, function, inst) && instruction.result.is_none_or(|result| function.users(result).is_empty()) && of(context, callees, function, inst) == Effects::NONE
+/// Whether `inst`'s only effect is its value, so that if nothing needs the
+/// value it may go: a pure operation, a plain load, or a call touching no
+/// memory to a function that always comes back.
+pub fn only_value(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
+    match function.instruction(inst).opcode {
+        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
+        | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. } => true,
+        Opcode::Call(_) => call_returns(context, callees, function, inst) && of(context, callees, function, inst) == Effects::NONE,
+        _ => false,
+    }
 }
 
 /// What `memory(...)`, `readnone` or `readonly` among `attrs` allows.
