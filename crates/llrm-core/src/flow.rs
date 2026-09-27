@@ -12,6 +12,7 @@ use iced_x86::Register;
 use crate::backend::cpu::{self as targets, ProfileOrName};
 use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
+use crate::backend::target::Segments;
 use crate::backend::{
     allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
 };
@@ -30,6 +31,7 @@ pub fn machine<'a>(
     calls: Option<&IndexMap<i64, String>>,
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
+    segments: &Segments,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -47,8 +49,8 @@ pub fn machine<'a>(
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None)),
-        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target))?),
+        Box::new(coalesce::Coalescer::new(None, segments)),
+        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),

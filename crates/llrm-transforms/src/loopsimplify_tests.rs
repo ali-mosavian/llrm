@@ -190,7 +190,7 @@ fn simplify(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(super::LoopSimplify);
-    passes.run(&mut module).expect("runs");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     (before, module)
 }
 

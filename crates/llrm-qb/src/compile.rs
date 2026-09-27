@@ -20,6 +20,8 @@ use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::abi::qb::HirAbi;
 use llrm_core::backend::assemble::{self, Abi};
+use llrm_core::abi::machine::{self, Machine};
+use llrm_core::backend::target::Segments;
 use llrm_core::backend::{addressvalues, frame, globals, lower, masm, omfwrite};
 use llrm_core::flow;
 use llrm_core::hir::lower::Lowered;
@@ -1119,13 +1121,14 @@ fn _optimized(
     function: &model::Function,
     body: &Lowered,
     options: &Options,
+    machine: &Machine,
     observer: &mut Option<&mut StageObserver<'_>>,
     phase: &str,
 ) -> Result<Lowered, CompileError> {
     let Some(module) = program.modules.iter().find(|one| one.functions.contains(function)) else {
         return emission(format!("{}: function is not part of this program", function.name));
     };
-    let target = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu))?;
+    let target = targets::profile(ProfileOrName::Name(&machine.cpu))?;
     let dgroup: BTreeSet<i64> = module
         .data
         .iter()
@@ -1200,7 +1203,7 @@ pub fn optimized(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options, &mut None, "")
+    _optimized(program, function, body, options, &machine::BUILT_IN, &mut None, "")
 }
 
 /// Optimize MIR introduced by ABI physicalization.
@@ -1214,7 +1217,7 @@ pub fn optimized_physical(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options, &mut None, "")
+    _optimized(program, function, body, options, &machine::BUILT_IN, &mut None, "")
 }
 
 /// Give the one-entry machine pipeline a temporary external-entry switch.
@@ -1468,6 +1471,7 @@ fn _lowered_machine(
     function: &model::Function,
     body: &Lowered,
     options: &Options,
+    machine: &Machine,
     observer: &mut Option<&mut StageObserver<'_>>,
     pool: &Rc<RefCell<Pool>>,
     empty_occurrences: &IndexMap<u32, Vec<(i64, i64)>>,
@@ -1481,7 +1485,7 @@ fn _lowered_machine(
         body
     };
     _observe(observer, "source-mir", StageValue::Lowered(body), Some(function), None)?;
-    let body = _optimized(program, function, body, options, observer, "source-")?;
+    let body = _optimized(program, function, body, options, machine, observer, "source-")?;
     _observe(observer, "optimized-mir", StageValue::Lowered(&body), Some(function), None)?;
     let mut physical = physicalize(program, function, &body)?;
     _observe(observer, "physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
@@ -1490,7 +1494,7 @@ fn _lowered_machine(
     // Feed those operations through the same fixed point as source MIR so
     // code quality cannot depend on whether a frontend expressed work
     // before or during ABI adaptation.
-    physical.lowered = _optimized(program, function, &physical.lowered, options, observer, "physical-")?;
+    physical.lowered = _optimized(program, function, &physical.lowered, options, machine, observer, "physical-")?;
     _observe(observer, "optimized-physical-mir", StageValue::Lowered(&physical.lowered), Some(function), None)?;
     let ordinary_entry = physical.lowered.body.entry;
     let ordinary_block = physical.lowered.body.block(ordinary_entry);
@@ -1501,13 +1505,15 @@ fn _lowered_machine(
         rotate::entered(&Rc::new(machine_body)).map_err(|error| CompileError::Value(error.to_string()))?;
     let rotated = Lowered { body: mir::MirBody::clone(&machine_body), ..physical.lowered.clone() };
     _observe(observer, "rotated-mir", StageValue::Lowered(&rotated), Some(function), None)?;
+    let segments = Segments::of(machine);
     let low = lower::lowered(
         &body.name,
         &machine_body,
         Some(&physical.calls),
         BTreeSet::new(),
         Some(&physical.contracts),
-        ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+        ProfileOrName::Profile(targets::named(&machine.cpu)?),
+        &segments,
         lower::Lowered {
             occurrences: Some(empty_occurrences),
             hints: Some(&physical.hints),
@@ -1535,7 +1541,8 @@ fn _lowered_machine(
         Some(Rc::clone(pool)),
         Some(&physical.calls),
         true,
-        ProfileOrName::Name(&llrm_core::abi::machine::current().cpu),
+        ProfileOrName::Name(&machine.cpu),
+        &segments,
     )?;
     for phase in phases.iter_mut() {
         // masm.Procedure owns a native BP frame and reserves the complete
@@ -1570,12 +1577,14 @@ fn _lowered_machine(
 /// data object's global, and how its calls link.
 struct Rich {
     mir: llrm_mir::Module,
+    cpu: String,
+    segments: Segments,
     data: std::collections::HashMap<i64, llrm_mir::GlobalId>,
     abi: HirAbi,
 }
 
 impl Rich {
-    fn new(program: &model::Program) -> Result<Self, CompileError> {
+    fn new(program: &model::Program, machine: &Machine) -> Result<Self, CompileError> {
         let program = &_positional_data(program)?;
         let module = &program.modules[0];
         // What the post-selection passes do not yet place in rich-MIR code.
@@ -1587,24 +1596,21 @@ impl Rich {
         }
         let family = program.runtime.value();
         let writes = |routine: &str| llrm_core::abi::runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect());
-        let mut emitted = hir::mir::emit_promised(program, Some(&hir::mir::Runtime { writes: &writes })).swap_remove(0);
+        let emitted = hir::mir::emit_promised(program, Some(&hir::mir::Runtime { writes: &writes })).swap_remove(0);
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        let profile = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
-        let applied = llrm_transforms::pipeline::Applied {
-            target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
-            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-            ..Default::default()
-        };
-        llrm_transforms::pipeline::applied(&mut emitted.module, &applied).map_err(CompileError::Value)?;
+        let profile = targets::profile(ProfileOrName::Name(&machine.cpu)).map_err(CompileError::Value)?;
+        let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+        let mut mir = llrm_mir::program::Program::new(vec![emitted.module], profile.target()).map_err(CompileError::Value)?;
+        llrm_transforms::pipeline::applied(&mut mir, &applied).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
-        Ok(Rich { mir: emitted.module, data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
+        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
     }
 
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
-        let cpu = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
-        let target = assemble::Target { cpu, runtime: program.runtime.value(), basic: true };
+        let cpu = targets::profile(ProfileOrName::Name(&self.cpu)).map_err(CompileError::Value)?;
+        let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true };
         let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
         let machined = assemble::machined(&self.mir, &function.name, &contracts, pool, &target).map_err(CompileError::Value)?;
         let final_ = finalized(&machined.body, machined.popped)?;
@@ -1656,7 +1662,7 @@ pub fn assembled(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<masm::Module, CompileError> {
-    assembled_by(program, observer, options, Route::Lowered)
+    assembled_by(program, observer, options, Route::Lowered, &machine::BUILT_IN)
 }
 
 /// A function in machine form, as either route makes it: its LIR with
@@ -1677,6 +1683,7 @@ pub fn assembled_by(
     mut observer: Option<&mut StageObserver<'_>>,
     options: &Options,
     route: Route,
+    machine: &Machine,
 ) -> Result<masm::Module, CompileError> {
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
@@ -1689,7 +1696,7 @@ pub fn assembled_by(
     let graphics = _graphics_dependencies(module);
     let functions: Vec<&model::Function> = module.functions.iter().collect();
     let rich = match route {
-        Route::Selected => Some(Rich::new(program)?),
+        Route::Selected => Some(Rich::new(program, machine)?),
         Route::Lowered => None,
     };
     let semantic = if rich.is_some() {
@@ -1722,7 +1729,7 @@ pub fn assembled_by(
     for (index, function) in functions.iter().copied().enumerate() {
         let machined = match &rich {
             Some(rich) => rich.machined(program, function, &pool)?,
-            None => _lowered_machine(program, module, function, &semantic[index], options, &mut observer, &pool, &empty_occurrences)?,
+            None => _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?,
         };
         let mut callees = machined.callees.clone();
         let mut resume_blocks: IndexMap<i64, i64> = IndexMap::default();
@@ -2068,7 +2075,7 @@ pub fn object_bytes(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<Vec<u8>, CompileError> {
-    object_bytes_by(program, source, observer, options, Route::Lowered)
+    object_bytes_by(program, source, observer, options, Route::Lowered, &machine::BUILT_IN)
 }
 
 pub fn object_bytes_by(
@@ -2077,8 +2084,9 @@ pub fn object_bytes_by(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
     route: Route,
+    machine: &Machine,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = omfwrite::live(&assembled_by(program, observer, options, route)?)
+    let module = omfwrite::live(&assembled_by(program, observer, options, route, machine)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     written_basic(&module, _header(program)?, &name)

@@ -13,18 +13,15 @@
 
 pub use llrm_mir::memory::callee;
 use llrm_mir::memory::{Effects, has, stated_at};
-use llrm_mir::module::{Function, GlobalValue, InstId, Module};
+use llrm_mir::module::{Function, GlobalValue, InstId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::Context;
 
 /// Every global as its declaration, by id, which a call to it reads:
-/// gathered once, since a pass holds its own function mutably while it asks
-/// about the others. `llrm_mir::memory` says what their attributes mean.
+/// the module analysis `passes::Declarations`, since a pass holds its own
+/// function mutably while it asks about the others. `llrm_mir::memory`
+/// says what their attributes mean.
 pub type Declarations = [GlobalValue];
-
-pub fn declarations(module: &Module) -> Vec<GlobalValue> {
-    module.globals.iter().map(GlobalValue::declaration).collect()
-}
 
 fn declared<'a>(context: &Context, declarations: &'a Declarations, function: &Function, inst: InstId) -> Option<&'a Function> {
     declarations.get(callee(context, function, inst)?.0 as usize).and_then(GlobalValue::function)
@@ -110,7 +107,7 @@ b:
 }
 ",
         );
-        let declarations = declarations(&module);
+        let declarations = module.declarations();
         let f = function(&module, "f");
         let insts: Vec<InstId> = f.walk().map(|(_, inst)| inst).collect();
         let writes: Vec<bool> = insts.iter().map(|&inst| unmodeled_write(&module.context, &declarations, f, inst)).collect();
@@ -122,7 +119,7 @@ b:
     /// Per instruction of `@f`: (unmodeled read, unmodeled write, touches memory).
     fn answers(text: &str) -> Vec<(bool, bool, bool)> {
         let module = parsed(text);
-        let declarations = declarations(&module);
+        let declarations = module.declarations();
         let f = function(&module, "f");
         let context = &module.context;
         f.walk()
@@ -179,7 +176,7 @@ b:
 }
 ",
         );
-        let declarations = declarations(&module);
+        let declarations = module.declarations();
         let callees = llrm_mir::memory::callees(&module);
         let f = function(&module, "f");
         let context = &module.context;
@@ -284,7 +281,7 @@ pad:
 }
 ",
         );
-        let declarations = declarations(&module);
+        let declarations = module.declarations();
         let f = function(&module, "f");
         let exposes = f.walk().map(|(_, inst)| exposes_memory(&module.context, &declarations, f, inst)).collect::<Vec<_>>();
         assert_eq!(exposes[..3], [false, true, false]);

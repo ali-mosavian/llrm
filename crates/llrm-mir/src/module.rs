@@ -360,6 +360,11 @@ impl Module {
         &self.globals[id.0 as usize]
     }
 
+    /// Every global as its declaration, by id.
+    pub fn declarations(&self) -> Vec<GlobalValue> {
+        self.globals.iter().map(GlobalValue::declaration).collect()
+    }
+
     pub fn named(&self, name: &str) -> Option<GlobalId> {
         self.globals.iter().position(|one| one.name.as_deref() == Some(name)).map(|at| GlobalId(at as u32))
     }

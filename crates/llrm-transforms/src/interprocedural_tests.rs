@@ -18,11 +18,13 @@ fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String,
     let roots = ids(module, roots);
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
+    let mut analyses = ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let proved = optimized::<String>(
         module,
+        &mut analyses,
         &roots,
         &costs,
-        &mut |module, id, stage| {
+        &mut |module, _, id, stage| {
             stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
             Ok(())
         },
@@ -174,8 +176,8 @@ fn test_the_step_runs_as_a_module_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_module(Interprocedural { target: Some(std::rc::Rc::new(target)), roots: BTreeSet::new(), pipeline: Box::new(|_, _, _| {}), proved: None });
-    let stages = manager.run(&mut module).unwrap();
+    manager.add_module(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None });
+    let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
 }
@@ -243,7 +245,7 @@ b:
 #[test]
 fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     let mut module = parsed(STAMPED);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     let text = printed(&module);
     let defined = text.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
     assert_eq!(
@@ -297,7 +299,7 @@ b:
     let loads = |call: &str, stamp: bool| {
         let mut module = parsed(&text(call));
         if stamp {
-            stamped(&mut module).unwrap();
+            crate::testing::stamped(&mut module).unwrap();
         }
         managed(&mut module, Promote);
         let f = module.function_mut("f").unwrap().1;
@@ -313,20 +315,20 @@ b:
 /// The bodies of `text` its stamp states pure, by name.
 fn pure(text: &str) -> BTreeSet<String> {
     let mut module = parsed(text);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     facts::stated_pure(&module).into_iter().map(|id| module.global(id).name.clone().unwrap()).collect()
 }
 
 /// The callees whose unused calls in `@uses` of `text`, stamped, go.
 fn dropped(text: &str) -> BTreeSet<String> {
     let mut module = parsed(text);
-    stamped(&mut module).unwrap();
+    crate::testing::stamped(&mut module).unwrap();
     let callees = |module: &Module| {
         let uses = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("uses")).expect("@uses").2;
         uses.walk().filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst)).map(|id| module.global(id).name.clone().unwrap()).collect::<BTreeSet<_>>()
     };
     let before = callees(&module);
-    let declarations = effects::declarations(&module);
+    let declarations = module.declarations();
     let (context, uses) = module.function_mut("uses").unwrap();
     facts::remove_dead_pure_calls(context, &declarations, uses);
     before.difference(&callees(&module)).cloned().collect()
@@ -579,7 +581,7 @@ b:
 fn the_corpus_is_stamped_as_it_was() {
     let mut lines = Vec::new();
     for (name, mut module) in llrm_analysis::testing::corpus() {
-        stamped(&mut module).unwrap();
+        crate::testing::stamped(&mut module).unwrap();
         let text = printed(&module);
         lines.extend(text.lines().filter(|line| line.starts_with("define")).map(|line| format!("{name} {}", line.trim_end_matches(" {"))));
     }

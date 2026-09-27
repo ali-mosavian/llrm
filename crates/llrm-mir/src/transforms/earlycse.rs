@@ -31,7 +31,7 @@ impl FunctionPass for EarlyCse {
             }
         }
         let entry = unit.function.entry().expect("a defined function");
-        let mut cse = Cse { unit, changed: false };
+        let mut cse = Cse { unit, callees: analyses.outer().callees(), changed: false };
         let mut stack = vec![(entry, Scope::default())];
         while let Some((block, scope)) = stack.pop() {
             let scope = cse.block(block, scope);
@@ -81,6 +81,7 @@ struct Scope {
 
 struct Cse<'u, 'a> {
     unit: &'u mut Unit<'a>,
+    callees: &'u memory::Callees,
     changed: bool,
 }
 
@@ -92,7 +93,7 @@ impl Cse<'_, '_> {
         let (base, offset) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, at.pointer);
         scope.memory.retain_mut(|known| {
             if memory::invariant(unit.context, unit.layout, unit.function, known.at().pointer)
-                || alias(unit.context, unit.layout, unit.callees, unit.metadata, unit.function, known.at(), at) == Alias::No
+                || alias(unit.context, unit.layout, self.callees, unit.metadata, unit.function, known.at(), at) == Alias::No
             {
                 return true;
             }
@@ -115,7 +116,7 @@ impl Cse<'_, '_> {
             let pointer = known.at().pointer;
             let (base, _) = crate::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
             memory::invariant(unit.context, unit.layout, unit.function, pointer)
-                || matches!(object(unit.context, unit.function, base), Some(Object::Slot(slot)) if !captured(unit.context, unit.callees, unit.function, slot))
+                || matches!(object(unit.context, unit.function, base), Some(Object::Slot(slot)) if !captured(unit.context, self.callees, unit.function, slot))
         });
     }
 
@@ -203,10 +204,10 @@ impl Cse<'_, '_> {
                 scope.memory.push(Known::Value { at, ty, value });
             }
             _ => {
-                if !memory::of(self.unit.context, self.unit.callees, function, inst).writes {
+                if !memory::of(self.unit.context, self.callees, function, inst).writes {
                     return;
                 }
-                match memory::memset(self.unit.context, self.unit.callees, function, inst) {
+                match memory::memset(self.unit.context, self.callees, function, inst) {
                     Some((pointer, byte, length)) => {
                         let bytes = match length {
                             Operand::Constant(id) => match self.unit.context.get(id).kind {
@@ -233,7 +234,7 @@ impl Cse<'_, '_> {
         let unit = &*self.unit;
         for known in scope.memory.iter().rev() {
             match known {
-                Known::Value { at: there, ty: stored, value } if *stored == ty && alias(unit.context, unit.layout, unit.callees, unit.metadata, unit.function, *there, at) == Alias::Must => {
+                Known::Value { at: there, ty: stored, value } if *stored == ty && alias(unit.context, unit.layout, self.callees, unit.metadata, unit.function, *there, at) == Alias::Must => {
                     return Some(*value);
                 }
                 Known::Zero { at: there, holes } if contains(unit.context, unit.layout, unit.function, *there, at) => {

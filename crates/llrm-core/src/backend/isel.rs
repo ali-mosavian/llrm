@@ -18,6 +18,7 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
+use crate::backend::target::Segments;
 use crate::backend::{addressforms, arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -247,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -286,6 +287,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
         cpu,
+        segments,
         exact,
         exact_sums: BTreeSet::new(),
         secondary,
@@ -353,6 +355,8 @@ struct Selector<'m, 'c, 'p> {
     callees: llrm_mir::memory::Callees,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    /// Which segment registers the machine's program model leaves free.
+    segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
     exact: BTreeSet<ValueId>,
     /// The registers indexing cells `exact` proves: each such cell is
@@ -2113,8 +2117,8 @@ impl Selector<'_, '_, '_> {
         }
         let what = semantics(Operation::Call, "call", vec![], vec![]);
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract),
-            clobbers_high: call_clobbered_high(&contract),
+            clobbers: call_clobbers(&contract, self.segments),
+            clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])

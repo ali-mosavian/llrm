@@ -237,7 +237,7 @@ pub(crate) fn summarized(module: &mut Module, pass: impl llrm_mir::passes::Funct
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.require::<llrm_analysis::manager::Summaries>();
     manager.add(pass);
-    manager.run(module).unwrap();
+    manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     printed(module)
 }
 

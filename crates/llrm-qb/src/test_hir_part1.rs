@@ -40,7 +40,7 @@ fn lowered(program: &model::Program) -> Vec<hir::Lowered> {
 /// `namespace["dumped"](source, output, dialect=..., runtime=..., includes=())`.
 fn dumped(source: &std::path::Path, output: &std::path::Path, dialect: &str, runtime: &str) {
     let frontend = super::driver::Frontend::new(dialect, runtime);
-    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered).expect("dumps");
+    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered, &llrm_core::abi::machine::BUILT_IN).expect("dumps");
 }
 
 fn machine(
@@ -58,6 +58,7 @@ fn machine(
         BTreeSet::new(),
         Some(contracts),
         "386",
+        &llrm_core::backend::target::BUILT_IN,
         lower_mir::Lowered { occurrences: Some(&occurrences), pointer_model, ..Default::default() },
     )
     .expect("lowers")
@@ -105,6 +106,16 @@ fn test_qb_cli_exposes_pds_huge_array_option() {
 fn test_qb_cli_exposes_pds_alternate_math_option() {
     let args = parse_args(&argv(&["probe.bas", "--alternate-math"])).expect("parses");
     assert!(args.frontend.alternate_math);
+}
+
+#[test]
+fn test_qb_cli_reads_the_machine_it_is_given() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("386.toml");
+    std::fs::write(&path, llrm_core::abi::machine::DOS.replace("cpu = \"486\"", "cpu = \"386\"")).expect("writes");
+    let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
+    assert_eq!(args.machine.cpu, "386");
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").machine, *llrm_core::abi::machine::BUILT_IN);
 }
 
 /// The SYS stage showcase crashed when FSTP carried its target through effects only.

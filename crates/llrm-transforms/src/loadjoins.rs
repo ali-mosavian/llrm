@@ -56,7 +56,7 @@ impl FunctionPass for LoadJoins {
         let pointers = analyses.get::<Pointers>(context, layout, unit.function);
         let changed = Accesses::managed(context, layout, unit.function, analyses).and_then(|accesses| {
             let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
-            reused(context, layout, unit.function, analyses.outer(), unit.callees, &accesses, pointers, self.insert)
+            reused(context, layout, unit.function, analyses.outer(), analyses.outer().callees(), &accesses, pointers, self.insert)
         });
         match changed {
             Ok(true) => PreservedAnalyses::none(),

@@ -39,7 +39,7 @@ impl FunctionPass for Affine {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         if canonical(unit, analyses) {
-            dead::dead(unit.context, unit.callees, unit.function);
+            dead::dead(unit.context, analyses.outer().callees(), unit.function);
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {

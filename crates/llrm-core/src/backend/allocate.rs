@@ -18,7 +18,8 @@ use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
-use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit, target};
+use crate::backend::target::{self, Segments};
+use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -360,7 +361,7 @@ fn _restrict(out: &mut Classes, value: u32, choices: &BTreeSet<Register>) {
 }
 
 /// The register class each value is confined to, where it is confined.
-pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
+pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
@@ -419,7 +420,7 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
             }
         }
     }
-    let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
+    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     for value in selecting.difference(&numeric) {
         _restrict(&mut out, *value, &selectors);
     }
@@ -432,7 +433,7 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>) -> Classes {
             }
         }
     }
-    _word_address_roles(&word_pairs, &mut out, body, prefer_indexes);
+    _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments);
     out
 }
 
@@ -442,6 +443,7 @@ fn _word_address_roles(
     confined: &mut Classes,
     body: &LirBody,
     prefer_indexes: &BTreeSet<u32>,
+    segments: &Segments,
 ) {
     let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for (base, index) in pairs {
@@ -451,7 +453,7 @@ fn _word_address_roles(
     let mut unseen: BTreeSet<u32> = adjacent.keys().copied().collect();
     let numbered = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&numbered));
-    let masks = _masks(body, &numbered);
+    let masks = _masks(body, &numbered, segments);
     let word_base = *target::WORD_BASES.iter().next().expect("one word base");
 
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
@@ -565,9 +567,9 @@ pub fn _unread_move(one: &Insn) -> bool {
 
 /// Each far cell whose selector is also read as a number, or pinned to a
 /// general register, reached through ES.
-pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> LirBody {
-    let confined = classes(body, &BTreeSet::new());
-    let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
+pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments) -> LirBody {
+    let confined = classes(body, &BTreeSet::new(), segments);
+    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
     let mut conflicted: BTreeSet<u32> = BTreeSet::new();
@@ -728,8 +730,9 @@ pub fn allocate(
     protected: Option<&BTreeSet<u32>>,
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
+    segments: &Segments,
 ) -> Result<Assignment, Error> {
-    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, None)?.0)
+    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, segments, None)?.0)
 }
 
 /// `allocate`, splitting and spilling as it goes, as LLVM's greedy allocator
@@ -742,10 +745,11 @@ pub fn rewritten(
     unspillable: Option<&BTreeSet<u32>>,
     protected: Option<&BTreeSet<u32>>,
     cpu: ProfileOrName<'_>,
+    segments: &Segments,
     frame: &mut Frame,
     splitting: bool,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    _allocated(body, pinned, unspillable, protected, None, cpu, Some((frame, splitting)))
+    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -759,7 +763,7 @@ struct Facts {
 }
 
 impl Facts {
-    fn of(body: &LirBody, profile: &Profile, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
+    fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
         for one in unspillable {
@@ -774,8 +778,8 @@ impl Facts {
                 interval.weight = INF;
             }
         }
-        let masks = _masks(body, &index);
-        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected), hints: _copy_hints(body) }
+        let masks = _masks(body, &index, segments);
+        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
     }
 }
 
@@ -807,17 +811,18 @@ fn _allocated(
     protected: Option<&BTreeSet<u32>>,
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
+    segments: &Segments,
     rewrite: Option<(&mut Frame, bool)>,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     let splitting = rewrite.as_ref().is_some_and(|(_, splitting)| *splitting);
     let mut rewrite: Option<&mut Frame> = rewrite.map(|(frame, _)| frame);
     let profile = targets::profile(cpu).map_err(Error::Value)?;
     let mut body = body.clone();
-    let data_free = !datagroup::names_data_segment(&body);
+    let data_free = !datagroup::names_data_segment(&body, segments);
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    let mut facts = Facts::of(&body, profile, &unspillable, protected);
+    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected);
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
@@ -865,11 +870,11 @@ fn _allocated(
             continue;
         };
         let mut order: Vec<Register> = match fixed.get(&value) {
-            None => target::order(facts.confined.get(&value)),
+            None => target::order(facts.confined.get(&value), segments),
             Some(register) => vec![*register],
         };
         if !data_free {
-            order.retain(|one| _whole(*one) != *target::DATA_SEGMENT);
+            order.retain(|one| _whole(*one) != segments.data);
         }
         if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined) {
             let word: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
@@ -915,7 +920,7 @@ fn _allocated(
 
         // The data segment register only once the selectors run out: holding
         // a value there costs a restore and a prefix on every data access.
-        order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
+        order.sort_by_key(|one| _whole(*one) == segments.data);
         let width = facts.widths.get(&value).copied().unwrap_or(4);
         if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
             r#where.insert(value, got);
@@ -929,10 +934,10 @@ fn _allocated(
                 if fixed.contains_key(&other) {
                     return false;
                 }
-                let elsewhere: Vec<Register> = target::order(facts.confined.get(&other))
+                let elsewhere: Vec<Register> = target::order(facts.confined.get(&other), segments)
                     .into_iter()
                     .filter(|one| _whole(*one) != _whole(register))
-                    .filter(|one| data_free || _whole(*one) != *target::DATA_SEGMENT)
+                    .filter(|one| data_free || _whole(*one) != segments.data)
                     .collect();
                 _free(&facts.live[&other], &elsewhere, &union, &facts.live, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4))
                     .is_some()
@@ -1037,11 +1042,11 @@ fn _allocated(
             // Last chance: move what holds a register rather than spill.
             let choices = |other: u32| -> Vec<Register> {
                 let mut order = match fixed.get(&other) {
-                    None => target::order(facts.confined.get(&other)),
+                    None => target::order(facts.confined.get(&other), segments),
                     Some(register) => vec![*register],
                 };
-                order.retain(|one| data_free || _whole(*one) != *target::DATA_SEGMENT);
-                order.sort_by_key(|one| _whole(*one) == *target::DATA_SEGMENT);
+                order.retain(|one| data_free || _whole(*one) != segments.data);
+                order.sort_by_key(|one| _whole(*one) == segments.data);
                 order
             };
             let wide = |other: u32| facts.widths.get(&other).copied().unwrap_or(4);
@@ -1110,7 +1115,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        facts = Facts::of(&body, profile, &unspillable, protected);
+        facts = Facts::of(&body, profile, segments, &unspillable, protected);
         placing = None;
         for (one, register) in constrain::required(&body)? {
             fixed.entry(one).or_insert(register);
@@ -1143,6 +1148,7 @@ fn _allocated(
         hints: &facts.hints,
         confined: &facts.confined,
         data_free,
+        segments,
     };
     _recolored_hints(&mut r#where, &mut union, &settled, |value| {
         fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
@@ -1158,6 +1164,7 @@ struct Settled<'a> {
     hints: &'a IndexMap<u32, Vec<u32>>,
     confined: &'a Classes,
     data_free: bool,
+    segments: &'a Segments,
 }
 
 /// LLVM's `tryHintsRecoloring`. Greedy order decides which end of a copy
@@ -1191,11 +1198,11 @@ fn _recolored_hints(
                     continue;
                 };
                 let gained = joined(value, theirs, r#where);
-                if best.is_some_and(|(most, _)| gained <= most) || (!settled.data_free && theirs == *target::DATA_SEGMENT) {
+                if best.is_some_and(|(most, _)| gained <= most) || (!settled.data_free && theirs == settled.segments.data) {
                     continue;
                 }
                 let order: Vec<Register> =
-                    target::order(settled.confined.get(&value)).into_iter().filter(|one| _whole(*one) == theirs).collect();
+                    target::order(settled.confined.get(&value), settled.segments).into_iter().filter(|one| _whole(*one) == theirs).collect();
                 if let Some(register) = _free(mine, &order, union, settled.live, settled.masks, width) {
                     best = Some((gained, register));
                 }
@@ -1217,15 +1224,16 @@ fn _assigned_plan(
     reloads: &BTreeSet<u32>,
     retained: &BTreeSet<u32>,
     cpu: &Profile,
+    segments: &Segments,
 ) -> Result<(Assignment, BTreeSet<u32>), Error> {
     if !retained.is_empty() {
-        match allocate(body, Some(pinned), Some(reloads), Some(retained), None, cpu.into()) {
+        match allocate(body, Some(pinned), Some(reloads), Some(retained), None, cpu.into(), segments) {
             Ok(got) => return Ok((got, retained.clone())),
             Err(Error::Unplaced(_)) => {}
             Err(other) => return Err(other),
         }
     }
-    Ok((allocate(body, Some(pinned), Some(reloads), None, None, cpu.into())?, BTreeSet::new()))
+    Ok((allocate(body, Some(pinned), Some(reloads), None, None, cpu.into(), segments)?, BTreeSet::new()))
 }
 
 /// Every value that wants a register, dead definitions included.
@@ -1307,14 +1315,14 @@ pub type Masks = Vec<Mask>;
 /// Every point a register is destroyed without being named, and which. The
 /// data segment register is reloaded ahead of a point that needs the data
 /// group, so it holds none of that point's operands either.
-pub fn _masks(body: &LirBody, index: &Indexes) -> Masks {
+pub fn _masks(body: &LirBody, index: &Indexes, segments: &Segments) -> Masks {
     let mut out = Vec::new();
     for block in &body.blocks {
         for one in &block.insns {
             let during: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
             let high: BTreeSet<Register> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
             let before: BTreeSet<Register> =
-                target::needs_data_group(one).then_some(*target::DATA_SEGMENT).into_iter().collect();
+                target::needs_data_group(one).then_some(segments.data).into_iter().collect();
             if !during.is_empty() || !high.is_empty() || !before.is_empty() {
                 out.push(Mask { slot: index.at[&ranges::key(one)], during, high, before });
             }
@@ -1539,6 +1547,7 @@ pub struct RegAlloc {
     /// One frame, shared with the phases around this one, as Python shares it.
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
+    pub segments: Segments,
 }
 
 impl RegAlloc {
@@ -1548,8 +1557,9 @@ impl RegAlloc {
         pinned: Option<&IndexMap<u32, Register>>,
         frame: Option<Rc<RefCell<Frame>>>,
         cpu: ProfileOrName<'_>,
+        segments: &Segments,
     ) -> Result<Self, String> {
-        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone() })
+        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone() })
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -1560,12 +1570,13 @@ impl RegAlloc {
         let cpu = self.cpu.clone();
         // Only a body that never names the data segment register itself may
         // find it holding one of its values.
-        let data_free = !datagroup::names_data_segment(&body);
-        let mut body = explicit_selectors(&body, Some(&self.pinned));
+        let segments = self.segments.clone();
+        let data_free = !datagroup::names_data_segment(&body, &segments);
+        let mut body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
         self.pinned = narrower;
-        let confined = classes(&body, &BTreeSet::new());
+        let confined = classes(&body, &BTreeSet::new(), &segments);
         let incompatible: BTreeSet<u32> = self
             .pinned
             .iter()
@@ -1592,7 +1603,7 @@ impl RegAlloc {
             }
             self.pinned.retain(|value, _register| !incompatible.contains(value));
         }
-        let selectors: BTreeSet<Register> = target::SELECTORS.iter().copied().collect();
+        let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
@@ -1622,7 +1633,7 @@ impl RegAlloc {
             let mut pins = prefer.clone();
             pins.extend(constrain::required(candidate)?);
             let (got, out, spilled) =
-                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &mut frame.borrow_mut(), splitting)?;
+                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
             Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved() })
         };
         let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
@@ -1677,7 +1688,7 @@ impl RegAlloc {
             }
         }
         frame.borrow_mut().restore(&best.slots);
-        applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free))
+        applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }
 
@@ -2344,7 +2355,7 @@ mod tests {
         let body = _one_block(insns);
         let frame = Rc::new(RefCell::new(frames::of(&body, None, "", None).expect("a frame")));
         let mut phase =
-            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386")).expect("a cpu");
+            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
     }
@@ -2352,7 +2363,7 @@ mod tests {
     fn _through_regalloc(body: LirBody, pinned: &[(u32, Register)]) -> LirBody {
         let pinned = pins(pinned);
         let frame = frames::of(&body, None, "", None).expect("a frame");
-        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386")).expect("a cpu");
+        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates")
     }
 
@@ -2365,7 +2376,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> Result<Assignment, Error> {
-        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"))
+        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN)
     }
 
     fn registers(places: &[Loc]) -> Vec<Register> {
@@ -2447,7 +2458,7 @@ mod tests {
     #[test]
     fn test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() {
         let preferred = pins(&[(1, Register::EDX)]);
-        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into())
+        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN)
             .expect("allocates");
         assert_eq!(one.r#where[&1], Register::EDX);
         let overlap = Insn::new(
@@ -2464,6 +2475,7 @@ mod tests {
             None,
             Some(&preferred),
             "386".into(),
+            &target::BUILT_IN,
         )
         .expect("allocates");
         assert_ne!(kept.r#where[&1], Register::EDX);
@@ -2493,6 +2505,7 @@ mod tests {
             None,
             Some(&pins(&[(1, Register::EDX)])),
             "386".into(),
+            &target::BUILT_IN,
         )
         .expect("allocates");
         assert_eq!(got.r#where[&1], Register::EDX, "{:?}", got.r#where);
@@ -2529,8 +2542,8 @@ mod tests {
             vec![2],
             vec![2, 3],
         ));
-        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into()).expect("allocates");
-        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into())
+        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
+        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN)
             .expect("allocates");
         assert_eq!(_whole(got.r#where[&1]), _whole(got.r#where[&2]), "{:?}", got.r#where);
     }
@@ -2551,8 +2564,8 @@ mod tests {
         insns.push(last);
         let body = _one_block(insns);
 
-        let on_386 = allocate(&body, None, None, None, None, "386".into()).expect("allocates");
-        let on_core = allocate(&body, None, None, None, None, "Core".into()).expect("allocates");
+        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
+        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN).expect("allocates");
 
         assert!(!on_386.spilled.contains(&7), "{on_386:?}");
         assert_eq!(on_core.spilled, values(&[7]), "{on_core:?}");
@@ -2769,7 +2782,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let body = _one_block(vec![_mov(1, 5, 0), _load(4, 2, cell, vec![1])]);
         let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
-        let facts = Facts::of(&body, profile, &BTreeSet::new(), &BTreeSet::new());
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &BTreeSet::new(), &BTreeSet::new());
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
@@ -2817,7 +2830,7 @@ mod tests {
             (1..8).collect(),
         ));
         let pinned: IndexMap<u32, Register> = (1..7).zip(target::AVAILABLE).collect();
-        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into());
+        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN);
         let message = unplaced(got);
         assert!(message.contains("value#7 cannot be spilled"), "{message}");
     }
@@ -2955,7 +2968,7 @@ mod tests {
             Insn::new(6, Some((6, 7)), Some(semantics(Operation::Push, "push", vec![], vec![one])), vec![], vec![1]);
         let body = body_of("call", 0, vec![before.clone(), call.clone(), after.clone()]);
         let si = pins(&[(1, Register::SI)]);
-        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into()).expect("allocates");
+        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN).expect("allocates");
         assert!(assigned.spilled.is_empty() && assigned.r#where[&1] == Register::SI);
 
         let surviving = body_of("call", 0, vec![before, Insn { defines: vec![], ..call }, after]);
@@ -3033,7 +3046,7 @@ mod tests {
         let read = _load(4, 3, cell, vec![1, 2]);
         let body = body_of("call-crossing-base", 0, vec![_frame_load(1, 1, 4), call, index, read]);
 
-        let found = classes(&body, &BTreeSet::new());
+        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN);
 
         assert_eq!(found[&1], *target::WORD_INDEXES);
         assert_eq!(found[&2], *target::WORD_BASES);
@@ -3053,7 +3066,7 @@ mod tests {
         let body = body_of("retention-fallback", 0, insns);
 
         let (result, retained) =
-            _assigned_plan(&body, &IndexMap::default(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"))
+            _assigned_plan(&body, &IndexMap::default(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"), &target::BUILT_IN)
                 .expect("allocates");
 
         assert_eq!(retained, BTreeSet::new());
@@ -3085,7 +3098,7 @@ mod tests {
         let read = _load(3, 3, cell, vec![1, 2]);
         let body = body_of("retained-address-role", 0, vec![_frame_load(1, 1, 6), _frame_load(2, 2, 8), read]);
 
-        let confined = classes(&body, &values(&[1]));
+        let confined = classes(&body, &values(&[1]), &target::BUILT_IN);
 
         assert_eq!(confined[&1], *target::WORD_INDEXES);
         assert_eq!(confined[&2], *target::WORD_BASES);
@@ -3096,7 +3109,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
         let body = body_of("secondary-base-class", 0, vec![_load(2, 2, cell, vec![1])]);
 
-        assert!(!classes(&body, &BTreeSet::new()).contains_key(&1));
+        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN).contains_key(&1));
     }
 
     // ------------------------------------------------------ tests/test_lir.py
@@ -3113,14 +3126,14 @@ mod tests {
     #[test]
     fn test_an_address_value_takes_the_class_a_base_register_must_be_in() {
         for through in [Register::BX, Register::SI] {
-            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new());
+            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN);
             assert_eq!(got.get(&21), Some(&*target::ADDRESSING), "through={through:?}: {:?}", got.get(&21));
         }
     }
 
     #[test]
     fn test_an_unbased_cell_confines_no_value() {
-        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new()).contains_key(&21));
+        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN).contains_key(&21));
     }
 
     // ------------------------------------- tests/test_dead_call_deliveries.py
@@ -3235,7 +3248,7 @@ mod tests {
         let what = semantics(Operation::Move, "mov", vec![held(1, 1)], vec![imm(12, 1)]);
         let body = body_of("byte", 0, vec![Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![])]);
         assert_eq!(
-            classes(&body, &BTreeSet::new())[&1],
+            classes(&body, &BTreeSet::new(), &target::BUILT_IN)[&1],
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }

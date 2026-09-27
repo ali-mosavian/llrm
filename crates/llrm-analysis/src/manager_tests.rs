@@ -5,12 +5,13 @@ use std::rc::Rc;
 
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
-use llrm_mir::target::Machine;
+use llrm_mir::passes::{Analyses, Analysis, FunctionPass, ModuleAnalyses, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
+use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{Annotated, CallEffects, DominatedEdges, Pointers, Registers, Summaries, ThroughMemory};
 use crate::alias::{self, Procedure};
+use crate::cfg::Shape;
 use crate::consts::{self, Calls};
 use crate::memory::Unit;
 use crate::ranges;
@@ -81,7 +82,7 @@ fn seen(steps: impl FnOnce(&Seen) -> Vec<Step>) -> (Vec<Rc<Answer>>, Module) {
     for step in steps(&seen) {
         passes.add(step);
     }
-    passes.run(&mut module).unwrap();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     (seen.take(), module)
 }
 
@@ -130,7 +131,6 @@ b0:
         let r = value(function(&module, "f"), "r");
         let got = Rc::new(RefCell::new(None));
         let mut passes = PassManager::default();
-        passes.target = dos.then(|| Rc::new(Dos::default()) as Rc<dyn Machine>);
         passes.require::<Summaries>();
         let into = Rc::clone(&got);
         passes.add(step(
@@ -140,7 +140,8 @@ b0:
             },
             PreservedAnalyses::all(),
         ));
-        passes.run(&mut module).unwrap();
+        let target: Rc<dyn Machine> = if dos { Rc::new(Dos::default()) } else { Rc::new(Neutral) };
+        passes.run_module(&mut module, target).unwrap();
         got.take().map(|fact| fact.n)
     };
     assert_eq!(known(false), None);
@@ -222,10 +223,20 @@ b2:
     passes.add(look(&seen));
     passes.add(swap(PreservedAnalyses::none()));
     passes.add(look(&seen));
-    passes.run(&mut module).unwrap();
+    passes.run_module(&mut module, Rc::new(llrm_mir::target::Neutral)).unwrap();
     let seen = seen.take();
     assert_eq!(seen[0].loops.len(), 1);
     assert!(Rc::ptr_eq(&seen[0], &seen[1]), "found again though the CFG was kept");
     assert!(!Rc::ptr_eq(&seen[1], &seen[2]));
     assert_eq!(seen[1], seen[2]);
+}
+
+/// Summaries and GlobalsAA ran points-to over every body with a shape of
+/// its own: 100k shapes a pipeline run. Each is its body's manager's.
+#[test]
+fn summaries_read_each_bodys_shape_from_its_manager() {
+    let module = parsed("define i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n");
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
 }

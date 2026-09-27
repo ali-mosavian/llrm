@@ -491,7 +491,7 @@ fn every_corpus_reduction_verifies_and_settles() {
             let mut manager = llrm_mir::passes::PassManager::default();
             manager.verify_each = true;
             manager.add(Strength::default());
-            manager.run(&mut module).unwrap_or_else(|error| panic!("{name}: {error}"));
+            manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{name}: {error}"));
             runs.push(printed(&module));
         }
         fired += runs[0].matches("lsr.iv.next").count();
@@ -512,7 +512,7 @@ fn emitted_counters_reduce_once_promoted() {
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(crate::promote::Promote);
         manager.add(Strength::default());
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         promoted += printed(&module).matches("lsr.iv.next").count();
     }
     assert_eq!(alone, 0);
@@ -559,9 +559,8 @@ fn test_strength_prices_the_target_registers() {
     let recurrences = |target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>| {
         let mut module = parsed(&text);
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.target = target;
         manager.add(Strength::default());
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, target.unwrap_or_else(|| std::rc::Rc::new(llrm_mir::target::Neutral))).unwrap();
         printed(&module).matches("lsr.iv.next").count()
     };
     assert_eq!(recurrences(None), 4);

@@ -1232,7 +1232,7 @@ pub fn bodies(
 ) -> Result<RaisedBodies, String> {
     let mut source = SourceMap::from_module(found);
     let unreached = _unreached(found);
-    let result = match decode::decode_module(found) {
+    let result = match decode::decode_module(found, &crate::abi::machine::BUILT_IN) {
         Ok(result) => result,
         Err(_) => return Ok(RaisedBodies { values: Vec::new(), source, hints: IndexMap::default() }),
     };

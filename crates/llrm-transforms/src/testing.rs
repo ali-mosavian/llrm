@@ -54,7 +54,7 @@ b0:
 pub fn managed(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static) -> String {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(pass);
-    manager.run(module).unwrap();
+    manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     printed(module)
 }
 
@@ -82,7 +82,7 @@ pub fn summarized(module: &Module, pass: impl llrm_mir::passes::FunctionPass + '
         manager.require::<llrm_analysis::manager::Summaries>();
     }
     manager.add(pass);
-    manager.run(&mut after).unwrap();
+    manager.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let text = printed(&after);
     assert_eq!(results(&after, inputs), results(module, inputs), "{text}");
     text[text.find("@f(").expect("@f")..].to_owned()
@@ -117,4 +117,10 @@ impl llrm_mir::target::Machine for Tuned {
     fn call_registers(&self) -> i64 {
         self.call_registers
     }
+}
+
+/// `interprocedural::stamped` over `module` alone, for no target.
+pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    crate::interprocedural::stamped(module, &mut analyses)
 }

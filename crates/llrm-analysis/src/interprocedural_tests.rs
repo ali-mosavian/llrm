@@ -163,14 +163,14 @@ b:
 ",
     );
     let both = names(&module, &["spin", "caller"]);
-    assert_eq!(noreturn_procedures(&module, &both), both);
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &both), both);
     let spin = names(&module, &["spin"]);
     let caller = function(&module, "caller");
-    let sites = terminal_sites(&module.context, &effects::declarations(&module), caller, &spin);
+    let sites = terminal_sites(&module.context, &module.declarations(), caller, &spin);
     assert_eq!(sites.into_iter().collect::<Vec<_>>(), calls(caller));
 
     let mut module = module;
-    let declarations = effects::declarations(&module);
+    let declarations = module.declarations();
     let (context, caller) = module.function_mut("caller").unwrap();
     assert!(terminal_calls(context, &declarations, caller, &spin));
     let left: Vec<&str> = caller.walk().map(|(_, inst)| caller.instruction(inst).opcode.mnemonic()).collect();
@@ -190,7 +190,7 @@ b:
 ",
     );
     let fails = names(&module, &["fails"]);
-    assert_eq!(noreturn_procedures(&module, &fails), fails);
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &fails), fails);
 }
 
 #[test]
@@ -202,7 +202,7 @@ b:
 }
 ",
     );
-    assert_eq!(noreturn_procedures(&module, &BTreeSet::new()), BTreeSet::new());
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &BTreeSet::new()), BTreeSet::new());
 }
 
 #[test]
@@ -222,7 +222,7 @@ b:
 ",
     );
     let both = names(&module, &["first", "second"]);
-    assert_eq!(noreturn_procedures(&module, &both), both);
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &both), both);
 }
 
 #[test]
@@ -240,7 +240,7 @@ b:
 }
 ",
     );
-    assert_eq!(noreturn_procedures(&module, &names(&module, &["first", "second"])), BTreeSet::new());
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &names(&module, &["first", "second"])), BTreeSet::new());
 }
 
 #[test]
@@ -409,7 +409,7 @@ b3:
 }
 ",
     );
-    assert_eq!(noreturn_procedures(&module, &names(&module, &["sometimes"])), BTreeSet::new());
+    assert_eq!(noreturn_procedures(&module, &module.declarations(), &names(&module, &["sometimes"])), BTreeSet::new());
 }
 
 #[test]
@@ -432,7 +432,7 @@ pad:
 ",
     );
     let f = function(&module, "f");
-    assert!(terminal_sites(&module.context, &effects::declarations(&module), f, &BTreeSet::new()).is_empty());
+    assert!(terminal_sites(&module.context, &module.declarations(), f, &BTreeSet::new()).is_empty());
 }
 
 /// Each linkage the linker may swap for another body.

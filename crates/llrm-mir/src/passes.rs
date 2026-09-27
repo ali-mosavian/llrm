@@ -1,8 +1,10 @@
-//! LLVM's new pass manager: function passes over a module, analyses cached
-//! per function and dropped unless a pass says it preserved them, and each
-//! pass's change log kept for the rewrite ledger. A function analysis reads
-//! its module and program only through `Outer`, LLVM's outer analysis
-//! manager proxy, which also holds the module analyses.
+//! LLVM's new pass manager: function and module passes over each module of
+//! a program, analyses cached per function and per module and dropped
+//! unless a pass says it preserved them, and each pass's change log kept
+//! for the rewrite ledger. A function analysis reads its module only
+//! through `Outer`, LLVM's outer analysis manager proxy, which holds the
+//! module analyses; a module analysis reads its program only through
+//! `ModuleAnalyses::program`.
 //!
 //! Two instruments, as LLVM's `-verify-each` and
 //! `-verify-analysis-invalidation`: verifying the module after every pass,
@@ -16,20 +18,17 @@ use crate::context::{Context, GlobalId};
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
 use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Module};
-use crate::program::ProgramProxy;
+use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
 use crate::target::{Machine, Neutral};
 
 /// What a function pass works on: its function, the context its types and
-/// constants live in, and the module's datalayout.
+/// constants live in, and the program's datalayout.
 pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
-    /// What each function in the module does to memory.
-    pub callees: &'a crate::memory::Callees,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
-    pub sizes: &'a crate::valuetracking::Sizes,
     /// Functions the pass declares in the module.
     pub declared: &'a mut Declared,
 }
@@ -91,14 +90,49 @@ pub trait Analysis: 'static {
     }
 }
 
-/// A fact about the whole module, as LLVM's `GlobalsAA`: computed before
-/// each pass once required (`PassManager::require`), and dropped unless
-/// every run of a pass preserved it. Function analyses read it through
-/// `Outer::cached`. It reads its program through `program`.
+/// A fact about the whole module, as LLVM's `GlobalsAA`: computed on
+/// demand, before each pass once required (`PassManager::require`), and
+/// dropped unless every run of a pass preserved it. It asks `analyses` for
+/// the module analyses it builds on and its program. Function analyses
+/// read it through `Outer::cached`.
 pub trait ModuleAnalysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
     const NAME: &'static str;
-    fn run(module: &Module, program: &ProgramProxy) -> Self::Result;
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result;
+}
+
+/// What each function does to memory, as its attributes state it.
+pub struct CalleeEffects;
+
+impl ModuleAnalysis for CalleeEffects {
+    type Result = crate::memory::Callees;
+    const NAME: &'static str = "callee-effects";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        crate::memory::callees(module)
+    }
+}
+
+/// Each global variable's size in bytes.
+pub struct GlobalSizes;
+
+impl ModuleAnalysis for GlobalSizes {
+    type Result = crate::valuetracking::Sizes;
+    const NAME: &'static str = "global-sizes";
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        crate::valuetracking::sizes(module, &analyses.program().layout)
+    }
+}
+
+/// Every global as its declaration, by id: what a function may read of
+/// the others.
+pub struct Declarations;
+
+impl ModuleAnalysis for Declarations {
+    type Result = Vec<GlobalValue>;
+    const NAME: &'static str = "declarations";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        module.declarations()
+    }
 }
 
 /// LLVM's `DominatorTreeAnalysis`.
@@ -178,29 +212,26 @@ impl PreservedAnalyses {
 /// What a function analysis may read beyond its function: LLVM's outer
 /// analysis manager proxy, read-only. The module's metadata and globals,
 /// each function by its declaration alone since a function analysis reads
-/// no other body; its program; and the module analyses computed.
+/// no other body; its program; and the module analyses required.
 #[derive(Clone)]
 pub struct Outer {
     pub metadata: Vec<MetadataNode>,
-    pub globals: Vec<GlobalValue>,
+    pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
 }
 
 impl Outer {
-    /// `module`'s, a program of its own for `target`, or a neutral one.
+    /// `module`'s, a program of its own for `target`, or a neutral one:
+    /// for analyses asked outside a pass manager.
     pub fn of(module: &Module, target: Option<Rc<dyn Machine>>) -> Self {
-        Self::within(module, ProgramProxy::of(module, target.unwrap_or_else(|| Rc::new(Neutral))))
-    }
-
-    /// `module`'s, of `program`.
-    pub fn within(module: &Module, program: Rc<ProgramProxy>) -> Self {
-        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(GlobalValue::declaration).collect(), program, modules: HashMap::new() }
+        (*ModuleAnalyses::of(module, target.unwrap_or_else(|| Rc::new(Neutral))).outer(module)).clone()
     }
 
     /// Computes `M` of `module`, for analyses asked outside a pass manager.
     pub fn require<M: ModuleAnalysis>(&mut self, module: &Module) {
-        self.modules.insert(TypeId::of::<M>(), Rc::new(M::run(module, &self.program)));
+        let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
+        self.modules.insert(TypeId::of::<M>(), result);
     }
 
     pub fn program(&self) -> &ProgramProxy {
@@ -209,6 +240,16 @@ impl Outer {
 
     pub fn target(&self) -> &dyn Machine {
         &*self.program.target
+    }
+
+    /// What each function does to memory: `CalleeEffects`.
+    pub fn callees(&self) -> &crate::memory::Callees {
+        self.cached_ref::<CalleeEffects>().expect("every outer proxy holds the callees' effects")
+    }
+
+    /// Each global variable's size: `GlobalSizes`.
+    pub fn sizes(&self) -> &crate::valuetracking::Sizes {
+        self.cached_ref::<GlobalSizes>().expect("every outer proxy holds the globals' sizes")
     }
 
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
@@ -279,6 +320,11 @@ impl Analyses {
         &self.outer
     }
 
+    /// `A`'s result, if computed: LLVM's `getCachedResult`.
+    pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
+        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").0))
+    }
+
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(&mut self, context: &Context, layout: &DataLayout, function: &Function) -> Rc<A::Result> {
         let key = TypeId::of::<A>();
@@ -306,21 +352,157 @@ impl Analyses {
     }
 }
 
-/// A required module analysis: how to compute it, and whether two results
-/// agree.
-pub(crate) struct Required {
+/// A module analysis: how to compute it, and whether two results agree.
+#[derive(Clone, Copy)]
+pub(crate) struct Kind {
     id: TypeId,
     name: &'static str,
-    run: fn(&Module, &ProgramProxy) -> Rc<dyn Any>,
+    run: fn(&Module, &mut ModuleAnalyses) -> Rc<dyn Any>,
     agree: fn(&dyn Any, &dyn Any) -> bool,
 }
 
-fn computed<M: ModuleAnalysis>(module: &Module, program: &ProgramProxy) -> Rc<dyn Any> {
-    Rc::new(M::run(module, program))
+impl Kind {
+    fn of<M: ModuleAnalysis>() -> Self {
+        Self { id: TypeId::of::<M>(), name: M::NAME, run: computed::<M>, agree: agree::<M> }
+    }
+}
+
+fn computed<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses) -> Rc<dyn Any> {
+    Rc::new(M::run(module, analyses))
 }
 
 fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
     one.downcast_ref::<M::Result>() == other.downcast_ref::<M::Result>()
+}
+
+/// One module's cached analyses, what they may read of its program, and
+/// each function's manager: LLVM's `ModuleAnalysisManager` with its
+/// `FunctionAnalysisManagerModuleProxy`. The pass manager and a module pass
+/// rerunning function passes share one.
+pub struct ModuleAnalyses {
+    program: Rc<ProgramProxy>,
+    /// What every outer proxy holds, beside the callees' effects, the
+    /// globals' sizes and declarations.
+    required: Vec<Kind>,
+    results: HashMap<TypeId, (Kind, Rc<dyn Any>)>,
+    /// Results dropped, reused when computed again the same, so that an
+    /// outer proxy holding them stays the same.
+    dropped: HashMap<TypeId, Rc<dyn Any>>,
+    outer: Option<Rc<Outer>>,
+    functions: HashMap<GlobalId, Analyses>,
+}
+
+impl ModuleAnalyses {
+    pub fn new(program: Rc<ProgramProxy>) -> Self {
+        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new() }
+    }
+
+    /// `module`'s, a program of its own for `target`: for analyses asked
+    /// outside a pass manager.
+    pub fn of(module: &Module, target: Rc<dyn Machine>) -> Self {
+        Self::new(ProgramProxy::of(module, target))
+    }
+
+    pub fn program(&self) -> &Rc<ProgramProxy> {
+        &self.program
+    }
+
+    /// Keeps `M` in every outer proxy, as LLVM's `RequireAnalysisPass`.
+    pub fn require<M: ModuleAnalysis>(&mut self) {
+        if !self.required.iter().any(|one| one.id == TypeId::of::<M>()) {
+            self.required.push(Kind::of::<M>());
+        }
+    }
+
+    /// `M`'s result for `module`, computed once until invalidated.
+    pub fn get<M: ModuleAnalysis>(&mut self, module: &Module) -> Rc<M::Result> {
+        self.computed(Kind::of::<M>(), module).downcast::<M::Result>().expect("keyed by its type")
+    }
+
+    /// `M`'s result, if computed.
+    pub fn cached<M: ModuleAnalysis>(&self) -> Option<Rc<M::Result>> {
+        self.results.get(&TypeId::of::<M>()).map(|(_, one)| Rc::clone(one).downcast::<M::Result>().expect("keyed by its type"))
+    }
+
+    fn computed(&mut self, kind: Kind, module: &Module) -> Rc<dyn Any> {
+        if let Some((_, one)) = self.results.get(&kind.id) {
+            return Rc::clone(one);
+        }
+        let fresh = (kind.run)(module, self);
+        let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
+        self.results.insert(kind.id, (kind, Rc::clone(&result)));
+        result
+    }
+
+    /// Drops what `preserved` does not keep.
+    pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
+        let gone: Vec<TypeId> = self.results.keys().filter(|one| !preserved.keeps(**one)).copied().collect();
+        for one in gone {
+            let (_, result) = self.results.remove(&one).expect("held");
+            self.dropped.insert(one, result);
+        }
+    }
+
+    /// `A` of function `id`, from its manager. `A` reads nothing through
+    /// `Outer`: the module analysis asking may be one the outer proxy holds.
+    pub fn function<A: Analysis>(&mut self, module: &Module, id: GlobalId) -> Rc<A::Result> {
+        let function = module.global(id).function().expect("a function");
+        if !self.functions.contains_key(&id) {
+            let outer = match &self.outer {
+                Some(outer) => Rc::clone(outer),
+                None => Rc::new(Outer { metadata: Vec::new(), globals: Rc::default(), program: Rc::clone(&self.program), modules: HashMap::new() }),
+            };
+            self.functions.insert(id, Analyses::new(outer));
+        }
+        let layout = self.program.layout.clone();
+        self.functions.get_mut(&id).expect("inserted above").get::<A>(&module.context, &layout, function)
+    }
+
+    /// `A` of function `id`, if its manager holds it.
+    pub fn cached_function<A: Analysis>(&self, id: GlobalId) -> Option<Rc<A::Result>> {
+        self.functions.get(&id)?.cached::<A>()
+    }
+
+    /// Function `id`'s manager under `outer`, emptied where `outer` is not
+    /// the one its results read.
+    pub fn manager(&mut self, id: GlobalId, outer: &Rc<Outer>) -> &mut Analyses {
+        let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
+        if !Rc::ptr_eq(&cache.outer, outer) {
+            *cache = Analyses::new(Rc::clone(outer));
+        }
+        cache
+    }
+
+    /// Drops function `id`'s analyses, as a module pass does to a body it
+    /// changed.
+    pub fn changed(&mut self, id: GlobalId) {
+        self.functions.remove(&id);
+    }
+
+    /// What a function analysis reads of `module`: the same proxy as last
+    /// time where nothing it holds changed.
+    pub fn outer(&mut self, module: &Module) -> Rc<Outer> {
+        let every = [Kind::of::<CalleeEffects>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
+        let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()]).downcast::<Vec<GlobalValue>>().expect("keyed by its type");
+        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
+            self.outer = Some(Rc::new(now));
+        }
+        Rc::clone(self.outer.as_ref().expect("set above"))
+    }
+
+    /// The held results among `kept` a fresh computation disagrees with.
+    fn stale(&self, module: &Module, kept: &HashSet<TypeId>) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = self
+            .results
+            .iter()
+            .filter(|(id, (kind, result))| kept.contains(id) && !(kind.agree)(&**result, &*(kind.run)(module, &mut ModuleAnalyses::new(Rc::clone(&self.program)))))
+            .map(|(_, (kind, _))| kind.name)
+            .collect();
+        out.sort_unstable();
+        out
+    }
 }
 
 pub trait FunctionPass {
@@ -329,10 +511,11 @@ pub trait FunctionPass {
 }
 
 /// A pass over the whole module, as LLVM's inliner works across functions:
-/// it answers which functions it changed.
+/// it answers which functions it changed. It asks `analyses` for module
+/// analyses and its program, and drops those it invalidates as it goes.
 pub trait ModulePass {
     fn name(&self) -> &'static str;
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId>;
+    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId>;
 }
 
 pub enum Pass {
@@ -353,6 +536,8 @@ impl Pass {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stage {
     pub pass: &'static str,
+    /// The function's module, by its index in the program.
+    pub module: usize,
     pub function: GlobalId,
     pub changes: Vec<Change>,
 }
@@ -368,10 +553,7 @@ pub struct PassManager {
     /// pass's one per function, as LLVM's `-opt-bisect-limit`: each run is
     /// named on stderr, and those past the limit are skipped.
     pub bisect: Option<usize>,
-    /// What analyses may ask of the target; none, where it keeps nothing
-    /// they ask about.
-    pub target: Option<Rc<dyn Machine>>,
-    pub(crate) required: Vec<Required>,
+    pub(crate) required: Vec<Kind>,
 }
 
 impl PassManager {
@@ -387,17 +569,38 @@ impl PassManager {
     /// a pass that drops it has it computed again before the next.
     pub fn require<M: ModuleAnalysis>(&mut self) {
         if !self.required.iter().any(|one| one.id == TypeId::of::<M>()) {
-            self.required.push(Required { id: TypeId::of::<M>(), name: M::NAME, run: computed::<M>, agree: agree::<M> });
+            self.required.push(Kind::of::<M>());
         }
     }
 
-    /// Runs every pass over every defined function, in order.
-    pub fn run(&mut self, module: &mut Module) -> Result<Vec<Stage>, String> {
-        let layout = match &module.datalayout {
-            Some(text) => DataLayout::parse(text)?,
-            None => DataLayout::default(),
-        };
-        let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
+    /// Runs every pass over every defined function of each module, in
+    /// order.
+    pub fn run(&mut self, program: &mut Program) -> Result<Vec<Stage>, String> {
+        self.managed(program, &mut ProgramAnalyses::default())
+    }
+
+    /// `run` over `module` as a program of its own, for `target`.
+    pub fn run_module(&mut self, module: &mut Module, target: Rc<dyn Machine>) -> Result<Vec<Stage>, String> {
+        Program::lend(module, target, |program| self.run(program))?
+    }
+
+    /// Each module's run reads the program results computed before it; a
+    /// change to what the module exports drops them.
+    fn managed(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<Vec<Stage>, String> {
+        let mut stages = Vec::new();
+        for at in 0..program.modules.len() {
+            let before = interface(&program.modules[at]);
+            let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program)) };
+            stages.extend(self.over(at, &mut program.modules[at], &mut modules)?);
+            if interface(&program.modules[at]) != before {
+                analyses.invalidate();
+            }
+        }
+        Ok(stages)
+    }
+
+    fn over(&mut self, index: usize, module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec<Stage>, String> {
+        let layout = analyses.program().layout.clone();
         let mut stages = Vec::new();
         let mut runs = 0;
         let bisect = self.bisect;
@@ -408,52 +611,32 @@ impl PassManager {
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
-        // Module analyses computed, and those dropped, kept to be reused
-        // when computed again the same.
-        let mut modules: HashMap<TypeId, Rc<dyn Any>> = HashMap::new();
-        let mut dropped: HashMap<TypeId, Rc<dyn Any>> = HashMap::new();
-        let program = ProgramProxy::of(module, self.target.clone().unwrap_or_else(|| Rc::new(Neutral)));
-        let mut last: Option<Rc<Outer>> = None;
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
-            for one in &self.required {
-                if modules.contains_key(&one.id) {
-                    continue;
-                }
-                let fresh = (one.run)(module, &program);
-                let result = dropped.remove(&one.id).filter(|old| (one.agree)(&**old, &*fresh)).unwrap_or(fresh);
-                modules.insert(one.id, result);
-            }
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
-            let now = Outer { modules: modules.clone(), ..Outer::within(module, Rc::clone(&program)) };
-            if !last.as_ref().is_some_and(|old| old.same(&now)) {
-                last = Some(Rc::new(now));
-            }
-            let outer = Rc::clone(last.as_ref().expect("set above"));
-            let callees = crate::memory::callees(module);
-            let sizes = crate::valuetracking::sizes(module, &layout);
+            let outer = analyses.outer(module);
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Module(pass) => {
                     if !bisected(name, "the module") {
                         continue;
                     }
-                    let changed = pass.run(module);
+                    let changed = pass.run(module, analyses);
                     if !changed.is_empty() {
-                        dropped.extend(modules.drain());
+                        analyses.invalidate(&PreservedAnalyses::none());
                     }
                     for id in changed {
-                        caches.remove(&id);
+                        analyses.changed(id);
                         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
-                        stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
+                        stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                     }
                     after(&self.dump, self.verify_each, number, name, module)?;
                     continue;
                 }
             };
             // The module analyses every run of the pass preserved.
-            let mut kept: HashSet<TypeId> = modules.keys().copied().collect();
+            let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
@@ -463,43 +646,43 @@ impl PassManager {
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
-                let analyses = caches.entry(id).or_insert_with(|| Analyses::new(Rc::clone(&outer)));
-                if !Rc::ptr_eq(&analyses.outer, &outer) {
-                    *analyses = Analyses::new(Rc::clone(&outer));
-                }
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared }, analyses);
+                let cache = analyses.manager(id, &outer);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache);
                 kept.retain(|one| preserved.keeps(*one));
-                analyses.invalidate(&preserved);
+                cache.invalidate(&preserved);
                 if self.verify_invalidation {
-                    let stale = analyses.stale(context, &layout, function);
+                    let stale = cache.stale(context, &layout, function);
                     if !stale.is_empty() {
                         return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                     }
                 }
-                stages.push(Stage { pass: name, function: id, changes: function.take_changes() });
+                stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                 declared.place(module)?;
             }
             if self.verify_invalidation {
-                let mut stale: Vec<&str> = self
-                    .required
-                    .iter()
-                    .filter(|one| kept.contains(&one.id) && !(one.agree)(&*modules[&one.id], &*(one.run)(module, &program)))
-                    .map(|one| one.name)
-                    .collect();
-                stale.sort_unstable();
+                let stale = analyses.stale(module, &kept);
                 if !stale.is_empty() {
                     return Err(format!("{name} claims to preserve {} but changed them", stale.join(", ")));
                 }
             }
-            let gone: Vec<TypeId> = modules.keys().filter(|one| !kept.contains(*one)).copied().collect();
-            for one in gone {
-                dropped.insert(one, modules.remove(&one).expect("computed"));
-            }
+            let mut preserved = PreservedAnalyses::none();
+            preserved.kept = kept;
+            analyses.invalidate(&preserved);
             after(&self.dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
     }
+}
 
+/// The pass manager beneath a program: its passes over each module.
+impl ProgramPass for PassManager {
+    fn name(&self) -> &'static str {
+        "module-passes"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        self.managed(program, analyses).map(|_| ())
+    }
 }
 
 /// The dump and the verifier after pass `number`.

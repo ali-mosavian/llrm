@@ -108,13 +108,11 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let mut module = parsed(text);
     let replacement = replacement.map(|name| module.function_mut(name).expect("the replacement").1.clone());
     let layout = DataLayout::default();
-    let callees = llrm_mir::memory::callees(&module);
-    let sizes = llrm_mir::valuetracking::sizes(&module, &layout);
     let metadata = module.metadata.clone();
     let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
     let mut declared = llrm_mir::passes::Declared::default();
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
     let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();
@@ -189,9 +187,8 @@ fn test_unswitch_prices_at_the_target_costs() {
         let mut module = parsed(&text);
         let divide = module.function_mut("divide").unwrap().1.clone();
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.target = target;
         manager.add(super::Unswitch { passes: vec![Box::new(Replace(divide))] });
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, target.unwrap_or_else(|| std::rc::Rc::new(llrm_mir::target::Neutral))).unwrap();
         printed(&module) != printed(&parsed(&text))
     };
     assert!(kept(None));
@@ -221,9 +218,8 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     let seen = std::rc::Rc::default();
     let mut module = parsed(INVARIANT);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 }));
     manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
     assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");
