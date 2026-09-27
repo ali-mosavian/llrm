@@ -2,9 +2,8 @@
 //! `tests/test_loopclone.py`, each body now MIR text. `is None` is `Ok(None)`
 //! and the function unchanged.
 //!
-//! `test_opaque_dispatch_is_not_cloned_as_an_ordinary_branch` is skipped:
-//! a multi-way terminator other than `br` and `switch` is an `invoke`,
-//! which no loop here holds.
+//! `test_peeling_clones_pointer_identity_and_seed_facts` is
+//! `test_clones_keep_their_originals_metadata`: those facts are metadata.
 
 use std::collections::BTreeSet;
 
@@ -145,4 +144,67 @@ fn test_a_loop_with_two_latches_is_refused() {
         "  %right = add i16 %carried, 1\n  br label %b5",
         "  %right = add i16 %carried, 1\n  %odd = icmp ult i16 %right, 8\n  br i1 %odd, label %b1, label %b5",
     ));
+}
+
+/// The old opaque dispatch: a multi-way terminator other than `br` and
+/// `switch`, here an `invoke`.
+#[test]
+fn test_opaque_dispatch_is_not_cloned_as_an_ordinary_branch() {
+    refused(&format!(
+        "declare void @g()\n\ndeclare i32 @personality(...)\n\n{}",
+        DIAMOND
+            .replace("define i16 @f(i16 %seed, i16 %n, i16 %limit) {", "define i16 @f(i16 %seed, i16 %n, i16 %limit) personality ptr @personality {")
+            .replace("  br i1 %even, label %b3, label %b4", "  invoke void @g() to label %b3 unwind label %b4")
+            .replace("b4:\n", "b4:\n  %pad = landingpad { ptr, i32 } cleanup\n")
+    ));
+}
+
+#[test]
+fn test_clones_keep_their_originals_metadata() {
+    let text = format!("{}\n!0 = !{{!\"fact\"}}\n", DIAMOND.replace("%left = add i16 %carried, 3", "%left = add i16 %carried, 3, !fact !0"));
+    let mut module = peel(&text, 2);
+    assert_eq!(printed(&module).matches(", !fact !0").count(), 3);
+    let function = f(&mut module);
+    assert_eq!(function.walk().filter(|&(_, inst)| !function.instruction(inst).metadata.is_empty()).count(), 3);
+}
+
+/// A `switch` in the body is cloned with every case retargeted.
+#[test]
+fn test_peeling_clones_a_switch_and_keeps_its_results() {
+    let text = "define i16 @f(i16 %seed, i16 %n, i16 %limit) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ %seed, %b0 ], [ %next, %b4 ]
+  %sum = phi i16 [ 0, %b0 ], [ %total, %b4 ]
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %b6, label %b5
+
+b6:
+  %low = and i16 %i, 3
+  switch i16 %low, label %b3 [ i16 0, label %b2
+                               i16 1, label %b5 ]
+
+b2:
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %add = phi i16 [ %limit, %b2 ], [ %low, %b3 ]
+  %total = add i16 %sum, %add
+  %next = add i16 %i, 1
+  br label %b1
+
+b5:
+  %out = phi i16 [ %sum, %b1 ], [ %sum, %b6 ]
+  ret i16 %out
+}
+";
+    let module = peel(text, 2);
+    assert_eq!(printed(&module).matches("switch i16").count(), 3);
+    let inputs: &[&[i128]] = &[&[0, 20, 10], &[2, 20, 7], &[3, 4, 1], &[17, 20, 5], &[400, 20, 3]];
+    assert_eq!(results(&module, inputs), results(&parsed(text), inputs));
 }
