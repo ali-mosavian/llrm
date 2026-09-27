@@ -318,6 +318,17 @@ pub fn _contract(
     pushed: i64,
     family: model::RuntimeProfile,
 ) -> Result<Contract, AbiError> {
+    _contract_keeping(name, cleanup, pushed, family, &BTreeSet::new())
+}
+
+/// `_contract`, a call no runtime contract describes keeping `preserved`.
+fn _contract_keeping(
+    name: &str,
+    cleanup: model::StackCleanup,
+    pushed: i64,
+    family: model::RuntimeProfile,
+    preserved: &BTreeSet<runtime::Reg>,
+) -> Result<Contract, AbiError> {
     let resume_label = name.starts_with("$QB$RESA:");
     let restore_label = name.starts_with("$QB$RSTB:");
     let physical_name = if resume_label {
@@ -853,8 +864,10 @@ pub fn _contract(
         inputs: Some(BTreeSet::new()),
         i386: true,
         evidence: "QB source ABI: stack-only far call; cleanup and argument widths \
-                   come from verified HIR, while memory and clobbers remain conservative"
+                   come from verified HIR, clobbers from the calling convention, while \
+                   memory remains conservative"
             .to_owned(),
+        clobbers: runtime::EVERY.difference(preserved).copied().collect(),
         ..runtime::worst(name)
     })
 }
@@ -894,13 +907,27 @@ pub struct HirAbi {
     pub runtime: model::RuntimeProfile,
     /// Each function's object name, where it is not its HIR name.
     pub objects: std::collections::BTreeMap<String, String>,
+    /// The registers a call no runtime contract describes keeps.
+    pub preserved: BTreeSet<runtime::Reg>,
+}
+
+impl HirAbi {
+    /// `program`'s calls: its runtime's, and its own by their symbols.
+    pub fn of(program: &model::Program) -> Result<Self, String> {
+        let functions = program.modules.iter().flat_map(|module| &module.functions);
+        Ok(Self {
+            runtime: program.runtime,
+            objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
+            preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 impl crate::backend::assemble::Abi for HirAbi {
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
-        _contract(name, cleanup, pushed, self.runtime).map_err(|error| error.0)
+        _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
     }
 
     fn linked(&self, name: &str) -> String {
@@ -1578,4 +1605,20 @@ pub fn physicalize(
         },
         inline,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::assemble::Abi;
+
+    /// A C call clobbered SI and DI when the driver asked the QB defaults
+    /// instead of the program's calling convention.
+    #[test]
+    fn test_a_call_no_runtime_contract_describes_keeps_the_convention_s_registers() {
+        let program = model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) };
+        let contract = HirAbi::of(&program).unwrap().contract("_strlen", false, 2).unwrap();
+        assert!(contract.clobbers.contains(&runtime::Reg::Ax));
+        assert!(!contract.clobbers.contains(&runtime::Reg::Si) && !contract.clobbers.contains(&runtime::Reg::Di));
+    }
 }

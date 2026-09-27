@@ -112,7 +112,7 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     assert!(early.find("landing:") < early.find("next:"));
     let mut module = parsed(&early);
     prepared(&mut module).expect("prepared");
-    let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default() };
+    let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() };
     let assembled = super::super::assemble::assembled(&module, &abi, "CODE", super::super::cpu::ProfileOrName::Name("486"), &super::super::target::BUILT_IN).expect("assembled");
     let main = assembled.procedures.iter().find(|one| one.name.contains("main")).expect("main");
     let last = main.body.blocks.last().expect("blocks");

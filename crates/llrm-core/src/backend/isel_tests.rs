@@ -8,7 +8,7 @@ use crate::backend::masm;
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default() }
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() }
 }
 
 fn parsed(text: &str) -> llrm_mir::Module {

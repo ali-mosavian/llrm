@@ -324,6 +324,12 @@ impl _Plain for model::Program {
         if !self.entries.is_empty() {
             out.insert("entries".to_owned(), self.entries._plain());
         }
+        if !self.preserved.is_empty() {
+            out.insert("preserved".to_owned(), self.preserved._plain());
+        }
+        if self.constant_segment.is_some() {
+            out.insert("constant_segment".to_owned(), self.constant_segment._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1200,6 +1206,8 @@ static PROGRAM: _Record = _Record {
         ("zeroed_locals", _Hint::Bool, false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
         ("entries", _Hint::Tuple(&_Hint::Str), false),
+        ("preserved", _Hint::Tuple(&_Hint::Str), false),
+        ("constant_segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1214,6 +1222,8 @@ static PROGRAM: _Record = _Record {
             zeroed_locals: _default(args, "zeroed_locals", true)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
             entries: _default(args, "entries", Vec::new())?,
+            preserved: _default(args, "preserved", Vec::new())?,
+            constant_segment: _default(args, "constant_segment", None)?,
         })
     },
 };
