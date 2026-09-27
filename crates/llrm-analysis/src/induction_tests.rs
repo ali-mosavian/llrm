@@ -18,6 +18,7 @@ use num_bigint::BigInt;
 
 use super::*;
 use crate::cfg;
+use crate::consts;
 use crate::consts::Known;
 use crate::memory::Unit;
 use crate::testing::{DOS, corpus, function, layout, parsed, value};
