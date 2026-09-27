@@ -663,44 +663,40 @@ b1:
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 4",
             "push si",
             "push di",
             "L0_0:",
-            "mov ecx, dword ptr [bp+6]",
+            "mov eax, dword ptr [bp+6]",
             "mov ebx, dword ptr [bp+10]",
-            "mov eax, ecx",
             "imul ebx",
             "mov ecx, eax",
             "shrd ecx, edx, 16",
             "mov eax, ecx",
             "cdq",
-            "mov di, dx",
-            "mov eax, ebx",
-            "shld edi, ecx, 16",
+            "mov ax, dx",
+            "shld eax, ecx, 16",
             "shl ecx, 16",
-            "mov esi, edi",
+            "mov esi, eax",
             "sar esi, 31",
             "xor ecx, esi",
-            "xor edi, esi",
+            "xor eax, esi",
             "sub ecx, esi",
-            "sbb edi, esi",
-            "sar eax, 31",
-            "xor ebx, eax",
-            "sub ebx, eax",
-            "mov dword ptr [bp-4], eax",
-            "mov eax, edi",
+            "sbb eax, esi",
+            "mov edi, ebx",
+            "sar edi, 31",
+            "xor ebx, edi",
+            "sub ebx, edi",
             "xor edx, edx",
             "div ebx",
             "mov eax, ecx",
             "div ebx",
-            "xor esi, dword ptr [bp-4]",
+            "xor esi, edi",
             "xor eax, esi",
             "sub eax, esi",
             "shld edx, eax, 16",
             "pop di",
             "pop si",
-            "leave",
+            "pop bp",
             "retf",
         ]
     );
@@ -1041,12 +1037,11 @@ b1:
             "cdq",
             "shld edx, ebx, 16",
             "shl ebx, 16",
-            "mov eax, edx",
-            "sar eax, 31",
-            "shr eax, 22",
-            "add eax, ebx",
-            "and eax, 4294966272",
-            "sub ebx, eax",
+            "sar edx, 31",
+            "shr edx, 22",
+            "add edx, ebx",
+            "and edx, 4294966272",
+            "sub ebx, edx",
             "shld edx, ebx, 16",
             "mov ax, bx",
             "pop bp",
@@ -1779,6 +1774,121 @@ n:
     assert!(load.is_some() && load < store, "{got:?}");
 }
 
+/// A cell whose offset `exact_offsets` proves is `Mem::exact`, so
+/// `exactaddress` folds its `add si,si` into the address: unmarked, the
+/// isel route kept every such chain the old route folded.
+#[test]
+fn test_an_exact_elements_offset_is_folded_into_a_scaled_address() {
+    let sum = |inbounds: &str| {
+        format!(
+            "@a = global [8 x i16] zeroinitializer
+
+define i16 @f() addrspace(1) {{
+entry:
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %e = getelementptr {inbounds} [8 x i16], ptr @a, i16 0, i16 %i
+  %v = load i16, ptr %e
+  %t = add i16 %s, %v
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 8
+  br i1 %more, label %body, label %done
+done:
+  ret i16 %t
+}}
+"
+        )
+    };
+    let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[esi+esi]");
+    // Without `inbounds` nothing places the start: the offset may wrap.
+    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+}
+
+/// A word product only cells read is the 67h form's scaled index on the
+/// 386, as the old route's addressforms makes it: `[ebx+esi*2]`, the index
+/// and the base widened where they are loaded.
+#[test]
+fn test_a_non_negative_typed_index_is_scaled_in_the_67h_form() {
+    let text = |guard: &str| {
+        format!(
+            "define i16 @f(ptr %p, ptr %q) addrspace(1) {{
+entry:
+  %i = load i16, ptr %q
+  %b = load ptr, ptr %p
+  %c = icmp {guard} i16 %i, 0
+  br i1 %c, label %ok, label %no
+ok:
+  %e = getelementptr inbounds i16, ptr %b, i16 %i
+  %v = load i16, ptr %e, !tbaa !1
+  ret i16 %v
+no:
+  ret i16 0
+}}
+
+!0 = !{{!\"int\"}}
+!1 = !{{!0, !0, i64 0}}
+"
+        )
+    };
+    let got = listing_on("386", &text("sge"), "f");
+    assert_eq!(got[6..8], ["movzx eax, word ptr [si]", "movzx ebx, word ptr [bx]"], "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
+    // A negative index names another byte 32 bits wide; the 486 prices
+    // the form above a spill.
+    for (cpu, guard) in [("386", "ne"), ("486", "sge")] {
+        let got = listing_on(cpu, &text(guard), "f");
+        assert!(!got.iter().any(|line| line.contains("movzx") || line.contains("*2")), "{cpu} {guard}: {got:?}");
+    }
+}
+
+/// A counted loop's trips reach the machine phases: without them the
+/// isel route's bodies had none, and `executed` guessed nine in ten.
+#[test]
+fn test_a_counted_loops_trips_are_the_bodys() {
+    let text = "define i16 @f() addrspace(1) {
+entry:
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %t = add i16 %s, %i
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 5
+  br i1 %more, label %body, label %done
+done:
+  ret i16 %t
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let header = body.blocks[1].at;
+    assert_eq!(body.loop_trip_counts, [(header, 5)]);
+}
+
+/// A wide half nothing reads is not made: matmul8's `x * 256 / 1024`
+/// kept `sar edx,10`, the quotient's high dword its truncation dropped,
+/// through every machine phase.
+#[test]
+fn test_an_i64_halfs_unread_computation_is_not_made() {
+    let text = "define i32 @f(i32 %x) addrspace(1) {
+  %w = sext i32 %x to i64
+  %s = shl i64 %w, 8
+  %q = sdiv i64 %s, 1024
+  %t = trunc i64 %q to i32
+  ret i32 %t
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let names: Vec<&str> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()?.name.as_deref()).collect();
+    // The quotient's low dword: the bias's add and its carry, and shrd.
+    let low = names.iter().position(|name| *name == "shrd").expect("the low dword's shift");
+    assert_eq!(names[low - 2..low], ["add", "adc"], "{names:?}");
+    // One `sar`, the dividend's sign; none for the quotient's high dword.
+    assert_eq!(names.iter().filter(|name| **name == "sar").count(), 1, "{names:?}");
+}
+
 /// isel asks whether a call between a load and its only reader writes
 /// memory, as the callee's attributes state; only llrm-mir's function-attrs
 /// stated them of a defined body, so a load across a call to one that
@@ -1806,4 +1916,33 @@ define double @f() addrspace(1) {
     let stamped = stamped.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n");
     assert!(listing(&stamped, "f").iter().any(|line| line == "fild word ptr g"), "{stamped}");
     assert!(!listing(text, "f").iter().any(|line| line == "fild word ptr g"));
+}
+
+/// A far pointer a loop steps is a phi of its offset and one of its
+/// selector, as the old route split it into two words: strength made the
+/// runtime's `buffers.copy` step one, and isel refused every program.
+#[test]
+fn test_a_far_pointer_a_loop_steps_is_two_phis() {
+    let text = "define void @copy(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) {
+b1:
+  %3 = icmp eq i16 %2, 0
+  br i1 %3, label %done, label %loop
+loop:
+  %far = phi ptr addrspace(1) [ %far.next, %loop ], [ %1, %b1 ]
+  %near = phi ptr [ %near.next, %loop ], [ %0, %b1 ]
+  %i = phi i16 [ %j, %loop ], [ %2, %b1 ]
+  %v = load i8, ptr addrspace(1) %far
+  store i8 %v, ptr %near
+  %j = sub i16 %i, 1
+  %more = icmp ne i16 %j, 0
+  %near.next = getelementptr i8, ptr %near, i16 1
+  %far.next = getelementptr i8, ptr addrspace(1) %far, i16 1
+  br i1 %more, label %loop, label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "copy");
+    let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
+    assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
 }

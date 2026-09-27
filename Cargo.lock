@@ -234,8 +234,10 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-analysis",
  "llrm-bcmachine",
  "llrm-cycles",
+ "llrm-graph",
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",

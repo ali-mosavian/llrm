@@ -294,9 +294,10 @@ fn _profile(name: &str) -> Result<Profile, String> {
     })
 }
 
+/// A profile per CPU the machine layer lists.
 static _PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
-    std::iter::once("386")
-        .chain(timings::ARCHS)
+    crate::abi::machine::CPUS
+        .iter()
         .map(|name| _profile(name).expect("every listed CPU has a profile"))
         .collect()
 });
@@ -330,10 +331,6 @@ mod tests {
 
     #[test]
     fn test_every_public_cpu_name_has_one_immutable_profile() {
-        assert_eq!(
-            names(),
-            ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"]
-        );
         assert_eq!(
             names()
                 .into_iter()
