@@ -971,9 +971,9 @@ fn test_redim_stack_contract_uses_typed_rank_cleanup_not_register_arguments() {
     assert!(!machine("redim", &physical.lowered.body, &physical.calls, &physical.contracts, None).insns().is_empty());
 }
 
-/// r_bsp reached B$ERAS, whose VBDOS object contract measured cleanup but stayed conservative.
+/// r_bsp reached B$ERAS. VBDOS's erase.asm is QB 4.5's, so it shares the established OWN contract.
 #[test]
-fn test_vbdos_erase_uses_typed_stack_call_without_weakening_unknown_effects() {
+fn test_vbdos_erase_uses_typed_stack_call_with_the_established_contract() {
     let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
     let integer = int_type(1, "integer", 2);
     let (instruction, call) = stack_call(vec![Operand::constant(1, 0)], "B$ERAS", vec![0]);
@@ -985,7 +985,7 @@ fn test_vbdos_erase_uses_typed_stack_call_without_weakening_unknown_effects() {
     assert_eq!(contract.cleanup, Some(2));
     assert_eq!(contract.inputs, Some(BTreeSet::new()));
     assert!(contract.established);
-    assert_eq!(contract.writes.name(), "ANY");
+    assert_eq!(contract.writes.name(), "OWN");
 }
 
 /// d_poly's SIN must stay an inline float value, not become B$SIN or cross CALL.

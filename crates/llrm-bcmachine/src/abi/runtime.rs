@@ -1507,6 +1507,11 @@ pub fn named_only(name: &str, family: &str) -> bool {
     WRITERS.keys().any(|&(cell, of)| cell == name && of == family)
 }
 
+/// Each of `family`'s named-only cells, and the routines that write it.
+pub fn writers(family: &str) -> impl Iterator<Item = (&'static str, impl Iterator<Item = &'static str>)> + '_ {
+    WRITERS.iter().filter(move |((_, of), _)| *of == family).map(|((cell, _), routines)| (*cell, routines.iter().copied()))
+}
+
 /// The named-only cells runtime routine `routine` writes: those whose
 /// `WRITERS` list it. None when it may run the program's own code, which
 /// writes anything.

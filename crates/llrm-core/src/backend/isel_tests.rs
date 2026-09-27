@@ -426,11 +426,6 @@ define i32 @f(i16 %a) addrspace(1) {
             "push ax",
             "call c",
             "add sp, 4",
-            "movzx ebx, ax",
-            "movzx eax, dx",
-            "shl eax, 16",
-            "or eax, ebx",
-            "shld edx, eax, 16",
             "pop bp",
             "retf",
         ]
@@ -2243,4 +2238,67 @@ fn test_parameters_passed_in_the_frame_are_refused() {
         let text = format!("declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n");
         assert!(selected(&text, "f").is_err(), "a call's {attribute}");
     }
+}
+
+/// A call writes what its MIR says it may: a double loaded from a cell the
+/// callee is handed is not read again after the call, which may change it.
+/// isel's calls listed nothing, and floatassign read the cell again.
+#[test]
+fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
+    let text = "@out = internal global double 0.0
+declare void @g(ptr) addrspace(1)
+define void @f(double %a) addrspace(1) {
+  %x = alloca double
+  store double %a, ptr %x
+  %v = load double, ptr %x
+  call addrspace(1) void @g(ptr %x)
+  %w = fadd double %v, %v
+  store double %w, ptr @out
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
+    assert!(!got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+    // A cell no call can reach is still read again rather than saved.
+    let private = text.replace("declare void @g(ptr)", "declare void @g()").replace("@g(ptr %x)", "@g()");
+    let got = listing(&private, "f");
+    let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+}
+
+/// A store of poison stores nothing, as LLVM's DAGCombiner drops it: the
+/// memory may then hold anything. isel refused it as "an address of no
+/// global".
+#[test]
+fn test_a_store_of_poison_stores_nothing() {
+    let text = "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
+    assert!(!listing(text, "f").iter().any(|line| line.starts_with("mov")));
+}
+
+/// A dword that arrived as two words leaves as those words: a call's dx:ax
+/// result returned as is was joined into one register and split back.
+#[test]
+fn test_a_dword_returned_as_it_arrived_is_not_joined() {
+    let text = "declare i32 @g() addrspace(1)
+define i32 @f() addrspace(1) {
+  %r = call addrspace(1) i32 @g()
+  ret i32 %r
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
+}
+
+/// A word truncated from a dword that arrived as two words is its low word:
+/// struct_view's main joined its call's dx:ax result to return ax.
+#[test]
+fn test_a_word_truncated_from_a_joined_dword_is_its_low_word() {
+    let text = "declare i32 @g() addrspace(1)
+define i16 @f() addrspace(1) {
+  %r = call addrspace(1) i32 @g()
+  %t = trunc i32 %r to i16
+  ret i16 %t
+}
+";
+    assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
 }

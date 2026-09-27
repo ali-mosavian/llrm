@@ -13,6 +13,7 @@ llrm-bcmachine = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
+llrm-transforms = { workspace = true }
 llrm-graph = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
@@ -31,5 +32,4 @@ testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
 llrm-omf = { workspace = true, features = ["testing"] }
-llrm-transforms = { workspace = true }
 regex = { workspace = true }

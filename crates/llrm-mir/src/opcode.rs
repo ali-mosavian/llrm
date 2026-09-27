@@ -262,6 +262,18 @@ pub enum Attribute {
     Str(String, Option<String>),
 }
 
+impl Attribute {
+    /// This attribute of `from`'s types in `types`: none where it names a
+    /// type `types` cannot hold.
+    pub fn imported(&self, types: &mut crate::types::Types, from: &crate::types::Types) -> Option<Attribute> {
+        Some(match self {
+            Attribute::Type(name, ty) => Attribute::Type(name.clone(), types.imported(from, *ty)?),
+            Attribute::Range { ty, lower, upper } => Attribute::Range { ty: types.imported(from, *ty)?, lower: *lower, upper: *upper },
+            other => other.clone(),
+        })
+    }
+}
+
 pub const FLAG_ATTRIBUTES: [&str; 37] = [
     "alwaysinline",
     "builtin",

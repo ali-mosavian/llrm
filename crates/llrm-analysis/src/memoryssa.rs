@@ -173,14 +173,39 @@ pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cel
 /// displacements in one frame (`regions`), or at constant offsets from one
 /// pointer (`pointerfacts`).
 pub fn covers(unit: &Unit, outer: &MemRef, inner: &MemRef) -> bool {
-    if let (Some((frame, low, high)), Some((inner_frame, inner_low, inner_high))) = (displaced_span(outer), displaced_span(inner))
+    covered(unit, &[outer], inner)
+}
+
+/// Whether `outers` together certainly hold every byte of `inner`, as
+/// LLVM's DSE merges the intervals later stores overwrite.
+pub fn covered(unit: &Unit, outers: &[&MemRef], inner: &MemRef) -> bool {
+    let Some(size) = placed(unit, inner, inner).map(|(low, high)| high - low) else {
+        return false;
+    };
+    let mut spans: Vec<(i128, i128)> = outers.iter().filter_map(|outer| placed(unit, outer, inner)).collect();
+    spans.sort_unstable();
+    let mut reached = 0;
+    for (low, high) in spans {
+        if low > reached {
+            break;
+        }
+        reached = reached.max(high);
+    }
+    reached >= size
+}
+
+/// `outer`'s bytes, counted from `inner`'s first, where both are placed:
+/// at fixed displacements in one frame (`regions`), or at constant offsets
+/// from one pointer (`pointerfacts`).
+pub fn placed(unit: &Unit, outer: &MemRef, inner: &MemRef) -> Option<(i128, i128)> {
+    if let (Some((frame, low, high)), Some((inner_frame, inner_low, _))) = (displaced_span(outer), displaced_span(inner))
         && frame == inner_frame
     {
-        return low <= inner_low && inner_high <= high;
+        return Some((low - inner_low, high - inner_low));
     }
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
-    let (Some(one), Some(other)) = (located(outer), located(inner)) else { return false };
-    offsets.comparable(one, other).is_some_and(|(low, inner_low)| low <= inner_low && inner_low + other.bytes as i64 <= low + one.bytes as i64)
+    let (one, other) = (located(outer)?, located(inner)?);
+    offsets.comparable(one, other).map(|(low, inner_low)| (i128::from(low - inner_low), i128::from(low - inner_low) + i128::from(one.bytes)))
 }
 
 /// Whether `one` and `other` certainly name the same bytes.

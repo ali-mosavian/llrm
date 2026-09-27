@@ -54,6 +54,8 @@ pub const MODULE: &str = "<module>";
 /// Each body raised, or why not; a refused one is left a declaration.
 pub struct Raised {
     pub module: Module,
+    /// The runtime it links against, declarations alone.
+    pub runtime: Module,
     pub outcomes: Vec<(String, Result<(), String>)>,
     pub placement: Placement,
 }
@@ -76,16 +78,16 @@ impl Raised {
 
 /// The module raised whole, or the first function refused.
 pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Module, Refusal> {
-    raise_placed(found, machine).map(|(module, _)| module)
+    raise_placed(found, machine).map(|raised| raised.module)
 }
 
-/// `raise`, and where the object put its globals.
-pub fn raise_placed(found: &found_module::Module, machine: &Machine) -> Result<(Module, Placement), Refusal> {
+/// `raise`, its runtime, and where the object put its globals.
+pub fn raise_placed(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
     let raised = raise_each(found, machine)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
-        None => Ok((raised.module, raised.placement)),
+        None => Ok(raised),
     }
 }
 
@@ -200,8 +202,8 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
         }
         outcomes.push((name, outcome));
     }
-    cells::promise(&mut module, &facts, &objects);
+    let runtime = cells::promise(&module, &facts, &objects).map_err(module_refusal)?;
     tags::tag(&mut module);
     let placement = objects.placement();
-    Ok(Raised { module, outcomes, placement })
+    Ok(Raised { module, runtime, outcomes, placement })
 }

@@ -6,20 +6,22 @@
 //! outside code reaches but by name, and alias's callee summaries, which
 //! ask it.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, InstId, Module, ValueId};
+use llrm_mir::module::{Function, InstId, Linkage, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
+use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
 use llrm_support::hash::IndexMap;
 
 use crate::cfg::Shape;
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
-use crate::globalsaa::{self, Globals};
+use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::floatfacts;
-use crate::memory::{MemRef, Unit};
+use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Slice, Unit};
 use crate::ranges::{self, Interval};
 
 impl<'a> Unit<'a> {
@@ -44,7 +46,8 @@ impl ModuleAnalysis for GlobalsAA {
 }
 
 /// Each defined function's memory effects, by name: `alias::summaries` of
-/// the whole module, its globals as `GlobalsAA` finds them.
+/// the whole module, its globals as `GlobalsAA` finds them and the bodies
+/// other modules define as the cached `ProgramSummaries` says.
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
@@ -53,16 +56,123 @@ impl ModuleAnalysis for Summaries {
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
         let globals = analyses.get::<GlobalsAA>(module);
         let globals = Result::as_ref(&*globals).map_err(String::clone)?;
-        let program = std::rc::Rc::clone(analyses.program());
-        let bodies: Vec<_> = module.functions().filter(|(_, _, function)| !function.is_declaration()).filter_map(|(id, global, function)| Some((id, global.name.clone()?, function))).collect();
-        let shapes: Vec<_> = bodies.iter().map(|&(id, _, _)| analyses.function::<Shape>(module, id)).collect();
-        let procedures = bodies
-            .into_iter()
-            .zip(&shapes)
-            .map(|((_, name, function), shape)| (name, Procedure::of(Unit { program: Some(&program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(shape))))
-            .collect();
-        alias::summaries(&procedures, None)
+        let program = Rc::clone(analyses.program());
+        let known = match program.cached::<ProgramSummaries>() {
+            Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),
+            None => None,
+        };
+        let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
+        alias::summaries(&procedures(module, &program, globals, &shapes), known.as_ref())
     }
+}
+
+/// `module`'s defined functions, each with its id.
+fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
+}
+
+/// `module`'s named bodies as alias summarizes them.
+fn procedures<'a>(module: &'a Module, program: &'a ProgramProxy, globals: &'a Globals, shapes: &'a IndexMap<GlobalId, Rc<Shape>>) -> IndexMap<String, Procedure<'a>> {
+    bodies(module)
+        .filter_map(|(id, function)| {
+            let name = module.global(id).name.clone()?;
+            Some((name, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(&shapes[&id]))))
+        })
+        .collect()
+}
+
+/// For each module, the summary of each of its declarations another
+/// module defines, as the module names its globals: one fixed point over
+/// the program, each module's `Summaries` in turn given the others'.
+pub struct ProgramSummaries;
+
+impl ProgramAnalysis for ProgramSummaries {
+    type Result = Result<Vec<IndexMap<String, Summary>>, String>;
+    const NAME: &'static str = "program-summaries";
+    fn run(program: &Program, analyses: &mut ProgramAnalyses) -> Self::Result {
+        let count = program.modules.len();
+        let mut known = vec![IndexMap::default(); count];
+        if count < 2 {
+            return Ok(known);
+        }
+        let elsewhere = analyses.get::<ProgramGlobals>(program);
+        let elsewhere = Result::as_ref(&*elsewhere).map_err(String::clone)?;
+        let proxies: Vec<_> = (0..count).map(|at| analyses.proxy(program, at)).collect();
+        let shapes: Vec<IndexMap<GlobalId, Rc<Shape>>> = program.modules.iter().map(|module| bodies(module).map(|(id, function)| (id, Rc::new(Shape::of(function)))).collect()).collect();
+        let globals = (0..count)
+            .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| Rc::clone(&shapes[at][&id])))
+            .collect::<Result<Vec<_>, String>>()?;
+        // A body defined elsewhere starts as a call no summary describes,
+        // the most any call does: each round only narrows.
+        let mut own = vec![IndexMap::default(); count];
+        loop {
+            let mut changed = false;
+            for at in 0..count {
+                let procedures = procedures(&program.modules[at], &proxies[at], &globals[at], &shapes[at]);
+                let found = alias::summaries(&procedures, Some(&known[at]))?;
+                let mine: IndexMap<String, Summary> = found.into_iter().filter(|(name, _)| procedures.contains_key(name)).collect();
+                if mine != own[at] {
+                    own[at] = mine;
+                    changed = true;
+                    known = imported(program, &own);
+                }
+            }
+            if !changed {
+                return Ok(known);
+            }
+        }
+    }
+}
+
+/// Each module's declarations another module defines, with that body's
+/// summary in `own` as the module names its globals.
+fn imported(program: &Program, own: &[IndexMap<String, Summary>]) -> Vec<IndexMap<String, Summary>> {
+    program
+        .modules
+        .iter()
+        .enumerate()
+        .map(|(at, module)| {
+            module
+                .functions()
+                .filter(|(_, _, function)| function.is_declaration())
+                .filter_map(|(id, global, _)| {
+                    let (there, defined) = program.definition(at, id).filter(|&(there, _)| there != at)?;
+                    let from = &program.modules[there];
+                    let summary = own[there].get(from.global(defined).name.as_deref()?)?;
+                    Some((global.name.clone()?, moved(summary, from, module)))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// `summary` of a body of `from` as `to` names its globals. A global `to`
+/// cannot name it cannot reach but through a pointer: one captured is
+/// reached as unknown memory, and one not is not reached.
+fn moved(summary: &Summary, from: &Module, to: &Module) -> Summary {
+    let mut out = summary.clone();
+    out.reads = carried(&summary.reads, from, to, &mut out.unknown_read);
+    out.writes = carried(&summary.writes, from, to, &mut out.unknown_write);
+    out
+}
+
+fn carried(slices: &BTreeSet<Slice>, from: &Module, to: &Module, unknown: &mut bool) -> BTreeSet<Slice> {
+    let mut out = BTreeSet::new();
+    for one in slices {
+        let (MemoryKind::Global, Some(Identity::Global(id))) = (one.object.kind, &one.object.identity) else {
+            out.insert(one.clone());
+            continue;
+        };
+        let global = from.global(GlobalId(*id));
+        let there = global.name.as_deref().filter(|_| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).and_then(|name| to.named(name));
+        match there {
+            Some(there) => {
+                out.insert(Slice { object: MemoryObject { identity: Some(Identity::Global(there.0)), ..one.object.clone() }, ..one.clone() });
+            }
+            None => *unknown |= one.object.captured,
+        }
+    }
+    out
 }
 
 /// Every pointer's objects, with no caller context: `alias::pointers`.

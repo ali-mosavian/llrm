@@ -209,5 +209,11 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
             object_.addressed = false;
         }
     }
+    // Where the program handles errors, any routine may run its handler.
+    let handles = program.modules.iter().flat_map(|module| &module.functions).any(|function| function.error_handler.is_some());
+    if !handles {
+        program.promises = model::RuntimePromises::of(llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(), llrm_core::abi::runtime::writers(family), []);
+    }
+    program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS.iter().filter(|(_, contract)| !contract.raises_error).map(|(name, _)| name.clone()).collect();
     Ok(program)
 }

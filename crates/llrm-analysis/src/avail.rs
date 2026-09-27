@@ -31,7 +31,7 @@ use llrm_support::hash::{HashMap, IndexMap};
 use crate::cellmap::CellMap;
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
-use crate::memoryssa::{self, Accesses, covers, may_clobber, same_bytes};
+use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges::{self, Interval};
 use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
 
@@ -179,10 +179,11 @@ struct Stored {
     number: IndexMap<MemRef, usize>,
     index: CellMap<usize, (), OverlapBucket>,
     private: Bits,
-    /// Per cell, lazily: the cells whose store writes all its bytes, and
-    /// the cells naming its bytes.
+    /// Per cell, lazily: the cells whose store writes all its bytes, the
+    /// cells naming its bytes, and those placed to write some of them.
     covering: RefCell<Vec<Option<Bits>>>,
     alike: RefCell<Vec<Option<Bits>>>,
+    pieces: RefCell<Vec<Option<Bits>>>,
 }
 
 impl Stored {
@@ -202,7 +203,7 @@ impl Stored {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
         }
         let size = cells.len();
-        Self { cells, number, index, private: marked, covering: RefCell::new(vec![None; size]), alike: RefCell::new(vec![None; size]) }
+        Self { cells, number, index, private: marked, covering: RefCell::new(vec![None; size]), alike: RefCell::new(vec![None; size]), pieces: RefCell::new(vec![None; size]) }
     }
 
     fn none(&self) -> Bits {
@@ -226,6 +227,16 @@ impl Stored {
 
     fn alike(&self, unit: &Unit, at: usize) -> Bits {
         self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
+    }
+
+    /// Whether the cells in `overwritten` together write every byte of
+    /// cell `at`, no one of them all.
+    fn pieced(&self, unit: &Unit, at: usize, overwritten: &Bits) -> bool {
+        let pieces = self.related(&self.pieces, at, |one, other| {
+            placed(unit, other, one).zip(placed(unit, one, one)).is_some_and(|((low, high), (_, size))| low < size && high > 0)
+        });
+        let written: Vec<&MemRef> = pieces.iter().filter(|piece| overwritten.contains(*piece)).map(|piece| &self.cells[piece]).collect();
+        written.len() > 1 && covered(unit, &written, &self.cells[at])
     }
 }
 
@@ -265,7 +276,7 @@ impl Solve<'_, '_> {
 
             if let Some(cell) = stored_cell(unit, self.accesses, inst) {
                 let at = stored.number[&cell];
-                if stored.covering(unit, at).intersects(&overwritten) {
+                if stored.covering(unit, at).intersects(&overwritten) || stored.pieced(unit, at, &overwritten) {
                     found.push(inst);
                 }
                 overwritten.insert(at);

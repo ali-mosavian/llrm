@@ -88,12 +88,58 @@ impl FunctionPass for Gvn {
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
 pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
+    let equal = propagated(unit);
     let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer).0, trips)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
     let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, outer.callees(), accesses, pointers, !combined)?;
-    Ok(numbered || combined || loaded)
+    Ok(equal || numbered || combined || loaded)
+}
+
+/// LLVM GVN's `propagateEquality`, for a branch's condition: in what the
+/// edge to a successor dominates, the condition is that edge's constant.
+/// Whether any use changed.
+fn propagated(unit: &mut Unit) -> bool {
+    let shape = cfg::Shape::of(unit.function);
+    let mut found = Vec::new();
+    for &block in unit.function.layout() {
+        let Some(last) = unit.function.terminator(block) else { continue };
+        let branch = unit.function.instruction(last);
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else { continue };
+        if branch.opcode != Opcode::Br || taken == other {
+            continue;
+        }
+        for (target, holds) in [(taken, 1), (other, 0)] {
+            // The edge dominates what its target does only when it is the one
+            // way in, and not back into the branch's own block.
+            if target == block || unit.function.predecessors(target) != [block] {
+                continue;
+            }
+            for one in unit.function.users(condition) {
+                let user = unit.function.instruction(one.user);
+                let at = match user.opcode {
+                    Opcode::Phi => match user.operands[one.index as usize + 1] {
+                        Operand::Block(from) => from,
+                        _ => continue,
+                    },
+                    _ => match unit.function.parent(one.user) {
+                        Some(at) => at,
+                        None => continue,
+                    },
+                };
+                if shape.dominance.dominates(cfg::id(target), cfg::id(at)) {
+                    found.push((*one, condition, holds));
+                }
+            }
+        }
+    }
+    for &(one, condition, holds) in &found {
+        let ty = unit.function.value(condition).ty;
+        let constant = unit.context.int(ty, holds);
+        unit.function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
+    }
+    !found.is_empty()
 }
 
 /// Local numbering, crossing stores only where the whole function prices
