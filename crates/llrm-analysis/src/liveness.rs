@@ -260,4 +260,192 @@ b1:
         let found = live(function);
         assert!(found.live_out[&id(block(function, "b0"))].contains(&value(function, "incoming")), "a live phi keeps it");
     }
+
+    /// `@f` and its liveness.
+    fn facts(text: &str) -> (llrm_mir::module::Module, Liveness) {
+        let module = parsed(text);
+        let found = live(function(&module, "f"));
+        (module, found)
+    }
+
+    fn live_in(module: &llrm_mir::module::Module, found: &Liveness, at: &str, name: &str) -> bool {
+        let f = function(module, "f");
+        found.live_in[&id(block(f, at))].contains(&value(f, name))
+    }
+
+    fn live_out(module: &llrm_mir::module::Module, found: &Liveness, at: &str, name: &str) -> bool {
+        let f = function(module, "f");
+        found.live_out[&id(block(f, at))].contains(&value(f, name))
+    }
+
+    const LOOP: &str = "declare void @use(i16)
+
+define i16 @f(i16 %n, i16 %x) {
+pre:
+  %before = add i16 %x, 1
+  %across = add i16 %x, 2
+  call void @use(i16 %before)
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %pre ], [ %next, %body ]
+  %done = icmp eq i16 %i, %n
+  br i1 %done, label %out, label %body
+
+body:
+  %next = add i16 %i, 1
+  br label %head
+
+out:
+  %late = add i16 %across, %i
+  ret i16 %late
+}
+";
+
+    #[test]
+    fn a_value_used_only_before_the_loop_is_not_live_inside_it() {
+        let (module, found) = facts(LOOP);
+        for at in ["head", "body"] {
+            assert!(!live_in(&module, &found, at, "before"), "{at}");
+        }
+    }
+
+    #[test]
+    fn a_value_used_after_the_loop_is_live_throughout_it() {
+        let (module, found) = facts(LOOP);
+        for at in ["head", "body"] {
+            assert!(live_in(&module, &found, at, "across") && live_out(&module, &found, at, "across"), "{at}");
+        }
+    }
+
+    #[test]
+    fn a_value_defined_after_the_loop_is_not_live_inside_it() {
+        let (module, found) = facts(LOOP);
+        for at in ["pre", "head", "body"] {
+            assert!(!live_out(&module, &found, at, "late"), "{at}");
+        }
+    }
+
+    #[test]
+    fn a_loop_carried_value_is_live_out_of_the_latch_but_not_into_the_header() {
+        let (module, found) = facts(LOOP);
+        assert!(live_out(&module, &found, "body", "next"));
+        assert!(!live_in(&module, &found, "head", "next"), "the phi reads it on the edge");
+        assert!(!live_in(&module, &found, "head", "i"), "the phi defines it at the top");
+        assert!(live_in(&module, &found, "body", "i"));
+    }
+
+    #[test]
+    fn a_parameter_read_in_the_loop_is_live_across_the_loop_but_not_into_the_entry() {
+        let (module, found) = facts(LOOP);
+        assert!(live_out(&module, &found, "pre", "n"));
+        assert!(live_out(&module, &found, "body", "n"), "the next trip compares it again");
+        assert!(!live_in(&module, &found, "pre", "n"), "the caller supplies it");
+        assert!(!live_out(&module, &found, "out", "n"));
+    }
+
+    #[test]
+    fn a_value_read_on_one_arm_of_a_diamond_is_live_only_into_that_arm() {
+        let (module, found) = facts("define i16 @f(i1 %c, i16 %x) {
+top:
+  %y = add i16 %x, 1
+  br i1 %c, label %left, label %right
+
+left:
+  br label %join
+
+right:
+  %z = add i16 %y, 1
+  br label %join
+
+join:
+  %r = phi i16 [ 0, %left ], [ %z, %right ]
+  ret i16 %r
+}
+");
+        assert!(live_in(&module, &found, "right", "y"));
+        assert!(!live_in(&module, &found, "left", "y"));
+        assert!(!live_in(&module, &found, "join", "y"));
+        assert!(live_out(&module, &found, "right", "z"));
+        assert!(!live_out(&module, &found, "left", "z"), "only the right edge carries it");
+    }
+
+    #[test]
+    fn a_use_in_an_unreachable_block_keeps_nothing_live_in_the_reachable_ones() {
+        let (module, found) = facts("define i16 @f(i16 %x) {
+top:
+  %y = add i16 %x, 1
+  ret i16 %x
+
+dead:
+  ret i16 %y
+}
+");
+        assert!(!live_out(&module, &found, "top", "y"));
+    }
+
+    #[test]
+    fn a_phi_with_a_repeated_predecessor_keeps_its_input_live_on_that_edge() {
+        let (module, found) = facts("define i16 @f(i16 %s, i16 %x) {
+top:
+  %y = add i16 %x, 1
+  switch i16 %s, label %join [ i16 1, label %join ]
+
+join:
+  %r = phi i16 [ %y, %top ], [ %y, %top ]
+  ret i16 %r
+}
+");
+        assert!(live_out(&module, &found, "top", "y"));
+    }
+
+    #[test]
+    fn a_declaration_has_nothing_live_and_no_pressure() {
+        let module = parsed("declare i16 @f(i16)\n");
+        let f = function(&module, "f");
+        assert_eq!(live(f), Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() });
+        assert_eq!(pressure(f, None, None), 0);
+    }
+
+    #[test]
+    fn pressure_counts_the_most_values_live_at_once_and_can_look_only_inside_a_loop() {
+        let (module, found) = facts(LOOP);
+        let f = function(&module, "f");
+        let inside = BTreeSet::from([id(block(f, "head")), id(block(f, "body"))]);
+        // %n, %across, %i and %done at the header's branch.
+        assert_eq!(pressure(f, Some(&found), Some(&inside)), 4);
+        assert_eq!(pressure(f, Some(&found), None), 4);
+        assert_eq!(pressure(f, Some(&found), Some(&BTreeSet::from([id(block(f, "out"))]))), 2);
+    }
+
+    #[test]
+    fn phi_inputs_are_the_edge_operands_of_live_phis_only() {
+        let module = parsed("define i16 @f(i1 %c, i16 %a, i16 %b) {
+top:
+  br i1 %c, label %left, label %join
+
+left:
+  br label %join
+
+join:
+  %used = phi i16 [ %a, %top ], [ 0, %left ]
+  %unused = phi i16 [ %b, %top ], [ %b, %left ]
+  ret i16 %used
+}
+");
+        let f = function(&module, "f");
+        assert_eq!(phi_inputs(f, None), BTreeSet::from([value(f, "a")]));
+    }
+
+    #[test]
+    fn entry_values_are_the_parameters_the_body_reads() {
+        let module = parsed("define i16 @f(i16 %read, i16 %ignored) {
+top:
+  %y = add i16 %read, 1
+  ret i16 %y
+}
+");
+        let f = function(&module, "f");
+        assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
+    }
 }
