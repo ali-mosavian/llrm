@@ -13,7 +13,7 @@ use crate::testing::{ACROSS_READONLY_CALL, managed, parsed, printed, results};
 fn fold(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    folded(context, &layout, function, &outer)
+    folded(context, &layout, function, &outer, &llrm_analysis::consts::Calls::default())
 }
 
 /// `text` folded is `expected`, and computes what it did on `inputs`.
@@ -422,4 +422,13 @@ b3:
 }
 ";
     check(text, &text.replace("ret i32 %after", "ret i32 1140047872").replace("store float 0.0", "store float 0.000000e+00").replace("48.75", "4.875000e+01"), &[&[]]);
+}
+
+#[test]
+fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
+    use crate::floatfold::tests::{ACROSS_A_CALL, summarized};
+    let mut module = parsed(&format!("{DOS}{ACROSS_A_CALL}"));
+    let before = results(&module, &[&[]]);
+    assert!(summarized(&mut module, Fold).contains("ret float 3.000000e+00"));
+    assert_eq!(results(&module, &[&[]]), before);
 }

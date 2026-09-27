@@ -41,7 +41,7 @@ fn fold_keeps_every_corpus_module_verifying_and_settles() {
     let changed = settles("fold", |module, id| {
         let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
         let (context, function) = function_mut(module, id);
-        crate::fold::folded(context, &layout, function, &outer)
+        crate::fold::folded(context, &layout, function, &outer, &llrm_analysis::consts::Calls::default())
     });
     assert!(changed > 0, "the corpus has something to fold");
 }
