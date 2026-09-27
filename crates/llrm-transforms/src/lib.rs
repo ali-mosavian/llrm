@@ -7,6 +7,7 @@ pub mod canonical;
 mod corpus_tests;
 pub mod cfg;
 pub mod dead;
+pub mod decide;
 pub mod edges;
 pub mod fold;
 pub mod inline;

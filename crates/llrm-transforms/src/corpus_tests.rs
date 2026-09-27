@@ -43,3 +43,12 @@ fn fold_keeps_every_corpus_module_verifying_and_settles() {
     });
     assert!(changed > 0, "the corpus has something to fold");
 }
+
+#[test]
+fn decide_keeps_every_corpus_module_verifying_and_settles() {
+    let changed = settles("decide", |module, id| {
+        let layout = crate::transform::layout(module).expect("a datalayout");
+        crate::decide::decided(module, &layout, id).expect("decides")
+    });
+    assert!(changed > 0, "the corpus has branches to decide");
+}
