@@ -150,6 +150,21 @@ impl Function {
         self.layout.is_empty()
     }
 
+    /// Its declaration: type, attributes and unnamed parameters, no body.
+    pub fn declaration(&self) -> Function {
+        let mut out = Function::new(self.ty, self.void);
+        out.parameter_attrs = self.parameter_attrs.clone();
+        out.return_attrs = self.return_attrs.clone();
+        out.attrs = self.attrs.clone();
+        out.calling_convention = self.calling_convention;
+        for &parameter in &self.parameters {
+            out.parameters.push(ValueId(out.values.len() as u32));
+            out.values.push(ValueData { name: None, ..self.value(parameter).clone() });
+            out.value_uses.push(Vec::new());
+        }
+        out
+    }
+
     pub fn parameters(&self) -> &[ValueId] {
         &self.parameters
     }
