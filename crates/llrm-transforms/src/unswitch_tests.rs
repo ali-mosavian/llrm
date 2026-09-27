@@ -5,7 +5,7 @@ use llrm_graph::loops;
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
-use llrm_mir::passes::Unit;
+use llrm_mir::passes::{Outer, Unit};
 
 use super::{optimized, specialized};
 use crate::profit::OperationCosts;
@@ -111,9 +111,10 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let callees = llrm_mir::memory::callees(&module);
     let sizes = llrm_mir::valuetracking::sizes(&module, &layout);
     let metadata = module.metadata.clone();
+    let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
     let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes };
-    let kept = optimized(&mut unit, &costs, &mut |trial: &mut Unit| {
+    let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();
         }
