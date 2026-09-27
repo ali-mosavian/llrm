@@ -207,7 +207,7 @@ fn test_restore_idiom_is_recognised_not_split_into_opaques() {
         leaders: BTreeSet::from([0]),
         ..CodeMap::default()
     };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new() };
+    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
 
     let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
     let kinds: Vec<&str> = nodes
@@ -315,7 +315,7 @@ fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
     let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
     let found = hand_built(&code);
     let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new() };
+    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
     let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
 
     let port = &nodes[1];
@@ -337,7 +337,7 @@ fn test_a_port_is_silent_only_where_the_machine_says() {
     let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
     let found = hand_built(&code);
     let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
-    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new() };
+    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())], entries: Vec::new(), entry_ranges: Vec::new() };
     let stores = |machine| decode_body(&found, &mapped, &[block.clone()], &body, machine)[1].effects().stores.clone();
 
     assert!(stores(&BUILT_IN).is_empty());

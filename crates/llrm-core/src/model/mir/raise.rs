@@ -1236,6 +1236,18 @@ pub fn bodies(
         Ok(result) => result,
         Err(_) => return Ok(RaisedBodies { values: Vec::new(), source, hints: IndexMap::default() }),
     };
+    // A body here has one entry: each statement RESUME re-enters is one of its own.
+    let result: Vec<decode::BodyIR> = result
+        .into_iter()
+        .flat_map(|one| {
+            let nodes = one.nodes;
+            one.body.apart().into_iter().map(move |body| {
+                let at = |node: &&Arc<Node>| span(node).0 as usize;
+                let kept = nodes.iter().filter(|node| body.ranges.iter().any(|&(lo, hi)| lo <= at(node) && at(node) < hi)).cloned().collect();
+                decode::BodyIR { nodes: kept, body }
+            })
+        })
+        .collect();
     let decoded_nodes: IndexMap<i64, Arc<Node>> =
         result.iter().flat_map(|body| body.nodes.iter()).map(|node| (span(node).0 as i64, node.clone())).collect();
     let header = split::has_header(found);

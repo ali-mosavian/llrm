@@ -30,6 +30,9 @@ pub enum BodyKind {
     EventStub,
     EventHandler,
     ErrorHandler,
+    /// A statement RESUME re-enters, as a body of its own for a consumer
+    /// whose bodies have one entry each (`Body::apart`).
+    ResumeEntry,
 }
 
 impl BodyKind {
@@ -41,6 +44,7 @@ impl BodyKind {
             BodyKind::EventStub => "EVENT_STUB",
             BodyKind::EventHandler => "EVENT_HANDLER",
             BodyKind::ErrorHandler => "ERROR_HANDLER",
+            BodyKind::ResumeEntry => "RESUME_ENTRY",
         }
     }
 
@@ -52,6 +56,7 @@ impl BodyKind {
             BodyKind::EventStub => "event-stub",
             BodyKind::EventHandler => "event-handler",
             BodyKind::ErrorHandler => "error-handler",
+            BodyKind::ResumeEntry => "resume-entry",
         }
     }
 }
@@ -71,12 +76,40 @@ pub struct Body {
     /// Where the runtime enters it besides its seed: each statement RESUME
     /// continues at that nothing in the body flows to.
     pub entries: Vec<usize>,
+    /// The code only each entry reaches, entry by entry: its part of `ranges`.
+    pub entry_ranges: Vec<Vec<(usize, usize)>>,
 }
 
 impl Body {
     pub fn length(&self) -> usize {
         self.ranges.iter().map(|(lo, hi)| hi - lo).sum()
     }
+
+    /// The body as bodies of one entry each: its seed's code, then each
+    /// entry's, as the partition made them before a body had entries.
+    pub fn apart(&self) -> Vec<Body> {
+        let theirs: Vec<(usize, usize)> = self.entry_ranges.iter().flatten().copied().collect();
+        let own = self.ranges.iter().flat_map(|&range| without(range, &theirs)).collect();
+        let owner = Body { ranges: own, entries: Vec::new(), entry_ranges: Vec::new(), ..self.clone() };
+        let entries = self.entries.iter().zip(&self.entry_ranges).map(|(&seed, ranges)| Body {
+            kind: BodyKind::ResumeEntry,
+            seed,
+            name: Some("resume entry".to_owned()),
+            ranges: ranges.clone(),
+            entries: Vec::new(),
+            entry_ranges: Vec::new(),
+        });
+        std::iter::once(owner).chain(entries).collect()
+    }
+}
+
+/// `range` less every one of `holes`.
+fn without((lo, hi): (usize, usize), holes: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut out = vec![(lo, hi)];
+    for &(start, end) in holes {
+        out = out.into_iter().flat_map(|(lo, hi)| [(lo, hi.min(start)), (lo.max(end), hi)]).filter(|(lo, hi)| lo < hi).collect();
+    }
+    out
 }
 
 /// `repr(tuple[tuple[int, int], ...])`.
@@ -267,7 +300,7 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
     // RESUME re-enters code at a statement the body's own flow may never
     // reach, as after an ERROR: each such statement is another entry of the
     // body whose code it lies in, the nearest main or procedure seed below.
-    let mut entries: IndexMap<usize, Vec<usize>> = IndexMap::default();
+    let mut entries: IndexMap<usize, Vec<(usize, BTreeSet<usize>)>> = IndexMap::default();
     if !handlers.is_empty() {
         let owned: BTreeSet<usize> = reached.values().flatten().copied().collect();
         let resumable: BTreeSet<usize> = module
@@ -283,8 +316,8 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             let mut others: BTreeSet<usize> = owned.union(&resumable).copied().collect();
             others.remove(&entry);
             let more = _reachable(entry, &others, &blocks_by_at, module, &mapped);
-            reached.get_mut(&owner).expect("a seed's reach").extend(more);
-            entries.entry(owner).or_default().push(entry);
+            reached.get_mut(&owner).expect("a seed's reach").extend(more.iter().copied());
+            entries.entry(owner).or_default().push((entry, more));
         }
     }
 
@@ -302,7 +335,8 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             seed: *seed,
             name: name.clone(),
             ranges: _ranges(&mapped, &blocks_by_at, &reached[seed]),
-            entries: entries.get(seed).cloned().unwrap_or_default(),
+            entries: entries.get(seed).map_or_else(Vec::new, |entries| entries.iter().map(|(entry, _)| *entry).collect()),
+            entry_ranges: entries.get(seed).map_or_else(Vec::new, |entries| entries.iter().map(|(_, reach)| _ranges(&mapped, &blocks_by_at, reach)).collect()),
         })
         .collect();
     let owned_by = |at: &usize| owners.get(at).copied().unwrap_or(0);
