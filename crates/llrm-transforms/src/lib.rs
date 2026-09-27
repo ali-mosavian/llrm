@@ -2,6 +2,7 @@
 //! does it there, with that pass's tests. A pass asks llrm-analysis for
 //! its facts and names nothing about the machine.
 
+pub mod affine;
 pub mod algebraic;
 pub mod canonical;
 #[cfg(test)]
@@ -12,12 +13,14 @@ pub mod dead;
 pub mod dse;
 pub mod decide;
 pub mod edges;
+pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod fold;
 pub mod gvn;
 pub mod inline;
 pub mod interprocedural;
+pub mod ivshare;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
