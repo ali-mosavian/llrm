@@ -20,7 +20,7 @@
 //! old body's `loop_trip_counts` and `integer_ranges` side tables; clearing
 //! a private start (Dead's).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use llrm_analysis::induction::{self, ControlReplacement};
 use llrm_analysis::manager::Registers;
@@ -30,7 +30,7 @@ use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use num_bigint::BigInt;
@@ -78,6 +78,8 @@ pub(crate) struct Shape {
     pub first: BlockId,
     pub latch: BlockId,
     pub exit: BlockId,
+    /// The loop's blocks but its header: where a moved phi is read.
+    pub body: BTreeSet<BlockId>,
 }
 
 fn _phis(function: &Function, block: BlockId) -> Vec<InstId> {
@@ -132,26 +134,9 @@ pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
     if !work.into_iter().all(|inst| _test_only(function, header, inst)) {
         return None;
     }
-    // A header phi's next value may be another's current one, but not in a
-    // cycle: each moved phi is placed after the one it reads.
-    let phis = _phis(function, header);
-    let values = phis.iter().map(|&phi| function.instruction(phi).result.expect("a phi's value")).collect::<Vec<ValueId>>();
-    let next = |index: usize| {
-        let read = arms(function, phis[index]).into_iter().find(|&(_, from)| from == cfg::block(latch))?.0;
-        values.iter().position(|value| read == Operand::Value(*value))
-    };
-    for start in 0..phis.len() {
-        let mut seen = BTreeSet::from([start]);
-        let mut at = start;
-        while let Some(read) = next(at) {
-            if !seen.insert(read) {
-                return None;
-            }
-            at = read;
-        }
-    }
     let block = cfg::block;
-    Some(Shape { preheader: block(preheader), header, first: block(*first), latch: block(latch), exit: block(*exit) })
+    let body = loop_.body.iter().copied().filter(|&at| at != loop_.header).map(block).collect();
+    Some(Shape { preheader: block(preheader), header, first: block(*first), latch: block(latch), exit: block(*exit), body })
 }
 
 /// `shape`'s loop entered at `first`, or, with `guard`, entered there only
@@ -183,47 +168,43 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
     for &phi in &phis {
         function.set_operands(phi, Vec::new());
     }
-    // Each header phi `p(preheader: a, latch: b)` is `a` leaving the
-    // preheader and `b` leaving the latch; its value in the body is the phi
-    // the updater places at `first`. A `b` that is another header phi is
-    // that phi's value in the body.
-    let mut updaters: BTreeMap<usize, SsaUpdater> = BTreeMap::new();
-    let mut moved: BTreeMap<usize, Operand> = BTreeMap::new();
-    fn place(
-        index: usize,
-        context: &mut Context,
-        function: &mut Function,
-        shape: &Shape,
-        (values, starts, nexts): (&[ValueId], &[Operand], &[Operand]),
-        updaters: &mut BTreeMap<usize, SsaUpdater>,
-        moved: &mut BTreeMap<usize, Operand>,
-    ) -> Operand {
-        if let Some(&operand) = moved.get(&index) {
-            return operand;
-        }
-        let next = match nexts[index] {
-            Operand::Value(read) if values.contains(&read) => {
-                let other = values.iter().position(|one| *one == read).expect("a header phi");
-                place(other, context, function, shape, (values, starts, nexts), updaters, moved)
-            }
-            other => other,
-        };
+    // Each header phi `p(preheader: a, latch: b)` moves to `first` as
+    // `p'(preheader: a, header: b')`, a `b` that is another header phi read
+    // as its moved `b'`. Phis read in parallel, so a swap needs no order.
+    let moved = values
+        .iter()
+        .map(|&value| {
+            let phi = function.create_instruction(Opcode::Phi, function.value(value).ty, Vec::new(), Flags::default(), function.value(value).name.clone().as_deref());
+            let top = function.block(shape.first).instructions().first().copied();
+            function.insert(phi, top.map_or(Position::End(shape.first), Position::Before)).expect("a placed block");
+            (phi, Operand::Value(function.instruction(phi).result.expect("a phi's value")))
+        })
+        .collect::<Vec<_>>();
+    let latest = |read: Operand| match read {
+        Operand::Value(value) => values.iter().position(|&one| one == value).map_or(read, |index| moved[index].1),
+        other => other,
+    };
+    for (index, &(phi, _)) in moved.iter().enumerate() {
+        function.set_operands(phi, vec![starts[index], Operand::Block(shape.preheader), latest(nexts[index]), Operand::Block(shape.header)]);
+    }
+    // The body reads the moved phi; the header and what follows the loop
+    // read `a` as it left the preheader and `b'` as it left the latch.
+    for (index, &phi) in phis.iter().enumerate() {
         let value = values[index];
         let mut updater = SsaUpdater::new(function.value(value).ty, function.value(value).name.clone().as_deref());
         updater.add_available_value(shape.preheader, starts[index]);
-        updater.add_available_value(shape.latch, next);
-        let operand = updater.value_in_middle_of_block(context, function, shape.first);
-        updaters.insert(index, updater);
-        moved.insert(index, operand);
-        operand
-    }
-    for index in 0..phis.len() {
-        place(index, context, function, shape, (&values, &starts, &nexts), &mut updaters, &mut moved);
-    }
-    for (index, &phi) in phis.iter().enumerate() {
-        let updater = updaters.get_mut(&index).expect("placed");
-        for one in function.users(values[index]).to_vec() {
-            updater.rewrite_use(context, function, one);
+        updater.add_available_value(shape.latch, latest(nexts[index]));
+        for one in function.users(value).to_vec() {
+            let user = function.instruction(one.user);
+            let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
+                Some(Operand::Block(from)) => from,
+                _ => function.parent(one.user).expect("a placed user"),
+            };
+            if shape.body.contains(&at) {
+                function.set_operand(one.user, one.index as usize, moved[index].1);
+            } else {
+                updater.rewrite_use(context, function, one);
+            }
         }
         function.erase(phi)?;
     }
