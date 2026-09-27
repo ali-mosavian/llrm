@@ -1,4 +1,4 @@
-# What each QuickBASIC 4.5 runtime routine does, one row per routine.
+# What each QuickBASIC-family runtime routine does, one table per routine.
 #
 # Data, not code: every field here is a claim about the runtime, and a
 # claim wants an audit trail more than it wants a Python literal.
@@ -6,11 +6,27 @@
 # register and control facts, and `tools/runtime_writes.py` reading a
 # linked image for what it writes.
 #
-# `established = false` means nothing here is known: the row concedes
-# every register and every byte of memory, which is the only safe answer
-# to a routine nobody has read.
-#
+# A table's contract fields are the routine's row. A row states what is
+# established; every field it leaves out is worst()'s, which concedes every
+# register and every byte of memory -- the only safe answer to a routine
+# nobody has read. `established = false` means nothing in the row is known.
 # `cleanup = -1` is "not known", which is not the same as zero.
+#
+# A subtable named for a family -- qb45, pds71, vbdos -- is that family's own
+# row, filled the same way. `from = "NAME"` or `from = "NAME.family"` fills a
+# row from that one instead; its own evidence comes first, then that row's.
+#
+# Facts about the routine itself, whatever its row:
+#   flags_result   its result is the flags, as `cmp result, 0` leaves them
+#   calls_program  hands control back to the program, so it writes what the
+#                  code it runs writes -- GCC's modref gives up on an indirect
+#                  call for the same reason
+#   never_returns  never comes back to its caller
+#   error_funnel   the registers the error funnel reads its error in
+#   by_value       its stack arguments are values, not caller pointers
+#   writes_cells   per family, the runtime cells a program names by EXTDEF
+#                  that it writes, where the runtime source settles it
+# A table named `PREFIX*` gives its facts to every routine with that prefix.
 
 ["B$HARY"]
 cleanup = -1
@@ -70,6 +86,7 @@ rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exception
 '''
 
 ["B$CENP"]
+calls_program = true
 cleanup = 0
 control = "never"
 enters_user_code = true
@@ -85,6 +102,7 @@ rt/rtterm.asm: `cProc B$CENP,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exception
 '''
 
 ["B$CPI4"]
+by_value = true
 cleanup = 8
 control = "returns"
 enters_user_code = false
@@ -116,6 +134,7 @@ rt/dynamic.asm: `B$DDIM - DIM a dynamic array`, `void pascal B$DDIM(I2 lo1, I2 h
 '''
 
 ["B$DSEG"]
+writes_cells = { qb45 = ["b$seg"] }
 cleanup = 2
 control = "returns"
 enters_user_code = false
@@ -132,6 +151,7 @@ rt/rtinit.asm: `cProc B$DSEG,<PUBLIC,FAR>` with parmW newseg, whole body `MOV AX
 '''
 
 ["B$DSG0"]
+writes_cells = { qb45 = ["b$seg"] }
 cleanup = 0
 control = "returns"
 enters_user_code = false
@@ -146,7 +166,14 @@ evidence = '''
 rt/rtinit.asm, CODE:299, five bytes whole: `mov [b$seg],ds` / `retf`, the store's fixup segment 4 + 197 -- BR_DATA:197, the same b$seg word B$DSEG writes. Bare DEF SEG, restoring the default segment. It touches no register and no flag, so clobbers is empty rather than B$DSEG's ax. writes is NONE on B$DSEG's argument, not a second measurement.
 '''
 
+["B$DSG0".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rtinit.asm 00de consists only of MOV DS:[relocated global],DS / RETF; it consumes no GP register or arithmetic flags and has no dependencies. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
 ["B$DVI4"]
+by_value = true
 cleanup = 8
 control = "returns"
 enters_user_code = false
@@ -175,6 +202,29 @@ evidence = '''
 inc/stack.inc: `The basic frame is set up on entry to the main program, by B$ENSA/B$ENRA SUB and FUNCTION entry routines`, and it names what lands there -- the previous BASIC frame at FR_BFRAME, si and di at FR_SI/FR_DI `Preserved for C compatability`, the local byte count at FR_CLOCALS and a zeroed GOSUB count at FR_GOSUB. inc/rtmint.inc and inc/ulib.inc list it as an entry family with B$ENSA/B$ENRD/B$ENSD/B$ENFA; the code is in none of them. agents.md measured the call site: the frame size arrives in cx, so nothing is on the stack to clean up. It moves both sp and bp, which is why it is in clobbers and why nothing may track stack depth across it.
 '''
 
+# B$ENRA takes the frame size in cx. Disassembled from the linked image:
+# PDS 7.1's is at 0x1d35 and QuickBASIC 4.5's at 0x211d, both reading cx
+# through `push cx` and `sub sp,cx` before writing it, with no unresolved
+# edge on any path from entry to the `jmp far` that returns. VBDOS's, at
+# 0x397, also reads bx -- `or bx,bx` gates `call 02f7:0002` -- and that
+# helper reaches `call far [di+24h]`, which no disassembly can follow.
+["B$ENRA".pds71]
+cleanup = 0
+enters_user_code = false
+inputs = ["cx"]
+evidence = '''
+disassembled from the linked image: `push cx` then `sub sp,cx` before any write, no unresolved edge from entry to the far jump that returns
+'''
+
+["B$ENRA".qb45]
+from = "B$ENRA.pds71"
+
+["B$ENRA".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB rtenexit.asm 0017..0062: saves the far return address, XOR AX,AX at 001f overwrites incoming arithmetic flags, builds the frame using CX, then OR BX,BX selects HFirstAllocBlock. Retain all GP inputs without claiming allocator preservation, cleanup, termination or error behavior. HFirstAllocBlock -> HandleAlloc reaches allocation/compaction dependencies whose effects remain unknown. BP/SP, segments and direction are runtime environment. Only a separately proven BX=0 site narrows this. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
 ["B$ERAS"]
 cleanup = 2
 control = "returns"
@@ -192,6 +242,7 @@ rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descrip
 '''
 
 ["B$EVCK"]
+calls_program = true
 cleanup = 0
 control = "unknown"
 enters_user_code = true
@@ -220,6 +271,42 @@ evidence = '''
 inc/stack.inc: si and di are `restored by B$EXSA`, and [b$curframe] is saved at FR_BFRAME `such that B$EXSA can restore it on exit`. inc/ulib.inc pairs it with B$EXFA as the exit family and rt/error.asm calls it to `clear frame state info`. The code is not in the tree. agents.md measured the call site: a far call with no arguments, immediately before the procedure's own `retf n`. Like B$ENRA it moves sp and bp.
 '''
 
+["B$EXSA".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+direct_inputs = ["ax", "dx"]
+evidence = '''
+VBDCL10E.LIB rtenexit.asm, seg 1:0x68: CMP [bp-12h],0 kills incoming arithmetic flags. Bound inputs by all six allocatable GP registers, not by incomplete helper summaries. The normal exit saves/restores DX:AX, restores the frame at 0x8e..0x97, then jumps through the return address popped at 0x6e/0x72; it removes no caller arguments. BP/SP and segments are the fixed runtime environment. Indirect/error/helper effects remain unknown: no clobber, memory or control guarantee is relaxed.
+'''
+
+# Bounded from the linked image at 0x1d6c. Its returning path -- `pop word
+# [422h]`/`[424h]`, `lea sp,[bp-6]`, four pops, `jmp far [422h]` -- reads no
+# register and removes no caller argument, so cleanup is 0. Its other path is
+# error dispatch, and there the survivors are what is declared here rather
+# than what is read: bx is fully written (`mov bl,13h` at 0x19da, `xor bh,bh`
+# at 0x1a63) and ax by the entry table, but cx survives the arm that skips
+# `mov cx,[41Ch]`, and dx, si and di are never written on any path before
+# `jmp cx` at 0x1a79 or the `retf` at 0x1b10. A superset, which costs a copy
+# where it is wrong and cannot be unsound; the control semantics past that
+# indirect jump stay unknown, which is what the conservative fields still say.
+["B$EXSA".pds71]
+cleanup = 0
+inputs = ["ax", "cx", "di", "dx", "si"]
+direct_inputs = ["ax", "dx"]
+evidence = '''
+disassembled from the linked image at 0x1d6c: the returning path reads no register and removes no argument; on the error path ax and bx are written before every terminal, and cx, dx, si and di are not. The normal return continuation exports dx:ax to the BASIC caller, so both halves are live at this boundary.
+'''
+
+# At 0x20f2: no register read on any reachable path, one exit, no unresolved edge.
+["B$EXSA".qb45]
+cleanup = 0
+enters_user_code = false
+inputs = ["ax", "dx"]
+direct_inputs = ["ax", "dx"]
+evidence = '''
+disassembled from the linked image at 0x20f2: no register read, one exit; the normal return continuation exports dx:ax to the BASIC caller
+'''
+
 ["B$FCMD"]
 cleanup = 0
 control = "returns"
@@ -234,6 +321,19 @@ inputs = []
 evidence = '''
 rt/oscmd.asm's B$FCMD is the `jmp B$FrameAFE` advanced-feature stub; the shipped libraries hold the routine, and its header says `Inputs: None` and `AX = ptr to string desc for temp with command line`. BCOM45.LIB and BCL71ENR.LIB oscmd 0023..0041: PUSH BP/SI/DI/ES, DS saved around B$CmdCopy (near, 0000..0022, PUSH SI/DI ... POP DI/SI / RET, XOR BX,BX first) copying `__acmdln` into b$Buf1, then B$STALCTMPCPY and XCHG AX,BX; POP ES/DI/SI/BP / RETF with no parameter. VBDCL10E.LIB 0023..004a is the same frame with B$StrAlcTmpCopy, skipped for an empty line (JCXZ, AX = b$nuldes). So si, di, bp, ds and es survive, cleanup is 0, no register is read, and the answer is AX. The allocation can compact string space and fail with Out of string space; it calls nothing else.
 '''
+
+# The x87 helpers, all six of them one module -- 87bhelp.asm -- and byte for
+# byte the same object in QuickBASIC 4.5's BCOM45.LIB, PDS 7.1's BCL71ENR.LIB
+# and VBDOS 1.0's VBDCL10E.LIB. They are the one group here established from
+# a disassembly rather than from source: runtime/inc/rtmint.inc declares them
+# and nothing in the 148-file runtime tree defines them, because the math
+# library is not in the source drop. tools/libdump.py is what read them out.
+# 
+# Every one of them keeps its own frame (push bp / mov bp,sp ... mov sp,bp /
+# pop bp / retf), takes no argument on the 8086 stack -- the operands are in
+# registers or already on the x87 stack -- and touches no memory but its own
+# scratch below sp. So cleanup is 0 and writes is NONE throughout, and what
+# differs between them is only which registers come back changed.
 
 ["B$FCMP"]
 cleanup = 0
@@ -280,6 +380,13 @@ evidence = '''
 87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
 
+["B$SIN4".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB 87btrig.asm SIN4/SIN8 share 005a: ST0 operand, local BP frame, hardware exits 0093..0096 and 00c3..00c6 restore SP/BP and RETF; emulator tail B$EMSIN (embtrig.asm 0065) exits 00c8..00cb identically. COS4/COS8 share 0007 with the same local frame: hardware exits 0040..0043 or 00c3..00c6; emulator tail B$EMCOS (embtrig.asm 0000) restores SP/BP and RETF at 0061..0064. All GP inputs are conservatively retained; no preservation, purity, x87 optimization or error-path guarantee is inferred. Error tails remain unknown.
+'''
+
 ["B$SIN8"]
 cleanup = 0
 control = "returns"
@@ -294,6 +401,9 @@ inputs = ["ax", "bx", "cx", "dx", "si", "di"]
 evidence = '''
 87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
+
+["B$SIN8".vbdos]
+from = "B$SIN4.vbdos"
 
 ["B$COS4"]
 cleanup = 0
@@ -310,6 +420,9 @@ evidence = '''
 87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
 
+["B$COS4".vbdos]
+from = "B$SIN4.vbdos"
+
 ["B$COS8"]
 cleanup = 0
 control = "returns"
@@ -324,6 +437,9 @@ inputs = ["ax", "bx", "cx", "dx", "si", "di"]
 evidence = '''
 87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
+
+["B$COS8".vbdos]
+from = "B$SIN4.vbdos"
 
 ["B$TAN4"]
 cleanup = 0
@@ -490,7 +606,20 @@ evidence = '''
 rt/strfcn.asm: B$LTRM is `MOV AH,TR_LEFT` then a two-byte skip into `cProc TRIM,FAR,<DI,ES>` with parmW psd, `Uses: Per convention`, so di and es come back and the cleanup is TRIM's 2 bytes. It scans the caller's string data and calls B$STALCTMPSUB for the result, reaching B$STCPCT. The right-trim path sets the direction flag but every exit passes the following CLD, matching ifout.asm's `PSW.D clear`.
 '''
 
+# VBDOS's strings are far: B$RefString and B$AlcTmpSH load ES with the
+# string's segment, and none of B$SPAC, B$FCHR, B$FASC, B$LEFT, B$LTRM, B$SCAT
+# or B$SASS restores it. Otherwise their VBDCL10E.LIB code has the table's
+# effects, and LMEM's B$FResizePpv, B$FReallocPpv and B$FreeDataPpv save SI,
+# DI and DS.
+["B$LTRM".vbdos]
+from = "B$LTRM"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB strfcn.asm 0232..0254: PUSH DI, B$RefStringArgLast, REPE SCASB through ES:DI, helper 011d; RETF 2.
+'''
+
 ["B$MUI4"]
+by_value = true
 cleanup = 8
 control = "returns"
 enters_user_code = false
@@ -506,6 +635,7 @@ rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`,
 '''
 
 ["B$OEGA"]
+calls_program = true
 cleanup = 4
 control = "unknown"
 enters_user_code = true
@@ -535,6 +665,21 @@ evidence = '''
 error.asm, at 0046 in BCL71ENR.LIB and VBDCL10E.LIB: ON LOCAL ERROR GOTO, one word, the handler's offset in the caller's code segment. It stores it in the caller's frame, [bx-0Eh] / [bx-10h] under `MOV BX,[BP]`, and RETF 2; with 0 while that frame's handler runs it jumps to the path OEGA_10 takes into B$SERR, as B$OEGA does. QB 4.5 has none.
 '''
 
+# The one routine that reads a table laid inline after its own call site.
+# Established from the shipped libraries rather than inferred -- gosub.asm
+# in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, read with tools/libdump.py.
+# The implementations differ; the QB form below shows the table protocol:
+# 
+#   lds  si,[bp+2]     si = the return address, which IS the table
+#   lodsb              al = the count, si now on the entries
+#   mov  dl,al / shl dx,1 / add dx,si    dx = past the table
+#   mov  cx,[bx+si]    cx = entry[index-1]
+#   cmp  al,bl / jbe   out of range falls through to dx
+#   push bx / push dx  and a far return goes to whichever was chosen
+# 
+# So an entry is a two-byte offset into this same segment, the count is one
+# byte in front of them. Selectors 0 or count+1..255 fall through; values
+# above 255 enter B$FrameFC instead. These are normal CFG successors only.
 ["B$OGTA"]
 cleanup = -1
 control = "inline-table"
@@ -551,6 +696,7 @@ Named by inc/ulib.inc and inc/rtmint.inc; the code is not in the tree. What is e
 '''
 
 ["B$PEI2"]
+by_value = true
 cleanup = 2
 control = "returns"
 enters_user_code = false
@@ -566,6 +712,7 @@ rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT
 '''
 
 ["B$PEI4"]
+by_value = true
 cleanup = 4
 control = "returns"
 enters_user_code = false
@@ -581,6 +728,7 @@ rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT
 '''
 
 ["B$PER4"]
+by_value = true
 cleanup = 4
 control = "returns"
 enters_user_code = false
@@ -626,6 +774,7 @@ rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT
 '''
 
 ["B$PSI4"]
+by_value = true
 cleanup = 4
 control = "returns"
 enters_user_code = false
@@ -641,6 +790,7 @@ rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT
 '''
 
 ["B$PSI2"]
+by_value = true
 cleanup = 2
 control = "returns"
 enters_user_code = false
@@ -716,6 +866,7 @@ rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination fo
 '''
 
 ["B$RESN"]
+calls_program = true
 cleanup = 0
 control = "never"
 enters_user_code = true
@@ -767,6 +918,7 @@ rt/error.asm: `cProc B$RESA,<FAR,PUBLIC,FORCEFRAME>`, `Entry: [AX] = Address to 
 '''
 
 ["B$RMI4"]
+by_value = true
 cleanup = 8
 control = "returns"
 enters_user_code = false
@@ -826,6 +978,13 @@ evidence = '''
 rt/stcore.asm: `cProc B$SASS,<FAR,PUBLIC>` with parmW psdSource, parmW psdDst, `Registers: per convention`. It writes the caller's destination descriptor outright -- `MOV [BX],CX` and `MOV [BX+2],AX` with BX=psdDst -- plus the backpointer at [BX-2] in string space, and the NOTEMP path calls B$STALCTMPSUB, which reaches B$STALC and so B$STCPCT (rt/nhstutil.asm), moving every other live string and rewriting its descriptor. B$STALC's failure path is `JMP B$ERR_OS`.
 '''
 
+["B$SASS".vbdos]
+from = "B$SASS"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB stcore.asm 0025..00b2: PUSH SI/DI/DS, B$RefString and B$ReallocHandle, which loads ES; POP DS/DI/SI / RETF 4.
+'''
+
 ["B$SCAT"]
 cleanup = 4
 control = "returns"
@@ -839,6 +998,13 @@ established = true
 inputs = []
 evidence = '''
 rt/stcore.asm: `cProc B$SCAT,<FAR,PUBLIC>,<ES,DI,SI>` with parmW psd1, parmW psd2, so es, di and si come back despite the routine setting ES=DS internally. It calls B$STALCTMP for the result, which reaches B$STCPCT and rewrites live descriptors (rt/nhstutil.asm), and MOVSTR ends `JMP B$STDALCTMP` on each source, freeing it if it was a temp. Length overflow is `JO ERRFC` -> `JMP B$ERR_FC`.
+'''
+
+["B$SCAT".vbdos]
+from = "B$SCAT"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB stcore.asm 0117..01b1: PUSH SI/DI/DS, B$RefString on both operands, B$AlcTmpSH or B$ReallocTemp; the shared exit at 0099 pops DS/DI/SI and RETF 4.
 '''
 
 ["B$STDL"]
@@ -887,6 +1053,13 @@ evidence = '''
 rt/strfcn.asm: `cProc B$SPAC,<FAR,PUBLIC>` with parmW cbDesired, `Registers: Per convention`. It calls `cProc STRING,NEAR,ES`, which borrows DI for `REP STOSW` and restores it, and allocates through B$STALCTMP -> B$STALC -> B$STCPCT; B$STALC saves everything but BX. A negative count is `JMP B$ERR_FC`, temp overflow B$ERR_ST, no room B$ERR_OS. BCOM45.LIB strfcn 0132..0165 and BCL71ENR.LIB 0000..0033 are that code, RETF 2.
 '''
 
+["B$SPAC".vbdos]
+from = "B$SPAC"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB strfcn.asm 0182..01a3: PUSH DI around B$AlcTmpSH, which returns the data in ES:DI, then REP STOSB; RETF 2.
+'''
+
 ["B$FCHR"]
 cleanup = 2
 control = "returns"
@@ -900,6 +1073,13 @@ established = true
 inputs = []
 evidence = '''
 rt/stcore.asm: `cProc B$FCHR,<FAR,PUBLIC>` with parmW val, `Registers: Per convention`. `OR AH,AH` / `JNZ ERRFC` -> B$ERR_FC; otherwise B$STALCTMP allocates one byte, `POP [BX]` stores it and AX is the descriptor. BCOM45.LIB stcore 00b5..00cf and BCL71ENR.LIB 0000..001a are that code, RETF 2.
+'''
+
+["B$FCHR".vbdos]
+from = "B$FCHR"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB stcore.asm 0264..0280: PUSH DI, B$AlcTmpSH before the range check, the byte stored through ES:DI; RETF 2.
 '''
 
 ["B$FASC"]
@@ -917,6 +1097,13 @@ evidence = '''
 rt/strfcn.asm: `cProc B$FASC,<FAR,PUBLIC>,SI` with parmW psd, `Uses: Per convention`. A null string is `JZ ERRFC` -> B$ERR_FC; otherwise it reads the first byte and B$STDALCTMP frees the argument if it is a temp, a write to string space. BCOM45.LIB strfcn 001f..003e and BCL71ENR.LIB 0060..007f: PUSH SI, POP SI/BP, RETF 2; cx and dx are the header's convention, since B$STDALC reaches B$LHFLDDESCADJ unread.
 '''
 
+["B$FASC".vbdos]
+from = "B$FASC"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB strfcn.asm 004e..0063: B$RefStringArgLast, a byte read through ES:BX, B$DelTempSH; RETF 2.
+'''
+
 ["B$LEFT"]
 cleanup = 4
 control = "returns"
@@ -931,3 +1118,527 @@ inputs = []
 evidence = '''
 rt/strfcn.asm: `cProc B$LEFT,<FAR,PUBLIC>` with parmW psd, parmW len, `Registers: Per convention`; it jumps into B$RGHT's `CALL LEFRIG` and RETF 4. LEFRIG: a negative length is `JL ARGERR` -> B$ERR_FC; zero frees the argument temp and returns b$nuldes; otherwise B$STALCTMPSUB (rt/nhstutil.asm), which saves ES, AX, CX, SI and DI, copies the substring and frees the source temp. BCOM45.LIB strfcn 00b8..00d9 with LEFRIG 0114..0132, and BCL71ENR.LIB 0000..0024 with 005c..007d, are that code.
 '''
+
+["B$LEFT".vbdos]
+from = "B$LEFT"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+evidence = '''
+VBDCL10E.LIB strfcn.asm 00dd..00f6: B$RefString, then helper 0113..0181, which saves DI, SI and DS around B$AlcTmpSH or reuse of the top temp; RETF 4.
+'''
+
+# Routines established only per family: each table is worst() with the
+# fields it states.
+
+["B$RETA".pds71]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+Shipped PDS/VBDOS gosub.asm RETA consumes the runtime frame and saved continuation, not caller arithmetic flags: DEC sets the tested SF; JCXZ tests a popped word. The event path enters EXSA, whose first CMP kills incoming flags (rtenexit.asm 004e/0068). The error path enters ERR_RG, which reaches XOR BH,BH before further dispatch (erproc.asm 00ad/00c1). All six GP inputs retained conservatively; BP/SP, segments and direction remain runtime environment. No preservation, cleanup or ordinary-return claim. Frontend control flow leaves at RETA.
+'''
+
+["B$RETA".vbdos]
+from = "B$RETA.pds71"
+
+["B$ONTA".pds71]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+BCL71ENR.LIB/VBDCL10E.LIB evttim.asm: ONTA at 002e/002f executes OR AX,DX at 003b/003c before every branch or call; ETT0/1/2 converge on XOR BL,BL at 0023/0024 before EVNT_SET. Incoming arithmetic flags cannot reach a dependency. Bound inputs by all six allocatable GP registers; segments, BP/SP and direction are runtime environment. No transitive preservation, cleanup, memory or control claim: error paths and indirect dependencies remain worst-case. See docs/optimizations/event-entry-blocker.md.
+'''
+
+["B$ONTA".vbdos]
+from = "B$ONTA.pds71"
+
+["B$ETT0".pds71]
+from = "B$ONTA.pds71"
+
+["B$ETT0".vbdos]
+from = "B$ONTA.pds71"
+
+["B$ETT1".pds71]
+from = "B$ONTA.pds71"
+
+["B$ETT1".vbdos]
+from = "B$ONTA.pds71"
+
+["B$ETT2".pds71]
+from = "B$ONTA.pds71"
+
+["B$ETT2".vbdos]
+from = "B$ONTA.pds71"
+
+# PDS 7.1 has the same zero-argument clock interface as the independently
+# audited QB 4.5 and VBDOS libraries.
+["B$TIMR".pds71]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+BCL71ENR.LIB rt/ostimer.asm B$TIMR 0000..0042: balanced BP/SI saves; DOS GETTIM at 0004; MUL CH at 000a kills incoming arithmetic flags; the result is stored through BX at 0037..003b and its near pointer returned in AX by XCHG BX,AX; POP SI/BP / RETF consumes no caller arguments. Time, memory, x87, errors and GP effects remain conservative.
+'''
+
+["B$TIMR".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E ostimer.asm 0000 saves BP/SI, obtains DOS time via INT 21h and MUL CH at 000a kills incoming arithmetic flags. Both relocated integer-to-float calls target member 299 entry 0000: PUSH BX / FILD word [BX] / POP BX / RET. Local arithmetic helper 0043..0063 balances DX/AX saves. POP SI/BP / RETF at 0040 returns a pointer to the stored float in AX; time, memory, x87 and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+# Emission-facing interfaces for QB45 routines reached by the demo corpus.
+# These deliberately do not turn into complete contracts: each call keeps
+# worst-case memory, clobber, control and error effects. The sole claim needed
+# is that allocation may reproduce BC's incoming GP state; stack cleanup is
+# recorded where the runtime's own epilogue makes it fixed. None of B$SCLS,
+# B$INKY, B$SCMP, B$BSAV or B$POW4 reaches the program's code: B$SCLS's one
+# indirect call is the runtime's own viewport vector, B$INKY's other exit is
+# B$END, and B$POW4's is B$RUNERR, which `raises_error` already says.
+["B$TIMR".qb45]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/ostimer.asm B$TIMR declares no parameters. CALLOS GETTIM supplies CH/CL/DH/DL, and MUL CH overwrites arithmetic flags before any conditional use. BCOM45.LIB member 170, offset 0000 ends POP ES/SI/BP / RETF at 0041..0044. It consumes no caller argument. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$POW4".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E 87btran.asm 00e2: x87 operands, PUSH BP / MOV BP,SP. FXAM/FNSTSW then AND AL,47h at 00f3 overwrites arithmetic flags before dispatch. Normal paths join POP BP / RETF at 0089, 0098, 00b3 or 00d8; logarithm/exponential kernel reached by relocated near jump 010b -> 0038 uses the same frame. Other paths tail B$RUNERR (overflow/domain); all GP, memory, x87 and error effects remain conservative. No algebraic replacement or purity claim.
+'''
+
+["B$POW4".qb45]
+cleanup = 0
+enters_user_code = false
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: BCOM45.LIB 87btran.asm 0000: `mov dx,<selector>` / `mov byte [..],0` / `jmp` into 87bdisp.asm __ctrand2, whose exit at 0028 is a bare RETF: the operands are on the x87 stack and nothing is on the 8086 stack. The transcendental dispatch __trandisp2 is `jmp word [bx]`, and __FF_intrin_err reaches B$RUNERR. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$POW8".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E 87btran.asm PUBDEFs POW4 and POW8 both resolve to segment 1 offset 00e2: identical entry and dependency graph. VBDCL10E 87btran.asm 00e2: x87 operands, PUSH BP / MOV BP,SP. FXAM/FNSTSW then AND AL,47h at 00f3 overwrites arithmetic flags before dispatch. Normal paths join POP BP / RETF at 0089, 0098, 00b3 or 00d8; logarithm/exponential kernel reached by relocated near jump 010b -> 0038 uses the same frame. Other paths tail B$RUNERR (overflow/domain); all GP, memory, x87 and error effects remain conservative. No algebraic replacement or purity claim.
+'''
+
+["B$FLOF".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: loclof.asm 0049 enters 0035 and calls LocateFDB (dvcore.asm 00e2); XOR SI,SI at 00e6 overwrites arithmetic flags before lookup/dispatch. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$GET3".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvgetput.asm 0043 enters local 00a4 with stacked position words; its first call is LocateFDB, which overwrites arithmetic flags before lookup. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$GET4".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvgetput.asm 0064 reads the record position and OR CX,CX at 006c overwrites arithmetic flags before validation and local 00a4 dispatch. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$SACT".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr stcore.asm entry 01b6 loads the descriptor at BP+0Ah and CMP word [DI],0 at 01bf overwrites arithmetic flags before string allocation/copy. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$PUT3".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvgetput.asm 005d sets AL=5 and joins GET3 at 0048, calling local 00a4; LocateFDB (dvcore.asm 00e2) kills arithmetic flags with XOR SI,SI at 00e6. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$SMID".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr mid.asm 0000 first calls strutil.asm 0013 with BX=[BP+0Ah]; OR AX,AX at 0016 kills arithmetic flags before any branch or further call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$RND0".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: random.asm 0000 calls local 0033; MUL CX at 003b sets CF/OF, ADD BX,AX at 0045 sets arithmetic flags before the later ADC. The straight-line body updates the seed, stores an x87 result, and returns its address through XCHG BX,AX at 0075. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$ATN4".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: 87btriga.asm 0000 establishes its frame with SUB SP,0Ah at 0003, overwriting incoming arithmetic flags before any branch or error tail. The x87 operand and runtime call remain unchanged. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$UBND".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dynamic.asm 0133 reads the dimension from [BP+6]; OR DH,DH at 013b overwrites incoming arithmetic flags before the first branch at 013d. Descriptor reads, the B$DeLink call and the B$ERR_BS tail remain intact. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$SSEK".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dkrandio.asm 0145 calls local 0114 then B$LocateFDB in dvcore.asm 00e2; PUSH saves precede XOR SI,SI at 00e6 and CMP at 00e8, overwriting incoming arithmetic flags before any branch. Seeking stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$STRI".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr strfcn.asm 01a3 loads AL and CX from stack arguments then calls local 0191, whose OR CX,CX overwrites incoming arithmetic flags before branching or allocation. String construction stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$RNZP".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: random.asm 0079 loads the stack argument at BP+0Ah, XORs its words at 0081, stores the seed and RETFs at 0088; the straight-line body reads no incoming arithmetic flag. Randomization stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$STR4".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E stringfp.asm entries 0000/001e pass AL=4/8 and BX=BP+6 to string.asm 001e (STR_COMMON). FOUTBX at ifout.asm 0000 overwrites arithmetic flags with CMP at 0003 before dispatching to floating formatting. Retain all GP inputs. Wrappers end POP BP / RETF 4 or 8, but the dependency graph through FOUTBX and StrAlcTmpCopy has unproved stack paths: cleanup remains unknown, as do all memory/control/error effects. No preservation or arithmetic replacement is claimed.
+'''
+
+["B$STR8".vbdos]
+from = "B$STR4.vbdos"
+
+["B$INT4".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E 87bint.asm: INT4/INT8 share 0016, saving BP/SI/DI; BX=6 and AX=0400h call emulator.asm segment 2 entry 002a. CMP BX,0Ch overwrites incoming arithmetic flags. The relocated table base is 0010; index 6 selects word 001c -> 0637. Hardware path changes rounding control, FRNDINT, restores control and RET at 0660. Software path calls 1be3 and 06e2; exception dispatch includes indirect calls, INT 21h and IRET, so all control/error/memory/x87 effects remain unknown. Normal wrapper return restores SI/DI, MOV SP,BP / POP BP / RETF at 0028..002b: zero caller argument cleanup. No replacement or preservation claim.
+'''
+
+["B$INT8".vbdos]
+from = "B$INT4.vbdos"
+
+["B$PEOS".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB prnval.asm 018f: establishes BP, saves ES/SI, loads FInput and OR AL,AL at 0197 kills incoming arithmetic flags before any branch/call. All GP inputs retained; BP/SP, segments and direction are runtime environment. Terminal input relocates the frame at 019d..01b7; disk/print paths skip it. Cleanup remains unknown, as do all memory, clobber, control and error effects.
+'''
+
+["B$EXTS".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+direct_inputs = []
+evidence = '''
+VBDCL10E.LIB rtenexit.asm 012e..0149: CMP BP,[runtime frame] kills incoming arithmetic flags. Both conditional branches and the state-clearing path reach RETF at 0149; no pushes, pops or incoming GP-register dependencies on the ordinary return edge. Writes globals and [bp-12h]; all GP inputs and unknown memory/clobber/control/error effects retained. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FEVS".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E osstmt.asm 01c9: establishes BP, saves SI/DI/DS, then calls B$RefStringArgLast (farstr/strutil.asm 0010). That helper loads [bp+6], then OR AX,AX at 0016 overwrites incoming arithmetic flags before any flag use or further call. All GP inputs and unknown memory/clobber/control/error effects retained. Cleanup remains unknown because the transitive dependency audit is incomplete. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$CHOU".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB pr0a.asm 0055: PUSH BP / MOV BP,SP; reads channel at [bp+6], calls B$ChkFNUM and B$SetFNum, POP BP / RETF 2 at 0061..0064. All GP inputs and unknown clobber/memory/control/error effects retained; only the normal-return argument cleanup is established. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$CSCN".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E gwscreen.asm 0000 calls ScSetup (locate.asm 001c): POP BX saves the near return, then BP/ES/SI are saved; SHL AX,1 at 0027 kills incoming arithmetic flags. ScCleanUpParms 000f restores these saves, pops the far return and count, and advances SP by twice the count before RETF. Cleanup is variable, not zero. SCRSTT calls indirect screen handlers; display, alias and error effects remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$CSCN".qb45]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/gwscreen.asm takes a count-led parameter block entirely on the stack. B$ScSetup in rt/gwscr.asm pops its near continuation, establishes BP, reads the count at BP+6, and SHL AX,1 overwrites incoming arithmetic flags before dispatch. B$ScCleanUpParms removes twice the runtime count; cleanup is variable rather than zero. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$WIDT".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E ioscrn.asm 002b establishes BP and calls EnsureFI, whose CMP at gwini.asm 0000 kills incoming arithmetic flags. Arguments at BP+8/+6 feed SWIDTH; normal exit POP BP / RETF 4 at 006d. Invalid width tails ERR_FC; BIOS/display and error effects unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$SLEP".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E evtkey.asm 00b3 establishes BP; local 0157 CMP kills incoming flags. SetKybdInt saves/restores DS/DX/AX/BX/ES across BIOS/DOS interrupts and RETF at llcevt.asm 005b. SetClockInt restores its saves and RET at llaevt.asm 00c4. SleepInit 0101 calls stack-balanced tick conversion 00c9..0100. Event wait joins POP BP / RETF 4 at 00e6; interrupt/control effects unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FRI2".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E stfree.asm 004d saves BP/SI; XOR CX,CX at 0053 kills incoming flags. FRE selectors join POP SI/BP / RETF 2 at 00b0. FHCompact/FHByteSize return near; CbCompactHeap (lmem segment 5 0066..00aa) and GAFC (getactiv 0000..0097) consume their two internal argument words with RETF 4. Alternate entries 009d/009e are INC BX, not extra pushes. Heap compaction, aliases and errors remain unknown; no register preservation inferred. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$STI4".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E farstr/string.asm 000f reads the long at BP+6 through STR_COMMON 001e. FOUTBX (ifout.asm 0000) kills incoming flags with CMP at 0003; integer path returns near at 0050. Common copy via StrAlcTmpCopy (strutil.asm 01f5..0209) balances its local saves; public POP BP / RETF 4 at 001a. Formatting, heap allocation, aliases and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FMKI".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, CX=2; StrAlcTmpCopy at strutil.asm 01f5 calls AlcTmpSH, whose CMP at 0103 overwrites incoming arithmetic flags before dependencies. Copy returns near; POP SI/BP / RETF 2. Allocation, aliases and errors remain unknown; no register preservation inferred from local saves. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FMKL".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/strnum.asm 0073..0085: SI addresses the dword argument at BP+6, CX=4; StrAlcTmpCopy -> AlcTmpSH overwrites incoming arithmetic flags at strutil.asm 0103. Near copy return followed by POP SI/BP / RETF 4. Heap writes, aliases, errors and register clobbers remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FCVI".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/strnum.asm 0024..0041: XOR CH,CH at 0029 replaces incoming arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. Helper reads the string through RefString, checks length, copies two bytes and calls DelTempSH, or tails ERR_FC. Normal POP DI/BP / RETF 2; temporary deletion, memory writes and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FCVS".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/strnum.asm 0044..005b: XOR CH,CH at 0049 replaces incoming arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. Shared conversion helper checks length and copies four bytes, with RefString and DelTempSH dependencies or ERR_FC. POP DI/BP / RETF 2; no purity, preservation or error-path guarantee. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$RGHT".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/strfcn.asm 00c9: RefString first overwrites incoming arithmetic flags. Reads count at BP+6, computes start from length, then joins LEFT at 00e9 or 00eb. Substring wrapper 0113 consumes two internal words with RET 4; shared normal exit is POP BP / RETF 4 at 00f2. Allocation, temporary deletion and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$RTRM".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/strfcn.asm 0215..0253: RefStringArgLast overwrites arithmetic flags before branching; reverse space scan uses STD then CLD. Substring helper 011d returns near; normal exit POP DI/BP / RETF 2. Allocation, temporary deletion, aliases and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$LCAS".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E farstr/strfcn.asm 01e8..0213: descriptor at BP+6 via RefStringArgLast; RefString OR AX,AX at strutil.asm 0016 replaces incoming arithmetic flags. Empty path pops saved DX and joins 0208; nonempty path copies/allocates through helper 0000 and converts bytes. The indirect CALL BX is fixed by the 01e9 relocation to B$ToLower (gwini.asm 00a7..00e0, RETF), balanced by PUSH CS / near CALL. Both normal paths restore DS/DI/SI/BP then RETF 2 at 020c. Allocation, aliases, register preservation and error effects remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$LNIN".vbdos]
+cleanup = 10
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/lininp.asm 0000..006e: initial CMP at 0004 overwrites arithmetic flags before terminal/disk dispatch. Both normal paths join string assignment (six internal words, ASSN RETF 12), InpReset, POP SI/BP and RETF 10. InpReset is a near reset, not PEOS's frame-relocating epilogue. FillBuf has indirect device calls; input, alias, control and error effects remain unknown. Cleanup describes only normal return. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$ERS1".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: rt/recarray.asm 014b..016e reads descriptor [bp+6], XOR CX,CX at 0152 overwrites incoming arithmetic flags. Empty and nonempty paths join POP SI/BP / RETF 2. Nonempty calls FreePpv with two words (RETF 4 at lmove.asm 01da), then stack-neutral DeLink at 0075..008f. FreePpv -> FreeHandle mutates heap state; no alias/preservation claim. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$SCMP"]
+# rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF
+flags_result = true
+
+["B$SCMP".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/stcore.asm 0280..02b8 reads two descriptors; first RefString dependency replaces incoming arithmetic flags (strutil.asm 0016 OR AX,AX). RefStringArgLast is the same reader with [bp+6]. DelStrTemp calls DelString -> FreeDataPpv for temporaries; near returns are stack neutral. Comparison saves/reinstates its flags around deletion, then restores DS/DI/SI/BP and RETF 4. Heap effects and all clobbers remain conservative. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$SCMP".qb45]
+cleanup = 4
+enters_user_code = false
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/stcore.asm `XOR DX,DX` falls into `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4. The result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$SCPF".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/string.asm 01aa..01c0 calls SCPY (0164, RETF 2) then STDL (0171, RETF 2), each with one internal argument; POP AX/BP / RETF 2 returns to caller. SCPY -> StrAlcTmpCopySH -> RefString overwrites incoming flags before conditional work; STDL -> DelString -> FreeDataPpv. Allocation/freeing and errors remain unknown, not a pure copy. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$SCPF".qb45]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996, module of B$SCPY/B$STDL, 0141..0157: PUSH BP / MOV BP,SP, pushes [bp+6] and calls B$SCPY far, pushes AX and [bp+6] and calls B$STDL far, POP AX/BP / RETF 2. A STRING FUNCTION's result: the descriptor copied to a temporary and the original released. Allocation, freeing and errors remain unknown.
+'''
+
+["B$SCPF".pds71]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+BCL71ENR.LIB SHA256 873fde67aa6fcf27961ec76d9f57ea8a621f6d16ea064da3312aa8d9e3a8c117, module of B$SCPY/B$STDL, 0023..0039: the same sequence, POP AX/BP / RETF 2. A STRING FUNCTION's result: the descriptor copied to a temporary and the original released. Allocation, freeing and errors remain unknown.
+'''
+
+["B$FMID".vbdos]
+cleanup = 6
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/strfcn.asm 00f6..0112 reads descriptor/start/count at [bp+0a/08/06]. First dependency RefString (strutil.asm 0013) overwrites incoming flags with OR AX,AX at 0016 before branching; it has no dependencies or stack adjustments and returns near. The substring wrapper 0113..011c consumes two internal words with RET 4; public normal return is POP BP / RETF 6. Invalid ranges tail ERR_FC and allocation/freeing remain unknown effects; no purity, preservation or error-path guarantee. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FLEN".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: farstr/stcore.asm 02b9 reads a far-string descriptor at [bp+6]; OR AX,AX at 02c1 kills incoming arithmetic flags before any branch/dependency. Empty and nonempty paths join POP BP / RETF 2 at 02f6..02f9. Temporary strings call FreeDataPpv with two words (RETF 4 at 01da), which calls FreeHandle (RET at 010c). Freeing may mutate aliased heap state; no memory or register preservation is claimed. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$RDIM".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: erase.asm 0000 establishes BP and reads descriptor [bp+6]; OR BL,BL at 0009 kills incoming flags before branches or dependencies. All GP inputs retained. DIM_COMMON consumes rank-dependent stack arguments, so cleanup stays unknown unless separately proven at the call site. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FEOF".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvstmt.asm 0073 reads file word [bp+6]; OR BX,BX kills incoming flags. File and DOS console paths join POP BP / RETF 2 at 0097..009a; invalid console mode tails ERR_IFN. DOS/device/error effects remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$CLOS".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvcore.asm 01b4 reads a stack count and file words; JCXZ selects CLOSF or LocateFDB. CLOSF's CMP at 019f and LocateFDB's XOR SI,SI at 00e6 kill incoming flags before dependencies. Return restores SP from the advanced argument cursor at 01e3, so cleanup stays unknown, not zero. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$OPEN".vbdos]
+cleanup = 8
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dkutil.asm 00c0..00f4 reads four stack words, calls DOS3CHECK and OPENIT, and restores BP then RETF 8 at 00f1. Other branches tail ERR_AFE or ERR_IFN; device, allocation and error effects are not established. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$DSKI".vbdos]
+cleanup = 2
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: inpdsk.asm 0016..0060 reads [bp+6], calls ChkFNUM/LocateFDB/EnsureFI, sets input state, restores SI/BP and RETF 2 at 005e. Other branches tail ERR_IFN, ERR_RPE or ERR_BFM; no device or error-path guarantees. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FDR1".vbdos]
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: VBDCL10E rt/dkdir.asm 0003 sets search mode, establishes BP, and sets DOS DTA (AH=1Ah, DS:DX); TEST at 0014 replaces arithmetic flags before search dispatch. RefStringArgLast reads BP+6; GET_PATHNAME, DelTempSH, DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy perform path, directory and heap work. Shared exit restores DI/SI/BP then mode-selects RETF or RETF 2 (007e/007f); cleanup remains unknown rather than assuming the shared mode survives every dependency. All GP inputs retained; memory, aliases, control and errors unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FREF".vbdos]
+cleanup = 0
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+VBDCL10E.LIB: dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; lwalk.asm PpvWalkHeap returns RETF 4 at 0039. No caller arguments. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$BLOD".qb45]
+cleanup = 6
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/bload.asm declares three ParmW stack arguments. Entry establishes BP, sets AX, loads DX from BP+0Ah and initializes runtime globals before its first dependency; subsequent branches consume values or flags produced inside the routine. BCOM45.LIB member 31, offset 0058 ends POP BP / RETF 6 at 009e..009f. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$SCLS".qb45]
+cleanup = 2
+enters_user_code = false
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/gwscr.asm `cProc B$SCLS,<PUBLIC,FAR>` with one `parmW ScnNum`; `MOV BX,ScnNum` / `INC BX` sets flags before any branch. cEnd is RETF 2. Out-of-range parameters tail B$ERR_FC. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$INKY".qb45]
+cleanup = 0
+enters_user_code = false
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/stinkey.asm `cProc B$INKY,<FAR,PUBLIC,FORCEFRAME>`, `sd * pascal B$INKY(void)`: no parameters, descriptor returned in AX. TEST b$IOFLAG sets flags before any branch. cEnd is RETF; redirected end of input jumps to B$END instead. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$BSAV".qb45]
+cleanup = 6
+enters_user_code = false
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/bload.asm `cProc B$BSAV,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, Len), so cEnd is RETF 6. The first instruction writes b$Buf3 and reads no register; it reads [b$seg]. Disk full tails B$ERR_DFL. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$PCR4".vbdos]
+cleanup = 4
+inputs = ["ax", "bx", "cx", "di", "dx", "si"]
+evidence = '''
+rt/prnvalfp.asm: scalar argument pushed by value; entry sets AL=VT_R4 (4) or VT_R8 (8), AH=terminator, then tails B$PRINT. VBDCL10E.LIB prnvalfp.asm entries 0000/0006/0012/0018/001e match; prnval.asm 003d saves the type and 0087 reloads it. Normal exits select RETF 4 at 009a or RETF 8 at 0094. Source PRINTX documents the same argument-width cleanup. Device dispatch and error effects remain unknown; all GP inputs retained. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$PSR4".vbdos]
+from = "B$PCR4.vbdos"
+
+["B$PCR8".vbdos]
+from = "B$PCR4.vbdos"
+cleanup = 8
+
+["B$PSR8".vbdos]
+from = "B$PCR8.vbdos"
+
+["B$EVK1".pds71]
+from = "B$EVCK"
+evidence = '''
+BCL71ENR.LIB evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name segment 1 offset 0103; exact entry aliases in this runtime family. Library hashes and scope: docs/optimizations/event-entry-blocker.md.
+'''
+
+["B$EVK1".vbdos]
+from = "B$EVCK"
+evidence = '''
+VBDCL10E.LIB evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name segment 1 offset 0127; exact entry aliases in this runtime family. Library hashes and scope: docs/optimizations/event-entry-blocker.md.
+'''
+
+# rt/erproc.asm's RTEDEF macro generates every B$ERR_?? entry as `mov bl,number`
+# falling into B$RUNERR, whose "transfer of control is either handled by
+# environment specific ON ERROR handler, or we fatal error" -- never the caller.
+# B$RUNERR's Entry: "[BP] = frame pointer ... [BX] = BASIC or internal error
+# number". What follows walks the BP frame chain to an ON ERROR handler or
+# B$FERROR; neither reads a register its caller left.
+["B$RUNERR"]
+never_returns = true
+error_funnel = ["bx"]
+
+["B$RUNERRINFO"]
+error_funnel = ["bx"]
+
+["B$ERR_*"]
+never_returns = true
+
+# b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
+# does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
+# `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
+# CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
+# B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
+# bload.asm only read it, and no reference takes its address. ABSOLUTE runs
+# machine code of the program's choosing.
+["B$SCLR"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["B$RUNL"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["B$StackReset"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["B$Init"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["B$IINIT"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["B$RUNINI"]
+writes_cells = { qb45 = ["b$seg"] }
+
+["ABSOLUTE"]
+writes_cells = { qb45 = ["b$seg"] }
