@@ -696,6 +696,9 @@ pub struct Program {
     pub float_mode: FloatMode,
     pub float_semantics: FloatSemantics,
     pub promises: RuntimePromises,
+    /// The functions code outside the program calls whatever their
+    /// linkage: the runtime's way into it.
+    pub entries: Vec<String>,
 }
 
 impl Program {
@@ -710,6 +713,7 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             promises: RuntimePromises::default(),
+            entries: Vec::new(),
         }
     }
 }

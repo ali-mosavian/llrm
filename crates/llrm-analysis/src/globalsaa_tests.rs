@@ -203,8 +203,8 @@ fn kept_in(first: &str, globals: &str, call: &str, exports: Exports) -> Option<K
 fn a_body_another_module_defines_is_summarized() {
     let second = "@g = global i16 0\ndeclare void @quiet()\n";
     let quiet = "define void @quiet() {\nb0:\n  ret void\n}\n";
-    assert_eq!(kept_in(quiet, second, "call void @quiet()", Exports::Open), seven());
-    assert_eq!(kept_in("", second, "call void @quiet()", Exports::Open), None);
+    assert_eq!(kept_in(quiet, second, "call void @quiet()", Exports::default()), seven());
+    assert_eq!(kept_in("", second, "call void @quiet()", Exports::default()), None);
 }
 
 /// A global no outside code names is the program's alone, whichever module
@@ -212,10 +212,10 @@ fn a_body_another_module_defines_is_summarized() {
 #[test]
 fn a_global_the_program_does_not_export_is_kept_across_the_runtime() {
     let second = "@g = external global i16\ndeclare void @outside(ptr) nocallback\n";
-    let closed = Exports::Closed(BTreeSet::from(["f".to_owned()]));
+    let closed = Exports::closed(BTreeSet::from(["f".to_owned()]));
     let call = "call void @outside(ptr null)";
     assert_eq!(kept_in("@g = global i16 0\n", second, call, closed.clone()), seven());
-    assert_eq!(kept_in("@g = global i16 0\n", second, call, Exports::Open), None);
+    assert_eq!(kept_in("@g = global i16 0\n", second, call, Exports::default()), None);
     assert_eq!(kept_in("@g = global i16 0\n@slot = global ptr @g\n", second, call, closed), None);
 }
 

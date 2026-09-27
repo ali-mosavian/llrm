@@ -266,6 +266,9 @@ impl _Plain for model::Program {
         if self.promises != model::RuntimePromises::default() {
             out.insert("promises".to_owned(), self.promises._plain());
         }
+        if !self.entries.is_empty() {
+            out.insert("entries".to_owned(), self.entries._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1119,6 +1122,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
+        ("entries", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1131,6 +1135,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
+            entries: _default(args, "entries", Vec::new())?,
         })
     },
 };

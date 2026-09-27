@@ -209,6 +209,8 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
             object_.addressed = false;
         }
     }
+    // The runtime enters a module at its body, through the module header.
+    program.entries = vec!["__main".to_owned()];
     // Where the program handles errors, any routine may run its handler.
     let handles = program.modules.iter().flat_map(|module| &module.functions).any(|function| function.error_handler.is_some());
     if !handles {

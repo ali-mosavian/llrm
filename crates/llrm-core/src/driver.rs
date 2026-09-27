@@ -40,7 +40,9 @@ pub fn emitted(program: &crate::hir::model::Program, options: &Options) -> Resul
     }
     let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
     let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
-    Ok((linked(modules, runtime, options)?, data))
+    let mut linked = linked(modules, runtime, options)?;
+    linked.exports.entries = program.entries.iter().cloned().collect();
+    Ok((linked, data))
 }
 
 /// `modules` as one program for the machine, linked against `runtime`, a
