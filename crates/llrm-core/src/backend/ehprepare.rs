@@ -6,8 +6,8 @@
 //! builds a frame of its own over the faulting one and jumps to that address;
 //! B$RESN leaves the frame again, back on the faulting one, and continues at
 //! the first statement-table row at or after the faulting call. So the
-//! address registered is `@llrm.qb.landing`, which keeps ERR in
-//! `@llrm.qb.landed` and calls B$RESN, and the landing pad is its function's
+//! address registered is `LANDING`, which keeps ERR in `LANDED` and
+//! calls B$RESN, and the landing pad is its function's
 //! row. The pad is entered with nothing the function left in a register, so
 //! each value live into it goes to the stack, as DemoteRegToStack puts it.
 
@@ -23,9 +23,9 @@ use llrm_hir::mir::FAR;
 use llrm_hir::onerror::ERR;
 pub use llrm_hir::onerror::{ONERROR, PERSONALITY};
 /// The module's registered handler: keeps ERR, then resumes at the pad.
-pub const LANDING: &str = "llrm.qb.landing";
+pub const LANDING: &str = "$QB$LANDING";
 /// The ERR the landing kept, which the pad's selector reads.
-pub const LANDED: &str = "llrm.qb.landed";
+pub const LANDED: &str = "$QB$LANDED";
 /// The runtime's ON ERROR GOTO and RESUME NEXT.
 const REGISTER: &str = "llrm.qb.B$OEGA";
 const RESUME: &str = "llrm.qb.B$RESN";

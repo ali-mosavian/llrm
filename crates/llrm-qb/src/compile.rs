@@ -430,29 +430,7 @@ fn _label_imm(key: i64) -> Loc {
 
 /// Emit MODULE_CODE.OF_STA's relocated (offset,line) rows and zero end.
 pub fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure {
-    let mut code: Vec<masm::InlinePart> = Vec::new();
-    for (_procedure, _order, label, line) in entries {
-        code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
-        code.push(masm::InlinePart::Bytes((*line as u16).to_le_bytes().to_vec()));
-    }
-    code.push(masm::InlinePart::Bytes(vec![0, 0]));
-    let instruction = lir::Insn::new(1, None, Some(_semantics(Operation::Call, "statement-table", vec![], vec![])), vec![], vec![]);
-    let body = lir::LirBody::new(
-        "$QB$STAT",
-        1,
-        vec![lir::LirBlock::new(1, vec![Arc::new(instruction)])],
-        IndexMap::default(),
-        IndexMap::default(),
-    );
-    masm::Procedure {
-        name: "$QB$STAT".into(),
-        public: false,
-        far: false,
-        body,
-        reserve: 0,
-        callees: IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
-        interrupt: None,
-    }
+    llrm_core::driver::statement_table(entries)
 }
 
 /// Restore source-statement labels after MIR legitimately merged blocks.
@@ -1570,6 +1548,8 @@ fn _lowered_machine(
         far_calls: physical.far_calls,
         reserve,
         source_instructions: body.source_instructions.clone().unwrap_or_default(),
+        inline: IndexMap::default(),
+        landing: None,
     })
 }
 
@@ -1587,13 +1567,6 @@ impl Rich {
     fn new(program: &model::Program, machine: &Machine) -> Result<Self, CompileError> {
         let program = &_positional_data(program)?;
         let module = &program.modules[0];
-        // What the post-selection passes do not yet place in rich-MIR code.
-        if !_statement_metadata(module)?.is_empty() {
-            return emission("a statement table is not selected from the rich MIR yet");
-        }
-        if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
-            return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
-        }
         let options = llrm_core::driver::Options::of(machine.clone());
         let (mut mir, mut data) = llrm_core::driver::emitted(program, &options).map_err(|why| EmissionError(why))?;
         llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
@@ -1601,11 +1574,11 @@ impl Rich {
         Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects } })
     }
 
-    fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
+    fn machined(&self, program: &model::Program, name: &str, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
         let cpu = targets::profile(ProfileOrName::Name(&self.cpu)).map_err(CompileError::Value)?;
         let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true };
         let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
-        let machined = assemble::machined(&self.mir, &function.name, &contracts, pool, &target).map_err(CompileError::Value)?;
+        let machined = assemble::machined(&self.mir, name, &contracts, pool, &target).map_err(CompileError::Value)?;
         let final_ = finalized(&machined.body, machined.popped)?;
         // A runtime routine is called by its own name.
         let calls = machined
@@ -1620,6 +1593,8 @@ impl Rich {
             far_calls: machined.far,
             reserve: machined.reserve,
             source_instructions: IndexMap::default(),
+            inline: machined.inline,
+            landing: machined.landing,
         })
     }
 
@@ -1633,6 +1608,7 @@ impl Rich {
             let id = llrm_mir::GlobalId(at as u32);
             let object = objects.get(&id).and_then(|object| qb.get(&(Space::Segment, *object)).or_else(|| qb.get(&(Space::External, *object))));
             let name = object.cloned().unwrap_or_else(|| self.abi.linked(global.name.as_deref().unwrap_or_default()));
+            names.extend(globals::segment_name(&self.mir, id, &name));
             names.insert((globals::space(&self.mir, id), i64::from(id.0)), name);
         }
         names.extend(pool.map(|id| ((Space::Segment, id), qb[&(Space::Segment, id)].clone())));
@@ -1669,6 +1645,10 @@ struct Machined {
     far_calls: BTreeSet<i64>,
     reserve: i64,
     source_instructions: IndexMap<i64, i64>,
+    /// The code laid down in place of each call to an inline helper.
+    inline: IndexMap<i64, Vec<u8>>,
+    /// The landing pad's block, which the statement table names.
+    landing: Option<i64>,
 }
 
 pub fn assembled_by(
@@ -1721,7 +1701,7 @@ pub fn assembled_by(
     let pool = Rc::new(RefCell::new(Pool::new(pool_start)));
     for (index, function) in functions.iter().copied().enumerate() {
         let machined = match &rich {
-            Some(rich) => rich.machined(program, function, &pool)?,
+            Some(rich) => rich.machined(program, &function.name, &pool)?,
             None => _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?,
         };
         let mut callees = machined.callees.clone();
@@ -1772,6 +1752,9 @@ pub fn assembled_by(
                     address = Some(Addr { index: key, ..Addr::new(Space::Segment, 0) });
                 }
                 error_registrations.insert(*at, (address, parts[2] == "L"));
+                continue;
+            } else if let Some(code) = machined.inline.get(at) {
+                callees.insert(*at, masm::Callee { name: name.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
                 continue;
             } else {
                 object_name = callable_names.get(name.as_str()).cloned().unwrap_or_else(|| name.clone());
@@ -1874,6 +1857,7 @@ pub fn assembled_by(
                 statement_targets.push((procedure_number as i64, layout_order[at], masm::label(procedure_number, *at), *line));
             }
         }
+        statement_targets.extend(machined.landing.map(|at| llrm_core::driver::landing_row(procedure_number, at)));
         procedures.push(masm::Procedure {
             name: if module_body { "$QB$MAIN".to_owned() } else { _object_name(&function.name) },
             public,
@@ -1892,9 +1876,32 @@ pub fn assembled_by(
         });
     }
 
+    // What the backend's prepare step added besides the HIR's functions:
+    // the landing stub, which runs on the runtime's own frame.
+    if let Some(rich) = &rich {
+        for (id, global, function) in rich.mir.functions() {
+            let name = global.name.clone().unwrap_or_default();
+            if function.is_declaration() || functions.iter().any(|one| one.name == name) {
+                continue;
+            }
+            if llrm_core::driver::framed(&rich.mir, id) {
+                return emission(format!("@{name}, which no HIR function makes, asks for a frame"));
+            }
+            let machined = rich.machined(program, &name, &pool)?;
+            let mut callees = machined.callees;
+            for (at, callee) in &machined.calls {
+                referenced_calls.insert(callee.clone());
+                callees.insert(*at, masm::Callee::new(callee.clone(), machined.far_calls.contains(at)));
+            }
+            procedures.push(masm::Procedure { name, public: false, far: true, body: addressvalues::converted(&machined.body), reserve: 0, callees, interrupt: None });
+        }
+    }
     statement_targets.sort();
     procedures.push(_statement_procedure(&statement_targets));
-    let (mut names, data_by_segment) = _data(module, &pool.borrow())?;
+    let (mut names, mut data_by_segment) = _data(module, &pool.borrow())?;
+    if let Some(rich) = &rich {
+        data_by_segment["BC_CN"].extend(llrm_core::driver::landed_data(&rich.mir));
+    }
     if let Some(rich) = &rich {
         names = rich.names(&names, pool.borrow().entries().map(|(_, id)| id));
     }

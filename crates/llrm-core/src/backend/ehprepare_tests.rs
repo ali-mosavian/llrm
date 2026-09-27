@@ -53,10 +53,10 @@ fn the_handler_registered_is_the_landing_and_err_is_what_it_kept() {
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:?}");
     let text = printed(&module);
-    assert!(text.contains("@llrm.qb.B$OEGA(ptr addrspace(1) @llrm.qb.landing)"), "{text}");
+    assert!(text.contains("@llrm.qb.B$OEGA(ptr addrspace(1) @$QB$LANDING)"), "{text}");
     assert!(!text.contains("void @llrm.qb.onerror(i1 true)"), "{text}");
     assert!(!text.contains("extractvalue"), "{text}");
-    assert!(text.contains("load i16, ptr @llrm.qb.landed"), "{text}");
+    assert!(text.contains("load i16, ptr @$QB$LANDED"), "{text}");
 }
 
 /// The pad is entered with every register the runtime's: `%x`, made before
@@ -118,5 +118,5 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     let last = main.body.blocks.last().expect("blocks");
     let first = last.insns.iter().find_map(|insn| main.callees.get(&insn.at)).expect("a call");
     assert_eq!(first.name, "__LANDING");
-    assert!(assembled.procedures.iter().any(|one| one.name.contains("landing")));
+    assert!(assembled.procedures.iter().any(|one| one.name == "$QB$LANDING"));
 }
