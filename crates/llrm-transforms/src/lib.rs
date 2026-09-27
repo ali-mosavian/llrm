@@ -7,6 +7,7 @@ pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
 pub mod cfg;
+pub mod counting;
 pub mod dead;
 pub mod decide;
 pub mod edges;
@@ -18,6 +19,8 @@ pub mod interprocedural;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod loopexit;
+pub mod loopmotion;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod peel;
