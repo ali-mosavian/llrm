@@ -663,44 +663,40 @@ b1:
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 4",
             "push si",
             "push di",
             "L0_0:",
-            "mov ecx, dword ptr [bp+6]",
+            "mov eax, dword ptr [bp+6]",
             "mov ebx, dword ptr [bp+10]",
-            "mov eax, ecx",
             "imul ebx",
             "mov ecx, eax",
             "shrd ecx, edx, 16",
             "mov eax, ecx",
             "cdq",
-            "mov di, dx",
-            "mov eax, ebx",
-            "shld edi, ecx, 16",
+            "mov ax, dx",
+            "shld eax, ecx, 16",
             "shl ecx, 16",
-            "mov esi, edi",
+            "mov esi, eax",
             "sar esi, 31",
             "xor ecx, esi",
-            "xor edi, esi",
+            "xor eax, esi",
             "sub ecx, esi",
-            "sbb edi, esi",
-            "sar eax, 31",
-            "xor ebx, eax",
-            "sub ebx, eax",
-            "mov dword ptr [bp-4], eax",
-            "mov eax, edi",
+            "sbb eax, esi",
+            "mov edi, ebx",
+            "sar edi, 31",
+            "xor ebx, edi",
+            "sub ebx, edi",
             "xor edx, edx",
             "div ebx",
             "mov eax, ecx",
             "div ebx",
-            "xor esi, dword ptr [bp-4]",
+            "xor esi, edi",
             "xor eax, esi",
             "sub eax, esi",
             "shld edx, eax, 16",
             "pop di",
             "pop si",
-            "leave",
+            "pop bp",
             "retf",
         ]
     );
@@ -1041,12 +1037,11 @@ b1:
             "cdq",
             "shld edx, ebx, 16",
             "shl ebx, 16",
-            "mov eax, edx",
-            "sar eax, 31",
-            "shr eax, 22",
-            "add eax, ebx",
-            "and eax, 4294966272",
-            "sub ebx, eax",
+            "sar edx, 31",
+            "shr edx, 22",
+            "add edx, ebx",
+            "and edx, 4294966272",
+            "sub ebx, edx",
             "shld edx, ebx, 16",
             "mov ax, bx",
             "pop bp",
@@ -1870,4 +1865,26 @@ done:
     let body = selected(text, "f").expect("selects").body;
     let header = body.blocks[1].at;
     assert_eq!(body.loop_trip_counts, [(header, 5)]);
+}
+
+/// A wide half nothing reads is not made: matmul8's `x * 256 / 1024`
+/// kept `sar edx,10`, the quotient's high dword its truncation dropped,
+/// through every machine phase.
+#[test]
+fn test_an_i64_halfs_unread_computation_is_not_made() {
+    let text = "define i32 @f(i32 %x) addrspace(1) {
+  %w = sext i32 %x to i64
+  %s = shl i64 %w, 8
+  %q = sdiv i64 %s, 1024
+  %t = trunc i64 %q to i32
+  ret i32 %t
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let names: Vec<&str> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()?.name.as_deref()).collect();
+    // The quotient's low dword: the bias's add and its carry, and shrd.
+    let low = names.iter().position(|name| *name == "shrd").expect("the low dword's shift");
+    assert_eq!(names[low - 2..low], ["add", "adc"], "{names:?}");
+    // One `sar`, the dividend's sign; none for the quotient's high dword.
+    assert_eq!(names.iter().filter(|name| **name == "sar").count(), 1, "{names:?}");
 }

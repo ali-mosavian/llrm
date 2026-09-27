@@ -2,6 +2,7 @@
 //! integer no register holds. What a value's sign bits prove lets a product
 //! or quotient of 32-bit values take one 32-bit instruction.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_mir::module::{InstId, Operand};
@@ -10,7 +11,7 @@ use llrm_mir::{BinaryOp, CastOp};
 
 use super::{insn, refuse, semantics, Selector, Unselected};
 use crate::model::ir::{Held, Imm, Loc, Operation};
-use crate::model::lir::Insn;
+use crate::model::lir::{Insn, LirBlock};
 
 type Pair = (Held, Held);
 
@@ -36,9 +37,16 @@ impl Selector<'_, '_, '_> {
         Loc::Imm(Imm { value, width: 1, address: None })
     }
 
+    /// A register for one half of a wide value, dropped where nothing reads it.
+    fn half(&mut self) -> Held {
+        let half = self.fresh_held(4);
+        self.halves.insert(half.value);
+        half
+    }
+
     /// `into` made `from`.
     fn made(&mut self, operation: Operation, name: &str, sources: Vec<Loc>, at: i64, out: &mut Vec<Arc<Insn>>) -> Held {
-        let into = self.fresh_held(4);
+        let into = self.half();
         self.put(semantics(operation, name, vec![Loc::Held(into)], sources), at, out);
         into
     }
@@ -123,14 +131,14 @@ impl Selector<'_, '_, '_> {
             BinaryOp::Mul if self.narrow(left) && self.narrow(right) => {
                 // Both are i32s: one signed widening multiply.
                 let (a, b) = (self.wide(left, at, out)?.0, self.wide(right, at, out)?.0);
-                let (low, high) = (self.fresh_held(4), self.fresh_held(4));
+                let (low, high) = (self.half(), self.half());
                 self.put(semantics(Operation::Multiply, "imul", vec![Loc::Held(low), Loc::Held(high)], vec![Loc::Held(a), Loc::Held(b)]), at, out);
                 (low, high)
             }
             BinaryOp::Mul => {
                 // low*low widened, and each half by the other's low into the high.
                 let (a, b) = (self.wide(left, at, out)?, self.wide(right, at, out)?);
-                let (low, carried) = (self.fresh_held(4), self.fresh_held(4));
+                let (low, carried) = (self.half(), self.half());
                 self.put(semantics(Operation::Multiply, "mul", vec![Loc::Held(low), Loc::Held(carried)], vec![Loc::Held(a.0), Loc::Held(b.0)]), at, out);
                 let first = self.made(Operation::Multiply, "imul", vec![Loc::Held(a.0), Loc::Held(b.1)], at, out);
                 let second = self.made(Operation::Multiply, "imul", vec![Loc::Held(a.1), Loc::Held(b.0)], at, out);
@@ -150,6 +158,37 @@ impl Selector<'_, '_, '_> {
         };
         self.wides.insert(result, pair);
         Ok(())
+    }
+
+    /// `blocks` without what makes a wide half nothing reads, as LLVM's
+    /// DAG drops the dead half its legalizer split off. A carry an `adc` or
+    /// `sbb` reads is made just before it and goes with it.
+    pub(super) fn unread_halves_dropped(&self, mut blocks: Vec<LirBlock>) -> Vec<LirBlock> {
+        loop {
+            let read: BTreeSet<u32> = blocks
+                .iter()
+                .flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied()).chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value))))
+                .collect();
+            let dead = |one: &Insn| !one.defines.is_empty() && one.defines.iter().all(|value| self.halves.contains(value) && !read.contains(value));
+            let carries = |one: &Insn| matches!(one.what.as_ref().and_then(|what| what.name.as_deref()), Some("adc" | "sbb"));
+            let mut changed = false;
+            for block in &mut blocks {
+                let insns = &block.insns;
+                let kept: Vec<Arc<Insn>> = insns
+                    .iter()
+                    .enumerate()
+                    .filter(|&(at, one)| !dead(one) || insns.get(at + 1).is_some_and(|next| carries(next) && !dead(next)))
+                    .map(|(_, one)| Arc::clone(one))
+                    .collect();
+                if kept.len() != insns.len() {
+                    changed = true;
+                    *block = block.with_insns(kept);
+                }
+            }
+            if !changed {
+                return blocks;
+            }
+        }
     }
 
     fn shifted(&mut self, op: BinaryOp, low: Held, high: Held, count: i64, at: i64, out: &mut Vec<Arc<Insn>>) -> Pair {
@@ -191,7 +230,7 @@ impl Selector<'_, '_, '_> {
         let magnitude = self.made(Operation::Binary, "sub", vec![Loc::Held(flipped), Loc::Held(divisor_sign)], at, out);
         let zero = self.made(Operation::Move, "mov", vec![Self::dword(0)], at, out);
         let divide = |selector: &mut Self, over: Held, under: Held, out: &mut Vec<Arc<Insn>>| {
-            let (quotient, remainder) = (selector.fresh_held(4), selector.fresh_held(4));
+            let (quotient, remainder) = (selector.half(), selector.half());
             let what = semantics(Operation::Divide, "div", vec![Loc::Held(quotient), Loc::Held(remainder)], vec![Loc::Held(over), Loc::Held(under), Loc::Held(magnitude)]);
             selector.put(what, at, out);
             (quotient, remainder)

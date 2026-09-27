@@ -246,6 +246,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         pointers: IndexMap::default(),
         fars: IndexMap::default(),
         wides: IndexMap::default(),
+        halves: BTreeSet::new(),
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -293,6 +294,8 @@ struct Selector<'m, 'c, 'p> {
     fars: IndexMap<ValueId, (Option<Held>, Held)>,
     /// Each i64 value's low and high dwords, expanded likewise.
     wides: IndexMap<ValueId, (Held, Held)>,
+    /// The registers holding those halves.
+    halves: BTreeSet<u32>,
     depth: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
@@ -491,7 +494,7 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = self.widen(combined::combined(blocks))?;
+        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks)))?;
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
