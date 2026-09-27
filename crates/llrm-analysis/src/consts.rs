@@ -19,9 +19,6 @@
 //! solve by body address, which a function changed in place no longer
 //! keeps: `manager` caches through the pass manager instead.
 //!
-//! Waiting for memoryssa's port, the back edge of this dependency cycle:
-//! `_pointer_stores` (a whole-pointer load a dominating store supplies).
-//!
 //! Tests skipped: `test_constant_analysis_scope_reuses_an_unchanged_body_without_sharing_mutation`
 //! (`reusing`); `test_pointer_displacement_constants_preserve_order_and_width`,
 //! `test_constant_subtraction_preserves_operand_order`,
@@ -45,15 +42,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+use llrm_mir::context::ConstantKind;
+use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
+use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
+use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
+use crate::avail;
 use crate::cellmap::CellMap;
 use crate::cfg;
 use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
+use crate::memoryssa::{self, Accesses};
 use crate::ranges::{self, Interval};
 use crate::regions::{ByteRange, OverlapBucket, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
 
@@ -254,13 +255,31 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
     Some((masked(&quotient, width), masked(&remainder, width)))
 }
 
-/// What this store puts in its cell, where that is a number.
+/// What this store puts in its cell, where that is a number: a float's
+/// bits too, which floatfacts supplies for a computed value.
 fn _put(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> Option<Known> {
     let op = unit.function.instruction(inst);
     if !matches!(op.opcode, Opcode::Store { .. }) {
         return None;
     }
-    _operand(unit, op.operands[0], known, None)
+    _operand(unit, op.operands[0], known, None).or_else(|| _float_bits(unit, op.operands[0], known))
+}
+
+/// A float operand's bits: a constant's, or what `known` says of a value.
+fn _float_bits(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Known>) -> Option<Known> {
+    let width = match unit.context.types.get(unit.operand_type(operand)?) {
+        Type::Float(FloatKind::Float) => 32,
+        Type::Float(FloatKind::Double) => 64,
+        _ => return None,
+    };
+    match operand {
+        Operand::Constant(id) => match unit.context.get(id).kind {
+            ConstantKind::Float(bits) => Some(Known::new(bits, width)),
+            _ => None,
+        },
+        Operand::Value(value) => _read(known.get(&value), width),
+        Operand::Block(_) => None,
+    }
 }
 
 /// The complete value a direct constant store writes to a contained cell.
@@ -601,6 +620,10 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     if op.opcode == Opcode::Cast(CastOp::Trunc) {
         return _read(_operand(unit, op.operands[0], known, here).as_ref(), width);
     }
+    if let Opcode::ICmp(predicate) = op.opcode {
+        let (left, right) = (_operand(unit, op.operands[0], known, here)?, _operand(unit, op.operands[1], known, here)?);
+        return Some(Known::new(u8::from(holds(predicate, &left, &right)), 1));
+    }
     if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub)) && matches!(op.operands[0], Operand::Value(_)) && op.operands[0] == op.operands[1] {
         return Some(Known::new(0, width));
     }
@@ -641,6 +664,30 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     Some(Known::new(masked(&arith(&parts[0].n, &parts[1].n), width), width))
 }
 
+/// Whether `predicate` holds of two known numbers: an `icmp`'s answer.
+pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
+    let width = left.width.max(right.width);
+    let signed = |fact: &Known| {
+        let top = BigInt::from(1) << (fact.width - 1);
+        let number = masked(&fact.n, fact.width);
+        if (&number & &top) != BigInt::from(0) { number - (top << 1) } else { number }
+    };
+    let (a, b) = (signed(left), signed(right));
+    let (ua, ub) = (masked(&left.n, width), masked(&right.n, width));
+    match predicate {
+        IntPredicate::Eq => a == b,
+        IntPredicate::Ne => a != b,
+        IntPredicate::Slt => a < b,
+        IntPredicate::Sle => a <= b,
+        IntPredicate::Sgt => a > b,
+        IntPredicate::Sge => a >= b,
+        IntPredicate::Ult => ua < ub,
+        IntPredicate::Ule => ua <= ub,
+        IntPredicate::Ugt => ua > ub,
+        IntPredicate::Uge => ua >= ub,
+    }
+}
+
 /// Every value this function computes that is a number, to a fixed point;
 /// memory too, where `calls` says what each call writes.
 ///
@@ -674,6 +721,48 @@ fn incoming(unit: &Unit, one: Operand, facts: &IndexMap<ValueId, Known>) -> Opti
     _operand(unit, one, facts, None)
 }
 
+/// Dominating, exact stores supplying loads outside the cell lattice: a
+/// load through a pointer whose one clobber, as MemorySSA walks it, is a
+/// store of its bytes and its type.
+fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
+    let function = unit.function;
+    let accesses = Accesses::plain(unit, calls);
+    let candidates = function
+        .walk()
+        .filter_map(|(block, inst)| Some((block, inst, avail::loaded_into(unit, &accesses, inst)?)))
+        .filter(|(_, _, (reference, result))| !(reference.object && reference.addr().is_some()) && _width(unit, Operand::Value(*result)).is_some())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return IndexMap::default();
+    }
+    let graph = memoryssa::built(unit, &accesses);
+    let dominance = llrm_graph::loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
+    let before = |source: InstId, block: BlockId, inst: InstId| {
+        let order = function.block(block).instructions();
+        match function.parent(source) {
+            Some(at) if at == block => order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst),
+            Some(at) => dominance.dominates(cfg::id(at), cfg::id(block)),
+            None => false,
+        }
+    };
+    let mut providers = IndexMap::default();
+    for (block, inst, (reference, result)) in candidates {
+        let clobbers = graph.clobbers(inst, &reference);
+        let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
+        let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site) else {
+            continue;
+        };
+        if let Some((stored, value)) = avail::stored_from(unit, &accesses, source)
+            && before(source, block, inst)
+            && memoryssa::same_bytes(unit, &reference, &stored)
+            && unit.operand_type(value) == Some(function.value(result).ty)
+        {
+            providers.insert(result, value);
+        }
+    }
+    providers
+}
+
 fn _solved(
     unit: &Unit,
     calls: Option<&Calls>,
@@ -687,6 +776,7 @@ fn _solved(
     let function = unit.function;
     let mut facts = IndexMap::<ValueId, Known>::default();
     let mut held = HeldCells::default();
+    let pointer_stores = calls.map(|calls| _pointer_stores(unit, calls)).unwrap_or_default();
     let empty = Cells::default();
     // The cells read only what writes name; until a round learns one of
     // those, solving them again gives the same answer.
@@ -732,7 +822,8 @@ fn _solved(
                 continue;
             }
             let here = held.get(&inst).map(|here| &**here).unwrap_or(&empty);
-            if let Some(found) = _result(unit, inst, &facts, Some(here)) {
+            let found = _result(unit, inst, &facts, Some(here)).or_else(|| _operand(unit, *pointer_stores.get(&target)?, &facts, None));
+            if let Some(found) = found {
                 learned |= read.contains(&target);
                 facts.insert(target, found);
                 changing = true;

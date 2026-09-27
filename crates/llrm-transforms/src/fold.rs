@@ -15,13 +15,14 @@
 //! - An edge fold put a copy of each number in its parent; a phi here takes
 //!   the constant, so the parent's terminator no longer matters.
 //! - consts reads the module's globals through the outer proxy.
+//! - The old Fold left floatfold out of a body with loops, whose x87
+//!   observation points belonged to floatloop; the rich MIR observes no FP
+//!   exception, so it folds every body.
 //!
 //! Dropped, no rich MIR analogue: `_constant_update` (a read-modify-write of
 //! a cell); `_symbol_copies` and the symbol half of `_literal_of` (a
 //! global's address is already a constant operand); the checks for a
 //! second result something reads (`wanted`: one result per instruction).
-//! Waiting for their ports: the float folds (`floatfacts`, `floatfold`) and
-//! the exit cells they supplied.
 //!
 //! Tests, in `fold_tests.rs`: `divisor_constants_propagate_without_reordering`,
 //! and consts' tests that waited for this port:
@@ -37,6 +38,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::floatfacts;
 use llrm_analysis::memory::Unit;
 use llrm_graph::loops;
 use llrm_mir::context::Context;
@@ -50,6 +52,7 @@ use num_bigint::BigInt;
 
 use crate::canonical;
 use crate::edges;
+use crate::floatfold;
 use crate::lcssa::{arms, from_arms, operations};
 
 /// `folded`, then the canonical forms, as the old Fold.
@@ -74,13 +77,21 @@ struct _EdgeFold {
     numbers: Vec<(BlockId, BigInt)>,
 }
 
-/// Each known value of `function` replaced by its number, and one join
-/// expression folded on its edges; `outer` is its module and target.
-/// Whether anything changed.
+/// Each known value of `function` replaced by its number, one join
+/// expression folded on its edges, then floatfold; `outer` is its module
+/// and target. Whether anything changed.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+    let numbers = _numbers(context, layout, function, outer);
+    floatfold::folded(context, layout, function, outer) | numbers
+}
+
+/// `folded`'s integers: consts' answers, a counted float loop's exit
+/// cells among them.
+fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
     let (values, edge) = {
         let unit = Unit::within(context, layout, function, outer);
-        let facts = consts::known(&unit, Some(&Calls::default()), None, None);
+        let edges = floatfacts::exit_cells(&unit, &Calls::default());
+        let facts = consts::known(&unit, Some(&Calls::default()), Some(&edges), None);
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };
     let mut rewritten = BTreeSet::new();

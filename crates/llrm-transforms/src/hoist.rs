@@ -2,9 +2,10 @@
 //!
 //! Adapted from llrm-core's `optimize/transform.rs` `Hoist`: `hoisted`,
 //! `_invariant_run`, `_preheader`, `_crossed_values`, `_cannot_fault` and
-//! `_guaranteed_float_work`. Loads ask alias whether the loop writes them
-//! (`transform::_unwritten`), induction whether the loop makes a trip,
-//! and noreturn which calls end one.
+//! `_guaranteed_float_work`. Loads ask memoryssa's `Accesses`, from the
+//! manager, whether the loop writes them (`transform::_unwritten`), so the
+//! pipeline requires `Summaries`; induction says whether the loop makes a
+//! trip, and noreturn which calls end one.
 //!
 //! What changed with the IR:
 //! - A value is SSA, and an operand defined outside the loop dominates the
@@ -25,8 +26,8 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::manager::{Annotated, CallEffects};
-use llrm_analysis::memory::{self, Unit};
+use llrm_analysis::memory::Unit;
+use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, effects, induction, noreturn};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::{ConstantKind, mask};
@@ -35,7 +36,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 
-use crate::transform::{_Accesses, _unwritten};
+use crate::transform::_unwritten;
 
 pub struct Hoist;
 
@@ -58,7 +59,8 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     if found.is_empty() {
         return false;
     }
-    let accesses = _accesses(unit, analyses);
+    // Asked before anything moves: an instruction keeps its id where it goes.
+    let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
     let terminal = noreturn::terminal_sites(unit.context, &effects::declared(&outer.globals), unit.function, &BTreeSet::new());
     let mut changed = false;
@@ -77,22 +79,6 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     changed
 }
 
-/// What the manager's alias entries say of the function's accesses, asked
-/// before anything moves: an instruction keeps its id where it goes.
-fn _accesses(unit: &passes::Unit, analyses: &mut Analyses) -> _Accesses {
-    let (context, layout, function) = (&*unit.context, unit.layout, &*unit.function);
-    let references = Result::as_ref(&*analyses.get::<Annotated>(context, layout, function)).cloned().unwrap_or_default();
-    // Without the module's summaries, a call writes anything.
-    let calls = Result::as_ref(&*analyses.get::<CallEffects>(context, layout, function)).cloned().unwrap_or_default();
-    let within = Unit::within(context, layout, function, analyses.outer());
-    let reading = function
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && !memory::unmodeled_write(&within, inst))
-        .collect();
-    _Accesses { references, calls, reading }
-}
-
 /// The one block entering `loop_` from outside it.
 pub fn _preheader(graph: &[cfg::Block], loop_: &Loop) -> Option<i64> {
     let outside: Vec<i64> = graph.iter().filter(|block| block.succ.contains(&loop_.header) && !loop_.body.contains(&block.at)).map(|block| block.at).collect();
@@ -105,7 +91,7 @@ pub fn _preheader(graph: &[cfg::Block], loop_: &Loop) -> Option<i64> {
 /// The loop's instructions whose results never change, in an order each
 /// reads only what is outside the loop or earlier in it. Grown, to a fixed
 /// point.
-pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &_Accesses, terminal: &BTreeSet<InstId>) -> Vec<InstId> {
+pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>) -> Vec<InstId> {
     let function = &*unit.function;
     let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
     let insts: Vec<InstId> = function.layout().iter().filter(|&&block| inside(block)).flat_map(|&block| function.block(block).instructions().to_vec()).collect();
@@ -142,7 +128,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
 
 /// Whether `inst` computes only from its operands, or is a load nothing in
 /// the loop of `insts` may write.
-fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &_Accesses) -> bool {
+fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Accesses) -> bool {
     match unit.function.instruction(inst).opcode {
         Opcode::Binary(_)
         | Opcode::Cast(_)

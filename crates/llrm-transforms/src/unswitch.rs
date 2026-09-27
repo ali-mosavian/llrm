@@ -6,7 +6,8 @@
 //! - The old candidate was re-optimized by `transform::recorded`, the whole
 //!   pipeline with unswitching off and the machine's tuning forwarded. That
 //!   pipeline is not ported, so the re-optimization is the passes the pass
-//!   is given; its price is `profit::weighted` at the given costs.
+//!   is given; its price is `profit::weighted` at the given costs, each
+//!   loop weighted by the trips induction proves.
 //! - The old stage records and `watch` hook are the pass manager's dump and
 //!   change log.
 //! - A condition's purity was checked on the old operations' memory, flag,
@@ -34,7 +35,7 @@
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::{cfg, occurrence};
+use llrm_analysis::{cfg, consts, memory, occurrence};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::context::Context;
@@ -89,7 +90,12 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn F
 
     let size = |state: &Function| occurrence::operations(state).count();
     let count = |state: &Function| loops::loops(&cfg::graph(state), state.entry().map(cfg::id)).len();
-    let price = |state: &Function| profit::weighted(unit.context, state, unit.callees, costs, None);
+    let price = |state: &Function| {
+        // Registers alone: no global is read.
+        let within = memory::Unit { machine: None, context: unit.context, layout: unit.layout, metadata: unit.metadata, globals: &[], function: state };
+        let trips = profit::proven_trips(&within, &consts::known(&within, None, None, None));
+        profit::weighted(unit.context, state, unit.callees, costs, Some(&trips))
+    };
     let worse = match (price(unit.function), price(&candidate)) {
         (Some(before), Some(after)) => after > before,
         _ => true,

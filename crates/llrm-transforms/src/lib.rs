@@ -7,9 +7,13 @@ pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
 pub mod cfg;
+pub mod counting;
 pub mod dead;
+pub mod dse;
 pub mod decide;
 pub mod edges;
+pub mod fill;
+pub mod floatfold;
 pub mod fold;
 pub mod gvn;
 pub mod hoist;
@@ -18,13 +22,18 @@ pub mod interprocedural;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod loopexit;
+pub mod loopmotion;
 pub mod loopclone;
 pub mod loopsimplify;
+pub mod peel;
 pub mod profit;
 pub mod promote;
+pub mod strength;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
+pub mod unroll;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
