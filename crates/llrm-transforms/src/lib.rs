@@ -2,6 +2,7 @@
 //! does it there, with that pass's tests. A pass asks llrm-analysis for
 //! its facts and names nothing about the machine.
 
+pub mod algebraic;
 pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
@@ -9,6 +10,7 @@ pub mod cfg;
 pub mod dead;
 pub mod decide;
 pub mod edges;
+pub mod floatfold;
 pub mod fold;
 pub mod gvn;
 pub mod inline;

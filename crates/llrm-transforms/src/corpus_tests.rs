@@ -55,3 +55,14 @@ fn decide_keeps_every_corpus_module_verifying_and_settles() {
     });
     assert!(changed > 0, "the corpus has branches to decide");
 }
+
+#[test]
+fn algebraic_keeps_every_corpus_module_verifying_and_settles() {
+    let changed = settles("algebraic", |module, id| {
+        let layout = llrm_analysis::testing::layout(module);
+        let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(Outer::of(module, None)));
+        let (context, function) = function_mut(module, id);
+        crate::algebraic::simplified(context, &layout, function, &mut analyses)
+    });
+    assert!(changed > 0, "the corpus has identities to simplify");
+}
