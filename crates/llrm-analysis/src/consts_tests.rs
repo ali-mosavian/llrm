@@ -156,6 +156,17 @@ fn test_equal_integer_operands_are_zero_without_input_facts() {
     }
 }
 
+/// A compare of known numbers is a known bit, signed or not as it says:
+/// peelsize decides an unrolled iteration's branch by it.
+#[test]
+fn a_compare_of_known_numbers_folds_to_its_bit() {
+    for (predicate, want) in [("slt", 1), ("ult", 0), ("sgt", 0), ("ugt", 1), ("eq", 0), ("ne", 1), ("sle", 1), ("uge", 1)] {
+        let parsed = one(&format!("icmp {predicate} i16 %x, 5"), "i16");
+        assert_eq!(parsed.result("y", &[("x", Known::new(0xFFFF, 16))]), Some(Known::new(want, 1)), "{predicate}");
+        assert_eq!(parsed.result("y", &[]), None, "{predicate}");
+    }
+}
+
 #[test]
 fn different_unknown_operands_are_not_folded() {
     let parsed = Parsed::new(

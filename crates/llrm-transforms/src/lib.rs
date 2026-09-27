@@ -20,11 +20,13 @@ pub mod lcssamerges;
 pub mod loadjoins;
 pub mod loopclone;
 pub mod loopsimplify;
+pub mod peel;
 pub mod profit;
 pub mod promote;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
+pub mod unroll;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

@@ -25,6 +25,7 @@ pub mod memory;
 pub mod memoryssa;
 pub mod noreturn;
 pub mod occurrence;
+pub mod peelsize;
 pub mod pointerfacts;
 pub mod ranges;
 pub mod regions;

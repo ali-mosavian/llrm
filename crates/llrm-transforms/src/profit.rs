@@ -14,14 +14,15 @@
 //! What changed with the IR: only a load or store touches memory, so no
 //! operation carries a folded memory operand and `memory_update` prices
 //! nothing; `llvm.memset` is the old fill, its bytes the cells; `select`,
-//! `frem` and `landingpad` had no old kind and stay unpriced. Two facts are
-//! asked of analyses not ported yet: `spill_risk` takes liveness's live-out
-//! sets, and a loop whose count `trips` does not name gets the conventional
-//! ten, not induction's proven count.
+//! `frem` and `landingpad` had no old kind and stay unpriced. `spill_risk`
+//! takes liveness's live-out sets. `trips` is induction's proven counts
+//! (`proven_trips`); a loop it does not name gets the conventional ten.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
+use llrm_analysis::consts::Known;
+use llrm_analysis::{induction, memory};
 use llrm_graph::loops;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::memory::{Callees, callee};
@@ -29,6 +30,7 @@ use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use num_traits::ToPrimitive;
 
 // Trips assumed of a loop, and cells of a fill, whose count is not a number.
 pub const UNKNOWN_TRIPS: i64 = 10;
@@ -133,6 +135,23 @@ pub fn _block(context: &Context, function: &Function, callees: &Callees, block: 
 /// Semantic work present once in the body, independent of frequency.
 pub fn r#static(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
     function.layout().iter().map(|&block| _block(context, function, callees, cfg::id(block), costs)).sum()
+}
+
+/// Whether the target prices every instruction here, which a copy's cost needs.
+pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
+    r#static(context, function, callees, costs).is_some()
+}
+
+/// Each loop's trips by latch, where induction proves them: the `trips`
+/// that replaces the conventional ten.
+pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> IndexMap<i64, i64> {
+    let mut trips = IndexMap::default();
+    for loop_ in loops::loops(&cfg::graph(unit.function), unit.function.entry().map(cfg::id)) {
+        if let Some(count) = induction::trip_count(unit, &loop_, facts).and_then(|count| count.to_i64()) {
+            trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
+        }
+    }
+    trips
 }
 
 /// Profile-free block frequencies, or `None` for conflicting proofs.
