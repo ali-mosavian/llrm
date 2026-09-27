@@ -11,7 +11,7 @@
 //! meaning: a raise reaches a handler in this body only along an `invoke`'s
 //! unwind edge, and `exposes_memory` asks for that edge.
 
-use llrm_mir::module::{Function, InstId, Module, Operand};
+use llrm_mir::module::{Function, GlobalValue, InstId, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::{ConstantKind, Context, GlobalId};
 use llrm_support::hash::HashMap;
@@ -28,9 +28,16 @@ pub struct Declaration {
 pub type Declarations = HashMap<GlobalId, Declaration>;
 
 pub fn declarations(module: &Module) -> Declarations {
-    module
-        .functions()
-        .map(|(id, _, function)| (id, Declaration { attrs: function.attrs.clone(), parameters: function.parameter_attrs.clone() }))
+    declared(&module.globals)
+}
+
+/// `declarations` of a module's globals, as a function pass sees them
+/// through `passes::Outer`.
+pub fn declared(globals: &[GlobalValue]) -> Declarations {
+    globals
+        .iter()
+        .enumerate()
+        .filter_map(|(at, global)| global.function().map(|function| (GlobalId(at as u32), Declaration { attrs: function.attrs.clone(), parameters: function.parameter_attrs.clone() })))
         .collect()
 }
 

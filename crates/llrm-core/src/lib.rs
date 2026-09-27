@@ -7,7 +7,7 @@ pub use llrm_cycles as cycles;
 pub mod flow;
 pub mod frontends;
 pub mod hir;
-pub mod legacy;
+pub use llrm_bcmachine::legacy;
 pub mod model;
 pub use llrm_omf as objectfile;
 pub mod optimize;

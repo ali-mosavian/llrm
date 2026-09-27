@@ -17,28 +17,27 @@
 //! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
 //!   `source_backed` and `raised` marks.
 //!
-//! It is a module pass, since `memory::Unit` reads the module's globals.
-//! Every access, and an address translated onto an edge, carries alias's
-//! provenance. Calls write what `memory::unmodeled_write` leaves open until
-//! alias gives their footprints.
+//! A call's footprint is its `CallEffects`: the pass needs `Summaries`
+//! required. An address translated onto an edge carries alias's
+//! provenance, as every access does.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_analysis::alias::{self, PointsTo};
+use llrm_analysis::alias::PointsTo;
+use llrm_analysis::manager::Pointers;
 use llrm_analysis::avail::{loaded_into, stored_from};
-use llrm_analysis::consts::{self, Calls};
 use llrm_analysis::memory::{MemRef, Unit};
-use llrm_analysis::memoryssa::{self, same_bytes};
+use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
 use llrm_graph::loops::{self, Dominance, Loop};
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{Callees, only_value};
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::ModulePass;
-use llrm_mir::GlobalId;
+use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::HashMap;
 
 use crate::edges;
@@ -48,35 +47,36 @@ pub struct LoadJoins {
     pub insert: bool,
 }
 
-impl ModulePass for LoadJoins {
+impl FunctionPass for LoadJoins {
     fn name(&self) -> &'static str {
         "loadjoins"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        let layout = match &module.datalayout {
-            Some(text) => DataLayout::parse(text).unwrap_or_else(|error| panic!("loadjoins: {error}")),
-            None => DataLayout::default(),
-        };
-        let callees = llrm_mir::memory::callees(module);
-        let mut changed = Vec::new();
-        for at in 0..module.globals.len() {
-            let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else {
-                continue;
-            };
-            let unit = Unit::of(module, &layout, function);
-            let facts = alias::points_to(&unit, None, None).unwrap_or_else(|error| panic!("loadjoins: {error}"));
-            let references = alias::annotated_with(&unit, &facts, &consts::known(&unit, None, None, None)).unwrap_or_else(|error| panic!("loadjoins: {error}"));
-            let joined = planned(&unit.with_references(&references), &facts, &callees, &Calls::default(), self.insert);
-            if joined.is_empty() {
-                continue;
-            }
-            let GlobalKind::Function(function) = &mut module.globals[at].kind else { unreachable!("a function") };
-            applied(function, joined).unwrap_or_else(|error| panic!("loadjoins: {error}"));
-            changed.push(GlobalId(at as u32));
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let (context, layout) = (&*unit.context, unit.layout);
+        let pointers = analyses.get::<Pointers>(context, layout, unit.function);
+        let changed = Accesses::managed(context, layout, unit.function, analyses).and_then(|accesses| {
+            let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
+            reused(context, layout, unit.function, analyses.outer(), unit.callees, &accesses, pointers, self.insert)
+        });
+        match changed {
+            Ok(true) => PreservedAnalyses::none(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("loadjoins: {error}"),
         }
-        changed
     }
+}
+
+/// `function`'s join loads made phis, as `accesses` (of `function` as it
+/// stands) says what each instruction touches and `pointers` what each
+/// pointer points to; whether any was.
+pub fn reused(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool) -> Result<bool, String> {
+    let joined = planned(&Unit::within(context, layout, function, outer), callees, accesses, pointers, insert);
+    if joined.is_empty() {
+        return Ok(false);
+    }
+    applied(function, joined)?;
+    Ok(true)
 }
 
 /// Where a join load's value comes from on one edge.
@@ -111,8 +111,8 @@ fn on_edge(function: &Function, load: InstId, parent: BlockId) -> Option<Operand
 }
 
 /// What a load or store at `inst` leaves in its cell.
-fn provided(unit: &Unit, inst: InstId) -> Option<(MemRef, Operand)> {
-    stored_from(unit, inst).or_else(|| loaded_into(unit, inst).map(|(cell, value)| (cell, Operand::Value(value))))
+fn provided(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, Operand)> {
+    stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))))
 }
 
 /// The CFG facts a join is judged by.
@@ -151,7 +151,7 @@ fn insertable(unit: &Unit, callees: &Callees, shape: &Shape, parent: BlockId, jo
 }
 
 /// Every join load to replace by a phi, decided on `unit` as it stands.
-fn planned(unit: &Unit, facts: &PointsTo, callees: &Callees, calls: &Calls, insert: bool) -> Vec<Joined> {
+fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool) -> Vec<Joined> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -159,10 +159,10 @@ fn planned(unit: &Unit, facts: &PointsTo, callees: &Callees, calls: &Calls, inse
     if !predecessors.values().any(|parents| parents.len() > 1) {
         return Vec::new();
     }
-    let memory = memoryssa::built(unit, calls);
+    let memory = memoryssa::built(unit, accesses);
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
-    let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, site).map(|(cell, value)| (site, cell, value))).collect();
+    let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value))).collect();
     let shape = Shape {
         dominance: loops::dominance(&graph, entry),
         depth: loops::dominators(&graph, entry).into_iter().map(|(at, above)| (at, above.len())).collect(),
@@ -177,7 +177,7 @@ fn planned(unit: &Unit, facts: &PointsTo, callees: &Callees, calls: &Calls, inse
         }
         let join = cfg::block(block.at);
         for (index, &load) in function.block(join).instructions().iter().enumerate() {
-            let Some((reference, result)) = loaded_into(unit, load) else {
+            let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };
             let ty = function.value(result).ty;
@@ -187,7 +187,7 @@ fn planned(unit: &Unit, facts: &PointsTo, callees: &Callees, calls: &Calls, inse
                     break;
                 };
                 let translated = MemRef { typed: reference.typed.clone(), ..MemRef::at(unit, pointer, reference.width) };
-                let translated = MemRef { provenance: facts.reference(unit, &translated), ..translated };
+                let translated = MemRef { provenance: pointers.reference(unit, &translated), ..translated };
                 let candidates = providers.iter().filter(|(source, cell, value)| {
                     let (at, _) = places[source];
                     at != block.at

@@ -8,6 +8,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 
 use super::*;
+use crate::consts::Calls;
 use crate::testing::{DOS, block, function, layout, parsed, value};
 
 struct Parsed {
@@ -51,8 +52,8 @@ fn cell(unit: &Unit, inst: InstId) -> MemRef {
 
 /// What forwarding offers each load of `@f`.
 fn forwarded(unit: &Unit, calls: &Calls) -> Vec<Forward> {
-    let loads = unit.function.walk().map(|(_, inst)| inst).filter(|&inst| loaded_into(unit, inst).is_some()).collect();
-    forwardable(unit, calls, &loads)
+    let loads = unit.function.walk().map(|(_, inst)| inst).filter(|&inst| unit.function.instruction(inst).opcode.mnemonic() == "load").collect();
+    forwardable(unit, &Accesses::plain(unit, calls), &loads)
 }
 
 /// `%v` stored to the cell, `between`, then the cell loaded.
@@ -76,7 +77,7 @@ fn test_current_mir_decides_whether_a_call_invalidates_memory() {
         let parsed = around(between);
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(provider(&unit, &Calls::default(), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{between}");
+        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{between}");
     }
 }
 
@@ -135,7 +136,7 @@ b0:
         ));
         let unit = parsed.unit();
         let calls = if disjoint { Calls::from_iter([(site(&unit, "b0", 1), vec![cell(&unit, site(&unit, "b0", 3))])]) } else { Calls::default() };
-        let removed = dead_stores(&unit, &calls, None);
+        let removed = dead_stores(&unit, &Accesses::plain(&unit, &calls), None);
         assert_eq!(removed, if disjoint { vec![site(&unit, "b0", 0)] } else { vec![] }, "{disjoint}");
     }
 }
@@ -155,7 +156,7 @@ b0:
     ));
     let unit = parsed.unit();
     let calls = Calls::from_iter([(site(&unit, "b0", 1), vec![])]);
-    assert_eq!(dead_stores(&unit, &calls, None), vec![]);
+    assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &calls), None), vec![]);
 }
 
 /// procs' TWICE kept two dead frame stores once its return read through an
@@ -175,8 +176,8 @@ b0:
     let unit = parsed.unit();
     let slot = named(&unit, "s");
     let private = |one: &MemRef| one.root == Some(slot);
-    assert_eq!(dead_stores(&unit, &Calls::default(), Some(&private)), vec![site(&unit, "b0", 1)]);
-    assert_eq!(dead_stores(&unit, &Calls::default(), None), vec![], "the caller may read it");
+    assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), Some(&private)), vec![site(&unit, "b0", 1)]);
+    assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None), vec![], "the caller may read it");
 }
 
 // ---- tests/test_memoryssa_forward.py ----
@@ -303,7 +304,7 @@ b3:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b3", 0);
-        assert_eq!(provider(&unit, &Calls::default(), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{right}");
+        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{right}");
     }
 }
 
@@ -364,7 +365,7 @@ b0:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(provider(&unit, &Calls::default(), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{write}");
+        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{write}");
     }
 }
 
@@ -393,7 +394,7 @@ b0:
         .replace("CELL", CELL)
         .replace("OTHER", OTHER));
         let unit = parsed.unit();
-        let removed = dead_stores(&unit, &Calls::default(), None);
+        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
         assert_eq!(removed, if dead { vec![site(&unit, "b0", 0)] } else { vec![] }, "{between} / {last}");
     }
 }
@@ -420,7 +421,7 @@ b2:
         )
         .replace("CELL", CELL));
         let unit = parsed.unit();
-        let removed = dead_stores(&unit, &Calls::default(), None);
+        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
         assert_eq!(removed.contains(&site(&unit, "b0", 0)), dead, "{right}");
     }
 }
@@ -444,7 +445,7 @@ b2:
 "
     ));
     let unit = parsed.unit();
-    assert_eq!(dead_stores(&unit, &Calls::default(), None), vec![]);
+    assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None), vec![]);
 }
 
 /// A handler reached along an unwind edge reads what was stored.
@@ -474,7 +475,7 @@ pad:
         let invoke = site(&unit, "b0", 2);
         let slot = named(&unit, "s");
         let private = |one: &MemRef| one.root == Some(slot);
-        let removed = dead_stores(&unit, &Calls::from_iter([(invoke, vec![])]), Some(&private));
+        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::from_iter([(invoke, vec![])])), Some(&private));
         assert_eq!(removed.contains(&site(&unit, "b0", 1)), dead, "{handler}");
     }
 }

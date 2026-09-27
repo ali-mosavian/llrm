@@ -17,10 +17,11 @@
 //! - `_on_edge` translates an instruction's operands; a phi's input may be
 //!   a constant.
 //!
-//! Not ported yet, so `optimized` does without them: `transform::forwarded`
-//! (store-to-load forwarding, waiting on `analysis::avail`), then
-//! `loadjoins::reused` after the join. `floatfold::checks` has no
-//! counterpart: the rich MIR observes no FP exception.
+//! `floatfold::checks` has no counterpart: the rich MIR observes no FP
+//! exception.
+//!
+//! What each instruction touches is `memoryssa::Accesses`, asked once
+//! before anything changes: the pass needs `Summaries` required.
 //! `reused_divides` has no counterpart (see `transform`).
 //!
 //! The old module had no tests of its own; `subexpressions`' are in
@@ -28,7 +29,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::{cfg, liveness, memory, ssa};
+use llrm_analysis::alias::PointsTo;
+use llrm_analysis::manager::Pointers;
+use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::{cfg, liveness, ssa};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
@@ -38,7 +42,7 @@ use llrm_support::hash::IndexMap;
 
 use crate::lcssa::{arms, from_arms, place_phi};
 use crate::profit::{self, OperationCosts};
-use crate::{edges, transform};
+use crate::{edges, loadjoins, transform};
 
 /// The single value-reuse pass: scalar GVN and memory-aware PRE.
 #[derive(Default)]
@@ -54,7 +58,13 @@ impl FunctionPass for Gvn {
     }
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match optimized(unit, analyses.outer(), &self.costs, self.registers) {
+        let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
+        let pointers = analyses.get::<Pointers>(unit.context, unit.layout, unit.function);
+        // Only `loadjoins` changes the CFG, and only by splitting an edge.
+        let blocks = unit.function.layout().len();
+        let pointers = Result::as_ref(&*pointers).map_err(String::clone);
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &self.costs, self.registers)) {
+            Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("gvn: {error}"),
@@ -64,26 +74,29 @@ impl FunctionPass for Gvn {
 
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
-/// module and target.
-pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let numbered = _numbered(unit, outer, costs, registers)?;
+/// module and target, `accesses` what each instruction of `unit` touches
+/// and `pointers` what each pointer points to.
+///
+/// Every edit replaces a value with an equal one and adds no memory
+/// access before `loadjoins`, so `accesses` stays true throughout.
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, costs, registers)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
-    let combined = joined(unit.function, !numbered)?;
-    Ok(numbered || combined)
+    let combined = joined(unit.function, !subexpressed)?;
+    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, unit.callees, accesses, pointers, !combined)?;
+    Ok(numbered || combined || loaded)
 }
 
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
-/// Whether it changed anything.
-fn _numbered(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let accesses = transform::_accesses(&memory::Unit::within(unit.context, unit.layout, unit.function, outer), outer)?;
-    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, bool), String> {
+/// Whether it changed anything, and whether `subexpressions` did.
+fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64) -> Result<(bool, bool), String> {
+    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
-        // `transform::forwarded(avoid_store_crossing)` goes here once
-        // `analysis::avail` is ported.
-        let changed = transform::subexpressions(&mut function, &accesses, avoid_store_crossing)?;
-        Ok((function, changed))
+        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, avoid_store_crossing)?;
+        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing)?;
+        Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
     let price = |one: &Function| profit::pressure_adjusted(unit.context, one, unit.callees, costs, registers, None, &liveness::live(one).live_out);

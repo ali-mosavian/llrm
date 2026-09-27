@@ -24,6 +24,7 @@
 
 use llrm_analysis::consts::{Calls, Known};
 use llrm_analysis::floatfacts::{self, Finite, Format};
+use llrm_analysis::manager;
 use llrm_analysis::memory::Unit;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -39,7 +40,8 @@ impl FunctionPass for FloatFold {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if folded(unit.context, unit.layout, unit.function, analyses.outer()) {
+        let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
+        if folded(unit.context, unit.layout, unit.function, analyses.outer(), &calls) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -48,12 +50,13 @@ impl FunctionPass for FloatFold {
 }
 
 /// `discarded`, then `stored`, with what floatfacts knows of `function`;
-/// `outer` is its module and target. Whether anything changed.
-pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+/// `outer` is its module and target, `calls` what each call writes.
+/// Whether anything changed.
+pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
     let (facts, conversions) = {
         let unit = Unit::within(context, layout, function, outer);
-        let facts = floatfacts::known(&unit, &Calls::default(), None);
-        let conversions = floatfacts::converted(&unit, &Calls::default(), Some(&facts));
+        let facts = floatfacts::known(&unit, calls, None);
+        let conversions = floatfacts::converted(&unit, calls, Some(&facts));
         (facts, conversions)
     };
     discarded(context, function, &conversions) | stored(context, function, &facts)
@@ -93,4 +96,4 @@ pub fn discarded(context: &mut Context, function: &mut Function, converted: &Ind
 
 #[cfg(test)]
 #[path = "floatfold_tests.rs"]
-mod tests;
+pub(crate) mod tests;

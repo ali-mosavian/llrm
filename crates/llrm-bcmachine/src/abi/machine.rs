@@ -8,6 +8,10 @@ use std::sync::OnceLock;
 
 pub const DOS: &str = include_str!("machines/dos.toml");
 
+/// The processors a description may name. `llrm-core` checks that the
+/// backend prices exactly these.
+pub const CPUS: [&str; 8] = ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Addressing {
     /// selector * 16 + offset.
@@ -77,8 +81,8 @@ impl Machine {
                 .collect()
         };
         let cpu = table.get("cpu").and_then(toml::Value::as_str).ok_or("cpu is not a string")?;
-        if !crate::backend::cpu::names().contains(&cpu) {
-            return Err(format!("cpu {cpu:?} is not one of {:?}", crate::backend::cpu::names()));
+        if !CPUS.contains(&cpu) {
+            return Err(format!("cpu {cpu:?} is not one of {CPUS:?}"));
         }
         Ok(Self {
             addressing,

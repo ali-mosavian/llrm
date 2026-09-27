@@ -12,7 +12,7 @@
 //! an operand, a constant or a global's address included), `_addressing`,
 //! `_real` and `_preserved` (a load defines its whole result from its one
 //! pointer), `_crosses_edges` and every stack exclusion (no push area),
-//! the runtime names in `calls` (a call's footprint is `Calls`), float
+//! the runtime names in `calls` (what a call touches is `Accesses`'), float
 //! exceptions, `sealed` and `handles_errors` (a handler in this function is
 //! reached along an `invoke`'s unwind edge, which the solve walks),
 //! `bounds` (the region lattice's
@@ -30,9 +30,8 @@ use llrm_support::hash::{HashMap, IndexMap};
 
 use crate::cellmap::CellMap;
 use crate::cfg;
-use crate::consts::Calls;
 use crate::memory::{MemRef, MemoryKind, Unit};
-use crate::memoryssa::{self, covers, may_clobber, reads, same_bytes, writes};
+use crate::memoryssa::{self, Accesses, covers, may_clobber, same_bytes};
 use crate::ranges::{self, Interval};
 use crate::regions::{OverlapBucket, overlap_bucket, overlap_buckets};
 
@@ -49,26 +48,26 @@ pub struct Held {
 }
 
 /// The cell `inst` purely loads, and the value it lands in.
-pub fn loaded_into(unit: &Unit, inst: InstId) -> Option<(MemRef, ValueId)> {
+pub fn loaded_into(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, ValueId)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
-        Opcode::Load { volatile: false, .. } => Some((unit.reference(inst)?, instruction.result?)),
+        Opcode::Load { volatile: false, .. } => Some((accesses.references.get(&inst)?.clone(), instruction.result?)),
         _ => None,
     }
 }
 
 /// The cell `inst` purely stores, and what it wrote there.
-pub fn stored_from(unit: &Unit, inst: InstId) -> Option<(MemRef, Operand)> {
+pub fn stored_from(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, Operand)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
-        Opcode::Store { volatile: false, .. } => Some((unit.reference(inst)?, instruction.operands[0])),
+        Opcode::Store { volatile: false, .. } => Some((accesses.references.get(&inst)?.clone(), instruction.operands[0])),
         _ => None,
     }
 }
 
 /// The cell `inst` purely stores to, whatever it put there.
-pub fn stored_cell(unit: &Unit, inst: InstId) -> Option<MemRef> {
-    stored_from(unit, inst).map(|(cell, _)| cell)
+pub fn stored_cell(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<MemRef> {
+    stored_from(unit, accesses, inst).map(|(cell, _)| cell)
 }
 
 /// Whether `holder` can stand for `value`: it has its type.
@@ -77,14 +76,14 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 }
 
 /// The map across one instruction.
-fn after(unit: &Unit, inst: InstId, mut holders: Holders, calls: &Calls, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
-    let Some(stores) = writes(unit, calls, inst) else {
+fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
+    let Some(stores) = accesses.writes(inst) else {
         return Holders::default();
     };
-    for store in &stores {
+    for store in stores {
         holders.retain(|one, _| !may_clobber(unit, known, one, store));
     }
-    let found = stored_from(unit, inst).or_else(|| loaded_into(unit, inst).map(|(cell, value)| (cell, Operand::Value(value))));
+    let found = stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))));
     if let Some((cell, value)) = found {
         holders.insert(cell, value);
     }
@@ -104,7 +103,7 @@ fn meet(maps: &[&Holders]) -> Holders {
 }
 
 /// Which value each cell holds, at every block's entry and exit.
-pub fn holders(unit: &Unit, calls: &Calls) -> Held {
+pub fn holders(unit: &Unit, accesses: &Accesses) -> Held {
     // Register facts only: a memory-aware solve per query costs more than it finds.
     let known: BTreeMap<ValueId, Interval> = ranges::constants(unit).into_iter().collect();
     let graph = cfg::graph(unit.function);
@@ -125,7 +124,7 @@ pub fn holders(unit: &Unit, calls: &Calls) -> Held {
             let arriving = if Some(block.at) == entry { Holders::default() } else { meet(&preds[&block.at].iter().map(|one| &outof[one]).collect::<Vec<_>>()) };
             let mut leaving = arriving.clone();
             for &inst in unit.function.block(cfg::block(block.at)).instructions() {
-                leaving = after(unit, inst, leaving, calls, Some(&known));
+                leaving = after(unit, accesses, inst, leaving, Some(&known));
             }
             if leaving != outof[&block.at] {
                 stale.extend(&block.succ);
@@ -144,15 +143,15 @@ pub fn holders(unit: &Unit, calls: &Calls) -> Held {
 /// What holds `reference`'s bytes just before `at`.
 ///
 /// A new use extends its lifetime; this says nothing about its allocation.
-pub fn provider(unit: &Unit, calls: &Calls, at: InstId, reference: &MemRef) -> Option<Operand> {
-    let found = holders(unit, calls);
+pub fn provider(unit: &Unit, accesses: &Accesses, at: InstId, reference: &MemRef) -> Option<Operand> {
+    let found = holders(unit, accesses);
     let block = unit.function.parent(at)?;
     let mut current = found.into[&cfg::id(block)].clone();
     for &inst in unit.function.block(block).instructions() {
         if inst == at {
             return current.iter().find(|(one, _)| same_bytes(unit, one, reference)).map(|(_, who)| *who);
         }
-        current = after(unit, inst, current, calls, Some(&found.known));
+        current = after(unit, accesses, inst, current, Some(&found.known));
     }
     None
 }
@@ -197,10 +196,10 @@ struct Stored {
 }
 
 impl Stored {
-    fn new(unit: &Unit, private: Option<&dyn Fn(&MemRef) -> bool>) -> Self {
+    fn new(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Self {
         let mut number: IndexMap<MemRef, usize> = IndexMap::default();
         for (_, inst) in unit.function.walk() {
-            if let Some(cell) = stored_cell(unit, inst) {
+            if let Some(cell) = stored_cell(unit, accesses, inst) {
                 let next = number.len();
                 number.entry(cell).or_insert(next);
             }
@@ -242,7 +241,7 @@ impl Stored {
 /// What a dead-store solve reads of the function besides its instructions.
 struct Solve<'a, 'u> {
     unit: &'a Unit<'u>,
-    calls: &'a Calls,
+    accesses: &'a Accesses,
     private: Option<&'a dyn Fn(&MemRef) -> bool>,
     stored: Stored,
 }
@@ -264,7 +263,7 @@ impl Solve<'_, '_> {
             // Nothing can read a private cell but by its name: not a call,
             // and not an address this cannot resolve.
             let shielded = self.private.is_some() && !volatile;
-            let (Some(loads), Some(stores)) = (reads(unit, inst), writes(unit, self.calls, inst)) else {
+            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.writes(inst)) else {
                 if shielded && call {
                     overwritten.intersect_with(&stored.private);
                 } else {
@@ -273,7 +272,7 @@ impl Solve<'_, '_> {
                 continue;
             };
 
-            if let Some(cell) = stored_cell(unit, inst) {
+            if let Some(cell) = stored_cell(unit, self.accesses, inst) {
                 let at = stored.number[&cell];
                 if stored.covering(unit, at).intersects(&overwritten) {
                     found.push(inst);
@@ -283,7 +282,7 @@ impl Solve<'_, '_> {
             }
 
             // Anything this reads or writes puts the cells it may touch back in doubt.
-            for reference in loads.iter().chain(&stores) {
+            for reference in loads.iter().chain(stores) {
                 self.clobber(&mut overwritten, reference, shielded && (call || !fixed(reference)));
             }
         }
@@ -322,8 +321,8 @@ impl Solve<'_, '_> {
 /// A block with no successor starts from nothing: the caller may read the
 /// cell -- unless `private` says nothing outside the function can, in which
 /// case it starts from every such cell stored here.
-pub fn dead_stores(unit: &Unit, calls: &Calls, private: Option<&dyn Fn(&MemRef) -> bool>) -> Vec<InstId> {
-    let solve = Solve { unit, calls, private, stored: Stored::new(unit, private) };
+pub fn dead_stores(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Vec<InstId> {
+    let solve = Solve { unit, accesses, private, stored: Stored::new(unit, accesses, private) };
     let stored = &solve.stored;
     let mut every = stored.none();
     (0..stored.cells.len()).for_each(|at| every.insert(at));
@@ -377,8 +376,8 @@ pub fn dead_stores(unit: &Unit, calls: &Calls, private: Option<&dyn Fn(&MemRef) 
 /// Loads in `want` that a known value can serve instead of memory.
 ///
 /// The caller replaces the load, extending the provider's lifetime.
-pub fn forwardable(unit: &Unit, calls: &Calls, want: &BTreeSet<InstId>) -> Vec<Forward> {
-    let held = holders(unit, calls);
+pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) -> Vec<Forward> {
+    let held = holders(unit, accesses);
     let mut found = Vec::new();
     let mut missing = Vec::new();
 
@@ -386,30 +385,30 @@ pub fn forwardable(unit: &Unit, calls: &Calls, want: &BTreeSet<InstId>) -> Vec<F
         let mut current = held.into[&cfg::id(at)].clone();
         for &inst in unit.function.block(at).instructions() {
             if want.contains(&inst)
-                && let Some((cell, result)) = loaded_into(unit, inst)
+                && let Some((cell, result)) = loaded_into(unit, accesses, inst)
             {
                 match current.iter().find(|(one, who)| same_bytes(unit, one, &cell) && serves(unit, **who, result)) {
                     Some((_, who)) => found.push(Forward { at: inst, value: *who }),
                     None => missing.push(inst),
                 }
             }
-            current = after(unit, inst, current, calls, Some(&held.known));
+            current = after(unit, accesses, inst, current, Some(&held.known));
         }
     }
     if !missing.is_empty() {
-        found.extend(memory_providers(unit, calls, &missing));
+        found.extend(memory_providers(unit, accesses, &missing));
     }
     found
 }
 
 /// Recover dominating memory values the forward lattice lost at loops.
-fn memory_providers(unit: &Unit, calls: &Calls, missing: &[InstId]) -> Vec<Forward> {
+fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec<Forward> {
     let function = unit.function;
-    let graph = memoryssa::built(unit, calls);
+    let graph = memoryssa::built(unit, accesses);
     let dominance = loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
-    let loads: Vec<(InstId, (MemRef, ValueId))> = graph.sites.keys().filter_map(|&site| loaded_into(unit, site).map(|loaded| (site, loaded))).collect();
+    let loads: Vec<(InstId, (MemRef, ValueId))> = graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
@@ -417,13 +416,13 @@ fn memory_providers(unit: &Unit, calls: &Calls, missing: &[InstId]) -> Vec<Forwa
 
     let mut found = Vec::new();
     for &site in missing {
-        let Some((cell, result)) = loaded_into(unit, site) else {
+        let Some((cell, result)) = loaded_into(unit, accesses, site) else {
             continue;
         };
         let clobbers = graph.clobbers(site, &cell);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
         if let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
-            && let Some((stored, value)) = stored_from(unit, source)
+            && let Some((stored, value)) = stored_from(unit, accesses, source)
             && available(source, site)
             && same_bytes(unit, &stored, &cell)
             && serves(unit, value, result)

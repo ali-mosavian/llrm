@@ -14,11 +14,13 @@
 //! constants is left to folding. A neutral term's raised source bytes, and
 //! its flags read by a carry, have no counterpart either.
 
-use llrm_mir::context::{Context, ConstantKind, mask};
+use llrm_mir::context::{Context, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
+use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Loops, PreservedAnalyses, Unit, Dominators};
+
+use crate::algebraic;
 
 /// `compares` then `identities`, as the old fold applied them.
 pub struct Canonical;
@@ -66,8 +68,8 @@ fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
     function.erase(inst).expect("its uses were replaced");
 }
 
-/// `x + 0`, `x - 0` and `x * 1` are `x`, and a test `x <=u 0` is `x == 0`.
-/// Whether anything changed.
+/// Each of `algebraic::identity`'s identities, and a test `x <=u 0` is
+/// `x == 0`. Whether anything changed.
 ///
 /// A rewrite states what it computes from a proof in full -- rotation's
 /// trip count is `bound - start + inclusive` for any start -- and the
@@ -75,7 +77,7 @@ fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
 pub fn identities(context: &Context, function: &mut Function) -> bool {
     let mut changed = false;
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
-        if let Some(kept) = _neutral(context, function, inst) {
+        if let Some(kept) = algebraic::identity(context, function, inst) {
             let result = function.instruction(inst).result.expect("a value");
             function.replace_all_uses_with(result, kept);
             function.erase(inst).expect("its uses were replaced");
@@ -94,26 +96,6 @@ pub fn identities(context: &Context, function: &mut Function) -> bool {
         }
     }
     changed
-}
-
-/// The operand a pure `x + 0`, `x - 0` or `x * 1` passes through unchanged.
-fn _neutral(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
-    let instruction = function.instruction(inst);
-    let identity = match instruction.opcode {
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => 0,
-        Opcode::Binary(BinaryOp::Mul) => 1,
-        _ => return None,
-    };
-    let width = context.types.int_bits(instruction.ty)?;
-    let (left, right) = (instruction.operands[0], instruction.operands[1]);
-    let pairs = [(left, right), (right, left)];
-    let commutes = instruction.opcode != Opcode::Binary(BinaryOp::Sub);
-    for (kept, other) in &pairs[..1 + usize::from(commutes)] {
-        if _integer(context, *other).is_some_and(|bits| bits & mask(width) == identity) {
-            return Some(*kept);
-        }
-    }
-    None
 }
 
 /// An `icmp` against zero on the right.

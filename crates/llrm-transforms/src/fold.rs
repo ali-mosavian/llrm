@@ -14,7 +14,8 @@
 //!   other. A commutative operation still takes its constant on the right.
 //! - An edge fold put a copy of each number in its parent; a phi here takes
 //!   the constant, so the parent's terminator no longer matters.
-//! - consts reads the module's globals through the outer proxy.
+//! - consts reads the module's globals through the outer proxy, and what
+//!   each call writes from the manager's `Writes`.
 //! - The old Fold left floatfold out of a body with loops, whose x87
 //!   observation points belonged to floatloop; the rich MIR observes no FP
 //!   exception, so it folds every body.
@@ -39,6 +40,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::floatfacts;
+use llrm_analysis::manager;
 use llrm_analysis::memory::Unit;
 use llrm_graph::loops;
 use llrm_mir::context::Context;
@@ -64,7 +66,8 @@ impl FunctionPass for Fold {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        let folded = folded(unit.context, unit.layout, unit.function, analyses.outer());
+        let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
+        let folded = folded(unit.context, unit.layout, unit.function, analyses.outer(), &calls);
         let swapped = canonical::compares(unit.context, unit.function);
         if folded | swapped | canonical::identities(unit.context, unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -79,19 +82,19 @@ struct _EdgeFold {
 
 /// Each known value of `function` replaced by its number, one join
 /// expression folded on its edges, then floatfold; `outer` is its module
-/// and target. Whether anything changed.
-pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
-    let numbers = _numbers(context, layout, function, outer);
-    floatfold::folded(context, layout, function, outer) | numbers
+/// and target, `calls` what each call writes. Whether anything changed.
+pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
+    let numbers = _numbers(context, layout, function, outer, calls);
+    floatfold::folded(context, layout, function, outer, calls) | numbers
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
-fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
     let (values, edge) = {
         let unit = Unit::within(context, layout, function, outer);
-        let edges = floatfacts::exit_cells(&unit, &Calls::default());
-        let facts = consts::known(&unit, Some(&Calls::default()), Some(&edges), None);
+        let edges = floatfacts::exit_cells(&unit, calls);
+        let facts = consts::known(&unit, Some(calls), Some(&edges), None);
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };
     let mut rewritten = BTreeSet::new();

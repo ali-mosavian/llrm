@@ -16,6 +16,8 @@
 //!   conditional branch both of whose arms go one way is a jump, as the
 //!   old one was when threading made it so.
 //! - consts reads the module's globals through the outer proxy.
+//! - A compare's answer (`_signed`, `_TAKEN`) is `consts::holds`, which
+//!   folds an `icmp`.
 //!
 //! Dropped, no rich MIR analogue: the memory a compare's operand read
 //! (`held`: a load is its own instruction, and its fact consts'), and the
@@ -24,7 +26,7 @@
 //! Tests, in `decide_tests.rs`: `test_empty_jump_threading_preserves_phi_inputs_and_effects`
 //! is ported. The other old tests of `_outcome`, `_switch_target` and
 //! `_executable_successors` read BC objects through the raise
-//! (`raising_dispatch_tests`) or belong to `peelsize`, not yet ported.
+//! (`raising_dispatch_tests`) or belong to `peelsize`, whose own tests cover them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,32 +136,6 @@ fn _jump(function: &mut Function, last: InstId, target: BlockId) {
     function.erase(last).expect("a terminator defines nothing");
 }
 
-/// A known number as the machine compares it signed.
-pub fn _signed(fact: &Known) -> BigInt {
-    let top = BigInt::from(1) << (fact.width - 1);
-    let number = masked(&fact.n, fact.width);
-    if (&number & &top) != BigInt::from(0) { number - (top << 1) } else { number }
-}
-
-/// Whether `predicate` holds of two known numbers.
-pub fn _taken(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
-    let width = left.width.max(right.width);
-    let (a, b) = (_signed(left), _signed(right));
-    let (ua, ub) = (masked(&left.n, width), masked(&right.n, width));
-    match predicate {
-        IntPredicate::Eq => a == b,
-        IntPredicate::Ne => a != b,
-        IntPredicate::Slt => a < b,
-        IntPredicate::Sle => a <= b,
-        IntPredicate::Sgt => a > b,
-        IntPredicate::Sge => a >= b,
-        IntPredicate::Ult => ua < ub,
-        IntPredicate::Ule => ua <= ub,
-        IntPredicate::Ugt => ua > ub,
-        IntPredicate::Uge => ua >= ub,
-    }
-}
-
 /// Whether `block`'s conditional branch is taken: its condition is known,
 /// the compare that makes it has two known operands, or it compares with
 /// null a pointer `nonnull` says is not.
@@ -178,7 +154,7 @@ pub fn _outcome(unit: &Unit, block: BlockId, facts: &IndexMap<ValueId, Known>, n
     };
     let (left, right) = (consts::_operand(unit, compare.operands[0], facts, None), consts::_operand(unit, compare.operands[1], facts, None));
     if let (Some(left), Some(right)) = (&left, &right) {
-        return Some(_taken(predicate, left, right));
+        return Some(consts::holds(predicate, left, right));
     }
     if !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
         return None;
