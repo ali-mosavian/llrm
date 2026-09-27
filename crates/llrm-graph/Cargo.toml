@@ -1,0 +1,9 @@
+[package]
+name = "llrm-graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Control-flow graph walks over any IR's blocks: dominance, loops, frontiers"
+
+[dependencies]
+llrm-support = { workspace = true }

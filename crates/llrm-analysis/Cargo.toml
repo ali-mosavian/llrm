@@ -1,0 +1,13 @@
+[package]
+name = "llrm-analysis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Facts about the MIR, adapted from llrm-core's analyses"
+
+[dependencies]
+llrm-mir = { workspace = true }
+llrm-graph = { workspace = true }
+llrm-support = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
