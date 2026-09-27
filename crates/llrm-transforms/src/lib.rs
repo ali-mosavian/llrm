@@ -4,8 +4,19 @@
 
 pub mod canonical;
 pub mod edges;
+pub mod lcssa;
+pub mod lcssamerges;
+pub mod loopclone;
 pub mod loopsimplify;
 pub mod profit;
+#[cfg(test)]
+pub mod testing;
+pub mod transform;
+pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
 // from `algebraic`).
+// Not ported, meaning nothing where an address is an operand: `pointeraccess`
+// split a packed far pointer's memory references into offset and selector
+// words for the old register allocator; a pointer here is its type, and
+// isel splits it (called from `transform`'s `SplitPointers`).
