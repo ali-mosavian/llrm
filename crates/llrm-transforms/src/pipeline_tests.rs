@@ -1,5 +1,6 @@
 use llrm_analysis::testing::corpus;
 use llrm_mir::interpret;
+use llrm_mir::program::Program;
 
 use crate::pipeline::{self, Applied};
 
@@ -8,12 +9,14 @@ const FUEL: u64 = 2_000_000;
 
 #[test]
 fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
-    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos::default())), ..Applied::default() };
+    let applied = Applied::default();
     let mut ran = 0;
     for (name, mut module) in corpus() {
         let entry = module.named("main").filter(|&id| module.global(id).function().is_some_and(|one| !one.is_declaration() && one.parameters().is_empty()));
         let before = entry.map(|_| interpret::run(&module, "main", Vec::new(), FUEL));
-        pipeline::applied(&mut module, &applied).unwrap_or_else(|error| panic!("{name}: {error}"));
+        Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &applied))
+            .and_then(|done| done)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         if let Some(Ok(before)) = before {
             assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), Ok(before), "{name}");
             ran += 1;
@@ -90,8 +93,7 @@ b3:
 }
 ",
     );
-    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos::default())), ..Applied::default() };
-    pipeline::applied(&mut module, &applied).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     for trip in 1..=3 {
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
@@ -154,8 +156,7 @@ done:
 ";
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "main", Vec::new(), FUEL);
-    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos::default())), ..Applied::default() };
-    pipeline::applied(&mut module, &applied).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_cycles::target::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = llrm_mir::print::module(&module);
     assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), before, "{after}");
     assert!(!after.contains(" phi "), "{after}");

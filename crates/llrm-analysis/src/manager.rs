@@ -3,15 +3,15 @@
 //! a pass asks, the manager computes once and drops what a pass did not
 //! preserve. An entry reads its module and target through the outer proxy
 //! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
-//! outside code reaches but by name, and alias's callee summaries.
+//! outside code reaches but by name, and alias's callee summaries, which
+//! ask it.
 
 use std::rc::Rc;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, ValueId};
-use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
-use llrm_mir::program::ProgramProxy;
+use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_support::hash::IndexMap;
 
 use crate::cfg::Shape;
@@ -38,8 +38,8 @@ pub struct GlobalsAA;
 impl ModuleAnalysis for GlobalsAA {
     type Result = Result<Globals, String>;
     const NAME: &'static str = "globals-aa";
-    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
-        globalsaa::analysis(module, program)
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        globalsaa::analysis(module, analyses)
     }
 }
 
@@ -50,15 +50,16 @@ pub struct Summaries;
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
-    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
-        // A module analysis sees no other: GlobalsAA's answer is found again.
-        let globals = globalsaa::analysis(module, program)?;
-        let procedures = module
-            .functions()
-            .filter(|(_, _, function)| !function.is_declaration())
-            .filter_map(|(_, global, function)| {
-                Some((global.name.clone()?, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(&globals))))
-            })
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        let globals = analyses.get::<GlobalsAA>(module);
+        let globals = Result::as_ref(&*globals).map_err(String::clone)?;
+        let program = std::rc::Rc::clone(analyses.program());
+        let bodies: Vec<_> = module.functions().filter(|(_, _, function)| !function.is_declaration()).filter_map(|(id, global, function)| Some((id, global.name.clone()?, function))).collect();
+        let shapes: Vec<_> = bodies.iter().map(|&(id, _, _)| analyses.function::<Shape>(module, id)).collect();
+        let procedures = bodies
+            .into_iter()
+            .zip(&shapes)
+            .map(|((_, name, function), shape)| (name, Procedure::of(Unit { program: Some(&program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(globals).with_shape(shape))))
             .collect();
         alias::summaries(&procedures, None)
     }

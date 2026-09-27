@@ -771,6 +771,7 @@ fn test_zeroing_stays_before_the_comparison_in_emitted_bytes() {
         BTreeSet::new(),
         Some(&IndexMap::default()),
         "386",
+        &crate::backend::target::BUILT_IN,
         Default::default(),
     )
     .unwrap();

@@ -38,8 +38,8 @@ impl FunctionPass for Dead {
         "dead"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
-        if dead(unit.context, unit.callees, unit.function) {
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        if dead(unit.context, analyses.outer().callees(), unit.function) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

@@ -530,7 +530,7 @@ fn test_a_shift_recurrence_requires_a_constant_count() {
 }
 
 fn lowered(name: &str, body: &MirBody) -> LirBody {
-    lower::lowered(name, body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+    lower::lowered(name, body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, Default::default())
         .unwrap()
 }
 

@@ -72,7 +72,7 @@ impl FunctionPass for Unroll {
 /// each; whether any was.
 pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
-    if !profit::priced(unit.context, unit.function, unit.callees, costs) {
+    if !profit::priced(unit.context, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }
     let mut changed = false;

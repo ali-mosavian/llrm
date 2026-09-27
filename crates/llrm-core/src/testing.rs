@@ -66,7 +66,7 @@ pub fn partitioned_bytes(data: &[u8]) -> Vec<Block> {
 
 /// `corpus.bodies`: the decoded IR.
 pub fn bodies(relative: impl AsRef<Path>) -> Result<Vec<BodyIR>, String> {
-    decode::decode_module(&_module(relative))
+    decode::decode_module(&_module(relative), &crate::abi::machine::BUILT_IN)
 }
 
 /// `mir.bodies(corpus.loaded(path), corpus.partitioned(path))`.

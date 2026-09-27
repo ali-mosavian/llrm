@@ -12,7 +12,7 @@ use crate::loops::Loop;
 use crate::memory;
 use crate::module::{BlockId, Function, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, Opcode};
-use crate::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use crate::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use crate::valuetracking;
 
 pub struct Licm;
@@ -25,6 +25,7 @@ impl FunctionPass for Licm {
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
+        let outer = analyses.outer();
         let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
         for &block in unit.function.layout() {
             if let Some(parent) = tree.immediate_dominator(block).filter(|_| tree.is_reachable(block)) {
@@ -39,14 +40,14 @@ impl FunctionPass for Licm {
                 .blocks
                 .iter()
                 .flat_map(|&block| unit.function.block(block).instructions().to_vec())
-                .filter(|&inst| memory::of(unit.context, unit.callees, unit.function, inst).writes)
+                .filter(|&inst| memory::of(unit.context, outer.callees(), unit.function, inst).writes)
                 .collect();
             let before = unit.function.terminator(preheader).expect("a terminator");
             // Down the dominator tree, so an operand hoists before its user.
             let mut stack = vec![one.header];
             while let Some(block) = stack.pop() {
                 for inst in unit.function.block(block).instructions().to_vec() {
-                    if invariant(unit, &one.blocks, inst) && safe(unit, inst, &writes) {
+                    if invariant(unit, &one.blocks, inst) && safe(unit, outer, inst, &writes) {
                         unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
                         changed = true;
                     }
@@ -83,7 +84,7 @@ fn invariant(unit: &Unit, blocks: &BTreeSet<BlockId>, inst: InstId) -> bool {
 
 /// Whether `inst` may run where the loop would not have run it, in a loop
 /// whose writes are `writes`: LLVM's `isSafeToSpeculativelyExecute`.
-fn safe(unit: &Unit, inst: InstId, writes: &[InstId]) -> bool {
+fn safe(unit: &Unit, outer: &Outer, inst: InstId, writes: &[InstId]) -> bool {
     let function = &*unit.function;
     let instruction = function.instruction(inst);
     match &instruction.opcode {
@@ -100,8 +101,8 @@ fn safe(unit: &Unit, inst: InstId, writes: &[InstId]) -> bool {
         Opcode::Load { volatile: false, .. } => {
             let pointer = instruction.operands[0];
             let bytes = unit.layout.store_size(&unit.context.types, instruction.ty);
-            valuetracking::dereferenceable(unit.context, unit.layout, unit.sizes, function, pointer, bytes)
-                && (memory::invariant(unit.context, unit.layout, function, pointer) || writes.iter().all(|&write| misses(unit, inst, write)))
+            valuetracking::dereferenceable(unit.context, unit.layout, outer.sizes(), function, pointer, bytes)
+                && (memory::invariant(unit.context, unit.layout, function, pointer) || writes.iter().all(|&write| misses(unit, outer, inst, write)))
         }
         _ => false,
     }
@@ -109,7 +110,7 @@ fn safe(unit: &Unit, inst: InstId, writes: &[InstId]) -> bool {
 
 /// Whether the write `write` leaves what the load `load` reads alone: a
 /// store alias analysis puts elsewhere.
-fn misses(unit: &Unit, load: InstId, write: InstId) -> bool {
+fn misses(unit: &Unit, outer: &Outer, load: InstId, write: InstId) -> bool {
     let function = &*unit.function;
     let location = |inst: InstId, pointer: Operand, ty| Location { pointer, bytes: unit.layout.store_size(&unit.context.types, ty), tbaa: alias::tag(function, inst) };
     let read = function.instruction(load);
@@ -117,5 +118,5 @@ fn misses(unit: &Unit, load: InstId, write: InstId) -> bool {
     let Opcode::Store { .. } = written.opcode else { return false };
     let Some(stored) = function.operand_type(unit.context, written.operands[0]) else { return false };
     let (a, b) = (location(load, read.operands[0], read.ty), location(write, written.operands[1], stored));
-    alias::alias(unit.context, unit.layout, unit.callees, unit.metadata, function, a, b) == Alias::No
+    alias::alias(unit.context, unit.layout, outer.callees(), unit.metadata, function, a, b) == Alias::No
 }

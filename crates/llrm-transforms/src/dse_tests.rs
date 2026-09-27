@@ -20,7 +20,7 @@ fn promoted(text: &str) -> String {
     manager.require::<Summaries>();
     manager.add(Promote);
     manager.add(Dse);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
     after[after.find("@f(").unwrap()..].to_owned()
@@ -108,7 +108,7 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     manager.require::<Summaries>();
     manager.add(Dse);
     manager.add(crate::dead::Dead);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0], &[3], &[-7]]), results(&before, &[&[0], &[3], &[-7]]), "{after}");
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("call void"), "{after}");
@@ -148,7 +148,7 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
         manager.verify_each = true;
         manager.require::<Summaries>();
         manager.add(Dse);
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         let after = printed(&module);
         assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
         assert_eq!(!after.contains("call void"), gone, "{after}");
@@ -217,7 +217,7 @@ done:
     manager.verify_each = true;
     manager.require::<Summaries>();
     manager.add(Dse);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[]]), results(&before, &[&[]]), "{after}");
     assert_eq!(after.matches("store i16").count(), 2, "{after}");
@@ -256,7 +256,7 @@ b0:
     manager.add(crate::promote::Sroa);
     manager.add(Promote);
     manager.add(Dse);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert!(!after.contains("store i16 1") && after.contains("ret i16 %x"), "{after}");
 }

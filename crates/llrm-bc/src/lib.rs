@@ -25,6 +25,7 @@ pub mod tags;
 use std::collections::BTreeMap;
 
 pub use llrm_hir::mir::{DATALAYOUT, FAR, RUNTIME, SEGMENT};
+use llrm_bcmachine::abi::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
 use llrm_bcmachine::objectfile::module::{self as found_module, Family};
@@ -74,13 +75,13 @@ impl Raised {
 }
 
 /// The module raised whole, or the first function refused.
-pub fn raise(found: &found_module::Module) -> Result<Module, Refusal> {
-    raise_placed(found).map(|(module, _)| module)
+pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Module, Refusal> {
+    raise_placed(found, machine).map(|(module, _)| module)
 }
 
 /// `raise`, and where the object put its globals.
-pub fn raise_placed(found: &found_module::Module) -> Result<(Module, Placement), Refusal> {
-    let raised = raise_each(found)?;
+pub fn raise_placed(found: &found_module::Module, machine: &Machine) -> Result<(Module, Placement), Refusal> {
+    let raised = raise_each(found, machine)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
@@ -110,9 +111,9 @@ fn main_frame(found: &found_module::Module) -> Option<(i64, i64)> {
 }
 
 /// Every body raised, each refusal recorded against its function.
-pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
+pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
     let module_refusal = |reason: String| Refusal { function: MODULE.to_owned(), reason };
-    let facts = Facts::new(found).map_err(module_refusal)?;
+    let facts = Facts::new(found, machine).map_err(module_refusal)?;
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut intrinsics = BTreeMap::new();
     for name in ["uadd", "usub"] {

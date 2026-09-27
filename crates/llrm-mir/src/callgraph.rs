@@ -6,7 +6,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::context::GlobalId;
 use crate::memory;
 use crate::module::Module;
+use crate::passes::{ModuleAnalyses, ModuleAnalysis};
 
+#[derive(Debug, PartialEq)]
 pub struct CallGraph {
     callees: HashMap<GlobalId, BTreeSet<GlobalId>>,
 }
@@ -61,5 +63,16 @@ impl CallGraph {
             }
         }
         false
+    }
+}
+
+/// LLVM's `CallGraphAnalysis`.
+pub struct CallGraphAnalysis;
+
+impl ModuleAnalysis for CallGraphAnalysis {
+    type Result = CallGraph;
+    const NAME: &'static str = "call-graph";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> CallGraph {
+        CallGraph::new(module)
     }
 }

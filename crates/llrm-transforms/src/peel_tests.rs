@@ -103,7 +103,7 @@ fn the_residual_loop_is_proven_dead_by_what_follows() {
     manager.add(crate::fold::Fold);
     manager.add(crate::decide::Decide);
     manager.add(crate::dead::Dead);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let text = printed(&module);
     assert_eq!(loops_of(&mut module), 0, "{text}");
     assert_eq!(multiplies(&mut module), 3, "{text}");

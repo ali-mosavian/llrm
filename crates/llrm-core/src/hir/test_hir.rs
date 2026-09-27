@@ -62,6 +62,7 @@ fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
         BTreeSet::new(),
         Some(&IndexMap::default()),
         "386",
+        &crate::backend::target::BUILT_IN,
         lower_mir::Lowered { occurrences: Some(&occurrences), ..Default::default() },
     )
     .expect("lowers")
@@ -215,6 +216,7 @@ fn test_hir_lowers_long_float_memory_and_control_to_existing_mir() {
         BTreeSet::new(),
         Some(&IndexMap::default()),
         "386",
+        &crate::backend::target::BUILT_IN,
         lower_mir::Lowered { occurrences: Some(&occurrences), ..Default::default() },
     )
     .unwrap();

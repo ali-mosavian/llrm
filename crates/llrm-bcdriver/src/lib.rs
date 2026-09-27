@@ -14,10 +14,12 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use llrm_core::abi::machine::{self, Machine};
 use llrm_core::abi::qb::HirAbi;
 use llrm_core::backend::assemble::{self, Abi, Target};
 use llrm_core::backend::constpool::Pool;
-use llrm_core::backend::cpu::{self, Profile, ProfileOrName};
+use llrm_core::backend::cpu::{self, ProfileOrName};
+use llrm_core::backend::target::Segments;
 use llrm_core::backend::{addressvalues, globals, masm};
 use llrm_core::hir::model::RuntimeProfile;
 use llrm_core::model::ir::Space;
@@ -46,11 +48,11 @@ const MAIN_FRAME: usize = 0x22;
 /// Where BC keeps its constants.
 const CONSTANTS: &str = "BC_CN";
 
-/// A program: its BC objects, by file name, in link order, and the CPU it
-/// runs on.
+/// A program: its BC objects, by file name, in link order, and the machine
+/// it runs on.
 pub struct Program<'p> {
     pub modules: Vec<(String, &'p [u8])>,
-    pub cpu: &'p Profile,
+    pub machine: &'p Machine,
 }
 
 /// Each module of `program` compiled again, in its order.
@@ -62,14 +64,19 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         parsed.push((name, records, found));
     }
     let dgroup = linked_dgroup(parsed.iter().map(|(_, records, found)| (records.as_slice(), found)));
-    parsed.iter().map(|(name, records, found)| recompiled(records, found, &dgroup, program.cpu, name).map_err(|why| format!("{name}: {why}"))).collect()
+    parsed.iter().map(|(name, records, found)| recompiled(records, found, &dgroup, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
 }
 
 /// `data`, a program of one BC object, compiled again for `cpu`.
 pub fn compiled(data: &[u8], cpu: &str, name: &str) -> Result<Vec<u8>, String> {
-    let cpu = cpu::profile(ProfileOrName::Name(cpu))?;
-    let mut written = program(&Program { modules: vec![(name.to_owned(), data)], cpu })?;
+    let machine = on(cpu);
+    let mut written = program(&Program { modules: vec![(name.to_owned(), data)], machine: &machine })?;
     Ok(written.remove(0))
+}
+
+/// The built-in machine with its code priced for `cpu`.
+fn on(cpu: &str) -> Machine {
+    Machine { cpu: cpu.to_owned(), ..machine::BUILT_IN.clone() }
 }
 
 /// The segments LINK puts in DGROUP: each module's GRPDEF names some.
@@ -83,7 +90,8 @@ fn linked_dgroup<'r>(modules: impl Iterator<Item = (&'r [Rc<Record>], &'r found_
 }
 
 /// One module of a program whose DGROUP is `dgroup`, compiled again.
-fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTreeSet<String>, profile: &Profile, name: &str) -> Result<Vec<u8>, String> {
+fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTreeSet<String>, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
+    let profile = cpu::profile(ProfileOrName::Name(&machine.cpu))?;
     // The raise reads DGROUP from the module's own GRPDEF: a segment another
     // module groups would be carved as far data here.
     let segments = omf::segments(records);
@@ -95,13 +103,11 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         }
     }
     let records = records.to_vec();
-    let (mut module, placement) = llrm_bc::raise_placed(found).map_err(|refusal| refusal.to_string())?;
-    let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
-    };
-    llrm_transforms::pipeline::applied(&mut module, &applied)?;
+    let (module, placement) = llrm_bc::raise_placed(found, machine).map_err(|refusal| refusal.to_string())?;
+    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+    let mut program = llrm_mir::program::Program::new(vec![module], profile.target())?;
+    llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    let module = program.modules.pop().expect("one module");
     let errors = llrm_mir::verify::verify(&module);
     if let Some(first) = errors.first() {
         return Err(format!("the pipeline left invalid MIR: {first}"));
@@ -125,7 +131,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         names.insert((globals::space(&module, global), i64::from(global.0)), HEADER.to_owned());
     }
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu: profile, runtime: runtime.value(), basic: true };
+    let target = Target { cpu: profile, segments: &Segments::of(machine), runtime: runtime.value(), basic: true };
     let mut procedures = Vec::new();
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     // The runtime enters the module right after its header.
@@ -353,8 +359,8 @@ pub fn main(argv: &[String]) -> i32 {
         })
         .collect();
     let written = read.and_then(|read| {
-        let cpu = cpu::profile(ProfileOrName::Name(&cpu))?;
-        let written = program(&Program { modules: read.iter().map(|(name, data)| (name.clone(), data.as_slice())).collect(), cpu })?;
+        let machine = on(&cpu);
+        let written = program(&Program { modules: read.iter().map(|(name, data)| (name.clone(), data.as_slice())).collect(), machine: &machine })?;
         Ok(read.into_iter().map(|(name, _)| name).zip(written).collect::<Vec<_>>())
     });
     let written = match written {

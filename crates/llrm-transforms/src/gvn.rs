@@ -93,7 +93,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: 
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
-    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, unit.callees, accesses, pointers, !combined)?;
+    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, outer.callees(), accesses, pointers, !combined)?;
     Ok(equal || numbered || combined || loaded)
 }
 
@@ -153,7 +153,7 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
-    let price = |one: &Function| profit::pressure_adjusted(unit.context, one, unit.callees, costs, registers, Some(trips), &liveness::live(one).live_out);
+    let price = |one: &Function| profit::pressure_adjusted(unit.context, one, outer.callees(), costs, registers, Some(trips), &liveness::live(one).live_out);
     let chosen = if registers == 0 {
         crossing
     } else if let Some(crossed) = price(&crossing.0) {

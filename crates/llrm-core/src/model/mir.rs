@@ -183,6 +183,18 @@ pub struct MemRef {
 }
 
 impl MemRef {
+    /// Whether its exclusions cover the frame bytes `[disp, disp + width)`;
+    /// with no `disp`, a frame cell at no fixed place, whether they cover
+    /// the whole frame.
+    pub fn spares(&self, disp: Option<i64>, width: u32) -> bool {
+        let (whole, size) = WHOLE_FRAME;
+        let (low, high) = match disp {
+            Some(disp) => (disp, disp + i64::from(width)),
+            None => (whole.disp, whole.disp + i64::from(size)),
+        };
+        self.excludes.iter().any(|(start, size)| start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
+    }
+
     /// This reference with every value it names renamed by `value`.
     pub fn with_values(&self, mut value: impl FnMut(Value) -> Value) -> Self {
         Self {
@@ -1945,7 +1957,7 @@ pub fn public(body: RaisedBody) -> MirBody {
 }
 
 /// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
-fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
+pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
     let (start, size) = WHOLE_FRAME;
     let (low, high) = (start.disp, start.disp + i64::from(size));
     let mut out = Vec::new();

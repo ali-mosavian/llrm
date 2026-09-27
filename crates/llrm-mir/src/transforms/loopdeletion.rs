@@ -20,6 +20,8 @@ impl FunctionPass for LoopDeletion {
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
         let evolution = analyses.get::<ScalarEvolution>(unit.context, unit.layout, unit.function);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let callees = outer.callees();
         let mut deleted: Vec<BlockId> = Vec::new();
         // Outer loops first: one deleted takes the loops inside it along.
         for one in &loops.loops {
@@ -43,12 +45,12 @@ impl FunctionPass for LoopDeletion {
                 let instruction = function.instruction(inst);
                 let harmless = match instruction.opcode {
                     Opcode::Load { volatile, .. } => !volatile,
-                    Opcode::Call(_) => memory::call_returns(unit.context, unit.callees, function, inst),
+                    Opcode::Call(_) => memory::call_returns(unit.context, callees, function, inst),
                     Opcode::Alloca { .. } | Opcode::Invoke(_) => false,
                     _ => true,
                 };
                 harmless
-                    && !memory::of(unit.context, unit.callees, function, inst).writes
+                    && !memory::of(unit.context, callees, function, inst).writes
                     && instruction.result.is_none_or(|result| function.users(result).iter().all(|one_use| inside(function, &one.blocks, one_use.user)))
             });
             if !quiet {

@@ -13,7 +13,8 @@ use iced_x86::Register;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower_floats, lower_switches, narrow, rmw, target};
+use super::target::{self, Segments};
+use super::{addressforms, arithmetic, comparefold, cpu, division, farload, lower_floats, lower_switches, narrow, rmw};
 use crate::optimize::canonical;
 use crate::abi::runtime;
 use crate::legacy::calls;
@@ -1557,7 +1558,13 @@ pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
 
 /// What an absorbed divide destroys, for a caller with no call map.
 pub fn clobbering(op: &Op) -> BTreeSet<Register> {
-    if op.kind == Kind::Divmod { _clobbers(op, &IndexMap::default(), None, None) } else { BTreeSet::new() }
+    if op.kind == Kind::Divmod { _divided() } else { BTreeSet::new() }
+}
+
+/// An absorbed divide writes the dividend's, the divisor's, idiv's own edx,
+/// and wherever the answer it was not asked for is kept.
+fn _divided() -> BTreeSet<Register> {
+    [calls::RESULT, calls::DIVISOR, Register::EDX, calls::OTHER].into_iter().filter(|register| target::AVAILABLE.contains(register)).collect()
 }
 
 /// Which registers this instruction destroys without naming them.
@@ -1566,33 +1573,29 @@ fn _clobbers(
     calls: &IndexMap<i64, String>,
     contracts: Option<&IndexMap<i64, runtime::Contract>>,
     node: Option<&Node>,
+    segments: &Segments,
 ) -> BTreeSet<Register> {
     if let Some(Node::Restore(node)) = node {
         // The second pop overwrites the other register even when its result is dead.
         return BTreeSet::from([crate::model::mir::restore_pair(node.pair as i64).unwrap().1]);
     }
     if op.kind == Kind::Divmod {
-        // An absorbed divide writes the dividend's, the divisor's, idiv's own
-        // edx, and wherever the answer it was not asked for is kept.
-        return [calls::RESULT, calls::DIVISOR, Register::EDX, calls::OTHER]
-            .into_iter()
-            .filter(|register| target::AVAILABLE.contains(register))
-            .collect();
+        return _divided();
     }
     if op.kind != Kind::Call {
         return BTreeSet::new();
     }
-    call_clobbers(&_contract(op, calls, contracts))
+    call_clobbers(&_contract(op, calls, contracts), segments)
 }
 
 /// The registers a call under `contract` destroys.
-pub fn call_clobbers(contract: &runtime::Contract) -> BTreeSet<Register> {
+pub fn call_clobbers(contract: &runtime::Contract, segments: &Segments) -> BTreeSet<Register> {
     let names = _names();
     let disturbed = runtime::disturbs(contract);
     // A contract is about the 8086 and names no FS or GS; one reaching user
     // code, or written for the 386, runs code that may use them.
     let mut out: BTreeSet<Register> = if disturbed == *runtime::EVERY || contract.i386 {
-        target::SELECTORS.iter().copied().filter(|register| !names.contains_key(register)).collect()
+        segments.selectors.iter().copied().filter(|register| !names.contains_key(register)).collect()
     } else {
         BTreeSet::new()
     };
@@ -1619,19 +1622,20 @@ fn _clobbered_high(
     op: &Op,
     calls: &IndexMap<i64, String>,
     contracts: Option<&IndexMap<i64, runtime::Contract>>,
+    segments: &Segments,
 ) -> BTreeSet<Register> {
     if op.kind != Kind::Call {
         return BTreeSet::new();
     }
-    call_clobbered_high(&_contract(op, calls, contracts))
+    call_clobbered_high(&_contract(op, calls, contracts), segments)
 }
 
 /// The registers a call under `contract` keeps only the 16-bit half of.
-pub fn call_clobbered_high(contract: &runtime::Contract) -> BTreeSet<Register> {
+pub fn call_clobbered_high(contract: &runtime::Contract, segments: &Segments) -> BTreeSet<Register> {
     if !contract.i386 {
         return BTreeSet::new();
     }
-    let whole: BTreeSet<Register> = call_clobbers(contract).into_iter().map(ir::root).collect();
+    let whole: BTreeSet<Register> = call_clobbers(contract, segments).into_iter().map(ir::root).collect();
     target::AVAILABLE.into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
 }
 
@@ -1764,6 +1768,7 @@ fn _scaled(op: &Op, context: &mut Lowering) -> Result<Option<Vec<ir::Semantics>>
 /// operation; every one after it is an insertion with no bytes of its own.
 pub struct Lowering<'a> {
     pub cpu: &'static cpu::Profile,
+    pub segments: &'a Segments,
     pub pointer_model: Option<super::pointers::Model>,
     _read: BTreeSet<u32>,
     /// Which dword values are a word's sign extension, and which word.
@@ -1808,6 +1813,7 @@ impl<'a> Lowering<'a> {
         absorbed: BTreeSet<u32>,
         contracts: Option<&'a IndexMap<i64, runtime::Contract>>,
         cpu: impl Into<cpu::ProfileOrName<'static>>,
+        segments: &'a Segments,
         options: Options<'a>,
     ) -> Result<Self, Unlowered> {
         let cpu = cpu::profile(cpu).map_err(Unlowered)?;
@@ -1844,6 +1850,7 @@ impl<'a> Lowering<'a> {
         every.extend(body.blocks.iter().flat_map(|block| &block.phis).map(|phi| phi.result.id));
         Ok(Self {
             cpu,
+            segments,
             pointer_model: options.pointer_model,
             _read: read,
             _extended: extended,
@@ -2410,8 +2417,8 @@ impl<'a> Lowering<'a> {
             let widths = if what.is_none() { self._widths(op) } else { vec![] };
             let mut leader = Insn::new(op.at, Some(covers), what, defines, inputs.into_iter().collect());
             leader.requires = requires;
-            leader.clobbers = _clobbers(op, self._calls, self._contracts, node.as_deref());
-            leader.clobbers_high = _clobbered_high(op, self._calls, self._contracts);
+            leader.clobbers = _clobbers(op, self._calls, self._contracts, node.as_deref(), self.segments);
+            leader.clobbers_high = _clobbered_high(op, self._calls, self._contracts, self.segments);
             leader.spread = spread;
             leader.delivers = delivers;
             leader.widths = widths;
@@ -2492,6 +2499,7 @@ pub fn lowered(
     absorbed: BTreeSet<u32>,
     contracts: Option<&IndexMap<i64, runtime::Contract>>,
     cpu: impl Into<cpu::ProfileOrName<'static>>,
+    segments: &Segments,
     options: Lowered,
 ) -> Result<lir::LirBody, Unlowered> {
     if crate::support::debug::enabled("cost") {
@@ -2537,6 +2545,7 @@ pub fn lowered(
         absorbed,
         contracts,
         cpu,
+        segments,
         Options {
             coverage: options.coverage,
             nodes: options.nodes,
@@ -2698,7 +2707,7 @@ mod tests {
         let mut hints = AllocationHints::new();
         hints.origins.insert(7, Register::EAX);
         let options = Lowered { hints: Some(&hints), ..Default::default() };
-        let low = lowered("origin", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", options)
+        let low = lowered("origin", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, options)
             .unwrap();
         let insns = low.insns();
         let [one] = insns.as_slice() else { panic!("{insns:?}") };
@@ -2741,6 +2750,7 @@ mod tests {
             BTreeSet::new(),
             Some(&contracts),
             "386",
+            &crate::backend::target::BUILT_IN,
             Lowered { occurrences: Some(&occurrences), ..Default::default() },
         )
     }
@@ -2776,7 +2786,7 @@ mod tests {
     fn test_lowered_switch_comparisons_encode_after_allocation() {
         let body = lower("switch", &switched()).unwrap();
         let pins: IndexMap<u32, Register> = [(1, Register::EAX)].into_iter().collect();
-        let assignment = super::super::allocate::allocate(&body, Some(&pins), None, None, None, "386".into()).unwrap();
+        let assignment = super::super::allocate::allocate(&body, Some(&pins), None, None, None, "386".into(), &crate::backend::target::BUILT_IN).unwrap();
         assert!(assignment.spilled.is_empty());
         let body = super::super::allocate::applied(&body, &assignment).unwrap();
         let mut encoded: Vec<Vec<u8>> = Vec::new();
@@ -2850,6 +2860,7 @@ mod tests {
                 BTreeSet::new(),
                 None,
                 "386",
+                &crate::backend::target::BUILT_IN,
                 Options { pointer_model: Some(model), ..Default::default() },
             )
             .unwrap();
@@ -2871,7 +2882,7 @@ mod tests {
         let body = MirBody::new(0, vec![MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
         let calls = IndexMap::default();
         let mut making =
-            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::from([3]), &calls, BTreeSet::new(), None, "386", &crate::backend::target::BUILT_IN, Options::default()).unwrap();
         assert!(making.expand(&op, true).unwrap_err().0.contains("pointer ABI"));
     }
 
@@ -2892,7 +2903,7 @@ mod tests {
         let calls = IndexMap::default();
         let body = MirBody::new(0, vec![]);
         let mut lowering =
-            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::new(), &calls, BTreeSet::new(), None, "386", Options::default()).unwrap();
+            Lowering::new(&Rc::new(MirBody::clone(&body)), BTreeSet::new(), &calls, BTreeSet::new(), None, "386", &crate::backend::target::BUILT_IN, Options::default()).unwrap();
         _fill(&op, &mut lowering, preserve_flags).unwrap()
     }
 

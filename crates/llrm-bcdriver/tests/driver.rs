@@ -142,9 +142,9 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
 /// FPDEEP's main once the pipeline has run, as MIR text.
 fn fpdeep() -> String {
     let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
-    let mut module = llrm_bc::raise(&found).unwrap_or_else(|refusal| panic!("{refusal}"));
-    let applied = llrm_transforms::pipeline::Applied { target: Some(Rc::new(llrm_cycles::target::Dos::default())), ..Default::default() };
-    llrm_transforms::pipeline::applied(&mut module, &applied).unwrap();
+    let mut module = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let applied = llrm_transforms::pipeline::Applied::default();
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_cycles::target::Dos::default()), |program| llrm_transforms::pipeline::applied(program, &applied)).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     text[text.find("define void @main").expect("main")..].to_owned()
 }

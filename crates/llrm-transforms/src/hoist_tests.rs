@@ -20,7 +20,7 @@ fn hoisted(text: &str) -> (Module, Module) {
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
     passes.add(super::Hoist);
-    passes.run(&mut after).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
 

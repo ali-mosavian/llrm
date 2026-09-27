@@ -1,14 +1,17 @@
 //! A program: the modules compiled together, resolved by name and never
 //! merged, and what they share -- one datalayout, the target, and where
-//! the segments put data and the stack. A module's analyses and passes
-//! read the shared state through `ProgramProxy`.
+//! the segments put data and the stack. Its analyses are cached in
+//! `ProgramAnalyses`; a module's analyses and passes read them, and the
+//! shared state, through `ProgramProxy`, as LLVM's
+//! `OuterAnalysisManagerProxy` one level up.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 use crate::context::GlobalId;
 use crate::datalayout::DataLayout;
-use crate::module::{GlobalValue, Module};
+use crate::module::{GlobalValue, Linkage, Module};
 use crate::target::Machine;
 
 /// DGROUP as the program links it: its member segments, the addresses cut
@@ -69,6 +72,14 @@ impl Program {
         Ok(Self { modules, layout, target, segments })
     }
 
+    /// `f` over `module` as a program of its own, handed back after.
+    pub fn lend<R>(module: &mut Module, target: Rc<dyn Machine>, f: impl FnOnce(&mut Program) -> R) -> Result<R, String> {
+        let mut program = Program::new(vec![std::mem::take(module)], target)?;
+        let result = f(&mut program);
+        *module = program.modules.pop().expect("one module");
+        Ok(result)
+    }
+
     /// The global `name` resolves to: the module defining it, else the
     /// first declaring it.
     pub fn resolve(&self, name: &str) -> Option<(usize, GlobalId)> {
@@ -81,18 +92,79 @@ fn defines(global: &GlobalValue) -> bool {
     global.function().is_none_or(|function| !function.is_declaration())
 }
 
-/// What a module's analyses and passes may read of its program, read-only.
+/// What other modules may resolve against `module`: each global it does
+/// not keep to itself, declared, and whether it defines it.
+pub fn interface(module: &Module) -> Vec<(GlobalValue, bool)> {
+    module.globals.iter().filter(|one| !matches!(one.linkage, Linkage::Internal | Linkage::Private)).map(|one| (one.declaration(), defines(one))).collect()
+}
+
+/// A fact about the whole program, cached in `ProgramAnalyses`.
+pub trait ProgramAnalysis: 'static {
+    type Result: PartialEq + std::fmt::Debug + 'static;
+    const NAME: &'static str;
+    fn run(program: &Program, analyses: &mut ProgramAnalyses) -> Self::Result;
+}
+
+/// The program analyses computed, kept until invalidated.
+#[derive(Default)]
+pub struct ProgramAnalyses {
+    cache: HashMap<TypeId, Rc<dyn Any>>,
+}
+
+impl ProgramAnalyses {
+    /// `P`'s result, computed once until invalidated.
+    pub fn get<P: ProgramAnalysis>(&mut self, program: &Program) -> Rc<P::Result> {
+        if let Some(one) = self.cached::<P>() {
+            return one;
+        }
+        let result = Rc::new(P::run(program, self));
+        self.cache.insert(TypeId::of::<P>(), Rc::clone(&result) as Rc<dyn Any>);
+        result
+    }
+
+    pub fn cached<P: ProgramAnalysis>(&self) -> Option<Rc<P::Result>> {
+        self.cache.get(&TypeId::of::<P>()).map(|one| Rc::clone(one).downcast::<P::Result>().expect("keyed by its type"))
+    }
+
+    /// Drops every result.
+    pub fn invalidate(&mut self) {
+        self.cache.clear();
+    }
+
+    /// What a module reads of `program`: its shared state and the results
+    /// computed.
+    pub fn proxy(&self, program: &Program) -> Rc<ProgramProxy> {
+        Rc::new(ProgramProxy { layout: program.layout.clone(), target: Rc::clone(&program.target), segments: program.segments.clone(), results: self.cache.clone() })
+    }
+}
+
+/// A pass over the whole program. It drops the program results it
+/// invalidates.
+pub trait ProgramPass {
+    fn name(&self) -> &'static str;
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String>;
+}
+
+/// What a module's analyses and passes may read of its program, read-only:
+/// the shared state and the program analyses cached when its run began.
 #[derive(Clone)]
 pub struct ProgramProxy {
     pub layout: DataLayout,
     pub target: Rc<dyn Machine>,
     pub segments: SegmentLayout,
+    results: HashMap<TypeId, Rc<dyn Any>>,
 }
 
 impl ProgramProxy {
-    /// A program of `module` alone for `target`.
+    /// A program of `module` alone for `target`, read by what runs outside a
+    /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, results: HashMap::new() })
+    }
+
+    /// `P`'s result, if computed: LLVM's `getCachedResult`.
+    pub fn cached<P: ProgramAnalysis>(&self) -> Option<Rc<P::Result>> {
+        self.results.get(&TypeId::of::<P>()).map(|one| Rc::clone(one).downcast::<P::Result>().expect("keyed by its type"))
     }
 }

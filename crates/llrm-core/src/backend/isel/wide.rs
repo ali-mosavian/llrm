@@ -41,7 +41,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A register for one half of a wide value, dropped where nothing reads it.
-    fn half(&mut self) -> Held {
+    pub(super) fn half(&mut self) -> Held {
         let half = self.fresh_held(4);
         self.halves.insert(half.value);
         half
@@ -323,12 +323,13 @@ impl Selector<'_, '_, '_> {
         let (quotient, remainder) = ((self.half(), self.half()), (self.half(), self.half()));
         let delivers = vec![(quotient.0, Register::EAX), (quotient.1, Register::EDX), (remainder.0, Register::EBX), (remainder.1, Register::ECX)];
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract),
-            clobbers_high: call_clobbered_high(&contract),
+            clobbers: call_clobbers(&contract, self.segments),
+            clobbers_high: call_clobbered_high(&contract, self.segments),
             uses: requires.iter().map(|(held, _)| held.value).collect(),
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
+            op: Some(self.listed(at, llrm_mir::memory::Effects::NONE)),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());

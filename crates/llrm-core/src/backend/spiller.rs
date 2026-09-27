@@ -138,6 +138,9 @@ pub fn spilled_from(
     let (body, next, short) = _short_update_runs(body, &stored, frame, fresh)?;
     fresh = next;
     made.extend(short);
+    let (body, next, local) = _local_updates(&body, &stored, frame, fresh)?;
+    fresh = next;
+    made.extend(local);
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
@@ -385,6 +388,87 @@ fn _short_update_runs(
             insns.push(_store(second, outof, &frame.cell(into, width)?));
             made.insert(outof);
             position += 2;
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    Ok((body.with_blocks(blocks), fresh, made))
+}
+
+/// An update of a spilled value whose result is read again in its block,
+/// as LLVM's local split: reloaded once, updated and read in a register,
+/// and stored only if still live after its last read there. Spilled whole,
+/// the update ran in memory and each read reloaded.
+fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+    let index = ranges::indexed(body);
+    let live = ranges::intervals(body, Some(&index));
+    let register_only = |one: &Insn| {
+        one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && one.clobbers_high.is_empty()
+            && one.what.as_ref().is_some_and(|what| !what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))))
+    };
+    let mut made: BTreeSet<u32> = BTreeSet::new();
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+        let mut position = 0;
+        while position < insns.len() {
+            let update = Arc::clone(&insns[position]);
+            let Some(&value) = update.defines.first() else {
+                position += 1;
+                continue;
+            };
+            let is_update = stored.contains(&value)
+                && update.defines.len() == 1
+                && update.uses.contains(&value)
+                && register_only(&update)
+                && update.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Binary | Operation::Unary));
+            if !is_update {
+                position += 1;
+                continue;
+            }
+            // The reads that follow, up to a redefinition or anything a
+            // register may not survive.
+            let mut reads = Vec::new();
+            for (at, one) in insns.iter().enumerate().skip(position + 1) {
+                if one.defines.contains(&value) || !register_only(one) {
+                    break;
+                }
+                if one.uses.contains(&value) {
+                    reads.push(at);
+                }
+            }
+            let Some(&last) = reads.last() else {
+                position += 1;
+                continue;
+            };
+            let slot = index.at[&key(&insns[last])];
+            let after = Segment { start: slot + ranges::DEF, end: slot + ranges::DEF + 1 };
+            let kept = live[&value].segments.iter().any(|segment| segment.overlaps(&after));
+            // Worth it when it saves a memory operand: the update's own
+            // and each read's, against one reload and perhaps one store.
+            if reads.len() + 1 <= 1 + usize::from(kept) {
+                position += 1;
+                continue;
+            }
+            let width = _width(&update, value);
+            let cell = frame.cell(value, width)?;
+            let register = fresh;
+            fresh += 1;
+            made.insert(register);
+            let renamed = IndexMap::from_iter([(value, register)]);
+            for at in &reads {
+                insns[*at] = _renamed(&insns[*at], &renamed);
+            }
+            let mut run = vec![_reload(&update, register, &cell), _renamed(&update, &renamed)];
+            if kept {
+                run.push(_store(&update, register, &cell));
+            }
+            let length = run.len();
+            insns.splice(position..=position, run);
+            position += length;
         }
         blocks.push(block.with_insns(insns));
     }
@@ -856,7 +940,7 @@ fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
         return false;
     };
     for reference in &op.stores {
-        if _in_frame(cell) && reference.excludes.contains(&mir::WHOLE_FRAME) {
+        if _in_frame(cell) && reference.spares(_frame_disp(cell), cell.width) {
             continue;
         }
         if _incoming_frame(cell) && _proven_local_frame(reference) {
@@ -867,6 +951,11 @@ fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
         }
     }
     false
+}
+
+/// A fixed frame cell's displacement; none for one indexed or based.
+pub(crate) fn _frame_disp(cell: &Mem) -> Option<i64> {
+    _exact_frame(cell).then(|| cell.addr.expect("a frame cell").disp)
 }
 
 fn _in_frame(cell: &Mem) -> bool {
@@ -2274,6 +2363,26 @@ mod tests {
         assert!(is_mem(&what(copied).sources[0]));
         assert_eq!(as_mem(&what(copied).sources[0]).width, 1);
         assert!(copied.uses.is_empty());
+    }
+
+    /// A spilled value updated and then read in its block keeps that local
+    /// run in a register: N$PQ4's `x - q*d` then `*10` ran `sub [slot]`,
+    /// then read the slot twice, three memory operands for one reload.
+    #[test]
+    fn test_an_update_read_again_in_its_block_stays_in_a_register() {
+        let binary = |name: &str, into: u32, left: u32, right: u32, at: i64| {
+            let what = semantics(Operation::Binary, name, vec![held(into, 2)], vec![held(left, 2), held(right, 2)]);
+            insn(at, (at, at), what, &[into], &[left, right])
+        };
+        let made = binary("imul", 1, 8, 9, 0x10);
+        let updated = binary("sub", 1, 1, 2, 0x11);
+        let read = _move(3, 1, None, 0x12);
+        let added = binary("add", 3, 3, 1, 0x13);
+        let pushed = _push(0x14, (0x14, 0x14), held(3, 2), &[3]);
+        let insns = _out(&_body(vec![made, updated, read, added, pushed]), &[1]);
+        let memory = insns.iter().filter(|one| one.what.as_ref().is_some_and(|what| what.dests.iter().chain(&what.sources).any(|loc| matches!(loc, Loc::Mem(_))))).count();
+        // The product stored, and read back once.
+        assert_eq!(memory, 2, "{insns:#?}");
     }
 
     #[test]

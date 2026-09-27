@@ -85,9 +85,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
         context: &mut *unit.context,
         layout: unit.layout,
         function: &mut candidate,
-        callees: unit.callees,
         metadata: unit.metadata,
-        sizes: unit.sizes,
         declared: &mut *unit.declared,
     });
 
@@ -96,7 +94,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
     let price = |state: &Function| {
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         let trips = profit::proven_trips(&within, &within.registers());
-        profit::weighted(unit.context, state, unit.callees, costs, Some(&trips))
+        profit::weighted(unit.context, state, outer.callees(), costs, Some(&trips))
     };
     let worse = match (price(unit.function), price(&candidate)) {
         (Some(before), Some(after)) => after > before,

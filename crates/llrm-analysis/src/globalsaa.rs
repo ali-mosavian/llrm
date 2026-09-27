@@ -25,9 +25,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::module::{GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::program::ProgramProxy;
+use llrm_mir::passes::ModuleAnalyses;
 
 use crate::alias;
+use crate::cfg::Shape;
 use crate::memory::{Identity, MemoryKind, Unit};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -138,7 +139,9 @@ fn referenced(module: &Module) -> BTreeSet<GlobalId> {
     out
 }
 
-pub fn analysis(module: &Module, program: &ProgramProxy) -> Result<Globals, String> {
+/// Each body's shape from its manager in `analyses`.
+pub fn analysis(module: &Module, analyses: &mut ModuleAnalyses) -> Result<Globals, String> {
+    let program = std::rc::Rc::clone(analyses.program());
     let layout = &program.layout;
     let named = listed(module, "llrm.named").into_iter().flat_map(|(first, rest)| first.into_iter().chain(rest)).collect::<BTreeSet<_>>();
     let writes = listed(module, "llrm.writes").into_iter().filter_map(|(routine, cells)| Some((routine?, cells))).collect();
@@ -152,8 +155,9 @@ pub fn analysis(module: &Module, program: &ProgramProxy) -> Result<Globals, Stri
         .map(|(at, _)| GlobalId(at as u32))
         .collect::<BTreeSet<_>>();
     let bodies = module.functions().filter(|(_, _, function)| !function.is_declaration()).collect::<Vec<_>>();
-    for (_, _, function) in &bodies {
-        let facts = alias::points_to(&Unit { program: Some(program), ..Unit::of(module, layout, function) }, None, None)?;
+    for &(id, _, function) in &bodies {
+        let shape = analyses.function::<Shape>(module, id);
+        let facts = alias::points_to(&Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_shape(&shape), None, None)?;
         for object in facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global) {
             if let Some(Identity::Global(global)) = object.identity {
                 tracked.remove(&GlobalId(global));

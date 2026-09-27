@@ -18,6 +18,7 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
+use crate::backend::target::Segments;
 use crate::backend::{addressforms, arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -77,11 +78,26 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
+/// Refuses an argument passed in the frame's own bytes: its slot would be
+/// addressable, which `sealed_arguments` denies, and the bytes are not what
+/// a push of the pointer passes.
+fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselected> {
+    for attribute in attributes.iter().flatten() {
+        if let llrm_mir::Attribute::Type(name, _) = attribute {
+            if matches!(name.as_str(), "byval" | "inalloca" | "byref") {
+                return refuse(format!("a {name} argument"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
 fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
+    in_the_frame(&function.parameter_attrs)?;
     let first = if far(global)? { 6 } else { 4 };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
     let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
@@ -232,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -266,11 +282,14 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         cells: BTreeSet::new(),
         stored: BTreeSet::new(),
         words: IndexMap::default(),
+        joins: IndexMap::default(),
         tested: BTreeSet::new(),
         consumed: BTreeSet::new(),
         paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
+        private: Vec::new(),
         cpu,
+        segments,
         exact,
         exact_sums: BTreeSet::new(),
         secondary,
@@ -326,6 +345,8 @@ struct Selector<'m, 'c, 'p> {
     stored: BTreeSet<InstId>,
     /// Dword loads read only as words: each word's offset and the value it is.
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
+    /// A dword joined from two words: those words, low then high.
+    joins: IndexMap<u32, (Held, Held)>,
     /// ANDs only a comparison with zero reads: a `test`.
     tested: BTreeSet<InstId>,
     /// What another instruction's selection made: a narrowed load's
@@ -336,8 +357,12 @@ struct Selector<'m, 'c, 'p> {
     paired: IndexMap<InstId, ValueId>,
     /// What each callee does to memory.
     callees: llrm_mir::memory::Callees,
+    /// The frame bytes no exposed alloca occupies, which no call reaches.
+    private: Vec<(crate::model::ir::Addr, u32)>,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    /// Which segment registers the machine's program model leaves free.
+    segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
     exact: BTreeSet<ValueId>,
     /// The registers indexing cells `exact` proves: each such cell is
@@ -403,6 +428,7 @@ impl Selector<'_, '_, '_> {
         let layout = &layout[..];
         let mut at = 0;
         let mut block_at = IndexMap::default();
+        let mut reach = BTreeSet::new();
         for &block in layout {
             block_at.insert(block, at);
             for &inst in function.block(block).instructions() {
@@ -411,10 +437,15 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     self.depth += size + size % 2;
-                    self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame { disp: -self.depth, index: None });
+                    let address = function.instruction(inst).result.expect("an address");
+                    self.pointers.insert(address, Pointer::Frame { disp: -self.depth, index: None });
+                    if llrm_analysis::frameescape::exposes(function, address) {
+                        reach.insert((-self.depth, -self.depth + size));
+                    }
                 }
             }
         }
+        self.private = crate::model::mir::outside(&reach);
         for &block in layout {
             let from = block_at[&block];
             let terminator = function.terminator(block).expect("a terminator");
@@ -1669,9 +1700,12 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `into` made of a low and a high word.
+    /// `into` made of a low and a high word, and dropped if only its words
+    /// are read: they are remembered.
     fn joined(&mut self, into: Held, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) {
-        let (wide_low, wide_high, shifted) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+        let (wide_low, wide_high, shifted) = (self.half(), self.half(), self.half());
+        self.halves.insert(into.value);
+        self.joins.insert(into.value, (low, high));
         let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
         for what in [
             semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_low)], vec![Loc::Held(low)]),
@@ -1714,6 +1748,8 @@ impl Selector<'_, '_, '_> {
                     out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
                 }
             }
+            // What a poison store leaves may be anything, so it stays as is.
+            Opcode::Store { volatile: false, .. } if matches!(operands[0], Operand::Constant(one) if self.module.context.get(one).kind == ConstantKind::Poison) => {}
             Opcode::Store { volatile, .. } if matches!(operands[0], Operand::Value(value) if self.converted(value).is_some()) => {
                 let Operand::Value(value) = operands[0] else { unreachable!("a converted value") };
                 let conversion = self.converted(value).expect("a stored conversion");
@@ -1859,6 +1895,11 @@ impl Selector<'_, '_, '_> {
                     }
                     CastOp::Trunc => {
                         let source = self.held(operands[0], from, at, out)?;
+                        // A joined dword's low word is the word it was joined from.
+                        let source = match self.joins.get(&source.value) {
+                            Some(&(low, _)) if to <= 2 => low,
+                            _ => source,
+                        };
                         semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: to, ..source })])
                     }
                     // An i1's byte is already 0 or 1: its sign extension is its negation.
@@ -1956,7 +1997,12 @@ impl Selector<'_, '_, '_> {
                     let held = self.held(value, type_of(value), at, out)?;
                     one.requires = match convention.returns[..] {
                         [register] => vec![(held, register)],
-                        // A dword result in a word pair: its low word, and its high word shifted down.
+                        // A dword result in a word pair: the words it was joined from.
+                        [low, high] if held.width == 4 && self.joins.contains_key(&held.value) => {
+                            let (low_word, high_word) = self.joins[&held.value];
+                            vec![(low_word, low), (high_word, high)]
+                        }
+                        // Else its low word, and its high word shifted down.
                         [low, high] if held.width == 4 => {
                             let top = Held { value: self.fresh(), width: 4 };
                             let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
@@ -1969,7 +2015,10 @@ impl Selector<'_, '_, '_> {
                 }
                 out.push(Arc::new(one));
             }
-            Opcode::Call(info) => self.call(inst, info.calling_convention, at, out)?,
+            Opcode::Call(info) => {
+                in_the_frame(&info.argument_attrs)?;
+                self.call(inst, info.calling_convention, at, out)?;
+            }
             // Nothing runs after it: the block ends with what came before.
             Opcode::Unreachable => {}
             _ => return refuse(instruction.opcode.mnemonic()),
@@ -1980,6 +2029,24 @@ impl Selector<'_, '_, '_> {
     /// A direct call: its arguments pushed as its convention orders them,
     /// its result delivered in ax or dx:ax, and what its contract says it
     /// destroys and who pops.
+    /// A call's MIR operation, listing what it may read and write as the
+    /// old route's `frame_bounded` did: anything but the frame bytes no
+    /// exposed alloca occupies.
+    fn listed(&self, at: i64, effects: llrm_mir::memory::Effects) -> Arc<crate::model::mir::Op> {
+        use crate::model::mir;
+        let reference = mir::MemRef { excludes: self.private.clone(), ..mir::MemRef::new(None, 4) };
+        let mut op = mir::Op::new(at, mir::OpCode::nothing(), "call", vec![], vec![]);
+        op.kind = mir::Kind::Call;
+        op.memory_complete = true;
+        if effects.reads {
+            op.loads = vec![reference.clone()];
+        }
+        if effects.writes {
+            op.stores = vec![reference];
+        }
+        Arc::new(op)
+    }
+
     fn call(&mut self, inst: InstId, convention: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
@@ -2007,6 +2074,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
+        }
+        if let Some(declared) = global.function() {
+            in_the_frame(&declared.parameter_attrs)?;
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
@@ -2091,9 +2161,11 @@ impl Selector<'_, '_, '_> {
             }
         }
         let what = semantics(Operation::Call, "call", vec![], vec![]);
+        let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract),
-            clobbers_high: call_clobbered_high(&contract),
+            op: Some(self.listed(at, effects)),
+            clobbers: call_clobbers(&contract, self.segments),
+            clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])

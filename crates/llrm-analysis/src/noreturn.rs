@@ -40,15 +40,14 @@ use crate::effects::{self, Declarations};
 /// prove terminal; every member with a reachable return or path through a
 /// nonterminal call is removed, and that removal propagates to its callers.
 /// A stated `noreturn` remains the independently established fact.
-pub fn inferred(module: &Module, bodies: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    let declarations = effects::declarations(module);
+pub fn inferred(module: &Module, declarations: &Declarations, bodies: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
     let bodies: Vec<(GlobalId, &Function)> =
         module.functions().filter(|(id, _, function)| bodies.contains(id) && !function.is_declaration()).map(|(id, _, function)| (id, function)).collect();
     let mut proven = bodies.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>();
     loop {
         let found = bodies
             .iter()
-            .filter(|(_, function)| _cannot_return(function, &terminal_sites(&module.context, &declarations, function, &proven)))
+            .filter(|(_, function)| _cannot_return(function, &terminal_sites(&module.context, declarations, function, &proven)))
             .map(|(id, _)| *id)
             .collect::<BTreeSet<_>>();
         if found == proven {

@@ -81,14 +81,14 @@ impl FunctionPass for Strength {
         let outer = Rc::clone(analyses.outer());
         let reduced = reduced(unit, &outer, &facts, true);
         let shared = ivshare::shared(unit, &outer);
-        let dead = dead::dead(unit.context, unit.callees, unit.function);
+        let dead = dead::dead(unit.context, outer.callees(), unit.function);
         let sunk = exitsink::sunk(unit.function);
         // The tail: exit values evaluated, then the control a credited
         // formula took over, so the counter it replaced dies.
-        let evaluated = loopexit::evaluated(unit.context, unit.layout, unit.callees, unit.function, &outer).unwrap_or_else(|error| panic!("strength: {error}"));
+        let evaluated = loopexit::evaluated(unit.context, unit.layout, outer.callees(), unit.function, &outer).unwrap_or_else(|error| panic!("strength: {error}"));
         let rewound = indvars::rewound(unit.context, unit.layout, unit.function, analyses, profit::registers(&outer).0, &profit::costs(&outer));
         let simplified = indvars::simplified(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("strength: {error}"));
-        let cleared = (rewound | simplified) && dead::dead(unit.context, unit.callees, unit.function);
+        let cleared = (rewound | simplified) && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated {
             PreservedAnalyses::none()
         } else if sunk | dead | reduced | shared | rewound | simplified | cleared {

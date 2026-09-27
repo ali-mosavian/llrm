@@ -54,3 +54,5 @@ mod tests;
 mod transforms_tests;
 #[cfg(test)]
 mod valuetracking_tests;
+#[cfg(test)]
+mod program_tests;
