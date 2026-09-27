@@ -172,7 +172,8 @@ b0:
     );
 }
 
-/// A division of two known numbers is its quotient or remainder.
+/// A division of two known numbers is its quotient or remainder, and what
+/// is computed from them is known in the same run.
 #[test]
 fn test_a_division_of_numbers_is_its_answer() {
     check(
@@ -194,8 +195,8 @@ b0:
   %r = srem i16 -7, 2
   %u = udiv i16 -7, 2
   %s = add i16 -3, -1
-  %t = add i16 %s, 32764
-  ret i16 %t
+  %t = add i16 -4, 32764
+  ret i16 32760
 }
 ",
         &[&[0]],
@@ -431,4 +432,19 @@ fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
     let before = results(&module, &[&[]]);
     assert!(summarized(&mut module, Fold).contains("ret float 3.000000e+00"));
     assert_eq!(results(&module, &[&[]]), before);
+}
+
+/// FPEMU's `X& \ 1024` of a known X&: algebraic expands the division to
+/// shifts, and Fold folds them, `ashr` among them. It stayed: consts had
+/// no `ashr`.
+#[test]
+fn a_constant_division_expanded_to_shifts_folds() {
+    for (dividend, quotient) in [(1073741831, 1048576), (-1073741831, -1048576)] {
+        let mut module = parsed(&format!("define i32 @f(i32 %x) {{\nb0:\n  %q = sdiv i32 {dividend}, 1024\n  ret i32 %q\n}}\n"));
+        let before = results(&module, &[&[0]]);
+        managed(&mut module, crate::algebraic::Algebraic);
+        let expanded = managed(&mut module, Fold);
+        assert!(expanded.contains(&format!("ret i32 {quotient}")), "{expanded}");
+        assert_eq!(results(&module, &[&[0]]), before);
+    }
 }

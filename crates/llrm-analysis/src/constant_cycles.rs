@@ -113,7 +113,7 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
         true
     };
     let supported = |opcode: &Opcode| match opcode {
-        Opcode::Binary(kind) => consts::ARITH.iter().any(|(one, _)| one == kind),
+        Opcode::Binary(kind) => consts::folds(*kind),
         Opcode::Cast(CastOp::Trunc | CastOp::SExt) => true,
         _ => false,
     };
