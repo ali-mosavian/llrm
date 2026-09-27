@@ -201,6 +201,17 @@ fn every_procedure_starts_a_statement_table_row() {
     assert!(rows.len() >= 2 && rows.iter().min() < rows.iter().max(), "{rows:x?}");
 }
 
+/// A row states a line: in a module that handles no error, a fault no row
+/// precedes reports "No line number", as the old route's; each procedure's
+/// line-0 row made it "line 0".
+#[test]
+fn a_module_without_a_handler_keeps_no_statement_rows() {
+    let records = recompiled("cmpord-q-o.obj");
+    let module = llrm_omf::module::of(&records).expect("a module");
+    let start = i64::from(u16::from_le_bytes([module.code[0x0A], module.code[0x0B]]));
+    assert!(!module.operands.contains_key(&start), "a row at {start:x}");
+}
+
 /// Data no frontend lays out -- ON ERROR's ERL table, the ERR its landing
 /// keeps -- goes where BC keeps its constants: erlnum's table was left a
 /// reference to nothing defined.
