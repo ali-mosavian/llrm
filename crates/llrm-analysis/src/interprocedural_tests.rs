@@ -676,3 +676,38 @@ pad:
     let f = function(&module, "f");
     assert!(terminal_sites(&module.context, &effects::declarations(&module), f, &BTreeSet::new()).is_empty());
 }
+
+/// Each linkage the linker may swap for another body.
+const REPLACEABLE: [&str; 5] = ["weak", "weak_odr", "linkonce", "linkonce_odr", "available_externally"];
+
+/// A replaceable body's constant return and purity were taken as facts of
+/// whichever body links in: its calls lost their results and effects.
+#[test]
+fn a_body_the_linker_may_replace_proves_no_return_constant_purity_or_readonly() {
+    for linkage in REPLACEABLE {
+        let module = parsed(&format!(
+            "@g = global i16 0
+
+define {linkage} i16 @five() {{
+b:
+  ret i16 5
+}}
+
+define {linkage} i16 @read() {{
+b:
+  %v = load i16, ptr @g
+  ret i16 %v
+}}
+
+define i16 @exact() {{
+b:
+  ret i16 5
+}}
+"
+        ));
+        let exact = names(&module, &["exact"]);
+        assert_eq!(constant_returns(&module).keys().copied().collect::<BTreeSet<_>>(), exact, "{linkage}");
+        assert_eq!(pure_procedures(&module), exact, "{linkage}");
+        assert_eq!(readonly_procedures(&module, &layout(&module)), exact, "{linkage}");
+    }
+}

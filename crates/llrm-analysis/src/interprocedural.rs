@@ -37,7 +37,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand, ValueId};
+use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantId, ConstantKind, Context, GlobalId};
@@ -137,7 +137,7 @@ pub fn specialize_parameters(context: &Context, function: &mut Function, constan
 /// and folded expressions need no special cases here.
 pub fn constant_returns(module: &Module) -> Returns {
     let mut out = Returns::default();
-    for (name, _, function) in module.functions() {
+    for (name, _, function) in module.functions().filter(|(_, global, _)| _exact(global.linkage)) {
         let mut returned = Vec::new();
         let mut complete = true;
         for (_, inst) in function.walk() {
@@ -235,9 +235,19 @@ fn _admitted(context: &Context, declarations: &Declarations, function: &Function
     effects::callee(context, function, inst).is_some_and(|target| admitted.contains(&target)) || _stated_pure(context, declarations, function, inst)
 }
 
-/// Each defined function, for the fixed points.
+/// Whether the body here is the one that runs: LLVM's `hasExactDefinition`.
+/// The linker may swap any other for a different one.
+fn _exact(linkage: Linkage) -> bool {
+    matches!(linkage, Linkage::External | Linkage::Internal | Linkage::Private)
+}
+
+/// Each exactly defined function, for the fixed points.
 fn _bodies(module: &Module) -> Vec<(GlobalId, &Function)> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function)).collect()
+    module
+        .functions()
+        .filter(|(_, global, function)| _exact(global.linkage) && !function.is_declaration())
+        .map(|(id, _, function)| (id, function))
+        .collect()
 }
 
 /// The pointer operand of a load or store, and whether it is volatile.
