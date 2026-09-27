@@ -403,3 +403,14 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
         }
     }
 }
+
+/// nbody's only floats are `VAL(COMMAND$)` through `B$FVAL`, `B$FCMD` and
+/// `B$FIST`: no inline FP instruction, so no FIDRQQ, and main was refused as
+/// "B$FIST outside the FP emulator's protocol" although BC asked for BCOM45.
+#[test]
+fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/nbody-q-o.obj");
+    let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    assert!(llrm_mir::verify::verify(&module).is_empty());
+}

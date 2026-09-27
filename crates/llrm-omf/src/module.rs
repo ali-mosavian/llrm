@@ -274,6 +274,35 @@ pub fn family(records: &[Rc<Record>]) -> Family {
     Family::Unknown
 }
 
+/// Whether floats live on the FP emulator's x87 stack, which the runtime's
+/// `B$F*` helpers push and pop. Read from the library BC asks for, since a
+/// module with no inline FP instruction has no FIxRQQ fixup to say so:
+/// BCOM45/BRUN45, PDS's `bcl71e..`/`brt71e..`, VBDOS's `..10e`. An `a`
+/// there is alternate math, which has no x87 stack.
+pub fn emulated(records: &[Rc<Record>]) -> bool {
+    let math = |name: &str| -> Option<u8> {
+        let name = name.to_ascii_lowercase();
+        let at = if ["bcom45", "brun45"].iter().any(|one| name.starts_with(one)) {
+            return Some(b'e');
+        } else if ["bcl71", "brt71"].iter().any(|one| name.starts_with(one)) {
+            5
+        } else if ["vbdcl10", "vbdrt10"].iter().any(|one| name.starts_with(one)) {
+            7
+        } else {
+            return None;
+        };
+        name.as_bytes().get(at).copied()
+    };
+    let asked = records
+        .iter()
+        .filter(|one| one.r#type & 0xFE == omf::COMENT && one.body.len() > 2 && matches!(one.body[1], 0x81 | 0x9F))
+        .find_map(|one| math(&String::from_utf8_lossy(&one.body[2..])));
+    match asked {
+        Some(kind) => kind == b'e',
+        None => omf::externals(records).iter().any(|one| one == "FIDRQQ"),
+    }
+}
+
 /// Python's `object`: what `absorbed` and `SourceMap.nodes`-like maps hold
 /// where module.py sits below the module that names the type.
 pub type Object = Rc<dyn Any>;

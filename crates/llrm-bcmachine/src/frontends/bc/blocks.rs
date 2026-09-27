@@ -14,7 +14,7 @@ use iced_x86::{Code, FlowControl, Register};
 
 use crate::frontends::bc::declen::{Insn, decode};
 use crate::frontends::bc::fppatches;
-use crate::objectfile::module::{Module, Space, defines, family};
+use crate::objectfile::module::{Module, Space, defines, emulated, family};
 use crate::objectfile::omf::{self, Fixup};
 use crate::support::hash::IndexMap;
 
@@ -652,7 +652,7 @@ pub fn decoded_instruction(module: &Module, at: usize) -> Option<Insn> {
     let insn = decode(&module.code, at)?;
     if slice(&module.code, at, at + 2) == b"\xcd\x3c"
         && insn.insn.code() != Code::Int_imm8
-        && omf::externals(&module.records).iter().any(|name| name == "FIDRQQ")
+        && emulated(&module.records)
     {
         // The emulator patches CD 3C D9 07 into 90 26 D9 07: ES, not DS.
         // Read out of QuickBASIC 4.5's own deedlines at 0824:A3F2, so the
