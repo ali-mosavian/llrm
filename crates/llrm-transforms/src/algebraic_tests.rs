@@ -411,3 +411,32 @@ b0:
     let after = checked(text, &inputs);
     assert!(after.contains("and i1 %a, %b") && after.matches("sext").count() == 1, "{after}");
 }
+
+/// A phi of two sign-extended truths stayed bytes a branch then compared
+/// against zero, as N$PQ4's `&&` did.
+#[test]
+fn a_phi_of_like_extensions_is_the_extension_of_a_phi() {
+    let text = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %s = icmp eq i16 %x, 0
+  br i1 %s, label %b1, label %b2
+
+b1:
+  %a = icmp eq i16 %y, 1
+  %wa = sext i1 %a to i16
+  br label %b3
+
+b2:
+  %b = icmp ult i16 %y, 5
+  %wb = sext i1 %b to i16
+  br label %b3
+
+b3:
+  %p = phi i16 [ %wa, %b1 ], [ %wb, %b2 ]
+  ret i16 %p
+}
+";
+    let inputs = [vec![0, 1], vec![0, 0], vec![1, 3], vec![1, 9]];
+    let after = checked(text, &inputs);
+    assert!(after.contains("phi i1") && after.matches("sext").count() == 1, "{after}");
+}

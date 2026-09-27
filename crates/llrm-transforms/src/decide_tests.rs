@@ -403,3 +403,39 @@ no:
         assert!(has(&module, if predicate == "eq" { "no" } else { "yes" }));
     }
 }
+
+/// An `&&`'s false edge reached a phi only to branch on it again: N$PQ4's
+/// loop exit tested a byte it had just set.
+#[test]
+fn an_edge_giving_a_branch_phi_a_constant_goes_where_it_leads() {
+    let text = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = icmp eq i16 %x, 0
+  br i1 %a, label %b1, label %b5
+
+b5:
+  br label %b2
+
+b1:
+  %b = icmp eq i16 %y, 0
+  br label %b2
+
+b2:
+  %c = phi i1 [ false, %b5 ], [ %b, %b1 ]
+  br i1 %c, label %b3, label %b4
+
+b3:
+  ret i16 1
+
+b4:
+  ret i16 0
+}
+";
+    let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[1, 0], &[1, 1]];
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    assert!(decide(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("phi"), "{after}");
+    assert_eq!(results(&module, inputs), before);
+}
