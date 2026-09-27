@@ -18,6 +18,7 @@ use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
+use crate::floatfacts;
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -111,6 +112,19 @@ impl Analysis for Writes {
 /// writes what `memory::unmodeled_write` says.
 pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Calls {
     Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
+}
+
+/// Float values, integers and memory in one solve, each call writing what
+/// `writes` says: `floatfacts::solved_with`.
+pub struct FloatFacts;
+
+impl Analysis for FloatFacts {
+    type Result = floatfacts::Solved;
+    const NAME: &'static str = "float-facts";
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let calls = writes(context, layout, function, analyses);
+        floatfacts::solved_with(&Unit::within(context, layout, function, analyses.outer()), &calls, None)
+    }
 }
 
 /// Every value known, memory solved alongside and each call writing what
