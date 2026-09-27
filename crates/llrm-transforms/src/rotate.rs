@@ -214,7 +214,7 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
 /// The first proven loop not in `done` entered at its body; whether one was.
 pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    for loop_ in loops::loops(&cfg::graph(function), function.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(function).loops {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
@@ -248,7 +248,7 @@ pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Functi
 /// `induction::control_replacement` proves.
 pub fn _counted_down(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    for loop_ in loops::loops(&cfg::graph(function), function.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(function).loops {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }

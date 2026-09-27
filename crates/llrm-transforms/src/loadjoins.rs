@@ -22,7 +22,6 @@
 //! alias's provenance, as every access does.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use llrm_analysis::alias::PointsTo;
 use llrm_analysis::manager::Pointers;
@@ -30,7 +29,7 @@ use llrm_analysis::avail::{loaded_into, stored_from};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
-use llrm_graph::loops::{self, Dominance, Loop};
+use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -117,7 +116,7 @@ fn provided(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, O
 
 /// The CFG facts a join is judged by.
 struct Shape {
-    dominance: Rc<Dominance>,
+    dominance: cfg::Dominance,
     depth: BTreeMap<i64, usize>,
     loops: Vec<Loop>,
 }
@@ -163,11 +162,8 @@ fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, pointers: &Point
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
     let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value))).collect();
-    let shape = Shape {
-        dominance: loops::dominance(&graph, entry),
-        depth: loops::dominators(&graph, entry).into_iter().map(|(at, above)| (at, above.len())).collect(),
-        loops: loops::loops(&graph, entry),
-    };
+    let cfg::Shape { dominance, loops: natural } = unit.shape().into_owned();
+    let shape = Shape { depth: dominance.dominators(function).into_iter().map(|(at, above)| (at, above.len())).collect(), dominance, loops: natural };
 
     let mut found = Vec::new();
     for block in &graph {

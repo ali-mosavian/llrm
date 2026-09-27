@@ -38,8 +38,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::alias;
-use llrm_analysis::manager;
+use llrm_analysis::manager::{self, Held};
 use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit, unmodeled_write};
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
@@ -219,8 +218,8 @@ impl FunctionPass for Sroa {
     }
 }
 
-fn run(unit: &mut passes::Unit, analyses: &Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
-    match promoted(unit.context, unit.layout, unit.function, analyses.outer(), aggregate_only) {
+fn run(unit: &mut passes::Unit, analyses: &mut Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
+    match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
         Ok(true) => PreservedAnalyses::none(),
         Ok(false) => PreservedAnalyses::all(),
         Err(error) => panic!("{name}: {error}"),
@@ -230,7 +229,15 @@ fn run(unit: &mut passes::Unit, analyses: &Analyses, aggregate_only: bool, name:
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, aggregate_only: bool) -> Result<bool, String> {
-    let plan = plan(&Unit::within(context, layout, function, outer), outer, aggregate_only)?;
+    _promoted(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), aggregate_only)
+}
+
+/// `promoted`, `analyses` holding what is known of `function`.
+fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, aggregate_only: bool) -> Result<bool, String> {
+    let plan = {
+        let held = Held::of(context, layout, function, analyses, true);
+        plan(&held.unit(context, layout, function, analyses.outer()), analyses.outer(), aggregate_only)?
+    };
     if plan.loads.is_empty() {
         return Ok(false);
     }
@@ -272,7 +279,7 @@ fn is_load(unit: &Unit, inst: InstId) -> bool {
 /// Cells whose reads can use a known stored value: touched more than once,
 /// loaded as one type, and available along every path to some load.
 fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String> {
-    let refs = alias::annotated(unit)?;
+    let refs = unit.annotated()?.into_owned();
     if !refs.keys().any(|&inst| is_load(unit, inst)) {
         return Ok(Plan::default());
     }
@@ -324,7 +331,8 @@ fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, slots: 
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
-    let reachable = loops::dominators(&graph, Some(entry)).into_iter().filter(|(_, doms)| !doms.is_empty()).map(|(at, _)| at).collect::<BTreeSet<_>>();
+    let dominance = cfg::Dominance::of(function);
+    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells.iter().map(|(key, &ty)| _reference(key, unit.layout.store_size(&unit.context.types, ty) as u32)).collect::<Vec<_>>();
     // The cells whose address a value is part of: its definition, a phi's
@@ -428,9 +436,9 @@ fn edges(function: &Function, block: BlockId) -> Vec<BlockId> {
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
     let entry = cfg::id(function.entry().expect("a defined function"));
-    let graph = cfg::graph(function);
-    let frontiers = loops::frontiers(&graph, Some(entry));
-    let idom = loops::immediate_dominators(&graph, Some(entry));
+    let dominance = cfg::Dominance::of(function);
+    let frontiers = dominance.frontiers(function);
+    let idom = dominance.immediate_dominators(function);
     let existing = function.walk().map(|(_, inst)| function.instruction(inst)).filter(|one| one.opcode == Opcode::Phi).filter_map(|one| one.result).collect::<BTreeSet<_>>();
     let poison = plan.types.iter().map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))).collect::<Vec<_>>();
 

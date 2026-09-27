@@ -67,7 +67,7 @@ impl FunctionPass for Fold {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
-        let folded = folded(unit.context, unit.layout, unit.function, analyses.outer(), &calls);
+        let folded = _folded(unit.context, unit.layout, unit.function, analyses, &calls);
         let swapped = canonical::compares(unit.context, unit.function);
         if folded | swapped | canonical::identities(unit.context, unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -84,15 +84,24 @@ struct _EdgeFold {
 /// expression folded on its edges, then floatfold; `outer` is its module
 /// and target, `calls` what each call writes. Whether anything changed.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
-    let numbers = _numbers(context, layout, function, outer, calls);
-    floatfold::folded(context, layout, function, outer, calls) | numbers
+    _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls)
+}
+
+/// `folded`, `analyses` holding what is known of `function`.
+fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
+    let numbers = _numbers(context, layout, function, analyses, calls);
+    if numbers {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    floatfold::_folded(context, layout, function, analyses, calls) | numbers
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
-fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
+fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
     let (values, edge) = {
-        let unit = Unit::within(context, layout, function, outer);
+        let held = manager::Held::of(context, layout, function, analyses, true);
+        let unit = held.unit(context, layout, function, analyses.outer());
         let edges = floatfacts::exit_cells(&unit, calls);
         let facts = consts::known(&unit, Some(calls), Some(&edges), None);
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))

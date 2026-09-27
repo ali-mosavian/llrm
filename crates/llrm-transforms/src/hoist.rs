@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, noreturn};
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
@@ -55,16 +55,17 @@ impl FunctionPass for Hoist {
 /// what leaves one may leave the next. Whether anything moved.
 pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     let graph = cfg::graph(unit.function);
-    let found = loops::loops(&graph, None);
+    let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+    let found = &shape.loops;
     if found.is_empty() {
         return false;
     }
     // Asked before anything moves: an instruction keeps its id where it goes.
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
-    let terminal = noreturn::terminal_sites(unit.context, &outer.globals, unit.function, &BTreeSet::new());
+    let terminal = analyses.get::<noreturn::TerminalSites>(unit.context, unit.layout, unit.function);
     let mut changed = false;
-    for one in &found {
+    for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
         let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal);
         if _crossed_values(unit.function, &run).is_empty() {

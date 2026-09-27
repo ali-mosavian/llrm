@@ -37,6 +37,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use llrm_mir::module::{Operand, ValueId};
 use num_bigint::BigInt;
@@ -282,29 +283,52 @@ pub struct OverlapShape {
     pub class: Option<AliasClass>,
 }
 
-/// An interned `OverlapShape`: equal shapes share one, so a cell map hashes
-/// and copies a word rather than an object's identity.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct OverlapBucket(u32);
-
-thread_local! {
-    static SHAPES: std::cell::RefCell<(HashMap<OverlapShape, OverlapBucket>, Vec<OverlapShape>)> =
-        std::cell::RefCell::new((HashMap::default(), Vec::new()));
+/// An interned `OverlapShape`: equal shapes share one id, so a cell map
+/// hashes and compares a word rather than an object's identity. Ids compare
+/// only between buckets of one `OverlapBuckets`.
+#[derive(Clone, Debug)]
+pub struct OverlapBucket {
+    id: u32,
+    shape: Rc<OverlapShape>,
 }
 
-impl OverlapBucket {
-    fn interned(shape: OverlapShape) -> Self {
-        SHAPES.with(|shapes| {
-            let (named, all) = &mut *shapes.borrow_mut();
-            *named.entry(shape).or_insert_with_key(|shape| {
-                all.push(shape.clone());
-                OverlapBucket(u32::try_from(all.len() - 1).expect("fewer than 2^32 buckets"))
-            })
-        })
+impl PartialEq for OverlapBucket {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
     }
+}
 
-    fn shape<T>(self, read: impl FnOnce(&OverlapShape) -> T) -> T {
-        SHAPES.with(|shapes| read(&shapes.borrow().1[self.0 as usize]))
+impl Eq for OverlapBucket {}
+
+impl std::hash::Hash for OverlapBucket {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl PartialOrd for OverlapBucket {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OverlapBucket {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+/// The buckets one analysis run names: every bucket of one cell map must
+/// come from one of these.
+#[derive(Default)]
+pub struct OverlapBuckets {
+    named: HashMap<OverlapShape, OverlapBucket>,
+}
+
+impl OverlapBuckets {
+    fn interned(&mut self, shape: OverlapShape) -> OverlapBucket {
+        let next = u32::try_from(self.named.len()).expect("fewer than 2^32 buckets");
+        self.named.entry(shape).or_insert_with_key(|shape| OverlapBucket { id: next, shape: Rc::new(shape.clone()) }).clone()
     }
 }
 
@@ -325,14 +349,13 @@ impl Bucket for OverlapBucket {
     type Parts = OverlapParts;
 
     fn held(&self, parts: &mut OverlapParts) {
-        self.shape(|shape| {
-            match &shape.object {
-                Some(object) => parts.objects.entry(object.clone()).or_default().insert(*self),
-                None => parts.objectless.insert(*self),
-            };
-            parts.frames.entry(shape.frame).or_default().insert(*self);
-            parts.classes.entry(shape.class).or_default().insert(*self);
-        });
+        let shape = &*self.shape;
+        match &shape.object {
+            Some(object) => parts.objects.entry(object.clone()).or_default().insert(self.clone()),
+            None => parts.objectless.insert(self.clone()),
+        };
+        parts.frames.entry(shape.frame).or_default().insert(self.clone());
+        parts.classes.entry(shape.class).or_default().insert(self.clone());
     }
 
     fn released(&self, parts: &mut OverlapParts) {
@@ -343,33 +366,32 @@ impl Bucket for OverlapBucket {
                 part.remove(key);
             }
         }
-        self.shape(|shape| {
-            match &shape.object {
-                Some(object) => drop_from(&mut parts.objects, object, self),
-                None => {
-                    parts.objectless.remove(self);
-                }
+        let shape = &*self.shape;
+        match &shape.object {
+            Some(object) => drop_from(&mut parts.objects, object, self),
+            None => {
+                parts.objectless.remove(self);
             }
-            drop_from(&mut parts.frames, &shape.frame, self);
-            drop_from(&mut parts.classes, &shape.class, self);
-        });
+        }
+        drop_from(&mut parts.frames, &shape.frame, self);
+        drop_from(&mut parts.classes, &shape.class, self);
     }
 }
 
 /// Python `mir.overlap_bucket`.
-pub fn overlap_bucket(reference: &MemRef) -> OverlapBucket {
+pub fn overlap_bucket(buckets: &mut OverlapBuckets, reference: &MemRef) -> OverlapBucket {
     let one = reference
         .provenance
         .as_ref()
         .filter(|provenance| provenance.slices.len() == 1)
         .map(|provenance| provenance.slices.first().expect("one slice").object.clone());
-    object_bucket(one, _frame(reference))
+    object_bucket(buckets, one, _frame(reference))
 }
 
 /// Python `mir.object_bucket`.
-pub fn object_bucket(one: Option<MemoryObject>, frame: Option<Frame>) -> OverlapBucket {
+pub fn object_bucket(buckets: &mut OverlapBuckets, one: Option<MemoryObject>, frame: Option<Frame>) -> OverlapBucket {
     let class = one.as_ref().map(alias_class);
-    OverlapBucket::interned(OverlapShape { object: one, frame, class })
+    buckets.interned(OverlapShape { object: one, frame, class })
 }
 
 /// Python `mir.overlap_buckets`: the buckets held (`parts`, of a map keyed
@@ -385,10 +407,10 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
     let provenance = reference.provenance.as_ref()?;
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
-    let mut reached = parts.objectless.iter().copied().collect::<Vec<_>>();
+    let mut reached = parts.objectless.iter().cloned().collect::<Vec<_>>();
     if let Some(frame) = _frame(reference) {
         if let Some(buckets) = parts.frames.get(&Some(frame)) {
-            reached.extend(buckets.iter().copied());
+            reached.extend(buckets.iter().cloned());
         }
     }
     // A write names one or two objects: a list is cheaper than a set.
@@ -400,7 +422,7 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
         }
         written.push(&one.object);
         if let Some(buckets) = parts.objects.get(&one.object) {
-            reached.extend(buckets.iter().copied());
+            reached.extend(buckets.iter().cloned());
         }
         let kind = alias_class(&one.object);
         if !kinds.contains(&kind) {
@@ -409,7 +431,7 @@ pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<O
     }
     for (kind, buckets) in &parts.classes {
         if kind.is_some_and(|kind| kinds.iter().any(|one| classes_may_alias(*one, kind))) {
-            reached.extend(buckets.iter().copied());
+            reached.extend(buckets.iter().cloned());
         }
     }
     reached.sort_unstable();

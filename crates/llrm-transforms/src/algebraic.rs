@@ -26,7 +26,6 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction};
-use llrm_graph::loops;
 use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -227,7 +226,7 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
         return BTreeSet::new();
     }
     let analysed = Unit::within(context, layout, function, outer);
-    loops::loops(&cfg::graph(function), None).iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
+    analysed.shape().loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
 /// `(x & m) * 2^k` is `(x * 2^k) & (m * 2^k)` at every width, where the
@@ -408,7 +407,7 @@ pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<
 /// outer, whose value is what a latch carries into that phi.
 fn _reassociated_recurrences(function: &mut Function) -> bool {
     let mut updates = BTreeMap::<ValueId, ValueId>::new();
-    for one in loops::loops(&cfg::graph(function), None) {
+    for one in cfg::Shape::of(function).loops {
         for &phi in function.block(cfg::block(one.header)).instructions() {
             let instruction = function.instruction(phi);
             if instruction.opcode != Opcode::Phi {

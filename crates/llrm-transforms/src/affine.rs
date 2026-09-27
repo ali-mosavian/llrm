@@ -19,11 +19,12 @@
 use std::collections::BTreeMap;
 
 use llrm_analysis::induction::{self, AffineOperand, Derived};
+use llrm_analysis::manager::Held;
 use llrm_analysis::{cfg, memory};
 use llrm_graph::loops::Loop;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use num_bigint::BigInt;
 
 use crate::dead;
@@ -37,9 +38,8 @@ impl FunctionPass for Affine {
     }
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        let outer = std::rc::Rc::clone(analyses.outer());
-        if canonical(unit, &outer) {
-            dead::dead(unit.context, outer.callees(), unit.function);
+        if canonical(unit, analyses) {
+            dead::dead(unit.context, analyses.outer().callees(), unit.function);
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
@@ -50,9 +50,10 @@ impl FunctionPass for Affine {
 
 /// Each loop-affine value built from its scaled counter and one invariant
 /// base; whether any was.
-pub fn canonical(unit: &mut Unit, outer: &Outer) -> bool {
+pub fn canonical(unit: &mut Unit, analyses: &mut Analyses) -> bool {
     let rewrites = {
-        let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer);
+        let held = Held::of(unit.context, unit.layout, unit.function, analyses, false);
+        let view = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
         let found = induction::of(&view);
         // A value is affine in every loop around it; its innermost loop is
         // the one whose trips it varies with.

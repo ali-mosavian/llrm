@@ -25,11 +25,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::consts::{self, Known, masked};
+use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, occurrence, ranges};
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -89,8 +89,8 @@ pub fn evaluated(context: &mut Context, layout: &DataLayout, callees: &Callees, 
 /// The first loop whose exit values change something: the old `evaluated`.
 fn _evaluation(context: &Context, layout: &DataLayout, callees: &Callees, function: &Function, outer: &Outer) -> Result<Option<Evaluation>, String> {
     let unit = Unit::within(context, layout, function, outer);
-    let facts = consts::known(&unit, None, None, None);
-    for loop_ in loops::loops(&cfg::graph(function), None) {
+    let facts = unit.registers();
+    for loop_ in cfg::Shape::of(function).loops {
         let Some(&latch) = loop_.latches.first() else { continue };
         if loop_.body.len() != 2 || loop_.latches.len() != 1 || !edges::phis(function, cfg::block(latch)).is_empty() {
             continue;
@@ -270,10 +270,10 @@ fn _constant_exits(
         return Ok(None);
     }
     let graph = cfg::graph(function);
-    let dominators = loops::dominators(&graph, None);
+    let dominance = cfg::Dominance::of(function);
     let following = graph
         .iter()
-        .filter(|block| dominators.get(&block.at).is_some_and(|dominating| dominating.contains(&cfg::id(exit))))
+        .filter(|block| dominance.dominates(cfg::id(exit), block.at))
         .map(|block| cfg::block(block.at))
         .collect::<BTreeSet<_>>();
     let aliases = _aliases(function, exit, loop_);

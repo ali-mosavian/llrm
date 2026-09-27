@@ -71,10 +71,11 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<BTreeMap<_, _>>();
-    let dominators = loops::dominators(&graph, None);
+    let shape = cfg::Shape::of(function);
+    let dominators = shape.dominance.dominators(function);
     // After a change, what alias said of the old placement no longer holds.
     let mut fresh: Option<Analyses> = None;
-    for loop_ in loops::loops(&graph, None) {
+    for loop_ in shape.loops {
         let mut exits = Vec::new();
         for &at in &loop_.body {
             for &to in &successors[&at] {
@@ -192,7 +193,7 @@ fn _moved(
 fn _last_counter_value(unit: &Unit, inst: InstId, loop_: &Loop) -> Option<BigInt> {
     let Operand::Value(stored) = unit.function.instruction(inst).operands[0] else { return None };
     let counter = induction::basics(unit, loop_).get(&stored)?.clone();
-    let proof = induction::controlling(unit, loop_, &counter, &consts::known(unit, None, None, None))?;
+    let proof = induction::controlling(unit, loop_, &counter, &unit.registers())?;
     Some(masked(proof.last.as_ref()?, counter.start.width()))
 }
 

@@ -37,7 +37,7 @@ use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, Affine, AffineMap, AffineOperand, CountedLoop};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -198,11 +198,10 @@ fn _simplified(context: &mut Context, layout: &DataLayout, function: &mut Functi
 /// The first loop another recurrence can end, and how.
 fn _replacement(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> Option<Replaced> {
     let function = unit.function;
-    let graph = cfg::graph(function);
-    let entry = function.entry().map(cfg::id);
-    let dominance = loops::dominance(&graph, entry);
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let recurrences = _recurrences(unit, facts);
-    for loop_ in loops::loops(&graph, entry) {
+    for loop_ in shape.loops.iter().cloned() {
         let (Some(preheader), [latch]) = (_preheader(function, &loop_), &loop_.latches.iter().copied().collect::<Vec<_>>()[..]) else {
             continue;
         };
@@ -267,9 +266,9 @@ fn _replacement(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> Option
 /// Every basic recurrence, with its proven domain when finite.
 fn _recurrences(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, (Affine, Option<(BigInt, BigInt)>)> {
     let mut out = IndexMap::default();
-    for loop_ in loops::loops(&cfg::graph(unit.function), unit.function.entry().map(cfg::id)) {
-        for affine in induction::basics(unit, &loop_).values() {
-            out.insert(affine.value, (affine.clone(), induction::domain(unit, &loop_, affine, facts)));
+    for loop_ in &unit.shape().loops {
+        for affine in induction::basics(unit, loop_).values() {
+            out.insert(affine.value, (affine.clone(), induction::domain(unit, loop_, affine, facts)));
         }
     }
     out
@@ -401,15 +400,15 @@ struct Rewinding {
 
 fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, registers: i64) -> Option<Rewinding> {
     let function = unit.function;
-    let graph = cfg::graph(function);
-    let entry = function.entry().map(cfg::id);
-    let found = loops::loops(&graph, entry);
+    let shape = unit.shape();
+    let found = &shape.loops;
     if found.len() < 2 {
         return None;
     }
-    let dominance = loops::dominance(&graph, entry);
+    let dominance = &shape.dominance;
     let live = liveness::live(function);
-    for inner in &found {
+    let graph = cfg::graph(function);
+    for inner in found {
         let Some(parent) = found.iter().filter(|parent| inner.body.is_subset(&parent.body) && inner.body != parent.body).min_by_key(|parent| parent.body.len()) else {
             continue;
         };
@@ -610,8 +609,7 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
         None => {
             // After the loop the recurrence is its final value.
             let exit = plan.exit.expect("an exit");
-            let graph = cfg::graph(function);
-            let dominance = loops::dominance(&graph, function.entry().map(cfg::id));
+            let dominance = cfg::Dominance::of(function);
             for one in function.users(plan.candidate.value).to_vec() {
                 let at = _block_of(function, one.user);
                 if !plan.loop_.body.contains(&at) && dominance.dominates(cfg::id(exit), at) {
@@ -625,10 +623,9 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
 
 fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeSet<i64>) -> Option<Zeroing> {
     let function = unit.function;
-    let graph = cfg::graph(function);
-    let entry = function.entry().map(cfg::id);
-    let dominance = loops::dominance(&graph, entry);
-    for loop_ in loops::loops(&graph, entry) {
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
+    for loop_ in shape.loops.iter().cloned() {
         if done.contains(&loop_.header) {
             continue;
         }

@@ -33,7 +33,7 @@ use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, covers, may_clobber, same_bytes};
 use crate::ranges::{self, Interval};
-use crate::regions::{OverlapBucket, overlap_bucket, overlap_buckets};
+use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
 
 /// What each cell holds.
 pub type Holders = IndexMap<MemRef, Operand>;
@@ -195,7 +195,8 @@ impl Stored {
             }
         }
         let cells: Vec<MemRef> = number.keys().cloned().collect();
-        let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| (overlap_bucket(&cells[*at]), None));
+        let mut buckets = OverlapBuckets::default();
+        let index = CellMap::new((0..cells.len()).map(|at| (at, ())).collect(), |at| (overlap_bucket(&mut buckets, &cells[*at]), None));
         let mut marked = Bits::new(cells.len());
         if let Some(private) = private {
             cells.iter().enumerate().filter(|(_, one)| private(one)).for_each(|(at, _)| marked.insert(at));
@@ -395,7 +396,8 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
 fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec<Forward> {
     let function = unit.function;
     let graph = memoryssa::built(unit, accesses);
-    let dominance = loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> = graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
