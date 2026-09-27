@@ -121,7 +121,7 @@ pub struct Machined {
 /// `name` of `module` selected and run through the machine phases, float
 /// constants in `pool`.
 pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut());
+    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut(), target.cpu);
     let Selected { body, convention, calls, far, depth } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;

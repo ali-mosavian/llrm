@@ -14,6 +14,8 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
+use crate::backend::cpu::Profile;
+use crate::backend::{arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
@@ -212,7 +214,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, offset: i64 },
 }
 
-pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mut Pool) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -235,6 +237,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mu
         cells: BTreeSet::new(),
         stored: BTreeSet::new(),
         callees: llrm_mir::memory::callees(module),
+        cpu,
         pending: IndexMap::default(),
         phi_inputs: IndexMap::default(),
         edges: IndexMap::default(),
@@ -275,6 +278,8 @@ struct Selector<'m, 'c, 'p> {
     stored: BTreeSet<InstId>,
     /// What each callee does to memory.
     callees: llrm_mir::memory::Callees,
+    /// What each instruction costs, where a choice depends on it.
+    cpu: &'c Profile,
     /// What each block computes for its successors' phis, before its terminator.
     pending: IndexMap<BlockId, Vec<Arc<Insn>>>,
     /// The register each (phi, predecessor) reads, where that block made it.
@@ -894,6 +899,15 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The shifts and adds a multiply by `factor` is, where the target
+    /// prices them below `imul`: the old route's `_scaled`.
+    fn scaled(&self, factor: Operand, ty: TypeId) -> Result<Option<Vec<(&'static str, i64)>>, Unselected> {
+        let width = self.width(ty)?;
+        let Some(n) = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n) else { return Ok(None) };
+        let chain = arithmetic::scale(n, self.cpu).map_err(Unselected)?;
+        Ok(chain.filter(|chain| chain.iter().all(|&(name, count)| name != "shl" || count < i64::from(width) * 8)))
+    }
+
     /// Whether every reader of `value` takes it as the address of a load or
     /// a store, directly or through a constant offset.
     fn only_addressed(&self, value: ValueId) -> bool {
@@ -922,8 +936,26 @@ impl Selector<'_, '_, '_> {
             return refuse("a byte division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
-        let divisor = self.held(instruction.operands[1], ty, at, out)?;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: self.fresh(), width });
+        let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
+        // A signed division by a constant is a multiply by its reciprocal
+        // where the target prices that cheaper, as the old route's
+        // division::reciprocal selects.
+        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| signed) {
+            let mut next = self.next;
+            let mut fresh = || {
+                next += 1;
+                next
+            };
+            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result).map_err(Unselected)?;
+            self.next = next;
+            if let Some(parts) = reciprocal {
+                out.extend(parts.into_iter().map(|what| insn(at, what)));
+                return Ok(());
+            }
+        }
+        let divisor = self.held(instruction.operands[1], ty, at, out)?;
         let high = Held { value: self.fresh(), width };
         out.push(insn(
             at,
@@ -933,8 +965,6 @@ impl Selector<'_, '_, '_> {
                 semantics(Operation::Move, "mov", vec![Loc::Held(high)], vec![Loc::Imm(Imm { value: 0, width, address: None })])
             },
         ));
-        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: self.fresh(), width });
-        let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
         let what = semantics(
             Operation::Divide,
             if signed { "idiv" } else { "div" },
@@ -1298,6 +1328,20 @@ impl Selector<'_, '_, '_> {
                     std::mem::swap(&mut a, &mut b);
                 }
                 let a = Loc::Held(self.held(a, ty, at, out)?);
+                if *op == BinaryOp::Mul
+                    && let Some(chain) = self.scaled(b, ty)?
+                {
+                    // Shifts and adds of the source, as the old route's _scaled selects.
+                    let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
+                    let mut current = a.clone();
+                    for (index, &(name, count)) in chain.iter().enumerate() {
+                        let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
+                        let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
+                        out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+                        current = Loc::Held(into);
+                    }
+                    return Ok(());
+                }
                 let b = match (self.source(b, ty, at, out)?, name) {
                     // A shift counts from cl: its count is a byte.
                     (Loc::Held(count), "shl" | "shr" | "sar") => Loc::Held(Held { width: 1, ..count }),

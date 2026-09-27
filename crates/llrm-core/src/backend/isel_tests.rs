@@ -17,20 +17,30 @@ fn parsed(text: &str) -> llrm_mir::Module {
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
-    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0))
+    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"))
 }
 
 /// The module's text, once its object is written: a listing that does not
 /// encode is no listing.
 fn assembled(text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486")).expect("assembles");
+    assembled_on("486", text)
+}
+
+/// The module's text as `cpu` prices it.
+fn assembled_on(cpu: &str, text: &str) -> String {
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name(cpu)).expect("assembles");
     crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
 /// The procedure's instructions, through every machine phase.
 fn listing(text: &str, name: &str) -> Vec<String> {
-    let text = assembled(text);
+    listing_on("486", text, name)
+}
+
+/// The procedure's instructions as `cpu` prices them.
+fn listing_on(cpu: &str, text: &str, name: &str) -> Vec<String> {
+    let text = assembled_on(cpu, text);
     let from = text.find(&format!("{name} proc")).expect("the procedure");
     text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
 }
@@ -1315,7 +1325,12 @@ define i16 @f(double %x) addrspace(1) {
 
 /// The instructions between a procedure's label and its epilogue.
 fn inner(text: &str) -> Vec<String> {
-    let got = listing(text, "f");
+    inner_on("486", text)
+}
+
+/// The instructions between a procedure's label and its epilogue, as `cpu` prices them.
+fn inner_on(cpu: &str, text: &str) -> Vec<String> {
+    let got = listing_on(cpu, text, "f");
     let from = got.iter().position(|one| one.ends_with(':')).expect("a label") + 1;
     got[from..].iter().take_while(|one| !one.starts_with("pop ") && *one != "leave" && *one != "retf").cloned().collect()
 }
@@ -1581,4 +1596,41 @@ join:
 }
 ";
     assert_eq!(listing(text, "f")[3..7], ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "add bx, bx", "add bx, offset a"]);
+}
+
+/// A signed dword divided by a constant is a multiply by its reciprocal
+/// where the target prices that cheaper, as the old route's
+/// division::reciprocal selects: P5's imul is cheap, the 386's is not.
+#[test]
+fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
+    let text = "define i32 @f(i32 %x) addrspace(1) {
+  %q = sdiv i32 %x, 10
+  %r = srem i32 %x, 10
+  %s = add i32 %q, %r
+  ret i32 %s
+}
+";
+    let divides = |cpu: &str| inner_on(cpu, text).iter().filter(|one| one.starts_with("idiv")).count();
+    assert_eq!((divides("P5"), divides("386")), (0, 2));
+}
+
+/// A word, and an unsigned dword, divided by a constant stay divisions:
+/// the reciprocal is the old route's for signed dwords only.
+#[test]
+fn test_a_word_or_unsigned_division_by_a_constant_divides() {
+    let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
+    let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
+    assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
+    assert!(inner_on("P5", unsigned).contains(&"div ebx".to_owned()), "{:?}", inner_on("P5", unsigned));
+}
+
+/// A multiply by a constant is shifts and adds where the target prices
+/// them below imul, as the old route's _scaled selects.
+#[test]
+fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
+    let by = |factor: i16| inner(&format!("define i16 @f(i16 %x) addrspace(1) {{\n  %q = mul i16 %x, {factor}\n  ret i16 %q\n}}\n"));
+    assert_eq!(by(10), ["mov bx, word ptr [bp+6]", "lea ax, [ebx+ebx*4]", "add ax, ax"]);
+    assert_eq!(by(7), ["mov ax, word ptr [bp+6]", "mov bx, ax", "shl bx, 3", "sub bx, ax", "mov ax, bx"]);
+    let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
+    assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "imul ax, bx"]);
 }
