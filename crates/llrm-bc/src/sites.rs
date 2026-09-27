@@ -19,7 +19,8 @@ pub trait Recognizer: Sync {
 }
 
 /// In the order they are asked. U3–U5 add theirs here.
-pub static RECOGNIZERS: &[&dyn Recognizer] = &[&crate::floats::Floats, &Absorbed, &crate::longs::Longs, &crate::division::Division, &crate::copies::Copies];
+pub static RECOGNIZERS: &[&dyn Recognizer] =
+    &[&crate::floats::Floats, &Absorbed, &crate::longs::Longs, &crate::division::Division, &crate::copies::Copies, &crate::cells::DefSeg, &crate::arrays::Dims, &crate::access::Element];
 
 /// What a runtime long routine computes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

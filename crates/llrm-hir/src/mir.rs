@@ -69,8 +69,15 @@ pub fn emit_promised(program: &model::Program, runtime: Option<&Runtime>) -> Vec
 }
 
 fn promised(emitted: &mut Emitted, hir: &model::Module, runtime: &Runtime) {
-    let module = &mut emitted.module;
     let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect::<HashMap<_, _>>();
+    promise(&mut emitted.module, &named, runtime);
+}
+
+/// States `runtime`'s promises of `named`, the cells only a reference
+/// naming them reaches: `!llrm.named` lists them, and a routine that runs
+/// no program code is `nocallback` with an `!llrm.writes` node of the
+/// named cells it writes.
+pub fn promise(module: &mut Module, named: &HashMap<&str, GlobalId>, runtime: &Runtime) {
     let node = |module: &mut Module, globals: Vec<GlobalId>| {
         let operands = globals.into_iter().map(|one| MetadataOperand::Constant(module.reference(one))).collect();
         module.metadata.push(MetadataNode { distinct: false, operands });
@@ -132,15 +139,15 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
     }
 }
 
-/// The `!tbaa` access tags that mark HIR's promise that a far allocation
-/// is disjoint from every place: two siblings under one root.
-struct Tags {
-    place: MetadataId,
-    allocation: MetadataId,
+/// The `!tbaa` access tags that mark a frontend's promise that a far
+/// allocation is disjoint from every place: two siblings under one root.
+pub struct Tags {
+    pub place: MetadataId,
+    pub allocation: MetadataId,
 }
 
 impl Tags {
-    fn new(module: &mut Module) -> Self {
+    pub fn new(module: &mut Module) -> Self {
         let zero = module.context.types.int(64);
         let zero = MetadataOperand::Constant(module.context.int(zero, 0));
         let mut node = |operands: Vec<MetadataOperand>| {
