@@ -1,0 +1,850 @@
+//! Machine-independent memory objects and byte-accurate access paths:
+//! llrm-core's `model/memory.rs` (`Kind`, `Object`, `Slice`, `Provenance`,
+//! `objects_may_alias`), and the access its analyses read, `MemRef`, adapted
+//! to the rich MIR. Slices are half-open; a stride greater than one
+//! describes selected byte lanes, not merely their hull.
+//!
+//! An object is what LLVM calls an underlying object. The rich MIR makes
+//! these kinds: `Frame` (an alloca), `Global` (a global variable),
+//! `Parameter` (what a pointer parameter points to), `Unknown`, `Nonlocal`
+//! (what a callee may reach) and `Absolute` (linear memory; see
+//! `regions::linear`). Kept for `classes_may_alias`, with no rich MIR
+//! producer: `Stack` (the push area), `External` (a symbol the linker may
+//! share: distinct rich MIR globals never overlap), `Named` (a far named
+//! segment) and `Allocation` (a descriptor's heap block: the rich MIR marks
+//! it on the access instead, as the `!tbaa` type "allocation").
+//!
+//! Every global is `captured`: nothing in the rich MIR says an internal
+//! global's address stays private, which the old raise's private segments
+//! did.
+//!
+//! Old `MemRef` spelled an address as an x86 operand -- a space, a segment
+//! index, a displacement and a register base -- with an SSA `base` and
+//! `segment` beside it. Here it is its pointer decomposed, as BasicAA's
+//! `DecomposeGEPExpression` does: a root, a constant displacement, and at
+//! most one variable index. Old concepts with no rich MIR counterpart are
+//! not carried: `symbolic` (a second spelling of an address), `beyond`,
+//! `excludes` and `within` (holes in the x86 region lattice), `allocation`
+//! (the `!tbaa` type now), `pointer` (an access whose address was a bare
+//! value: every access here is a decomposed pointer), `published`, `origin`.
+//!
+//! Skipped: the Python `repr` of each type, which ordered a call's effects;
+//! they sort as the types order.
+
+use std::collections::BTreeSet;
+use std::fmt;
+
+use llrm_mir::context::{ConstantExpr, ConstantKind, Context, signed};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
+use llrm_mir::types::{Type, TypeId};
+
+/// Python `qbopt.model.memory:Kind`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum MemoryKind {
+    Unknown,
+    Stack,
+    Frame,
+    Global,
+    External,
+    Nonlocal,
+    Allocation,
+    Absolute,
+    Named,
+    Parameter,
+}
+
+impl MemoryKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Stack => "stack",
+            Self::Frame => "frame",
+            Self::Global => "global",
+            Self::External => "external",
+            Self::Nonlocal => "nonlocal",
+            Self::Allocation => "allocation",
+            Self::Absolute => "absolute",
+            Self::Named => "named",
+            Self::Parameter => "parameter",
+        }
+    }
+}
+
+impl fmt::Display for MemoryKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// What tells two objects of one kind apart: a parameter's position, an
+/// alloca's value, a global's id, names, and tuples of them.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Identity {
+    Int(i64),
+    Str(String),
+    Global(u32),
+    Value(u32),
+    Tuple(Vec<Identity>),
+}
+
+/// Python `qbopt.model.memory:Object`.
+///
+/// `addressed` and `captured` are `field(compare=False)`: equality, hashing
+/// and order ignore them.
+#[derive(Clone, Debug)]
+pub struct MemoryObject {
+    pub kind: MemoryKind,
+    pub identity: Option<Identity>,
+    pub generation: i64,
+    pub extent: Option<i64>,
+    // Facts about the object, not its identity: two spellings of one object
+    // are the same object whatever they say. LLVM's split, stated once:
+    // `addressed` -- some code computes its address, so a pointer of unknown
+    // origin may hold it. `captured` -- that address can be found from
+    // outside this activation (memory, a return, a callee that keeps it), so
+    // NONLOCAL and PARAMETER may reach it. Unaddressed implies uncaptured.
+    pub addressed: bool,
+    pub captured: bool,
+}
+
+impl MemoryObject {
+    pub const fn new(kind: MemoryKind) -> Self {
+        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true }
+    }
+
+    fn key(&self) -> (MemoryKind, &Option<Identity>, i64, Option<i64>) {
+        (self.kind, &self.identity, self.generation, self.extent)
+    }
+}
+
+impl PartialEq for MemoryObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for MemoryObject {}
+
+impl std::hash::Hash for MemoryObject {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
+    }
+}
+
+impl PartialOrd for MemoryObject {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MemoryObject {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+pub const WHOLE_LOW: i64 = -(1_i64 << 31);
+pub const WHOLE_HIGH: i64 = 1_i64 << 31;
+
+/// Python `qbopt.model.memory:Slice`.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Slice {
+    pub object: MemoryObject,
+    pub low: i64,
+    pub high: i64,
+    pub stride: i64,
+    pub width: i64,
+}
+
+/// Python raises `ValueError` for all three invalid `Slice` shapes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum SliceError {
+    Empty,
+    NonPositiveStride,
+    NonPositiveWidth,
+}
+
+impl fmt::Display for SliceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "an alias slice must contain at least one byte",
+            Self::NonPositiveStride => "an alias stride must be positive",
+            Self::NonPositiveWidth => "an alias element width must be positive",
+        })
+    }
+}
+
+impl std::error::Error for SliceError {}
+
+impl Slice {
+    pub fn new(object: MemoryObject, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+        if high <= low {
+            return Err(SliceError::Empty);
+        }
+        if stride <= 0 {
+            return Err(SliceError::NonPositiveStride);
+        }
+        if width <= 0 {
+            return Err(SliceError::NonPositiveWidth);
+        }
+        Ok(Self { object, low, high, stride, width })
+    }
+
+    pub fn whole(object: MemoryObject) -> Self {
+        Self::new(object, WHOLE_LOW, WHOLE_HIGH, 1, 1).expect("the fixed whole-object slice is valid")
+    }
+
+    pub fn shifted(&self, amount: i64) -> Self {
+        Self::new(self.object.clone(), self.low + amount, self.high + amount, self.stride, self.width)
+            .expect("shifting a valid slice retains its positive shape")
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        if !objects_may_alias(&self.object, &other.object) {
+            return false;
+        }
+
+        let mine_low = i128::from(self.low);
+        let mine_high = i128::from(self.high);
+        let mine_width = i128::from(self.width);
+        let theirs_low = i128::from(other.low);
+        let theirs_high = i128::from(other.high);
+        let theirs_width = i128::from(other.width);
+        // Byte offsets have a common origin only for the same concrete object.
+        if self.object != other.object {
+            return true;
+        }
+        if mine_low >= theirs_high + theirs_width - 1 || theirs_low >= mine_high + mine_width - 1 {
+            return false;
+        }
+
+        let divisor = gcd(self.stride, other.stride);
+        for mine in 0..self.width {
+            for theirs in 0..other.width {
+                let mine_start = mine_low + i128::from(mine);
+                let theirs_start = theirs_low + i128::from(theirs);
+                if (mine_start - theirs_start) % i128::from(divisor) != 0 {
+                    continue;
+                }
+                let low = mine_start.max(theirs_start);
+                let high = (mine_high + i128::from(mine)).min(theirs_high + i128::from(theirs));
+                let stride = i128::from(self.stride);
+                let at = mine_start + ((low - mine_start + stride - 1) / stride) * stride;
+                let limit = high.min(at + i128::from(other.stride / divisor) * stride);
+                let other_stride = i128::from(other.stride);
+                let mut at = at;
+                while at < limit {
+                    if (at - theirs_start) % other_stride == 0 {
+                        return true;
+                    }
+                    at += stride;
+                }
+            }
+        }
+        false
+    }
+}
+
+pub fn gcd(mut one: i64, mut other: i64) -> i64 {
+    while other != 0 {
+        (one, other) = (other, one % other);
+    }
+    one
+}
+
+/// Python `qbopt.model.memory:Provenance`. `restrict` holds the `noalias`
+/// parameters a pointer is based on.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Provenance {
+    pub slices: BTreeSet<Slice>,
+    pub restrict: BTreeSet<Identity>,
+}
+
+impl Provenance {
+    /// `Provenance.one` with the whole-object bounds and no restrict roots.
+    pub fn one(object: MemoryObject) -> Self {
+        Self { slices: BTreeSet::from([Slice::whole(object)]), restrict: BTreeSet::new() }
+    }
+
+    pub fn one_with_slice(
+        object: MemoryObject,
+        low: i64,
+        high: i64,
+        stride: i64,
+        width: i64,
+        restrict: BTreeSet<Identity>,
+    ) -> Result<Self, SliceError> {
+        Ok(Self { slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict })
+    }
+
+    pub fn shifted(&self, amount: i64) -> Self {
+        let slices = self
+            .slices
+            .iter()
+            .map(|one| {
+                let whole = one.low == WHOLE_LOW && one.high == WHOLE_HIGH;
+                let bounded_whole = one.object.extent.is_some_and(|extent| one.low == 0 && one.high == extent);
+                if whole || bounded_whole { one.clone() } else { one.shifted(amount) }
+            })
+            .collect();
+        Self { slices, restrict: self.restrict.clone() }
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            slices: self.slices.union(&other.slices).cloned().collect(),
+            restrict: self.restrict.union(&other.restrict).cloned().collect(),
+        }
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        if !self.restrict.is_empty() && !other.restrict.is_empty() && self.restrict.is_disjoint(&other.restrict) {
+            return false;
+        }
+        self.slices.iter().any(|one| other.slices.iter().any(|two| one.intersects(two)))
+    }
+}
+
+/// Python `qbopt.model.memory:AliasClass`: all `objects_may_alias` asks of
+/// an object besides its identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AliasClass {
+    pub addressed: bool,
+    pub kind: MemoryKind,
+    pub captured: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `objects_may_alias` questions, for the test that pins how often
+    /// picking a write's buckets asks them.
+    pub static OBJECT_ALIASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub fn alias_class(one: &MemoryObject) -> AliasClass {
+    AliasClass { addressed: one.addressed, kind: one.kind, captured: one.captured }
+}
+
+pub fn objects_may_alias(one: &MemoryObject, other: &MemoryObject) -> bool {
+    #[cfg(test)]
+    OBJECT_ALIASES.with(|asked| asked.set(asked.get() + 1));
+    if one == other {
+        return true;
+    }
+    // classes_may_alias's first rule, asked before building either class.
+    one.addressed && other.addressed && classes_may_alias(alias_class(one), alias_class(other))
+}
+
+/// Whether two distinct objects of these classes may alias.
+pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
+    // Only a reference naming an unaddressed object reaches it.
+    if !(one.addressed && other.addressed) {
+        return false;
+    }
+    for (this, _that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Unknown {
+            return true;
+        }
+    }
+    for (this, that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Nonlocal {
+            return that.captured && !matches!(that.kind, MemoryKind::Frame | MemoryKind::Stack);
+        }
+    }
+    for (this, that) in [(one, other), (other, one)] {
+        if this.kind == MemoryKind::Parameter {
+            // An incoming pointer predates this activation and cannot designate
+            // one of its frame objects. At a call site the parameter object is
+            // replaced by the actual provenance before caller-side queries.
+            return that.captured && that.kind != MemoryKind::Frame;
+        }
+    }
+    if matches!(one.kind, MemoryKind::Global | MemoryKind::External) && matches!(other.kind, MemoryKind::Global | MemoryKind::External) {
+        return one.kind == MemoryKind::External || other.kind == MemoryKind::External;
+    }
+    false
+}
+
+/// What the memory analyses read: a function, and of its module the types
+/// and constants, the layout, the metadata (`!tbaa`) and the globals (an
+/// object's size, a callee's attributes).
+#[derive(Clone, Copy)]
+pub struct Unit<'a> {
+    pub context: &'a Context,
+    pub layout: &'a DataLayout,
+    pub metadata: &'a [MetadataNode],
+    pub globals: &'a [GlobalValue],
+    pub function: &'a Function,
+}
+
+impl<'a> Unit<'a> {
+    pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
+        Self { context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function }
+    }
+
+    pub fn operand_type(&self, operand: Operand) -> Option<TypeId> {
+        self.function.operand_type(self.context, operand)
+    }
+
+    /// An integer operand's width in bits.
+    pub fn int_bits(&self, operand: Operand) -> Option<u32> {
+        self.operand_type(operand).and_then(|ty| self.context.types.int_bits(ty))
+    }
+
+    /// An integer constant's bits, if `operand` is one.
+    pub fn int_constant(&self, operand: Operand) -> Option<u128> {
+        match operand {
+            Operand::Constant(id) => match self.context.get(id).kind {
+                ConstantKind::Int(bits) => Some(bits),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// A pointer operand's address space.
+    pub fn space(&self, operand: Operand) -> Option<u32> {
+        match self.context.types.get(self.operand_type(operand)?) {
+            Type::Pointer(space) => Some(*space),
+            _ => None,
+        }
+    }
+
+    /// The instruction defining `operand`, if a local value defines it.
+    pub fn defining(&self, operand: Operand) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function.value(value).def {
+            ValueDef::Instruction(inst) => Some((inst, self.function.instruction(inst))),
+            ValueDef::Argument(_) => None,
+        }
+    }
+}
+
+/// The object `root` is the address of, where it is an object's own: an
+/// alloca (`Frame`) or a global variable (`Global`).
+pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
+    match root {
+        Operand::Value(value) => {
+            let (_, instruction) = unit.defining(root)?;
+            let Opcode::Alloca { allocated, .. } = instruction.opcode else { return None };
+            let size = unit.layout.alloc_size(&unit.context.types, allocated) as i64;
+            let count = match instruction.operands.first() {
+                None => Some(1),
+                Some(&count) => unit.int_constant(count).map(|bits| bits as i64),
+            };
+            Some(MemoryObject {
+                identity: Some(Identity::Value(value.0)),
+                extent: count.map(|count| size * count),
+                ..MemoryObject::new(MemoryKind::Frame)
+            })
+        }
+        Operand::Constant(id) => {
+            let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
+            let extent = match &unit.globals.get(global.0 as usize)?.kind {
+                GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
+                GlobalKind::Function(_) => return None,
+            };
+            Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, ..MemoryObject::new(MemoryKind::Global) })
+        }
+        Operand::Block(_) => None,
+    }
+}
+
+/// An access as the alias queries read it: LLVM's `MemoryLocation`, its
+/// pointer decomposed into a root, a constant displacement and at most one
+/// variable index.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MemRef {
+    /// The pointer accessed.
+    pub pointer: Operand,
+    /// What `disp` and `base` are added to: a pointer no GEP, bitcast or
+    /// near-far cast computed.
+    pub root: Operand,
+    /// Constant bytes added to `root`, wrapped to the index width.
+    pub disp: i64,
+    /// The one variable index added: old `base`.
+    pub base: Option<ValueId>,
+    /// Bytes per unit of `base`.
+    pub scale: i64,
+    /// `base`'s width, in bits.
+    pub base_width: u32,
+    /// The selector of a far pointer made from one, as `segment:0`: old
+    /// `segment`.
+    pub segment: Option<Operand>,
+    /// `root` is an object's own address, so `disp` is an offset in it:
+    /// old `Space::Segment` and `Space::Frame`, as against a pointer.
+    pub object: bool,
+    pub space: u32,
+    pub index_bits: u32,
+    /// Bytes accessed.
+    pub width: u32,
+    /// The `!tbaa` access type's name.
+    pub typed: Option<String>,
+    /// Every GEP on the way from `root` was `inbounds`.
+    pub inbounds: bool,
+    pub volatile: bool,
+    pub provenance: Option<Provenance>,
+}
+
+impl MemRef {
+    /// `width` bytes at `pointer`.
+    pub fn at(unit: &Unit, pointer: Operand, width: u32) -> Self {
+        let space = unit.space(pointer).unwrap_or(0);
+        let index_bits = unit.layout.pointer(space).index_bits;
+        let mut made = Self {
+            pointer,
+            root: pointer,
+            disp: 0,
+            base: None,
+            scale: 0,
+            base_width: 0,
+            segment: None,
+            object: false,
+            space,
+            index_bits,
+            width,
+            typed: None,
+            inbounds: true,
+            volatile: false,
+            provenance: None,
+        };
+        let mut disp: i128 = 0;
+        loop {
+            let Some(step) = step(unit, made.root) else { break };
+            match step {
+                Step::Through(inner) => made.root = inner,
+                Step::Offset { pointer: inner, constant, variable, inbounds } => {
+                    match (variable, made.base) {
+                        (None, _) => {}
+                        (Some((index, scale)), None) => {
+                            made.base = Some(index);
+                            made.scale = scale;
+                            made.base_width = unit.int_bits(Operand::Value(index)).unwrap_or(index_bits);
+                        }
+                        (Some(_), Some(_)) => break,
+                    }
+                    disp += constant;
+                    made.inbounds &= inbounds;
+                    made.root = inner;
+                }
+            }
+        }
+        made.disp = wrapped(disp, index_bits);
+        made.segment = segment(unit, made.root);
+        made.object = object_of(unit, made.root).is_some();
+        made
+    }
+
+    /// The access instruction `inst` makes: a load's or a store's.
+    pub fn of(unit: &Unit, inst: InstId) -> Option<Self> {
+        let instruction = unit.function.instruction(inst);
+        let (pointer, ty, volatile) = match instruction.opcode {
+            Opcode::Load { volatile, .. } => (instruction.operands[0], instruction.ty, volatile),
+            Opcode::Store { volatile, .. } => (instruction.operands[1], unit.operand_type(instruction.operands[0])?, volatile),
+            _ => return None,
+        };
+        let width = unit.layout.store_size(&unit.context.types, ty) as u32;
+        Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
+    }
+
+    /// Where every byte of this access is fixed: `root` plus `disp`.
+    pub fn addr(&self) -> Option<Addr> {
+        (self.base.is_none() && self.segment.is_none()).then_some(Addr { root: self.root, disp: self.disp })
+    }
+}
+
+/// A fixed address: bytes past a root pointer. Old `Addr`, less its x86
+/// spelling.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Addr {
+    pub root: Operand,
+    pub disp: i64,
+}
+
+impl Addr {
+    pub fn plus(self, bytes: i64) -> Self {
+        Self { disp: self.disp + bytes, ..self }
+    }
+}
+
+/// `value` as a two's-complement number `bits` wide: pointer arithmetic
+/// wraps at the index width.
+pub fn wrapped(value: i128, bits: u32) -> i64 {
+    signed(value as u128 & llrm_mir::context::mask(bits), bits) as i64
+}
+
+enum Step {
+    /// The same address, spelled otherwise.
+    Through(Operand),
+    /// `pointer` plus `constant` bytes, plus one index scaled.
+    Offset { pointer: Operand, constant: i128, variable: Option<(ValueId, i64)>, inbounds: bool },
+}
+
+/// What computed `pointer` from another, if anything did.
+fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
+    let types = &unit.context.types;
+    let through = |from: Operand| {
+        // A segment's cast to a far pointer is `segment:0`, a new root.
+        (unit.space(from).is_some_and(|space| space != 2)).then_some(Step::Through(from))
+    };
+    match pointer {
+        Operand::Value(_) => {
+            let (_, instruction) = unit.defining(pointer)?;
+            match &instruction.opcode {
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => through(instruction.operands[0]),
+                Opcode::GetElementPtr { source } => {
+                    let indices = instruction.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| bits_signed(unit, one, bits))).collect::<Vec<_>>();
+                    let (constant, variable) = unit.layout.collect_offset(types, *source, &indices);
+                    let variable = match variable.as_slice() {
+                        [] => None,
+                        [(at, scale)] => match instruction.operands[1 + at] {
+                            Operand::Value(index) => Some((index, *scale as i64)),
+                            _ => return None,
+                        },
+                        _ => return None,
+                    };
+                    Some(Step::Offset { pointer: instruction.operands[0], constant, variable, inbounds: instruction.flags.contains(Flags::INBOUNDS) })
+                }
+                _ => None,
+            }
+        }
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => through(Operand::Constant(*value)),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, operands }) => {
+                let indices = operands[1..]
+                    .iter()
+                    .map(|&one| unit.int_constant(Operand::Constant(one)).map(|bits| bits_signed(unit, Operand::Constant(one), bits)))
+                    .collect::<Vec<_>>();
+                if indices.iter().any(Option::is_none) {
+                    return None;
+                }
+                let (constant, _) = unit.layout.collect_offset(types, *source, &indices);
+                Some(Step::Offset { pointer: Operand::Constant(operands[0]), constant, variable: None, inbounds: *inbounds })
+            }
+            _ => None,
+        },
+        Operand::Block(_) => None,
+    }
+}
+
+fn bits_signed(unit: &Unit, operand: Operand, bits: u128) -> i128 {
+    signed(bits, unit.int_bits(operand).unwrap_or(128))
+}
+
+/// The selector `root` is `segment:0` of: the integer an `inttoptr` made
+/// the segment from, or the segment itself.
+fn segment(unit: &Unit, root: Operand) -> Option<Operand> {
+    let (_, instruction) = unit.defining(root)?;
+    if !matches!(instruction.opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+        return None;
+    }
+    let from = instruction.operands[0];
+    if unit.space(from) != Some(2) {
+        return None;
+    }
+    match unit.defining(from) {
+        Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
+        _ => Some(from),
+    }
+}
+
+/// The name of the `!tbaa` access type `inst` carries.
+pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
+    let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
+    let MetadataOperand::Node(ty) = unit.metadata.get(tag.0 as usize)?.operands.first()? else { return None };
+    match unit.metadata.get(ty.0 as usize)?.operands.first()? {
+        MetadataOperand::String(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Whether `inst` may write memory beyond what its own access says:
+/// effects.rs's `unmodeled_write`. A call writes what its callee may, as
+/// its attributes and the callee's state it; a volatile access is a
+/// barrier.
+pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
+    let instruction = unit.function.instruction(inst);
+    match &instruction.opcode {
+        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => *volatile,
+        Opcode::Call(info) | Opcode::Invoke(info) => {
+            let callee = instruction.operands.last().and_then(|&one| match one {
+                Operand::Constant(id) => match unit.context.get(id).kind {
+                    ConstantKind::Global(global) => unit.globals.get(global.0 as usize).and_then(GlobalValue::function),
+                    _ => None,
+                },
+                _ => None,
+            });
+            !(reads_only(&info.attrs) || callee.is_some_and(|callee| reads_only(&callee.attrs)))
+        }
+        _ => false,
+    }
+}
+
+/// The attributes say memory is at most read.
+fn reads_only(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| match attr {
+        Attribute::Flag(flag) => flag == "readnone" || flag == "readonly",
+        Attribute::Memory(locations) => locations.iter().all(|(_, access)| access == "none" || access == "read"),
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, SliceError, Unit};
+    use crate::testing::{DOS, function, layout, parsed, value};
+    use llrm_mir::module::Operand;
+
+    fn object(kind: MemoryKind) -> MemoryObject {
+        MemoryObject::new(kind)
+    }
+
+    #[test]
+    fn object_kind_rules_keep_stack_and_global_separate() {
+        assert!(!super::objects_may_alias(&object(MemoryKind::Stack), &object(MemoryKind::Global)));
+        // Python since 8780f59b: the push area and the frame are distinct objects.
+        assert!(!super::objects_may_alias(&object(MemoryKind::Stack), &object(MemoryKind::Frame)));
+    }
+
+    #[test]
+    fn provenance_subobjects_use_object_identity_and_byte_ranges() {
+        let first = MemoryObject {
+            kind: MemoryKind::Frame,
+            identity: Some(Identity::Value(1)),
+            generation: 0,
+            extent: Some(8),
+            addressed: true,
+            captured: true,
+        };
+        let second = MemoryObject { identity: Some(Identity::Value(2)), ..first.clone() };
+        let a = Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap();
+        let b = Provenance::one_with_slice(first, 4, 8, 1, 1, BTreeSet::new()).unwrap();
+        let c = Provenance::one_with_slice(second, 0, 4, 1, 1, BTreeSet::new()).unwrap();
+
+        assert!(!a.intersects(&b));
+        assert!(!a.intersects(&c));
+        let same = Provenance::one_with_slice(a.slices.first().unwrap().object.clone(), 0, 2, 1, 1, BTreeSet::new()).unwrap();
+        assert!(a.intersects(&same));
+    }
+
+    #[test]
+    fn provenance_strided_ranges_prove_interleaved_arrays_disjoint() {
+        let object = MemoryObject { identity: Some(Identity::Global(4)), extent: Some(64), ..object(MemoryKind::Global) };
+        let even = Provenance::one_with_slice(object.clone(), 0, 64, 2, 1, BTreeSet::new()).unwrap();
+        let odd = Provenance::one_with_slice(object, 1, 64, 2, 1, BTreeSet::new()).unwrap();
+
+        assert!(!even.intersects(&odd));
+    }
+
+    #[test]
+    fn strided_slice_intersection_matches_the_bytes_it_describes() {
+        let object = MemoryObject {
+            identity: Some(Identity::Tuple(vec![Identity::Str("allocation".to_owned()), Identity::Int(1)])),
+            extent: Some(12),
+            ..object(MemoryKind::Allocation)
+        };
+        let mut slices = Vec::new();
+        for low in 0..4 {
+            for high in (low + 1)..7 {
+                for stride in 1..5 {
+                    for width in 1..4 {
+                        slices.push(Slice::new(object.clone(), low, high, stride, width).unwrap());
+                    }
+                }
+            }
+        }
+
+        let bytes_of = |one: &Slice| {
+            (one.low..one.high).step_by(one.stride as usize).flat_map(|start| (0..one.width).map(move |lane| start + lane)).collect::<BTreeSet<_>>()
+        };
+        for one in &slices {
+            let one_bytes = bytes_of(one);
+            for other in &slices {
+                let expected = !one_bytes.is_disjoint(&bytes_of(other));
+                assert_eq!(one.intersects(other), expected, "{one:?}, {other:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn provenance_restrict_roots_prove_disjoint() {
+        let unknown = object(MemoryKind::Unknown);
+        let left = Provenance::one_with_slice(unknown.clone(), super::WHOLE_LOW, super::WHOLE_HIGH, 1, 1, BTreeSet::from([Identity::Int(1)])).unwrap();
+        let right = Provenance::one_with_slice(unknown, super::WHOLE_LOW, super::WHOLE_HIGH, 1, 1, BTreeSet::from([Identity::Int(2)])).unwrap();
+
+        assert!(!left.intersects(&right));
+    }
+
+    #[test]
+    fn invalid_slice_bounds_stride_and_width_match_python_value_errors() {
+        let object = object(MemoryKind::Global);
+        let empty = Slice::new(object.clone(), 1, 1, 1, 1).unwrap_err();
+        let stride = Slice::new(object.clone(), 0, 1, 0, 1).unwrap_err();
+        let width = Slice::new(object, 0, 1, 1, 0).unwrap_err();
+        assert_eq!(empty, SliceError::Empty);
+        assert_eq!(stride, SliceError::NonPositiveStride);
+        assert_eq!(width, SliceError::NonPositiveWidth);
+        assert_eq!(empty.to_string(), "an alias slice must contain at least one byte");
+        assert_eq!(stride.to_string(), "an alias stride must be positive");
+        assert_eq!(width.to_string(), "an alias element width must be positive");
+    }
+
+    #[test]
+    fn whole_and_bounded_whole_provenance_are_shift_fixed_points() {
+        let whole = Provenance::one(object(MemoryKind::Global));
+        assert_eq!(whole.shifted(8), whole);
+
+        let bounded_object = MemoryObject { extent: Some(4), ..object(MemoryKind::Frame) };
+        let bounded = Provenance::one_with_slice(bounded_object, 0, 4, 1, 1, BTreeSet::new()).unwrap();
+        assert_eq!(bounded.shifted(8), bounded);
+    }
+
+    #[test]
+    fn union_is_order_independent_and_iterates_canonically() {
+        let left = Provenance::one_with_slice(object(MemoryKind::Global), 0, 1, 1, 1, BTreeSet::new()).unwrap();
+        let right = Provenance::one_with_slice(object(MemoryKind::External), 4, 5, 1, 1, BTreeSet::new()).unwrap();
+
+        let forward = left.union(&right);
+        let reverse = right.union(&left);
+        assert_eq!(forward, reverse);
+        assert_eq!(forward.slices.iter().collect::<Vec<_>>(), reverse.slices.iter().collect::<Vec<_>>());
+    }
+
+    /// The access a load of an array element through a far segment makes:
+    /// its root, displacement, index and selector.
+    #[test]
+    fn a_far_element_access_decomposes_to_its_segment_index_and_displacement() {
+        let module = parsed(&format!(
+            "{DOS}@g = global [8 x i16] zeroinitializer
+
+define i16 @f(i16 %sel, i16 %i) {{
+b0:
+  %s = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %e = getelementptr inbounds i16, ptr addrspace(1) %far, i16 %i
+  %f = getelementptr inbounds i8, ptr addrspace(1) %e, i16 -2
+  %x = load i16, ptr addrspace(1) %f
+  %y = load i16, ptr getelementptr (i8, ptr @g, i16 6)
+  %z = add i16 %x, %y
+  ret i16 %z
+}}
+"
+        ));
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
+
+        let far = &loads[0];
+        assert_eq!((far.root, far.disp, far.base, far.scale), (Operand::Value(value(f, "far")), -2, Some(value(f, "i")), 2));
+        assert_eq!(far.segment, Some(Operand::Value(value(f, "sel"))));
+        assert!(!far.object && far.inbounds && far.addr().is_none());
+        let fixed = &loads[1];
+        assert_eq!((fixed.disp, fixed.base, fixed.width), (6, None, 2));
+        assert!(fixed.object && fixed.addr().is_some());
+    }
+}

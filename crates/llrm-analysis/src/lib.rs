@@ -3,5 +3,6 @@
 //! passes in llrm-transforms ask it.
 
 pub mod cfg;
+pub mod memory;
 #[cfg(test)]
 pub mod testing;
