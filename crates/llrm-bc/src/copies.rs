@@ -1,8 +1,9 @@
-//! `movsw` and `movsb` as a load, a store and two pointer steps. Adapted
-//! from llrm-core's `raising_copies`.
+//! `movsw` and `movsb` as a load, a store and two pointer steps, adapted
+//! from llrm-core's `raising_copies`; and `rep stosw` / `rep stosb` as a
+//! memset.
 //!
-//! Only where ES is proven DS's, by `push ds / pop es`, as the old raise
-//! required. The step's sign is the direction flag, known where the body
+//! Only where ES is proven DS's, by `push ds / pop es` (or `push ss`, where
+//! the stack is in DGROUP), as the old raise required. The step's sign is the direction flag, known where the body
 //! sets it or where it is the runtime's: on entry and after a call, where
 //! the runtime contracts keep direction as environment, which is clear. BC
 //! relies on that: it copies with a bare `movsw`.
@@ -33,7 +34,7 @@ impl Recognizer for Copies {
         if raw.has_rep_prefix() || raw.has_repne_prefix() || raw.memory_segment() != Register::DS {
             return None;
         }
-        let State { direction: Some(direction), same: true } = before(e.body(), span(node).0)? else { return None };
+        let State { direction: Some(direction), same: true } = before(e.body(), span(node).0, e.unit.objects.names_data(Register::SS))? else { return None };
         let step = direction * width;
         Some((|| {
             let (source, dest) = (e.register(Register::SI)?, e.register(Register::DI)?);
@@ -51,6 +52,51 @@ impl Recognizer for Copies {
     }
 }
 
+pub struct Fills;
+
+impl Recognizer for Fills {
+    fn node(&self, e: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+        let Node::Opaque(one) = node else { return None };
+        let raw = &one.insn.insn;
+        let width = match raw.code() {
+            Code::Stosw_m16_AX => 2,
+            Code::Stosb_m8_AL => 1,
+            _ => return None,
+        };
+        if !raw.has_rep_prefix() {
+            return None;
+        }
+        let state = before(e.body(), span(node).0, e.unit.objects.names_data(Register::SS))?;
+        Some((|| {
+            if state != (State { direction: Some(1), same: true }) {
+                return Err("rep stos where ES or the direction is unknown".to_owned());
+            }
+            let value = e.register(Register::AX)?;
+            let value = e.constant(value).ok_or("rep stos of a value unknown until run time")?;
+            let bytes = value.to_le_bytes();
+            if width == 2 && bytes[0] != bytes[1] {
+                return Err("rep stosw of a word whose bytes differ".to_owned());
+            }
+            let (count, dest) = (e.register(Register::CX)?, e.register(Register::DI)?);
+            let size = if width == 2 {
+                let one = e.b.int(16, 1);
+                e.binary(BinaryOp::Shl, count, one)
+            } else {
+                count
+            };
+            // ES is DS here: DGROUP's.
+            let to = e.segmented(Register::DS, dest)?;
+            let &(memset, memset_ty) = e.unit.intrinsics.get(crate::emit::MEMSET).ok_or("@llvm.memset undeclared")?;
+            let (byte, volatile) = (e.b.int(8, i128::from(bytes[0])), e.b.int(1, 0));
+            e.b.call(memset_ty, llrm_mir::Operand::Constant(memset), &[to, byte, size, volatile], "");
+            let end = e.binary(BinaryOp::Add, dest, size);
+            e.set_register(Register::DI, end)?;
+            let zero = e.b.int(16, 0);
+            e.set_register(Register::CX, zero)
+        })())
+    }
+}
+
 /// What a copy needs of the machine: the direction flag, 1 forward or -1
 /// back, and whether ES holds DS's selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,8 +105,8 @@ struct State {
     same: bool,
 }
 
-/// The state before the node at `at`.
-fn before(body: &BodyFacts, at: usize) -> Option<State> {
+/// The state before the node at `at`; `stack` whether SS is DS.
+fn before(body: &BodyFacts, at: usize, stack: bool) -> Option<State> {
     let seed = body.blocks.first()?.at;
     let mut predecessors: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for block in &body.blocks {
@@ -87,7 +133,7 @@ fn before(body: &BodyFacts, at: usize) -> Option<State> {
             if Some(span(node).0) == until {
                 return Some(state);
             }
-            state = after(node, previous, state);
+            state = after(node, previous, state, stack);
             previous = Some(&**node);
         }
         until.is_none().then_some(state)
@@ -107,7 +153,7 @@ fn before(body: &BodyFacts, at: usize) -> Option<State> {
 }
 
 /// The state after `node`, `previous` the node before it.
-fn after(node: &Node, previous: Option<&Node>, state: State) -> State {
+fn after(node: &Node, previous: Option<&Node>, state: State, stack: bool) -> State {
     let Some(insn) = instruction(node) else { return state };
     let raw = &insn.insn;
     let direction = match raw.mnemonic() {
@@ -117,7 +163,7 @@ fn after(node: &Node, previous: Option<&Node>, state: State) -> State {
         _ if raw.rflags_modified() & RflagsBits::DF != 0 => None,
         _ => state.direction,
     };
-    let pushed = previous.and_then(instruction).is_some_and(|one| one.insn.code() == Code::Pushw_DS);
+    let pushed = previous.and_then(instruction).is_some_and(|one| one.insn.code() == Code::Pushw_DS || stack && one.insn.code() == Code::Pushw_SS);
     let same = if raw.code() == Code::Popw_ES {
         pushed
     } else {

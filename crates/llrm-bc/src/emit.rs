@@ -26,7 +26,7 @@ use llrm_bcmachine::frontends::bc::blocks::{self, Block, Ends};
 use llrm_bcmachine::frontends::bc::declen::Insn;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
 use llrm_bcmachine::model::ir::nodes::{Node, span};
-use llrm_bcmachine::model::ir::{Effects, Loc, Operation, Reg, Semantics};
+use llrm_bcmachine::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
 use llrm_bcmachine::objectfile::module::{Addr, Space};
 use llrm_bcmachine::support::hash::IndexMap;
 use llrm_mir::build::Builder;
@@ -174,6 +174,18 @@ pub struct Emitter<'b, 'm, 'u> {
     pure: Vec<InstId>,
     top: Operand,
     deepest: i64,
+    /// The depth BP holds, in a procedure that makes its own frame
+    /// (`push bp / mov bp,sp / sub sp,n`), as PDS /Ot does, and the depth
+    /// its locals reach.
+    bp: Option<i64>,
+    reserved: i64,
+    /// The registers such a frame saves for its caller, by depth: the
+    /// value on entry, which the matching pop gives back.
+    saved: Vec<(i64, Register, Operand)>,
+    /// Whether the node being emitted, and the one after it, may still be
+    /// making that frame: nothing but frame steps has run yet.
+    prologue: bool,
+    making: bool,
     layout: Option<Layout>,
     /// What each push still standing in this block stored, by its depth
     /// and width: a pop or an argument reads it back as that value.
@@ -228,6 +240,11 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
         pure: Vec::new(),
         top,
         deepest: 0,
+        bp: None,
+        reserved: 0,
+        saved: Vec::new(),
+        prologue: false,
+        making: true,
         layout: None,
         pushes: HashMap::new(),
         live_in: flagged::live_in(&body.blocks),
@@ -752,6 +769,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     fn node(&mut self, node: &Node) -> Emit<()> {
         self.insn = insn_of(node).cloned();
+        self.prologue = std::mem::replace(&mut self.making, false);
         if self.unit.facts.event_poll(node) {
             return self.call(crate::runtime::EVENT_POLL, span(node).0);
         }
@@ -775,6 +793,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     fn instruction(&mut self, insn: &Insn, what: &Semantics, effects: &Effects) -> Emit<()> {
         let name = what.name.as_deref().unwrap_or("");
+        if self.frame_step(what, effects)? {
+            return Ok(());
+        }
         match what.op {
             Operation::Nothing | Operation::Data => Ok(()),
             Operation::Move => {
@@ -834,7 +855,6 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             Operation::Multiply => self.multiply(what, effects),
             Operation::Divide => self.divide(what, effects),
-            Operation::Push if matches!(what.sources[0], Loc::Reg(Reg { register: Register::BP, .. })) => Err("sets up its own BP frame".to_owned()),
             Operation::Push => {
                 let value = self.read(&what.sources[0])?;
                 self.push(value)
@@ -846,7 +866,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             Operation::Call => Err(if what.indirect || what.target.is_none() { "an indirect call".to_owned() } else { "a near call (GOSUB)".to_owned() }),
             Operation::Escape => Err("a far jump".to_owned()),
-            Operation::Leave => Err("leave".to_owned()),
+
             Operation::Fill => Err("rep stosw".to_owned()),
             Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
                 Err(format!("x87 {name}"))
@@ -1431,6 +1451,18 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         if self.frame != Frame::Active {
             return Err(format!("[bp{disp:+}] outside its frame"));
         }
+        // A frame of its own: the locals are the bytes reserved under BP.
+        if let Some(at) = self.bp {
+            if disp < 0 && at - disp <= self.reserved && (indexed || disp + width <= 0) {
+                return Ok(self.offset(self.top, disp - at));
+            }
+            if let Some((start, bytes, arguments)) = self.layout.and_then(|one| one.arguments) {
+                if start <= disp && (indexed || disp + width <= start + bytes) {
+                    return Ok(self.offset(arguments, disp - start));
+                }
+            }
+            return Err(format!("[bp{disp:+}] outside its frame"));
+        }
         let layout = self.layout.ok_or("[bp] with no frame")?;
         if let Some((start, bytes, arguments)) = layout.arguments {
             if start <= disp && (indexed || disp + width <= start + bytes) {
@@ -1441,6 +1473,90 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             return Ok(self.offset(layout.locals, disp - layout.low));
         }
         Err(format!("[bp{disp:+}] outside its frame"))
+    }
+
+    /// A step of a frame the procedure makes itself, on the pushed bytes:
+    /// `push bp` saves the caller's, `mov bp,sp` points BP at it, `sub
+    /// sp,n` reserves the locals under it, and `leave` (or `mov sp,bp`)
+    /// and `pop bp` take them down. Whether `what` was one.
+    fn frame_step(&mut self, what: &Semantics, effects: &Effects) -> Emit<bool> {
+        let is = |loc: &Loc, register: Register| matches!(loc, Loc::Reg(Reg { register: one, .. }) if *one == register);
+        let (dest, source) = (what.dests.first(), what.sources.first());
+        let frame = |this: &Self| this.bp.filter(|_| this.frame == Frame::Active);
+        match what.op {
+            Operation::Push if source.is_some_and(|one| is(one, Register::BP)) => {
+                if self.frame != Frame::Before || self.depth != 0 || self.body.body.kind != BodyKind::Procedure {
+                    return Err("saves bp other than to make its frame".to_owned());
+                }
+                // Nothing reads it (`frame_pointer` has no address for
+                // [bp+0]), so nothing is stored: the bytes are only reserved.
+                self.depth += 2;
+                self.deepest = self.deepest.max(self.depth);
+            }
+            Operation::Move if dest.is_some_and(|one| is(one, Register::BP)) && source.is_some_and(|one| is(one, Register::SP)) => {
+                if self.frame != Frame::Before || self.depth != 2 {
+                    return Err("points bp at the stack other than to make its frame".to_owned());
+                }
+                self.bp = Some(self.depth);
+                self.reserved = self.depth;
+                self.frame = Frame::Active;
+            }
+            Operation::Binary if dest.is_some_and(|one| is(one, Register::SP)) => {
+                let (Some(at), Some(Loc::Imm(Imm { value, address: None, .. }))) = (frame(self), what.sources.get(1)) else {
+                    return Err("moves sp outside its own frame".to_owned());
+                };
+                let bytes = match what.name.as_deref() {
+                    Some("sub") => *value,
+                    Some("add") => -*value,
+                    _ => return Err("moves sp outside its own frame".to_owned()),
+                };
+                if self.depth != self.reserved || !self.saved.is_empty() || self.depth + bytes < at {
+                    return Err("moves sp other than to reserve its locals".to_owned());
+                }
+                self.depth += bytes;
+                self.reserved = self.depth;
+                self.deepest = self.deepest.max(self.depth);
+                self.forget_above(self.depth);
+                self.flags(None, effects);
+            }
+            Operation::Leave | Operation::Move if what.op == Operation::Leave || dest.is_some_and(|one| is(one, Register::SP)) && source.is_some_and(|one| is(one, Register::BP)) => {
+                let at = frame(self).ok_or("takes down a frame it did not make")?;
+                self.depth = at;
+                self.forget_above(at);
+                if what.op == Operation::Leave {
+                    self.depth -= 2;
+                    self.frame = Frame::After;
+                }
+            }
+            // A register saved for the caller as the frame is made: the value
+            // stays in SSA, not in the frame, so saving what the caller left
+            // reads nothing unless the procedure reads it once restored.
+            Operation::Push if self.prologue && frame(self).is_some() => {
+                let Some(Loc::Reg(Reg { register, .. })) = source.filter(|one| loc_width(one) == Some(2)) else { return Ok(false) };
+                let Some(index) = tracked(*register) else { return Ok(false) };
+                let value = self.get(Var::Reg(index, Half::Low));
+                self.depth += 2;
+                self.deepest = self.deepest.max(self.depth);
+                self.saved.push((self.depth, *register, value));
+            }
+            Operation::Pop if frame(self).is_some() && dest.is_some_and(|one| self.saved.iter().any(|&(at, register, _)| at == self.depth && is(one, register))) => {
+                let &(_, register, value) = self.saved.iter().find(|&&(at, _, _)| at == self.depth).expect("matched");
+                self.depth -= 2;
+                self.set_register(register, value)?;
+            }
+            Operation::Pop if dest.is_some_and(|one| is(one, Register::BP)) => {
+                let at = frame(self).ok_or("restores bp outside its own frame")?;
+                if self.depth != at {
+                    return Err("restores bp with its locals still reserved".to_owned());
+                }
+                self.depth -= 2;
+                self.frame = Frame::After;
+            }
+            _ => return Ok(false),
+        }
+        // Saving registers only follows making the frame.
+        self.making = self.prologue;
+        Ok(true)
     }
 
     /// Stores `value` below the pushed bytes.

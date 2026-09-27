@@ -16,8 +16,7 @@
 //! `strength.reduced`. These are new.
 
 use llrm_analysis::induction::{self, Affine, AffineOperand};
-use llrm_analysis::{cfg, memory};
-use llrm_graph::loops;
+use llrm_analysis::memory;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Outer, Unit};
@@ -61,8 +60,8 @@ pub fn shared(unit: &mut Unit, outer: &Outer) -> bool {
 /// The first counter of any loop another counter replaces, and how.
 fn _found(view: &memory::Unit) -> Option<(InstId, Shared)> {
     let function = view.function;
-    for loop_ in loops::loops(&cfg::graph(function), None) {
-        let counters = induction::basics(view, &loop_);
+    for loop_ in &view.shape().loops {
+        let counters = induction::basics(view, loop_);
         for derived in counters.values() {
             let ValueDef::Instruction(phi) = function.value(derived.value).def else { continue };
             if let Some(twin) = _twin(&counters, derived) {

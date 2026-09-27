@@ -456,27 +456,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
             }
         }
 
-        for _family in ["qb45", "pds71", "vbdos"] {
-            variants.insert(
-            ("B$FCMD", _family),
-            Contract {
-                inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-                cleanup: Some(0),
-                evidence: concat!(
-                    "BCOM45.LIB/BCL71ENR.LIB/VBDCL10E.LIB oscmd.asm B$FCMD at 1:0023: ",
-                    "balanced local saves and RETF (0041 in QB/PDS, 004a in VBDOS), no caller arguments. ",
-                    "Its first call is B$CmdCopy at 1:0000, whose XOR BX,BX at 0002 kills incoming ",
-                    "arithmetic flags before any conditional use or further call. Bound inputs by all ",
-                    "six allocatable GP registers; segments, BP/SP and direction are runtime environment. ",
-                    "Heap helper dependencies are incomplete, so memory, clobber and control effects ",
-                    "remain worst-case; no preservation or termination claim."
-                )
-                .to_owned(),
-                ..worst("B$FCMD")
-            },
-        );
-        }
-
         // PDS 7.1 has the same zero-argument clock interface as the independently
         // audited QB 4.5 and VBDOS libraries.  Keep the profile-specific evidence
         // here: source lowering asks the shared table, rather than teaching the
@@ -1085,17 +1064,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 ),
             ),
             (
-                "B$ASSN",
-                Some(12),
-                concat!(
-                    "farstr/string.asm 005e..00b3 reads six stack words. OR AX,AX at 0075 ",
-                    "replaces incoming arithmetic flags before branches/dependencies. Fixed ",
-                    "copy/padding, LDFS -> SAS1, and LSET paths join POP DI/SI/BP / RETF 12. ",
-                    "LDFS consumes 6 internal bytes, SAS1 4, LSET 8. Allocation, alias writes ",
-                    "and error paths remain unknown; string direction is runtime environment."
-                ),
-            ),
-            (
                 "B$SCMP",
                 Some(4),
                 concat!(
@@ -1173,15 +1141,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 ),
             ),
             (
-                "B$ERAS",
-                Some(2),
-                concat!(
-                    "erase.asm 0020 reads descriptor [bp+6]; empty arrays go directly to epilogue; ",
-                    "other paths test descriptor flags before dependencies. All normal paths join ",
-                    "POP DI/SI/BP / RETF 2 at 00bf..00c4. Heap, alias and error effects remain unknown."
-                ),
-            ),
-            (
                 "B$OPEN",
                 Some(8),
                 concat!(
@@ -1222,15 +1181,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                     "lwalk.asm PpvWalkHeap returns RETF 4 at 0039. No caller arguments."
                 ),
             ),
-            (
-                "B$LDFS",
-                Some(6),
-                concat!(
-                    "string.asm 0030..005b loads [bp+6/+8/+0a], optionally calls B$AlcTmpSH ",
-                    "and copies bytes; both zero-length and copying paths restore DS/DI/SI/BP ",
-                    "then RETF 6. Allocator and error dependencies remain unproved."
-                ),
-            ),
         ] {
             variants.insert(
             (_name, "vbdos"),
@@ -1247,34 +1197,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
             },
         );
         }
-
-        // VBDOS's array eraser receives its descriptor entirely on the stack. The
-        // broad ``inputs`` set above remains the conservative bound for unresolved
-        // dependency/error transfers, while the ordinary return edge observes no
-        // incoming GP value. Keeping both facts separate prevents unrelated helper
-        // clobbers in the caller from becoming semantic operands solely because ERASE
-        // follows them.
-        let eras = variants[&("B$ERAS", "vbdos")].clone();
-        variants.insert(
-            ("B$ERAS", "vbdos"),
-            Contract {
-                direct_inputs: Some(BTreeSet::new()),
-                ..eras
-            },
-        );
-
-        // Fixed-length UDT/string assignment likewise receives source/destination far
-        // pointers and both byte counts in its six stack words.  The implementation
-        // evidence above retains unknown hidden/error transfers, but its ordinary
-        // returning arm has no additional caller-register argument.
-        let assn = variants[&("B$ASSN", "vbdos")].clone();
-        variants.insert(
-            ("B$ASSN", "vbdos"),
-            Contract {
-                direct_inputs: Some(BTreeSet::new()),
-                ..assn
-            },
-        );
 
         // Emission-facing interfaces for QB45 routines newly reached by the demo
         // corpus. These deliberately do not turn into complete contracts: each call
@@ -1410,7 +1332,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
             ("B$PSR4", 4),
             ("B$PCR8", 8),
             ("B$PSR8", 8),
-            ("B$PER8", 8),
         ] {
             variants.insert(
             (_name, "vbdos"),
@@ -2104,9 +2025,9 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 // the code they call writes, which is anything -- GCC's modref gives up on
 // an indirect call for the same reason. B$CENP ends the program, B$EVCK
 // polls for an event and may run an event GOSUB, B$OEGA and B$RESN are the
-// ON ERROR machinery, and B$FCMD is not established at all.
+// ON ERROR machinery.
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
-    LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$FCMD", "B$OEGA", "B$RESN"]));
+    LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
 
 /// Whether a runtime entry never comes back to its caller.
 ///
@@ -2318,22 +2239,20 @@ mod tests {
         }
     }
 
+    /// B$FCMD's source is a stub, and it was the worst case in every family:
+    /// COMMAND$ refused nbody. Each shipped library's code returns, pops
+    /// nothing, reads no register and answers in AX; VBDOS's B$ERAS, B$ASSN,
+    /// B$LDFS and B$PER8 are their QB 4.5 code, and were the worst case there
+    /// too (arrudt, nestud, byref2 refused).
     #[test]
-    fn test_command_line_has_bounded_inputs_without_optimistic_effects() {
+    fn test_read_runtime_routines_are_established_in_every_family() {
         for family in ["qb45", "pds71", "vbdos"] {
-            let routine = one("B$FCMD", family);
-            assert_eq!(routine.inputs, Some(gp()));
-            assert_eq!(routine.cleanup, Some(0));
-            assert_eq!(
-                Contract {
-                    inputs: None,
-                    cleanup: None,
-                    evidence: worst("B$FCMD").evidence,
-                    ..routine
-                },
-                worst("B$FCMD")
-            );
-            assert_eq!(one("B$FCMD", "").inputs, None);
+            for (name, cleanup) in [("B$FCMD", 0), ("B$ERAS", 2), ("B$ASSN", 12), ("B$LDFS", 6), ("B$PER8", 8)] {
+                let routine = one(name, family);
+                assert!(routine.established, "{name} {family}");
+                assert_eq!((routine.control, routine.enters_user_code, routine.cleanup), (Control::Returns, false, Some(cleanup)), "{name} {family}");
+                assert_eq!(direct_slots(&routine), Vec::new(), "{name} {family}");
+            }
         }
     }
 
@@ -2613,7 +2532,7 @@ mod tests {
 
     #[test]
     fn test_a_routine_that_enters_user_code_still_writes_anything() {
-        for name in ["B$CENP", "B$EVCK", "B$OEGA", "B$RESN", "B$FCMD"] {
+        for name in ["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"] {
             let contract = contract(Some(name));
             assert!(
                 contract.enters_user_code,
@@ -2804,15 +2723,12 @@ mod tests {
     fn test_vbdos_file_setup_retains_unknown_effects() {
         for (name, cleanup) in [
             ("B$FREF", Some(0)),
-            ("B$LDFS", Some(6)),
             ("B$OPEN", Some(8)),
             ("B$DSKI", Some(2)),
             ("B$FEOF", Some(2)),
             ("B$CLOS", None),
-            ("B$ERAS", Some(2)),
             ("B$FLEN", Some(2)),
             ("B$FMID", Some(6)),
-            ("B$ASSN", Some(12)),
             ("B$SCMP", Some(4)),
             ("B$SCPF", Some(2)),
             ("B$LNIN", Some(10)),
@@ -2842,13 +2758,6 @@ mod tests {
             assert_eq!(contract.control, Control::Unknown);
             assert!(contract.raises_error);
         }
-    }
-
-    #[test]
-    fn test_vbdos_erase_has_no_direct_register_operand() {
-        let rule = one("B$ERAS", "vbdos");
-        assert_eq!(rule.inputs, Some(gp()));
-        assert_eq!(direct_slots(&rule), Vec::new());
     }
 
     #[test]
@@ -2886,18 +2795,12 @@ mod tests {
     }
 
     #[test]
-    fn test_vbdos_fixed_udt_assignment_reads_only_its_stack_arguments() {
-        assert_eq!(one("B$ASSN", "vbdos").direct_inputs, Some(BTreeSet::new()));
-    }
-
-    #[test]
     fn test_vbdos_float_print_interfaces() {
         for (name, cleanup) in [
             ("B$PCR4", 4),
             ("B$PSR4", 4),
             ("B$PCR8", 8),
             ("B$PSR8", 8),
-            ("B$PER8", 8),
         ] {
             let contract = one(name, "vbdos");
             assert_eq!(contract.cleanup, Some(cleanup));

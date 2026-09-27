@@ -173,3 +173,59 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
         }
     }
 }
+
+/// A pass keeping the CFG keeps the loops found: dominance and loops were
+/// once remembered per CFG shape in a thread-local instead.
+#[test]
+fn a_pass_that_keeps_the_cfg_keeps_its_loops() {
+    use llrm_mir::passes::{Dominators, Loops};
+
+    use crate::cfg::Shape;
+
+    let mut module = parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+",
+    );
+    let seen = Rc::new(RefCell::new(Vec::<Rc<Shape>>::new()));
+    let look = |seen: &Rc<RefCell<Vec<Rc<Shape>>>>| {
+        let seen = Rc::clone(seen);
+        step(move |unit, analyses| seen.borrow_mut().push(analyses.get::<Shape>(unit.context, unit.layout, unit.function)), PreservedAnalyses::all())
+    };
+    // Swaps the add's operands: no edge moves.
+    let swap = |preserved: PreservedAnalyses| {
+        step(
+            |unit, _| {
+                let function = &mut *unit.function;
+                let add = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_))).unwrap();
+                let operands = function.instruction(add).operands.iter().rev().copied().collect();
+                function.set_operands(add, operands);
+            },
+            preserved,
+        )
+    };
+    let mut passes = PassManager::default();
+    passes.verify_invalidation = true;
+    passes.add(look(&seen));
+    passes.add(swap(PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()));
+    passes.add(look(&seen));
+    passes.add(swap(PreservedAnalyses::none()));
+    passes.add(look(&seen));
+    passes.run(&mut module).unwrap();
+    let seen = seen.take();
+    assert_eq!(seen[0].loops.len(), 1);
+    assert!(Rc::ptr_eq(&seen[0], &seen[1]), "found again though the CFG was kept");
+    assert!(!Rc::ptr_eq(&seen[1], &seen[2]));
+    assert_eq!(seen[1], seen[2]);
+}

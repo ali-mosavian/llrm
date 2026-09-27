@@ -471,12 +471,13 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 
 /// An initializer's bytes, and a relocation for each address in it: near,
-/// far, a far pointer's offset word, and its segment.
+/// far, a far pointer's offset word, and its segment. A far pointer to near
+/// data is DGROUP's: its group offset and DGROUP's selector.
 #[test]
 fn test_initializers_are_bytes_and_relocations() {
     use crate::backend::masm::{Datum, Label, Pointer};
     let text = "@far = internal addrspace(1) global [2 x i8] c\"HI\"
-@rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)) }
+@rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2), ptr addrspace(1) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)), ptr addrspace(1) addrspacecast (ptr getelementptr (i8, ptr @rec, i16 1) to ptr addrspace(1)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
@@ -491,6 +492,8 @@ fn test_initializers_are_bytes_and_relocations() {
             pointer("far", 0, true),
             pointer("far", 1, false),
             Datum::SegmentWord("far".to_owned()),
+            pointer("rec", 1, false),
+            Datum::SegmentWord("DGROUP".to_owned()),
         ]
     );
 }
@@ -1103,6 +1106,26 @@ define i1 @ne(double %a, double %b) addrspace(1) {
     let answered = |name: &str| listing(text, name).into_iter().filter(|line| !compared.contains(&line.as_str()) && !line.ends_with(':')).collect::<Vec<_>>();
     assert_eq!(answered("eq"), ["sete al", "setnp bl", "and al, bl", "pop bp", "retf"]);
     assert_eq!(answered("ne"), ["setne al", "setp bl", "or al, bl", "pop bp", "retf"]);
+}
+
+/// An unordered predicate is the carry or zero unordered also sets: ult is
+/// `setb`, ugt the same with the operands the other way. fpemu's `fcmp ult`
+/// was refused.
+#[test]
+fn test_float_unordered_predicates_are_below() {
+    let text = "define i1 @ult(double %a, double %b) addrspace(1) {
+  %c = fcmp ult double %a, %b
+  ret i1 %c
+}
+define i1 @uge(double %a, double %b) addrspace(1) {
+  %c = fcmp uge double %a, %b
+  ret i1 %c
+}
+";
+    let prologue = ["push bp", "mov bp, sp", "fnstsw ax", "sahf", "pop bp", "retf"];
+    let answered = |name: &str| listing(text, name).into_iter().filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':')).collect::<Vec<_>>();
+    assert_eq!(answered("ult"), ["fld qword ptr [bp+6]", "fcomp qword ptr [bp+14]", "setb al"]);
+    assert_eq!(answered("uge"), ["fld qword ptr [bp+14]", "fcomp qword ptr [bp+6]", "setbe al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.

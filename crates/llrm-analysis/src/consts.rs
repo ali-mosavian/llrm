@@ -57,7 +57,7 @@ use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
 use crate::memoryssa::{self, Accesses};
 use crate::ranges::{self, Interval};
-use crate::regions::{ByteRange, OverlapBucket, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
+use crate::regions::{ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
 
 type Binary = fn(&BigInt, &BigInt) -> BigInt;
 
@@ -96,6 +96,8 @@ pub struct _MemoryQueries<'a> {
     pub addressed: HashMap<MemRef, Rc<MemRef>>,
     pub overlaps: HashMap<((Addr, u32), usize), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
+    /// The buckets `places` names, this epoch's own.
+    pub buckets: OverlapBuckets,
 }
 
 /// Cells indexed by this epoch's buckets; see `_MemoryQueries::owned`.
@@ -133,6 +135,7 @@ impl<'a> _MemoryQueries<'a> {
             addressed: HashMap::default(),
             overlaps: HashMap::default(),
             places: HashMap::default(),
+            buckets: OverlapBuckets::default(),
         }
     }
 
@@ -161,11 +164,11 @@ impl<'a> _MemoryQueries<'a> {
     /// Remembered: interning a bucket hashes its object.
     pub fn place(&mut self, where_: (Addr, u32)) -> (OverlapBucket, Option<ByteRange>) {
         if let Some(place) = self.places.get(&where_) {
-            return *place;
+            return place.clone();
         }
-        let bucket = object_bucket(object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
+        let bucket = object_bucket(&mut self.buckets, object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
         let place = (bucket, overlap_span(&self.cell(where_)));
-        self.places.insert(where_, place);
+        self.places.insert(where_, place.clone());
         place
     }
 
@@ -723,7 +726,7 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
     // A store kills the cells alias's provenance leaves it able to reach.
-    let annotated = (calls.is_some() && unit.references.is_none()).then(|| crate::alias::annotated(unit).ok()).flatten();
+    let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     // No edge facts is no edges: the solve reads only a nonempty map.
     let edges = edges.filter(|edges| !edges.is_empty());
@@ -766,7 +769,8 @@ fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
         return IndexMap::default();
     }
     let graph = memoryssa::built(unit, &accesses);
-    let dominance = llrm_graph::loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let before = |source: InstId, block: BlockId, inst: InstId| {
         let order = function.block(block).instructions();
         match function.parent(source) {

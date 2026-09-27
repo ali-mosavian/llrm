@@ -1,11 +1,16 @@
 //! A function's blocks as `llrm_graph` walks them: each block by its id,
 //! in layout order, the entry first.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
-use llrm_graph::loops::{self, Node};
+use llrm_graph::loops::{self, Dominates, Loop, Node};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dominators::DominatorTree;
+use llrm_mir::loops::LoopInfo;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops, PreservedAnalyses};
 use llrm_mir::{Constant, ConstantKind, Context};
 
 /// A block's id and its successors' ids.
@@ -36,6 +41,149 @@ pub fn block(at: i64) -> BlockId {
 /// `function`'s graph, in layout order.
 pub fn graph(function: &Function) -> Vec<Block> {
     function.layout().iter().map(|&block| Block { at: id(block), succ: function.successors(block).into_iter().map(id).collect() }).collect()
+}
+
+/// `Dominators` as the graph walks read it: over block ids, and nothing
+/// dominates a block the entry does not reach.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dominance(Rc<DominatorTree>);
+
+impl Dominance {
+    pub fn new(tree: Rc<DominatorTree>) -> Self {
+        Self(tree)
+    }
+
+    /// Of a body no manager holds.
+    pub fn of(function: &Function) -> Self {
+        Self(Rc::new(DominatorTree::new(function)))
+    }
+
+    pub fn tree(&self) -> &DominatorTree {
+        &self.0
+    }
+
+    pub fn reachable(&self, at: i64) -> bool {
+        self.0.is_reachable(block(at))
+    }
+
+    pub fn dominates(&self, dominator: i64, at: i64) -> bool {
+        self.reachable(at) && self.0.dominates(block(dominator), block(at))
+    }
+
+    /// The nearest strict dominator: none for the entry or an unreachable block.
+    pub fn immediate(&self, at: i64) -> Option<i64> {
+        self.0.immediate_dominator(block(at)).map(id)
+    }
+
+    /// Each block's dominators, itself among them; none for an unreachable one.
+    pub fn dominators(&self, function: &Function) -> BTreeMap<i64, BTreeSet<i64>> {
+        let above = |at: i64| {
+            let mut found = BTreeSet::new();
+            let mut next = self.reachable(at).then_some(at);
+            while let Some(one) = next {
+                found.insert(one);
+                next = self.immediate(one);
+            }
+            found
+        };
+        function.layout().iter().map(|&one| (id(one), above(id(one)))).collect()
+    }
+
+    pub fn immediate_dominators(&self, function: &Function) -> BTreeMap<i64, Option<i64>> {
+        function.layout().iter().map(|&one| (id(one), self.immediate(id(one)))).collect()
+    }
+
+    /// Where a definition stops being the only one that reaches: the
+    /// blocks a phi belongs in.
+    pub fn frontiers(&self, function: &Function) -> BTreeMap<i64, BTreeSet<i64>> {
+        let mut found = function.layout().iter().map(|&one| (id(one), BTreeSet::new())).collect::<BTreeMap<_, _>>();
+        for &one in function.layout() {
+            let at = id(one);
+            if !self.reachable(at) {
+                continue;
+            }
+            let preds = function.predecessors(one).into_iter().map(id).filter(|&from| self.reachable(from)).collect::<BTreeSet<_>>();
+            if preds.len() < 2 {
+                continue;
+            }
+            for from in preds {
+                let mut runner = Some(from);
+                while let Some(walked) = runner {
+                    if Some(walked) == self.immediate(at) {
+                        break;
+                    }
+                    found.get_mut(&walked).expect("a block").insert(at);
+                    runner = self.immediate(walked);
+                }
+            }
+        }
+        found
+    }
+
+    /// Blocks left in a cycle once every natural loop's back edge is cut.
+    pub fn irreducible(&self, function: &Function) -> BTreeSet<i64> {
+        loops::irreducible_under(&graph(function), self)
+    }
+}
+
+impl Dominates for Dominance {
+    fn reachable(&self, at: i64) -> bool {
+        Dominance::reachable(self, at)
+    }
+
+    fn dominates(&self, dominator: i64, at: i64) -> bool {
+        Dominance::dominates(self, dominator, at)
+    }
+}
+
+/// `Loops` as the graph walks read them: innermost first where they nest,
+/// else in the order their first back edge comes in the layout.
+pub fn natural(function: &Function, info: &LoopInfo) -> Vec<Loop> {
+    let headers = info.loops.iter().map(|one| (one.header, one)).collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut found = Vec::with_capacity(info.loops.len());
+    for &at in function.layout() {
+        for successor in function.successors(at) {
+            let Some(one) = headers.get(&successor) else { continue };
+            if one.latches.contains(&at) && seen.insert(successor) {
+                found.push(Loop { header: id(successor), latches: one.latches.iter().map(|&latch| id(latch)).collect(), body: one.blocks.iter().map(|&inside| id(inside)).collect() });
+            }
+        }
+    }
+    found.sort_by_key(|one| one.body.len());
+    found
+}
+
+/// A function's dominance and natural loops, as block ids: what the graph
+/// walks read of `Dominators` and `Loops`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    pub dominance: Dominance,
+    pub loops: Vec<Loop>,
+}
+
+impl Shape {
+    /// Of a body no manager holds.
+    pub fn of(function: &Function) -> Self {
+        let dominance = Dominance::of(function);
+        let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
+        Self { dominance, loops }
+    }
+}
+
+impl Analysis for Shape {
+    type Result = Shape;
+    const NAME: &'static str = "shape";
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Shape {
+        let dominance = Dominance::new(analyses.get::<Dominators>(context, layout, function));
+        let loops = natural(function, &analyses.get::<Loops>(context, layout, function));
+        Shape { dominance, loops }
+    }
+
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Shape>() || (preserved.kept::<Dominators>() && preserved.kept::<Loops>())
+    }
 }
 
 /// Blocks the entry does not reach, gone, and each phi's inputs from
@@ -105,7 +253,7 @@ b3:
 }
 ");
         let function = function(&module, "f");
-        let found = llrm_graph::loops::loops(&graph(function), None);
+        let found = Shape::of(function).loops;
         assert_eq!(found.len(), 1);
         assert_eq!(block(found[0].header), function.layout()[1]);
     }

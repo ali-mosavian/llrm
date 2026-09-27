@@ -26,8 +26,9 @@ impl FunctionPass for LoopSimplify {
         "loopsimplify"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
-        if simplified(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let shape = (*analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function)).clone();
+        if _simplified(unit.function, shape) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -93,17 +94,19 @@ pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) ->
 
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
-    let Some(entry) = function.entry().map(cfg::id) else { return false };
-    let graph = cfg::graph(function);
-    if !loops::irreducible(&graph, Some(entry)).is_empty() {
+    let shape = cfg::Shape::of(function);
+    _simplified(function, shape)
+}
+
+/// `simplified`, `shape` being `function`'s.
+fn _simplified(function: &mut Function, mut shape: cfg::Shape) -> bool {
+    if function.entry().is_none() || !shape.dominance.irreducible(function).is_empty() {
         return false;
     }
     let mut changed = false;
-    for original in loops::loops(&graph, Some(entry)) {
-        let original = loops::loops(&cfg::graph(function), Some(entry))
-            .into_iter()
-            .find(|loop_| loop_.header == original.header)
-            .expect("StopIteration");
+    let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
+    for header in headers {
+        let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
         let mut candidate = function.clone();
         let mut grouping = false;
         let predecessors = loops::predecessors(&cfg::graph(&candidate));
@@ -122,10 +125,11 @@ pub fn simplified(function: &mut Function) -> bool {
             grouping = true;
         }
         let graph = cfg::graph(&candidate);
-        let current = loops::loops(&graph, Some(entry))
-            .into_iter()
-            .find(|loop_| loop_.header == original.header)
-            .expect("StopIteration");
+        let current = if grouping {
+            cfg::Shape::of(&candidate).loops.into_iter().find(|loop_| loop_.header == original.header).expect("StopIteration")
+        } else {
+            original.clone()
+        };
         let predecessors = loops::predecessors(&graph);
         let exits = graph
             .iter()
@@ -149,6 +153,7 @@ pub fn simplified(function: &mut Function) -> bool {
         if !broke && grouping {
             *function = candidate;
             changed = true;
+            shape = cfg::Shape::of(function);
         }
     }
     changed

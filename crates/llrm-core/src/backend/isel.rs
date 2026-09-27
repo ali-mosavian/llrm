@@ -156,13 +156,22 @@ enum Test {
 /// compared the other way, and the conditions. Its flags are an unsigned
 /// compare's, and unordered sets ZF, PF and CF: `a > b` is `ja`, false
 /// when unordered, and a less-than compares the other way to stay false.
-const FLOAT_CONDITIONS: [(FloatPredicate, bool, Test); 6] = [
+/// An unordered predicate is the carry or zero that unordered also sets:
+/// `a < b` or unordered is `jb`, as the old route branched on each BASIC
+/// comparison (`lower::_unordered`).
+const FLOAT_CONDITIONS: [(FloatPredicate, bool, Test); 12] = [
     (FloatPredicate::Ogt, false, Test::One("ja")),
     (FloatPredicate::Oge, false, Test::One("jae")),
     (FloatPredicate::Olt, true, Test::One("ja")),
     (FloatPredicate::Ole, true, Test::One("jae")),
     (FloatPredicate::Oeq, false, Test::Both("je", "jnp")),
     (FloatPredicate::Une, false, Test::Either("jne", "jp")),
+    (FloatPredicate::Ult, false, Test::One("jb")),
+    (FloatPredicate::Ule, false, Test::One("jbe")),
+    (FloatPredicate::Ugt, true, Test::One("jb")),
+    (FloatPredicate::Uge, true, Test::One("jbe")),
+    (FloatPredicate::Ueq, false, Test::One("je")),
+    (FloatPredicate::One, false, Test::One("jne")),
 ];
 
 fn float_conditions(predicate: FloatPredicate) -> Option<(bool, Test)> {
@@ -569,8 +578,10 @@ impl Selector<'_, '_, '_> {
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
         let unit = Unit::of(self.module, &self.layout, self.function);
-        let facts = llrm_analysis::consts::known(&unit, None, None, None);
-        let mut counts: Vec<(i64, i64)> = llrm_graph::loops::loops(&cfg::graph(self.function), None)
+        let facts = unit.registers();
+        let mut counts: Vec<(i64, i64)> = unit
+            .shape()
+            .loops
             .iter()
             .filter_map(|one| {
                 let header = block_at.get(&cfg::block(one.header))?;
