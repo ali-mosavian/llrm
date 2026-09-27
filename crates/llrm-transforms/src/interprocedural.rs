@@ -240,7 +240,7 @@ pub fn optimized<E: From<String>>(
 }
 
 /// The procedure `id`, with the context its types and constants live in.
-fn function_mut(module: &mut Module, id: GlobalId) -> (&mut llrm_mir::context::Context, &mut llrm_mir::module::Function) {
+pub(crate) fn function_mut(module: &mut Module, id: GlobalId) -> (&mut llrm_mir::context::Context, &mut llrm_mir::module::Function) {
     let Module { context, globals, .. } = module;
     match &mut globals[id.0 as usize].kind {
         GlobalKind::Function(function) => (context, function),

@@ -1,14 +1,41 @@
 //! Helpers adapted from llrm-core's `optimize/transform.rs`, each copied as
 //! a ported pass needs it; the pipeline itself is not ported yet.
 //! `_unreachable` is `llrm_analysis::cfg::_unreachable`.
+//!
+//! `live` is gvn's share, taken here for Dead; `halves`, which it read, has
+//! no counterpart: a value here is whole.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::memory::Callees;
+use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
+
+/// Values something that stays reads, to a fixed point.
+pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeSet<ValueId> {
+    let mut alive = BTreeSet::new();
+    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
+    while let Some(inst) = pending.pop() {
+        for &operand in &function.instruction(inst).operands {
+            if let Operand::Value(value) = operand
+                && alive.insert(value)
+                && let ValueDef::Instruction(defining) = function.value(value).def
+            {
+                pending.push(defining);
+            }
+        }
+    }
+    alive
+}
+
+/// Every function of `module` that has a body.
+pub(crate) fn bodies(module: &Module) -> Vec<GlobalId> {
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
+}
 
 /// The comparison supplying `branch`'s condition: the `icmp` in `block`
 /// that defines it.
