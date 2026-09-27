@@ -455,7 +455,8 @@ fn ports_are_the_targets_intrinsics() {
 /// may run program code promises nothing.
 #[test]
 fn a_runtime_promise_is_stated_on_its_routines() {
-    use crate::mir::{Runtime, emit, runtime};
+    use crate::mir::{emit, runtime};
+    use crate::model::RuntimePromises;
     use crate::model::{DataLinkage, DataObject};
     let call = |id, callee: &str| {
         let mut call = Instruction::new(id, Op::Call, Vec::new(), Vec::new());
@@ -468,13 +469,9 @@ fn a_runtime_promise_is_stated_on_its_routines() {
     let mut segment = DataObject::new(3, "b$seg", vec![0, 0]);
     (segment.linkage, segment.addressed) = (DataLinkage::External, false);
     program.modules[0].data = vec![segment];
-    let writes = |routine: &str| match routine {
-        "B$DSEG" => Some(vec!["b$seg".to_owned()]),
-        "B$INKY" => Some(Vec::new()),
-        _ => None,
-    };
+    let promises = RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])]);
     let emitted = emit(&program).remove(0);
-    let runtime = runtime(&emitted, &program.modules[0], &Runtime { writes: &writes }).unwrap();
+    let runtime = runtime(&emitted, &program.modules[0], &promises).unwrap();
     let promises = llrm_mir::print::module(&runtime);
     assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&promises).unwrap()), promises);
     assert!(promises.contains("!llrm.named = !{!0}\n!llrm.writes = !{!1, !2}\n"), "{promises}");

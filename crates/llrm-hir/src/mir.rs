@@ -38,32 +38,25 @@ pub struct Emitted {
     pub data: HashMap<i64, GlobalId>,
 }
 
-/// What a frontend's runtime promises, which its routines' declarations
-/// state: of the external data HIR marks unaddressed, the named cells, the
-/// ones a routine writes; none where it may run the program's own code.
-pub struct Runtime<'a> {
-    pub writes: &'a dyn Fn(&str) -> Option<Vec<String>>,
-}
-
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
     // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
     let zeroed = program.dialect != model::Dialect::Quickr;
     program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed)).collect()
 }
 
-/// The runtime `emitted` links against, as `runtime` promises it: the named
-/// cells are the external data `hir` marks unaddressed.
-pub fn runtime(emitted: &Emitted, hir: &model::Module, runtime: &Runtime) -> Emit<Module> {
+/// The runtime `emitted` links against, as `promises` states it: the
+/// named cells are the external data `hir` marks unaddressed.
+pub fn runtime(emitted: &Emitted, hir: &model::Module, promises: &model::RuntimePromises) -> Emit<Module> {
     let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect();
-    promised(&emitted.module, &named, runtime)
+    promised(&emitted.module, &named, promises)
 }
 
 /// The declarations-only runtime module `module` links against, with
-/// `runtime`'s promises of `named`, the cells only a reference naming them
+/// `promises` of `named`, the cells only a reference naming them
 /// reaches: `!llrm.named` lists them, and each routine `module` declares
 /// that runs no program code is `nocallback` with an `!llrm.writes` node
 /// of the named cells it writes.
-pub fn promised(module: &Module, named: &HashMap<&str, GlobalId>, runtime: &Runtime) -> Emit<Module> {
+pub fn promised(module: &Module, named: &HashMap<&str, GlobalId>, promises: &model::RuntimePromises) -> Emit<Module> {
     let mut out = Module { datalayout: module.datalayout.clone(), ..Module::default() };
     let node = |out: &mut Module, globals: Vec<GlobalId>| {
         let operands = globals.into_iter().map(|one| MetadataOperand::Constant(out.reference(one))).collect();
@@ -92,7 +85,7 @@ pub fn promised(module: &Module, named: &HashMap<&str, GlobalId>, runtime: &Runt
         .collect::<Vec<_>>();
     let mut writes = Vec::new();
     for (global, routine) in routines {
-        let Some(cells) = (runtime.writes)(&routine) else { continue };
+        let Some(cells) = promises.writes(&routine) else { continue };
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
         function.attrs.push(Attribute::Flag("nocallback".to_owned()));

@@ -244,6 +244,8 @@ impl _Plain for model::DataRelocation {
 }
 plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", readonly => "readonly",
     relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
+plain_record!(CellWriters, None, cell => "cell", routines => "routines");
+plain_record!(RuntimePromises, None, calling_back => "calling_back", writers => "writers");
 plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
     data => "data", callables => "callables");
 /// Float semantics are written only when they are the machine's, as before
@@ -260,6 +262,9 @@ impl _Plain for model::Program {
         out.insert("float_mode".to_owned(), self.float_mode._plain());
         if self.float_semantics != model::FloatSemantics::Declared {
             out.insert("float_semantics".to_owned(), self.float_semantics._plain());
+        }
+        if self.promises != model::RuntimePromises::default() {
+            out.insert("promises".to_owned(), self.promises._plain());
         }
         Json::Dict(out)
     }
@@ -579,6 +584,8 @@ macro_rules! made_records {
 }
 
 made_records!(
+    CellWriters,
+    RuntimePromises,
     Promise,
     Type,
     Place,
@@ -1078,6 +1085,21 @@ static MODULE: _Record = _Record {
     },
 };
 
+static CELL_WRITERS: _Record = _Record {
+    name: "CellWriters",
+    fields: &[("cell", _Hint::Str, true), ("routines", _Hint::Tuple(&_Hint::Str), true)],
+    build: |args| _object(model::CellWriters { cell: _required(args, "cell")?, routines: _required(args, "routines")? }),
+};
+
+static RUNTIME_PROMISES: _Record = _Record {
+    name: "RuntimePromises",
+    fields: &[
+        ("calling_back", _Hint::Union(&[_Hint::Tuple(&_Hint::Str), _Hint::NoneType]), false),
+        ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
+    ],
+    build: |args| _object(model::RuntimePromises { calling_back: _default(args, "calling_back", None)?, writers: _default(args, "writers", Vec::new())? }),
+};
+
 static PROGRAM: _Record = _Record {
     name: "Program",
     fields: &[
@@ -1089,6 +1111,7 @@ static PROGRAM: _Record = _Record {
         ("array_order", enum_hint!(ArrayOrder), false),
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
+        ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1100,6 +1123,7 @@ static PROGRAM: _Record = _Record {
             array_order: _default(args, "array_order", model::ArrayOrder::ColumnMajor)?,
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
+            promises: _default(args, "promises", model::RuntimePromises::default())?,
         })
     },
 };

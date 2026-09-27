@@ -1594,13 +1594,11 @@ impl Rich {
         if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
             return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
         }
-        let family = program.runtime.value();
-        let writes = |routine: &str| llrm_core::abi::runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect());
         let emitted = hir::mir::emit(program).swap_remove(0);
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        let runtime = hir::mir::runtime(&emitted, module, &hir::mir::Runtime { writes: &writes }).map_err(CompileError::Value)?;
+        let runtime = hir::mir::runtime(&emitted, module, &program.promises).map_err(CompileError::Value)?;
         let options = llrm_core::driver::Options::of(machine.clone());
         let mut mir = llrm_core::driver::linked(vec![emitted.module], runtime, &options).map_err(CompileError::Value)?;
         llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;

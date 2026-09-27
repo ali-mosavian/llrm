@@ -638,6 +638,45 @@ impl Module {
     }
 }
 
+/// A runtime cell only a reference naming it reaches, and the routines
+/// that write it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellWriters {
+    pub cell: String,
+    pub routines: Vec<String>,
+}
+
+/// What the runtime the program links against promises of its routines,
+/// which their declarations state.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RuntimePromises {
+    /// The routines that may run the program's own code; any other runs
+    /// none. None: every one may.
+    pub calling_back: Option<Vec<String>>,
+    /// Each named cell's writers.
+    pub writers: Vec<CellWriters>,
+}
+
+impl RuntimePromises {
+    /// The promises of a runtime whose `calling_back` routines may run the
+    /// program's code, and whose named cells `writers` write.
+    pub fn of<'a, 'b, W: IntoIterator<Item = &'b str>>(calling_back: impl IntoIterator<Item = &'a str>, writers: impl IntoIterator<Item = (&'b str, W)>) -> Self {
+        Self {
+            calling_back: Some(calling_back.into_iter().map(str::to_owned).collect()),
+            writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
+        }
+    }
+
+    /// The named cells `routine` writes; none where it may run the
+    /// program's code.
+    pub fn writes(&self, routine: &str) -> Option<Vec<String>> {
+        if self.calling_back.as_ref()?.iter().any(|one| one == routine) {
+            return None;
+        }
+        Some(self.writers.iter().filter(|one| one.routines.iter().any(|writer| writer == routine)).map(|one| one.cell.clone()).collect())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub dialect: Dialect,
@@ -648,6 +687,7 @@ pub struct Program {
     pub array_order: ArrayOrder,
     pub float_mode: FloatMode,
     pub float_semantics: FloatSemantics,
+    pub promises: RuntimePromises,
 }
 
 impl Program {
@@ -661,6 +701,7 @@ impl Program {
             array_order: ArrayOrder::ColumnMajor,
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
+            promises: RuntimePromises::default(),
         }
     }
 }

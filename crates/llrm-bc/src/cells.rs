@@ -6,7 +6,7 @@
 //! other routine's promise is stated in the runtime module as the HIR
 //! emitter states it: a cell `runtime::named_only` names is `!llrm.named`,
 //! and a routine that runs no program code writes only the named cells
-//! `runtime::named_writes` lists. GlobalsAA reads both.
+//! `runtime::writers` lists. GlobalsAA reads both.
 
 use std::collections::HashMap;
 
@@ -14,6 +14,7 @@ use iced_x86::Register;
 use llrm_bcmachine::abi::runtime::{self, Control};
 use llrm_bcmachine::model::ir::nodes::Node;
 use llrm_bcmachine::objectfile::omf;
+use llrm_hir::model::RuntimePromises;
 use llrm_mir::{ConstantId, ConstantKind, Module, Operand};
 
 use crate::emit::{Emit, Emitter};
@@ -80,11 +81,8 @@ pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Modu
     }
     // Where the program handles errors, a routine that raises one runs it.
     let handles = runtime::handles_errors(facts.contracts.values());
-    let writes = |routine: &str| {
-        if handles && runtime::contract(Some(routine)).raises_error {
-            return None;
-        }
-        runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect())
-    };
-    llrm_hir::mir::promised(module, &named, &llrm_hir::mir::Runtime { writes: &writes })
+    let declared = module.functions().filter(|(_, _, one)| one.is_declaration()).filter_map(|(_, global, _)| global.name.as_deref()?.strip_prefix(crate::RUNTIME));
+    let raising = declared.filter(|&routine| handles && runtime::contract(Some(routine)).raises_error);
+    let calling_back = runtime::ENTERS_USER_CODE.iter().copied().chain(raising);
+    llrm_hir::mir::promised(module, &named, &RuntimePromises::of(calling_back, runtime::writers(family)))
 }
