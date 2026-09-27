@@ -24,7 +24,7 @@ pub fn closed(function: &mut Function, loop_: &Loop) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
     let predecessors = loops::predecessors(&graph);
-    let dominance = loops::dominance(&graph, entry);
+    let dominance = cfg::Dominance::of(function);
     let exits = graph
         .iter()
         .filter(|block| loop_.body.contains(&block.at))

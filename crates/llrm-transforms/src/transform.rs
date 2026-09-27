@@ -51,7 +51,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::memory::{self, MemRef};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{avail, cfg, regions, ssa};
-use llrm_graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::Callees;
@@ -160,8 +159,7 @@ pub fn _floating(opcode: &Opcode) -> bool {
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
 pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, machine: Option<&dyn Machine>) -> Result<bool, String> {
-    let graph = cfg::graph(function);
-    let doms = loops::dominators(&graph, function.entry().map(cfg::id));
+    let doms = cfg::Dominance::of(function).dominators(function);
     let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
 
     let mut seen: IndexMap<_Computation, Vec<(usize, usize, InstId)>> = IndexMap::default();

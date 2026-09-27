@@ -32,7 +32,7 @@ use llrm_analysis::consts;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::cfg;
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -64,7 +64,7 @@ impl FunctionPass for Fill {
 pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared) -> bool {
     let mut changed = false;
     'again: loop {
-        for loop_ in loops::loops(&cfg::graph(function), None) {
+        for loop_ in cfg::Shape::of(function).loops {
             let found = _fill(&Unit::within(context, layout, function, outer), callees, &loop_);
             if let Some(found) = found {
                 _filled(context, declared, function, &found);

@@ -233,15 +233,15 @@ pub fn _executable_successors(
 /// Loop-simplify form keeps a loop's one entry edge, its one back edge and
 /// its dedicated exits as blocks of their own.
 pub fn _threaded(context: &mut Context, function: &mut Function) -> bool {
-    let Some(entry) = function.entry() else {
+    if function.entry().is_none() {
         return false;
-    };
+    }
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
     let none = BTreeSet::new();
     let mut loop_edges = BTreeSet::new();
-    for loop_ in loops::loops(&graph, Some(cfg::id(entry))) {
+    for loop_ in cfg::Shape::of(function).loops {
         let outside = predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
         if let [parent] = outside[..]
             && *known[&parent] == [loop_.header]

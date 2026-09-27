@@ -396,7 +396,8 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
 fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec<Forward> {
     let function = unit.function;
     let graph = memoryssa::built(unit, accesses);
-    let dominance = loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> = graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();

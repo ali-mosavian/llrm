@@ -41,10 +41,9 @@ impl FunctionPass for LoopClosedSSA {
 /// anything changed.
 pub fn closed(function: &mut Function) -> Result<bool, String> {
     let mut changed = _opened(function)?;
-    let graph = cfg::graph(function);
-    // loops() deliberately returns inner loops first.  Closing an inner loop
-    // first makes its exit value an ordinary definition in an enclosing loop.
-    for loop_ in loops::loops(&graph, function.entry().map(cfg::id)) {
+    // Loops come inner first. Closing an inner loop first makes its exit
+    // value an ordinary definition in an enclosing loop.
+    for loop_ in cfg::Shape::of(function).loops {
         changed |= _closed_loop(function, &loop_)?;
     }
     Ok(changed)
@@ -103,7 +102,7 @@ pub(crate) fn place_phi(function: &mut Function, block: BlockId, phi: InstId) ->
 fn _opened(function: &mut Function) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
-    for loop_ in loops::loops(&graph, function.entry().map(cfg::id)) {
+    for loop_ in cfg::Shape::of(function).loops {
         for block in graph.iter().filter(|block| loop_.body.contains(&block.at)) {
             exits.extend(block.succ.iter().copied().filter(|successor| !loop_.body.contains(successor)));
         }
@@ -181,7 +180,7 @@ pub fn _closed_loop(function: &mut Function, loop_: &Loop) -> Result<bool, Strin
         }
     }
 
-    let dominance = loops::dominance(&graph, function.entry().map(cfg::id));
+    let dominance = cfg::Dominance::of(function);
     let crossing = use_sites
         .iter()
         .filter(|(value, sites)| {

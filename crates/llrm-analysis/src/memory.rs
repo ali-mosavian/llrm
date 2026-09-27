@@ -30,6 +30,7 @@
 //! Skipped: the Python `repr` of each type, which ordered a call's effects;
 //! they sort as the types order.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -41,6 +42,7 @@ use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
+use crate::cfg::Shape;
 use crate::globalsaa::Globals;
 use crate::regions::Machine;
 
@@ -388,11 +390,13 @@ pub struct Unit<'a> {
     /// What GlobalsAA proves of the module's globals; without it every
     /// global is captured.
     pub globals_aa: Option<&'a Globals>,
+    /// Dominance and loops, the manager's; without them each ask finds them.
+    pub shape: Option<&'a Shape>,
 }
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None }
+        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -401,6 +405,19 @@ impl<'a> Unit<'a> {
 
     pub fn with_references(self, references: &'a IndexMap<InstId, MemRef>) -> Self {
         Self { references: Some(references), ..self }
+    }
+
+    pub fn with_shape(self, shape: &'a Shape) -> Self {
+        Self { shape: Some(shape), ..self }
+    }
+
+    /// The function's dominance and loops: the manager's where the unit
+    /// carries them.
+    pub fn shape(&self) -> Cow<'a, Shape> {
+        match self.shape {
+            Some(shape) => Cow::Borrowed(shape),
+            None => Cow::Owned(Shape::of(self.function)),
+        }
     }
 
     /// The access `inst` makes: alias's, where the unit has its references.

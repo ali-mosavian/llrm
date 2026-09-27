@@ -92,7 +92,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
     });
 
     let size = |state: &Function| occurrence::operations(state).count();
-    let count = |state: &Function| loops::loops(&cfg::graph(state), state.entry().map(cfg::id)).len();
+    let count = |state: &Function| cfg::Shape::of(state).loops.len();
     let price = |state: &Function| {
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         let trips = profit::proven_trips(&within, &consts::known(&within, None, None, None));
@@ -121,9 +121,9 @@ pub fn specialized(context: &mut Context, function: &Function) -> Result<Option<
         }
     }
     let graph = cfg::graph(&closed);
-    let dominance = loops::dominance(&graph, closed.entry().map(cfg::id));
+    let cfg::Shape { dominance, loops: found } = cfg::Shape::of(&closed);
     let predecessors = loops::predecessors(&graph);
-    for loop_ in loops::loops(&graph, closed.entry().map(cfg::id)) {
+    for loop_ in found {
         let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
         if outside.len() != 1 || loop_.body.iter().map(|&at| operations(&closed, cfg::block(at)).len()).sum::<usize>() > 128 {
             continue;

@@ -762,7 +762,8 @@ fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
         return IndexMap::default();
     }
     let graph = memoryssa::built(unit, &accesses);
-    let dominance = llrm_graph::loops::dominance(&cfg::graph(function), function.entry().map(cfg::id));
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let before = |source: InstId, block: BlockId, inst: InstId| {
         let order = function.block(block).instructions();
         match function.parent(source) {

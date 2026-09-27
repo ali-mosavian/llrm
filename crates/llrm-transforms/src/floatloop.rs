@@ -39,7 +39,6 @@ use llrm_analysis::manager::{self, FloatFacts};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, induction, regions};
-use llrm_graph::loops;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -122,8 +121,7 @@ fn _carried(unit: &Unit, reference: &MemRef, insts: &[InstId]) -> bool {
 
 fn _planned(unit: &Unit, calls: &Calls, solved: &Solved, alive: &BTreeSet<ValueId>, proof: &LoopExit) -> Option<_Plan> {
     let function = unit.function;
-    let graph = cfg::graph(function);
-    let loop_ = loops::loops(&graph, function.entry().map(cfg::id)).into_iter().find(|one| one.header == proof.header)?;
+    let loop_ = unit.shape().loops.iter().find(|one| one.header == proof.header)?.clone();
     let (header, latch) = (cfg::block(loop_.header), cfg::block(*loop_.latches.first()?));
     let [exit] = function.successors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect::<Vec<_>>()[..] else {
         return None;

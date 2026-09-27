@@ -307,7 +307,7 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let immediate = loops::immediate_dominators(&graph, Some(cfg::id(entry)));
+    let immediate = unit.shape().dominance.immediate_dominators(function);
     let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
@@ -365,9 +365,9 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let dominators = loops::dominators(&graph, None);
+    let shape = unit.shape();
     let mut result = Facts::default();
-    for loop_ in loops::loops(&graph, None) {
+    for loop_ in &shape.loops {
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -427,7 +427,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                     let parents = predecessors.get(&successor).ok_or_else(|| successor.to_string())?;
                     if parents.len() == 1
                         && parents.contains(&block.at)
-                        && dominators.get(&at).is_some_and(|dominating| dominating.contains(&successor))
+                        && shape.dominance.dominates(successor, at)
                         && let Some(narrowed) = on_edge(unit, cfg::block(block.at), cfg::block(successor), &scoped, Some(&facts))?
                     {
                         scoped = narrowed;

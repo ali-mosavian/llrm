@@ -190,8 +190,9 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
     let Some(entry) = function.entry() else {
         return Ok(false);
     };
-    let dominators = loops::dominators(&graph, Some(cfg::id(entry)));
-    let natural_loops = loops::loops(&graph, Some(cfg::id(entry)));
+    let shape = cfg::Shape::of(function);
+    let dominators = shape.dominance.dominators(function);
+    let natural_loops = shape.loops;
 
     let key = |op: &Instruction| {
         op.result?;

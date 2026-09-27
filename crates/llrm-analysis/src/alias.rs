@@ -942,8 +942,8 @@ pub fn points_to(
     let none = BTreeSet::new();
     // A pointer value is otherwise an exact byte slice. Natural-loop joins
     // are the one place those exact facts can grow without a program bound.
-    let entry = function.entry().map(cfg::id);
-    let dominance = loops::dominance(&graph, entry);
+    let shape = unit.shape();
+    let dominance = &shape.dominance;
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
@@ -1396,8 +1396,8 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
     let function = unit.function;
     let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
     let zero = BigInt::from(0);
-    for loop_ in loops::loops(&cfg::graph(function), None) {
-        for affine in induction::basics(unit, &loop_).values() {
+    for loop_ in &unit.shape().loops {
+        for affine in induction::basics(unit, loop_).values() {
             let width = affine.start.width();
             let (Some(start), Some(step)) = (induction::_signed(&affine.start, &constants, width), induction::_signed(&affine.step, &constants, width)) else {
                 continue;

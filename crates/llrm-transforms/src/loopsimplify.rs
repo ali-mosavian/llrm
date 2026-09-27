@@ -93,14 +93,17 @@ pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) ->
 
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
-    let Some(entry) = function.entry().map(cfg::id) else { return false };
-    let graph = cfg::graph(function);
-    if !loops::irreducible(&graph, Some(entry)).is_empty() {
+    if function.entry().is_none() {
+        return false;
+    }
+    let shape = cfg::Shape::of(function);
+    if !shape.dominance.irreducible(function).is_empty() {
         return false;
     }
     let mut changed = false;
-    for original in loops::loops(&graph, Some(entry)) {
-        let original = loops::loops(&cfg::graph(function), Some(entry))
+    for original in shape.loops {
+        let original = cfg::Shape::of(function)
+            .loops
             .into_iter()
             .find(|loop_| loop_.header == original.header)
             .expect("StopIteration");
@@ -122,7 +125,8 @@ pub fn simplified(function: &mut Function) -> bool {
             grouping = true;
         }
         let graph = cfg::graph(&candidate);
-        let current = loops::loops(&graph, Some(entry))
+        let current = cfg::Shape::of(&candidate)
+            .loops
             .into_iter()
             .find(|loop_| loop_.header == original.header)
             .expect("StopIteration");

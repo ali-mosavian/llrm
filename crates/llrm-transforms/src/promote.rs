@@ -324,7 +324,8 @@ fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, slots: 
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
-    let reachable = loops::dominators(&graph, Some(entry)).into_iter().filter(|(_, doms)| !doms.is_empty()).map(|(at, _)| at).collect::<BTreeSet<_>>();
+    let dominance = cfg::Dominance::of(function);
+    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells.iter().map(|(key, &ty)| _reference(key, unit.layout.store_size(&unit.context.types, ty) as u32)).collect::<Vec<_>>();
     // The cells whose address a value is part of: its definition, a phi's
@@ -428,9 +429,9 @@ fn edges(function: &Function, block: BlockId) -> Vec<BlockId> {
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
     let entry = cfg::id(function.entry().expect("a defined function"));
-    let graph = cfg::graph(function);
-    let frontiers = loops::frontiers(&graph, Some(entry));
-    let idom = loops::immediate_dominators(&graph, Some(entry));
+    let dominance = cfg::Dominance::of(function);
+    let frontiers = dominance.frontiers(function);
+    let idom = dominance.immediate_dominators(function);
     let existing = function.walk().map(|(_, inst)| function.instruction(inst)).filter(|one| one.opcode == Opcode::Phi).filter_map(|one| one.result).collect::<BTreeSet<_>>();
     let poison = plan.types.iter().map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))).collect::<Vec<_>>();
 

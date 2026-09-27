@@ -75,6 +75,23 @@ pub fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BT
     dominance(blocks, entry).named()
 }
 
+/// Dominance as the walks here read it: nothing dominates a block the entry
+/// does not reach.
+pub trait Dominates {
+    fn reachable(&self, at: i64) -> bool;
+    fn dominates(&self, dominator: i64, at: i64) -> bool;
+}
+
+impl Dominates for Dominance {
+    fn reachable(&self, at: i64) -> bool {
+        Dominance::reachable(self, at)
+    }
+
+    fn dominates(&self, dominator: i64, at: i64) -> bool {
+        Dominance::dominates(self, dominator, at)
+    }
+}
+
 /// Each block's dominators as bits over the sorted block addresses; naming
 /// them as sets costs more than finding them.
 pub struct Dominance {
@@ -190,7 +207,7 @@ pub struct Loop {
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
-pub fn back_edges<N: Node>(blocks: &[N], dominance: &Dominance) -> Vec<(i64, i64)> {
+pub fn back_edges<N: Node>(blocks: &[N], dominance: &impl Dominates) -> Vec<(i64, i64)> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = Vec::new();
     for block in blocks {
@@ -234,7 +251,7 @@ pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 
     let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
     let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for (latch, header) in back_edges(blocks, &doms) {
+    for (latch, header) in back_edges(blocks, &*doms) {
         latches.entry(header).or_default().insert(latch);
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));
     }
@@ -252,9 +269,13 @@ pub fn loops<N: Node>(blocks: &[N], entry: Option<i64>) -> Vec<Loop> {
 /// Decided by actually cutting the edges and looking for a remaining cycle,
 /// not by address order.
 pub fn irreducible<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeSet<i64> {
-    let doms = dominance(blocks, entry);
+    irreducible_under(blocks, &*dominance(blocks, entry))
+}
+
+/// `irreducible`, of dominance found already.
+pub fn irreducible_under<N: Node>(blocks: &[N], doms: &impl Dominates) -> BTreeSet<i64> {
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
-    let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
+    let cut = back_edges(blocks, doms).into_iter().collect::<BTreeSet<_>>();
     let forward = blocks
         .iter()
         .filter(|block| known.contains(&block.at()))

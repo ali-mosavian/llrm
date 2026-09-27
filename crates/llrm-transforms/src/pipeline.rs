@@ -30,7 +30,6 @@ use std::rc::Rc;
 use llrm_analysis::cfg;
 use llrm_analysis::manager::Summaries;
 use llrm_analysis::peelsize::Limits;
-use llrm_graph::loops;
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -361,8 +360,7 @@ impl FunctionPass for Fixed {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         self.runs += 1;
-        let graph = cfg::graph(unit.function);
-        let promotes = loops::irreducible(&graph, unit.function.entry().map(cfg::id)).is_empty();
+        let promotes = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function).dominance.irreducible(unit.function).is_empty();
         let dump = self.dump.as_ref().map(|directory| directory.join(format!("{:02}", self.runs)));
         let mut run = Run { version: 0, promotes, dump };
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));

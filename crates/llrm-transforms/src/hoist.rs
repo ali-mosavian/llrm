@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, noreturn};
-use llrm_graph::loops::{self, Loop};
+use llrm_graph::loops::Loop;
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
@@ -55,7 +55,7 @@ impl FunctionPass for Hoist {
 /// what leaves one may leave the next. Whether anything moved.
 pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     let graph = cfg::graph(unit.function);
-    let found = loops::loops(&graph, None);
+    let found = cfg::Shape::of(unit.function).loops;
     if found.is_empty() {
         return false;
     }

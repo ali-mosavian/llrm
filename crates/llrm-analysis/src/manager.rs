@@ -24,7 +24,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None }
+        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None, shape: None }
     }
 }
 

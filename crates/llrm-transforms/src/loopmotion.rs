@@ -70,10 +70,11 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<BTreeMap<_, _>>();
-    let dominators = loops::dominators(&graph, None);
+    let shape = cfg::Shape::of(function);
+    let dominators = shape.dominance.dominators(function);
     // After a change, what alias said of the old placement no longer holds.
     let mut fresh: Option<Analyses> = None;
-    for loop_ in loops::loops(&graph, None) {
+    for loop_ in shape.loops {
         let mut exits = Vec::new();
         for &at in &loop_.body {
             for &to in &successors[&at] {
