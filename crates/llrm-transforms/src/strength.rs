@@ -273,14 +273,14 @@ fn _recurrence(unit: &mut Unit, plan: &Plan, one: &Derived, ty: TypeId) -> Opera
 }
 
 /// `opcode` of `operands`, placed before `before`.
-fn _emitted(unit: &mut Unit, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, before: InstId) -> Operand {
+pub(crate) fn _emitted(unit: &mut Unit, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, before: InstId) -> Operand {
     let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
     unit.function.insert(inst, Position::Before(before)).expect("a placed instruction");
     Operand::Value(unit.function.instruction(inst).result.expect("a value"))
 }
 
 /// A term as an operand.
-fn _operand(unit: &mut Unit, term: &AffineOperand) -> Operand {
+pub(crate) fn _operand(unit: &mut Unit, term: &AffineOperand) -> Operand {
     match term {
         AffineOperand::Value(value, _) => Operand::Value(*value),
         AffineOperand::Const(known) => {
@@ -892,7 +892,7 @@ fn _start(unit: &mut Unit, one: &Derived, before: InstId) -> Operand {
 
 /// `scale * start` plus the invariant offsets, computed before `before`;
 /// the offsets alone, the base an index is added to, where not `counted`.
-fn _starts(unit: &mut Unit, one: &Derived, counted: bool, before: InstId) -> Operand {
+pub(crate) fn _starts(unit: &mut Unit, one: &Derived, counted: bool, before: InstId) -> Operand {
     let unit_by = matches!(&one.by, AffineOperand::Const(constant) if constant.n == BigInt::from(1));
     let width = one.of.start.width();
     let int = unit.context.types.int(width);
