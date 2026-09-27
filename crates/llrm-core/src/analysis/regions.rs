@@ -331,7 +331,7 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<Value, Interval>>) -> Opt
     }
     .unwrap_or((0, 0xFFFF));
     let width = i64::from(reference.width.max(1));
-    let (start, end) = crate::abi::machine::current().foreign_span(selectors, offsets, width)?;
+    let (start, end) = crate::abi::machine::BUILT_IN.foreign_span(selectors, offsets, width)?;
     Some(Slice::new(linear(), start, end - width + 1, 1, width).expect("a foreign span holds one access"))
 }
 

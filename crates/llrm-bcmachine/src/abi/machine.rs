@@ -4,9 +4,12 @@
 //! no memory, and which CPU its code is priced for. One description per target, read from TOML;
 //! real-mode DOS is the default.
 
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 pub const DOS: &str = include_str!("machines/dos.toml");
+
+/// The built-in description, which nothing can change.
+pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS).expect("the built-in DOS description parses"));
 
 /// The processors a description may name. `llrm-core` checks that the
 /// backend prices exactly these.
