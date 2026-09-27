@@ -266,6 +266,8 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         promoted: BTreeSet::new(),
         pending: IndexMap::default(),
         phi_inputs: IndexMap::default(),
+        far_inputs: IndexMap::default(),
+        far_phi_inputs: IndexMap::default(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
         pins: IndexMap::default(),
@@ -335,6 +337,11 @@ struct Selector<'m, 'c, 'p> {
     pending: IndexMap<BlockId, Vec<Arc<Insn>>>,
     /// The register each (phi, predecessor) reads, where that block made it.
     phi_inputs: IndexMap<(InstId, BlockId), u32>,
+    /// A far phi's offset and selector each predecessor brings, and the
+    /// far value it copies into them before its terminator: as the old
+    /// route split a far pointer into two words, each its own phi.
+    far_inputs: IndexMap<BlockId, Vec<(Operand, Held, Held)>>,
+    far_phi_inputs: IndexMap<(InstId, BlockId), (u32, u32)>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
     /// from blocks of their own.
     edges: IndexMap<(BlockId, BlockId), Vec<i64>>,
@@ -459,6 +466,17 @@ impl Selector<'_, '_, '_> {
             let mut phis = Vec::new();
             for &inst in function.block(block).instructions() {
                 let instruction = function.instruction(inst);
+                if instruction.opcode == Opcode::Phi && self.is_far(instruction.ty) {
+                    let (Some(offset), selector) = self.fars[&instruction.result.expect("a phi's value")] else { unreachable!("a far phi's offset") };
+                    for (half, one) in [(offset, 0), (selector, 1)] {
+                        let incoming = self.incoming_by(inst, |selector, inst, from, _| {
+                            let pair = selector.far_phi_inputs[&(inst, from)];
+                            if one == 0 { pair.0 } else { pair.1 }
+                        })?;
+                        phis.push(Phi { result: half.value, incoming });
+                    }
+                    continue;
+                }
                 if instruction.opcode == Opcode::Phi {
                     let result = instruction.result.expect("a phi's value");
                     let incoming = self.incoming(inst)?;
@@ -468,6 +486,7 @@ impl Selector<'_, '_, '_> {
                 }
                 if instruction.opcode.is_terminator() {
                     insns.extend(self.pending.shift_remove(&block).unwrap_or_default());
+                    self.far_copies(block, self.ats[&inst], &mut insns)?;
                 }
                 if instruction.opcode == Opcode::Switch {
                     self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), blocks)?;
@@ -723,6 +742,10 @@ impl Selector<'_, '_, '_> {
             if instruction.opcode != Opcode::Phi {
                 break;
             }
+            if self.is_far(instruction.ty) {
+                self.far_phi(inst);
+                continue;
+            }
             for pair in instruction.operands.chunks(2) {
                 let [value, Operand::Block(from)] = *pair else { unreachable!("a phi's pairs") };
                 if !self.reachable.contains(&from) || !self.successors(from).contains(&block) {
@@ -743,8 +766,49 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// A far phi as two, its offset's and its selector's: each input a pair
+    /// its predecessor makes before its terminator, when the far value it
+    /// copies is selected.
+    fn far_phi(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let block = function.parent(inst).expect("a placed phi");
+        let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+        self.fars.insert(instruction.result.expect("a phi's value"), (Some(offset), selector));
+        for pair in instruction.operands.chunks(2) {
+            let [value, Operand::Block(from)] = *pair else { unreachable!("a phi's pairs") };
+            if !self.reachable.contains(&from) || !self.successors(from).contains(&block) || self.far_phi_inputs.contains_key(&(inst, from)) {
+                continue;
+            }
+            let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+            self.far_inputs.entry(from).or_default().push((value, offset, selector));
+            self.far_phi_inputs.insert((inst, from), (offset.value, selector.value));
+        }
+    }
+
+    /// The copies into far phis' inputs `block` makes before its terminator.
+    fn far_copies(&mut self, block: BlockId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        for (value, offset, selector) in self.far_inputs.shift_remove(&block).unwrap_or_default() {
+            let (from_offset, from_selector) = self.far(value, at, out)?;
+            for (into, from) in [(offset, from_offset), (selector, from_selector)] {
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(from)])));
+            }
+        }
+        Ok(())
+    }
+
     /// Each LIR edge into the phi's block, and the register it brings.
     fn incoming(&mut self, inst: InstId) -> Result<Vec<(i64, u32)>, Unselected> {
+        self.incoming_by(inst, |selector, inst, from, value| match (selector.phi_inputs.get(&(inst, from)), value) {
+            (Some(&made), _) => made,
+            (None, Operand::Value(one)) => selector.value(one),
+            (None, _) => unreachable!("phis_from made every other input"),
+        })
+    }
+
+    /// Each LIR edge into the phi's block, and the register `input` says
+    /// the edge from `from` brings.
+    fn incoming_by(&mut self, inst: InstId, input: impl Fn(&mut Self, InstId, BlockId, Operand) -> u32) -> Result<Vec<(i64, u32)>, Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
         let block = function.parent(inst).expect("a placed phi");
@@ -758,11 +822,7 @@ impl Selector<'_, '_, '_> {
             if !seen.insert(from) {
                 continue;
             }
-            let held = match (self.phi_inputs.get(&(inst, from)), value) {
-                (Some(&made), _) => made,
-                (None, Operand::Value(one)) => self.value(one),
-                (None, _) => unreachable!("phis_from made every other input"),
-            };
+            let held = input(self, inst, from, value);
             out.extend(edges.iter().map(|&at| (at, held)));
         }
         Ok(out)

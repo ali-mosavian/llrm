@@ -1917,3 +1917,32 @@ define double @f() addrspace(1) {
     assert!(listing(&stamped, "f").iter().any(|line| line == "fild word ptr g"), "{stamped}");
     assert!(!listing(text, "f").iter().any(|line| line == "fild word ptr g"));
 }
+
+/// A far pointer a loop steps is a phi of its offset and one of its
+/// selector, as the old route split it into two words: strength made the
+/// runtime's `buffers.copy` step one, and isel refused every program.
+#[test]
+fn test_a_far_pointer_a_loop_steps_is_two_phis() {
+    let text = "define void @copy(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) {
+b1:
+  %3 = icmp eq i16 %2, 0
+  br i1 %3, label %done, label %loop
+loop:
+  %far = phi ptr addrspace(1) [ %far.next, %loop ], [ %1, %b1 ]
+  %near = phi ptr [ %near.next, %loop ], [ %0, %b1 ]
+  %i = phi i16 [ %j, %loop ], [ %2, %b1 ]
+  %v = load i8, ptr addrspace(1) %far
+  store i8 %v, ptr %near
+  %j = sub i16 %i, 1
+  %more = icmp ne i16 %j, 0
+  %near.next = getelementptr i8, ptr %near, i16 1
+  %far.next = getelementptr i8, ptr addrspace(1) %far, i16 1
+  br i1 %more, label %loop, label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "copy");
+    let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
+    assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
+}
