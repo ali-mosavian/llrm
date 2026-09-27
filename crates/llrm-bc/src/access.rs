@@ -11,7 +11,7 @@
 
 use iced_x86::Register;
 use llrm_bcmachine::model::ir::nodes::Node;
-use llrm_mir::{CastOp, Operand};
+use llrm_mir::CastOp;
 
 use crate::emit::{Emit, Emitter, Var};
 use crate::sites::Recognizer;
@@ -62,7 +62,7 @@ fn element(emitter: &mut Emitter) -> Emit<()> {
         arguments.push(emitter.stack_word(depth - 2 * (rank - index), 2)?);
     }
     let &(callee, ty) = emitter.unit.intrinsics.get(&declared()).ok_or("B$HARY undeclared")?;
-    let answer = emitter.b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(callee), &arguments, "").expect("an answer");
+    let answer = emitter.call_as(llrm_mir::opcode::BASIC, ty, callee, &arguments)?.expect("an answer");
     emitter.popped(2 * (rank + 1))?;
     let (address, selector) = (emitter.b.extract_value(answer, 0, ""), emitter.b.extract_value(answer, 1, ""));
     let segment = emitter.b.context.types.ptr(crate::SEGMENT);

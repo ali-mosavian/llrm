@@ -384,3 +384,22 @@ fn a_push_after_the_prologue_is_no_register_save() {
     }
     assert!(printed >= 3);
 }
+
+/// The module's error handler is its main function's one landing pad, every
+/// call that may raise an invoke to it; each RESUME form and a label /V
+/// polls events at before its statement. It was refused as a body the
+/// runtime enters by its own protocol.
+#[test]
+fn an_error_handler_is_the_main_bodys_landing_pad() {
+    for stem in ["onerr", "divmod"] {
+        for config in ["q-o", "p-g2", "v-g3", "q-evt", "p-evt", "v-evt"] {
+            let fixture = format!("{stem}-{config}.obj");
+            let module = raised(&fixture);
+            let (_, _, main) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("main")).expect("main");
+            assert!(main.personality.is_some(), "{fixture}");
+            let opcodes: Vec<&Opcode> = main.walk().map(|(_, inst)| &main.instruction(inst).opcode).collect();
+            assert_eq!(opcodes.iter().filter(|one| matches!(one, Opcode::LandingPad { .. })).count(), 1, "{fixture}");
+            assert!(opcodes.iter().any(|one| matches!(one, Opcode::Invoke(_))), "{fixture}");
+        }
+    }
+}

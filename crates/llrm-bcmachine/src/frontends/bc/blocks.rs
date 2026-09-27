@@ -472,6 +472,13 @@ pub fn statement_table(module: &Module) -> Option<(usize, usize)> {
     None
 }
 
+/// The code offset each OF_STA row names: where each statement starts, in
+/// the table's order.
+pub fn statements(module: &Module) -> Vec<usize> {
+    let Some((start, end)) = statement_table(module) else { return Vec::new() };
+    (start..end - 2).step_by(4).filter_map(|at| module.operands.get(&(at as i64)).map(|address| address.disp as usize)).collect()
+}
+
 /// Runs of relocations no instruction accounts for, which are a table.
 ///
 /// Under /X, a map from statement to code offset so RESUME can find its way
