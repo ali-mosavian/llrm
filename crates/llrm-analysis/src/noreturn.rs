@@ -24,8 +24,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::{Analyses, Analysis};
 use llrm_mir::{Constant, ConstantKind, Context, GlobalId, Position};
 
 use crate::cfg::{self, id};
@@ -59,6 +61,18 @@ pub fn inferred(module: &Module, bodies: &BTreeSet<GlobalId>) -> BTreeSet<Global
 /// Direct calls whose callee cannot return: named in `noreturn`, or stated
 /// `noreturn`. An `invoke` may still unwind to its handler, so only a call
 /// counts.
+/// `terminal_sites` of no function proven noreturn.
+pub struct TerminalSites;
+
+impl Analysis for TerminalSites {
+    type Result = BTreeSet<InstId>;
+    const NAME: &'static str = "terminal-sites";
+
+    fn run(context: &Context, _: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        terminal_sites(context, &analyses.outer().globals, function, &BTreeSet::new())
+    }
+}
+
 pub fn terminal_sites(context: &Context, declarations: &Declarations, function: &Function, noreturn: &BTreeSet<GlobalId>) -> BTreeSet<InstId> {
     function
         .walk()

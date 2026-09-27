@@ -11,6 +11,7 @@
 //! function's) and `Kind::value` (Python's repr).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use llrm_graph::loops;
 use llrm_mir::context::Context;
@@ -18,7 +19,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
 use llrm_mir::module::{Function, GlobalValue, InstId, ValueId};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::Analyses;
+use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
 
 use crate::cfg;
@@ -62,13 +63,27 @@ type Footprint = (Option<Vec<MemRef>>, Option<Vec<MemRef>>);
 /// ask: old `Op.loads` and `Op.stores`. A load's or store's bytes are its
 /// reference; a call's are its footprint, else anything its attributes
 /// allow.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Accesses {
     /// Each load's and store's reference.
     pub references: IndexMap<InstId, MemRef>,
     /// Of each instruction touching memory, what it reads and what it
     /// writes; `None` for anything.
     touched: IndexMap<InstId, Footprint>,
+}
+
+impl Analysis for Accesses {
+    type Result = Result<Rc<Accesses>, String>;
+    const NAME: &'static str = "accesses";
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let effects = analyses.get::<CallEffects>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        let effects = Result::as_ref(&*effects).map_err(String::clone)?;
+        let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
+        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), references.clone(), effects)))
+    }
 }
 
 impl Accesses {
@@ -78,15 +93,10 @@ impl Accesses {
         Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
     }
 
-    /// `function`'s accesses from the manager's `Annotated` and
+    /// `function`'s accesses, the manager's: from its `Annotated` and
     /// `CallEffects`; the pipeline must require `Summaries`.
-    pub fn managed(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Result<Self, String> {
-        let references = analyses.get::<Annotated>(context, layout, function);
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        let references = Result::as_ref(&*references).map_err(String::clone)?;
-        let effects = Result::as_ref(&*effects).map_err(String::clone)?;
-        let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
-        Ok(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), references.clone(), effects))
+    pub fn managed(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Result<Rc<Self>, String> {
+        (*analyses.get::<Accesses>(context, layout, function)).clone()
     }
 
     /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
