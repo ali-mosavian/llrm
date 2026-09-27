@@ -177,6 +177,14 @@ impl llrm_mir::target::Machine for DearDivide {
     fn costs(&self) -> OperationCosts {
         OperationCosts { divide: 1000, ..OperationCosts::default() }
     }
+
+    fn registers(&self) -> i64 {
+        0
+    }
+
+    fn call_registers(&self) -> i64 {
+        0
+    }
 }
 
 /// Re-optimizes a candidate into a copy of the function it holds.

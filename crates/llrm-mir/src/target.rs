@@ -12,6 +12,12 @@ pub trait Machine {
 
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
+
+    /// How many integer values fit in registers at once.
+    fn registers(&self) -> i64;
+
+    /// Of `registers`, how many survive a call.
+    fn call_registers(&self) -> i64;
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.

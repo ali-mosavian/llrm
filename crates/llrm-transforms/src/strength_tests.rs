@@ -549,3 +549,42 @@ b3:
     );
     assert!(!printed.contains("%i =") && printed.contains("icmp ne i16 %lsr.iv"), "{printed}");
 }
+
+/// A target with six registers and a multiply as cheap as an add.
+struct Crowded;
+
+impl llrm_mir::target::Machine for Crowded {
+    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> OperationCosts {
+        OperationCosts::default()
+    }
+
+    fn registers(&self) -> i64 {
+        6
+    }
+
+    fn call_registers(&self) -> i64 {
+        2
+    }
+}
+
+/// The pass prices pressure on the target's registers: with six, three
+/// cheap multiplies stay rather than take a recurrence each; strength
+/// used to leave pressure unpriced whatever the target.
+#[test]
+fn test_strength_prices_the_target_registers() {
+    let text = format!("{DOS}{}", ROWS.replace("  %row = mul i16 %i, %w\n", "  %r1 = mul i16 %i, 3\n  %r2 = mul i16 %i, 5\n  %r3 = mul i16 %i, %w\n  %r4 = add i16 %r1, %r2\n  %row = add i16 %r4, %r3\n"));
+    let recurrences = |target: Option<std::rc::Rc<dyn llrm_mir::target::Machine>>| {
+        let mut module = parsed(&text);
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.target = target;
+        manager.add(Strength::default());
+        manager.run(&mut module).unwrap();
+        printed(&module).matches("lsr.iv.next").count()
+    };
+    assert_eq!(recurrences(None), 4);
+    assert_eq!(recurrences(Some(std::rc::Rc::new(Crowded))), 0);
+}
