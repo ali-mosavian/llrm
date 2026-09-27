@@ -2437,6 +2437,39 @@ no:
     assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul")), "{got:?}");
 }
 
+/// A multiply that may wrap is still the scale where the index's range
+/// says it cannot: segld's `a(i)` scaled `i` in 1..20 by a plain `mul`, and
+/// `lea si, [ecx+ecx]` ran before every store.
+#[test]
+fn test_an_index_multiplied_within_its_range_is_the_scaled_index() {
+    let text = "define void @f(ptr addrspace(1) %s, i16 %i) addrspace(1) {
+entry:
+  %b = load ptr addrspace(1), ptr addrspace(1) %s, !tbaa !1
+  %c = icmp slt i16 %i, 0
+  br i1 %c, label %no, label %low
+low:
+  %d = icmp sgt i16 %i, 999
+  br i1 %d, label %no, label %ok
+ok:
+  %m = mul i16 %i, 4
+  %e = getelementptr inbounds i8, ptr addrspace(1) %b, i16 %m
+  store i32 7, ptr addrspace(1) %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul") || line.starts_with("lea")), "{got:?}");
+    let wraps = text.replace("sgt i16 %i, 999", "sgt i16 %i, 9999");
+    let got = listing_on("386", &wraps, "f");
+    assert!(!got.iter().any(|line| line.contains("*4]")), "{got:?}");
+}
+
 /// A branch on the `and` or `or` of two compares branches on each, as
 /// LLVM's FindMergedConditions splits it: rcflip's IF a = 0 AND b = 1 made
 /// both truth values, and-ed them, and tested the result.

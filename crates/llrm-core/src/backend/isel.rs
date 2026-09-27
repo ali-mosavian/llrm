@@ -1382,7 +1382,7 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
             self.pointers.insert(address, scaled);
             return Ok(());
         }
@@ -1512,7 +1512,7 @@ impl Selector<'_, '_, '_> {
     /// defines them (`addressforms::promote`), so no register is added. The
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
-    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64) -> Option<Pointer> {
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
         let form = self.secondary?;
         let Operand::Value(index) = index else { return None };
         let function = self.function;
@@ -1522,7 +1522,8 @@ impl Selector<'_, '_, '_> {
         }
         let proven = self.accesses(address).into_iter().all(|access| {
             let fact = function.parent(access).and_then(|block| self.facts.get(&cfg::id(block))).and_then(|known| known.get(&index));
-            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into()) && (self.typed.contains(&access) || self.exact.contains(&index))
+            let unwrapped = |fact: &ranges::Interval| factor == 1 || fact.high.clone() * factor <= i16::MAX.into();
+            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into() && unwrapped(fact)) && (self.typed.contains(&access) || self.exact.contains(&index))
         });
         if !proven {
             return None;
@@ -1552,21 +1553,21 @@ impl Selector<'_, '_, '_> {
 
     /// `index` times `scale` with the index's own multiply by a constant
     /// taken into the scale, as LLVM's address matcher folds a `mul` or
-    /// `shl` into it; one that may wrap is left as it is.
-    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64) {
-        let Operand::Value(value) = index else { return (index, scale) };
-        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale) };
+    /// `shl` into it; and the factor the index's range must keep from
+    /// wrapping, 1 where `nsw` already does.
+    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64, i64) {
+        let Operand::Value(value) = index else { return (index, scale, 1) };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale, 1) };
         let instruction = self.function.instruction(inst);
-        if !instruction.flags.contains(llrm_mir::opcode::Flags::NSW) {
-            return (index, scale);
-        }
+        let (Opcode::Binary(_), [_, by]) = (&instruction.opcode, &instruction.operands[..]) else { return (index, scale, 1) };
         let width = self.width(instruction.ty).unwrap_or(0);
-        let factor = match (&instruction.opcode, self.constant(instruction.operands[1], width)) {
+        let factor = match (&instruction.opcode, self.constant(*by, width)) {
             (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => factor,
             (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => 1 << count,
-            _ => return (index, scale),
+            _ => return (index, scale, 1),
         };
-        (instruction.operands[0], scale * factor)
+        let wraps = if instruction.flags.contains(llrm_mir::opcode::Flags::NSW) { 1 } else { factor };
+        (instruction.operands[0], scale * factor, wraps)
     }
 
     /// The pointer `operand` offsets by constants.
