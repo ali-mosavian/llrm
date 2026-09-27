@@ -249,6 +249,21 @@ evidence = '''
 87bhelp.asm, disassembled from all three libraries and identical in each: push bp / mov bp,sp / wait / fcompp / wait / fnstsw [0] / nop / wait / mov ah,[0] / sahf / mov sp,bp / pop bp / retf. It names bx, cx, dx, si and di nowhere; ah is the only register written, and the flags ARE the return value. sahf writes SF, ZF, AF, PF and CF and cannot write OF -- it is bit 11, outside the byte -- so the comparison arrives in CF and ZF and only the unsigned branches read it, which is what wide.COMPARISONS records and what BC emits at every site. Microsoft's own runtime agrees: rt/grwindow.asm calls it and branches with JZ and JC. The fnstsw writes one word of DGROUP, the runtime's own, which is why writes is NONE the way B$DSEG's is.
 '''
 
+["B$SERR"]
+cleanup = 2
+control = "never"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+rt/erproc.asm: `cProc B$SERR,<PUBLIC,FAR>` with one `parmW errnum`, the ERROR statement: an errnum of 0 or over 255 becomes Illegal function call, and it ends `JMP SHORT B$RUNERR`, the runtime error handler, which enters an ON ERROR handler or ends the program. It does not return.
+'''
+
 ["B$SIN4"]
 cleanup = 0
 control = "returns"

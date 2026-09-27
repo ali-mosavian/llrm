@@ -22,10 +22,10 @@ use std::rc::Rc;
 use iced_x86::Register;
 use llrm_analysis::ssa::{SsaUpdater, provider};
 use llrm_bcmachine::analysis::flags::{self as flagged, Flag};
-use llrm_bcmachine::frontends::bc::blocks::{Block, Ends};
+use llrm_bcmachine::frontends::bc::blocks::{self, Block, Ends};
 use llrm_bcmachine::frontends::bc::declen::Insn;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
-use llrm_bcmachine::model::ir::nodes::Node;
+use llrm_bcmachine::model::ir::nodes::{Node, span};
 use llrm_bcmachine::model::ir::{Effects, Loc, Operation, Reg, Semantics};
 use llrm_bcmachine::objectfile::module::{Addr, Space};
 use llrm_bcmachine::support::hash::IndexMap;
@@ -335,18 +335,20 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     }
 
     /// A frame of locals `[low, high)` below BP, the header above them left
-    /// out, zeroed where it is set up: BASIC's locals start at zero.
+    /// out, zeroed where it is set up, as B$ENSA and B$ENRA zero-fill it:
+    /// QB 4.5's `runtime/inc/stack.inc` keeps FR_GOSUB "last on the frame to
+    /// optimize recursive zero-fill".
     fn frame_layout(&mut self, low: i64, high: i64, header: i64) -> Emit<Layout> {
         if high > -header {
             return Err("locals overlap the runtime's frame header".to_owned());
         }
+        let arguments = self.layout.and_then(|one| one.arguments);
         let byte = self.b.context.types.int(8);
         let ty = self.b.context.types.intern(Type::Array { element: byte, count: (high - low) as u64 });
         let locals = self.b.alloca(ty, "frame");
         let &(memset, memset_ty) = self.unit.intrinsics.get(MEMSET).ok_or("@llvm.memset undeclared")?;
         let (zero, size, volatile) = (self.b.int(8, 0), self.b.int(16, i128::from(high - low)), self.b.int(1, 0));
         self.b.call(memset_ty, Operand::Constant(memset), &[locals, zero, size, volatile], "");
-        let arguments = self.layout.and_then(|one| one.arguments);
         Ok(Layout { low, high, locals, arguments })
     }
 
@@ -403,7 +405,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.floats = entry.floats;
         let nodes: Vec<&Node> = self.body.nodes_of(block).map(|one| &**one).collect();
         let (last, rest) = match nodes.split_last() {
-            Some((last, rest)) if is_transfer(last) => (Some(*last), rest),
+            Some((last, rest)) if is_transfer(last) || block.ends == Ends::Table => (Some(*last), rest),
             _ => (None, &nodes[..]),
         };
         self.run = rest.to_vec();
@@ -490,11 +492,53 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.b.position(self.block);
                 self.b.br(target);
             }
+            (Ends::Table, Some(Node::Call(call))) if blocks::INLINE_TABLE.contains(call.name.as_str()) => return self.dispatch(&call.insn, &call.name),
             (Ends::Table, _) => return Err("a jump through a table".to_owned()),
             (Ends::Indirect, _) => return Err("an indirect jump".to_owned()),
             (other, _) => return Err(format!("a block that ends {}", other.value())),
         }
         self.ends.insert(self.block, end);
+        Ok(())
+    }
+
+    /// ON GOTO: B$OGTA reads a count byte and that many code offsets past
+    /// its call, and goes to the BX'th; 0 or past the count goes on past the
+    /// table, and past 255 is Illegal function call.
+    fn dispatch(&mut self, insn: &Insn, name: &str) -> Emit<()> {
+        let found = self.unit.facts.found;
+        let targets = blocks::dispatch_targets(found, insn).ok_or_else(|| format!("{name}'s table names code outside this segment"))?;
+        let (_, past, _) = blocks::inline_table(found, insn).ok_or_else(|| format!("{name} without a table"))?;
+        let index = self.register(Register::BX)?;
+        let contract = self.unit.facts.contract(insn.at).ok_or_else(|| format!("{name} has no contract"))?.clone();
+        let disturbed: Vec<Register> =
+            llrm_bcmachine::abi::runtime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
+        let why = format!("{name} clobbers it");
+        self.clobber(&disturbed, &why);
+        let error = match self.unit.callees.named.get(crate::runtime::ERROR) {
+            Some(Ok(spec)) => spec.clone(),
+            Some(Err(why)) => return Err(why.clone()),
+            None => return Err(format!("{} is undeclared", crate::runtime::ERROR)),
+        };
+        let end = (self.current.clone(), self.bits.clone());
+        let (raise, within) = (self.b.block("dispatch.error"), self.b.block("dispatch"));
+        let limit = self.b.int(16, 255);
+        let above = self.b.icmp(IntPredicate::Ugt, index, limit, "");
+        self.b.cond_br(above, raise, within);
+        self.ends.insert(self.block, end.clone());
+        self.b.position(raise);
+        let code = self.b.int(16, crate::runtime::ILLEGAL_FUNCTION_CALL);
+        self.b.call_as(error.convention, error.ty, Operand::Constant(error.reference), &[code], "");
+        self.b.unreachable();
+        self.ends.insert(raise, end.clone());
+        let otherwise = self.enter(past)?;
+        let mut cases = Vec::new();
+        for (number, &target) in targets.iter().enumerate() {
+            let target = self.enter(target as usize)?;
+            cases.push((self.b.int(16, number as i128 + 1), target));
+        }
+        self.b.position(within);
+        self.b.switch(index, otherwise, &cases);
+        self.ends.insert(within, end);
         Ok(())
     }
 
@@ -708,6 +752,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     fn node(&mut self, node: &Node) -> Emit<()> {
         self.insn = insn_of(node).cloned();
+        if self.unit.facts.event_poll(node) {
+            return self.call(crate::runtime::EVENT_POLL, span(node).0);
+        }
         for recognizer in sites::RECOGNIZERS {
             if let Some(done) = recognizer.node(self, node) {
                 return done;
@@ -1232,6 +1279,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                     Ok(self.cast(CastOp::Trunc, whole, word))
                 }
                 Some(address) if imm.width == 2 => {
+                    if let Some(key) = (address.space == Space::Segment).then(|| self.unit.objects.key(address.index, address.disp)).flatten() {
+                        return Ok(self.b.int(16, i128::from(key)));
+                    }
                     let pointer = self.symbol(address)?;
                     let word = self.b.context.types.int(16);
                     Ok(self.cast(CastOp::PtrToInt, pointer, word))
@@ -1590,6 +1640,14 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let header = self.unit.header.ok_or("no frame header size for this compiler")?;
         let size = self.register(Register::CX)?;
         let size = self.constant(size).ok_or("a frame of variable size")?;
+        // VBDOS's B$ENRA takes in BX the string temporaries it gives the
+        // frame; QB 4.5's and PDS's code sets no BX for it.
+        if self.unit.facts.family() == llrm_bcmachine::objectfile::module::Family::Vbdos {
+            let temporaries = self.register(Register::BX)?;
+            if self.constant(temporaries) != Some(0) {
+                return Err(format!("{FRAME_ENTRY} with string temporaries"));
+            }
+        }
         let high = -header;
         self.layout = Some(self.frame_layout(high - size, high, header)?);
         self.frame = Frame::Active;

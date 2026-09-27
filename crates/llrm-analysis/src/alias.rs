@@ -75,16 +75,10 @@ pub enum CellKey {
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
-fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<MemoryObject>) -> Result<BTreeSet<Slice>, String> {
+fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<MemoryObject>) -> BTreeSet<Slice> {
     let mut objects = provenances.into_iter().flat_map(|provenance| provenance.slices.iter().map(|one| one.object.clone())).collect::<BTreeSet<_>>();
     objects.extend(escaped.iter().cloned());
-    objects
-        .into_iter()
-        .map(|object| match object.extent {
-            Some(extent) => Slice::new(object, 0, extent, 1, 1).map_err(|error| error.to_string()),
-            None => Ok(Slice::whole(object)),
-        })
-        .collect()
+    objects.into_iter().filter_map(Slice::every_byte).collect()
 }
 
 /// Python `qbopt.analysis.alias:PointsTo`.
@@ -371,7 +365,7 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     for (index, one) in actual.iter().enumerate() {
         let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
-        let objects = _whole([one], &BTreeSet::new())?;
+        let objects = _whole([one], &BTreeSet::new());
         if through.reads {
             reads.extend(objects.iter().cloned());
         }
@@ -393,7 +387,7 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
 /// through its arguments.
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let mut reads = NONLOCAL.slices.clone();
-    reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default())?);
+    reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
@@ -449,6 +443,11 @@ fn _actuals(procedure: &Procedure, facts: &PointsTo, at: InstId) -> Vec<Provenan
         .collect()
 }
 
+/// Whether `slice` outlives its function's activation: no frame object.
+fn outlives(slice: &Slice) -> bool {
+    !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
+}
+
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
@@ -466,7 +465,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
         };
         for one in provenance.slices {
             let unknown = one.object.kind == MemoryKind::Unknown;
-            if !matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack) {
+            if outlives(&one) {
                 if read {
                     reads.insert(one);
                 } else {
@@ -593,6 +592,9 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 unknown_read |= effect.unknown_read;
                 unknown_write |= effect.unknown_write;
             }
+            // A callee's frame is gone when it returns: what its calls touch
+            // there, like its own accesses, is no effect of calling it.
+            let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
             let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write };
             if made != result[name] {
                 result.insert(name.clone(), made);
@@ -649,12 +651,12 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             }
         };
         if effect.unknown_read {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
+            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             effect.reads.extend(_tracked(&procedure.unit));
         }
         if effect.unknown_write {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
+            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             effect.writes.extend(_tracked(&procedure.unit));
         }
@@ -844,16 +846,9 @@ fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option
 /// natural-loop header, use the standard abstract-interpretation widening
 /// instead. Keeping object identity and restrict roots still proves the
 /// important disjointness facts; only the changing subrange is forgotten.
-fn _widened(provenance: &Provenance) -> Result<Provenance, String> {
-    let slices = provenance
-        .slices
-        .iter()
-        .map(|one| match one.object.extent {
-            Some(extent) => Slice::new(one.object.clone(), 0, extent, 1, 1).map_err(|error| error.to_string()),
-            None => Ok(Slice::whole(one.object.clone())),
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(Provenance { slices, restrict: provenance.restrict.clone() })
+fn _widened(provenance: &Provenance) -> Provenance {
+    let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object.clone())).collect();
+    Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
 fn _cell_key(reference: &MemRef) -> Option<CellKey> {
@@ -896,7 +891,7 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
             }
             // Arithmetic by an unknown integer remains within each known
             // object, but no longer has a byte offset precise enough to compare.
-            _widened(&fact).map(Some)
+            Ok(Some(_widened(&fact)))
         }
         _ => Ok(None),
     }
@@ -1001,7 +996,7 @@ pub fn points_to(
                             if has_back_edge {
                                 if let Some(previous) = previous_incoming.get(&key) {
                                     if fact != *previous {
-                                        fact = _widened(&previous.union(&fact))?;
+                                        fact = _widened(&previous.union(&fact));
                                     }
                                 }
                             }
@@ -1024,7 +1019,7 @@ pub fn points_to(
                             if carried {
                                 if let Some(previous) = values.get(&result) {
                                     if current != previous {
-                                        fact = Some(_widened(&previous.union(current))?);
+                                        fact = Some(_widened(&previous.union(current)));
                                     }
                                 }
                             }
@@ -1075,7 +1070,7 @@ pub fn points_to(
                         if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
                             for one in &targets.slices {
                                 // Whole objects: stored offsets may shift each trip around a loop.
-                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)))?;
+                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)));
                                 if fields.get(&one.object) != Some(&grown) {
                                     fields.insert(one.object.clone(), grown);
                                     changed.set(true);
@@ -1172,23 +1167,20 @@ pub fn points_to(
         for &inst in instructions(block.at) {
             let op = function.instruction(inst);
             let mut newly = BTreeSet::new();
+            // What a call reads a pointer out of, it may keep.
+            let mut lent = BTreeSet::new();
             if calls.contains(&inst) {
                 if let Some(arguments) = arguments {
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
-                    match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                        None => {
-                            for (_, one) in actual.iter().enumerate().filter(|(index, _)| !_borrowed(unit, inst, *index)) {
-                                newly.extend(one.slices.iter().map(|one| one.object.clone()));
-                            }
+                    let kept = |index: usize| -> Result<bool, String> {
+                        match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
+                            None => Ok(!_borrowed(unit, inst, index)),
+                            Some(selected) => Ok(selected.iter().map(_index).collect::<Result<Vec<_>, _>>()?.contains(&(index as i64))),
                         }
-                        Some(selected) => {
-                            for index in selected {
-                                let index = _index(index)?;
-                                if 0 <= index && index < actual.len() as i64 {
-                                    newly.extend(actual[index as usize].slices.iter().map(|one| one.object.clone()));
-                                }
-                            }
-                        }
+                    };
+                    for (index, one) in actual.iter().enumerate() {
+                        let objects = one.slices.iter().map(|one| one.object.clone());
+                        if kept(index)? { newly.extend(objects) } else { lent.extend(objects) }
                     }
                 } else {
                     // The callee's own address is no argument.
@@ -1221,7 +1213,10 @@ pub fn points_to(
                 _ if unmodeled_write(unit, inst) => {}
                 _ => {}
             }
-            mine.push(pointees(newly, &cells));
+            let lent_numbers = lent.iter().map(number).collect::<HashSet<_>>();
+            let mut published = pointees(newly, &cells);
+            published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
+            mine.push(published);
         }
         publishes.insert(block.at, mine);
     }

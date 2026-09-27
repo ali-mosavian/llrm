@@ -1,0 +1,15 @@
+[package]
+name = "llrm-bcdriver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The rich route for BC objects: raised, optimized, selected and written afresh"
+
+[dependencies]
+llrm-bc = { workspace = true }
+llrm-core = { workspace = true }
+llrm-qb = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-omf = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-cycles = { workspace = true }

@@ -1,6 +1,6 @@
 //! What analyses may ask of the target, which MIR does not state: the
-//! driver hands one to the pass manager (`PassManager::target`), as LLVM's
-//! `TargetMachine` gives its analyses `TargetTransformInfo`.
+//! driver names one for its program (`program::Program::target`), as
+//! LLVM's `TargetMachine` gives its analyses `TargetTransformInfo`.
 
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
@@ -74,3 +74,25 @@ impl Default for OperationCosts {
     }
 }
 
+
+/// A target that states nothing: no foreign memory, unit prices, and no
+/// registers, which leaves pressure unpriced.
+pub struct Neutral;
+
+impl Machine for Neutral {
+    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> OperationCosts {
+        OperationCosts::default()
+    }
+
+    fn registers(&self) -> i64 {
+        0
+    }
+
+    fn call_registers(&self) -> i64 {
+        0
+    }
+}

@@ -190,7 +190,7 @@ impl<'a> _MemoryQueries<'a> {
 
     fn _overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
         // An answer Rust cannot represent is taken to overlap.
-        overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.machine).unwrap_or(true)
+        overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.program).unwrap_or(true)
     }
 }
 

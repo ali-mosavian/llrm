@@ -33,6 +33,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use llrm_mir::program::ProgramProxy;
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context, GlobalId, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::Intrinsic;
@@ -42,7 +43,6 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
 use crate::globalsaa::Globals;
-use crate::regions::Machine;
 
 /// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -198,6 +198,15 @@ impl Slice {
 
     pub fn whole(object: MemoryObject) -> Self {
         Self::new(object, WHOLE_LOW, WHOLE_HIGH, 1, 1).expect("the fixed whole-object slice is valid")
+    }
+
+    /// Every byte of `object`; none of a zero-byte one, which overlaps
+    /// nothing, as in LLVM.
+    pub fn every_byte(object: MemoryObject) -> Option<Self> {
+        match object.extent {
+            Some(extent) => Self::new(object, 0, extent, 1, 1).ok(),
+            None => Some(Self::whole(object)),
+        }
     }
 
     pub fn shifted(&self, amount: i64) -> Self {
@@ -373,11 +382,11 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
 
 /// What the memory analyses read: a function, and of its module the types
 /// and constants, the layout, the metadata (`!tbaa`) and the globals (an
-/// object's size, a callee's attributes); and of the target, where it
-/// keeps no program data.
+/// object's size, a callee's attributes); and of its program, where the
+/// target keeps no program data and where the segments put it.
 #[derive(Clone, Copy)]
 pub struct Unit<'a> {
-    pub machine: Option<&'a dyn Machine>,
+    pub program: Option<&'a ProgramProxy>,
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
@@ -392,7 +401,7 @@ pub struct Unit<'a> {
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None }
+        Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -458,9 +467,14 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
                 None => Some(1),
                 Some(&count) => unit.int_constant(count).map(|bits| bits as i64),
             };
+            // Only a reference naming an alloca reaches it until its address
+            // is exposed.
+            let exposed = crate::frameescape::exposes(unit.function, value);
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
+                addressed: exposed,
+                captured: exposed,
                 ..MemoryObject::new(MemoryKind::Frame)
             })
         }

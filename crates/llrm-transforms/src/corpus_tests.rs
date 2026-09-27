@@ -75,7 +75,7 @@ fn hoist_keeps_every_corpus_module_verifying_and_settles() {
         let layout = llrm_analysis::testing::layout(&module);
         let (callees, sizes, metadata) = (llrm_mir::memory::callees(&module), llrm_mir::valuetracking::sizes(&module, &layout), module.metadata.clone());
         let mut outer = Outer::of(&module, None);
-        outer.require::<llrm_analysis::manager::Summaries>(&module, &layout);
+        outer.require::<llrm_analysis::manager::Summaries>(&module);
         let outer = std::rc::Rc::new(outer);
         for id in bodies(&module) {
             let mut rounds = 0;

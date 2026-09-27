@@ -97,7 +97,7 @@ pub struct Objects {
     externals: BTreeMap<i64, ConstantId>,
     /// The base of each segment outside DGROUP that data points into, as
     /// a far pointer: the code segment the recompiled module still has.
-    bases: BTreeMap<i64, ConstantId>,
+    bases: BTreeMap<i64, (GlobalId, ConstantId)>,
     /// The segments outside DGROUP that hold data: each is one object.
     far: BTreeSet<i64>,
     /// The code segment's index.
@@ -148,8 +148,26 @@ impl Objects {
         self.externals.get(&index).copied()
     }
 
+    /// A near code offset held as a value, which is its original offset.
+    /// What holds one is a DATA row's key and the RESTORE that searches for
+    /// it (B$RSTB), or a handler's address; a handler is entered by the
+    /// runtime's protocol, which refuses its module, so what is left is a
+    /// key, and the original offset keeps both sides equal.
+    pub fn key(&self, segment: i64, disp: i64) -> Option<i64> {
+        (Some(segment) == self.code).then_some(disp)
+    }
+
     pub fn base(&self, segment: i64) -> Option<ConstantId> {
-        self.bases.get(&segment).copied()
+        self.bases.get(&segment).map(|&(_, reference)| reference)
+    }
+
+    /// Where each object sits: its segment, first byte and global, in
+    /// segment and address order; and the global each segment the objects
+    /// point into but the raise does not carve is.
+    pub fn placement(&self) -> crate::Placement {
+        let objects = self.segments.iter().flat_map(|(&segment, objects)| objects.values().map(move |one| (segment, one.start, one.global))).collect();
+        let bases = self.bases.iter().map(|(&segment, &(global, _))| (segment, global)).collect();
+        crate::Placement { objects, bases }
     }
 
     /// The code segment's base, as a far pointer.
@@ -212,7 +230,7 @@ impl Objects {
             let variable = GlobalVariable { ty: byte, constant: true, initializer: None, align: None };
             let global = add_unique(module, name, |module, named| module.add_variable(named, variable.clone(), Linkage::External));
             module.globals[global.0 as usize].address_space = FAR;
-            objects.bases.insert(code, module.reference(global));
+            objects.bases.insert(code, (global, module.reference(global)));
         }
         let mut carved: Vec<(i64, i64, i64, Option<String>)> = Vec::new();
         for &segment in &data {
@@ -300,6 +318,12 @@ impl Objects {
                 members.push(bytes(context, at, relocation.at));
             }
             let addend = i64::from(u16::from_le_bytes([image.get(relocation.at as usize).copied().unwrap_or(0), image.get(relocation.at as usize + 1).copied().unwrap_or(0)]));
+            if let Some(key) = (relocation.loc == omf::LOC_OFF16 && relocation.target == "segment").then(|| self.key(relocation.index, relocation.disp + addend)).flatten() {
+                let word = context.types.int(16);
+                members.push(context.constant(Constant { ty: word, kind: ConstantKind::Int(key as u16 as u128) }));
+                at = relocation.at + relocation.width;
+                continue;
+            }
             let target = match relocation.target.as_str() {
                 "segment" => match (self.at(relocation.index, relocation.disp), self.base(relocation.index)) {
                     (Some(target), _) => offset_constant(context, target.reference, relocation.disp - target.start + addend),
@@ -314,11 +338,10 @@ impl Objects {
             };
             let far = context.types.ptr(FAR);
             members.push(match relocation.loc {
-                // A near offset into a far segment is its far pointer's low word.
+                // A near offset into a far segment is its far pointer as `i16`.
                 omf::LOC_OFF16 if context.get(target).ty == far => {
-                    let (long, word) = (context.types.int(32), context.types.int(16));
-                    let whole = context.constant(Constant { ty: long, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) });
-                    context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::Trunc, value: whole }) })
+                    let word = context.types.int(16);
+                    context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) })
                 }
                 omf::LOC_OFF16 => target,
                 omf::LOC_PTR32 => cast(context, CastOp::AddrSpaceCast, target, FAR),
