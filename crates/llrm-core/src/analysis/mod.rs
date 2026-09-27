@@ -1,5 +1,7 @@
 //! Ports of `qbopt/analysis`.
 
+pub use llrm_bcmachine::analysis::flags;
+
 pub mod alias;
 pub mod avail;
 pub mod cellmap;
@@ -7,7 +9,6 @@ pub mod constant_cycles;
 pub mod consts;
 pub mod manager;
 pub mod effects;
-pub mod flags;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;

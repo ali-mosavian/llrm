@@ -62,7 +62,7 @@ flowchart LR
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls | `crates/llrm-c/src/raise_hir.rs`, Borland's medium-model ABI |
 | `llrm-omf` | OMF decode of BC's machine code | `crates/llrm-core/src/frontends/bc/raising_*.rs` recognition |
 
-There is one production optimizer and one production backend. `crates/llrm-core/src/legacy/`
+There is one production optimizer and one production backend. `crates/llrm-bcmachine/src/legacy/`
 remains only where raising or encoding still shares old recognition data; it is
 not a second optimization route.
 
@@ -166,9 +166,9 @@ The main ownership split is:
 | --- | --- |
 | OMF parsing and record fidelity | `crates/llrm-omf/src/omf.rs` |
 | Segment, group, symbol, call and object-bound facts | `crates/llrm-omf/src/module.rs` |
-| Instruction lengths and BC emulator forms | `crates/llrm-core/src/frontends/bc/declen.rs` |
-| Reachability, inline tables and basic blocks | `crates/llrm-core/src/frontends/bc/blocks.rs` |
-| BC calling and runtime contracts | `crates/llrm-core/src/abi/runtime.rs`, `runtime.toml` |
+| Instruction lengths and BC emulator forms | `crates/llrm-bcmachine/src/frontends/bc/declen.rs` |
+| Reachability, inline tables and basic blocks | `crates/llrm-bcmachine/src/frontends/bc/blocks.rs` |
+| BC calling and runtime contracts | `crates/llrm-bcmachine/src/abi/runtime.rs`, `runtime.toml` |
 | Idiom recognition | `crates/llrm-core/src/frontends/bc/raising_*.rs`, coordinated by `crates/llrm-core/src/model/mir.rs` |
 | Pure analyses used by passes | `crates/llrm-core/src/analysis/` |
 

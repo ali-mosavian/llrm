@@ -684,8 +684,10 @@ pub fn _power_of_two(value: i64) -> Option<u32> {
 ///
 /// The bias makes the shift truncate towards zero as idiv does:
 ///
-///     mov  scratch,eax / sar scratch,31 / shr scratch,32-n
-///     add  eax,scratch / sar eax,n
+/// ```text
+/// mov  scratch,eax / sar scratch,31 / shr scratch,32-n
+/// add  eax,scratch / sar eax,n
+/// ```
 pub fn dividing_by_a_power_of_two(name: &str, n: u32, scratch: Register) -> Vec<Instruction> {
     let n = n as i32;
     let mut steps = vec![
