@@ -1634,3 +1634,55 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
     assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "imul ax, bx"]);
 }
+
+/// A dword load read only as its words is those words loaded, as the old
+/// route's narrow selects: the high word cost a copy and a shift.
+#[test]
+fn test_a_dword_read_only_as_words_loads_the_words() {
+    let text = "define i16 @f(ptr %p) addrspace(1) {
+  %v = load i32, ptr %p
+  %h = lshr i32 %v, 16
+  %w = trunc i32 %h to i16
+  %l = trunc i32 %v to i16
+  %s = add i16 %w, %l
+  ret i16 %s
+}
+";
+    assert_eq!(inner(text), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bx+2]", "add ax, word ptr [bx]"]);
+}
+
+/// A dword also read whole, or loaded volatile, is loaded whole.
+#[test]
+fn test_a_dword_read_whole_or_volatile_is_loaded_whole() {
+    let whole = "define i32 @f(ptr %p) addrspace(1) {
+  %v = load i32, ptr %p
+  %l = trunc i32 %v to i16
+  %x = zext i16 %l to i32
+  %s = add i32 %v, %x
+  ret i32 %s
+}
+";
+    assert!(inner(whole).iter().any(|one| one.ends_with("dword ptr [bx]")), "{:?}", inner(whole));
+    let volatile = "define i16 @f(ptr %p) addrspace(1) {
+  %v = load volatile i32, ptr %p
+  %l = trunc i32 %v to i16
+  ret i16 %l
+}
+";
+    assert!(inner(volatile).iter().any(|one| one.ends_with("dword ptr [bx]")), "{:?}", inner(volatile));
+}
+
+/// An AND only a comparison with zero reads is `test`, as the old route's
+/// _flag_test selects: its result needs no register.
+#[test]
+fn test_an_and_only_compared_with_zero_is_test() {
+    let tested = |mask: &str, ret: &str| {
+        inner(&format!(
+            "define i16 @f(i16 %x, i16 %m) addrspace(1) {{\n  %a = and i16 %x, {mask}\n  %c = icmp eq i16 %a, 0\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 {ret}\n}}\n"
+        ))
+    };
+    assert_eq!(tested("%m", "0")[..4], ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]);
+    // Read again, the AND is computed; a constant mask is the old route's AND too.
+    assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
+    assert!(tested("12", "0").iter().any(|one| one.starts_with("and ")), "{:?}", tested("12", "0"));
+}

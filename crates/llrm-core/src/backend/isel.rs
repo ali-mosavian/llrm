@@ -236,6 +236,9 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         fused: BTreeSet::new(),
         cells: BTreeSet::new(),
         stored: BTreeSet::new(),
+        words: IndexMap::default(),
+        tested: BTreeSet::new(),
+        consumed: BTreeSet::new(),
         callees: llrm_mir::memory::callees(module),
         cpu,
         pending: IndexMap::default(),
@@ -276,6 +279,12 @@ struct Selector<'m, 'c, 'p> {
     cells: BTreeSet<InstId>,
     /// Conversions whose only reader is a store: x87 stores them itself.
     stored: BTreeSet<InstId>,
+    /// Dword loads read only as words: each word's offset and the value it is.
+    words: IndexMap<InstId, Vec<(i64, ValueId)>>,
+    /// ANDs only a comparison with zero reads: a `test`.
+    tested: BTreeSet<InstId>,
+    /// What another instruction's selection made: a narrowed load's readers.
+    consumed: BTreeSet<InstId>,
     /// What each callee does to memory.
     callees: llrm_mir::memory::Callees,
     /// What each instruction costs, where a choice depends on it.
@@ -377,6 +386,8 @@ impl Selector<'_, '_, '_> {
             for &inst in function.block(block).instructions() {
                 self.fuse(block, inst);
                 self.fold(inst);
+                self.narrowed(inst);
+                self.test(inst);
             }
             self.phis_from(block)?;
         }
@@ -488,6 +499,61 @@ impl Selector<'_, '_, '_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A dword load read only through its words is those words loaded, as
+    /// the old route's narrow selects: `trunc` reads the low word, `trunc`
+    /// of a shift right by 16 the high.
+    fn narrowed(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        if !matches!(instruction.opcode, Opcode::Load { volatile: false, .. }) || self.types().int_bits(instruction.ty) != Some(32) {
+            return;
+        }
+        let Some(loaded) = instruction.result else { return };
+        let word = |reader: InstId| {
+            let reading = function.instruction(reader);
+            (reading.opcode == Opcode::Cast(CastOp::Trunc) && self.types().int_bits(reading.ty) == Some(16)).then(|| reading.result).flatten()
+        };
+        let mut halves = Vec::new();
+        let mut readers = Vec::new();
+        for one in function.users(loaded) {
+            let reading = function.instruction(one.user);
+            if let Some(result) = word(one.user) {
+                halves.push((0, result));
+                readers.push(one.user);
+                continue;
+            }
+            let high = matches!(reading.opcode, Opcode::Binary(BinaryOp::LShr | BinaryOp::AShr)) && one.index == 0 && self.constant(reading.operands[1], 4) == Some(16);
+            let Some(shifted) = reading.result.filter(|_| high) else { return };
+            let [only] = function.users(shifted) else { return };
+            let Some(result) = word(only.user) else { return };
+            halves.push((2, result));
+            readers.extend([one.user, only.user]);
+        }
+        if !halves.is_empty() {
+            self.words.insert(inst, halves);
+            self.consumed.extend(readers);
+        }
+    }
+
+    /// An AND only a comparison with zero reads is `test`: its result is
+    /// dead, and its flags are the comparison's, as the old route's
+    /// _flag_test selects.
+    fn test(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        if !matches!(instruction.opcode, Opcode::ICmp(_)) {
+            return;
+        }
+        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+        let Some(Operand::Value(value)) = [(a, b), (b, a)].into_iter().find(|&(_, zero)| self.constant(zero, 4) == Some(0)).map(|(value, _)| value) else { return };
+        let ValueDef::Instruction(and) = function.value(value).def else { return };
+        let anding = function.instruction(and);
+        let registers = anding.operands.iter().all(|one| matches!(one, Operand::Value(_)));
+        if anding.opcode == Opcode::Binary(BinaryOp::And) && registers && matches!(self.types().int_bits(anding.ty), Some(16 | 32)) && self.only_reader(value, inst) {
+            self.tested.insert(and);
         }
     }
 
@@ -1218,7 +1284,22 @@ impl Selector<'_, '_, '_> {
         match &instruction.opcode {
             Opcode::Alloca { .. } => {}
             // Selected where its reader is: see fold.
-            _ if self.cells.contains(&inst) || self.stored.contains(&inst) => {}
+            _ if self.cells.contains(&inst) || self.stored.contains(&inst) || self.tested.contains(&inst) || self.consumed.contains(&inst) => {}
+            Opcode::Load { .. } if self.words.contains_key(&inst) => {
+                let pointer = self.pointer(operands[0])?;
+                let mut made: IndexMap<i64, Held> = IndexMap::default();
+                let mut halves = self.words[&inst].clone();
+                halves.sort_by_key(|&(offset, _)| offset);
+                for (offset, result) in halves {
+                    let held = Held { value: self.value(result), width: 2 };
+                    let source = match made.get(&offset) {
+                        Some(&earlier) => Loc::Held(earlier),
+                        None => Loc::Mem(Self::memory(pointer.moved(offset), 2)),
+                    };
+                    made.entry(offset).or_insert(held);
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
+                }
+            }
             Opcode::Store { volatile, .. } if matches!(operands[0], Operand::Value(value) if self.converted(value).is_some()) => {
                 let Operand::Value(value) = operands[0] else { unreachable!("a converted value") };
                 let conversion = self.converted(value).expect("a stored conversion");
@@ -1671,6 +1752,15 @@ impl Selector<'_, '_, '_> {
             if self.constant(b, 2) != Some(0) || !self.flags_reach(value, inst) {
                 return refuse("a call's flags read apart from its compare with zero");
             }
+            return Ok(Test::One(condition_code(predicate)));
+        }
+        if let Operand::Value(value) = a
+            && let ValueDef::Instruction(and) = self.function.value(value).def
+            && self.tested.contains(&and)
+        {
+            let operands = self.function.instruction(and).operands.clone();
+            let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));
+            out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![x, y])));
             return Ok(Test::One(condition_code(predicate)));
         }
         let a = Loc::Held(self.held(a, ty, at, out)?);
