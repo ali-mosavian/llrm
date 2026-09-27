@@ -240,3 +240,14 @@ fn test_an_address_the_latch_computes_keeps_its_store() {
         .replace("load i16, ptr @g", "load i16, ptr getelementptr ([4 x i16], ptr @a, i16 0, i16 2)");
     kept(&text, VALUES);
 }
+
+/// A call before the loop that writes elsewhere leaves the seed standing.
+/// Any writing call refused, and sum_three stored its total every trip
+/// past a bound's runtime call.
+#[test]
+fn test_a_call_writing_elsewhere_keeps_the_seed() {
+    let text = accumulator("  store i16 5, ptr @acc\n  call void @touch()\n").replace("define i16 @f", "@m = global i16 0\n\ndefine void @touch() {\nb:\n  store i16 1, ptr @m\n  ret void\n}\n\ndefine i16 @f");
+    let module = parsed(&format!("{DOS}{text}"));
+    let after = crate::testing::summarized(&module, super::LoopMotion, true, TRIPS);
+    assert!(after.contains("b3:\n  store i16 %s, ptr @acc\n"), "{after}");
+}

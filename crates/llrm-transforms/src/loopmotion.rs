@@ -16,8 +16,8 @@
 //!   old refused every call; one with no effect that returns is a value.
 //! - A stored cell is in an object (`MemRef::object`), as the old `Segment`
 //!   and `Frame` spaces were, with no selector.
-//! - A call that may write stops `_stored_at`: alias does not yet say what a
-//!   call writes, which the old read from its `stores`.
+//! - A call stops `_stored_at` where `Accesses` says it may write the
+//!   cell, as the old read its `stores`.
 //! - `root` followed copies, which have no instruction.
 //!
 //! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::consts::{self, Calls, HeldCells, Known, masked};
 use llrm_analysis::manager::Annotated;
 use llrm_analysis::memory::{MemRef, Unit};
+use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::Context;
@@ -100,8 +101,9 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
         let current = fresh.as_mut().unwrap_or(&mut *analyses);
         let annotated = current.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
+        let accesses = Accesses::managed(context, layout, function, current)?;
         let unit = Unit::within(context, layout, function, current.outer());
-        let moved = _moved(&unit, callees, &loop_, &inside, references, &predecessors, &successors, &dominators, source)?;
+        let moved = _moved(&unit, &accesses, &loop_, &inside, references, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -135,7 +137,7 @@ enum Stored {
 #[allow(clippy::too_many_arguments)]
 fn _moved(
     unit: &Unit,
-    callees: &Callees,
+    accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
     references: &IndexMap<InstId, MemRef>,
@@ -172,7 +174,7 @@ fn _moved(
     let entry = outside[0];
     let nonempty = induction::nonempty(unit, loop_);
     let invariant = if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
-    let mut exit = _Exit { unit, callees, references, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
+    let mut exit = _Exit { unit, accesses, references, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
     for &inst in operations {
         if moved.iter().any(|(one, _)| *one == inst) || !unobserved(inst) || !reaches(function.instruction(inst).operands[1]) {
             continue;
@@ -206,7 +208,7 @@ fn _invariant_value(function: &Function, inst: InstId, invariant: &induction::In
 /// What `_exit_value` closes over.
 struct _Exit<'a> {
     unit: &'a Unit<'a>,
-    callees: &'a Callees,
+    accesses: &'a Accesses,
     references: &'a IndexMap<InstId, MemRef>,
     predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
     entry: i64,
@@ -248,7 +250,10 @@ impl _Exit<'_> {
             let op = function.instruction(inst);
             match op.opcode {
                 Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } | Opcode::Invoke(_) => return false,
-                Opcode::Call(_) if memory::of(unit.context, self.callees, function, inst).writes => return false,
+                Opcode::Call(_) => match self.accesses.writes(inst) {
+                    Some(written) if written.iter().all(|one| !regions::overlapping(reference, one, None, None, unit.program).unwrap_or(true)) => continue,
+                    _ => return false,
+                },
                 Opcode::Store { .. } => {}
                 _ => continue,
             }
