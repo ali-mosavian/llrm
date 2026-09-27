@@ -85,7 +85,8 @@ impl Accesses {
         let effects = analyses.get::<CallEffects>(context, layout, function);
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let effects = Result::as_ref(&*effects).map_err(String::clone)?;
-        Ok(Self::of(&Unit::within(context, layout, function, analyses.outer()), references.clone(), effects))
+        let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
+        Ok(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), references.clone(), effects))
     }
 
     /// `unit`'s accesses from `references` (`alias::annotated`'s) and each

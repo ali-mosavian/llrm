@@ -12,6 +12,7 @@ use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
 use llrm_mir::target::Machine;
 use llrm_support::hash::IndexMap;
 
+use crate::cfg::Shape;
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
 use crate::globalsaa::{self, Globals};
@@ -68,7 +69,8 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        alias::points_to(&Unit::within(context, layout, function, analyses.outer()), None, None)
+        let shape = analyses.get::<Shape>(context, layout, function);
+        alias::points_to(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), None, None)
     }
 }
 
@@ -82,7 +84,8 @@ impl Analysis for Annotated {
         let pointers = analyses.get::<Pointers>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
-        alias::annotated_with(&Unit::within(context, layout, function, analyses.outer()), pointers, &registers)
+        let shape = analyses.get::<Shape>(context, layout, function);
+        alias::annotated_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), pointers, &registers)
     }
 }
 
@@ -96,8 +99,9 @@ impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
         let outer = analyses.outer();
-        call_effects(&Unit::within(context, layout, function, outer), outer)
+        call_effects(&Unit::within(context, layout, function, outer).with_shape(&shape), outer)
     }
 }
 
@@ -121,7 +125,8 @@ impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        consts::known(&Unit::within(context, layout, function, analyses.outer()), None, None, None)
+        let shape = analyses.get::<Shape>(context, layout, function);
+        consts::known(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), None, None, None)
     }
 }
 
@@ -153,7 +158,8 @@ impl Analysis for FloatFacts {
     const NAME: &'static str = "float-facts";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let calls = writes(context, layout, function, analyses);
-        floatfacts::solved_with(&Unit::within(context, layout, function, analyses.outer()), &calls, None)
+        let shape = analyses.get::<Shape>(context, layout, function);
+        floatfacts::solved_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), &calls, None)
     }
 }
 
@@ -168,7 +174,8 @@ impl Analysis for ThroughMemory {
         let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
         let references = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*references).map_err(String::clone)?;
-        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()).with_references(references), Some(&calls), None, None))
+        let shape = analyses.get::<Shape>(context, layout, function);
+        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()).with_references(references).with_shape(&shape), Some(&calls), None, None))
     }
 }
 
@@ -181,7 +188,8 @@ impl Analysis for DominatedEdges {
     const NAME: &'static str = "dominated-edges";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let registers = analyses.get::<Registers>(context, layout, function);
-        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()), &registers)
+        let shape = analyses.get::<Shape>(context, layout, function);
+        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), &registers)
     }
 }
 
