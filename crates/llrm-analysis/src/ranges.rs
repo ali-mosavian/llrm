@@ -296,7 +296,7 @@ pub fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width:
 /// predecessor's facts narrowed by that edge, or else from its immediate
 /// dominator's, and each edge is applied once.
 pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
-    dominated_edges_with(unit, &consts::known(unit, None, None, None))
+    dominated_edges_with(unit, &unit.registers())
 }
 
 /// `dominated_edges`, given what `consts::known` finds without memory.
@@ -357,7 +357,7 @@ pub type Facts = IndexMap<i64, IndexMap<ValueId, Interval>>;
 /// dominate the block. A block in no counted loop keeps the facts of the
 /// branch edges that dominate it.
 pub fn bounded(unit: &Unit) -> Result<Facts, String> {
-    bounded_with(unit, &consts::known(unit, None, None, None))
+    bounded_with(unit, &unit.registers())
 }
 
 /// `bounded`, given what `consts::known` finds without memory.
@@ -579,7 +579,7 @@ fn _exact_sum(unit: &Unit, value: ValueId, at: i64, scoped: &Facts, bits: u32, d
 /// Every value `consts` knows without solving memory, as the singleton
 /// interval an alias query reads.
 pub fn constants(unit: &Unit) -> IndexMap<ValueId, Interval> {
-    intervals(&consts::known(unit, None, None, None))
+    intervals(&unit.registers())
 }
 
 /// Each known value as the interval of it alone.

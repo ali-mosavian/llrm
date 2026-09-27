@@ -719,7 +719,7 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
     // A store kills the cells alias's provenance leaves it able to reach.
-    let annotated = (calls.is_some() && unit.references.is_none()).then(|| crate::alias::annotated(unit).ok()).flatten();
+    let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     // No edge facts is no edges: the solve reads only a nonempty map.
     let edges = edges.filter(|edges| !edges.is_empty());

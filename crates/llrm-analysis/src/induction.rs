@@ -26,7 +26,7 @@ use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
 use crate::cfg;
-use crate::consts::{self, Known, masked};
+use crate::consts::{Known, masked};
 use crate::memory::{MemRef, Unit};
 use crate::noreturn;
 use crate::occurrence::{operations, phis};
@@ -553,7 +553,7 @@ pub fn derived(unit: &Unit, loop_: &Loop, found: Option<&IndexMap<ValueId, Affin
     if found.is_empty() {
         return Vec::new();
     }
-    let facts = consts::known(unit, None, None, None);
+    let facts = unit.registers();
     let still = invariant(unit.function, &loop_.body);
 
     let mut direct = IndexMap::<InstId, Derived>::default();
@@ -691,8 +691,8 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     let facts = match facts {
         Some(facts) => facts,
         None => {
-            computed = consts::known(unit, None, None, None);
-            &computed
+            computed = unit.registers();
+            &*computed
         }
     };
     let Some(shape) = _control(function, loop_) else { return Vec::new() };
@@ -1194,7 +1194,7 @@ pub fn trips_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId,
 
 /// A counted loop whose first iteration and finite exit are proven.
 pub fn nonempty(unit: &Unit, loop_: &Loop) -> bool {
-    trip_count(unit, loop_, &consts::known(unit, None, None, None)).is_some()
+    trip_count(unit, loop_, &unit.registers()).is_some()
 }
 
 /// The proof in which `counter` decides when `loop` leaves.
@@ -1416,8 +1416,8 @@ pub fn zero_terminating_control<'a>(
     let facts = match facts {
         Some(facts) => facts,
         None => {
-            computed = consts::known(unit, None, None, None);
-            &computed
+            computed = unit.registers();
+            &*computed
         }
     };
     let step = _signed(&candidate.step, facts, width)?;

@@ -42,7 +42,9 @@ use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
+use crate::alias::PointsTo;
 use crate::cfg::Shape;
+use crate::consts::Known;
 use crate::globalsaa::Globals;
 use crate::regions::Machine;
 
@@ -392,11 +394,18 @@ pub struct Unit<'a> {
     pub globals_aa: Option<&'a Globals>,
     /// Dominance and loops, the manager's; without them each ask finds them.
     pub shape: Option<&'a Shape>,
+    /// What consts knows without memory, the manager's `Registers`.
+    pub registers: Option<&'a IndexMap<ValueId, Known>>,
+    /// Every pointer's objects, the manager's `Pointers`.
+    pub pointers: Option<&'a PointsTo>,
+    /// Each access's reference as alias finds it, the manager's
+    /// `Annotated`; unlike `references`, the unit does not read through it.
+    pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
 }
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None }
+        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -409,6 +418,45 @@ impl<'a> Unit<'a> {
 
     pub fn with_shape(self, shape: &'a Shape) -> Self {
         Self { shape: Some(shape), ..self }
+    }
+
+    pub fn with_registers(self, registers: &'a IndexMap<ValueId, Known>) -> Self {
+        Self { registers: Some(registers), ..self }
+    }
+
+    pub fn with_pointers(self, pointers: &'a PointsTo) -> Self {
+        Self { pointers: Some(pointers), ..self }
+    }
+
+    pub fn with_annotated(self, annotated: &'a Result<IndexMap<InstId, MemRef>, String>) -> Self {
+        Self { annotated: Some(annotated), ..self }
+    }
+
+    /// Each access's reference as `alias::annotated` finds it: the
+    /// manager's where the unit carries it.
+    pub fn annotated(&self) -> Result<Cow<'a, IndexMap<InstId, MemRef>>, String> {
+        match self.annotated {
+            Some(annotated) => annotated.as_ref().map(Cow::Borrowed).map_err(String::clone),
+            None => crate::alias::annotated(self).map(Cow::Owned),
+        }
+    }
+
+    /// What consts knows without memory: the manager's where the unit
+    /// carries it.
+    pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
+        match self.registers {
+            Some(registers) => Cow::Borrowed(registers),
+            None => Cow::Owned(crate::consts::known(self, None, None, None)),
+        }
+    }
+
+    /// Every pointer's objects, as `alias::pointers`: the manager's where
+    /// the unit carries them.
+    pub fn pointers(&self) -> Result<Cow<'a, PointsTo>, String> {
+        match self.pointers {
+            Some(pointers) => Ok(Cow::Borrowed(pointers)),
+            None => crate::alias::points_to(self, None, None).map(Cow::Owned),
+        }
     }
 
     /// The function's dominance and loops: the manager's where the unit

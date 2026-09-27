@@ -75,7 +75,7 @@ impl Accesses {
     /// `unit`'s accesses as `alias` resolves them: each reference with its
     /// provenance, each call's effect instantiated from `known` callees.
     pub fn resolved(unit: &Unit, known: &IndexMap<String, Summary>) -> Result<Self, String> {
-        Ok(Self::of(unit, alias::annotated(unit)?, &alias::calls_annotated(&Procedure::of(*unit), known)?))
+        Ok(Self::of(unit, unit.annotated()?.into_owned(), &alias::calls_annotated(&Procedure::of(*unit), known)?))
     }
 
     /// `function`'s accesses from the manager's `Annotated` and

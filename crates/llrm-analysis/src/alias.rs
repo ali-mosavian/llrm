@@ -46,7 +46,7 @@ use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
-use crate::consts::{self, Known};
+use crate::consts::Known;
 use crate::globalsaa;
 use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
@@ -1388,7 +1388,7 @@ fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
-    congruences_with(unit, &consts::known(unit, None, None, None))
+    congruences_with(unit, &unit.registers())
 }
 
 /// `congruences`, given what `consts::known` finds without memory.
@@ -1458,7 +1458,7 @@ fn reduced(modulus: BigInt, residue: BigInt, width: u32) -> (BigInt, BigInt) {
 /// Attach solved provenance to every access of the function: each load's
 /// and store's, narrowed where a range bounds its index.
 pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
-    annotated_with(unit, &points_to(unit, None, None)?, &consts::known(unit, None, None, None))
+    annotated_with(unit, &*unit.pointers()?, &unit.registers())
 }
 
 /// `annotated`, given the points-to facts and what `consts::known` finds

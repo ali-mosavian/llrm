@@ -34,6 +34,7 @@ use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::manager::{Annotated, Pointers, Registers};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_graph::loops;
@@ -58,7 +59,7 @@ impl FunctionPass for Decide {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        let decided = decided(unit.context, unit.layout, unit.function, analyses.outer()).unwrap_or_else(|error| panic!("decide: {error}"));
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -66,8 +67,26 @@ impl FunctionPass for Decide {
 /// `function` threaded, and each branch whose way is known a jump that
 /// way; `outer` is its module and target. Whether anything changed.
 pub fn decided(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
+}
+
+/// `decided`, `analyses` holding what is known of `function`.
+fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> Result<bool, String> {
     let threaded = _threaded(context, function);
-    let decisions = _decisions(&Unit::within(context, layout, function, outer))?;
+    if threaded {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let decisions = {
+        let shape = analyses.get::<cfg::Shape>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let pointers = analyses.get::<Pointers>(context, layout, function);
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&annotated);
+        if let Ok(pointers) = &*pointers {
+            unit = unit.with_pointers(pointers);
+        }
+        _decisions(&unit)?
+    };
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -91,7 +110,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let nonnull = |value: ValueId| {
         pointing.contains(&value)
             && alias::nonnull_by_definition(unit, value)
-                .unwrap_or_else(|| pointers.get_or_init(|| alias::pointers(unit)).as_ref().is_ok_and(|facts| facts.nonnull(value)))
+                .unwrap_or_else(|| pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value)))
     };
     let successors =
         |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));

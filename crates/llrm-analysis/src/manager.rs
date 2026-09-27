@@ -25,7 +25,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None, shape: None }
+        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None }
     }
 }
 
@@ -85,7 +85,8 @@ impl Analysis for Annotated {
         let registers = analyses.get::<Registers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
-        alias::annotated_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), pointers, &registers)
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers);
+        alias::annotated_with(&unit, pointers, &registers)
     }
 }
 
@@ -159,7 +160,10 @@ impl Analysis for FloatFacts {
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let calls = writes(context, layout, function, analyses);
         let shape = analyses.get::<Shape>(context, layout, function);
-        floatfacts::solved_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), &calls, None)
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&references);
+        floatfacts::solved_with(&unit, &calls, None)
     }
 }
 
@@ -175,7 +179,9 @@ impl Analysis for ThroughMemory {
         let references = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
-        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()).with_references(references).with_shape(&shape), Some(&calls), None, None))
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_references(references).with_shape(&shape).with_registers(&registers);
+        Ok(consts::known(&unit, Some(&calls), None, None))
     }
 }
 
@@ -189,7 +195,7 @@ impl Analysis for DominatedEdges {
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
-        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), &registers)
+        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers), &registers)
     }
 }
 
