@@ -414,3 +414,12 @@ fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
     let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
 }
+
+/// FPDEEP's `p(1 TO 3)` is one object with the origin its index counts
+/// from: the stores to p(1..3) were carved apart from the reads through
+/// p(i), and the pipeline dropped them.
+#[test]
+fn an_indexed_array_is_one_object() {
+    let text = llrm_mir::print::module(&raised("fpdeep-q-o.obj"));
+    assert!(text.contains("@BC_DATA.0002 = ") && !text.contains("@BC_DATA.0006 = "), "{text}");
+}

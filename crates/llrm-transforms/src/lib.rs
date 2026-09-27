@@ -17,6 +17,7 @@ pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod floatloop;
+pub mod globalopt;
 pub mod fold;
 pub mod gvn;
 pub mod hoist;

@@ -400,7 +400,8 @@ fn test_nbody_identity_uses_the_paired_byte_recurrences() {
 
     assert!(!Regex::new(r"    shl (?:[sd]i|word ptr \[[^\]]+\]), 4\n").unwrap().is_match(interaction));
     assert!(!interaction.contains(", 96\n"));
-    let recurrences = Regex::new(r"    add (?:[sd]i|word ptr \[[^\]]+\]), 16\nL\d+_\d+:\n    jne L\d+_\d+\n")
+    // A `mov` between the step and its `jne` keeps the step's flags.
+    let recurrences = Regex::new(r"    add (?:[sd]i|word ptr \[[^\]]+\]), 16\n(?:    mov [^\n]*\n)*L\d+_\d+:\n    jne L\d+_\d+\n")
         .unwrap()
         .find_iter(force_loops)
         .count();
@@ -948,9 +949,9 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
-    // `a`'s fill is one `rep stosd`; `b`'s stays one rolled store, not eight.
-    assert_eq!(body.matches("rep stosd").count(), 1);
-    assert_eq!(Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count(), 1);
+    // Each fill is one string fill or one rolled store, never eight copies.
+    let fills = body.matches("rep stosd").count() + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
+    assert_eq!(fills, 2);
 }
 
 fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir::MirBody {

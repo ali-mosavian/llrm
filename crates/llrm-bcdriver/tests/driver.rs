@@ -169,7 +169,6 @@ fn fpdeep_copies_out_its_print_loop() {
 /// float arithmetic; the old route's floatbounds, floatfold and literal
 /// tests.
 #[test]
-#[ignore = "p(i) reads through @BC_DATA.0002+4i miss the stores to the separately carved @BC_DATA.0006.., and loads of the never-written BC_CN literals do not fold"]
 fn fpdeep_prints_constants_and_computes_no_float() {
     let main = fpdeep();
     for n in [144, 6, 512, 784, 14, 768, 3600, 30, 896] {

@@ -35,6 +35,8 @@ pub struct Carving {
     pub stack_in_data: bool,
     pub cuts: BTreeMap<i64, BTreeMap<i64, Option<String>>>,
     pub spans: BTreeMap<i64, Vec<(i64, i64)>>,
+    /// The displacements a register indexes from: an array's origin.
+    pub indexed: BTreeMap<i64, BTreeSet<i64>>,
 }
 
 impl Carving {
@@ -64,7 +66,7 @@ impl Carving {
         }
         for body in &facts.bodies {
             for node in body.nodes.values() {
-                accesses(node, &mut carving.spans);
+                accesses(node, &mut carving.spans, &mut carving.indexed);
             }
             // A long's two words are one access.
             for (segment, disp) in body.pairs.values().filter_map(|pair| pair.span()) {
@@ -250,6 +252,8 @@ impl Objects {
                 }
             }
             let mut crossing: Vec<(i64, i64)> = carving.spans.get(&segment).cloned().unwrap_or_default();
+            let origins = carving.indexed.get(&segment).into_iter().flatten().filter(|&&one| (0..size).contains(&one));
+            crossing.extend(origins.map(|&one| indexed_reach(one, &names, size)));
             crossing.extend(relocations.get(&segment).into_iter().flatten().map(|one| (one.at, one.at + one.width)));
             for (low, high) in crossing {
                 let inside: Vec<i64> = cuts.range(low + 1..high).copied().collect();
@@ -406,15 +410,32 @@ fn names_code(facts: &Facts, code: i64) -> bool {
     })
 }
 
-/// Every static access `node` makes to a segment, as `[disp, disp + width)`.
-fn accesses(node: &Node, spans: &mut BTreeMap<i64, Vec<(i64, i64)>>) {
+/// Every static access `node` makes to a segment, as `[disp, disp + width)`,
+/// and the displacement of every indexed one.
+fn accesses(node: &Node, spans: &mut BTreeMap<i64, Vec<(i64, i64)>>, indexed: &mut BTreeMap<i64, BTreeSet<i64>>) {
     let effects = node.effects();
     for cell in effects.loads.iter().chain(&effects.stores) {
         let Some(addr) = cell.addr else { continue };
-        if addr.space == Space::Segment && addr.base == iced_x86::Register::None && cell.width > 0 {
+        if addr.space != Space::Segment || cell.width <= 0 {
+            continue;
+        }
+        if addr.base == iced_x86::Register::None {
             spans.entry(addr.index).or_default().push((addr.disp, addr.disp + i64::from(cell.width)));
+        } else {
+            indexed.entry(addr.index).or_default().insert(addr.disp);
         }
     }
+}
+
+/// What an index from `origin` may reach, a subscript in range and its
+/// lower bound not negative: from the origin through the array the next
+/// name starts, or itself names, to the name after it; with no names, the
+/// segment's end. A landmark cannot end it: the array's own elements are
+/// landmarks, and BASE 1's origin is before its first.
+fn indexed_reach(origin: i64, names: &BTreeMap<i64, String>, size: i64) -> (i64, i64) {
+    let array = names.range(origin..).next().map(|(&at, _)| at);
+    let end = array.and_then(|at| names.range(at + 1..).next().map(|(&after, _)| after));
+    (origin, end.unwrap_or(size))
 }
 
 /// The relocated fields of each DGROUP segment.

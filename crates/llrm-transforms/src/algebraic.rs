@@ -87,6 +87,7 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _casted_logic(context, function, inst)
+        || _phi_of_casts(context, function, inst)
         || _negated_difference(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
@@ -319,6 +320,40 @@ fn _casted_logic(context: &mut Context, function: &mut Function, inst: InstId) -
     function.insert(logic, Position::Before(inst)).expect("a placed instruction");
     let logic = Operand::Value(function.instruction(logic).result.expect("a value"));
     _replace(function, inst, Opcode::Cast(kind), vec![logic]);
+    true
+}
+
+/// A phi of like extensions from one type, each read by it alone, is that
+/// extension of a phi of their sources, as InstCombine's
+/// `foldPHIArgOpIntoPHI`: an `&&`'s truths as frontend bytes, then tested,
+/// become one `i1` phi a branch reads.
+fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    if function.instruction(inst).opcode != Opcode::Phi {
+        return false;
+    }
+    let incoming = crate::lcssa::arms(function, inst);
+    let extended = |operand: Operand| {
+        let made = _definition(function, operand)?;
+        let op = function.instruction(made);
+        match op.opcode {
+            Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) if _single_use(function, operand) => Some((kind, op.operands[0])),
+            _ => None,
+        }
+    };
+    let Some(sources) = incoming.iter().map(|&(value, _)| extended(value)).collect::<Option<Vec<_>>>() else { return false };
+    let Some(&(kind, first)) = sources.first() else { return false };
+    let narrow = function.operand_type(context, first);
+    if narrow.is_none() || sources.iter().any(|&(other, source)| other != kind || function.operand_type(context, source) != narrow) {
+        return false;
+    }
+    let arms = sources.iter().zip(&incoming).map(|(&(_, source), &(_, from))| (source, from)).collect::<Vec<_>>();
+    let phi = function.create_instruction(Opcode::Phi, narrow.expect("typed"), crate::lcssa::from_arms(&arms), Flags::default(), None);
+    function.insert(phi, Position::Before(inst)).expect("a placed phi");
+    let block = function.parent(inst).expect("a placed phi");
+    let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminated block");
+    let cast = function.create_instruction(Opcode::Cast(kind), function.instruction(inst).ty, vec![Operand::Value(function.instruction(phi).result.expect("a value"))], Flags::default(), None);
+    function.insert(cast, Position::Before(first)).expect("a placed instruction");
+    _forward(function, inst, Operand::Value(function.instruction(cast).result.expect("a value")));
     true
 }
 

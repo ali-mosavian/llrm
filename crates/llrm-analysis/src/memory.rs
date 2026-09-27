@@ -734,6 +734,54 @@ impl MemRef {
     }
 }
 
+/// The bits `reference` reads from a `constant` global's initializer,
+/// little-endian: LLVM's `ConstantFoldLoadFromConstPtr`. None where the
+/// address is not fixed or a byte is an address only the linker knows.
+pub fn constant_bits(unit: &Unit, reference: &MemRef) -> Option<num_bigint::BigInt> {
+    let addr = reference.addr()?;
+    let Operand::Constant(root) = addr.root else { return None };
+    let ConstantKind::Global(global) = unit.context.get(root).kind else { return None };
+    let GlobalKind::Variable(variable) = &unit.globals.get(global.0 as usize)?.kind else { return None };
+    if !variable.constant || reference.volatile {
+        return None;
+    }
+    let bytes = constant_bytes(unit.context, unit.layout, variable.initializer?)?;
+    let (low, width) = (usize::try_from(addr.disp).ok()?, reference.width as usize);
+    let read = bytes.get(low..low.checked_add(width)?)?;
+    Some(read.iter().rev().fold(num_bigint::BigInt::from(0), |bits, &byte| (bits << 8) | num_bigint::BigInt::from(byte)))
+}
+
+/// The bytes `constant` lays out in memory; None where one is an address.
+pub fn constant_bytes(context: &Context, layout: &DataLayout, constant: llrm_mir::context::ConstantId) -> Option<Vec<u8>> {
+    let one = context.get(constant);
+    let size = usize::try_from(layout.alloc_size(&context.types, one.ty)).ok()?;
+    let little = |bits: u128, count: usize| (0..size).map(|at| if at < count.min(16) { (bits >> (8 * at)) as u8 } else { 0 }).collect::<Vec<_>>();
+    match &one.kind {
+        ConstantKind::Zero => Some(vec![0; size]),
+        ConstantKind::Int(bits) => Some(little(*bits, size)),
+        ConstantKind::Float(bits) => Some(little(u128::from(*bits), size)),
+        ConstantKind::Bytes(bytes) => Some(bytes.iter().copied().chain(std::iter::repeat(0)).take(size).collect()),
+        ConstantKind::Aggregate(members) => {
+            let offsets = match context.types.get(one.ty) {
+                Type::Array { element, .. } => {
+                    let stride = layout.alloc_size(&context.types, *element);
+                    (0..members.len() as u64).map(|at| at * stride).collect()
+                }
+                Type::Struct { .. } => layout.struct_layout(&context.types, one.ty).1,
+                _ => return None,
+            };
+            let mut out = vec![0; size];
+            for (&member, offset) in members.iter().zip(offsets) {
+                let bytes = constant_bytes(context, layout, member)?;
+                let at = usize::try_from(offset).ok()?;
+                out.get_mut(at..at + bytes.len())?.copy_from_slice(&bytes);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 /// A fixed address: bytes past a root pointer. Old `Addr`, less its x86
 /// spelling.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
