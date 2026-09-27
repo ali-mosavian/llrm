@@ -1594,16 +1594,11 @@ impl Rich {
         if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
             return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
         }
-        let emitted = hir::mir::emit(program).swap_remove(0);
-        if let Some((name, why)) = emitted.refused.first() {
-            return emission(format!("@{name}: {why}"));
-        }
-        let runtime = hir::mir::runtime(&emitted, module, &program.promises).map_err(CompileError::Value)?;
         let options = llrm_core::driver::Options::of(machine.clone());
-        let mut mir = llrm_core::driver::linked(vec![emitted.module], runtime, &options).map_err(CompileError::Value)?;
+        let (mut mir, mut data) = llrm_core::driver::emitted(program, &options).map_err(|why| EmissionError(why))?;
         llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
-        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
+        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects } })
     }
 
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {

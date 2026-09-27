@@ -1,12 +1,13 @@
-//! The one compiler past the frontends, as clang's CodeGen and llc: a
-//! program's MIR modules linked against its runtime, optimized by the
-//! pipeline for the machine. It reads what the program states and never
-//! asks which frontend made it.
+//! The one compiler past the frontends, as clang's CodeGen and llc: a HIR
+//! program emitted as MIR, or a lifter's MIR modules, linked against the
+//! runtime and optimized by the pipeline for the machine. It reads what
+//! the program states and never asks which frontend made it.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use llrm_mir::Module;
 use llrm_mir::program::Program;
+use llrm_mir::{GlobalId, Module};
 
 use crate::abi::machine::Machine;
 use crate::backend::cpu::{self, Profile};
@@ -27,6 +28,19 @@ impl Options {
     pub fn cpu(&self) -> Result<&'static Profile, String> {
         cpu::named(&self.machine.cpu)
     }
+}
+
+/// `program` as MIR, a module per HIR module, linked against the runtime
+/// its promises describe; and each module's data objects' globals, by the
+/// objects' ids.
+pub fn emitted(program: &crate::hir::model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+    let emitted = crate::hir::mir::emit(program);
+    if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
+        return Err(format!("@{name}: {why}"));
+    }
+    let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
+    let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
+    Ok((linked(modules, runtime, options)?, data))
 }
 
 /// `modules` as one program for the machine, linked against `runtime`, a

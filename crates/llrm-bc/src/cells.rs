@@ -84,5 +84,5 @@ pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Modu
     let declared = module.functions().filter(|(_, _, one)| one.is_declaration()).filter_map(|(_, global, _)| global.name.as_deref()?.strip_prefix(crate::RUNTIME));
     let raising = declared.filter(|&routine| handles && runtime::contract(Some(routine)).raises_error);
     let calling_back = runtime::ENTERS_USER_CODE.iter().copied().chain(raising);
-    llrm_hir::mir::promised(module, &named, &RuntimePromises::of(calling_back, runtime::writers(family)))
+    llrm_hir::mir::promised(&[(module, named)], &RuntimePromises::of(calling_back, runtime::writers(family)))
 }

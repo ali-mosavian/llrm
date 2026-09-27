@@ -359,21 +359,19 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, machine: &llrm_
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
-    let module = &program.modules[0];
-    let emitted = hir::mir::emit(program).swap_remove(0);
-    if let Some((name, why)) = emitted.refused.first() {
-        return Err(format!("@{name}: {why}"));
-    }
-    let mut mir = emitted.module;
     // The entry is public for the runtime to call; a library has none. The
-    // pipeline's whole-module step reads who may call what.
-    match mir.named(entry) {
-        Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,
-        None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
+    // pipeline's whole-program step reads who may call what.
+    // Each function links by its name in `program`, the entry as `_main`.
+    let module = &program.modules[0];
+    let mut public = program.clone();
+    let library = module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External);
+    match public.modules[0].functions.iter_mut().find(|one| one.name == entry) {
+        Some(function) => function.linkage = model::FunctionLinkage::External,
+        None if library => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let options = llrm_core::driver::Options::of(machine.clone());
-    let mut mir = llrm_core::driver::linked(vec![mir], llrm_mir::Module::default(), &options)?;
+    let (mut mir, _) = llrm_core::driver::emitted(&public, &options)?;
     llrm_core::driver::optimized(&mut mir, &options)?;
     let mir = mir.modules.pop().expect("one module");
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();

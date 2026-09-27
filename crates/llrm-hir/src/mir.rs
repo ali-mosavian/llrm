@@ -45,30 +45,42 @@ pub fn emit(program: &model::Program) -> Vec<Emitted> {
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
-/// named cells are the external data `hir` marks unaddressed.
-pub fn runtime(emitted: &Emitted, hir: &model::Module, promises: &model::RuntimePromises) -> Emit<Module> {
-    let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect();
-    promised(&emitted.module, &named, promises)
+/// named cells are the external data each HIR module marks unaddressed.
+pub fn runtime(emitted: &[(&Emitted, &model::Module)], promises: &model::RuntimePromises) -> Emit<Module> {
+    let named = emitted.iter().map(|(emitted, hir)| {
+        let cells = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed);
+        (&emitted.module, cells.map(|one| (one.name.as_str(), emitted.data[&one.id])).collect())
+    });
+    promised(&named.collect::<Vec<_>>(), promises)
 }
 
-/// The declarations-only runtime module `module` links against, with
-/// `promises` of `named`, the cells only a reference naming them
-/// reaches: `!llrm.named` lists them, and each routine `module` declares
-/// that runs no program code is `nocallback` with an `!llrm.writes` node
-/// of the named cells it writes.
-pub fn promised(module: &Module, named: &HashMap<&str, GlobalId>, promises: &model::RuntimePromises) -> Emit<Module> {
-    let mut out = Module { datalayout: module.datalayout.clone(), ..Module::default() };
+/// The declarations-only runtime module `modules` link against, with
+/// `promises` of each one's named cells, those only a reference naming
+/// them reaches: `!llrm.named` lists them, and each routine a module
+/// declares that runs no program code is `nocallback` with an
+/// `!llrm.writes` node of the named cells it writes.
+pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model::RuntimePromises) -> Emit<Module> {
+    let mut out = Module { datalayout: modules.first().and_then(|(module, _)| module.datalayout.clone()), ..Module::default() };
     let node = |out: &mut Module, globals: Vec<GlobalId>| {
         let operands = globals.into_iter().map(|one| MetadataOperand::Constant(out.reference(one))).collect();
         out.metadata.push(MetadataNode { distinct: false, operands });
         MetadataId(out.metadata.len() as u32 - 1)
     };
-    let mut cells = named.iter().map(|(&name, &cell)| (cell, name)).collect::<Vec<_>>();
-    cells.sort();
     let mut declared = HashMap::new();
-    for (cell, name) in cells {
-        let Some(one) = out.declared(module, cell)? else { continue };
-        declared.insert(name, one);
+    for (module, named) in modules {
+        let mut cells = named.iter().map(|(&name, &cell)| (cell, name)).collect::<Vec<_>>();
+        cells.sort();
+        for (cell, name) in cells {
+            let Some(global) = module.global(cell).name.as_deref() else { continue };
+            let one = match out.named(global) {
+                Some(one) => one,
+                None => match out.declared(module, cell)? {
+                    Some(one) => one,
+                    None => continue,
+                },
+            };
+            declared.insert(name, one);
+        }
     }
     if !declared.is_empty() {
         let mut listed = declared.values().copied().collect::<Vec<_>>();
@@ -76,16 +88,16 @@ pub fn promised(module: &Module, named: &HashMap<&str, GlobalId>, promises: &mod
         let listed = node(&mut out, listed);
         out.named_metadata.push(("llrm.named".to_owned(), vec![listed]));
     }
-    let routines = module
-        .globals
-        .iter()
-        .enumerate()
-        .filter(|(_, one)| one.function().is_some_and(llrm_mir::Function::is_declaration))
-        .filter_map(|(at, one)| Some((GlobalId(at as u32), one.name.as_deref()?.strip_prefix(RUNTIME)?.to_owned())))
-        .collect::<Vec<_>>();
+    let routines = modules.iter().flat_map(|(module, _)| {
+        let declared = module.globals.iter().enumerate().filter(|(_, one)| one.function().is_some_and(llrm_mir::Function::is_declaration));
+        declared.filter_map(move |(at, one)| Some((*module, GlobalId(at as u32), one.name.as_deref()?, one.name.as_deref()?.strip_prefix(RUNTIME)?)))
+    });
     let mut writes = Vec::new();
-    for (global, routine) in routines {
-        let Some(cells) = promises.writes(&routine) else { continue };
+    for (module, global, name, routine) in routines {
+        let Some(cells) = promises.writes(routine) else { continue };
+        if out.named(name).is_some() {
+            continue;
+        }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
         function.attrs.push(Attribute::Flag("nocallback".to_owned()));

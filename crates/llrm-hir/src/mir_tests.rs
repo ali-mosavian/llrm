@@ -471,7 +471,7 @@ fn a_runtime_promise_is_stated_on_its_routines() {
     program.modules[0].data = vec![segment];
     let promises = RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])]);
     let emitted = emit(&program).remove(0);
-    let runtime = runtime(&emitted, &program.modules[0], &promises).unwrap();
+    let runtime = runtime(&[(&emitted, &program.modules[0])], &promises).unwrap();
     let promises = llrm_mir::print::module(&runtime);
     assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&promises).unwrap()), promises);
     assert!(promises.contains("!llrm.named = !{!0}\n!llrm.writes = !{!1, !2}\n"), "{promises}");
