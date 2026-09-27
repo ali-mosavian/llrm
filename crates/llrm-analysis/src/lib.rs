@@ -11,6 +11,7 @@ pub mod constant_cycles;
 pub mod consts;
 pub mod effects;
 pub mod frameescape;
+pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
 pub mod memory;
