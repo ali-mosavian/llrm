@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
@@ -639,6 +640,12 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     }
     if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub)) && matches!(op.operands[0], Operand::Value(_)) && op.operands[0] == op.operands[1] {
         return Some(Known::new(0, width));
+    }
+    if let Some(Intrinsic::Fixed { divide }) = unit.intrinsic(inst) {
+        let signed = |at: usize| _operand(unit, op.operands[at], known, here).filter(|one| one.width >= width).and_then(|one| i128::try_from(_signed(&one.n, width)).ok());
+        let scale = u32::try_from(&_operand(unit, op.operands[2], known, here)?.n).ok()?;
+        let value = Intrinsic::fixed(divide, width, signed(0)?, signed(1)?, scale)?;
+        return Some(Known::new(masked(&BigInt::from(value), width), width));
     }
     let supported = matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) || matches!(op.opcode, Opcode::Binary(kind) if folds(kind));
     if !supported {
