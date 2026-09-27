@@ -65,9 +65,12 @@ pub fn stored_from(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(Me
     }
 }
 
-/// The cell `inst` purely stores to, whatever it put there.
+/// The cell `inst` purely stores to, whatever it put there: a store's, or
+/// the bytes a `memset` fills.
 pub fn stored_cell(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<MemRef> {
-    stored_from(unit, accesses, inst).map(|(cell, _)| cell)
+    stored_from(unit, accesses, inst)
+        .map(|(cell, _)| cell)
+        .or_else(|| MemRef::filled(unit, inst).filter(|one| !one.volatile).and_then(|_| accesses.references.get(&inst).cloned()))
 }
 
 /// Whether `holder` can stand for `value`: it has its type.
@@ -175,6 +178,13 @@ fn fixed(reference: &MemRef) -> bool {
         .as_ref()
         .is_some_and(|provenance| !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind != MemoryKind::Unknown));
     canonical || (reference.object && reference.addr().is_some())
+}
+
+/// Whether `reference`'s provenance names an object `cell` is in: an
+/// access reaches what it names, whatever else it may also reach.
+fn names(reference: &MemRef, cell: &MemRef) -> bool {
+    let objects = |one: &MemRef| one.provenance.iter().flat_map(|provenance| provenance.slices.iter().map(|slice| slice.object.clone())).collect::<BTreeSet<_>>();
+    !objects(reference).is_disjoint(&objects(cell))
 }
 
 /// Every cell a function stores to, numbered once for its dead-store solve.
@@ -293,7 +303,7 @@ impl Solve<'_, '_> {
     /// `unnamed` one cannot reach a private cell.
     fn clobber(&self, overwritten: &mut Bits, reference: &MemRef, unnamed: bool) {
         let stored = &self.stored;
-        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at));
+        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at) && !names(reference, &stored.cells[*at]));
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
             None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
             Some(buckets) => buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),

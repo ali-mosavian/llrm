@@ -20,10 +20,10 @@ use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKi
 pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16";
 
 /// A far pointer's address space.
-const FAR: u32 = 1;
+pub const FAR: u32 = 1;
 /// A segment's: a cast from a far pointer gives its segment, and one back
 /// gives segment:0.
-const SEGMENT: u32 = 2;
+pub const SEGMENT: u32 = 2;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
