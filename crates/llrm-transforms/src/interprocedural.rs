@@ -126,14 +126,20 @@ pub fn optimized<E: From<String>>(
 ) -> Result<Proved, E> {
     let procedures = procedures(module);
     let private = private(module);
-    let edited = |analyses: &mut ModuleAnalyses| analyses.invalidate(&PreservedAnalyses::none());
+    let edited = |analyses: &mut ModuleAnalyses, bodies: &[GlobalId]| {
+        for &id in bodies {
+            analyses.changed(id);
+        }
+        analyses.invalidate(&PreservedAnalyses::none());
+    };
 
     // Inline only after each independent body has reached its local fixed
     // point; the splice's result goes straight back through the pipeline.
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
-    if !stamped(module, analyses).map_err(E::from)?.is_empty() {
-        edited(analyses);
+    let bodies = stamped(module, analyses).map_err(E::from)?;
+    if !bodies.is_empty() {
+        edited(analyses, &bodies);
     }
     let pure = facts::stated_pure(module);
     let mut inline_round = 0;
@@ -149,7 +155,7 @@ pub fn optimized<E: From<String>>(
             if !inline::expanded(context, function, &available, Some(&constant))? {
                 continue;
             }
-            edited(analyses);
+            edited(analyses, &[id]);
             let stage = format!("inline{inline_round}");
             spliced(module, id, &stage)?;
             reoptimised(module, analyses, id, &format!("{stage}."))?;
@@ -177,7 +183,7 @@ pub fn optimized<E: From<String>>(
                     if !facts::propagate_returns(context, function, &returns) {
                         continue;
                     }
-                    edited(analyses);
+                    edited(analyses, &[id]);
                     reoptimised(module, analyses, id, &format!("ipa{return_round}."))?;
                     changed = true;
                 }
@@ -204,7 +210,7 @@ pub fn optimized<E: From<String>>(
             if !facts::specialize_parameters(context, function, constants_for_body) {
                 continue;
             }
-            edited(analyses);
+            edited(analyses, &[id]);
             reoptimised(module, analyses, id, &format!("ipa-args{argument_round}."))?;
             changed = true;
         }
@@ -226,7 +232,7 @@ pub fn optimized<E: From<String>>(
             if !inline::expanded(context, function, &available, Some(&constant))? {
                 continue;
             }
-            edited(analyses);
+            edited(analyses, &[id]);
             reoptimised(module, analyses, id, &format!("ipa-inline{argument_round}."))?;
             inlined = true;
         }
@@ -238,14 +244,15 @@ pub fn optimized<E: From<String>>(
         }
     }
     // Propagation may have left a body doing less than it states.
-    if !stamped(module, analyses).map_err(E::from)?.is_empty() {
-        edited(analyses);
+    let bodies = stamped(module, analyses).map_err(E::from)?;
+    if !bodies.is_empty() {
+        edited(analyses, &bodies);
     }
     let declarations = analyses.get::<Declarations>(module);
     for &id in &procedures {
         let (context, function) = function_mut(module, id);
         if facts::remove_dead_pure_calls(context, &declarations, function) {
-            edited(analyses);
+            edited(analyses, &[id]);
             reoptimised(module, analyses, id, "ipa-pure.")?;
         }
     }
@@ -261,7 +268,7 @@ pub fn optimized<E: From<String>>(
             if !facts::terminal_calls(context, &declarations, function, &noreturn) {
                 continue;
             }
-            edited(analyses);
+            edited(analyses, &[id]);
             reoptimised(module, analyses, id, "ipa-noreturn.")?;
             changed = true;
         }

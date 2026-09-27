@@ -212,7 +212,8 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
         return Err(format!("@{}: not a function", id.0));
     };
     let mut unit = Unit { context, layout: &layout, function, metadata, declared: &mut declared };
-    analyses.invalidate(&fixed.run(&mut unit, &mut Analyses::new(outer)));
+    let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    analyses.invalidate(&preserved);
     declared.place(module)
 }
 

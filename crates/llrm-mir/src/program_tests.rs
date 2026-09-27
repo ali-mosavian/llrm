@@ -5,7 +5,10 @@ use crate::context::GlobalId;
 use crate::module::{GlobalKind, Linkage, Module};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager};
+use crate::context::Context;
+use crate::datalayout::DataLayout;
+use crate::module::Function;
+use crate::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramPass};
 use crate::target::Neutral;
 
@@ -125,4 +128,49 @@ fn a_module_analysis_asks_another_once() {
     COUNTED.set(0);
     assert_eq!((*analyses.get::<Twice>(&module), *analyses.get::<Globals>(&module)), (2, 1));
     assert_eq!(COUNTED.take(), 1);
+}
+
+thread_local! {
+    static BLOCKS: RefCell<usize> = const { RefCell::new(0) };
+}
+
+/// A function's blocks, counting its computations.
+struct Blocks;
+
+impl Analysis for Blocks {
+    type Result = usize;
+    const NAME: &'static str = "blocks";
+    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
+        BLOCKS.with_borrow_mut(|one| *one += 1);
+        function.layout().len()
+    }
+}
+
+/// Every function's `Blocks`, asked of its manager.
+struct AllBlocks;
+
+impl ModuleAnalysis for AllBlocks {
+    type Result = usize;
+    const NAME: &'static str = "all-blocks";
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> usize {
+        let ids: Vec<GlobalId> = module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect();
+        ids.into_iter().map(|id| *analyses.function::<Blocks>(module, id)).sum()
+    }
+}
+
+/// A module analysis computed again reads each function's result from its
+/// manager; a body changed is computed again.
+#[test]
+fn a_module_analysis_reads_function_results_from_their_managers() {
+    let module = module("define i16 @f() {\nentry:\n  br label %done\ndone:\n  ret i16 0\n}\n\ndefine i16 @g() {\nentry:\n  ret i16 1\n}\n");
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    BLOCKS.set(0);
+    assert_eq!(*analyses.get::<AllBlocks>(&module), 3);
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert_eq!(*analyses.get::<AllBlocks>(&module), 3);
+    assert_eq!(BLOCKS.take(), 2);
+    analyses.changed(module.named("g").unwrap());
+    analyses.invalidate(&PreservedAnalyses::none());
+    analyses.get::<AllBlocks>(&module);
+    assert_eq!(BLOCKS.take(), 1);
 }

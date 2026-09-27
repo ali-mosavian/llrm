@@ -350,8 +350,9 @@ fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
     one.downcast_ref::<M::Result>() == other.downcast_ref::<M::Result>()
 }
 
-/// One module's cached analyses, and what they may read of its program:
-/// LLVM's `ModuleAnalysisManager`. The pass manager and a module pass
+/// One module's cached analyses, what they may read of its program, and
+/// each function's manager: LLVM's `ModuleAnalysisManager` with its
+/// `FunctionAnalysisManagerModuleProxy`. The pass manager and a module pass
 /// rerunning function passes share one.
 pub struct ModuleAnalyses {
     program: Rc<ProgramProxy>,
@@ -363,11 +364,12 @@ pub struct ModuleAnalyses {
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     outer: Option<Rc<Outer>>,
+    functions: HashMap<GlobalId, Analyses>,
 }
 
 impl ModuleAnalyses {
     pub fn new(program: Rc<ProgramProxy>) -> Self {
-        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None }
+        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new() }
     }
 
     /// `module`'s, a program of its own for `target`: for analyses asked
@@ -414,6 +416,37 @@ impl ModuleAnalyses {
             let (_, result) = self.results.remove(&one).expect("held");
             self.dropped.insert(one, result);
         }
+    }
+
+    /// `A` of function `id`, from its manager. `A` reads nothing through
+    /// `Outer`: the module analysis asking may be one the outer proxy holds.
+    pub fn function<A: Analysis>(&mut self, module: &Module, id: GlobalId) -> Rc<A::Result> {
+        let function = module.global(id).function().expect("a function");
+        if !self.functions.contains_key(&id) {
+            let outer = match &self.outer {
+                Some(outer) => Rc::clone(outer),
+                None => Rc::new(Outer { metadata: Vec::new(), globals: Rc::default(), program: Rc::clone(&self.program), modules: HashMap::new() }),
+            };
+            self.functions.insert(id, Analyses::new(outer));
+        }
+        let layout = self.program.layout.clone();
+        self.functions.get_mut(&id).expect("inserted above").get::<A>(&module.context, &layout, function)
+    }
+
+    /// Function `id`'s manager under `outer`, emptied where `outer` is not
+    /// the one its results read.
+    pub fn manager(&mut self, id: GlobalId, outer: &Rc<Outer>) -> &mut Analyses {
+        let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
+        if !Rc::ptr_eq(&cache.outer, outer) {
+            *cache = Analyses::new(Rc::clone(outer));
+        }
+        cache
+    }
+
+    /// Drops function `id`'s analyses, as a module pass does to a body it
+    /// changed.
+    pub fn changed(&mut self, id: GlobalId) {
+        self.functions.remove(&id);
     }
 
     /// What a function analysis reads of `module`: the same proxy as last
@@ -538,7 +571,6 @@ impl PassManager {
 
     fn over(&mut self, index: usize, module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec<Stage>, String> {
         let layout = analyses.program().layout.clone();
-        let mut caches: HashMap<GlobalId, Analyses> = HashMap::new();
         let mut stages = Vec::new();
         let mut runs = 0;
         let bisect = self.bisect;
@@ -565,7 +597,7 @@ impl PassManager {
                         analyses.invalidate(&PreservedAnalyses::none());
                     }
                     for id in changed {
-                        caches.remove(&id);
+                        analyses.changed(id);
                         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
                         stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                     }
@@ -584,10 +616,7 @@ impl PassManager {
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
-                let cache = caches.entry(id).or_insert_with(|| Analyses::new(Rc::clone(&outer)));
-                if !Rc::ptr_eq(&cache.outer, &outer) {
-                    *cache = Analyses::new(Rc::clone(&outer));
-                }
+                let cache = analyses.manager(id, &outer);
                 let preserved = pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache);
                 kept.retain(|one| preserved.keeps(*one));
                 cache.invalidate(&preserved);
