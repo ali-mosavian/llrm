@@ -1848,3 +1848,26 @@ no:
         assert!(!got.iter().any(|line| line.contains("movzx") || line.contains("*2")), "{cpu} {guard}: {got:?}");
     }
 }
+
+/// A counted loop's trips reach the machine phases: without them the
+/// isel route's bodies had none, and `executed` guessed nine in ten.
+#[test]
+fn test_a_counted_loops_trips_are_the_bodys() {
+    let text = "define i16 @f() addrspace(1) {
+entry:
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %t = add i16 %s, %i
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 5
+  br i1 %more, label %body, label %done
+done:
+  ret i16 %t
+}
+";
+    let body = selected(text, "f").expect("selects").body;
+    let header = body.blocks[1].at;
+    assert_eq!(body.loop_trip_counts, [(header, 5)]);
+}

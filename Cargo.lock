@@ -221,6 +221,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcmachine",
  "llrm-cycles",
+ "llrm-graph",
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",

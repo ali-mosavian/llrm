@@ -495,7 +495,24 @@ impl Selector<'_, '_, '_> {
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
+        body.loop_trip_counts = self.trip_counts(&block_at);
         Ok(body)
+    }
+
+    /// Each loop's header and constant trips, as `induction` proves them.
+    fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
+        let unit = Unit::of(self.module, &self.layout, self.function);
+        let facts = llrm_analysis::consts::known(&unit, None, None, None);
+        let mut counts: Vec<(i64, i64)> = llrm_graph::loops::loops(&cfg::graph(self.function), None)
+            .iter()
+            .filter_map(|one| {
+                let header = block_at.get(&cfg::block(one.header))?;
+                let count = llrm_analysis::induction::trip_count(&unit, one, &facts)?;
+                Some((*header, i64::try_from(count).expect("a trip count fits an int64")))
+            })
+            .collect();
+        counts.sort();
+        counts
     }
 
     /// Blocks from which every path ends in `unreachable`, as the old
