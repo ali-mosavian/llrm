@@ -398,7 +398,7 @@ fn _killed(
     let stores = match calls.get(&inst) {
         Some(stores) => stores.clone(),
         None if call => Vec::new(),
-        None => MemRef::of(&unit, inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).into_iter().collect(),
+        None => unit.reference(inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).into_iter().collect(),
     };
     // Only a write changes a cell.
     if stores.is_empty() {
@@ -668,6 +668,9 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
+    // A store kills the cells alias's provenance leaves it able to reach.
+    let annotated = (calls.is_some() && unit.references.is_none()).then(|| crate::alias::annotated(unit).ok()).flatten();
+    let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     // No edge facts is no edges: the solve reads only a nonempty map.
     let edges = edges.filter(|edges| !edges.is_empty());
     let mut allowed: Option<BTreeSet<ValueId>> = None;

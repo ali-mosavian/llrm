@@ -399,3 +399,14 @@ fn test_every_corpus_module_verifies_after_loadjoins() {
     }
     assert!(changed > 0, "loadjoins changed nothing in the corpus");
 }
+
+/// A store's reference had no provenance, so a store to another global
+/// met the join's cell and the load stayed. Through an unknown pointer it
+/// still may.
+#[test]
+fn a_store_to_another_global_keeps_the_join_value() {
+    let other = format!("@b = global i16 0\n\n{}", diamond("store i16 1, ptr @b", ""));
+    let text = after(&other, false, BOTH);
+    assert!(!text.contains("load"), "{text}");
+    unchanged(&diamond("%p = inttoptr i16 64 to ptr\n  store i16 1, ptr %p", ""), false);
+}

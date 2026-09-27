@@ -18,14 +18,16 @@
 //!   `source_backed` and `raised` marks.
 //!
 //! It is a module pass, since `memory::Unit` reads the module's globals.
-//! Calls write what `memory::unmodeled_write` leaves open until alias
-//! gives their footprints.
+//! Every access, and an address translated onto an edge, carries alias's
+//! provenance. Calls write what `memory::unmodeled_write` leaves open until
+//! alias gives their footprints.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use llrm_analysis::alias::{self, PointsTo};
 use llrm_analysis::avail::{loaded_into, stored_from};
-use llrm_analysis::consts::Calls;
+use llrm_analysis::consts::{self, Calls};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, same_bytes};
 use llrm_analysis::{cfg, ssa};
@@ -62,7 +64,10 @@ impl ModulePass for LoadJoins {
             let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else {
                 continue;
             };
-            let joined = planned(&Unit::of(module, &layout, function), &callees, &Calls::default(), self.insert);
+            let unit = Unit::of(module, &layout, function);
+            let facts = alias::points_to(&unit, None, None).unwrap_or_else(|error| panic!("loadjoins: {error}"));
+            let references = alias::annotated_with(&unit, &facts, &consts::known(&unit, None, None, None)).unwrap_or_else(|error| panic!("loadjoins: {error}"));
+            let joined = planned(&unit.with_references(&references), &facts, &callees, &Calls::default(), self.insert);
             if joined.is_empty() {
                 continue;
             }
@@ -146,7 +151,7 @@ fn insertable(unit: &Unit, callees: &Callees, shape: &Shape, parent: BlockId, jo
 }
 
 /// Every join load to replace by a phi, decided on `unit` as it stands.
-fn planned(unit: &Unit, callees: &Callees, calls: &Calls, insert: bool) -> Vec<Joined> {
+fn planned(unit: &Unit, facts: &PointsTo, callees: &Callees, calls: &Calls, insert: bool) -> Vec<Joined> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -182,6 +187,7 @@ fn planned(unit: &Unit, callees: &Callees, calls: &Calls, insert: bool) -> Vec<J
                     break;
                 };
                 let translated = MemRef { typed: reference.typed.clone(), ..MemRef::at(unit, pointer, reference.width) };
+                let translated = MemRef { provenance: facts.reference(unit, &translated), ..translated };
                 let candidates = providers.iter().filter(|(source, cell, value)| {
                     let (at, _) = places[source];
                     at != block.at

@@ -39,6 +39,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::IndexMap;
 
 use crate::regions::Machine;
 
@@ -381,11 +382,22 @@ pub struct Unit<'a> {
     pub metadata: &'a [MetadataNode],
     pub globals: &'a [GlobalValue],
     pub function: &'a Function,
+    /// Each access with the provenance alias found (`alias::annotated`).
+    pub references: Option<&'a IndexMap<InstId, MemRef>>,
 }
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function }
+        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, references: None }
+    }
+
+    pub fn with_references(self, references: &'a IndexMap<InstId, MemRef>) -> Self {
+        Self { references: Some(references), ..self }
+    }
+
+    /// The access `inst` makes: alias's, where the unit has its references.
+    pub fn reference(&self, inst: InstId) -> Option<MemRef> {
+        self.references.and_then(|all| all.get(&inst).cloned()).or_else(|| MemRef::of(self, inst))
     }
 
     pub fn operand_type(&self, operand: Operand) -> Option<TypeId> {

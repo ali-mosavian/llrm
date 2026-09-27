@@ -52,7 +52,7 @@ pub struct Held {
 pub fn loaded_into(unit: &Unit, inst: InstId) -> Option<(MemRef, ValueId)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
-        Opcode::Load { volatile: false, .. } => Some((MemRef::of(unit, inst)?, instruction.result?)),
+        Opcode::Load { volatile: false, .. } => Some((unit.reference(inst)?, instruction.result?)),
         _ => None,
     }
 }
@@ -61,7 +61,7 @@ pub fn loaded_into(unit: &Unit, inst: InstId) -> Option<(MemRef, ValueId)> {
 pub fn stored_from(unit: &Unit, inst: InstId) -> Option<(MemRef, Operand)> {
     let instruction = unit.function.instruction(inst);
     match instruction.opcode {
-        Opcode::Store { volatile: false, .. } => Some((MemRef::of(unit, inst)?, instruction.operands[0])),
+        Opcode::Store { volatile: false, .. } => Some((unit.reference(inst)?, instruction.operands[0])),
         _ => None,
     }
 }

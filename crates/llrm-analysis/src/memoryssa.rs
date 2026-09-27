@@ -61,7 +61,7 @@ pub fn writes(unit: &Unit, calls: &Calls, inst: InstId) -> Option<Vec<MemRef>> {
         return None;
     }
     Some(match unit.function.instruction(inst).opcode {
-        Opcode::Store { .. } => MemRef::of(unit, inst).into_iter().collect(),
+        Opcode::Store { .. } => unit.reference(inst).into_iter().collect(),
         _ => Vec::new(),
     })
 }
@@ -69,7 +69,7 @@ pub fn writes(unit: &Unit, calls: &Calls, inst: InstId) -> Option<Vec<MemRef>> {
 /// What `inst` reads: its load's bytes; `None` where it may read anything.
 pub fn reads(unit: &Unit, inst: InstId) -> Option<Vec<MemRef>> {
     match &unit.function.instruction(inst).opcode {
-        Opcode::Load { volatile: false, .. } => Some(MemRef::of(unit, inst).into_iter().collect()),
+        Opcode::Load { volatile: false, .. } => Some(unit.reference(inst).into_iter().collect()),
         Opcode::Load { .. } | Opcode::Store { volatile: true, .. } => None,
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = llrm_mir::memory::callee(unit.context, unit.function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);

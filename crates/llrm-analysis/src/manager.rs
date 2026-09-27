@@ -21,7 +21,7 @@ impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function }
+        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, references: None }
     }
 }
 
@@ -114,7 +114,9 @@ impl Analysis for ThroughMemory {
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let effects = analyses.get::<CallEffects>(context, layout, function);
         let calls: Calls = Result::as_ref(&*effects).map_err(String::clone)?.iter().map(|(&at, effect)| (at, effect.stores.clone())).collect();
-        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()), Some(&calls), None, None))
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()).with_references(references), Some(&calls), None, None))
     }
 }
 
