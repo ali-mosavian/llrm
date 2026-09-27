@@ -15,7 +15,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
-use crate::abi::runtime::Contract;
+use crate::backend::assemble::Abi;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::target::Segments;
@@ -140,9 +140,6 @@ pub struct Selected {
     pub depth: i64,
 }
 
-/// A call's contract, asked of the ABI that knows the callee: its name,
-/// whether it pops its own arguments, and how many bytes were pushed.
-pub type Contracts<'c> = &'c dyn Fn(&str, bool, i64) -> Result<Contract, String>;
 
 /// The bytes a value of `ty` takes in a register.
 fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
@@ -248,7 +245,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -274,6 +271,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         next: 0,
         pointers: IndexMap::default(),
         fars: IndexMap::default(),
+        fields: IndexMap::default(),
         wides: IndexMap::default(),
         halves: BTreeSet::new(),
         depth: 0,
@@ -308,7 +306,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         chains: IndexMap::default(),
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
-        contracts,
+        abi,
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         far: BTreeSet::new(),
@@ -331,6 +329,8 @@ struct Selector<'m, 'c, 'p> {
     /// legalizer expands a value no register holds into two; no offset
     /// register is offset 0.
     fars: IndexMap<ValueId, (Option<Held>, Held)>,
+    /// Each aggregate a call answers in registers: a register per field.
+    fields: IndexMap<ValueId, Vec<Held>>,
     /// Each i64 value's low and high dwords, expanded likewise.
     wides: IndexMap<ValueId, (Held, Held)>,
     /// The registers holding those halves.
@@ -400,7 +400,9 @@ struct Selector<'m, 'c, 'p> {
     chains: IndexMap<InstId, Vec<i64>>,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
-    contracts: Contracts<'c>,
+    /// Each call's contract and register interface, from the ABI that
+    /// knows the callee.
+    abi: &'c dyn Abi,
     calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
@@ -1941,6 +1943,16 @@ impl Selector<'_, '_, '_> {
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
                 out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
             }
+            // A field of an answer in registers: the register it came in.
+            Opcode::ExtractValue(indices) => {
+                let field = match (operands[0], &indices[..]) {
+                    (Operand::Value(aggregate), &[index]) => self.fields.get(&aggregate).and_then(|fields| fields.get(index as usize)).copied(),
+                    _ => None,
+                };
+                let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
+                let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
+            }
             Opcode::Cast(op) if self.is_far(instruction.ty) || self.is_far(type_of(operands[0])) => self.far_cast(*op, inst, at, out)?,
             Opcode::Cast(op) => {
                 let from = type_of(operands[0]);
@@ -2140,6 +2152,21 @@ impl Selector<'_, '_, '_> {
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
+        // The arguments the ABI passes in registers are the call's last.
+        let registers = self.abi.registers(&name).unwrap_or_default();
+        let Some(stacked) = arguments.len().checked_sub(registers.arguments.len()) else {
+            return refuse(format!("@{name} takes {} arguments in registers", registers.arguments.len()));
+        };
+        let (arguments, in_registers) = arguments.split_at(stacked);
+        let mut requires = Vec::new();
+        for (&argument, &register) in in_registers.iter().zip(&registers.arguments) {
+            let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            let held = self.held(argument, ty, at, out)?;
+            if held.width as usize != register.size() {
+                return refuse(format!("@{name}'s {register:?} argument of {} bytes", held.width));
+            }
+            requires.push((held, register));
+        }
         let mut order: Vec<usize> = (0..arguments.len()).collect();
         if !in_order {
             order.reverse();
@@ -2199,7 +2226,7 @@ impl Selector<'_, '_, '_> {
             pushed += slot(held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
-        let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
+        let contract = self.abi.contract(&name, pops, pushed).map_err(Unselected)?;
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -2210,6 +2237,21 @@ impl Selector<'_, '_, '_> {
                 }
                 self.flagged.insert(value);
             }
+        } else if let Some(value) = instruction.result.filter(|_| !registers.results.is_empty()) {
+            // Each field of the answer in the register the ABI names.
+            let Type::Struct { fields, .. } = self.types().get(instruction.ty).clone() else {
+                return refuse(format!("@{name} answers in registers but returns no aggregate"));
+            };
+            if fields.len() != registers.results.len() {
+                return refuse(format!("@{name} answers {} registers for {} fields", registers.results.len(), fields.len()));
+            }
+            let mut held = Vec::new();
+            for (field, &register) in fields.into_iter().zip(&registers.results) {
+                let one = self.fresh_held(self.width(field)?);
+                delivers.push((one, register));
+                held.push(one);
+            }
+            self.fields.insert(value, held);
         } else if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
@@ -2243,6 +2285,8 @@ impl Selector<'_, '_, '_> {
             clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
+            uses: requires.iter().map(|(held, _)| held.value).collect(),
+            requires,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         }));
         // A float result is in st(0).

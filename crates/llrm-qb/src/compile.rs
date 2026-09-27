@@ -1604,8 +1604,7 @@ impl Rich {
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
         let cpu = targets::profile(ProfileOrName::Name(&self.cpu)).map_err(CompileError::Value)?;
         let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true };
-        let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
-        let machined = assemble::machined(&self.mir, &function.name, &contracts, pool, &target).map_err(CompileError::Value)?;
+        let machined = assemble::machined(&self.mir, &function.name, &self.abi, pool, &target).map_err(CompileError::Value)?;
         let final_ = finalized(&machined.body, machined.popped)?;
         // A runtime routine is called by its own name.
         let calls = machined
