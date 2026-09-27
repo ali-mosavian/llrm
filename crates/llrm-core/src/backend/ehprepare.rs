@@ -60,6 +60,11 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     };
     let name = module.global(owner).name.clone().unwrap_or_default();
     let why = |what: String| format!("@{name}: {what}");
+    let Some(pad) = module.global(owner).function().map(pad).transpose().map_err(why)?.flatten() else {
+        // Every call here that may raise is an invoke to the pad: with none, nothing lands.
+        let (context, function) = module.function_mut(&name).expect("the handled function");
+        return unregistered(context, function, onerror);
+    };
     let register = declare(module)?;
     let routine = module.named(REGISTER).expect("declared");
     let routine = module.reference(routine);
@@ -70,7 +75,6 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     let null = Constant { ty: module.context.types.ptr(FAR), kind: ConstantKind::Null };
     let null = module.context.constant(null);
     let (context, function) = module.function_mut(&name).expect("the handled function");
-    let pad = pad(function).map_err(why)?;
     // Every call that may raise outside the handler is an invoke to the pad;
     // the handler's own calls are not, and the runtime would land their
     // errors on the pad again rather than end the program.
@@ -125,12 +129,12 @@ fn unwinds(context: &Context, nounwind: &BTreeSet<GlobalId>, function: &Function
     }
 }
 
-/// The one block a landingpad starts.
-fn pad(function: &Function) -> Result<BlockId, String> {
+/// The one block a landingpad starts, if any.
+fn pad(function: &Function) -> Result<Option<BlockId>, String> {
     let pads: Vec<BlockId> = function.layout().iter().copied().filter(|&block| landing_pad(function, block).is_some()).collect();
     match pads[..] {
-        [one] => Ok(one),
-        [] => Err("a personality but no landing pad".to_owned()),
+        [] => Ok(None),
+        [one] => Ok(Some(one)),
         _ => Err("more than one landing pad, which the one module handler cannot choose between".to_owned()),
     }
 }
@@ -181,6 +185,12 @@ fn runtime(module: &mut Module, id: GlobalId, attrs: &[&str]) {
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = BASIC;
     function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).to_owned())));
+}
+
+/// Each ON ERROR gone, where no call lands.
+fn unregistered(context: &Context, function: &mut Function, onerror: Option<GlobalId>) -> Result<(), String> {
+    let sites: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| onerror.is_some() && callee(context, function, inst) == onerror).collect();
+    sites.into_iter().try_for_each(|inst| function.erase(inst).map_err(|error| error.to_string()))
 }
 
 /// Each ON ERROR a call of B$OEGA with the landing, or with null.

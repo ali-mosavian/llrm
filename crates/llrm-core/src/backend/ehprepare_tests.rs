@@ -120,3 +120,22 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     assert_eq!(first.name, "__LANDING");
     assert!(assembled.procedures.iter().any(|one| one.name == "$QB$LANDING"));
 }
+
+/// ON ERROR where no call may raise, as GOSUBERR's: the optimizer drops
+/// the unreachable pad, and nothing can land. Was refused as "a
+/// personality but no landing pad".
+#[test]
+fn a_handler_nothing_raises_into_registers_nothing() {
+    let quiet = r#"
+define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
+  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  unreachable
+}
+"#;
+    let mut module = parsed(quiet);
+    prepared(&mut module).expect("prepared");
+    let text = printed(&module);
+    assert!(!text.contains("call cc1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA"), "{text}");
+}
