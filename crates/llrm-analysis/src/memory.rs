@@ -360,9 +360,12 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
     if !(one.addressed && other.addressed) {
         return false;
     }
-    for (this, _that) in [(one, other), (other, one)] {
+    for (this, that) in [(one, other), (other, one)] {
+        // A pointer no fact follows, an `inttoptr` among them, reaches only
+        // what escaped: LLVM's capture tracking and GlobalsAA's
+        // non-address-taken globals.
         if this.kind == MemoryKind::Unknown {
-            return true;
+            return that.captured;
         }
     }
     for (this, that) in [(one, other), (other, one)] {

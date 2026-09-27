@@ -438,8 +438,11 @@ fn test_capture_decides_what_nonlocal_reaches() {
     let nonlocal = MemoryObject::new(MemoryKind::Nonlocal);
     let unknown = MemoryObject::new(MemoryKind::Unknown);
     assert!(!memory::objects_may_alias(&nonlocal, &private));
-    assert!(memory::objects_may_alias(&unknown, &private));
+    // A pointer no fact follows reaches only what escaped (`_lost`
+    // publishes the rest); the old route's unknown x86 operand met it too.
+    assert!(!memory::objects_may_alias(&unknown, &private));
     assert!(!memory::objects_may_alias(&unknown, &unaddressed));
+    assert!(memory::objects_may_alias(&unknown, &MemoryObject { captured: true, ..private.clone() }));
     assert!(memory::objects_may_alias(&unaddressed, &unaddressed));
 }
 
