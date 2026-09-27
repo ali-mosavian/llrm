@@ -15,3 +15,6 @@ num-traits = { workspace = true }
 [features]
 # testing, for the other crates' tests
 testing = []
+
+[dev-dependencies]
+llrm-cycles = { workspace = true }
