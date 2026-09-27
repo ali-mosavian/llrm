@@ -446,3 +446,19 @@ fn ports_are_the_targets_intrinsics() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%2 = call i16 @llrm.ia16.in.i16(i16 %0)\n  call void @llrm.ia16.out.i16(i16 %0, i16 %2)"), "{text}");
 }
+
+/// A value defined in a block the HIR lists after its use's block, though
+/// it dominates it -- UBOUND's ranking block does. Emitting blocks in HIR
+/// order refused the function: "value 3 used before its definition".
+#[test]
+fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
+    let mut function = difference();
+    let sub = function.blocks[0].instructions.remove(0);
+    let jump = |to| Terminator::new(TerminatorKind::Jump, Vec::new(), vec![to]);
+    let ret = std::mem::replace(&mut function.blocks[0].terminator, jump(3));
+    function.blocks.push(Block::new(2, Vec::new(), ret));
+    function.blocks.push(Block::new(3, vec![sub], jump(2)));
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+}
