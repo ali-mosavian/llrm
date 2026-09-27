@@ -142,3 +142,31 @@ fn unary_float_intrinsics_compute_their_functions() {
     assert_eq!(applied("cos", "0.000000e+00"), double(1.0));
     assert_eq!(applied("atan", "0.000000e+00"), double(0.0));
 }
+
+/// `llvm.smul.fix` and `llvm.sdiv.fix` compute what Nib's expansion did:
+/// at twice the width, shifted, divided toward zero, and wrapped.
+#[test]
+fn fixed_point_intrinsics_are_their_expansions() {
+    for width in [16_u32, 32] {
+        let top = 1_i128 << (width - 1);
+        let values = [0, 1, -1, 7, -7, 300, -300, top - 1, -top];
+        for (a, b) in values.iter().flat_map(|&a| values.iter().map(move |&b| (a, b))) {
+            for (name, expansion) in [("smul", "%p = mul i64 %a, %b\n  %s = ashr i64 %p, 8"), ("sdiv", "%u = shl i64 %a, 8\n  %s = sdiv i64 %u, %b")] {
+                let wide = |body: &str| body.replace("i64", &format!("i{}", 2 * width));
+                let expanded = result(&format!(
+                    "define i{width} @f() {{\n  %a = sext i{width} {a} to i{w2}\n  %b = sext i{width} {b} to i{w2}\n  {}\n  %r = trunc i{w2} %s to i{width}\n  ret i{width} %r\n}}\n",
+                    wide(expansion),
+                    w2 = 2 * width
+                ));
+                let called = result(&format!(
+                    "declare i{width} @llvm.{name}.fix.i{width}(i{width}, i{width}, i32)\n\
+                     define i{width} @f() {{\n  %r = call i{width} @llvm.{name}.fix.i{width}(i{width} {a}, i{width} {b}, i32 8)\n  ret i{width} %r\n}}\n"
+                ));
+                match expanded {
+                    Err(Trap::Undefined(_)) => assert!(matches!(called, Err(Trap::Undefined(_))), "{name} {a} {b}: {called:?}"),
+                    expanded => assert_eq!(called, expanded, "{name}.i{width} {a} {b}"),
+                }
+            }
+        }
+    }
+}
