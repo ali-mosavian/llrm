@@ -33,3 +33,6 @@ pub mod unswitch;
 // split a packed far pointer's memory references into offset and selector
 // words for the old register allocator; a pointer here is its type, and
 // isel splits it (called from `transform`'s `SplitPointers`).
+// Not ported, meaning nothing where a call's arguments are its operands:
+// `transform`'s `Place` (`placed`, `_argument_run`, `_may_pass`, `_meets`)
+// moved what stood among a call's argument pushes ahead of them.
