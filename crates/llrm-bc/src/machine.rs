@@ -385,6 +385,8 @@ fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Proced
         None => Answer::None,
         Some("INTEGER") => Answer::Registers(vec![Register::EAX]),
         Some("LONG") => Answer::Registers(vec![Register::EAX, Register::EDX]),
+        // Stored through a hidden last argument, whose address AX answers.
+        Some("SINGLE" | "DOUBLE") => Answer::Registers(vec![Register::EAX]),
         Some(other) => return Err(format!("a FUNCTION returning {other}")),
     };
     Ok((popped, Some(answer)))

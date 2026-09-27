@@ -237,3 +237,28 @@ fn fpcse_prints_its_single_sum() {
         assert_eq!(printed(fixture, 1), vec![i64::from(487.5f32.to_bits() as i32)], "{fixture}");
     }
 }
+
+/// byref2's `Half!` and `Doubled#` store their answer through a hidden last
+/// argument and answer its address in AX: refused before as "a FUNCTION
+/// returning SINGLE". Half(4) = 2, Doubled(8) = 16.
+#[test]
+fn a_float_function_answers_through_its_hidden_argument() {
+    for (name, bits, n, expected) in [("HALF", 32, u64::from(4f32.to_bits()), u64::from(2f32.to_bits())), ("DOUBLED", 64, 8f64.to_bits(), 16f64.to_bits())] {
+        let mut module = raised("byref2-q-o.obj");
+        let n = cell(&mut module, "n", bits, i128::from(n));
+        let result = cell(&mut module, "result", bits, 0);
+        let (reference, ty) = function(&mut module, name);
+        let answer = probe(&mut module, bits, |b| {
+            let word = b.context.types.int(16);
+            let (n, at) = (b.cast(CastOp::PtrToInt, n, word, ""), b.cast(CastOp::PtrToInt, result, word, ""));
+            let answered = b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(reference), &[n, at], "").expect("an answer");
+            let ty = b.context.types.int(bits);
+            let stored = b.load(ty, result, false, "");
+            let same = b.icmp(llrm_mir::IntPredicate::Eq, answered, at, "");
+            let zero = b.int(bits, 0);
+            b.select(same, stored, zero, "")
+        });
+        let Val::Int { bits: got, .. } = answer else { panic!("{answer:?}") };
+        assert_eq!(got as u64, expected, "{name}");
+    }
+}
