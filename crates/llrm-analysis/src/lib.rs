@@ -14,4 +14,6 @@ pub mod occurrence;
 pub mod pointerfacts;
 pub mod ssa;
 #[cfg(test)]
+mod corpus_tests;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;

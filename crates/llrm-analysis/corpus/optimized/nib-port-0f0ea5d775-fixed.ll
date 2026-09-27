@@ -1,0 +1,17 @@
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+
+define internal i32 @scaled(i32 %0, i32 %1) addrspace(1) memory(none) willreturn {
+b1:
+  ret i32 98304
+}
+
+define internal i16 @main() addrspace(1) memory(none) willreturn {
+b1:
+  ret i16 0
+}
+
+!0 = !{!"llrm hir"}
+!1 = !{!"place", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!"allocation", !0, i64 0}
+!4 = !{!3, !3, i64 0}

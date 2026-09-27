@@ -1,4 +1,4 @@
-//! What the tests share: a module read from its text.
+//! What the tests share: a module read from its text, and the corpus.
 
 use llrm_mir::module::{BlockId, Function, Module, ValueId};
 
@@ -27,4 +27,26 @@ pub fn value(function: &Function, name: &str) -> ValueId {
 /// The block named `name`.
 pub fn block(function: &Function, name: &str) -> BlockId {
     function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).unwrap_or_else(|| panic!("no %{name}"))
+}
+
+/// Every module of `corpus/` (`tools/mir-corpus.sh`), named by its
+/// directory and program, as `emitted/qb-addrm`.
+pub fn corpus() -> Vec<(String, Module)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
+    let mut paths: Vec<_> = ["emitted", "optimized"]
+        .iter()
+        .flat_map(|stage| std::fs::read_dir(root.join(stage)).unwrap_or_else(|error| panic!("{stage}: {error}")))
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let stage = path.parent().unwrap().file_name().unwrap().to_string_lossy();
+            let name = format!("{stage}/{}", path.file_stem().unwrap().to_string_lossy());
+            let text = std::fs::read_to_string(&path).unwrap();
+            let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+            (name, module)
+        })
+        .collect()
 }
