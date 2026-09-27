@@ -34,10 +34,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::callgraph::Defined;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory;
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::program::Program;
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_support::hash::IndexMap;
@@ -68,6 +70,55 @@ pub fn constant_parameters(module: &Module, eligible: &BTreeSet<GlobalId>) -> Pa
     }
 
     _agreed_parameters(&actuals)
+}
+
+/// `constant_parameters` over a program: the actuals of every call in any
+/// module to an `eligible` body, imported into its module, each module's
+/// agreed parameters.
+pub fn program_parameters(program: &mut Program, eligible: &BTreeSet<Defined>) -> Vec<Parameters> {
+    let mut actuals: BTreeMap<Defined, Vec<Vec<Option<(usize, ConstantId)>>>> = eligible.iter().map(|&one| (one, Vec::new())).collect();
+    for (at, module) in program.modules.iter().enumerate() {
+        for (_, _, function) in module.functions() {
+            for (call, values) in current_call_constants(&module.context, function) {
+                let target = effects::callee(&module.context, function, call).and_then(|target| program.definition(at, target));
+                if let Some(sites) = target.and_then(|target| actuals.get_mut(&target)) {
+                    sites.push(values.into_iter().map(|one| one.map(|constant| (at, constant))).collect());
+                }
+            }
+        }
+    }
+    let mut out = vec![IndexMap::default(); program.modules.len()];
+    for (at, local) in out.iter_mut().enumerate() {
+        let mut mine = IndexMap::default();
+        for (&(defined, id), sites) in &actuals {
+            if defined != at {
+                continue;
+            }
+            let sites = sites.iter().map(|site| site.iter().map(|one| one.and_then(|(from, constant)| program.imported(from, constant, at))).collect()).collect();
+            mine.insert(id, sites);
+        }
+        *local = _agreed_parameters(&mine);
+    }
+    out
+}
+
+/// `constant_returns` of each module, as it names the bodies: its own, and
+/// those another module defines, their constants imported.
+pub fn program_returns(program: &mut Program) -> Vec<Returns> {
+    let own: Vec<Returns> = program.modules.iter().map(constant_returns).collect();
+    let mut out = own.clone();
+    for at in 0..program.modules.len() {
+        let declared: Vec<(GlobalId, Defined)> = (0..program.modules[at].globals.len() as u32)
+            .map(GlobalId)
+            .filter_map(|id| Some((id, program.definition(at, id).filter(|&(there, _)| there != at)?)))
+            .collect();
+        for (id, (there, defined)) in declared {
+            if let Some(constant) = own[there].get(&defined).and_then(|&constant| program.imported(there, constant, at)) {
+                out[at].insert(id, constant);
+            }
+        }
+    }
+    out
 }
 
 /// The constant actuals of every direct call.
@@ -291,6 +342,11 @@ pub fn erasable(context: &Context, declarations: &Declarations, function: &Funct
 /// Direct private procedures that cannot reach a normal return: noreturn's
 /// fixed point over the `eligible` bodies.  An unknown, external or public
 /// callee stays a returning edge.
+/// `noreturn_procedures` over a program.
+pub fn program_noreturn(program: &Program, declarations: &[&Declarations], eligible: &BTreeSet<Defined>) -> BTreeSet<Defined> {
+    noreturn::inferred_in(program, declarations, eligible)
+}
+
 pub fn noreturn_procedures(module: &Module, declarations: &Declarations, eligible: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
     noreturn::inferred(module, declarations, eligible)
 }

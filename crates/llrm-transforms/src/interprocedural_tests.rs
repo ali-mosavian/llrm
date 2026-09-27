@@ -15,23 +15,31 @@ fn ids(module: &Module, names: &[&str]) -> BTreeSet<GlobalId> {
 /// The step over `module` from `roots`, the call priced `call`; each
 /// pipeline run as `(procedure, stage)`.
 fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String, String)>) {
-    let roots = ids(module, roots);
+    let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
-    let mut analyses = ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let proved = optimized::<String>(
-        module,
-        &mut analyses,
-        &roots,
-        &costs,
-        &mut |module, _, id, stage| {
-            stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
-            Ok(())
-        },
-        &mut |_, _, _| Ok(()),
-    )
+    let proved = Program::lend(module, std::rc::Rc::new(llrm_mir::target::Neutral), |program| {
+        let mut modules = managers(program, &mut ProgramAnalyses::default());
+        optimized::<String>(
+            program,
+            &mut modules,
+            &roots,
+            &costs,
+            &mut |module, _, id, stage| {
+                stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
+                Ok(())
+            },
+            &mut |_, _, _| Ok(()),
+        )
+    })
+    .unwrap()
     .unwrap();
     (proved, stages)
+}
+
+/// `ids` in the one module a test's program has.
+fn defined(module: &Module, names: &[&str]) -> BTreeSet<Defined> {
+    ids(module, names).into_iter().map(|id| (0, id)).collect()
 }
 
 fn staged(stages: &[(String, String)], name: &str, stage: &str) -> bool {
@@ -77,7 +85,7 @@ fn test_private_leaves_are_inlined_and_each_changed_body_reoptimised() {
     assert!(!text[text.find("define i16 @f").unwrap()..].contains("call "), "{text}");
     assert!(staged(&stages, "f", "inline0.") && staged(&stages, "f", "inline2."), "{stages:?}");
     // No call reaches the helpers any more.
-    assert_eq!(proved.reachable, ids(&module, &["f"]));
+    assert_eq!(proved.reachable, defined(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
 }
 
@@ -85,7 +93,7 @@ fn test_private_leaves_are_inlined_and_each_changed_body_reoptimised() {
 fn test_without_roots_every_procedure_is_reachable() {
     let mut module = parsed(HELPERS);
     let (proved, _) = step(&mut module, &[], 4);
-    assert_eq!(proved.reachable, ids(&module, &["scale", "clamp", "f"]));
+    assert_eq!(proved.reachable, defined(&module, &["scale", "clamp", "f"]));
 }
 
 #[test]
@@ -165,18 +173,58 @@ b:
 ",
     );
     let (proved, stages) = step(&mut module, &["f"], 40);
-    assert_eq!(proved.noreturn, ids(&module, &["spin"]));
+    assert_eq!(proved.noreturn, defined(&module, &["spin"]));
     assert!(printed(&module).contains("  call void @spin()\n  unreachable\n"));
     assert!(staged(&stages, "f", "ipa-noreturn."), "{stages:?}");
 }
 
+/// Per module, the step saw only its own bodies: a call to another
+/// module's body that never returns kept the dead tail after it.
 #[test]
-fn test_the_step_runs_as_a_module_pass() {
+fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
+    let spin = parsed("define void @spin() {\nb:\n  br label %l\n\nl:\n  br label %l\n}\n");
+    let caller = parsed("declare void @spin()\n\ndefine i16 @f(i16 %a) {\nb:\n  call void @spin()\n  %s = add i16 %a, 1\n  ret i16 %s\n}\n");
+    let exports = llrm_mir::program::Exports::Closed(["f".to_owned()].into());
+    let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
+    let roots = roots(&program);
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
+    assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
+}
+
+/// Per module, a declaration of another module's body kept no attributes,
+/// so every call to it read and wrote all memory.
+#[test]
+fn test_a_body_s_attributes_are_stated_on_its_declarations() {
+    let double = parsed("define i16 @double(i16 %x) {\nb:\n  %y = add i16 %x, %x\n  ret i16 %y\n}\n");
+    let caller = parsed("declare i16 @double(i16)\n\ndefine i16 @f(i16 %a) {\nb:\n  %y = call i16 @double(i16 %a)\n  ret i16 %y\n}\n");
+    let mut program = Program::new(vec![double, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    stamped_all(&mut program, &mut modules).unwrap();
+    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind\n"), "{}", printed(&program.modules[1]));
+}
+
+/// Per module, a call to another module's body that always returns one
+/// constant kept its result unknown.
+#[test]
+fn test_a_constant_another_module_returns_reaches_its_callers() {
+    let seven = parsed("define i16 @seven() {\nb:\n  ret i16 7\n}\n");
+    let caller = parsed("declare i16 @seven()\n\ndefine i16 @f() {\nb:\n  %y = call i16 @seven()\n  ret i16 %y\n}\n");
+    let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let roots = roots(&program);
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
+}
+
+#[test]
+fn test_the_step_runs_as_a_program_pass() {
     let mut module = parsed(HELPERS);
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_module(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None });
+    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));

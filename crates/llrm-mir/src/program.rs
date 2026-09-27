@@ -115,6 +115,28 @@ impl Program {
         named().find(|&(at, id)| defines(self.modules[at].global(id))).or_else(|| named().next())
     }
 
+    /// `constant` of module `from` in module `to`'s context: none where it
+    /// names what only `from` has.
+    pub fn imported(&mut self, from: usize, constant: crate::context::ConstantId, to: usize) -> Option<crate::context::ConstantId> {
+        if from == to {
+            return Some(constant);
+        }
+        let (source, target) = if from < to {
+            let (low, high) = self.modules.split_at_mut(to);
+            (&low[from], &mut high[0])
+        } else {
+            let (low, high) = self.modules.split_at_mut(from);
+            (&high[0], &mut low[to])
+        };
+        target.context.imported(&source.context, constant)
+    }
+
+    /// Module `at`'s globals that stand for one of `defined`: its own, and
+    /// its declarations of another module's.
+    pub fn local(&self, at: usize, defined: &BTreeSet<(usize, GlobalId)>) -> BTreeSet<GlobalId> {
+        (0..self.modules[at].globals.len() as u32).map(GlobalId).filter(|&id| self.definition(at, id).is_some_and(|one| defined.contains(&one))).collect()
+    }
+
     /// The definition global `id` of module `at` is: itself where it
     /// defines it, else the one another module defines under its name. A
     /// global a module keeps to itself is defined there or nowhere.

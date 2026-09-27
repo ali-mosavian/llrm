@@ -521,6 +521,9 @@ pub trait ModulePass {
 pub enum Pass {
     Function(Box<dyn FunctionPass>),
     Module(Box<dyn ModulePass>),
+    /// Over every module at once, between the module-by-module runs of the
+    /// passes before and after it.
+    Program(Box<dyn ProgramPass>),
 }
 
 impl Pass {
@@ -528,6 +531,7 @@ impl Pass {
         match self {
             Pass::Function(pass) => pass.name(),
             Pass::Module(pass) => pass.name(),
+            Pass::Program(pass) => pass.name(),
         }
     }
 }
@@ -556,6 +560,8 @@ pub struct PassManager {
     pub(crate) required: Vec<Kind>,
     /// Program analyses computed before each module's run.
     pub(crate) program_required: Vec<fn(&Program, &mut ProgramAnalyses)>,
+    /// Pass runs so far, for `bisect`.
+    pub(crate) runs: usize,
 }
 
 impl PassManager {
@@ -565,6 +571,10 @@ impl PassManager {
 
     pub fn add_module(&mut self, pass: impl ModulePass + 'static) {
         self.passes.push(Pass::Module(Box::new(pass)));
+    }
+
+    pub fn add_program(&mut self, pass: impl ProgramPass + 'static) {
+        self.passes.push(Pass::Program(Box::new(pass)));
     }
 
     /// Keeps `M` computed for every pass, as LLVM's `RequireAnalysisPass`:
@@ -594,44 +604,80 @@ impl PassManager {
         Program::lend(module, target, |program| self.run(program))?
     }
 
-    /// Each module's run reads the program results computed before it; a
-    /// module the run changed drops them.
+    /// The passes between program passes run module by module, each
+    /// module's run reading the program results computed before it; a
+    /// module the run changed drops them. A program pass runs over them
+    /// all.
     fn managed(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<Vec<Stage>, String> {
         let mut stages = Vec::new();
-        for at in 0..program.modules.len() {
-            for require in &self.program_required {
-                require(program, analyses);
+        self.runs = 0;
+        let count = program.modules.len();
+        let dumps: Vec<_> = (0..count).map(|at| self.dump.as_ref().map(|one| if count > 1 { one.join(format!("module{at}")) } else { one.clone() })).collect();
+        let mut start = 0;
+        while start < self.passes.len() {
+            if let Pass::Program(pass) = &mut self.passes[start] {
+                let name = pass.name();
+                if self.bisect.is_none_or(|limit| {
+                    self.runs += 1;
+                    let running = self.runs <= limit;
+                    eprintln!("BISECT: {}running pass ({}) {name} on the program", if running { "" } else { "NOT " }, self.runs);
+                    running
+                }) {
+                    pass.run(program, analyses)?;
+                }
+                for (at, module) in program.modules.iter_mut().enumerate() {
+                    for (index, global) in module.globals.iter_mut().enumerate() {
+                        let GlobalKind::Function(function) = &mut global.kind else { continue };
+                        let changes = function.take_changes();
+                        if !changes.is_empty() {
+                            stages.push(Stage { pass: name, module: at, function: GlobalId(index as u32), changes });
+                        }
+                    }
+                }
+                for (at, module) in program.modules.iter().enumerate() {
+                    after(&dumps[at], self.verify_each, start, name, module)?;
+                }
+                start += 1;
+                continue;
             }
-            let before = interface(&program.modules[at]);
-            let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program, at)) };
-            let made = self.over(at, &mut program.modules[at], &mut modules)?;
-            if made.iter().any(|one| !one.changes.is_empty()) || interface(&program.modules[at]) != before {
-                analyses.invalidate();
+            let end = (start..self.passes.len()).find(|&one| matches!(self.passes[one], Pass::Program(_))).unwrap_or(self.passes.len());
+            for at in 0..program.modules.len() {
+                for require in &self.program_required {
+                    require(program, analyses);
+                }
+                let before = interface(&program.modules[at]);
+                let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program, at)) };
+                let made = self.over(at, &mut program.modules[at], &mut modules, start..end, &dumps[at])?;
+                if made.iter().any(|one| !one.changes.is_empty()) || interface(&program.modules[at]) != before {
+                    analyses.invalidate();
+                }
+                stages.extend(made);
             }
-            stages.extend(made);
+            start = end;
         }
         Ok(stages)
     }
 
-    fn over(&mut self, index: usize, module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec<Stage>, String> {
+    fn over(&mut self, index: usize, module: &mut Module, analyses: &mut ModuleAnalyses, passes: std::ops::Range<usize>, dump: &Option<std::path::PathBuf>) -> Result<Vec<Stage>, String> {
         let layout = analyses.program().layout.clone();
         let mut stages = Vec::new();
-        let mut runs = 0;
+        let runs = &mut self.runs;
         let bisect = self.bisect;
         let mut bisected = |name: &str, unit: &str| {
             let Some(limit) = bisect else { return true };
-            runs += 1;
-            let running = runs <= limit;
+            *runs += 1;
+            let running = *runs <= limit;
             eprintln!("BISECT: {}running pass ({runs}) {name} on {unit}", if running { "" } else { "NOT " });
             running
         };
-        for (number, pass) in self.passes.iter_mut().enumerate() {
+        for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
             let outer = analyses.outer(module);
             let pass = match pass {
                 Pass::Function(pass) => pass,
+                Pass::Program(_) => unreachable!("a program pass runs over every module"),
                 Pass::Module(pass) => {
                     if !bisected(name, "the module") {
                         continue;
@@ -645,7 +691,7 @@ impl PassManager {
                         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { continue };
                         stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                     }
-                    after(&self.dump, self.verify_each, number, name, module)?;
+                    after(dump, self.verify_each, number, name, module)?;
                     continue;
                 }
             };
@@ -682,7 +728,7 @@ impl PassManager {
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
-            after(&self.dump, self.verify_each, number, name, module)?;
+            after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
     }

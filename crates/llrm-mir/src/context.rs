@@ -69,6 +69,19 @@ impl Context {
         &self.constants[id.0 as usize]
     }
 
+    /// `constant` of `from`, interned here: none for one that names a
+    /// global or a type only `from` defines.
+    pub fn imported(&mut self, from: &Context, constant: ConstantId) -> Option<ConstantId> {
+        let Constant { ty, kind } = from.get(constant).clone();
+        let kind = match kind {
+            ConstantKind::Global(_) | ConstantKind::Expr(_) => return None,
+            ConstantKind::Aggregate(members) => ConstantKind::Aggregate(members.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?),
+            other => other,
+        };
+        let ty = self.types.imported(&from.types, ty)?;
+        Some(self.constant(Constant { ty, kind }))
+    }
+
     /// `value` modulo the width of the integer type `ty`.
     pub fn int(&mut self, ty: TypeId, value: i128) -> ConstantId {
         let bits = self.types.int_bits(ty).expect("an integer constant has an integer type");
