@@ -181,8 +181,10 @@ impl Analysis for Shape {
         Shape { dominance, loops }
     }
 
+    const READS_OUTER: bool = false;
+
     fn preserved(preserved: &PreservedAnalyses) -> bool {
-        preserved.kept::<Shape>() || (preserved.kept::<Dominators>() && preserved.kept::<Loops>())
+        preserved.kept::<Shape>() || (Dominators::preserved(preserved) && Loops::preserved(preserved))
     }
 }
 
