@@ -1,10 +1,10 @@
-//! A function's blocks as `llrm_graph` walks them: each block by its id,
+//! A function's blocks as `graph` walks them: each block by its id,
 //! in layout order, the entry first.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use llrm_graph::loops::{self, Dominates, Loop, Node};
+use crate::graph::loops::{self, Dominates, Loop, Node};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loops::LoopInfo;

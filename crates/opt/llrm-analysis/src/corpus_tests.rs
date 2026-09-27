@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_graph::loops;
+use crate::graph::loops;
 
 use crate::cfg;
 use crate::testing::corpus;

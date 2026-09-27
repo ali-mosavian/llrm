@@ -35,7 +35,7 @@ use llrm_analysis::manager::{Pointers, Registers};
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, liveness, ssa};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};

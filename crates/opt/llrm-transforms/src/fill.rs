@@ -31,7 +31,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::cfg;
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

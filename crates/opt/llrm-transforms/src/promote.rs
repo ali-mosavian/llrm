@@ -42,7 +42,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};

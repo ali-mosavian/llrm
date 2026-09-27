@@ -53,7 +53,7 @@ use llrm_analysis::induction::{self, Affine, AffineMap, AffineOperand, Derived};
 use llrm_analysis::occurrence::operations;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, liveness, memory};
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};

@@ -42,7 +42,7 @@ use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::floatfacts;
 use llrm_analysis::manager;
 use llrm_analysis::memory::Unit;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

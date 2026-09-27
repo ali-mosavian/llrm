@@ -17,7 +17,7 @@
 //! These are new.
 
 use llrm_analysis::cfg;
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Opcode};

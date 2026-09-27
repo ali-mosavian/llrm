@@ -153,7 +153,7 @@ fn _returns(function: &Function, at: i64) -> bool {
 /// leaves into one stops the program rather than going on after the loop.
 pub fn stranded(function: &Function, header: i64) -> BTreeSet<i64> {
     let blocks = cfg::graph(function);
-    let predecessors = llrm_graph::loops::predecessors(&blocks);
+    let predecessors = crate::graph::loops::predecessors(&blocks);
     let mut returning = BTreeSet::new();
     let mut pending = blocks.iter().map(|block| block.at).filter(|&at| _returns(function, at)).chain([header]).collect::<Vec<_>>();
     while let Some(at) = pending.pop() {

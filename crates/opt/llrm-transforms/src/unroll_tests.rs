@@ -4,7 +4,7 @@
 
 use llrm_analysis::cfg;
 use llrm_analysis::peelsize::Limits;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::module::Module;
 use llrm_mir::opcode::{BinaryOp, Opcode};
 

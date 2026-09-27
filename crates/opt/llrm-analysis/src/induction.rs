@@ -18,7 +18,7 @@
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_graph::loops::Loop;
+use crate::graph::loops::Loop;
 use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};

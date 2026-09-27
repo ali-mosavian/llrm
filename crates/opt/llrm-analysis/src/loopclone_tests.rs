@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
-use llrm_graph::loops;
+use crate::graph::loops;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Function, Module, Operand};
 

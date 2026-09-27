@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::{cfg, ssa};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Operand, ValueId};
 
 use crate::edges;

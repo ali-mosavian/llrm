@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use llrm_analysis::induction::{self, AffineOperand, Derived};
 use llrm_analysis::manager::Held;
 use llrm_analysis::{cfg, memory};
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};

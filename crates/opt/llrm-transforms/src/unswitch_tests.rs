@@ -1,7 +1,7 @@
 //! Adapted from llrm-core's `optimize/unswitch_tests.rs`, the port of
 //! `tests/test_unswitch.py`; which tests stay behind is in `unswitch.rs`.
 
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;

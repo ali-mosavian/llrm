@@ -8,7 +8,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::induction::{self, control_replacement};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::testing::{DOS, layout};
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::Outer;

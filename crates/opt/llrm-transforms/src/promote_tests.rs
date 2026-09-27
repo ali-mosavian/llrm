@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
 use llrm_analysis::testing::{DOS, corpus};
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_analysis::manager::Summaries;

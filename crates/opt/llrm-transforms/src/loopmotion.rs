@@ -31,7 +31,7 @@ use llrm_analysis::consts::{self, Calls, HeldCells, Known, masked};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

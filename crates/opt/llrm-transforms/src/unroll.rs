@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

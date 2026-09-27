@@ -7,7 +7,6 @@ description = "MIR to MIR passes, adapted from llrm-core's optimizations"
 
 [dependencies]
 llrm-mir = { workspace = true }
-llrm-graph = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-support = { workspace = true }
 num-bigint = { workspace = true }

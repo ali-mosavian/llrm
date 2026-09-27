@@ -34,7 +34,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use llrm_graph::loops;
+use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{InstId, Linkage, Operand, ValueId};

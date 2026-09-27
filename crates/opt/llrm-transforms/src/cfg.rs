@@ -33,7 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, Operand, ValueId};
 use llrm_mir::opcode::Opcode;

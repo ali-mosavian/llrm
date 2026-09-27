@@ -29,7 +29,7 @@ use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, occurrence, ranges};
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::{cfg, ssa};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};

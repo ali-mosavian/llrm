@@ -37,7 +37,7 @@ use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, Affine, AffineMap, AffineOperand, CountedLoop, PointerRecurrence};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

@@ -469,7 +469,7 @@ fn checked(text: &str, facts: impl Fn(&Parsed) -> super::Facts) -> (String, usiz
     let known = facts(&parsed);
     let f = function(&parsed.module, "f");
     let graph = cfg::graph(f);
-    let dominators = llrm_graph::loops::dominators(&graph, None);
+    let dominators = crate::graph::loops::dominators(&graph, None);
     let (mut out, mut label, mut serial) = (String::new(), String::new(), 0);
     for line in text.lines() {
         if let Some(name) = line.strip_suffix(':').filter(|name| !name.starts_with(' ')) {

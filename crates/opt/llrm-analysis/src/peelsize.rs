@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_graph::loops::Loop;
+use crate::graph::loops::Loop;
 use llrm_mir::module::{InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;

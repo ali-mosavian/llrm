@@ -29,7 +29,7 @@ use llrm_analysis::avail::{loaded_into, stored_from};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

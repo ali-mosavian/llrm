@@ -179,7 +179,6 @@ name = "llrm-analysis"
 version = "0.1.0"
 dependencies = [
  "llrm-cycles",
- "llrm-graph",
  "llrm-mir",
  "llrm-support",
  "num-bigint",
@@ -250,7 +249,6 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcmachine",
  "llrm-cycles",
- "llrm-graph",
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",
@@ -280,13 +278,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "llrm-graph"
-version = "0.1.0"
-dependencies = [
- "llrm-support",
 ]
 
 [[package]]
@@ -371,7 +362,6 @@ version = "0.1.0"
 dependencies = [
  "llrm-analysis",
  "llrm-cycles",
- "llrm-graph",
  "llrm-mir",
  "llrm-support",
  "num-bigint",

@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, noreturn, ranges};
-use llrm_graph::loops::Loop;
+use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};

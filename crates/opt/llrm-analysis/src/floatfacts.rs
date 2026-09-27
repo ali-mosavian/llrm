@@ -30,7 +30,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use llrm_graph::loops;
+use crate::graph::loops;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{InstId, Operand, ValueId};

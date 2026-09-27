@@ -9,7 +9,7 @@
 
 use llrm_analysis::cfg;
 use llrm_analysis::testing::{DOS, layout};
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 

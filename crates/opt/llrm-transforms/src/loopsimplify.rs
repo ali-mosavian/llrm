@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::{Flags, Opcode};

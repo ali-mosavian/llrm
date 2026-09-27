@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use llrm_analysis::cfg;
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;

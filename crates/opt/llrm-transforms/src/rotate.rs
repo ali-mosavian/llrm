@@ -26,7 +26,7 @@ use llrm_analysis::induction::{self, ControlReplacement};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

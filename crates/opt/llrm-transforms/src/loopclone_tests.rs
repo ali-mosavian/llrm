@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::module::{Module, Operand};
 
 use super::peeled;

@@ -22,7 +22,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use llrm_graph::loops;
+use crate::graph::loops;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;

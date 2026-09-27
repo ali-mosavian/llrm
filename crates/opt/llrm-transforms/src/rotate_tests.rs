@@ -9,7 +9,7 @@
 //! for the backend).
 
 use llrm_analysis::cfg;
-use llrm_graph::loops::{self, Loop};
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Module, Operand};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 

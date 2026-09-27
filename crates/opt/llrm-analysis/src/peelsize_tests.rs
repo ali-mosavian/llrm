@@ -2,7 +2,7 @@
 //! GCC's refusals, and a copy that folds away being taken past them. The
 //! old peelsize had no tests of its own; unroll's covered it.
 
-use llrm_graph::loops::{self, Loop};
+use crate::graph::loops::{self, Loop};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use num_bigint::BigInt;

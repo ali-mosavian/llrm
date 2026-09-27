@@ -37,7 +37,7 @@ use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;

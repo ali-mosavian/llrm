@@ -558,7 +558,7 @@ pub fn cells(
 }
 
 fn loops_order(graph: &[cfg::Block], entry: i64) -> Vec<i64> {
-    llrm_graph::loops::reverse_postorder(graph, entry)
+    crate::graph::loops::reverse_postorder(graph, entry)
 }
 
 fn _read(fact: Option<&Known>, width: u32) -> Option<Known> {

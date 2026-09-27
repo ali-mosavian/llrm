@@ -2,7 +2,7 @@
 //! `analysis/liveness.rs` (a port of `qbopt/analysis/liveness.py`).
 //!
 //! That module read the old MIR's `MirBody`, so it stays here rather than in
-//! `llrm-graph`; the machine phases have their own, `backend/liveness.rs`,
+//! `graph`; the machine phases have their own, `backend/liveness.rs`,
 //! over physical register lanes.  Blocks are keyed by [`cfg::id`], as the
 //! loops that `pressure`'s `inside` comes from name them.
 //!

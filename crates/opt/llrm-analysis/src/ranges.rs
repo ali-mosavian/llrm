@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_graph::loops;
+use crate::graph::loops;
 use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};

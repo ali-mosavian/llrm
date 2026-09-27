@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_graph::loops::{self, Loop};
+use crate::graph::loops::{self, Loop};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::interpret::{Val, run};
 use llrm_mir::module::{Function, InstId, Module, Operand, ValueId};

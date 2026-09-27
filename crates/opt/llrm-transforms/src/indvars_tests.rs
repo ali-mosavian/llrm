@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use llrm_analysis::cfg;
 use llrm_analysis::testing::layout;
-use llrm_graph::loops;
+use llrm_analysis::graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, Operand};
