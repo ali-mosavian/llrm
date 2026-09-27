@@ -450,16 +450,12 @@ define i16 @f(i16 %i) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
-            "push si",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
             "add word ptr count, 1",
             "mov ax, word ptr table+4",
             "add bx, bx",
-            "mov si, offset table",
-            "add si, bx",
-            "add ax, word ptr [si]",
-            "pop si",
+            "add ax, word ptr table[bx]",
             "pop bp",
             "retf",
         ]
@@ -1182,4 +1178,22 @@ fn test_a_segments_element_is_addressed_by_its_index_alone() {
     let got = listing(text, "f");
     assert!(!got.iter().any(|line| line.starts_with("xor")), "{got:?}");
     assert_eq!(got.iter().filter(|line| line.starts_with("add")).count(), 1, "{got:?}");
+}
+
+/// A static array's element is [index+symbol]: plasmablobs built each
+/// address as `mov di,sym; add di,cx` before reading it.
+#[test]
+fn test_a_global_arrays_element_is_addressed_by_its_symbol_and_index() {
+    let text = "@a = global [8 x i16] zeroinitializer
+
+define void @f(i16 %i) addrspace(1) {
+  %e = getelementptr [8 x i16], ptr @a, i16 0, i16 %i
+  %v = load i16, ptr %e
+  %w = add i16 %v, 1
+  store i16 %w, ptr %e
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert_eq!(got[3..6], ["mov bx, word ptr [bp+6]", "add bx, bx", "add word ptr a[bx], 1"], "{got:?}");
 }

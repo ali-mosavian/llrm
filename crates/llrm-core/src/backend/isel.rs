@@ -197,8 +197,9 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 enum Pointer {
     Frame(i64),
     Based { base: Held, offset: i64 },
-    /// A near global's symbol, and a displacement from it.
-    Global { space: Space, index: i64, offset: i64 },
+    /// A near global's symbol, a displacement from it, and a register
+    /// holding a variable one.
+    Global { space: Space, index: i64, offset: i64, base: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
     Far { selector: Held, base: Option<Held>, offset: i64 },
@@ -627,9 +628,12 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { base: None, offset, .. } => {
                 semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: offset, width: held.width, address: None })])
             }
-            Pointer::Global { space, index, offset } => {
+            Pointer::Global { space, index, offset, base } => {
                 let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
-                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol])
+                match base {
+                    None => semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol]),
+                    Some(base) => semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), symbol]),
+                }
             }
         }
     }
@@ -677,7 +681,7 @@ impl Selector<'_, '_, '_> {
         if self.module.global(global).address_space != 0 {
             return refuse("a far global");
         }
-        Ok(Pointer::Global { space: crate::backend::globals::space(self.module, global), index: i64::from(global.0), offset })
+        Ok(Pointer::Global { space: crate::backend::globals::space(self.module, global), index: i64::from(global.0), offset, base: None })
     }
 
     /// A GEP's indices, each a constant or `None`.
@@ -736,6 +740,14 @@ impl Selector<'_, '_, '_> {
             });
         }
         let pointer = self.pointer(instruction.operands[0])?;
+        let address = instruction.result.expect("an address");
+        let sum = sum.expect("a variable index");
+        // A global's symbol is the displacement of the register holding the
+        // index: each access addresses [index+symbol].
+        if let Pointer::Global { space, index, offset: start, base: None } = pointer {
+            self.pointers.insert(address, Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) });
+            return Ok(());
+        }
         let start = match pointer {
             Pointer::Based { base, offset: 0 } | Pointer::Far { base: Some(base), offset: 0, .. } if offset == 0 => Some(base),
             Pointer::Far { base: None, offset: 0, .. } if offset == 0 => None,
@@ -746,8 +758,6 @@ impl Selector<'_, '_, '_> {
                 Some(start)
             }
         };
-        let address = instruction.result.expect("an address");
-        let sum = sum.expect("a variable index");
         let result = match (pointer, start) {
             // Offset 0 plus the index is the index.
             (Pointer::Far { selector, .. }, None) => {
@@ -803,7 +813,7 @@ impl Selector<'_, '_, '_> {
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
             Pointer::Frame(disp) => frame(disp, width),
-            Pointer::Global { space, index, offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
             Pointer::Far { selector, base, offset } => Mem {
                 offset,
@@ -1528,7 +1538,7 @@ impl Pointer {
         match self {
             Pointer::Frame(disp) => Pointer::Frame(disp + by),
             Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
-            Pointer::Global { space, index, offset } => Pointer::Global { space, index, offset: offset + by },
+            Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
             Pointer::Far { selector, base, offset } => Pointer::Far { selector, base, offset: offset + by },
         }
     }
