@@ -77,11 +77,26 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
+/// Refuses an argument passed in the frame's own bytes: its slot would be
+/// addressable, which `sealed_arguments` denies, and the bytes are not what
+/// a push of the pointer passes.
+fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselected> {
+    for attribute in attributes.iter().flatten() {
+        if let llrm_mir::Attribute::Type(name, _) = attribute {
+            if matches!(name.as_str(), "byval" | "inalloca" | "byref") {
+                return refuse(format!("a {name} argument"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
 fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
+    in_the_frame(&function.parameter_attrs)?;
     let first = if far(global)? { 6 } else { 4 };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
     let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
@@ -1969,7 +1984,10 @@ impl Selector<'_, '_, '_> {
                 }
                 out.push(Arc::new(one));
             }
-            Opcode::Call(info) => self.call(inst, info.calling_convention, at, out)?,
+            Opcode::Call(info) => {
+                in_the_frame(&info.argument_attrs)?;
+                self.call(inst, info.calling_convention, at, out)?;
+            }
             // Nothing runs after it: the block ends with what came before.
             Opcode::Unreachable => {}
             _ => return refuse(instruction.opcode.mnemonic()),
@@ -2007,6 +2025,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
+        }
+        if let Some(declared) = global.function() {
+            in_the_frame(&declared.parameter_attrs)?;
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
