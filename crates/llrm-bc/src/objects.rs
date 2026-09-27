@@ -1,8 +1,8 @@
 //! DGROUP carved into one global per variable. A segment is cut at every
 //! address something names -- an operand's landmark, a CodeView variable, a
-//! relocation's target -- and a cut that an access or a relocated field
-//! crosses is dropped, so that span stays one object. A COMMON segment's
-//! layout is shared with other modules, so it stays whole.
+//! relocation's target -- and a cut that an access, a long's pair of words
+//! or a relocated field crosses is dropped, so that span stays one object.
+//! A COMMON segment's layout is shared with other modules, so it stays whole.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -118,6 +118,10 @@ impl Objects {
         for body in &facts.bodies {
             for node in body.nodes.values() {
                 accesses(node, &mut spans);
+            }
+            // A long's two words are one access.
+            for (segment, disp) in body.pairs.values().filter_map(|pair| pair.span()) {
+                spans.entry(segment).or_default().push((disp, disp + 4));
             }
         }
         let mut carved: Vec<(i64, i64, i64, Option<String>)> = Vec::new();

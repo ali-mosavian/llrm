@@ -178,6 +178,11 @@ pub struct Emitter<'b, 'm, 'u> {
     live_in: IndexMap<usize, Flag>,
     /// The instruction being emitted.
     pub insn: Option<Insn>,
+    /// This block's nodes before its transfer, the one being emitted, and
+    /// how many after it a recognizer consumed.
+    run: Vec<&'b Node>,
+    cursor: usize,
+    consumed: usize,
 }
 
 fn poison(b: &mut Builder, ty: TypeId) -> Operand {
@@ -223,6 +228,9 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
         layout: None,
         live_in: flagged::live_in(&body.blocks),
         insn: None,
+        run: Vec::new(),
+        cursor: 0,
+        consumed: 0,
     };
     emitter.run()
 }
@@ -393,8 +401,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             Some((last, rest)) if is_transfer(last) => (Some(*last), rest),
             _ => (None, &nodes[..]),
         };
-        for node in rest {
+        self.run = rest.to_vec();
+        let mut index = 0;
+        while let Some(&node) = self.run.get(index) {
+            (self.cursor, self.consumed) = (index, 0);
             self.node(node)?;
+            index += 1 + self.consumed;
             if let Node::Call(call) = node {
                 if self.unit.facts.contract(call.insn.at).is_some_and(never_returns) {
                     self.ends.insert(self.block, (self.current.clone(), self.bits.clone()));
@@ -521,6 +533,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
 
     /// `high:low` as one value twice as wide.
     pub fn join(&mut self, low: Operand, high: Operand) -> Operand {
+        if let Some(whole) = crate::longs::whole(self, low, high) {
+            return whole;
+        }
         let bits = self.bits_of(low);
         let wide = self.b.context.types.int(bits * 2);
         let low = self.cast(CastOp::ZExt, low, wide);
@@ -528,6 +543,21 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let shift = self.b.int(bits * 2, i128::from(bits));
         let high = self.binary(BinaryOp::Shl, high, shift);
         self.binary(BinaryOp::Or, high, low)
+    }
+
+    /// The body being emitted.
+    pub fn body(&self) -> &'b BodyFacts {
+        self.body
+    }
+
+    /// The `n`th node after the one being emitted, in its block.
+    pub fn ahead(&self, n: usize) -> Option<&'b Node> {
+        self.run.get(self.cursor + n).copied()
+    }
+
+    /// Owns the next `n` nodes too: the core raise does not see them.
+    pub fn consume(&mut self, n: usize) {
+        self.consumed = n;
     }
 
     pub fn bits_of(&self, value: Operand) -> u32 {

@@ -8,8 +8,10 @@
 
 pub mod emit;
 pub mod floats;
+pub mod longs;
 pub mod machine;
 pub mod objects;
+pub mod pairs;
 pub mod runtime;
 pub mod sites;
 
