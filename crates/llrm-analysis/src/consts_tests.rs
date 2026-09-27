@@ -236,6 +236,17 @@ fn division_gives_quotient_and_remainder_but_not_where_it_faults() {
     }
 }
 
+/// Division folded only at 16, 32 and 64 bits, the old x86 widths: an
+/// i8 quotient had none.
+#[test]
+fn division_folds_at_every_width() {
+    for (operation, width, expected) in [("sdiv i8 -7, 2", 8, (-3_i64, -1_i64)), ("udiv i8 -7, 2", 8, (0x7C, 1)), ("urem i1 1, 1", 1, (1, 0))] {
+        let parsed = one(operation, &format!("i{width}"));
+        let got = division(&parsed.unit(), parsed.made("y"), &IndexMap::default());
+        assert_eq!(got, Some((masked(&BigInt::from(expected.0), width), masked(&BigInt::from(expected.1), width))), "{operation}");
+    }
+}
+
 #[test]
 fn test_a_fact_is_never_wider_than_the_operation_that_made_it() {
     assert_eq!(masked(&BigInt::from(0x1FFFF), 16), BigInt::from(0xFFFF));

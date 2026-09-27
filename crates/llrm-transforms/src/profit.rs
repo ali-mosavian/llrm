@@ -44,6 +44,13 @@ pub fn costs(outer: &Outer) -> OperationCosts {
     outer.target.as_ref().map_or_else(OperationCosts::default, |target| target.costs())
 }
 
+/// How many integer values `outer`'s target holds in registers, and how
+/// many across a call; 0 each where it names no target, which leaves
+/// pressure unpriced.
+pub fn registers(outer: &Outer) -> (i64, i64) {
+    outer.target.as_ref().map_or((0, 0), |target| (target.registers(), target.call_registers()))
+}
+
 fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }

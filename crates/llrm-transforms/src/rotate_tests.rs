@@ -133,8 +133,38 @@ b3:
 }
 ";
     assert!(through(text, Rotate).0);
-    let swapped = text.replace("[ %sum, %b2 ]", "[ %a, %b2 ]");
-    assert!(!through(&swapped, Rotate).0, "a cycle of header phis is refused");
+}
+
+/// Header phis read in parallel: `a, b = b, a` rotates, each moved phi
+/// reading the other's moved one, over odd and even trips. It was refused.
+#[test]
+fn header_phis_that_swap_rotate() {
+    let text = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %a = phi i16 [ %x, %b0 ], [ %b, %b2 ]
+  %b = phi i16 [ %n, %b0 ], [ %a, %b2 ]
+  %go = icmp ult i16 %i, TRIPS
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %shifted = shl i16 %a, 4
+  %r = xor i16 %shifted, %b
+  ret i16 %r
+}
+";
+    for trips in ["1", "2", "5"] {
+        let (changed, mut module) = through(&text.replace("TRIPS", trips), Rotate);
+        assert!(changed, "{trips}");
+        assert_eq!(only_loop(f(&mut module)).body.len(), 1, "{trips}");
+    }
 }
 
 /// The header's work runs once fewer: a store there is not skipped.

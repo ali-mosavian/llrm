@@ -230,7 +230,8 @@ fn test_gvn_joins_the_values_each_arm_stored() {
 /// `@x` loaded before a loop of `bound` trips and again after a store
 /// inside it, where serving the reload holds `%a` through a point that
 /// then spills. Priced at the conventional ten trips even when proven
-/// one, the reload was always served: a spill for one saved load.
+/// one, the reload was always served: a spill for one saved load. The
+/// registers are the target's; gvn used to ignore them.
 #[test]
 fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
     let text = |bound: &str| {
@@ -273,7 +274,8 @@ b3:
         let mut module = before.clone();
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
-        manager.add(Gvn { registers: 4, ..Gvn::default() });
+        manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() }));
+        manager.add(Gvn::default());
         manager.run(&mut module).unwrap();
         let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
         assert_eq!(results(&module, inputs), results(&before, inputs));

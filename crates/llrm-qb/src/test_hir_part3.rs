@@ -2308,21 +2308,29 @@ fn test_a_module_compiles_through_the_rich_mir() {
     assert!(fade.contains("in al, dx") && fade.contains("out dx, al"), "{fade}");
 }
 
-/// Seven suite programs refused DATA on the rich route; each READ's row
-/// is keyed by its DATA statement's code, as on the lowered route.
+/// Seven suite programs refused DATA on the rich route.
 #[test]
 fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/suite/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let text = masm::text(&rich).expect("prints");
-        // The row's key is the label of the NOP its DATA marker became.
-        let lines: Vec<&str> = text.lines().collect();
-        let nop = lines.iter().position(|line| line.trim() == "xchg ax, ax").unwrap_or_else(|| panic!("{name}: no DATA NOP\n{text}"));
-        let label = lines[nop - 1].trim().strip_suffix(':').unwrap_or_else(|| panic!("{name}: an unlabeled NOP\n{text}"));
-        assert!(text.contains(&format!("dw {label}\n")), "{name}: no row keyed by {label}\n{text}");
+        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
+}
+
+/// RESTORE to a label and DATA after END were refused on the rich route:
+/// their DATA blocks were code entries, BC keying a row by its code. B$RSTB
+/// only compares keys, so the rich route keys a row by its position.
+#[test]
+fn test_rich_route_keys_data_rows_by_position() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).expect("compiles");
+    let text = masm::text(&rich).expect("prints");
+    let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
+    assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
+    assert!(text.contains("pushw 1\n    call far ptr B$RSTB"), "{text}");
 }
 
 /// UBOUND's "subscript out of range" call may RESUME, so its block jumps on
