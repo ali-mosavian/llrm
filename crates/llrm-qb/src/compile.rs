@@ -162,19 +162,19 @@ fn _bytes_of(values: &[i64]) -> Vec<u8> {
 
 type Names = IndexMap<(Space, i64), String>;
 
-#[allow(clippy::type_complexity)]
-fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
-    let mut names: Names = llrm_core::hir::lower::symbol_names();
+/// The data objects BASIC lays down in its segments: the module's own, less
+/// the DATA stream and statement table the envelope writes.
+fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
-    let internal: IndexMap<i64, &model::DataObject> = module
-        .data
-        .iter()
-        .filter(|one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
-        .map(|one| (one.id, one))
-        .collect();
+    module.data.iter().filter(move |one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
+}
+
+/// Each data object's symbol, by its HIR id: its own name where external.
+fn _data_names(module: &model::Module) -> Names {
+    let mut names: Names = llrm_core::hir::lower::symbol_names();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
-        if reserved.contains(&object_.name.as_str()) {
+        if [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT].contains(&object_.name.as_str()) {
             continue;
         }
         let (key, name) = if object_.linkage == model::DataLinkage::External {
@@ -185,18 +185,29 @@ fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String,
         taken.insert(name.to_uppercase());
         names.insert(key, name);
     }
+    names
+}
 
+/// The BASIC segment a data object goes in: far ones FSL_CONST, read-only
+/// ones BC_CN, the rest BC_DATA.
+fn _segment(object_: &model::DataObject) -> &'static str {
+    if matches!(object_.address, model::AddressKind::Far | model::AddressKind::Huge) {
+        "FSL_CONST"
+    } else if object_.readonly {
+        "BC_CN"
+    } else {
+        "BC_DATA"
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
+    let mut names = _data_names(module);
+    let internal: IndexMap<i64, &model::DataObject> = _placed(module).map(|one| (one.id, one)).collect();
     let mut grouped: IndexMap<String, Vec<masm::Datum>> =
         ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name.to_owned(), Vec::new())).collect();
     for object_ in internal.values() {
-        let segment = if matches!(object_.address, model::AddressKind::Far | model::AddressKind::Huge) {
-            "FSL_CONST"
-        } else if object_.readonly {
-            "BC_CN"
-        } else {
-            "BC_DATA"
-        };
-        let items = &mut grouped[segment];
+        let items = &mut grouped[_segment(object_)];
         let label = names[&(Space::Segment, object_.id)].clone();
         items.push(masm::Datum::Object(masm::Label { name: label }));
         let mut cursor = 0;
@@ -1260,13 +1271,20 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
     let module = &program.modules[0];
     let options = llrm_core::driver::Options::of(machine.clone());
     let (mut mir, data) = llrm_core::driver::emitted(program, &options).map_err(EmissionError)?;
-    let (names, mut placed) = _data(module, &Pool::new(0))?;
+    let names = _data_names(module);
     let procedures = module.functions.iter().map(|one| &one.name).chain(module.callables.iter().map(|one| &one.name));
     let mut symbols: BTreeMap<String, String> = procedures.map(|name| (name.clone(), _object_name(name))).collect();
     for (object, &global) in &data[0] {
         let symbol = names.get(&(Space::Segment, *object)).or_else(|| names.get(&(Space::External, *object)));
         if let (Some(symbol), Some(name)) = (symbol, &mir.modules[0].global(global).name) {
             symbols.insert(name.clone(), symbol.clone());
+        }
+    }
+    // Each object's global, by name: one the pipeline deletes lies nowhere.
+    let mut placed: IndexMap<&str, Vec<basic::Item>> = ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
+    for object_ in _placed(module) {
+        if let Some(name) = data[0].get(&object_.id).and_then(|&global| mir.modules[0].global(global).name.clone()) {
+            placed[_segment(object_)].push(basic::Item::Global { name, at: None });
         }
     }
     llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
@@ -1285,19 +1303,20 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
     let rows = (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
     let read_data = _read_data_items(module, rows)?;
     let graphics = _graphics_dependencies(module);
-    let label = |name: &str| masm::Datum::Label(masm::Label { name: name.to_owned() });
-    let mut segments: Vec<(&str, Vec<masm::Datum>)> = vec![
+    let datum = basic::Item::Datum;
+    let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
+    let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
         ("COMMON", vec![]),
-        ("BC_DATA", [vec![masm::Datum::Bytes(vec![0; 6])], placed.swap_remove("BC_DATA").unwrap_or_default()].concat()),
+        ("BC_DATA", [vec![datum(masm::Datum::Bytes(vec![0; 6]))], placed.swap_remove("BC_DATA").unwrap_or_default()].concat()),
         ("NMALLOC", vec![]),
         ("ENMALLOC", vec![]),
         ("BC_FT", vec![]),
         ("BC_CN", placed.swap_remove("BC_CN").unwrap_or_default()),
-        ("BC_DS", [read_data, vec![masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]].concat()),
+        ("BC_DS", read_data.into_iter().chain([masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]).map(datum).collect()),
         ("BC_SAB", vec![label("$QB$SAB")]),
-        ("BC_SA", vec![label("$QB$SA"), masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true })]),
+        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true }))]),
     ];
     let mut private: BTreeSet<String> = BTreeSet::new();
     if vbdos {
@@ -1306,7 +1325,7 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
         private.extend(["FDATA".to_owned(), "FSL_CONST".to_owned()]);
     }
     if vbdos && !graphics.is_empty() {
-        segments.push(("QB_LINK", graphics.iter().map(|name| masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false })).collect()));
+        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false }))).collect()));
         private.insert("QB_LINK".into());
     }
     let object = basic::Object {
@@ -1314,7 +1333,7 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
         header: _header(program)?,
         main: "__main".to_owned(),
         symbols,
-        segments: segments.into_iter().map(|(name, items)| basic::Segment { name: name.to_owned(), items: items.into_iter().map(basic::Item::Datum).collect(), size: None }).collect(),
+        segments: segments.into_iter().map(|(name, items)| basic::Segment { name: name.to_owned(), items, size: None }).collect(),
         constants: "BC_CN".to_owned(),
         private,
         requests: graphics,

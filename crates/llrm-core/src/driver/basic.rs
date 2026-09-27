@@ -563,7 +563,9 @@ pub struct Segment {
 }
 
 /// What a segment holds: a datum as it is, or a global's data by its MIR
-/// name, at its offset where stated.
+/// name, at its offset where stated; one without an offset the pipeline
+/// may delete.
+#[derive(Clone, Debug)]
 pub enum Item {
     Datum(masm::Datum),
     Global { name: String, at: Option<i64> },
@@ -756,8 +758,12 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
                 if at.is_some_and(|at| at != offset) {
                     return Err(format!("{name} has a gap at {offset:#x}"));
                 }
-                let id = module.named(global).ok_or_else(|| format!("{name} holds @{global}, which the module lacks"))?;
-                globals::datums(module, id, names)?
+                match (module.named(global), at) {
+                    (Some(id), _) => globals::datums(module, id, names)?,
+                    // One the frontend placed nowhere in particular goes with its global.
+                    (None, None) => continue,
+                    (None, Some(_)) => return Err(format!("{name} holds @{global}, which the module lacks")),
+                }
             }
         };
         for datum in &datums {
