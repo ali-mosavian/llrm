@@ -32,19 +32,32 @@ use llrm_analysis::testing::{DOS, corpus};
 use llrm_graph::loops;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::Outer;
 
-use super::promoted;
-use crate::testing::{parsed, printed, results};
+use super::{Promote, Sroa, promoted};
+use crate::interprocedural::function_mut;
+use crate::testing::{ACROSS_READONLY_CALL, bodies, managed, parsed, printed, results};
 
 fn module(body: &str) -> Module {
     parsed(&format!("{DOS}{body}"))
+}
+
+/// Every body of `module` promoted, or with `aggregate_only` its
+/// aggregates' leaves.
+fn promote_all(module: &mut Module, aggregate_only: bool) -> Result<(), String> {
+    let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
+    for id in bodies(module) {
+        let (context, function) = function_mut(module, id);
+        promoted(context, &layout, function, &outer, aggregate_only)?;
+    }
+    Ok(())
 }
 
 /// `body` promoted, or with `aggregate_only` its aggregates' leaves; it
 /// must verify.
 fn run(body: &str, aggregate_only: bool) -> Module {
     let mut module = module(body);
-    promoted(&mut module, aggregate_only).unwrap();
+    promote_all(&mut module, aggregate_only).unwrap();
     printed(&module);
     module
 }
@@ -558,7 +571,7 @@ fn test_every_corpus_module_verifies_and_keeps_its_stores() {
         let before = stores(&module);
         let reloaded = globals_loaded_in_loops(&module);
         for aggregate_only in [true, false] {
-            promoted(&mut module, aggregate_only).unwrap_or_else(|error| panic!("{name}: {error}"));
+            promote_all(&mut module, aggregate_only).unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{name}");
             assert_eq!(stores(&module), before, "{name}");
         }
@@ -569,4 +582,19 @@ fn test_every_corpus_module_verifies_and_keeps_its_stores() {
         }
     }
     assert_eq!(checked, 2 * loops_of.len());
+}
+
+/// Under the pass manager Promote and Sroa still read the module's
+/// globals: without them @g is no object and @peek a writer, and the load
+/// stays.
+#[test]
+fn a_global_cell_is_promoted_across_a_readonly_call() {
+    let after = managed(&mut module(ACROSS_READONLY_CALL), Promote);
+    assert!(after.contains("  ret i16 7\n"), "{after}");
+    let aggregate = ACROSS_READONLY_CALL
+        .replace("@g = global i16 0", "@g = global [2 x i16] zeroinitializer")
+        .replace("  store i16 7, ptr @g", "  %e = getelementptr [2 x i16], ptr @g, i16 0, i16 1\n  store i16 7, ptr %e")
+        .replace("load i16, ptr @g", "load i16, ptr %e");
+    let after = managed(&mut module(&aggregate), Sroa);
+    assert!(after.contains("  ret i16 7\n"), "{after}");
 }

@@ -3,9 +3,10 @@
 
 use llrm_analysis::testing::corpus;
 use llrm_mir::module::Module;
+use llrm_mir::passes::Outer;
 
 use crate::interprocedural::function_mut;
-use crate::transform::bodies;
+use crate::testing::bodies;
 
 /// Runs `pass` on each body of each corpus module until it reports no
 /// change, verifying after every run. How many bodies it changed.
@@ -38,8 +39,9 @@ fn dead_keeps_every_corpus_module_verifying_and_settles() {
 #[test]
 fn fold_keeps_every_corpus_module_verifying_and_settles() {
     let changed = settles("fold", |module, id| {
-        let layout = crate::transform::layout(module).expect("a datalayout");
-        crate::fold::folded(module, &layout, id)
+        let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
+        let (context, function) = function_mut(module, id);
+        crate::fold::folded(context, &layout, function, &outer)
     });
     assert!(changed > 0, "the corpus has something to fold");
 }
@@ -47,8 +49,9 @@ fn fold_keeps_every_corpus_module_verifying_and_settles() {
 #[test]
 fn decide_keeps_every_corpus_module_verifying_and_settles() {
     let changed = settles("decide", |module, id| {
-        let layout = crate::transform::layout(module).expect("a datalayout");
-        crate::decide::decided(module, &layout, id).expect("decides")
+        let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
+        let (context, function) = function_mut(module, id);
+        crate::decide::decided(context, &layout, function, &outer).expect("decides")
     });
     assert!(changed > 0, "the corpus has branches to decide");
 }

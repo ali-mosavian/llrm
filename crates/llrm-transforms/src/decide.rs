@@ -15,7 +15,7 @@
 //!   `switch`; explicit and fall-through edges are one kind here. A
 //!   conditional branch both of whose arms go one way is a jump, as the
 //!   old one was when threading made it so.
-//! - Decide runs over the module, as Fold does.
+//! - consts reads the module's globals through the outer proxy.
 //!
 //! Dropped, no rich MIR analogue: the memory a compare's operand read
 //! (`held`: a load is its own instruction, and its fact consts'), and the
@@ -37,54 +37,40 @@ use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_graph::loops;
-use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
-use llrm_mir::passes::ModulePass;
+use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::edges;
-use crate::interprocedural::function_mut;
-use crate::transform::{self, bodies, layout};
+use crate::transform;
 
-/// `decided` on every body, then its chains merged, as the old Decide.
+/// `decided`, then its chains merged, as the old Decide.
 pub struct Decide;
 
-impl ModulePass for Decide {
+impl FunctionPass for Decide {
     fn name(&self) -> &'static str {
         "decide"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        let layout = layout(module).unwrap_or_else(|error| panic!("decide: {error}"));
-        bodies(module)
-            .into_iter()
-            .filter(|&id| {
-                let decided = decided(module, &layout, id).unwrap_or_else(|error| panic!("decide: {error}"));
-                decided | crate::cfg::merged(function_mut(module, id).1)
-            })
-            .collect()
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let decided = decided(unit.context, unit.layout, unit.function, analyses.outer()).unwrap_or_else(|error| panic!("decide: {error}"));
+        if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
-/// Body `id` threaded, and each branch whose way is known a jump that
-/// way. Whether anything changed.
-pub fn decided(module: &mut Module, layout: &DataLayout, id: GlobalId) -> Result<bool, String> {
-    let threaded = {
-        let (context, function) = function_mut(module, id);
-        _threaded(context, function)
-    };
-    let decisions = {
-        let function = module.global(id).function().expect("a body");
-        _decisions(&Unit::of(module, layout, function))?
-    };
+/// `function` threaded, and each branch whose way is known a jump that
+/// way; `outer` is its module and target. Whether anything changed.
+pub fn decided(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+    let threaded = _threaded(context, function);
+    let decisions = _decisions(&Unit::within(context, layout, function, outer))?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
-    let (context, function) = function_mut(module, id);
     for (block, target) in decisions {
         let last = function.terminator(block).expect("a terminator");
         _jump(function, last, target);
