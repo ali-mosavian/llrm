@@ -1779,6 +1779,24 @@ fn test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted() {
     assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
 }
 
+/// qbdemo's PLASMA scaled its masked `fuh` index with an `add` per pixel:
+/// a dynamic array's far pointer starts at offset 0 of its selector, which
+/// `exact_offsets` never counted, so the index was not proven exact and
+/// could not fold into a 32-bit `[esi+esi]` address.
+#[test]
+fn test_a_bounded_index_into_a_dynamic_array_scales_in_its_address() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "T.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED k\r\nt\r\nSUB t\r\n'$DYNAMIC\r\nDIM a(320), b(320), c(128, 128)\r\n\
+DEF SEG = &HA000\r\nFOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE o, c((a(x) + k) AND 127, (b(x) + y) AND 127)\r\n\
+o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    assert!(regex::Regex::new(r"\[e\w\w\+e\w\w\]").unwrap().is_match(&inner), "{inner}");
+}
+
 /// PLASMA read three local arrays and VRAM with three selector registers, so
 /// one register took two of them and was reloaded for each every pixel. The
 /// data segment register is the fourth, with the data group reached through

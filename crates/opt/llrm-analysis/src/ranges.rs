@@ -526,8 +526,9 @@ pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let Some(base) = reference.base else { continue };
         let bits = reference.index_bits;
-        let exact = reference.inbounds
-            && reference.object
+        // A far pointer made from a selector starts at offset 0 as well.
+        let placed = (reference.inbounds && reference.object) || reference.segment.is_some();
+        let exact = placed
             && reference.base_width == bits
             && _exact_sum(unit, base, cfg::id(block), &scoped, bits, 16).is_some_and(|(low, high)| {
                 let (low, high) = (BigInt::from(reference.disp) + low * reference.scale, BigInt::from(reference.disp) + high * reference.scale);
