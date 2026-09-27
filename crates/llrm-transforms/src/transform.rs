@@ -23,6 +23,9 @@
 //! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased
 //!   operation's source bytes. `replace_all_uses_with` reaches phis too.
 //! - `forwarded` (store-to-load forwarding): waits on `analysis::avail`.
+//!
+//! `_undisturbed` asks alias, through `_accesses`, what a store or call
+//! writes; the old one refused every call.
 //! - The `dgroup` parameter: a segment is not a MIR fact.
 //!
 //! Tests of these, from `optimize/transform_tests.rs` and
@@ -47,7 +50,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::{cfg, ssa};
+use llrm_analysis::alias::{self, Effect, Procedure};
+use llrm_analysis::memory::{self, MemRef};
+use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -130,11 +135,31 @@ pub fn _floating(opcode: &Opcode) -> bool {
     )
 }
 
+/// What alias says of a function's memory accesses, asked once before
+/// anything changes: an instruction keeps its id through the edits.
+pub struct _Accesses {
+    /// Each load's and store's reference.
+    pub references: IndexMap<InstId, MemRef>,
+    /// What each call reads and writes.
+    pub calls: IndexMap<InstId, Effect>,
+    /// The calls that write nothing.
+    pub reading: BTreeSet<InstId>,
+}
+
+/// `unit`'s accesses, as `alias::annotated` and `alias::calls_annotated`
+/// find them; a call's callee is summarized by nothing.
+pub fn _accesses(unit: &memory::Unit) -> Result<_Accesses, String> {
+    let references = alias::annotated(unit)?;
+    let calls = alias::calls_annotated(&Procedure::of(*unit), &IndexMap::default())?;
+    let reading = calls.keys().copied().filter(|&call| !memory::unmodeled_write(unit, call)).collect();
+    Ok(_Accesses { references, calls, reading })
+}
+
 /// One operation where two computed the same thing from the same values;
 /// whether any went.
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(function: &mut Function, avoid_store_crossing: bool) -> Result<bool, String> {
+pub fn subexpressions(function: &mut Function, accesses: &_Accesses, avoid_store_crossing: bool) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let doms = loops::dominators(&graph, function.entry().map(cfg::id));
     let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
@@ -162,7 +187,7 @@ pub fn subexpressions(function: &mut Function, avoid_store_crossing: bool) -> Re
                 continue;
             };
             let loads = matches!(op.opcode, Opcode::Load { .. });
-            if loads && (at != here || !_undisturbed(function, &instructions[where_ + 1..index])) {
+            if loads && (at != here || !_undisturbed(function, inst, &instructions[where_ + 1..index], accesses)) {
                 candidates.push((here, index, inst));
                 continue;
             }
@@ -265,16 +290,27 @@ pub fn _reaches(
     doms.get(&cfg::id(block)).is_some_and(|dominating| dominating.contains(&cfg::id(layout[at])))
 }
 
-/// Whether a load still reads what the load before it read, with `between`
-/// run in between.
+/// Whether the load `one` still reads what the load before it read, with
+/// `between` run in between: nothing there may write its bytes.
 ///
-/// The old one asked `regions::overlapping` whether a store wrote the cell;
-/// until regions is ported every store may, as its unknown answer did.
-pub fn _undisturbed(function: &Function, between: &[InstId]) -> bool {
+/// A volatile access is the old barrier. A call writes what
+/// `alias::calls_annotated` says, and `regions::overlapping` decides
+/// against each write; an answer it cannot give overlaps.
+pub fn _undisturbed(function: &Function, one: InstId, between: &[InstId], accesses: &_Accesses) -> bool {
+    let Some(read) = accesses.references.get(&one) else {
+        return false;
+    };
+    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, None).unwrap_or(true);
     for &other in between {
-        match function.instruction(other).opcode {
-            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Store { .. } | Opcode::Load { volatile: true, .. } => return false,
-            _ => {}
+        let written = match function.instruction(other).opcode {
+            Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } => return false,
+            Opcode::Store { .. } => accesses.references.get(&other).map(std::slice::from_ref),
+            Opcode::Call(_) | Opcode::Invoke(_) if accesses.reading.contains(&other) => continue,
+            Opcode::Call(_) | Opcode::Invoke(_) => accesses.calls.get(&other).map(|effect| effect.stores.as_slice()),
+            _ => continue,
+        };
+        if written.is_none_or(|written| written.iter().any(overlaps)) {
+            return false;
         }
     }
     true
@@ -282,18 +318,28 @@ pub fn _undisturbed(function: &Function, between: &[InstId]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use llrm_analysis::memory::Unit;
+    use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::Module;
 
     use crate::testing::{f, parsed, printed, results};
 
-    use super::{_trivial_phis, subexpressions};
+    use super::{_accesses, _trivial_phis, subexpressions};
+
+    /// `module`'s @f numbered.
+    fn subexpressions_of(module: &mut Module) -> bool {
+        let layout = DataLayout::default();
+        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let accesses = _accesses(&Unit::of(module, &layout, function)).unwrap();
+        subexpressions(f(module), &accesses, false).unwrap()
+    }
 
     /// `text` numbered: its printed form, and whether anything went. What
     /// `@f` returns for `inputs` is what it returned before.
     fn numbered(text: &str, inputs: &[&[i128]]) -> (String, bool) {
         let before = parsed(text);
         let mut module: Module = before.clone();
-        let changed = subexpressions(f(&mut module), false).unwrap();
+        let changed = subexpressions_of(&mut module);
         let text = printed(&module);
         assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
         (text, changed)
@@ -303,7 +349,7 @@ mod tests {
     fn kept(text: &str) {
         let mut module = parsed(text);
         let before = printed(&module);
-        assert!(!subexpressions(f(&mut module), false).unwrap(), "{before}");
+        assert!(!subexpressions_of(&mut module), "{before}");
         assert_eq!(printed(&module), before);
     }
 
@@ -567,32 +613,67 @@ b0:
         assert_eq!(text.matches("sdiv").count() + text.matches("srem").count(), 2, "{text}");
     }
 
-    #[test]
-    fn test_a_load_is_reused_until_memory_may_change() {
-        let body = |between: &str| {
-            format!(
-                "declare void @g()
-
-define i16 @f(i16 %x, i16 %y) {{
+    /// `%a` and `%b` load `%p` with `between` in between, in @f of `head`,
+    /// which starts with `pointers`.
+    fn loads(head: &str, pointers: &str, between: &str) -> String {
+        format!(
+            "{head}
+define i16 @f(i16 %x, i16 %y{pointers}) {{
 b0:
-  %p = alloca i16
-  %q = alloca i16
-  store i16 %x, ptr %p
   %a = load i16, ptr %p
 {between}  %b = load i16, ptr %p
   %r = add i16 %a, %b
   ret i16 %r
 }}
 "
-            )
-        };
-        let (text, changed) = numbered(&body("  %n = add i16 %x, 1\n"), XY);
-        assert!(changed);
+        )
+    }
+
+    const LOCAL: &str = "  %p = alloca [2 x i16]\n  %q = alloca i16\n  store i16 %x, ptr %p\n";
+
+    fn reused(text: String) {
+        let (text, changed) = numbered(&text.replace("i16 %y) {\nb0:\n", &format!("i16 %y) {{\nb0:\n{LOCAL}")), XY);
+        assert!(changed, "{text}");
         assert!(text.contains("%r = add i16 %a, %a"), "{text}");
-        for between in ["  store i16 %y, ptr %q\n", "  call void @g()\n", "  %v = load volatile i16, ptr %q\n"] {
-            kept(&body(between));
+    }
+
+    #[test]
+    fn test_a_load_is_reused_across_what_touches_no_memory() {
+        reused(loads("", "", "  %n = add i16 %x, 1\n"));
+    }
+
+    #[test]
+    fn test_a_load_is_reused_across_a_store_to_another_offset() {
+        reused(loads("", "", "  %s = getelementptr i8, ptr %p, i16 2\n  store i16 %y, ptr %s\n"));
+    }
+
+    #[test]
+    fn test_a_load_is_reused_across_a_store_to_another_alloca() {
+        reused(loads("", "", "  store i16 %y, ptr %q\n"));
+    }
+
+    /// Two noalias pointers' objects are apart; alias proves nothing of one
+    /// noalias pointer against a plain one.
+    #[test]
+    fn test_a_load_through_a_noalias_pointer_is_reused_across_a_store_through_another() {
+        let mut module = parsed(&loads("", "", "  store i16 %y, ptr %q\n").replace("i16 %y) {", "i16 %y, ptr noalias %p, ptr noalias %q) {"));
+        assert!(subexpressions_of(&mut module), "{}", printed(&module));
+        assert!(printed(&module).contains("%r = add i16 %a, %a"));
+    }
+
+    /// Neither alloca escaped, so the callee cannot reach them.
+    #[test]
+    fn test_a_load_is_reused_across_a_call_that_cannot_reach_it() {
+        reused(loads("define void @g(ptr %s) {\nb0:\n  store i16 9, ptr %s\n  ret void\n}\n", "", "  call void @g(ptr %q)\n"));
+    }
+
+    #[test]
+    fn test_a_load_is_refused_across_what_may_write_it() {
+        let pointers = |between: &str| loads("declare void @g(ptr)\n", ", ptr %p, ptr %q", between);
+        for between in ["  store i16 %y, ptr %q\n", "  call void @g(ptr %q)\n", "  call void @g(ptr %p)\n", "  %v = load volatile i16, ptr %q\n"] {
+            kept(&pointers(between));
         }
-        kept(&body("").replace("%b = load i16", "%b = load volatile i16"));
+        kept(&pointers("").replace("%b = load i16", "%b = load volatile i16"));
     }
 
     /// The first load has not certainly run, nor did the old one look.

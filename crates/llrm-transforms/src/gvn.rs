@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::{cfg, liveness, ssa};
+use llrm_analysis::{cfg, liveness, memory, ssa};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
@@ -75,11 +75,21 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, registers: i64) -> Res
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything.
 fn _numbered(unit: &mut Unit, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
+    // The pass sees no other global, so a global's extent and a callee's
+    // attributes stay unknown, and so every access through them may overlap.
+    let accesses = transform::_accesses(&memory::Unit {
+        machine: None,
+        context: unit.context,
+        layout: unit.layout,
+        metadata: unit.metadata,
+        globals: &[],
+        function: unit.function,
+    })?;
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, bool), String> {
         let mut function = function.clone();
         // `transform::forwarded(avoid_store_crossing)` goes here once
         // `analysis::avail` is ported.
-        let changed = transform::subexpressions(&mut function, avoid_store_crossing)?;
+        let changed = transform::subexpressions(&mut function, &accesses, avoid_store_crossing)?;
         Ok((function, changed))
     };
     let crossing = numbered(unit.function, false)?;
