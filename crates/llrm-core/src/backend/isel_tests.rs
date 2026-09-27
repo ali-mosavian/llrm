@@ -2116,3 +2116,69 @@ fn test_a_quotient_that_fits_a_dword_is_one_idiv() {
     assert_eq!(divides.len(), 1, "{got:?}");
     assert!(divides[0].starts_with("idiv"), "{got:?}");
 }
+
+/// A parameter needed after a call is loaded again from its argument slot,
+/// which nothing in the IR can address: spilled across the call instead,
+/// format.field stored and reloaded its three argument words every call.
+#[test]
+fn test_a_parameter_is_reloaded_from_its_slot_across_a_call() {
+    let text = "declare void @g() addrspace(1)
+declare void @h(i16) addrspace(1)
+define void @f(i16 %a) addrspace(1) {
+  %b = add i16 %a, 1
+  call addrspace(1) void @g()
+  call addrspace(1) void @h(i16 %a)
+  call addrspace(1) void @h(i16 %b)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    // Only %b, computed before the call, needs a slot.
+    assert_eq!(got.iter().filter(|line| line.starts_with("mov word ptr [bp-")).count(), 1, "{got:?}");
+}
+
+/// A far pointer loaded from memory only to be passed on is one dword push:
+/// loaded as two words, format.put_text read one more memory operand per
+/// call than the old route's dword.
+#[test]
+fn test_a_far_pointer_loaded_to_be_passed_is_one_push() {
+    let text = "declare void @g(ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %t) addrspace(1) {
+  %at = getelementptr i8, ptr addrspace(1) %t, i16 4
+  %p = load ptr addrspace(1), ptr addrspace(1) %at
+  %n = load i16, ptr addrspace(1) %t
+  call addrspace(1) void @g(ptr addrspace(1) %p, i16 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("push dword ptr es:[")), "{got:?}");
+}
+
+/// A dword read as two words and pushed whole in several places is one
+/// dword load: format.put read its far buffer's two words and pushed them
+/// apart on both paths, one memory operand and one push more than the old
+/// route's dword per call.
+#[test]
+fn test_a_far_pointer_pushed_whole_on_two_paths_is_one_dword() {
+    let text = "@sink = internal global ptr null
+declare void @w(ptr addrspace(1), i16) addrspace(1)
+declare ptr @a(ptr, ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
+  %s = load ptr, ptr @sink
+  %z = icmp eq ptr %s, null
+  br i1 %z, label %one, label %two
+one:
+  call addrspace(1) void @w(ptr addrspace(1) %p, i16 %n)
+  ret void
+two:
+  %r = call addrspace(1) ptr @a(ptr %s, ptr addrspace(1) %p, i16 %n)
+  store ptr %r, ptr @sink
+  ret void
+}
+";
+    let got = listing(text, "f");
+    // Three argument words in two reads, pushed as two on each path.
+    assert_eq!(got.iter().filter(|line| line.contains("[bp+")).count(), 2, "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 5, "{got:?}");
+}

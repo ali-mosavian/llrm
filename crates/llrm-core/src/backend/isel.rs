@@ -559,6 +559,7 @@ impl Selector<'_, '_, '_> {
             .collect();
         let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks)))?;
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
+        body.sealed_arguments = true;
         body.inputs = self.inputs.clone();
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
