@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use llrm_core::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{hir, libfunc, raise_hir, raise_mir, stream};
+use super::{hir, libfunc, raise_hir, stream, translate};
 use llrm_core::analysis::{alias, interprocedural};
 use llrm_core::optimize::interprocedural as module;
 use llrm_core::optimize::rotate;
@@ -385,12 +385,29 @@ impl assemble::Abi for MediumModel {
     }
 }
 
-/// C through the rich MIR: raised by `raise_mir`, optimized by the ported
-/// pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
+/// C through the rich MIR: translated to HIR, emitted as MIR, optimized by
+/// the ported pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> Result<masm::Module, CompileError> {
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
     let unit = hir::unit(&stream::parse(text))?;
-    let raise_mir::Emitted { module: mir, segments } = raise_mir::emitted(&unit)?;
+    let program = translate::program(&unit, module)?;
+    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    if let Some((name, why)) = emitted.refused.first() {
+        return Err(hir::Unsupported(format!("@{name}: {why}")).into());
+    }
+    let mir = emitted.module;
+    // Each data segment in the order HIR places objects, with the globals it holds.
+    let mut segments: Vec<(String, Vec<String>)> = Vec::new();
+    for object in &program.modules[0].data {
+        let Some(segment) = &object.segment else { continue };
+        let name = mir.global(emitted.data[&object.id]).name.clone().expect("a named object");
+        match segments.iter_mut().find(|(one, _)| one == segment) {
+            Some((_, names)) => names.push(name),
+            None => segments.push((segment.clone(), vec![name])),
+        }
+    }
+    let private: BTreeSet<String> =
+        program.modules[0].data.iter().filter(|one| one.address == llrm_core::hir::AddressKind::Far).filter_map(|one| one.segment.clone()).collect();
     write(dump, "raised.ll", || llrm_mir::print::module(&mir))?;
     let problems = llrm_mir::verify::verify(&mir);
     if !problems.is_empty() {
@@ -438,7 +455,7 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> 
         }
     }
     built.externs.sort();
-    built.private = unit.segments.values().filter(|one| one.attr & hir::PRIVATE != 0).map(|one| one.name.clone()).collect();
+    built.private = private;
     write(dump, "cost", || built.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
     if dump.is_some() {
         let text = masm::text(&built)?;
