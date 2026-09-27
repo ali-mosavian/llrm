@@ -1102,6 +1102,8 @@ impl Selector<'_, '_, '_> {
                 let Operand::Value(value) = operand else { unreachable!("a constant is folded") };
                 Ok(Held { value: self.value(value), width })
             }
+            // No offset from a register: that register.
+            Some(Pointer::Based { base, index: None, offset: 0, .. }) if base.width == width => Ok(base),
             Some(pointer) => {
                 let held = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(pointer, held)));

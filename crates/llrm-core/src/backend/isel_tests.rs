@@ -2369,3 +2369,18 @@ define void @f() addrspace(1) {
     assert!(!got.iter().any(|line| line.starts_with("fld") || line.starts_with("fstp")), "{got:?}");
     assert_eq!(got.iter().filter(|line| line.starts_with("push")).count(), 3, "{got:?}");
 }
+
+/// A pointer at offset 0 from a register is that register: string-array-
+/// element's descriptor offset was made by `add ax, 0`.
+#[test]
+fn test_a_pointer_at_offset_zero_adds_nothing() {
+    let text = "declare void @g(ptr) addrspace(1)
+define void @f(ptr %p) addrspace(1) {
+  %q = getelementptr i8, ptr %p, i16 0
+  call addrspace(1) void @g(ptr %q)
+  ret void
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("add") && line.ends_with(", 0")), "{got:?}");
+}
