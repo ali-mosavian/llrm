@@ -232,12 +232,20 @@ fn _plan(
         let pressure = liveness::pressure(function, None, Some(&loop_.body)) as i64;
         room = 0.max((capacity - basics.len() as i64 - _RESERVE).min(capacity - pressure));
     }
-    // An address a counter indexes is left to it.
+    // An address a counter indexes is left to it. Its recurrences compete
+    // for the registers of the loop's own blocks: across a loop inside, a
+    // value is spilled around it, once a trip of this one.
+    let own = {
+        let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).flat_map(|one| one.body.clone()).collect::<BTreeSet<_>>();
+        loop_.body.difference(&nested).copied().collect::<BTreeSet<_>>()
+    };
+    let own_room = if capacity != 0 { 0.max((capacity - basics.len() as i64 - _RESERVE).min(capacity - liveness::pressure(function, None, Some(&own)) as i64)) } else { room };
+    let frequencies = profit::_frequencies(function, Some(&profit::proven_trips(view, facts)));
     let mut indexed = BTreeSet::new();
     let mut widened = Vec::new();
     for counter in basics.values() {
         let domain = induction::domain(view, loop_, counter, facts);
-        let Some(found) = indexing::indexing(function, loop_, counter, derived, forms, costs, room, domain.is_some()) else { continue };
+        let Some(found) = indexing::indexing(function, loop_, counter, derived, forms, costs, own_room, domain.is_some(), &credits, frequencies.as_ref()) else { continue };
         indexed.extend(found.indexed);
         if let (Some(bits), Some(domain)) = (found.widened, domain) {
             widened.push((counter.clone(), domain, bits));
