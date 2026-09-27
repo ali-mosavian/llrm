@@ -19,7 +19,8 @@
 //!
 //! Not ported yet, so `optimized` does without them: `transform::forwarded`
 //! (store-to-load forwarding, waiting on `analysis::avail`), then
-//! `loadjoins::reused` and `floatfold::checks` after the join.
+//! `loadjoins::reused` after the join. `floatfold::checks` has no
+//! counterpart: the rich MIR observes no FP exception.
 //! `reused_divides` has no counterpart (see `transform`).
 //!
 //! The old module had no tests of its own; `subexpressions`' are in
