@@ -4,7 +4,7 @@
 //! transaction is `Fixed`, one function pass; `applied` runs it under a
 //! manager that requires `Summaries` and verifies the module after it,
 //! then the whole-module step, `Interprocedural`, which runs it again on
-//! each body it changes.
+//! each body it changes, then `Rotate`.
 //!
 //! What changed with the IR:
 //! - A pass reports a change by preserving less than every analysis; the
@@ -18,8 +18,7 @@
 //!   prices neither here. The machine's facts are `Applied`'s numbers and
 //!   `target`.
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
-//!   Hoist's store sinking is loopmotion's pass, and Strength's
-//!   `loopexit::evaluated` is loopexit's.
+//!   Hoist's store sinking is loopmotion's pass.
 //! - llrm-mir's InstCombine joins SROA at the boundaries: see `pipeline`.
 //! - `flow::optimized`'s rule that an irreducible body is not promoted is
 //!   here: promotion needs dominators.
@@ -43,8 +42,8 @@ use llrm_mir::target::Machine;
 use crate::interprocedural::Interprocedural;
 use crate::profit::OperationCosts;
 use crate::{
-    affine, algebraic, dead, decide, dse, fill, floatloop, fold, gvn, hoist, lcssa, loopexit, loopmotion, loopsimplify, peel, promote,
-    strength, unroll, unswitch,
+    affine, algebraic, dead, decide, dse, fill, floatloop, fold, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
+    rotate, strength, unroll, unswitch,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -111,7 +110,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "strength" | "loopexit" | "zeroed" => self.strength,
+            "strength" | "zeroed" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" => self.fill,
@@ -169,14 +168,12 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(strength::Strength { costs: costs(), registers: applied.registers, call_registers: applied.call_registers }),
-        Box::new(loopexit::LoopExit),
-        // Pending: Strength's `indvars::rewound` and `simplified`, and rotate.
         Box::new(algebraic::Algebraic),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { costs: costs(), limits: limits() }),
         Box::new(peel::Peel { costs: costs(), limits: limits() }),
         Box::new(fill::Fill),
-        // Pending: CountToZero, named `zeroed`.
+        Box::new(indvars::CountToZero),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -190,7 +187,7 @@ pub fn passes() -> Vec<&'static str> {
 /// the scalar passes settle, counting to zero once strength has.
 fn settles_after(name: &str) -> u8 {
     match name {
-        "strength" | "loopexit" => 1,
+        "strength" => 1,
         "zeroed" => 2,
         _ => 0,
     }
@@ -219,7 +216,9 @@ pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, St
         pipeline: Box::new(move |module, id, _| rerun(module, id, &mut again, target.clone()).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
     });
-    // Pending: rotate, after the fixed point as the old drivers ran it.
+    // Last, as the old drivers rotated in lowering: unroll and peel refuse
+    // a rotated loop.
+    manager.add(rotate::Rotate);
     manager.run(module)
 }
 
