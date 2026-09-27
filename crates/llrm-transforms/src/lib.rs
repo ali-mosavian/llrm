@@ -12,6 +12,7 @@ pub mod decide;
 pub mod edges;
 pub mod fold;
 pub mod gvn;
+pub mod hoist;
 pub mod inline;
 pub mod interprocedural;
 pub mod lcssa;

@@ -310,19 +310,25 @@ pub fn _reaches(
 }
 
 /// Whether the load `one` still reads what the load before it read, with
-/// `between` run in between: nothing there may write its bytes.
+/// `between` run in between: nothing there may write its bytes, and, as
+/// the old barrier, nothing there is volatile.
+pub fn _undisturbed(function: &Function, one: InstId, between: &[InstId], accesses: &_Accesses) -> bool {
+    let volatile = |other: &InstId| matches!(function.instruction(*other).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. });
+    !between.iter().any(volatile) && _unwritten(function, one, between, accesses)
+}
+
+/// Whether nothing in `between` may write the bytes the load `one` reads.
 ///
-/// A volatile access is the old barrier. A call writes what
+/// A store writes its own bytes, volatile or not. A call writes what
 /// `alias::calls_annotated` says, and `regions::overlapping` decides
 /// against each write; an answer it cannot give overlaps.
-pub fn _undisturbed(function: &Function, one: InstId, between: &[InstId], accesses: &_Accesses) -> bool {
+pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &_Accesses) -> bool {
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
     let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, None).unwrap_or(true);
     for &other in between {
         let written = match function.instruction(other).opcode {
-            Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } => return false,
             Opcode::Store { .. } => accesses.references.get(&other).map(std::slice::from_ref),
             Opcode::Call(_) | Opcode::Invoke(_) if accesses.reading.contains(&other) => continue,
             Opcode::Call(_) | Opcode::Invoke(_) => accesses.calls.get(&other).map(|effect| effect.stores.as_slice()),
