@@ -318,6 +318,9 @@ pub struct LirBody {
     /// handler says so: RESUME NEXT finds the statement after the faulting
     /// address, which holds only while each statement's code is contiguous.
     pub source_order: bool,
+    /// Only an instruction that names them writes the incoming argument
+    /// slots: the IR this came from cannot address them.
+    pub sealed_arguments: bool,
 }
 
 impl LirBody {
@@ -341,6 +344,7 @@ impl LirBody {
             ordered: false,
             noreturn: false,
             source_order: false,
+            sealed_arguments: false,
         }
     }
 
@@ -358,6 +362,7 @@ impl LirBody {
             ordered: self.ordered,
             noreturn: self.noreturn,
             source_order: self.source_order,
+            sealed_arguments: self.sealed_arguments,
         }
     }
 

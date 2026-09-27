@@ -282,6 +282,17 @@ impl Selector<'_, '_, '_> {
             let mine = self.divided_by_power(quotient, dividend, shift, at, out);
             return Ok((mine, both.then(|| self.divided_by_power(!quotient, dividend, shift, at, out))));
         }
+        // Under 2^31 in magnitude, the dividend over any nonzero dword
+        // leaves a quotient that fits one: idiv cannot overflow.
+        if signed && self.narrow(right) && sign_bits(&self.module.context, self.function, left) > 33 {
+            let ((low, high), divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
+            let (quotients, remainders) = (self.half(), self.half());
+            let what = semantics(Operation::Divide, "idiv", vec![Loc::Held(quotients), Loc::Held(remainders)], vec![Loc::Held(high), Loc::Held(low), Loc::Held(divisor)]);
+            self.put(what, at, out);
+            let mut widened = |held: Held, selector: &mut Self| (held, selector.made(Operation::Binary, "sar", vec![Loc::Held(held), Self::count(31)], at, out));
+            let (quotients, remainders) = (widened(quotients, self), widened(remainders, self));
+            return Ok(if quotient { (quotients, both.then_some(remainders)) } else { (remainders, both.then_some(quotients)) });
+        }
         if signed && self.narrow(right) {
             let (dividend, divisor) = (self.wide(left, at, out)?, self.wide(right, at, out)?.0);
             let mine = self.divided(quotient, dividend, divisor, at, out);
