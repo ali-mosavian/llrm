@@ -341,6 +341,39 @@ b3:
     assert!(!through(&masked, &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap()).0);
 }
 
+/// A recurrence less an invariant absorbs the bias as a sum does. An
+/// index into an array based below zero reads `x - -640`, and refusing it
+/// left such a loop counting up to a compare.
+#[test]
+fn a_recurrence_less_an_invariant_counts_to_zero() {
+    let text = "@table = global [16 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp ult i16 %i, 9
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %k = sub i16 %i, -2
+  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %k
+  %got = load i16, ptr %at
+  %sum = add i16 %acc, %got
+  %inext = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+";
+    let (changed, module) = through(text, &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap());
+    assert!(changed, "{}", printed(&module));
+}
+
 /// Unknown trips counted down behind a guard, for 0, 1 and many trips.
 #[test]
 fn a_dead_counter_of_unknown_trips_counts_down() {
