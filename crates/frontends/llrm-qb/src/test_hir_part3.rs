@@ -1779,6 +1779,21 @@ fn test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted() {
     assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
 }
 
+/// A POKE of the BIOS data area counted as reaching every global, so each
+/// shared element the loop reads was reloaded every iteration.
+#[test]
+fn test_a_poke_of_the_bios_data_area_leaves_invariant_globals_hoisted() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "T.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3), xp(3)\r\nt\r\nSUB t\r\nDEF SEG = &H40\r\n\
+FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\n",
+    );
+    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
+}
+
 /// qbdemo's PLASMA scaled its masked `fuh` index with an `add` per pixel:
 /// a dynamic array's far pointer starts at offset 0 of its selector, which
 /// `exact_offsets` never counted, so the index was not proven exact and

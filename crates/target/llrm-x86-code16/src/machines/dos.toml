@@ -17,6 +17,12 @@ stack_is_data = true
 
 # Linear [low, high) ranges no program's own data occupies. A write there
 # reaches no variable, array or runtime cell.
+# Sources: Ralf Brown's Interrupt List, MEMORY.LST.
+[[foreign]]
+name = "interrupt vectors, BIOS data area, DOS work areas; IO.SYS loads at 0070:0000"
+low = 0x00000
+high = 0x00700
+
 [[foreign]]
 name = "VGA memory: graphics, monochrome and colour text"
 low = 0xA0000
@@ -26,6 +32,13 @@ high = 0xC0000
 name = "VGA BIOS ROM: B800:FFFF ends inside it"
 low = 0xC0000
 high = 0xC8000
+
+# C8000-EFFFF stays out: an upper memory block there may hold a program
+# loaded high, its data group included.
+[[foreign]]
+name = "system BIOS ROM and the HMA FFFF:FFFF reaches, where DOS=HIGH keeps DOS"
+low = 0xF0000
+high = 0x10FFF0
 
 # I/O ports a write to changes no memory. The VGA DAC: PEL mask, read
 # index, write index, data; the palette is mapped at no address.

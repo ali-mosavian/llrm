@@ -5,8 +5,8 @@ use llrm_mir::target::{Machine, OperationCosts};
 
 use crate::timings;
 
-/// Real-mode DOS on one CPU: its prices and registers, and its foreign
-/// memory -- VGA and text video memory, and the ROMs above.
+/// Real-mode DOS on one CPU: its prices and registers, and the built-in
+/// description's foreign memory.
 pub struct Dos {
     pub costs: OperationCosts,
     pub registers: i64,
@@ -31,19 +31,9 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    /// The description's foreign memory: `dos.toml` states it once.
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
-        let word = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF;
-        if !word(selectors) || !word(offsets) {
-            return None;
-        }
-        let (start, end) = (selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width);
-        let mut reached = start;
-        for (from, to) in [(0xA0000, 0xC0000), (0xC0000, 0x10_0000)] {
-            if from <= reached && reached < to {
-                reached = to;
-            }
-        }
-        (end <= reached).then_some((start, end))
+        crate::machine::BUILT_IN.foreign_span(selectors, offsets, width)
     }
 
     fn costs(&self) -> OperationCosts {

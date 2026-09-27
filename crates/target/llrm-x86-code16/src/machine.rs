@@ -130,6 +130,21 @@ impl Machine {
 mod tests {
     use super::*;
 
+    /// Only VGA was foreign, so a PEEK or POKE of the BIOS data area or the
+    /// ROM counted as reaching every global.
+    #[test]
+    fn test_the_bios_and_dos_areas_below_program_data_and_the_rom_above_are_foreign() {
+        let dos = Machine::parse(DOS).unwrap();
+        let every = (0, 0xFFFF);
+        assert_eq!(dos.foreign_span((0, 0), (0x46C, 0x46C), 4), Some((0x46C, 0x470)));
+        assert_eq!(dos.foreign_span((0x40, 0x40), (0x17, 0x17), 1), Some((0x417, 0x418)));
+        assert_eq!(dos.foreign_span((0x6F, 0x6F), (0xF, 0xF), 1), Some((0x6FF, 0x700)));
+        assert_eq!(dos.foreign_span((0x70, 0x70), (0, 0), 1), None);
+        assert_eq!(dos.foreign_span((0xF000, 0xF000), every, 1), Some((0xF0000, 0x100000)));
+        assert_eq!(dos.foreign_span((0xFFFF, 0xFFFF), every, 1), Some((0xFFFF0, 0x10FFF0)));
+        assert_eq!(dos.foreign_span((0xE000, 0xE000), (0, 0), 1), None);
+    }
+
     #[test]
     fn test_vga_selectors_are_foreign_only_in_real_mode() {
         let dos = Machine::parse(DOS).unwrap();
