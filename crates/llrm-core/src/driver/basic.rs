@@ -532,6 +532,8 @@ pub struct Object {
     pub main: String,
     /// Each global's symbol, by its MIR name, where it is not that name.
     pub symbols: BTreeMap<String, String>,
+    /// Each HIR data object's symbol, by its id, for a module entering as HIR.
+    pub data: BTreeMap<i64, String>,
     /// Each data segment, in order.
     pub segments: Vec<Segment>,
     /// The segment the compiler's constants go in.
@@ -569,6 +571,29 @@ pub struct Segment {
 pub enum Item {
     Datum(masm::Datum),
     Global { name: String, at: Option<i64> },
+    /// A HIR data object, by its id, for a module entering as HIR: its
+    /// global once emitted.
+    Object(i64),
+}
+
+/// `program`, one HIR module, compiled into the BASIC module object `object`
+/// lays out: emitted, each data object `object` names resolved to its
+/// global, optimized, assembled.
+pub fn compiled(program: &model::Program, object: &Object, options: &Options) -> Result<masm::Module, String> {
+    let (mut mir, data) = super::emitted(program, options)?;
+    let [(module, data)] = [(&mir.modules[0], &data[0])];
+    let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
+    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone() };
+    resolved.symbols.extend(object.data.iter().filter_map(|(id, symbol)| Some((global(id)?, symbol.clone()))));
+    for segment in &object.segments {
+        let items = segment.items.iter().filter_map(|item| match item {
+            Item::Object(id) => global(id).map(|name| Item::Global { name, at: None }),
+            other => Some(other.clone()),
+        });
+        resolved.segments.push(Segment { name: segment.name.clone(), items: items.collect(), size: segment.size });
+    }
+    super::optimized(&mut mir, options)?;
+    assembled(&mir.modules[0], &resolved, program.runtime, options)
 }
 
 /// A lifter's `module` compiled into the BASIC module object `object` lays
@@ -578,7 +603,7 @@ pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::R
     let mut program = super::linked(vec![module], runtime, options)?;
     let placed = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {
         Item::Global { name, .. } => Some(name.clone()),
-        Item::Datum(_) => None,
+        Item::Datum(_) | Item::Object(_) => None,
     });
     program.exports.kept = placed.collect();
     super::optimized(&mut program, options)?;
@@ -765,6 +790,7 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
                     (None, Some(_)) => return Err(format!("{name} holds @{global}, which the module lacks")),
                 }
             }
+            Item::Object(id) => return Err(format!("{name} holds data object {id}, which no HIR entry resolved")),
         };
         for datum in &datums {
             if let masm::Datum::Pointer(masm::Pointer { name: target, offset: at, .. }) = datum {

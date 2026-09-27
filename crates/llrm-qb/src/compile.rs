@@ -1269,25 +1269,13 @@ fn _lowered_machine(
 fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::Module, CompileError> {
     let program = &_positional_data(program)?;
     let module = &program.modules[0];
-    let options = llrm_core::driver::Options::of(machine.clone());
-    let (mut mir, data) = llrm_core::driver::emitted(program, &options).map_err(EmissionError)?;
-    let names = _data_names(module);
     let procedures = module.functions.iter().map(|one| &one.name).chain(module.callables.iter().map(|one| &one.name));
-    let mut symbols: BTreeMap<String, String> = procedures.map(|name| (name.clone(), _object_name(name))).collect();
-    for (object, &global) in &data[0] {
-        let symbol = names.get(&(Space::Segment, *object)).or_else(|| names.get(&(Space::External, *object)));
-        if let (Some(symbol), Some(name)) = (symbol, &mir.modules[0].global(global).name) {
-            symbols.insert(name.clone(), symbol.clone());
-        }
-    }
-    // Each object's global, by name: one the pipeline deletes lies nowhere.
+    let symbols: BTreeMap<String, String> = procedures.map(|name| (name.clone(), _object_name(name))).collect();
+    let data = _data_names(module).into_iter().filter(|((space, _), _)| matches!(space, Space::Segment | Space::External)).map(|((_, id), name)| (id, name)).collect();
     let mut placed: IndexMap<&str, Vec<basic::Item>> = ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
-        if let Some(name) = data[0].get(&object_.id).and_then(|&global| mir.modules[0].global(global).name.clone()) {
-            placed[_segment(object_)].push(basic::Item::Global { name, at: None });
-        }
+        placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
-    llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
     let frames = module
         .functions
         .iter()
@@ -1333,13 +1321,14 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
         header: _header(program)?,
         main: "__main".to_owned(),
         symbols,
+        data,
         segments: segments.into_iter().map(|(name, items)| basic::Segment { name: name.to_owned(), items, size: None }).collect(),
         constants: "BC_CN".to_owned(),
         private,
         requests: graphics,
         frames,
     };
-    Ok(basic::assembled(&mir.modules[0], &object, program.runtime, &options)?)
+    Ok(basic::compiled(program, &object, &llrm_core::driver::Options::of(machine.clone()))?)
 }
 
 /// Which middle and back end a module's functions reach machine form by.

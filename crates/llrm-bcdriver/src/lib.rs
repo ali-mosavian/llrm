@@ -102,6 +102,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         header: header(found, &records, code_segment, &segments)?,
         main: "main".to_owned(),
         symbols,
+        data: BTreeMap::new(),
         segments: data,
         constants: CONSTANTS.to_owned(),
         private,
