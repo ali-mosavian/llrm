@@ -334,3 +334,345 @@ b:
     );
     assert_eq!(noreturn_procedures(&module, &names(&module, &["first", "second"])), BTreeSet::new());
 }
+
+#[test]
+fn void_declared_and_partly_dynamic_returns_have_no_constant() {
+    let module = parsed(
+        "declare i16 @external()
+
+define void @nothing() {
+b:
+  ret void
+}
+
+define i16 @mixed(i1 %c, i16 %x) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  ret i16 5
+
+b3:
+  ret i16 %x
+}
+",
+    );
+    assert!(constant_returns(&module).is_empty());
+}
+
+#[test]
+fn a_returned_constant_replaces_only_uses_of_its_callers_result() {
+    let mut module = parsed(
+        "define internal i16 @five() {
+b:
+  ret i16 5
+}
+
+declare i16 @other()
+
+define i16 @caller() {
+b:
+  %unused = call i16 @five()
+  %five = call i16 @five()
+  %other = call i16 @other()
+  %sum = add i16 %five, %other
+  ret i16 %sum
+}
+",
+    );
+    let returns = constant_returns(&module);
+    let (context, caller) = module.function_mut("caller").unwrap();
+    assert!(propagate_returns(context, caller, &returns));
+    assert_eq!(calls(caller).len(), 3);
+    assert!(llrm_mir::print::module(&module).contains("%sum = add i16 5, %other"));
+}
+
+#[test]
+fn an_unused_call_result_is_not_a_change() {
+    let mut module = parsed(
+        "define internal i16 @five() {
+b:
+  ret i16 5
+}
+
+define void @caller() {
+b:
+  %unused = call i16 @five()
+  ret void
+}
+",
+    );
+    let returns = constant_returns(&module);
+    let (context, caller) = module.function_mut("caller").unwrap();
+    assert!(!propagate_returns(context, caller, &returns));
+}
+
+#[test]
+fn a_constant_that_is_not_an_integer_is_no_parameter_fact() {
+    let module = parsed(
+        "define internal void @take(ptr %p, i16 %n) {
+b:
+  ret void
+}
+
+define void @caller() {
+b:
+  call void @take(ptr null, i16 3)
+  ret void
+}
+",
+    );
+    assert_eq!(named(&module, &constant_parameters(&module, &names(&module, &["take"]))), [("take".to_owned(), vec![None, Some(3)])]);
+}
+
+#[test]
+fn a_body_nobody_calls_has_no_parameter_facts() {
+    let module = parsed(
+        "define internal void @take(i16 %n) {
+b:
+  ret void
+}
+",
+    );
+    assert!(constant_parameters(&module, &names(&module, &["take"])).is_empty());
+}
+
+#[test]
+fn only_eligible_callees_get_parameter_facts() {
+    let module = parsed(
+        "define void @exported(i16 %n) {
+b:
+  ret void
+}
+
+define void @caller() {
+b:
+  call void @exported(i16 3)
+  ret void
+}
+",
+    );
+    assert!(constant_parameters(&module, &BTreeSet::new()).is_empty());
+}
+
+#[test]
+fn an_indirect_call_has_no_per_call_constants() {
+    let module = parsed(
+        "define void @caller(ptr %target) {
+b:
+  call void %target(i16 3)
+  ret void
+}
+",
+    );
+    assert!(current_call_constants(&module.context, function(&module, "caller")).is_empty());
+}
+
+#[test]
+fn specializing_a_parameter_nothing_reads_changes_nothing() {
+    let mut module = parsed(
+        "define internal i16 @leaf(i16 %x, i16 %y) {
+b:
+  ret i16 %y
+}
+",
+    );
+    let i16 = module.context.types.int(16);
+    let seven = module.context.int(i16, 7);
+    let (context, leaf) = module.function_mut("leaf").unwrap();
+    assert!(!specialize_parameters(context, leaf, &[Some(seven), None]));
+}
+
+#[test]
+fn purity_reaches_a_caller_of_a_pure_body_but_not_a_self_recursive_one() {
+    let module = parsed(
+        "define internal i16 @leaf(i16 %x) {
+b:
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define i16 @middle(i16 %x) {
+b:
+  %y = call i16 @leaf(i16 %x)
+  ret i16 %y
+}
+
+define i16 @recursive(i16 %x) {
+b:
+  %y = call i16 @recursive(i16 %x)
+  ret i16 %y
+}
+",
+    );
+    assert_eq!(pure_procedures(&module), names(&module, &["leaf", "middle"]));
+}
+
+#[test]
+fn purity_refuses_reads_of_globals_parameters_and_volatile_frame_accesses() {
+    let module = parsed(
+        "@g = global i16 0
+
+define i16 @global() {
+b:
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+
+define i16 @parameter(ptr %p) {
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+
+define i16 @volatile() {
+b:
+  %slot = alloca i16
+  %v = load volatile i16, ptr %slot
+  ret i16 %v
+}
+",
+    );
+    assert_eq!(pure_procedures(&module), BTreeSet::new());
+}
+
+#[test]
+fn a_call_that_states_only_memory_none_is_not_pure_without_willreturn_and_nounwind() {
+    let module = parsed(
+        "declare i16 @quiet(i16) memory(none)
+declare i16 @returns(i16) memory(none) willreturn nounwind
+
+define i16 @f(i16 %x) {
+b:
+  %y = call i16 @quiet(i16 %x)
+  ret i16 %y
+}
+
+define i16 @g(i16 %x) {
+b:
+  %y = call i16 @returns(i16 %x)
+  ret i16 %y
+}
+",
+    );
+    assert_eq!(pure_procedures(&module), names(&module, &["g"]));
+}
+
+#[test]
+fn dead_call_removal_keeps_used_results_impure_callees_and_invokes() {
+    let mut module = parsed(
+        "declare void @effect()
+declare i32 @__gxx_personality_v0(...)
+
+define internal i16 @leaf(i16 %x) {
+b:
+  ret i16 %x
+}
+
+define i16 @caller() personality ptr @__gxx_personality_v0 {
+b:
+  %used = call i16 @leaf(i16 1)
+  call void @effect()
+  %dead = invoke i16 @leaf(i16 2) to label %ok unwind label %pad
+
+ok:
+  ret i16 %used
+
+pad:
+  %lp = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %lp
+}
+",
+    );
+    let pure = pure_procedures(&module);
+    let declarations = effects::declarations(&module);
+    let before = llrm_mir::print::module(&module);
+    let (context, caller) = module.function_mut("caller").unwrap();
+    assert!(!remove_dead_pure_calls(context, &declarations, caller, &pure));
+    assert_eq!(llrm_mir::print::module(&module), before);
+}
+
+#[test]
+fn readonly_reaches_callers_and_refuses_far_external_and_pointer_reads() {
+    let module = parsed(
+        "@near = global i16 0
+@far_data = addrspace(1) global i16 0
+@external_data = external global i16
+
+define i16 @read() {
+b:
+  %v = load i16, ptr @near
+  ret i16 %v
+}
+
+define i16 @caller() {
+b:
+  %v = call i16 @read()
+  ret i16 %v
+}
+
+define i16 @far() {
+b:
+  %v = load i16, ptr addrspace(1) @far_data
+  ret i16 %v
+}
+
+define i16 @external() {
+b:
+  %v = load i16, ptr @external_data
+  ret i16 %v
+}
+
+define i16 @pointer(ptr %p) {
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert_eq!(readonly_procedures(&module, &layout(&module)), names(&module, &["read", "caller"]));
+}
+
+#[test]
+fn a_private_body_that_returns_on_one_path_is_not_noreturn() {
+    let module = parsed(
+        "declare void @exit(i16) noreturn
+
+define internal void @sometimes(i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  call void @exit(i16 1)
+  unreachable
+
+b3:
+  ret void
+}
+",
+    );
+    assert_eq!(noreturn_procedures(&module, &names(&module, &["sometimes"])), BTreeSet::new());
+}
+
+#[test]
+fn an_invoke_of_a_noreturn_callee_is_not_a_terminal_site() {
+    let module = parsed(
+        "declare void @exit(i16) noreturn
+declare i32 @__gxx_personality_v0(...)
+
+define void @f() personality ptr @__gxx_personality_v0 {
+b:
+  invoke void @exit(i16 1) to label %ok unwind label %pad
+
+ok:
+  unreachable
+
+pad:
+  %lp = landingpad { ptr, i32 } cleanup
+  ret void
+}
+",
+    );
+    let f = function(&module, "f");
+    assert!(terminal_sites(&module.context, &effects::declarations(&module), f, &BTreeSet::new()).is_empty());
+}
