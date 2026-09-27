@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::Summaries;
+use llrm_analysis::manager::{ProgramSummaries, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
@@ -186,6 +186,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
     manager.require::<Summaries>();
+    manager.require_program::<ProgramSummaries>();
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
