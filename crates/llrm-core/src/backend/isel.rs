@@ -1738,6 +1738,8 @@ impl Selector<'_, '_, '_> {
                     out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
                 }
             }
+            // What a poison store leaves may be anything, so it stays as is.
+            Opcode::Store { volatile: false, .. } if matches!(operands[0], Operand::Constant(one) if self.module.context.get(one).kind == ConstantKind::Poison) => {}
             Opcode::Store { volatile, .. } if matches!(operands[0], Operand::Value(value) if self.converted(value).is_some()) => {
                 let Operand::Value(value) = operands[0] else { unreachable!("a converted value") };
                 let conversion = self.converted(value).expect("a stored conversion");

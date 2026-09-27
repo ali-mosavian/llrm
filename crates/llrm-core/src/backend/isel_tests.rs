@@ -2270,3 +2270,12 @@ define void @f(double %a) addrspace(1) {
     let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
     assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
 }
+
+/// A store of poison stores nothing, as LLVM's DAGCombiner drops it: the
+/// memory may then hold anything. isel refused it as "an address of no
+/// global".
+#[test]
+fn test_a_store_of_poison_stores_nothing() {
+    let text = "@g = internal global i16 0\ndefine void @f() addrspace(1) {\n  store i16 poison, ptr @g\n  ret void\n}\n";
+    assert!(!listing(text, "f").iter().any(|line| line.starts_with("mov")));
+}
