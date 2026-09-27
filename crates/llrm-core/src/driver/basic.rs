@@ -569,6 +569,20 @@ pub enum Item {
     Global { name: String, at: Option<i64> },
 }
 
+/// A lifter's `module` compiled into the BASIC module object `object` lays
+/// out, the object file `name`: linked against `runtime`, a module of
+/// declarations alone, what the layout places kept, optimized, assembled.
+pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::RuntimeProfile, options: &Options, name: &str) -> Result<Vec<u8>, String> {
+    let mut program = super::linked(vec![module], runtime, options)?;
+    let placed = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {
+        Item::Global { name, .. } => Some(name.clone()),
+        Item::Datum(_) => None,
+    });
+    program.exports.kept = placed.collect();
+    super::optimized(&mut program, options)?;
+    self::object(&program.modules[0], object, family, options, name)
+}
+
 /// `module` compiled for the machine into the BASIC module object `object`
 /// lays out, the object file `name`; its runtime `runtime`'s.
 pub fn object(module: &Module, object: &Object, runtime: model::RuntimeProfile, options: &Options, name: &str) -> Result<Vec<u8>, String> {

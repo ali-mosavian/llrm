@@ -114,10 +114,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         Family::Vbdos => RuntimeProfile::Vbdos,
         other => return Err(format!("a {other:?} object")),
     };
-    let options = driver::Options::of(machine.clone());
-    let mut program = driver::linked(vec![module], runtime, &options)?;
-    driver::optimized(&mut program, &options)?;
-    basic::object(&program.modules[0], &object, family, &options, name)
+    basic::lifted(module, runtime, &object, family, &driver::Options::of(machine.clone()), name)
 }
 
 /// Each data segment the object had, in its order, holding its objects in
