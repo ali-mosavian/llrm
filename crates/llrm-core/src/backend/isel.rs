@@ -282,6 +282,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         cells: BTreeSet::new(),
         stored: BTreeSet::new(),
         words: IndexMap::default(),
+        joins: IndexMap::default(),
         tested: BTreeSet::new(),
         consumed: BTreeSet::new(),
         paired: IndexMap::default(),
@@ -344,6 +345,8 @@ struct Selector<'m, 'c, 'p> {
     stored: BTreeSet<InstId>,
     /// Dword loads read only as words: each word's offset and the value it is.
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
+    /// A dword joined from two words: those words, low then high.
+    joins: IndexMap<u32, (Held, Held)>,
     /// ANDs only a comparison with zero reads: a `test`.
     tested: BTreeSet<InstId>,
     /// What another instruction's selection made: a narrowed load's
@@ -1697,9 +1700,12 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// `into` made of a low and a high word.
+    /// `into` made of a low and a high word, and dropped if only its words
+    /// are read: they are remembered.
     fn joined(&mut self, into: Held, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) {
-        let (wide_low, wide_high, shifted) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
+        let (wide_low, wide_high, shifted) = (self.half(), self.half(), self.half());
+        self.halves.insert(into.value);
+        self.joins.insert(into.value, (low, high));
         let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
         for what in [
             semantics(Operation::Extend, "movzx", vec![Loc::Held(wide_low)], vec![Loc::Held(low)]),
@@ -1986,7 +1992,12 @@ impl Selector<'_, '_, '_> {
                     let held = self.held(value, type_of(value), at, out)?;
                     one.requires = match convention.returns[..] {
                         [register] => vec![(held, register)],
-                        // A dword result in a word pair: its low word, and its high word shifted down.
+                        // A dword result in a word pair: the words it was joined from.
+                        [low, high] if held.width == 4 && self.joins.contains_key(&held.value) => {
+                            let (low_word, high_word) = self.joins[&held.value];
+                            vec![(low_word, low), (high_word, high)]
+                        }
+                        // Else its low word, and its high word shifted down.
                         [low, high] if held.width == 4 => {
                             let top = Held { value: self.fresh(), width: 4 };
                             let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });

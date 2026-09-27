@@ -41,7 +41,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A register for one half of a wide value, dropped where nothing reads it.
-    fn half(&mut self) -> Held {
+    pub(super) fn half(&mut self) -> Held {
         let half = self.fresh_held(4);
         self.halves.insert(half.value);
         half
