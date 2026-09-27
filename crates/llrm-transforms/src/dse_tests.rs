@@ -64,3 +64,14 @@ fn test_dse_keeps_an_observed_store() {
         assert_eq!(after.matches("store").count(), kept, "{after}");
     }
 }
+
+/// Without `Summaries` required the pass runs, as an LLVM function pass
+/// does without a cached outer result: every call unknown, so less
+/// precise. It panicked.
+#[test]
+fn a_bare_pass_manager_takes_every_call_for_unknown() {
+    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  call void @h(ptr @k)\n  store i16 %x, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}\n"));
+    let precise = crate::testing::summarized(&module, Dse, true, &[&[0], &[5]]);
+    let bare = crate::testing::summarized(&module, Dse, false, &[&[0], &[5]]);
+    assert!(precise.matches("store").count() == 1 && bare.matches("store").count() == 2, "{precise}\n{bare}");
+}

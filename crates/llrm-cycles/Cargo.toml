@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "llrm's instruction-cost model"
 
 [dependencies]
+llrm-mir = { workspace = true }
 llrm-support = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }

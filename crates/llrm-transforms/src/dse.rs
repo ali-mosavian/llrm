@@ -5,7 +5,8 @@
 //! no call and no exit observes. `Promote` leaves every store; this takes
 //! those to cells nothing reads any more.
 //!
-//! The pass needs `Summaries` required, for its calls' footprints.
+//! Its calls' footprints are `Summaries`', where required; else each
+//! callee is unknown.
 //! Dropped with the BC frontend: the data-segment bounds and the error
 //! handlers' contracts.
 

@@ -381,27 +381,31 @@ b0:
 /// `tests/test_edge_ranges.py:guarded_loop`: `for i = 0 while i < 10: if i < 4: off = i * 2`,
 /// the header also computing `header`.
 fn guarded_loop(header: &str) -> Parsed {
+    guarded_loop_of(16, header)
+}
+
+fn guarded_loop_of(width: u32, header: &str) -> Parsed {
     Parsed::new(&format!(
         "define void @f() {{
 b0:
   br label %b10
 
 b10:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b40 ]
+  %i = phi i{width} [ 0, %b0 ], [ %next, %b40 ]
   {header}
-  %c = icmp slt i16 %i, 10
+  %c = icmp slt i{width} %i, 10
   br i1 %c, label %b20, label %b50
 
 b20:
-  %g = icmp slt i16 %i, 4
+  %g = icmp slt i{width} %i, 4
   br i1 %g, label %b30, label %b40
 
 b30:
-  %off = mul i16 %i, 2
+  %off = mul i{width} %i, 2
   br label %b40
 
 b40:
-  %next = add i16 %i, 1
+  %next = add i{width} %i, 1
   br label %b10
 
 b50:
@@ -433,6 +437,17 @@ fn test_a_value_the_header_makes_is_bounded_inside_the_loop() {
     let parsed = guarded_loop("%twice = mul i16 %i, 2");
     let known = bounded(&parsed.unit()).unwrap();
     assert_eq!(known[&cfg::id(parsed.block("b20"))].get(&parsed.value("twice")), Some(&interval(0, 18, 16)));
+}
+
+/// Widths were the old x86's 16 and 32 bits: a value computed from an i8
+/// counter had no interval, nor did the counter under the guard.
+#[test]
+fn a_value_computed_from_an_i8_counter_is_bounded() {
+    let parsed = guarded_loop_of(8, "%twice = mul i8 %i, 2");
+    let known = bounded(&parsed.unit()).unwrap();
+    let at = |name: &str| &known[&cfg::id(parsed.block(name))];
+    assert_eq!(at("b20").get(&parsed.value("twice")), Some(&interval(0, 18, 8)));
+    assert_eq!(at("b30").get(&parsed.value("off")), Some(&interval(0, 6, 8)));
 }
 
 /// A loop tested after its trip had no facts in its header, which in a

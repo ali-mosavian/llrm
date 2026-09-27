@@ -434,3 +434,14 @@ fn a_store_to_another_global_keeps_the_join_value() {
     assert!(!text.contains("load"), "{text}");
     unchanged(&diamond("%p = inttoptr i16 64 to ptr\n  store i16 1, ptr %p", ""), false);
 }
+
+/// Without `Summaries` required the pass runs, as an LLVM function pass
+/// does without a cached outer result: every call unknown, so less
+/// precise. It panicked.
+#[test]
+fn a_bare_pass_manager_takes_every_call_for_unknown() {
+    let module = crate::testing::parsed(&format!("{}{}{}", llrm_analysis::testing::DOS, crate::testing::WRITES_ITS_ARGUMENT, "define i16 @f(i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  store i16 10, ptr @g\n  br label %b3\n\nb2:\n  store i16 20, ptr @g\n  br label %b3\n\nb3:\n  call void @h(ptr @k)\n  %x = load i16, ptr @g\n  ret i16 %x\n}\n"));
+    let precise = crate::testing::summarized(&module, LoadJoins { insert: false }, true, &[&[0], &[1]]);
+    let bare = crate::testing::summarized(&module, LoadJoins { insert: false }, false, &[&[0], &[1]]);
+    assert!(precise.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]") && !bare.contains("phi i16 [ 10, %b1 ], [ 20, %b2 ]"), "{precise}\n{bare}");
+}

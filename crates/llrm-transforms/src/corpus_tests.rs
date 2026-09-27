@@ -80,8 +80,9 @@ fn hoist_keeps_every_corpus_module_verifying_and_settles() {
         for id in bodies(&module) {
             let mut rounds = 0;
             loop {
+                let mut declared = llrm_mir::passes::Declared::of(&module);
                 let (context, function) = function_mut(&mut module, id);
-                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes };
+                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
                 if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer))) {
                     break;
                 }

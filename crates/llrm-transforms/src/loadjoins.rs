@@ -17,9 +17,9 @@
 //! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
 //!   `source_backed` and `raised` marks.
 //!
-//! A call's footprint is its `CallEffects`: the pass needs `Summaries`
-//! required. An address translated onto an edge carries alias's
-//! provenance, as every access does.
+//! A call's footprint is its `CallEffects`: without `Summaries` required,
+//! an unknown callee's. An address translated onto an edge carries
+//! alias's provenance, as every access does.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

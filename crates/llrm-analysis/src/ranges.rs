@@ -113,7 +113,7 @@ pub fn on_edge(
     let (Some(left_width), Some(right_width)) = (unit.int_bits(left), unit.int_bits(right)) else {
         return Ok(Some(result));
     };
-    if !matches!(left_width, 16 | 32) || right_width != left_width {
+    if right_width != left_width {
         return Ok(Some(result));
     }
     let mut kind = predicate;
@@ -218,9 +218,6 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     let op = unit.function.instruction(inst);
     let result = op.result?;
     let width = unit.int_bits(Operand::Value(result))?;
-    if !matches!(width, 16 | 32) {
-        return None;
-    }
     // Every other operation answers None below, whatever its operands.
     let kind = match op.opcode {
         Opcode::Cast(CastOp::SExt) => None,

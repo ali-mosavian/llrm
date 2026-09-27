@@ -6,7 +6,7 @@
 //! - The old candidate was re-optimized by `transform::recorded`, the whole
 //!   pipeline with unswitching off and the machine's tuning forwarded. That
 //!   pipeline is not ported, so the re-optimization is the passes the pass
-//!   is given; its price is `profit::weighted` at the given costs, each
+//!   is given; its price is `profit::weighted` at the target's costs, each
 //!   loop weighted by the trips induction proves.
 //! - The old stage records and `watch` hook are the pass manager's dump and
 //!   change log.
@@ -41,14 +41,13 @@ use llrm_mir::edit::Position;
 use llrm_mir::context::Context;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 
 use crate::lcssa::{self, arms, from_arms, operations};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loopclone, transform};
 
 pub struct Unswitch {
-    pub costs: OperationCosts,
     /// What a specialized candidate goes through before it is judged.
     pub passes: Vec<Box<dyn FunctionPass>>,
 }
@@ -59,13 +58,15 @@ impl FunctionPass for Unswitch {
     }
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let costs = profit::costs(&outer);
         let passes = &mut self.passes;
         let mut reoptimize = |candidate: &mut Unit| {
             for pass in passes.iter_mut() {
                 pass.run(candidate, &mut analyses.fresh());
             }
         };
-        match optimized(unit, &self.costs, &mut reoptimize) {
+        match optimized(unit, &outer, &costs, &mut reoptimize) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("unswitch: {error}"),
@@ -75,7 +76,8 @@ impl FunctionPass for Unswitch {
 
 /// `unit`'s function specialized and re-optimized, kept only when that
 /// removed a loop without growing the function or its price; whether it was.
-pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn FnMut(&mut Unit)) -> Result<bool, String> {
+/// `outer` is what the prices' analyses read of the module.
+pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptimize: &mut dyn FnMut(&mut Unit)) -> Result<bool, String> {
     let Some(mut candidate) = specialized(unit.context, unit.function)? else {
         return Ok(false);
     };
@@ -86,13 +88,13 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn F
         callees: unit.callees,
         metadata: unit.metadata,
         sizes: unit.sizes,
+        declared: &mut *unit.declared,
     });
 
     let size = |state: &Function| occurrence::operations(state).count();
     let count = |state: &Function| loops::loops(&cfg::graph(state), state.entry().map(cfg::id)).len();
     let price = |state: &Function| {
-        // Registers alone: no global is read.
-        let within = memory::Unit { machine: None, context: unit.context, layout: unit.layout, metadata: unit.metadata, globals: &[], function: state, references: None, globals_aa: None };
+        let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         let trips = profit::proven_trips(&within, &consts::known(&within, None, None, None));
         profit::weighted(unit.context, state, unit.callees, costs, Some(&trips))
     };

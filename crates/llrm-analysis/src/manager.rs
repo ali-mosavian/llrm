@@ -14,8 +14,8 @@ use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
-use crate::floatfacts;
 use crate::globalsaa::{self, Globals};
+use crate::floatfacts;
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -87,7 +87,9 @@ impl Analysis for Annotated {
 }
 
 /// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. An error where `Summaries` was not required.
+/// `alias::calls_annotated`. Where `Summaries` was not required, each
+/// call is to an unknown callee. Either way a call does no more than its
+/// attributes state, as alias reads them.
 pub struct CallEffects;
 
 impl Analysis for CallEffects {
@@ -95,13 +97,13 @@ impl Analysis for CallEffects {
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let outer = analyses.outer();
-        outer.cached::<Summaries>().ok_or("call effects need the module's summaries: require `Summaries`")?;
         call_effects(&Unit::within(context, layout, function, outer), outer)
     }
 }
 
 /// What each call of `unit` reads and writes, its callee as `Summaries`
-/// says where `outer` holds it, and otherwise as its attributes alone do.
+/// says where `outer` holds it, and otherwise an unknown one, as LLVM's
+/// function passes read an outer result only if cached.
 pub fn call_effects(unit: &Unit, outer: &Outer) -> Result<IndexMap<InstId, Effect>, String> {
     let summaries = outer.cached::<Summaries>();
     let none = IndexMap::default();
@@ -136,8 +138,8 @@ impl Analysis for Writes {
     }
 }
 
-/// `Writes`, or where `Summaries` was not required none: each call then
-/// writes what `memory::unmodeled_write` says.
+/// `Writes`, or where it failed none: each call then writes what
+/// `memory::unmodeled_write` says.
 pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Calls {
     Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
 }

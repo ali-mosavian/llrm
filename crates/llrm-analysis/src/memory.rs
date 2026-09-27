@@ -36,7 +36,7 @@ use std::fmt;
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context, GlobalId, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
@@ -736,19 +736,10 @@ pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
                 },
                 _ => None,
             });
-            !(reads_only(&info.attrs) || callee.is_some_and(|callee| reads_only(&callee.attrs)))
+            llrm_mir::memory::stated(&info.attrs).writes && callee.is_none_or(|callee| llrm_mir::memory::stated(&callee.attrs).writes)
         }
         _ => false,
     }
-}
-
-/// The attributes say memory is at most read.
-fn reads_only(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| match attr {
-        Attribute::Flag(flag) => flag == "readnone" || flag == "readonly",
-        Attribute::Memory(locations) => locations.iter().all(|(_, access)| access == "none" || access == "read"),
-        _ => false,
-    })
 }
 
 #[cfg(test)]

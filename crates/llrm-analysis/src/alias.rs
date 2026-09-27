@@ -355,7 +355,7 @@ fn _allowed(unit: &Unit, at: InstId) -> Allowed {
 /// at the site or on the callee's parameter.
 fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
-    let nocapture = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nocapture"));
+    let nocapture = |attrs: &[Attribute]| llrm_mir::memory::has(attrs, "nocapture");
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
     info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
@@ -631,7 +631,18 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     for at in call_sites(&procedure.unit) {
         let actual = _actuals(procedure, &facts, at);
         let mut effect = match callee(&at) {
-            Some(callee) => callee.instantiated(&actual),
+            Some(callee) => {
+                // A body does no more than its call states.
+                let allowed = _allowed(&procedure.unit, at);
+                let mut effect = callee.instantiated(&actual);
+                if !(allowed.arguments.reads || allowed.other.reads) {
+                    (effect.reads, effect.unknown_read) = (BTreeSet::new(), false);
+                }
+                if !(allowed.arguments.writes || allowed.other.writes) {
+                    (effect.writes, effect.unknown_write) = (BTreeSet::new(), false);
+                }
+                effect
+            }
             None => {
                 let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
                 Summary { reads, writes, ..Summary::default() }

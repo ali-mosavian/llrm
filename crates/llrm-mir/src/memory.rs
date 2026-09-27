@@ -70,7 +70,8 @@ pub fn memset(context: &Context, callees: &Callees, function: &Function, inst: I
     (summary.memset && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
 }
 
-fn has(attrs: &[Attribute], flag: &str) -> bool {
+/// Whether `attrs` carry the flag `flag`.
+pub fn has(attrs: &[Attribute], flag: &str) -> bool {
     attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag))
 }
 
@@ -120,20 +121,28 @@ pub fn only_value(context: &Context, callees: &Callees, function: &Function, ins
     }
 }
 
-/// What `memory(...)`, `readnone` or `readonly` among `attrs` allows.
+/// What `memory(...)`, `readnone`, `readonly` or `writeonly` among `attrs`
+/// allows.
 pub fn stated(attrs: &[Attribute]) -> Effects {
+    stated_at(attrs, |_| true)
+}
+
+/// What `attrs` allow at the locations `counted` admits (`None` is
+/// `memory(...)`'s default, `Some("argmem")` a named one).
+pub fn stated_at(attrs: &[Attribute], counted: impl Fn(Option<&str>) -> bool) -> Effects {
     let mut effects = Effects::ANY;
     for attr in attrs {
         match attr {
             Attribute::Memory(locations) => {
                 effects = Effects::NONE;
-                for (_, access) in locations {
+                for (_, access) in locations.iter().filter(|(location, _)| counted(location.as_deref())) {
                     effects.reads |= access == "read" || access == "readwrite";
                     effects.writes |= access == "write" || access == "readwrite";
                 }
             }
             Attribute::Flag(flag) if flag == "readnone" => effects = Effects::NONE,
-            Attribute::Flag(flag) if flag == "readonly" => effects = Effects { reads: true, writes: false },
+            Attribute::Flag(flag) if flag == "readonly" => effects.writes = false,
+            Attribute::Flag(flag) if flag == "writeonly" => effects.reads = false,
             _ => {}
         }
     }
