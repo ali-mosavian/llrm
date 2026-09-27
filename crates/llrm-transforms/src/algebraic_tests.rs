@@ -392,3 +392,22 @@ b2:
 ",
     );
 }
+
+/// Two truths `and`ed as frontend words are one `i1` `and`: rcflip kept
+/// both extensions and the word `and` in its hot loop.
+#[test]
+fn logic_of_two_like_extensions_is_the_extension_of_the_logic() {
+    let text = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = icmp eq i16 %x, 0
+  %b = icmp eq i16 %y, 1
+  %wa = sext i1 %a to i16
+  %wb = sext i1 %b to i16
+  %both = and i16 %wa, %wb
+  ret i16 %both
+}
+";
+    let inputs = [vec![0, 1], vec![0, 0], vec![1, 1], vec![1, 0]];
+    let after = checked(text, &inputs);
+    assert!(after.contains("and i1 %a, %b") && after.matches("sext").count() == 1, "{after}");
+}
