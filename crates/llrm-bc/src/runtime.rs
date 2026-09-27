@@ -74,9 +74,11 @@ pub fn answer_type(module: &mut Module, answer: &Answer) -> TypeId {
 /// The memory attribute a contract's reads and writes promise: a routine
 /// that touches only its own pushed arguments touches no memory MIR names,
 /// since MIR passes them by value.
-fn memory(contract: &Contract) -> Option<Attribute> {
+/// One that writes a named cell (`cells`) writes memory whatever its
+/// contract says.
+fn memory(contract: &Contract, writes_named: bool) -> Option<Attribute> {
     let quiet = |one: Memory| one <= Memory::Arguments;
-    let effect = match (quiet(contract.reads), quiet(contract.writes)) {
+    let effect = match (quiet(contract.reads), quiet(contract.writes) && !writes_named) {
         (true, true) => "none",
         (false, true) => "read",
         (true, false) => "write",
@@ -102,14 +104,15 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
         }
     }
     let mut callees = Callees::default();
+    let family = facts.family();
     for (name, sites) in sites_of {
-        let made = declared(module, &name, &sites);
+        let made = declared(module, &name, &sites, family.value());
         callees.named.insert(name, made);
     }
     callees
 }
 
-fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]) -> Result<Callee, String> {
+fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)], family: &str) -> Result<Callee, String> {
     let contract = sites[0].1;
     if !contract.established {
         return Err(format!("{name}'s contract is not established"));
@@ -174,7 +177,7 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
         one.address_space = FAR;
         let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
         function.calling_convention = convention;
-        function.attrs.extend(memory(contract));
+        function.attrs.extend(memory(contract, runtime::named_writes(name, family).is_some_and(|cells| !cells.is_empty())));
         if !contract.raises_error {
             function.attrs.push(Attribute::Flag("nounwind".to_owned()));
         }

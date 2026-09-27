@@ -184,3 +184,29 @@ fn the_heap_element_is_apart_from_every_variable() {
     let (r, c) = (access(&module, &all, "BC_DATA.001c"), access(&module, &all, "BC_DATA.001e"));
     assert_eq!(overlapping(r, c, None, None, None), Ok(false));
 }
+
+/// qbdemo's RENDER: `DEF SEG = &HA000` is &HA000 stored where PEEK and
+/// POKE read their segment, and GlobalsAA tracks that cell: B$ERAS writes
+/// none of it, B$DSG0 does.
+#[test]
+fn def_seg_is_a_store_the_runtime_leaves_alone() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/qbdemo-fil2.obj");
+    let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+    let raised = llrm_bc::raise_each(&found).expect("raises");
+    assert!(raised.outcomes.iter().any(|(name, outcome)| name == "RENDER" && outcome.is_ok()));
+    let module = raised.module;
+    let cell = module.named("b$seg").expect("named");
+    let render = module.global(module.named("RENDER").expect("raised")).function().expect("a function");
+    let stored = render.walk().any(|(_, inst)| {
+        let one = render.instruction(inst);
+        matches!(one.opcode, Opcode::Store { .. })
+            && matches!(one.operands[..], [Operand::Constant(value), Operand::Constant(pointer)]
+                if module.context.get(value).kind == ConstantKind::Int(0xA000) && module.context.get(pointer).kind == ConstantKind::Global(cell))
+    });
+    assert!(stored, "{}", llrm_mir::print::module(&module));
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
+    let globals = llrm_analysis::globalsaa::analysis(&module, &layout, None).expect("analyzes");
+    assert!(globals.tracked(cell));
+    let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_bc::RUNTIME))).1.contains(&cell);
+    assert!(!writes("B$ERAS") && writes("B$DSG0"));
+}

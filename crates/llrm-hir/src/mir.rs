@@ -69,8 +69,15 @@ pub fn emit_promised(program: &model::Program, runtime: Option<&Runtime>) -> Vec
 }
 
 fn promised(emitted: &mut Emitted, hir: &model::Module, runtime: &Runtime) {
-    let module = &mut emitted.module;
     let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect::<HashMap<_, _>>();
+    promise(&mut emitted.module, &named, runtime);
+}
+
+/// States `runtime`'s promises of `named`, the cells only a reference
+/// naming them reaches: `!llrm.named` lists them, and a routine that runs
+/// no program code is `nocallback` with an `!llrm.writes` node of the
+/// named cells it writes.
+pub fn promise(module: &mut Module, named: &HashMap<&str, GlobalId>, runtime: &Runtime) {
     let node = |module: &mut Module, globals: Vec<GlobalId>| {
         let operands = globals.into_iter().map(|one| MetadataOperand::Constant(module.reference(one))).collect();
         module.metadata.push(MetadataNode { distinct: false, operands });

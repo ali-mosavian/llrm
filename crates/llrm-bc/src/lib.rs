@@ -9,6 +9,7 @@
 pub mod access;
 pub mod addresses;
 pub mod arrays;
+pub mod cells;
 pub mod copies;
 pub mod division;
 pub mod emit;
@@ -160,6 +161,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         }
         outcomes.push((name, outcome));
     }
+    cells::promise(&mut module, &facts, &objects);
     tags::tag(&mut module);
     Ok(Raised { module, outcomes })
 }
