@@ -39,7 +39,6 @@ use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PassManager, Pre
 use llrm_mir::target::Machine;
 
 use crate::interprocedural::Interprocedural;
-use crate::profit::OperationCosts;
 use crate::{
     affine, algebraic, dead, decide, dse, fill, floatloop, fold, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
     rotate, strength, unroll, unswitch,
@@ -131,12 +130,6 @@ pub struct Applied {
     pub dump: Option<PathBuf>,
 }
 
-impl Applied {
-    /// The target's prices; unit prices where there is none.
-    fn costs(&self) -> OperationCosts {
-        self.target.as_ref().map_or_else(OperationCosts::default, |target| target.costs())
-    }
-}
 
 /// The passes, in order, that `applied` leaves on.
 ///
