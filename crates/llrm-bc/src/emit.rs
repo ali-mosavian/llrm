@@ -1510,6 +1510,12 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             return Ok(());
         }
+        self.runtime_call(callee, at, None)
+    }
+
+    /// A call of runtime routine `callee`, which pops `stack` bytes where
+    /// its declaration does not say.
+    pub fn runtime_call(&mut self, callee: &str, at: usize, stack: Option<i64>) -> Emit<()> {
         let contract = self.unit.facts.contract(at).ok_or_else(|| format!("{callee} has no contract"))?.clone();
         let spec = match self.unit.callees.named.get(callee) {
             Some(Ok(spec)) => spec.clone(),
@@ -1521,14 +1527,14 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         for &root in &spec.inputs {
             arguments.push(if direct.contains(&root) { self.register(word(root))? } else { self.b.int(16, 0) });
         }
-        let words = spec.stack / 2;
-        for index in 0..words {
-            let depth = if spec.pops { self.depth - spec.stack + 2 + 2 * index } else { self.depth - 2 * index };
+        let stack = stack.unwrap_or(spec.stack);
+        for index in 0..stack / 2 {
+            let depth = if spec.pops { self.depth - stack + 2 + 2 * index } else { self.depth - 2 * index };
             arguments.push(self.stack_word(depth, 2)?);
         }
         let answered = self.b.call_as(spec.convention, spec.ty, Operand::Constant(spec.reference), &arguments, "");
         if spec.pops {
-            self.popped(spec.stack)?;
+            self.popped(stack)?;
         }
         let disturbed: Vec<Register> =
             llrm_bcmachine::abi::runtime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();

@@ -132,15 +132,15 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
     }
 }
 
-/// The `!tbaa` access tags that mark HIR's promise that a far allocation
-/// is disjoint from every place: two siblings under one root.
-struct Tags {
-    place: MetadataId,
-    allocation: MetadataId,
+/// The `!tbaa` access tags that mark a frontend's promise that a far
+/// allocation is disjoint from every place: two siblings under one root.
+pub struct Tags {
+    pub place: MetadataId,
+    pub allocation: MetadataId,
 }
 
 impl Tags {
-    fn new(module: &mut Module) -> Self {
+    pub fn new(module: &mut Module) -> Self {
         let zero = module.context.types.int(64);
         let zero = MetadataOperand::Constant(module.context.int(zero, 0));
         let mut node = |operands: Vec<MetadataOperand>| {

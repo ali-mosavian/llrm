@@ -22,8 +22,9 @@ use crate::{FAR, SEGMENT};
 /// segments, the COMMON ones other modules share, the code segment, whether
 /// SS is DS -- and what the code names in it: the cuts (landmarks and
 /// CodeView variables, those with a name) and the spans no cut may cross
-/// (static accesses, a long's two words, a CodeView variable's width).
-/// The object's relocations cut too; they are its own.
+/// (static accesses, a long's two words, a CodeView variable's width, a
+/// DIM request's descriptor). The object's relocations cut too; they are
+/// its own.
 #[derive(Clone, Debug, Default)]
 pub struct Carving {
     pub dgroup: BTreeSet<i64>,
@@ -69,6 +70,10 @@ impl Carving {
             for (segment, disp) in body.pairs.values().filter_map(|pair| pair.span()) {
                 carving.spans.entry(segment).or_default().push((disp, disp + 4));
             }
+        }
+        // A DIM request's descriptor is one object.
+        for one in crate::arrays::requests(facts) {
+            carving.spans.entry(one.segment).or_default().push((one.start, one.end()));
         }
         carving
     }

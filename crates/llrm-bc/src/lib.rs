@@ -6,7 +6,9 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod access;
 pub mod addresses;
+pub mod arrays;
 pub mod copies;
 pub mod division;
 pub mod emit;
@@ -17,6 +19,7 @@ pub mod objects;
 pub mod pairs;
 pub mod runtime;
 pub mod sites;
+pub mod tags;
 
 use std::collections::BTreeMap;
 
@@ -139,6 +142,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
     let objects = Objects::build(&Carving::of(&facts), found, &mut module).map_err(module_refusal)?;
     let interfaces = runtime::interfaces(&facts);
     let callees = runtime::declare(&facts, &mut module, &interfaces);
+    intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));
     let family = found_module::family(&found.records);
     let unit = Unit { facts: &facts, objects: &objects, callees: &callees, procedures, intrinsics, main_frame: main_frame(found), header: header(family) };
     let mut outcomes = Vec::new();
@@ -156,5 +160,6 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         }
         outcomes.push((name, outcome));
     }
+    tags::tag(&mut module);
     Ok(Raised { module, outcomes })
 }

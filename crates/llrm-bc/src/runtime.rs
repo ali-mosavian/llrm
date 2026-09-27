@@ -93,7 +93,7 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
         for node in body.nodes.values() {
             let Node::Call(call) = &**node else { continue };
             let name = call.name.as_str();
-            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) {
+            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) || name == crate::access::ADDRESS {
                 continue;
             }
             let Some(contract) = facts.contract(call.insn.at) else { continue };
@@ -123,10 +123,14 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
     if !matches!(contract.control, Control::Returns | Control::Never) {
         return Err(format!("{name}'s control is {}", contract.control.value()));
     }
-    let Some(cleanup) = contract.cleanup.filter(|&one| one >= 0) else {
-        return Err(format!("{name}'s stack cleanup is unknown"));
+    // A routine `arrays` sizes per site pops what that site pushed.
+    let sized = crate::arrays::sized(name);
+    let (stack, pops) = match contract.cleanup.filter(|&one| one >= 0) {
+        _ if sized => (0, true),
+        Some(cleanup) if cleanup > 0 => (cleanup, true),
+        Some(_) => (contract.caller_cleanup, false),
+        None => return Err(format!("{name}'s stack cleanup is unknown")),
     };
-    let (stack, pops) = if cleanup > 0 { (cleanup, true) } else { (contract.caller_cleanup, false) };
     if stack % 2 != 0 {
         return Err(format!("{name} takes an odd number of stack bytes"));
     }
@@ -134,7 +138,7 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
     let mut results: Registers = Registers::new();
     let mut flags = false;
     for (_, site, after) in sites {
-        if site.cleanup != contract.cleanup || site.caller_cleanup != contract.caller_cleanup {
+        if !sized && (site.cleanup != contract.cleanup || site.caller_cleanup != contract.caller_cleanup) {
             return Err(format!("{name}'s calls pop different byte counts"));
         }
         inputs.extend(runtime::direct_slots(site).into_iter().filter_map(from_contract).filter(|&one| one != FLAGS));
@@ -161,7 +165,7 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
     let word = module.context.types.int(16);
     let parameters = vec![word; inputs.len() + (stack / 2) as usize];
     let returns = answer_type(module, &answer);
-    let ty = module.context.types.intern(Type::Function { returns, parameters, variadic: false });
+    let ty = module.context.types.intern(Type::Function { returns, parameters, variadic: sized });
     let global = module.add_function(&format!("{RUNTIME}{name}"), ty, Linkage::External)?;
     let convention = if pops { llrm_mir::opcode::BASIC } else { 0 };
     let never_returns = contract.control == Control::Never;
