@@ -14,6 +14,7 @@ pub mod fold;
 pub mod gvn;
 pub mod inline;
 pub mod interprocedural;
+pub mod ivshare;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;

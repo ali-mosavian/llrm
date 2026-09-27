@@ -25,7 +25,8 @@
 //! - Ids and placement: `_next`, `_start_temporary_count`, `_woven`,
 //!   `_widest` and `_width`'s word default.
 //!
-//! Not ported yet: `Strength`'s tail, `loopexit::evaluated`,
+//! `Strength` then shares counters (`ivshare`) and drops what died.
+//! Not ported yet: the rest of its tail, `loopexit::evaluated`,
 //! `indvars::rewound` and `indvars::simplified`.
 //!
 //! llrm-mir's `loopreduce` reduces, through ScalarEvolution, a sum of any
@@ -62,7 +63,7 @@ use llrm_mir::{Constant, ConstantKind};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::dead;
+use crate::{dead, ivshare};
 use crate::profit::OperationCosts;
 
 /// Strength reduction. `registers` of 0 leaves pressure unpriced;
@@ -82,8 +83,9 @@ impl FunctionPass for Strength {
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let outer = Rc::clone(analyses.outer());
-        if reduced(unit, &outer, &facts, self.registers, self.call_registers, &self.costs, true) {
-            dead::dead(unit.context, unit.callees, unit.function);
+        let reduced = reduced(unit, &outer, &facts, self.registers, self.call_registers, &self.costs, true);
+        let shared = ivshare::shared(unit, &outer);
+        if dead::dead(unit.context, unit.callees, unit.function) | reduced | shared {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
