@@ -168,3 +168,77 @@ fn signed_and_other_tests_against_zero_are_left_alone() {
         assert_eq!(printed(&folded), printed(&body), "{test}");
     }
 }
+
+/// A zero test of an extension tests what was extended, at its width; of an
+/// `i1`, it is the `i1` or its complement. None was rewritten, so a loop
+/// exiting on a frontend's sign-extended truth was never counted.
+#[test]
+fn a_zero_test_of_an_extension_tests_what_was_extended() {
+    for (from, ext, predicate, left) in [
+        ("i1", "sext", "ne", "%c"),
+        ("i1", "zext", "ne", "%c"),
+        ("i1", "sext", "eq", "xor i1 %c, true"),
+        ("i1", "zext", "eq", "xor i1 %c, true"),
+        ("i8", "sext", "eq", "icmp eq i8 %c, 0"),
+        ("i8", "zext", "ne", "icmp ne i8 %c, 0"),
+    ] {
+        let text = format!(
+            "define i16 @f(i16 %x) {{
+b0:
+  %c = trunc i16 %x to {from}
+  %e = {ext} {from} %c to i16
+  %t = icmp {predicate} i16 %e, 0
+  %r = zext i1 %t to i16
+  ret i16 %r
+}}
+"
+        );
+        let (before, after) = canonical(&text);
+        let shown = printed(&after);
+        assert!(!shown.contains("icmp ne i16") && !shown.contains("icmp eq i16"), "{ext} {from} {predicate}:\n{shown}");
+        assert!(shown.contains(left) || shown.contains(&format!("zext i1 {left} to i16")), "{ext} {from} {predicate}:\n{shown}");
+        for x in [0, 1, 2, 0x80, 0xFF, 0x100, 0xFFFF] {
+            assert_eq!(returned(&after, x), returned(&before, x), "{ext} {from} {predicate} {x}");
+        }
+    }
+}
+
+/// The HIR's loop test, `icmp ne (sext i1 %go), 0`: once canonical, the
+/// counter is induction's and Rotate enters the loop at its body.
+#[test]
+fn a_loop_on_a_sign_extended_truth_is_rotated_once_canonical() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %x, %b0 ], [ %sum, %b2 ]
+  %go = icmp slt i16 %i, 4
+  %truth = sext i1 %go to i16
+  %test = icmp ne i16 %truth, 0
+  br i1 %test, label %b2, label %b3
+
+b2:
+  %sum = add i16 %acc, %i
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+";
+    let before = llrm_mir::parse::module(text).unwrap();
+    let mut module = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.verify_each = true;
+    passes.add(super::Canonical);
+    passes.add(crate::rotate::Rotate);
+    passes.run(&mut module).expect("runs");
+    let shown = printed(&module);
+    let entry = shown.split("b0:\n").nth(1).unwrap().lines().next().unwrap();
+    assert_eq!(entry.trim(), "br label %b2", "{shown}");
+    for x in [0, 7, 0xFFFF] {
+        assert_eq!(returned(&module, x), returned(&before, x), "{x}");
+    }
+}

@@ -214,27 +214,42 @@ fn test_a_symbol_plus_zero_is_the_symbol() {
     assert!(printed(&after).contains("  ret i16 ptrtoint (ptr @g to i16)\n"), "{}", printed(&after));
 }
 
+/// Two integer casts are one, or none, and answer as before at every edge
+/// value: `trunc(ext x)` is `x` or one cast, `trunc(trunc x)` one `trunc`,
+/// an extension of a `zext` or of a like one one extension. `ext(trunc x)`
+/// and `zext(sext x)` stay two. Only `ext(trunc(ext x))` was folded.
 #[test]
-fn test_reextending_an_already_extended_low_byte_reads_the_extension() {
-    for op in ["zext", "sext"] {
-        let text = format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i16\n  %v = trunc i16 %m to i8\n  %r = {op} i8 %v to i16\n  ret i16 %r\n}}\n");
-        let bytes = singles(&edges(8));
-        assert_eq!(checked(&text, &bytes), format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i16\n  ret i16 %m\n}}\n"));
-        let text = format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i32\n  %v = trunc i32 %m to i8\n  %r = {op} i8 %v to i16\n  ret i16 %r\n}}\n");
-        assert_eq!(checked(&text, &bytes), format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i32\n  %0 = trunc i32 %m to i16\n  ret i16 %0\n}}\n"));
+fn test_a_cast_pair_is_one_cast_or_none() {
+    let casts = |text: &str| text.lines().filter(|line| ["trunc ", "zext ", "sext "].iter().any(|op| line.contains(op))).count();
+    for source in [8, 16, 32] {
+        for middle in [8, 16, 32] {
+            for result in [8, 16, 32] {
+                for first in ["trunc", "zext", "sext"] {
+                    for second in ["trunc", "zext", "sext"] {
+                        let fits = |op: &str, from: u32, to: u32| if op == "trunc" { to < from } else { to > from };
+                        if !fits(first, source, middle) || !fits(second, middle, result) {
+                            continue;
+                        }
+                        let text = format!("define i{result} @f(i{source} %x) {{\nb0:\n  %m = {first} i{source} %x to i{middle}\n  %r = {second} i{middle} %m to i{result}\n  ret i{result} %r\n}}\n");
+                        let after = checked(&text, &singles(&edges(source)));
+                        let stays = (first == "trunc" && second != "trunc") || (first, second) == ("sext", "zext");
+                        assert_eq!(casts(&after), if stays { 2 } else { usize::from(source != result) }, "{text}{after}");
+                    }
+                }
+            }
+        }
     }
 }
 
+/// An extension of a truncated extension is the first extension's bits
+/// where the truncation kept them: two pair steps.
 #[test]
-fn test_redundant_extension_requires_every_output_bit_to_be_known() {
-    let chain = |source: u32, first: &str, established: u32, viewed: u32, second: &str, result: u32| {
-        format!(
-            "define i{result} @f(i{source} %x) {{\nb0:\n  %m = {first} i{source} %x to i{established}\n  %v = trunc i{established} %m to i{viewed}\n  %r = {second} i{viewed} %v to i{result}\n  ret i{result} %r\n}}\n"
-        )
-    };
-    // Signedness, discarded bits, bits above what the first extension set.
-    for text in [chain(8, "zext", 16, 8, "sext", 16), chain(16, "zext", 32, 8, "zext", 16), chain(8, "zext", 16, 8, "zext", 32)] {
-        unchanged(&text);
+fn test_reextending_an_already_extended_low_byte_reads_the_extension() {
+    for op in ["zext", "sext"] {
+        for established in [16, 32] {
+            let text = format!("define i16 @f(i8 %x) {{\nb0:\n  %m = {op} i8 %x to i{established}\n  %v = trunc i{established} %m to i8\n  %r = {op} i8 %v to i16\n  ret i16 %r\n}}\n");
+            assert_eq!(checked(&text, &singles(&edges(8))), format!("define i16 @f(i8 %x) {{\nb0:\n  %r = {op} i8 %x to i16\n  ret i16 %r\n}}\n"));
+        }
     }
 }
 
