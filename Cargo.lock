@@ -185,6 +185,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-bc"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-analysis",
+ "llrm-bcmachine",
+ "llrm-hir",
+ "llrm-mir",
+ "llrm-omf",
+]
+
+[[package]]
 name = "llrm-bcmachine"
 version = "0.1.0"
 dependencies = [
