@@ -14,6 +14,7 @@ pub mod edges;
 pub mod floatfold;
 pub mod fold;
 pub mod gvn;
+pub mod indvars;
 pub mod inline;
 pub mod interprocedural;
 pub mod lcssa;

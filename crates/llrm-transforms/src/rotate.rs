@@ -72,12 +72,12 @@ pub fn entered(context: &mut Context, layout: &DataLayout, function: &mut Functi
 /// A loop this can enter at its body: `preheader` jumps only to `header`,
 /// which tests and branches to `first`, reached from nowhere else; the one
 /// latch goes only back to `header`.
-struct Shape {
-    preheader: BlockId,
-    header: BlockId,
-    first: BlockId,
-    latch: BlockId,
-    exit: BlockId,
+pub(crate) struct Shape {
+    pub preheader: BlockId,
+    pub header: BlockId,
+    pub first: BlockId,
+    pub latch: BlockId,
+    pub exit: BlockId,
 }
 
 fn _phis(function: &Function, block: BlockId) -> Vec<InstId> {
@@ -96,7 +96,7 @@ fn _test_only(function: &Function, header: BlockId, inst: InstId) -> bool {
     computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header)))
 }
 
-fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
+pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let succ = |at: i64| graph.iter().find(|block| block.at == at).map(|block| block.succ.clone()).unwrap_or_default();
@@ -156,7 +156,7 @@ fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
 
 /// `shape`'s loop entered at `first`, or, with `guard`, entered there only
 /// where the guard is false and skipped to the exit where it is true.
-fn _rotate(context: &mut Context, function: &mut Function, shape: &Shape, guard: Option<Operand>) -> Result<(), String> {
+pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Shape, guard: Option<Operand>) -> Result<(), String> {
     let entering = function.terminator(shape.preheader).expect("a terminated preheader");
     if let Some(guard) = guard {
         // The exit is now also reached before the loop: each of its phis reads
