@@ -100,7 +100,7 @@ fn safe(unit: &Unit, inst: InstId, writes: &[InstId]) -> bool {
         Opcode::Load { volatile: false, .. } => {
             let pointer = instruction.operands[0];
             let bytes = unit.layout.store_size(&unit.context.types, instruction.ty);
-            valuetracking::dereferenceable(unit.context, unit.layout, function, pointer, bytes)
+            valuetracking::dereferenceable(unit.context, unit.layout, unit.sizes, function, pointer, bytes)
                 && (memory::invariant(unit.context, unit.layout, function, pointer) || writes.iter().all(|&write| misses(unit, inst, write)))
         }
         _ => false,

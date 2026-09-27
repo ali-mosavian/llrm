@@ -469,6 +469,46 @@ b4:
     assert!(entry.contains("load i16"), "{got}");
 }
 
+/// fractaleffect reloaded a SHARED array's segment word each iteration:
+/// a global is as readable anywhere as an alloca, as LLVM's
+/// `isDereferenceablePointer` says.
+#[test]
+fn test_licm_hoists_a_load_from_a_global() {
+    let text = "@d = global [4 x i8] zeroinitializer
+
+define void @f(i16 %n) {
+b1:
+  br label %b2
+
+b2:
+  %0 = phi i16 [ 0, %b1 ], [ %6, %b3 ]
+  %1 = icmp slt i16 %0, %n
+  br i1 %1, label %b3, label %b4
+
+b3:
+  %2 = load i16, ptr getelementptr (i8, ptr @d, i16 2), !tbaa !3
+  %3 = inttoptr i16 %2 to ptr addrspace(2)
+  %4 = addrspacecast ptr addrspace(2) %3 to ptr addrspace(1)
+  %5 = getelementptr i16, ptr addrspace(1) %4, i16 %0
+  store i16 0, ptr addrspace(1) %5, !tbaa !4
+  %6 = add i16 %0, 1
+  br label %b2
+
+b4:
+  ret void
+}
+
+!0 = !{!\"qb\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!\"allocation\", !0, i64 0}
+!3 = !{!1, !1, i64 0}
+!4 = !{!2, !2, i64 0}
+";
+    let got = through(&["licm"], text);
+    let entry = &got[got.find("b1:").unwrap()..got.find("b2:").unwrap()];
+    assert!(entry.contains("load i16"), "{got}");
+}
+
 /// plasma's `o = o + 1` survived as a counter its loop carried for no
 /// one, an `inc` a pass: a phi cycle only itself reads goes.
 #[test]

@@ -25,6 +25,7 @@ pub struct Unit<'a> {
     pub callees: &'a crate::memory::Callees,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
+    pub sizes: &'a crate::valuetracking::Sizes,
 }
 
 /// A fact about a function, computed on demand and cached until a pass
@@ -225,6 +226,7 @@ impl PassManager {
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
             let callees = crate::memory::callees(module);
+            let sizes = crate::valuetracking::sizes(module, &layout);
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Module(pass) => {
@@ -249,7 +251,7 @@ impl PassManager {
                     continue;
                 }
                 let analyses = caches.entry(id).or_default();
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata }, analyses);
+                let preserved = pass.run(&mut Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes }, analyses);
                 analyses.invalidate(&preserved);
                 if self.verify_invalidation {
                     let stale = analyses.stale(context, &layout, function);
