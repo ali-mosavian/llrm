@@ -538,6 +538,8 @@ pub struct Function {
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
     pub promises: Vec<Promise>,
+    /// The name it links by, where not its own.
+    pub symbol: Option<String>,
 }
 
 /// What the language promises of a pointer parameter, as LLVM's
@@ -577,6 +579,7 @@ impl Function {
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
             promises: Vec::new(),
+            symbol: None,
         }
     }
 }
@@ -725,6 +728,9 @@ pub struct Program {
     pub float_mode: FloatMode,
     pub float_semantics: FloatSemantics,
     pub promises: RuntimePromises,
+    /// The functions code outside the program calls whatever their
+    /// linkage: the runtime's way into it.
+    pub entries: Vec<String>,
 }
 
 impl Program {
@@ -739,6 +745,7 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             promises: RuntimePromises::default(),
+            entries: Vec::new(),
         }
     }
 }

@@ -225,6 +225,9 @@ impl _Plain for model::Function {
         if !self.promises.is_empty() {
             out.insert("promises".to_owned(), self.promises._plain());
         }
+        if self.symbol.is_some() {
+            out.insert("symbol".to_owned(), self.symbol._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -265,6 +268,9 @@ impl _Plain for model::Program {
         }
         if self.promises != model::RuntimePromises::default() {
             out.insert("promises".to_owned(), self.promises._plain());
+        }
+        if !self.entries.is_empty() {
+            out.insert("entries".to_owned(), self.entries._plain());
         }
         Json::Dict(out)
     }
@@ -982,6 +988,7 @@ static FUNCTION: _Record = _Record {
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
         ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
+        ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Function {
@@ -1000,6 +1007,7 @@ static FUNCTION: _Record = _Record {
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
             promises: _default(args, "promises", Vec::new())?,
+            symbol: _default(args, "symbol", None)?,
         })
     },
 };
@@ -1119,6 +1127,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
+        ("entries", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1131,6 +1140,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
+            entries: _default(args, "entries", Vec::new())?,
         })
     },
 };

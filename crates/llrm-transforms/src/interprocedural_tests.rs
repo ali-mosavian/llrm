@@ -184,7 +184,7 @@ b:
 fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let spin = parsed("define void @spin() {\nb:\n  br label %l\n\nl:\n  br label %l\n}\n");
     let caller = parsed("declare void @spin()\n\ndefine i16 @f(i16 %a) {\nb:\n  call void @spin()\n  %s = add i16 %a, 1\n  ret i16 %s\n}\n");
-    let exports = llrm_mir::program::Exports::Closed(["f".to_owned()].into());
+    let exports = llrm_mir::program::Exports::closed(["f".to_owned()].into());
     let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
@@ -231,6 +231,20 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
+}
+
+/// An internal body the runtime calls, as QB's module body, had every
+/// caller in the program: its parameters took the one call's constants.
+#[test]
+fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
+    let body = (1..12).map(|at| format!("  %y{at} = mul i16 %y{}, %x\n", at - 1)).collect::<String>();
+    let text = format!("define internal i16 @entered(i16 %x) {{\nb:\n  %y0 = add i16 %x, 1\n{body}  ret i16 %y11\n}}\n\ndefine i16 @f() {{\nb:\n  %r = call i16 @entered(i16 3)\n  %s = call i16 @entered(i16 3)\n  %t = add i16 %r, %s\n  ret i16 %t\n}}\n");
+    let mut program = Program::new(vec![parsed(&text)], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    program.exports.entries = ["entered".to_owned()].into();
+    let roots = roots(&program);
+    let mut modules = managers(&program, &mut ProgramAnalyses::default());
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
 #[test]

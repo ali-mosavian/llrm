@@ -139,13 +139,14 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
     }
 }
 
-/// FPDEEP's main once the pipeline has run, as MIR text.
+/// FPDEEP's main once the pipeline has run, linked against its runtime, as
+/// MIR text.
 fn fpdeep() -> String {
     let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
-    let mut module = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
-    let applied = llrm_transforms::pipeline::Applied::default();
-    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_cycles::target::Dos::default()), |program| llrm_transforms::pipeline::applied(program, &applied)).and_then(|done| done).unwrap();
-    let text = llrm_mir::print::module(&module);
+    let raised = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_cycles::target::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
+    llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
+    let text = llrm_mir::print::module(&program.modules[0]);
     text[text.find("define void @main").expect("main")..].to_owned()
 }
 

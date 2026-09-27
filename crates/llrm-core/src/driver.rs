@@ -10,8 +10,13 @@ use llrm_mir::program::Program;
 use llrm_mir::{GlobalId, Module};
 
 use crate::abi::machine::Machine;
-use crate::backend::cpu::{self, Profile};
-use crate::backend::{ehprepare, masm};
+use crate::abi::qb::HirAbi;
+use crate::backend::assemble;
+use crate::backend::cpu::{self, Profile, ProfileOrName};
+use crate::backend::masm;
+use crate::backend::target::Segments;
+use crate::hir::model;
+use crate::backend::ehprepare;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 
@@ -33,17 +38,40 @@ impl Options {
     }
 }
 
+/// `program` compiled for the machine: emitted, optimized, then each module
+/// selected and assembled, its code in `<MODULE>_TEXT` and each function
+/// linked by its symbol. Each module's listing goes beside the stages.
+pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm::Module>, String> {
+    let (mut mir, _) = emitted(program, options)?;
+    optimized(&mut mir, options)?;
+    let functions = program.modules.iter().flat_map(|module| &module.functions);
+    let abi = HirAbi { runtime: program.runtime, objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect() };
+    let segments = Segments::of(&options.machine);
+    let mut out = Vec::new();
+    for (module, hir) in mir.modules.iter().zip(&program.modules) {
+        let assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
+        if let Some(directory) = &options.dump {
+            let name = if program.modules.len() > 1 { format!("listing-{}.asm", hir.name) } else { "listing.asm".to_owned() };
+            std::fs::write(directory.join(name), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+        }
+        out.push(assembled);
+    }
+    Ok(out)
+}
+
 /// `program` as MIR, a module per HIR module, linked against the runtime
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
-pub fn emitted(program: &crate::hir::model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
     }
     let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
     let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
-    Ok((linked(modules, runtime, options)?, data))
+    let mut linked = linked(modules, runtime, options)?;
+    linked.exports.entries = program.entries.iter().cloned().collect();
+    Ok((linked, data))
 }
 
 /// `modules` as one program for the machine, linked against `runtime`, a

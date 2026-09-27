@@ -51,24 +51,31 @@ impl SegmentLayout {
     }
 }
 
-/// Which of the program's globals code outside it may name.
+/// Which of the program's globals code outside it may reach.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum Exports {
-    /// Every one a module does not keep to itself: the program is part of
-    /// a larger link.
-    #[default]
-    Open,
-    /// These names alone: the program is the whole link but its runtime.
-    Closed(BTreeSet<String>),
+pub struct Exports {
+    /// The names it may link to. None: every one a module does not keep to
+    /// itself, as when the program is part of a larger link.
+    pub linked: Option<BTreeSet<String>>,
+    /// The functions it calls whatever their linkage: the entry points and
+    /// what the runtime calls back.
+    pub entries: BTreeSet<String>,
 }
 
 impl Exports {
-    /// Whether outside code may name `global`.
+    /// `linked` alone: the program is the whole link but its runtime.
+    pub fn closed(linked: BTreeSet<String>) -> Self {
+        Self { linked: Some(linked), entries: BTreeSet::new() }
+    }
+
+    /// Whether outside code may reach `global`.
     pub fn exported(&self, global: &GlobalValue) -> bool {
-        match self {
+        let named = |names: &BTreeSet<String>| global.name.as_ref().is_some_and(|name| names.contains(name));
+        match &self.linked {
+            _ if named(&self.entries) => true,
             _ if matches!(global.linkage, Linkage::Internal | Linkage::Private) => false,
-            Exports::Open => true,
-            Exports::Closed(names) => global.name.as_ref().is_some_and(|name| names.contains(name)),
+            None => true,
+            Some(names) => named(names),
         }
     }
 }
@@ -98,7 +105,7 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        Ok(Self { modules, layout, target, segments, exports: Exports::Open, runtime: Rc::default() })
+        Ok(Self { modules, layout, target, segments, exports: Exports::default(), runtime: Rc::default() })
     }
 
     /// The program linked against `runtime`: each module's declaration of
@@ -327,7 +334,7 @@ impl ProgramProxy {
     /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::Open, runtime: Rc::default(), module: 0, results: HashMap::new() })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::default(), runtime: Rc::default(), module: 0, results: HashMap::new() })
     }
 
     /// `P`'s result, if computed: LLVM's `getCachedResult`.

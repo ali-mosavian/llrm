@@ -9,9 +9,9 @@ use std::rc::Rc;
 
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::backend::{addressvalues, assemble, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
+use llrm_core::backend::{addressvalues, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
 use llrm_core::flow;
-use llrm_core::abi::qb::{HirAbi, physicalize};
+use llrm_core::abi::qb::physicalize;
 use llrm_core::hir::lower::{DGROUP, Lowered};
 use llrm_core::hir::{self, callmemory, model};
 use llrm_core::model::mir::{Kind, MirBody};
@@ -359,30 +359,22 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, machine: &llrm_
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
-    // The entry is public for the runtime to call; a library has none. The
-    // pipeline's whole-program step reads who may call what.
-    // Each function links by its name in `program`, the entry as `_main`.
-    let module = &program.modules[0];
+    // Each function links by its object name; the entry, `_main`, is public
+    // for the runtime to call, and a library has none. The pipeline's
+    // whole-program step reads who may call what.
     let mut public = program.clone();
+    let module = &mut public.modules[0];
     let library = module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External);
-    match public.modules[0].functions.iter_mut().find(|one| one.name == entry) {
+    for function in &mut module.functions {
+        function.symbol = Some(object_name(function));
+    }
+    match module.functions.iter_mut().find(|one| one.name == entry) {
         Some(function) => function.linkage = model::FunctionLinkage::External,
         None if library => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let options = llrm_core::driver::Options::of(machine.clone());
-    let (mut mir, _) = llrm_core::driver::emitted(&public, &options)?;
-    llrm_core::driver::optimized(&mut mir, &options)?;
-    let mir = mir.modules.pop().expect("one module");
-    let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
-    let abi = HirAbi { runtime: program.runtime, objects };
-    let segments = llrm_core::backend::target::Segments::of(machine);
-    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
-    // Beside the MIR stages, what they became.
-    if let Some(directory) = std::env::var_os("LLRM_MIR_STAGES") {
-        std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-    }
-    Ok(assembled)
+    Ok(llrm_core::driver::compiled(&public, &options)?.swap_remove(0))
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
