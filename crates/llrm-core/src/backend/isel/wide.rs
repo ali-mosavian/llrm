@@ -329,6 +329,7 @@ impl Selector<'_, '_, '_> {
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
+            op: Some(self.listed(at, llrm_mir::memory::Effects::NONE)),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
