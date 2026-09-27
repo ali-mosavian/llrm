@@ -5,14 +5,20 @@
 //! llrm-core's `analysis/flags.rs` has no port: it is liveness of x86 flags
 //! over BC instructions, and MIR carries a carry or overflow as a value.
 
+pub mod cellmap;
 pub mod cfg;
+pub mod constant_cycles;
+pub mod consts;
 pub mod effects;
 pub mod frameescape;
 pub mod interprocedural;
 pub mod liveness;
+pub mod memory;
 pub mod noreturn;
 pub mod occurrence;
 pub mod pointerfacts;
+pub mod ranges;
+pub mod regions;
 pub mod ssa;
 #[cfg(test)]
 mod corpus_tests;
