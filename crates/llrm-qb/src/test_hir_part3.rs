@@ -20,7 +20,7 @@ use llrm_core::support::hash::IndexMap;
 use super::abi::{_contract, physicalize};
 use super::compile::{self as qb_compile, Stage, StageObserver, StageValue};
 use super::driver as qb_driver;
-use super::inline_x87::finalized;
+use llrm_core::driver::basic::finalized;
 use super::test_hir::*;
 use llrm_core::abi::runtime::Contract;
 use llrm_core::analysis::loops;
