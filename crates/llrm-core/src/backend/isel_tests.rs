@@ -2302,3 +2302,18 @@ define i16 @f() addrspace(1) {
 ";
     assert_eq!(listing(text, "f"), ["L0_0:", "call far ptr g", "retf"]);
 }
+
+/// Zero minus a value is its negation: crc's `0 - (crc & 1)` cost a
+/// zeroing `xor` and a `sub` in each of its eight unrolled steps.
+#[test]
+fn test_zero_minus_a_value_is_a_neg() {
+    let text = "define i32 @f(i32 %a) addrspace(1) {
+  %m = and i32 %a, 1
+  %n = sub i32 0, %m
+  ret i32 %n
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.starts_with("neg")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("sub")), "{got:?}");
+}

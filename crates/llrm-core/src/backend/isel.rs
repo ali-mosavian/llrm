@@ -1855,6 +1855,12 @@ impl Selector<'_, '_, '_> {
                     return refuse("arithmetic on an i1");
                 }
                 let (mut a, mut b) = (operands[0], operands[1]);
+                if *op == BinaryOp::Sub && self.constant(a, self.width(ty)?) == Some(0) {
+                    let negated = Loc::Held(self.held(b, ty, at, out)?);
+                    let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
+                    out.push(insn(at, semantics(Operation::Unary, "neg", vec![Loc::Held(result)], vec![negated])));
+                    return Ok(());
+                }
                 if commutes && matches!(a, Operand::Constant(_)) {
                     std::mem::swap(&mut a, &mut b);
                 }
