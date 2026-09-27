@@ -117,6 +117,11 @@ fn at(run: &[&Node]) -> Option<Pair> {
         (Lifted::Load, Lifted::Load) | (Lifted::Store, Lifted::Store) => {
             let (index, lower, upper) = if ordered { (0, x, y) } else { (1, y, x) };
             let memory = adjacent(lower, upper)?;
+            // The second load's address must not read what the first wrote.
+            let written = if ordered { low } else { high };
+            if x.kind == Lifted::Load && memory.base == written {
+                return None;
+            }
             pair(if x.kind == Lifted::Load { Shape::Load } else { Shape::Store }, Some((index, memory)))
         }
         (Lifted::Alu, Lifted::Alu) if ordered => {
@@ -192,5 +197,38 @@ fn pushes(first: &Node, second: &Node) -> Option<(Source, Option<(usize, Addr)>)
             Some((Source::Immediate(word(first)? << 16 | word(second)?), None))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_bcmachine::frontends::bc::blocks::Ends;
+    use llrm_bcmachine::frontends::bc::declen::decode;
+    use llrm_bcmachine::model::ir::Effects;
+    use llrm_bcmachine::objectfile::module::literal_only;
+
+    use super::*;
+
+    /// The pairs in one block of these instructions.
+    fn found_in(code: &[u8]) -> Vec<Shape> {
+        let (mut insns, mut nodes, mut at) = (Vec::new(), IndexMap::default(), 0);
+        while at < code.len() {
+            let insn = decode(code, at).expect("an instruction");
+            let decoded = lift::classify_with(&insn, &literal_only).expect("a long's half");
+            nodes.insert(at as i64, Arc::new(Node::Long(Long::new(insn.clone(), decoded, Effects::no_effect()))));
+            at = insn.end();
+            insns.push(insn);
+        }
+        let block = Block { at: 0, end: at, insns, ends: Ends::FallsThrough, succ: Vec::new() };
+        found(&[block], &nodes).into_values().map(|pair| pair.shape).collect()
+    }
+
+    /// `mov bx,[bx+2] / mov cx,[bx]` reads its low word through the BX it
+    /// just loaded: not the four bytes at [bx], which one load would read.
+    #[test]
+    fn a_high_word_that_moves_the_base_is_no_pair() {
+        assert_eq!(found_in(&[0x8B, 0x5F, 0x02, 0x8B, 0x4F, 0x00]), []);
+        assert_eq!(found_in(&[0x8B, 0x4F, 0x00, 0x8B, 0x5F, 0x02]), [Shape::Load]);
+        assert_eq!(found_in(&[0x8B, 0x57, 0x02, 0x8B, 0x47, 0x00]), [Shape::Load]);
     }
 }
