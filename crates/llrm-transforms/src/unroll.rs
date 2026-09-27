@@ -10,9 +10,8 @@
 //! header's test is gone; Dead takes the compares left behind.
 //!
 //! The copy budgets are peelsize's `Limits`, which count instructions. The
-//! one machine number is `costs`: a function with an instruction the target
-//! does not price is left alone (`profit::priced`). The target in `outer`
-//! carries no costs yet, so they are the pass's, as `Gvn`'s and `Unswitch`'s.
+//! one machine number is the target's costs: a function with an instruction
+//! the target does not price is left alone (`profit::priced`).
 //!
 //! What changed with the IR: an expanded value is a clone with a fresh
 //! result, and its origin the `Cloned` change, so the old fresh ids, byte
@@ -48,11 +47,10 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::lcssa::{arms, from_arms, operations};
-use crate::profit::{self, OperationCosts};
+use crate::profit;
 
 #[derive(Default)]
 pub struct Unroll {
-    pub costs: OperationCosts,
     pub limits: Limits,
 }
 
@@ -62,7 +60,7 @@ impl FunctionPass for Unroll {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match optimized(unit, analyses, &self.costs, &self.limits) {
+        match optimized(unit, analyses, &self.limits) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("unroll: {error}"),
@@ -72,7 +70,8 @@ impl FunctionPass for Unroll {
 
 /// Every exact loop `peelsize::admitted` prices as worth it expanded, once
 /// each; whether any was.
-pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, costs: &OperationCosts, limits: &Limits) -> Result<bool, String> {
+pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
+    let costs = &profit::costs(analyses.outer());
     if !profit::priced(unit.context, unit.function, unit.callees, costs) {
         return Ok(false);
     }

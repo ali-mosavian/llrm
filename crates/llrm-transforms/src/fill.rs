@@ -19,7 +19,8 @@
 //! - Its count in bytes must not wrap the index: a byte's trips never do,
 //!   and wider cells need `inbounds` GEPs or the proof's `maximum`. The
 //!   counter must be the index's width.
-//! - A function pass declares nothing: the module must declare the memset.
+//! - The memset is declared where the module has none, through the pass
+//!   manager's `Declared`.
 //! - `_pure` is `memory::only_value` less loads and allocas, and less
 //!   divisions, which trap.
 //!
@@ -36,10 +37,10 @@ use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
-use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
-use llrm_mir::types::TypeId;
+use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
+use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
@@ -55,18 +56,18 @@ impl FunctionPass for Fill {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if filled(unit.context, unit.layout, unit.callees, unit.function, analyses.outer()) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if filled(unit.context, unit.layout, unit.callees, unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
 /// `function` with every such loop's body made one fill; whether any was.
-pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer) -> bool {
+pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared) -> bool {
     let mut changed = false;
     'again: loop {
         for loop_ in loops::loops(&cfg::graph(function), None) {
             let found = _fill(&Unit::within(context, layout, function, outer), callees, &loop_);
             if let Some(found) = found {
-                _filled(context, function, &found);
+                _filled(context, declared, function, &found);
                 changed = true;
                 continue 'again;
             }
@@ -90,7 +91,8 @@ struct _Found {
     bytes: BigInt,
     /// Counters the exit reads from the header, with their steps.
     left: Vec<(ValueId, BigInt)>,
-    memset: (GlobalId, TypeId),
+    /// The memset's pointer space and length width.
+    memset: (u32, u32),
 }
 
 /// What a fill sets each byte to.
@@ -170,21 +172,21 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
         }
     }
     left.dedup();
-    let memset = _memset(unit, unit.space(pointer)?, width)?;
+    let memset = (unit.space(pointer)?, width);
     Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, byte, bytes, left, memset })
 }
 
-/// The memset the module declares for pointers of `space` and lengths
-/// `width` bits wide.
-fn _memset(unit: &Unit, space: u32, width: u32) -> Option<(GlobalId, TypeId)> {
-    let name = format!("llvm.memset.p{space}.i{width}");
-    let at = unit.globals.iter().position(|global| global.name.as_deref() == Some(&name))?;
-    let GlobalKind::Function(declared) = &unit.globals[at].kind else { return None };
-    Some((GlobalId(at as u32), declared.ty))
+/// `llvm.memset` for pointers of `space` and lengths `width` bits wide,
+/// declared where the module has none.
+fn _memset(context: &mut Context, declared: &mut Declared, space: u32, width: u32) -> (GlobalId, TypeId) {
+    let types = &mut context.types;
+    let (void, pointer, byte, length, flag) = (types.void(), types.ptr(space), types.int(8), types.int(width), types.int(1));
+    let ty = types.intern(Type::Function { returns: void, parameters: vec![pointer, byte, length, flag], variadic: false });
+    (declared.declare(&format!("llvm.memset.p{space}.i{width}"), ty), ty)
 }
 
 /// The loop made one trip that fills.
-fn _filled(context: &mut Context, function: &mut Function, found: &_Found) {
+fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Function, found: &_Found) {
     let width = found.proof.width();
     let mut seeds = Seeds { context, function, at: found.effect, width };
     let trips = induction::trips(&found.proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
@@ -199,7 +201,7 @@ fn _filled(context: &mut Context, function: &mut Function, found: &_Found) {
         .collect::<IndexMap<_, _>>();
     let count = seeds.operand(&count);
     let finals = finals.into_iter().map(|(value, sum)| (value, seeds.operand(&sum))).collect::<IndexMap<_, _>>();
-    let (callee, function_type) = found.memset;
+    let (callee, function_type) = _memset(seeds.context, declared, found.memset.0, found.memset.1);
     let ty = seeds.context.types.ptr(0);
     let callee = Operand::Constant(seeds.context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
     let off = counting::constant(seeds.context, &BigInt::from(0), 1);

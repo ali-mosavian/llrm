@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
-use llrm_analysis::{cfg, effects, induction, noreturn};
+use llrm_analysis::{cfg, induction, noreturn};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
@@ -62,7 +62,7 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     // Asked before anything moves: an instruction keeps its id where it goes.
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
-    let terminal = noreturn::terminal_sites(unit.context, &effects::declared(&outer.globals), unit.function, &BTreeSet::new());
+    let terminal = noreturn::terminal_sites(unit.context, &outer.globals, unit.function, &BTreeSet::new());
     let mut changed = false;
     for one in &found {
         let Some(into) = _preheader(&graph, one) else { continue };
@@ -105,7 +105,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
     loop {
         let mut grew = false;
         for &inst in &insts {
-            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses) {
+            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses, outer.target.as_deref()) {
                 continue;
             }
             let ready = function.instruction(inst).operands.iter().all(|&operand| match operand {
@@ -128,7 +128,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
 
 /// Whether `inst` computes only from its operands, or is a load nothing in
 /// the loop of `insts` may write.
-fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Accesses) -> bool {
+fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Accesses, machine: Option<&dyn llrm_mir::target::Machine>) -> bool {
     match unit.function.instruction(inst).opcode {
         Opcode::Binary(_)
         | Opcode::Cast(_)
@@ -140,7 +140,7 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
         | Opcode::Freeze
         | Opcode::ExtractValue(_)
         | Opcode::InsertValue(_) => true,
-        Opcode::Load { volatile: false, .. } => _unwritten(unit.function, inst, insts, accesses),
+        Opcode::Load { volatile: false, .. } => _unwritten(unit.function, inst, insts, accesses, machine),
         _ => false,
     }
 }

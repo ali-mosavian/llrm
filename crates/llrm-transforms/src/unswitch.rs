@@ -6,7 +6,7 @@
 //! - The old candidate was re-optimized by `transform::recorded`, the whole
 //!   pipeline with unswitching off and the machine's tuning forwarded. That
 //!   pipeline is not ported, so the re-optimization is the passes the pass
-//!   is given; its price is `profit::weighted` at the given costs, each
+//!   is given; its price is `profit::weighted` at the target's costs, each
 //!   loop weighted by the trips induction proves.
 //! - The old stage records and `watch` hook are the pass manager's dump and
 //!   change log.
@@ -48,7 +48,6 @@ use crate::profit::{self, OperationCosts};
 use crate::{edges, loopclone, transform};
 
 pub struct Unswitch {
-    pub costs: OperationCosts,
     /// What a specialized candidate goes through before it is judged.
     pub passes: Vec<Box<dyn FunctionPass>>,
 }
@@ -60,13 +59,14 @@ impl FunctionPass for Unswitch {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
+        let costs = profit::costs(&outer);
         let passes = &mut self.passes;
         let mut reoptimize = |candidate: &mut Unit| {
             for pass in passes.iter_mut() {
                 pass.run(candidate, &mut analyses.fresh());
             }
         };
-        match optimized(unit, &outer, &self.costs, &mut reoptimize) {
+        match optimized(unit, &outer, &costs, &mut reoptimize) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("unswitch: {error}"),
@@ -88,6 +88,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
         callees: unit.callees,
         metadata: unit.metadata,
         sizes: unit.sizes,
+        declared: &mut *unit.declared,
     });
 
     let size = |state: &Function| occurrence::operations(state).count();

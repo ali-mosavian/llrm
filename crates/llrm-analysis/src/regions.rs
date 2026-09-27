@@ -482,31 +482,12 @@ pub(crate) mod tests {
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::{Module, Operand};
 
-    use super::{Machine, RegionError, may_alias, overlapping, typed_apart};
+    use super::{RegionError, may_alias, overlapping, typed_apart};
     use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Provenance, Unit};
     use crate::ranges::Interval;
     use crate::testing::{DOS, function, layout, parsed, value};
 
-    /// Real-mode DOS's foreign memory, as its machine description states
-    /// it: VGA and text video memory, and the ROMs above.
-    pub struct Dos;
-
-    impl Machine for Dos {
-        fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
-            let word = |(low, high): (i64, i64)| 0 <= low && low <= high && high <= 0xFFFF;
-            if !word(selectors) || !word(offsets) {
-                return None;
-            }
-            let (start, end) = (selectors.0 * 16 + offsets.0, selectors.1 * 16 + offsets.1 + width);
-            let mut reached = start;
-            for (from, to) in [(0xA0000, 0xC0000), (0xC0000, 0x10_0000)] {
-                if from <= reached && reached < to {
-                    reached = to;
-                }
-            }
-            (end <= reached).then_some((start, end))
-        }
-    }
+    pub use llrm_cycles::target::Dos;
 
     /// Every access `@f` of `text` makes, in order.
     fn accesses(module: &Module, layout: &DataLayout) -> Vec<MemRef> {
