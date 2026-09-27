@@ -151,6 +151,11 @@ impl Outer {
         self.modules.get(&TypeId::of::<M>()).map(|one| Rc::clone(one).downcast::<M::Result>().expect("keyed by its type"))
     }
 
+    /// `cached`, borrowed for as long as the proxy.
+    pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
+        self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
+    }
+
     /// Whether an analysis computed under `other` read what this holds.
     fn same(&self, other: &Self) -> bool {
         self.metadata == other.metadata

@@ -2,8 +2,8 @@
 //! (`passes::Analyses`), the role llrm-core's `analysis/manager.rs` played:
 //! a pass asks, the manager computes once and drops what a pass did not
 //! preserve. An entry reads its module and target through the outer proxy
-//! (`passes::Outer`), and alias's callee summaries are a module analysis
-//! there, as LLVM's `GlobalsAA`.
+//! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
+//! outside code reaches but by name, and alias's callee summaries.
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -14,6 +14,7 @@ use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
+use crate::globalsaa::{self, Globals};
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -21,22 +22,39 @@ impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, references: None }
+        let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
+        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None }
+    }
+}
+
+/// Which globals no code outside the module reaches but by name:
+/// `globalsaa::analysis`.
+pub struct GlobalsAA;
+
+impl ModuleAnalysis for GlobalsAA {
+    type Result = Result<Globals, String>;
+    const NAME: &'static str = "globals-aa";
+    fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
+        globalsaa::analysis(module, layout, target)
     }
 }
 
 /// Each defined function's memory effects, by name: `alias::summaries` of
-/// the whole module.
+/// the whole module, its globals as `GlobalsAA` finds them.
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
     fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
+        // A module analysis sees no other: GlobalsAA's answer is found again.
+        let globals = globalsaa::analysis(module, layout, target)?;
         let procedures = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
-            .filter_map(|(_, global, function)| Some((global.name.clone()?, Procedure::of(Unit { machine: target, ..Unit::of(module, layout, function) }))))
+            .filter_map(|(_, global, function)| {
+                Some((global.name.clone()?, Procedure::of(Unit { machine: target, ..Unit::of(module, layout, function) }.with_globals_aa(&globals))))
+            })
             .collect();
         alias::summaries(&procedures, None)
     }

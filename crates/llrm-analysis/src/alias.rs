@@ -13,7 +13,9 @@
 //! counts it a capture; an `inttoptr` has no provenance.
 //!
 //! What a call reads and writes, `calls_annotated`, is a side table here:
-//! the rich MIR's call carries no memory operands.
+//! the rich MIR's call carries no memory operands. Of the globals GlobalsAA
+//! tracks, a callee no summary describes reaches what `globalsaa` says. A
+//! body that may be replaced, weak or linkonce, is no summary.
 //!
 //! Not ported: `named_bytes` (a cell's root is its object), the merge of a
 //! frontend's attached provenance with the derived one in
@@ -33,7 +35,7 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 
 use llrm_graph::loops;
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
@@ -44,6 +46,7 @@ use num_bigint::BigInt;
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
 use crate::consts::{self, Known};
+use crate::globalsaa;
 use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
@@ -262,11 +265,6 @@ pub struct Procedure<'a> {
     pub unit: Unit<'a>,
     pub calls: IndexMap<InstId, String>,
     pub arguments: IndexMap<InstId, Vec<Actual>>,
-    /// Objects no pointer reaches that a callee outside the unit names.
-    pub named: BTreeSet<MemoryObject>,
-    /// Of `named`, what each outside callee whose writes are known writes.
-    /// Any other outside callee writes them all.
-    pub outside: IndexMap<String, BTreeSet<MemoryObject>>,
 }
 
 impl<'a> Procedure<'a> {
@@ -294,13 +292,15 @@ impl<'a> Procedure<'a> {
                 .iter()
                 .map(|&one| match one {
                     Operand::Value(value) if is_pointer(&unit, one) => Actual::Pointer(value, 0),
+                    // A null pointer points to nothing.
+                    Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison) => Actual::Absent,
                     Operand::Constant(_) if is_pointer(&unit, one) => _operand(&unit, one, &IndexMap::default()).map_or(Actual::Provenance(UNKNOWN.clone()), Actual::Provenance),
                     _ => Actual::Absent,
                 })
                 .collect();
             arguments.insert(inst, actual);
         }
-        Self { unit, calls, arguments, named: BTreeSet::new(), outside: IndexMap::default() }
+        Self { unit, calls, arguments }
     }
 }
 
@@ -310,15 +310,63 @@ fn call_sites(unit: &Unit) -> Vec<InstId> {
     function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect()
 }
 
-/// What a callee nobody summarized may read and write at `at`.
-fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance]) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+/// Whole slices of `globals`.
+fn _globals(unit: &Unit, globals: impl IntoIterator<Item = GlobalId>) -> BTreeSet<Slice> {
+    globals.into_iter().filter_map(|one| memory::global_object(unit, one)).map(Slice::whole).collect()
+}
+
+/// Every global the unit's GlobalsAA tracks: what a pointer of unknown
+/// origin in a callee, which may name them, reaches.
+fn _tracked(unit: &Unit) -> BTreeSet<Slice> {
+    _globals(unit, unit.globals_aa.into_iter().flat_map(|aa| aa.tracked_globals().iter().copied()))
+}
+
+/// What a callee nobody summarized may read and write at `at`: what a
+/// nonlocal reaches, what escaped before the call, its actuals' objects,
+/// and of the tracked globals what GlobalsAA says it names and what
+/// `callbacks` into the module do, all of them where that is unknown.
+fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance], callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+    let unit = &procedure.unit;
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole(actual, &facts.escaped_before.get(&at).unwrap_or_default())?);
     let mut writes = reads.clone();
-    let written = procedure.calls.get(&at).and_then(|callee| procedure.outside.get(callee)).unwrap_or(&procedure.named);
-    writes.extend(_whole([], written)?);
-    reads.extend(_whole([], &procedure.named)?);
+    let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
+    let (read, written) = globals.unsummarized(callee);
+    reads.extend(_globals(unit, read));
+    writes.extend(_globals(unit, written));
+    // An indirect callee may be an entry itself.
+    if callee.is_none() || globalsaa::calls_back(unit, at) {
+        let Some(callbacks) = callbacks else {
+            reads.extend(_tracked(unit));
+            writes.extend(_tracked(unit));
+            return Ok((reads, writes));
+        };
+        reads.extend(callbacks.reads.iter().cloned());
+        writes.extend(callbacks.writes.iter().cloned());
+        if callbacks.unknown_read {
+            reads.extend(_tracked(unit));
+        }
+        if callbacks.unknown_write {
+            writes.extend(_tracked(unit));
+        }
+    }
     Ok((reads, writes))
+}
+
+/// What calling back into the module may do: the effects of the unit's
+/// GlobalsAA entries, in no caller's object space; none where `known`
+/// lacks one.
+fn _callbacks(unit: &Unit, known: &IndexMap<String, Summary>) -> Option<Summary> {
+    let mut out = Summary::default();
+    for name in unit.globals_aa?.entries() {
+        let one = known.get(name)?.instantiated(&[]);
+        out.reads.extend(one.reads);
+        out.writes.extend(one.writes);
+        out.unknown_read |= one.unknown_read;
+        out.unknown_write |= one.unknown_write;
+    }
+    Some(Summary { reads: _coalesced(&out.reads), writes: _coalesced(&out.writes), ..out })
 }
 
 fn _actuals(procedure: &Procedure, facts: &PointsTo, at: InstId) -> Vec<Provenance> {
@@ -447,7 +495,8 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
     loop {
         let mut changed = false;
         for (name, procedure) in procedures {
-            let captured_at = procedure.calls.iter().map(|(at, target)| (*at, result.get(target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+            let callbacks = _callbacks(&procedure.unit, &result);
+            let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, &result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
             let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))?;
             let direct = _direct_summary(&procedure.unit)?;
             let (mut reads, mut writes, mut captures) = (direct.reads, direct.writes, direct.captures);
@@ -457,7 +506,7 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 let callee = target.and_then(|target| _summary(&procedure.unit, &result, target));
                 let actual = _actuals(procedure, &facts, at);
                 let Some(callee) = callee else {
-                    let (read, written) = _unknown_visible(procedure, &facts, at, &actual)?;
+                    let (read, written) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
                     reads.extend(read);
                     writes.extend(written);
                     captures.extend(
@@ -509,6 +558,7 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
     let callee = |at: &InstId| procedure.calls.get(at).and_then(|target| _summary(&procedure.unit, known, target));
     let captures = procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
+    let callbacks = _callbacks(&procedure.unit, known);
 
     let reference = |one: &Slice| {
         MemRef::reach(u32::try_from(one.width).expect("a slice width is a memory width"), Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() })
@@ -520,17 +570,19 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
         let mut effect = match callee(&at) {
             Some(callee) => callee.instantiated(&actual),
             None => {
-                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual)?;
+                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
                 Summary { reads, writes, ..Summary::default() }
             }
         };
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.reads.extend(_tracked(&procedure.unit));
         }
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.writes.extend(_tracked(&procedure.unit));
         }
         out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect() });
     }
@@ -873,7 +925,7 @@ pub fn points_to(
     // gen/kill form of a forward dataflow.
     let calls = call_sites(unit).into_iter().collect::<BTreeSet<_>>();
     let provenances = |operands: &[Operand], values: &IndexMap<ValueId, Provenance>| {
-        operands.iter().filter(|one| matches!(one, Operand::Value(_))).filter_map(|&one| _operand(unit, one, values)).flat_map(|one| one.slices.into_iter().map(|slice| slice.object)).collect::<Vec<_>>()
+        operands.iter().filter_map(|&one| _operand(unit, one, values)).flat_map(|one| one.slices.into_iter().map(|slice| slice.object)).collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
     for block in &graph {
@@ -904,6 +956,7 @@ pub fn points_to(
                     newly.extend(provenances(&op.operands, &values));
                 }
             }
+            newly.extend(_lost(unit, inst, &values));
             // Returned, or turned into an integer: found from outside.
             if matches!(op.opcode, Opcode::Ret | Opcode::Cast(CastOp::PtrToInt)) {
                 newly.extend(provenances(&op.operands, &values));
@@ -981,6 +1034,35 @@ pub fn points_to(
     let escaped = named(&every);
     let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
     Ok(PointsTo { values, escaped, escaped_before })
+}
+
+/// Objects whose address `inst` turns into what no pointer fact follows,
+/// which LLVM's capture tracking counts a capture: a pointer operand whose
+/// provenance neither the result nor the access carries, and a global in
+/// a constant that is no pointer. A comparison captures nothing; what a
+/// call, a return, a store and a `ptrtoint` publish, their own rules say.
+fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Vec<MemoryObject> {
+    let op = unit.function.instruction(inst);
+    let carried = match &op.opcode {
+        Opcode::ICmp(_) => return Vec::new(),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => unit.space(op.operands[0]) != Some(2),
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => true,
+        Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
+        _ => false,
+    };
+    let mut out = Vec::new();
+    for &operand in &op.operands {
+        if is_pointer(unit, operand) {
+            if !carried {
+                out.extend(_operand(unit, operand, values).into_iter().flat_map(|one| one.slices.into_iter().map(|slice| slice.object)));
+            }
+        } else if let Operand::Constant(id) = operand {
+            let mut held = BTreeSet::new();
+            globalsaa::embedded(unit.context, id, &mut held);
+            out.extend(held.into_iter().filter_map(|one| memory::global_object(unit, one)));
+        }
+    }
+    out
 }
 
 fn _resolved_actuals(actuals: &[Actual], values: &IndexMap<ValueId, Provenance>) -> Vec<Provenance> {
