@@ -538,6 +538,21 @@ pub struct Object {
     pub constants: String,
     /// The segments outside DGROUP.
     pub private: BTreeSet<String>,
+    /// The near symbols LINK must resolve though no code calls them: the
+    /// graphics drivers a SCREEN mode needs.
+    pub requests: BTreeSet<String>,
+    /// How each function is framed, by its MIR name, where not by B$ENRA
+    /// with no temporary STRING slot.
+    pub frames: BTreeMap<String, Frame>,
+}
+
+/// How a function is framed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Frame {
+    /// By B$ENRA and B$EXSA, with this many temporary STRING slots.
+    Runtime { strings: i64 },
+    /// By the function itself, its locals zeroed by its own code.
+    Own,
 }
 
 /// A data segment: what it holds, in order, and its size where stated.
@@ -566,6 +581,14 @@ pub fn object(module: &Module, object: &Object, runtime: model::RuntimeProfile, 
 pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfile, options: &Options) -> Result<masm::Module, String> {
     let abi = HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new() };
     let mut names = globals::names(module, &|name| abi.linked(name))?;
+    // A symbol the frontend states stands as it is, BASIC's type suffix and all.
+    for (at, global) in module.globals.iter().enumerate() {
+        let id = GlobalId(at as u32);
+        if let Some(symbol) = global.name.as_ref().and_then(|name| object.symbols.get(name)) {
+            names.extend(globals::segment_name(module, id, symbol));
+            names.insert((globals::space(module, id), i64::from(id.0)), symbol.clone());
+        }
+    }
     names.extend(crate::hir::lower::symbol_names());
     let main = module.named(&object.main).ok_or("no main body")?;
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
@@ -582,7 +605,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         if function.is_declaration() {
             continue;
         }
-        let (procedure, landing) = procedure(module, id, id == main, &names, &abi, &pool, &target, runtime)?;
+        let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
+        let (procedure, landing) = procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)?;
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
         }
@@ -618,6 +642,9 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             externs.extend(names.get(&(Space::External, at as i64)).filter(|name| name.as_str() != HEADER).map(|name| (name.clone(), "byte".to_owned())));
         }
     }
+    externs.extend(object.requests.iter().map(|name| (name.clone(), "near".to_owned())));
+    externs.sort();
+    externs.dedup();
     Ok(masm::Module {
         code: object.code.clone(),
         names,
@@ -626,19 +653,20 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         data,
         procedures,
         private: object.private.clone(),
-        requests: BTreeSet::new(),
+        requests: object.requests.clone(),
     })
 }
 
 /// A defined function selected, through the machine phases, and framed as
 /// BASIC frames it: a naked one not at all, the main body only where it
-/// reserves anything, every other by B$ENRA and B$EXSA. Its landing pad's
-/// block, where it has one.
+/// reserves anything, and ending the program where it returns; every other
+/// as `frame` says. Its landing pad's block, where it has one.
 #[allow(clippy::too_many_arguments)]
 fn procedure(
     module: &Module,
     id: GlobalId,
     main: bool,
+    frame: Frame,
     names: &IndexMap<(Space, i64), String>,
     abi: &HirAbi,
     pool: &Rc<RefCell<Pool>>,
@@ -650,14 +678,29 @@ fn procedure(
     let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), &contracts, pool, target)?;
     let finalized = finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
+    let mut reserve = 0;
     let (body, framed) = if !super::framed(module, id) {
         (finalized.body, IndexMap::default())
     } else if main && machined.reserve == 0 {
         _initialize_frame(&finalized.body, 0)?
-    } else {
+    } else if main {
         _runtime_frame(&finalized.body, machined.reserve, runtime, 0)?
+    } else {
+        match frame {
+            Frame::Runtime { strings } => _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?,
+            Frame::Own => {
+                reserve = machined.reserve;
+                (finalized.body, IndexMap::default())
+            }
+        }
     };
     callees.extend(framed);
+    let mut body = addressvalues::converted(&body);
+    if main {
+        let exits;
+        (body, exits) = ends_program(&body);
+        callees.extend(exits);
+    }
     for (at, callee) in &machined.calls {
         if let Some(code) = machined.inline.get(at) {
             callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
@@ -673,9 +716,9 @@ fn procedure(
         name: names[&(Space::Segment, i64::from(id.0))].clone(),
         public: !main && global.linkage == llrm_mir::Linkage::External,
         far: isel::far(global).map_err(|error| error.0)?,
-        body: addressvalues::converted(&body),
-        // B$ENRA reserves the frame; masm's own shell reserves nothing.
-        reserve: 0,
+        body,
+        // B$ENRA reserves the frame; masm's own shell only one of its own.
+        reserve,
         callees,
         interrupt: None,
     };
@@ -728,4 +771,31 @@ fn size_of(datum: &masm::Datum) -> i64 {
         masm::Datum::Fill(fill) => fill.size,
         _ => 0,
     }
+}
+
+/// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
+pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
+    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut instructions = Vec::new();
+        let mut exits = false;
+        for instruction in &block.insns {
+            let mut instruction = Arc::clone(instruction);
+            if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                exits = true;
+                sites.insert(instruction.at, masm::Callee::new("B$CENP", true));
+                let mut replaced = (*instruction).clone();
+                replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
+                instruction = Arc::new(replaced);
+            }
+            instructions.push(instruction);
+        }
+        // Only the rewritten return becomes non-returning. Branch and jump
+        // blocks retain their CFG edges; MASM listing uses the untaken edge to
+        // insert an explicit jump when it is not the next laid-out block.
+        let succ = if exits { vec![] } else { block.succ.clone() };
+        blocks.push(lir::LirBlock { succ, ..block.with_insns(instructions) });
+    }
+    (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }
