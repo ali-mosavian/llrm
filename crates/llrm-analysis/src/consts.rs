@@ -231,7 +231,7 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem) => false,
         _ => return None,
     };
-    let width = _width(unit, Operand::Value(op.result?)).filter(|width| matches!(width, 16 | 32 | 64))?;
+    let width = _width(unit, Operand::Value(op.result?))?;
     let operands = op.operands.iter().map(|&one| _operand(unit, one, known, None)).collect::<Option<Vec<_>>>()?;
     if operands.iter().any(|fact| fact.width < width) {
         return None;

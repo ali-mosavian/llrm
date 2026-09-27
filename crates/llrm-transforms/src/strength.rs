@@ -64,16 +64,12 @@ use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
 use crate::{dead, exitsink, indvars, ivshare, loopexit};
-use crate::profit::OperationCosts;
+use crate::profit::{self, OperationCosts};
 
-/// Strength reduction. `registers` of 0 leaves pressure unpriced;
-/// `call_registers`, when not 0, is what survives a call in the loop.
+/// Strength reduction, priced on the target's costs and registers
+/// (`profit::costs`, `profit::registers`).
 #[derive(Default)]
-pub struct Strength {
-    pub costs: OperationCosts,
-    pub registers: i64,
-    pub call_registers: i64,
-}
+pub struct Strength;
 
 impl FunctionPass for Strength {
     fn name(&self) -> &'static str {
@@ -83,14 +79,14 @@ impl FunctionPass for Strength {
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let outer = Rc::clone(analyses.outer());
-        let reduced = reduced(unit, &outer, &facts, self.registers, self.call_registers, &self.costs, true);
+        let reduced = reduced(unit, &outer, &facts, true);
         let shared = ivshare::shared(unit, &outer);
         let dead = dead::dead(unit.context, unit.callees, unit.function);
         let sunk = exitsink::sunk(unit.function);
         // The tail: exit values evaluated, then the control a credited
         // formula took over, so the counter it replaced dies.
         let evaluated = loopexit::evaluated(unit.context, unit.layout, unit.callees, unit.function, &outer).unwrap_or_else(|error| panic!("strength: {error}"));
-        let rewound = indvars::rewound(unit.context, unit.layout, unit.function, analyses, self.registers, &self.costs);
+        let rewound = indvars::rewound(unit.context, unit.layout, unit.function, analyses, profit::registers(&outer).0, &profit::costs(&outer));
         let simplified = indvars::simplified(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("strength: {error}"));
         let cleared = (rewound | simplified) && dead::dead(unit.context, unit.callees, unit.function);
         if evaluated {
@@ -116,20 +112,15 @@ struct Plan {
 
 /// Every multiply of a counter by an invariant, and every formula like it,
 /// made an add, the replaced left for `dead`; whether anything changed.
-/// `outer` is the function's module, `facts` its values consts knows.
+/// `outer` is the function's module and target, `facts` its values consts
+/// knows. A target's `registers` of 0 leaves pressure unpriced;
+/// `call_registers`, when not 0, is what survives a call in the loop.
 ///
 /// An inner recurrence's start, in its preheader, is a formula of the
 /// loop around it.
-#[allow(clippy::too_many_arguments)]
-pub fn reduced(
-    unit: &mut Unit,
-    outer: &Outer,
-    facts: &IndexMap<ValueId, Known>,
-    registers: i64,
-    call_registers: i64,
-    costs: &OperationCosts,
-    control_recurrences: bool,
-) -> bool {
+pub fn reduced(unit: &mut Unit, outer: &Outer, facts: &IndexMap<ValueId, Known>, control_recurrences: bool) -> bool {
+    let costs = &profit::costs(outer);
+    let (registers, call_registers) = profit::registers(outer);
     let mut changed = false;
     let mut found = None::<Vec<Formulas>>;
     let mut visited = BTreeSet::<i64>::new();
