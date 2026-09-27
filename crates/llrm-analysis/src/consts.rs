@@ -46,7 +46,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
@@ -601,6 +601,10 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     if op.opcode == Opcode::Cast(CastOp::Trunc) {
         return _read(_operand(unit, op.operands[0], known, here).as_ref(), width);
     }
+    if let Opcode::ICmp(predicate) = op.opcode {
+        let (left, right) = (_operand(unit, op.operands[0], known, here)?, _operand(unit, op.operands[1], known, here)?);
+        return Some(Known::new(u8::from(holds(predicate, &left, &right)), 1));
+    }
     if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub)) && matches!(op.operands[0], Operand::Value(_)) && op.operands[0] == op.operands[1] {
         return Some(Known::new(0, width));
     }
@@ -639,6 +643,30 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     let width = parts.iter().map(|one| one.width).min().expect("parts").min(width);
     let (_, arith) = ARITH.iter().find(|(one, _)| *one == kind)?;
     Some(Known::new(masked(&arith(&parts[0].n, &parts[1].n), width), width))
+}
+
+/// Whether `predicate` holds of two known numbers: an `icmp`'s answer.
+pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
+    let width = left.width.max(right.width);
+    let signed = |fact: &Known| {
+        let top = BigInt::from(1) << (fact.width - 1);
+        let number = masked(&fact.n, fact.width);
+        if (&number & &top) != BigInt::from(0) { number - (top << 1) } else { number }
+    };
+    let (a, b) = (signed(left), signed(right));
+    let (ua, ub) = (masked(&left.n, width), masked(&right.n, width));
+    match predicate {
+        IntPredicate::Eq => a == b,
+        IntPredicate::Ne => a != b,
+        IntPredicate::Slt => a < b,
+        IntPredicate::Sle => a <= b,
+        IntPredicate::Sgt => a > b,
+        IntPredicate::Sge => a >= b,
+        IntPredicate::Ult => ua < ub,
+        IntPredicate::Ule => ua <= ub,
+        IntPredicate::Ugt => ua > ub,
+        IntPredicate::Uge => ua >= ub,
+    }
 }
 
 /// Every value this function computes that is a number, to a fixed point;
