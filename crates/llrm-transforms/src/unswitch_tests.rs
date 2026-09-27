@@ -166,19 +166,6 @@ fn test_unswitch_rejects_semantic_work_without_a_target_price() {
     assert_eq!(through(&text, Some("choose"), OperationCosts::default()), (false, printed(&parsed(&text))));
 }
 
-/// A target where division is dear.
-struct DearDivide;
-
-impl llrm_mir::target::Machine for DearDivide {
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
-        None
-    }
-
-    fn costs(&self) -> OperationCosts {
-        OperationCosts { divide: 1000, ..OperationCosts::default() }
-    }
-}
-
 /// Re-optimizes a candidate into a copy of the function it holds.
 struct Replace(llrm_mir::module::Function);
 
@@ -208,5 +195,36 @@ fn test_unswitch_prices_at_the_target_costs() {
         printed(&module) != printed(&parsed(&text))
     };
     assert!(kept(None));
-    assert!(!kept(Some(std::rc::Rc::new(DearDivide))));
+    assert!(!kept(Some(std::rc::Rc::new(crate::testing::Tuned { costs: OperationCosts { divide: 1000, ..OperationCosts::default() }, ..Default::default() }))));
+}
+
+/// Records the target's prices and registers each candidate's passes see.
+struct Seen(std::rc::Rc<std::cell::RefCell<Vec<(OperationCosts, (i64, i64))>>>);
+
+impl llrm_mir::passes::FunctionPass for Seen {
+    fn name(&self) -> &'static str {
+        "seen"
+    }
+
+    fn run(&mut self, _: &mut Unit, analyses: &mut llrm_mir::passes::Analyses) -> llrm_mir::passes::PreservedAnalyses {
+        let outer = analyses.outer();
+        self.0.borrow_mut().push((crate::profit::costs(outer), crate::profit::registers(outer)));
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Specializing IVARM restarted optimization with default tuning: the
+/// candidate's passes see the target the pass runs under.
+#[test]
+fn test_unswitch_reoptimization_preserves_mir_target_costs() {
+    let costs = OperationCosts { add: 97, address: 89, load: 83, ..OperationCosts::default() };
+    let seen = std::rc::Rc::default();
+    let mut module = parsed(INVARIANT);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 }));
+    manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
+    manager.run(&mut module).unwrap();
+    let seen = seen.borrow();
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");
 }

@@ -728,19 +728,35 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             continue;
         }
         let start = counter.start.clone();
-        let begin = _constant(&start, facts, width);
         let limit = _constant(&bound, facts, width);
-        let difference = _difference(unit, &bound, &start, begin.as_ref(), limit.as_ref(), facts, width);
-        let count = match (&difference, &begin, &limit) {
-            (Some(difference), _, _) if test == IntPredicate::Ne => _equal_after(difference, &step, width, shape.posttested, stepped),
-            (_, Some(begin), Some(limit)) if test != IntPredicate::Ne || difference.is_none() => {
-                _ordered_after(begin, limit, &step, test, width, shape.posttested, stepped)
-            }
-            _ => None,
+        let counted_from = |start: &AffineOperand| {
+            let begin = _constant(start, facts, width);
+            let difference = _difference(unit, &bound, start, begin.as_ref(), limit.as_ref(), facts, width);
+            let count = match (&difference, &begin, &limit) {
+                (Some(difference), _, _) if test == IntPredicate::Ne => _equal_after(difference, &step, width, shape.posttested, stepped),
+                (_, Some(begin), Some(limit)) if test != IntPredicate::Ne || difference.is_none() => {
+                    _ordered_after(begin, limit, &step, test, width, shape.posttested, stepped)
+                }
+                _ => None,
+            };
+            (begin, count)
         };
+        let (mut begin, mut count) = counted_from(&start);
+        // The start as counted: itself, or the entry value it is proven to equal.
+        let mut equal = start.clone();
+        if count.is_none()
+            && let Some((entry, rewinds)) = _carried(unit, loop_, &start, counter.value, update, width)
+            && let (entered, Some(trips)) = counted_from(&entry)
+            && rewinds.iter().all(|(stepped_root, offset)| {
+                let exited = &trips - BigInt::from(u8::from(shape.posttested && !stepped_root));
+                mod_floor(&(offset + exited * &step), &(BigInt::from(1) << width)) == BigInt::from(0)
+            })
+        {
+            (begin, count, equal) = (entered, Some(trips), entry);
+        }
         let (mut first, mut last) = (None, None);
         let maximum = if let Some(count) = &count {
-            (first, last) = _signed_span(&start, facts, width, count, &step);
+            (first, last) = _signed_span(&equal, facts, width, count, &step);
             Some(count.clone())
         } else if shape.posttested || abs(&step) != BigInt::from(1) {
             continue;
@@ -775,6 +791,64 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
         });
     }
     proven
+}
+
+/// A start carried round an enclosing loop: a phi outside `loop_` whose
+/// arms are one entry value, or the counter (`phi` or its `update`) as it
+/// left plus a constant. The entry value and, per other arm, whether it
+/// reads the update and its constant.
+///
+/// If each such constant takes the counter from its exit value back to
+/// where it began, the start always equals the entry value: by induction
+/// over the start's evaluations, each run began at it and so left where
+/// its trips from it say. The arm is read outside `loop_`, after the run
+/// that the loop's header, dominating it, proves came in between.
+fn _carried(unit: &Unit, loop_: &Loop, start: &AffineOperand, phi: ValueId, update: ValueId, width: u32) -> Option<(AffineOperand, Vec<(bool, BigInt)>)> {
+    let function = unit.function;
+    let &AffineOperand::Value(value, _) = start else { return None };
+    let (inst, op) = unit.defining(Operand::Value(value))?;
+    if op.opcode != Opcode::Phi || loop_.body.contains(&cfg::id(function.parent(inst)?)) {
+        return None;
+    }
+    let (mut entry, mut rewinds) = (None, Vec::new());
+    for pair in op.operands.chunks(2) {
+        match _rewind(unit, loop_, pair[0], phi, update) {
+            Some((root, offset)) => rewinds.push((root == update, offset)),
+            None if entry.is_none_or(|one| one == pair[0]) => entry = Some(pair[0]),
+            None => return None,
+        }
+    }
+    (!rewinds.is_empty()).then_some(())?;
+    Some((term(unit, entry?).filter(|entry| entry.width() == width)?, rewinds))
+}
+
+/// `operand` as `phi` or `update` plus a constant, through adds and
+/// single-arm phis outside `loop_`.
+fn _rewind(unit: &Unit, loop_: &Loop, mut operand: Operand, phi: ValueId, update: ValueId) -> Option<(ValueId, BigInt)> {
+    let mut offset = BigInt::from(0);
+    loop {
+        let Operand::Value(value) = operand else { return None };
+        if value == phi || value == update {
+            return Some((value, offset));
+        }
+        let (inst, op) = unit.defining(operand)?;
+        if loop_.body.contains(&cfg::id(unit.function.parent(inst)?)) {
+            return None;
+        }
+        operand = match (&op.opcode, &op.operands[..]) {
+            (Opcode::Phi, [one, _]) => *one,
+            (Opcode::Binary(BinaryOp::Add), &[left, right]) => {
+                let (other, constant) = match (unit.int_constant(left), unit.int_constant(right)) {
+                    (_, Some(constant)) => (left, constant),
+                    (Some(constant), _) => (right, constant),
+                    _ => return None,
+                };
+                offset += BigInt::from(constant);
+                other
+            }
+            _ => return None,
+        };
+    }
 }
 
 /// `(width, bound, mirrored, stepped)` where `icmp` tests a counter value in `tested`.

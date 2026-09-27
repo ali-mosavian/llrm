@@ -28,6 +28,15 @@ impl Machine for Dos {
     fn costs(&self) -> OperationCosts {
         costs("486")
     }
+
+    // The old profile's `register_capacity` and `call_register_capacity`.
+    fn registers(&self) -> i64 {
+        6
+    }
+
+    fn call_registers(&self) -> i64 {
+        2
+    }
 }
 
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the

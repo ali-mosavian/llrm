@@ -7,9 +7,9 @@
 //! old emission (`test_harr_reuses_an_existing_recurrence_for_termination`,
 //! `test_harr_initializes_the_reused_counter_before_its_exit_bound`,
 //! `test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone`).
-//! `test_exact_nested_recurrence_rewinds_before_reloading_its_start` loses
-//! its trip-count assertions: the old body remembered the inner count in
-//! `loop_trip_counts`, which the rich MIR has no counterpart for.
+//! The old rewind test's trip-count assertions, which read the side table
+//! `loop_trip_counts`, are `a_rewound_loop_keeps_its_count_for_rotate`:
+//! induction re-proves the count from the IR.
 
 use std::rc::Rc;
 
@@ -400,3 +400,58 @@ b4:
     let after = printed(&module);
     assert!(changed && after.contains("icmp ne i16 %i, 0") && after.contains("add i16 %acc, 10"), "{after}");
 }
+
+/// Rewound, the inner loop starts at a phi carried round the outer loop,
+/// but it still runs four trips each row, so Rotate enters it. Induction
+/// once lost the count there, and the loop stayed unrotated.
+#[test]
+fn a_rewound_loop_keeps_its_count_for_rotate() {
+    let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
+    let inputs: &[&[i128]] = &[&[0], &[-5], &[1000]];
+    let (changed, mut module) = through(&rewinding("add i32 %x, 5"), inputs, |context, layout, function, analyses| rewound(context, layout, function, analyses, 1, &later));
+    assert!(changed);
+    let (before, results_before) = (printed(&module), results(&module, inputs));
+    let after = managed(&mut module, Rotate);
+    assert_ne!(after, before);
+    assert!(after.contains("  %done = icmp eq i32 %fol, %bound\n  br i1 %done, label %b5, label %b4\n"), "{after}");
+    assert_eq!(results(&module, inputs), results_before, "{after}");
+}
+
+/// Over the corpus, every loop induction counted before `rewound` keeps
+/// its count after. Only Strength's recurrences start at a value, so it
+/// runs first; the one it rewinds is not its loop's control.
+#[test]
+fn rewinding_the_corpus_loses_no_trip_count() {
+    let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
+    let counts = |context: &Context, layout: &DataLayout, function: &Function, outer: &Outer| {
+        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+        let facts = llrm_analysis::consts::known(&unit, None, None, None);
+        loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
+            .into_iter()
+            .filter_map(|loop_| Some((loop_.header, llrm_analysis::induction::trip_count(&unit, &loop_, &facts)?)))
+            .collect::<Vec<_>>()
+    };
+    let mut fired = 0;
+    for (name, mut module) in llrm_analysis::testing::corpus() {
+        // Emitted counters live in allocas until promoted.
+        managed(&mut module, crate::promote::Promote);
+        managed(&mut module, crate::strength::Strength::default());
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+        let names = crate::testing::bodies(&module).into_iter().filter_map(|id| module.global(id).name.clone()).collect::<Vec<_>>();
+        for callee in names {
+            let (context, function) = module.function_mut(&callee).expect("a body");
+            let before = counts(context, &layout, function, &outer);
+            if !rewound(context, &layout, function, &analyses.fresh(), 1, &later) {
+                continue;
+            }
+            fired += 1;
+            let after = counts(context, &layout, function, &outer);
+            for counted in &before {
+                assert!(after.contains(counted), "{name}: {counted:?} lost; after {after:?}");
+            }
+        }
+    }
+    assert!(fired > 0, "the corpus rewinds somewhere");
+}
+
