@@ -13,6 +13,7 @@ pub mod lcssamerges;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod profit;
+pub mod promote;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;

@@ -1,0 +1,509 @@
+//! Write-through promotion: a load of a cell a store left its value in on
+//! every path becomes that value, a phi where paths join; every store
+//! stays. `Sroa` does it for aggregates' leaves alone.
+//! LLVM's counterpart: LICM's scalar promotion, function-wide; `Sroa`'s, SROA.
+//!
+//! Adapted from llrm-core's `optimize/promote.rs`. What an access names is
+//! `alias::annotated`'s answer, what a call writes `alias::calls_annotated`'s
+//! with every callee unknown, and whether a write reaches a cell
+//! `regions::overlapping`'s. A module pass: a function pass's unit has no
+//! globals, without which no global is an object and no callee's
+//! attributes are read.
+//!
+//! What changed with the IR:
+//! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`)
+//!   over any root: the old `Addr` key, and `_allocation_leaves`' grouping
+//!   by affine root. A leaf of one start takes any stride.
+//! - One LLVM type per cell stands for the old width and float checks
+//!   (`_float_cells`, `_stores_value`, `_converts_integer`,
+//!   `_forwards_float`): a store keeps its type's value.
+//! - A load becomes the stored operand itself, so `_restated` and `_order`
+//!   have nothing to do; the phis are placed here, as `ssa::constructed`
+//!   was not ported.
+//! - `_canonical_leaf_types` types a leaf in both passes: the old `Sroa`
+//!   rewrote the body the old `Promote` then read.
+//!
+//! Dropped, with no rich MIR counterpart:
+//! - `READS`, `_separated`, `split_updates`: an arithmetic memory operand.
+//! - `CELLS`, `Bounds`: the x86 spaces and landmarks `regions` dropped.
+//! - `_initializers`: every object access carries exact provenance, so a
+//!   narrower store into a wider cell blocks both.
+//! - `_allocation_leaves`, `_affine_values`, `_signed`, `_rewritten_refs`:
+//!   no array request; `MemRef::at` decomposes an address.
+//! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
+//!   narrows constant indices and follows exact pointers.
+//! - `_split_copies` and its helpers: no frontend moves an aggregate by one
+//!   load and one store.
+//! - `loop_only`: no caller set it.
+
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+
+use llrm_analysis::alias::{self, Procedure};
+use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit, unmodeled_write};
+use llrm_analysis::{cfg, regions, ssa};
+use llrm_graph::loops;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::edit::Position;
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
+use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::passes::ModulePass;
+use llrm_mir::types::TypeId;
+use llrm_mir::{Constant, ConstantKind, Context, GlobalId};
+use llrm_support::bits::Bits;
+use llrm_support::hash::{HashMap, HashSet, IndexMap};
+
+/// One exact scalar leaf of a memory object, and the restrict roots the
+/// pointers to it are based on.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct _Leaf {
+    pub object: MemoryObject,
+    pub low: i64,
+    pub high: i64,
+    pub type_class: Option<String>,
+    pub restrict: BTreeSet<Identity>,
+}
+
+/// What a promoted cell is.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Key {
+    Leaf(_Leaf),
+    /// An access that is no leaf, as its pointer decomposes, at no width.
+    Ref(MemRef),
+}
+
+/// The one explicit type each leaf's bytes are accessed as.
+pub type Canonical = HashMap<(MemoryObject, i64, i64), String>;
+
+fn only_slice(provenance: &Provenance) -> Option<&Slice> {
+    if provenance.slices.len() == 1 { provenance.slices.iter().next() } else { None }
+}
+
+fn slice(object: MemoryObject, low: i64, high: i64) -> Slice {
+    Slice::new(object, low, high, 1, 1).expect("a nonempty exact byte range")
+}
+
+/// The leaf `reference` is, typed as `canonical` says where it has no type.
+pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
+    let span = only_slice(reference.provenance.as_ref()?)?;
+    // One access is either the dense byte range `[low, low + width)` or one
+    // start whose own width is the access's, whatever its stride.
+    let width = i64::from(reference.width);
+    let contiguous = (span.width == 1 && span.stride == 1 && span.high - span.low == width) || (span.high - span.low == 1 && span.width == width);
+    if !contiguous {
+        return None;
+    }
+    let high = span.low + width;
+    if span.object.extent.is_some_and(|extent| !(0 <= span.low && span.low < high && high <= extent)) {
+        return None;
+    }
+    let type_class = reference.typed.clone().or_else(|| canonical.get(&(span.object.clone(), span.low, high)).cloned());
+    let restrict = reference.provenance.as_ref().map(|provenance| provenance.restrict.clone()).unwrap_or_default();
+    Some(_Leaf { object: span.object.clone(), low: span.low, high, type_class, restrict })
+}
+
+/// Bytes whose accesses cannot form disjoint scalar leaves.
+///
+/// Equal ranges are one leaf, disjoint ranges independent leaves. A proper
+/// overlap keeps both ranges in memory and leaves the rest of their object
+/// alone; ambiguous multi-object provenance keeps every slice it names.
+pub fn _blocked<'a>(refs: impl IntoIterator<Item = &'a MemRef>, canonical: &Canonical) -> BTreeSet<Slice> {
+    let mut accesses = IndexMap::<MemoryObject, Vec<_Leaf>>::default();
+    let mut blocked = BTreeSet::new();
+    for reference in refs {
+        let Some(provenance) = &reference.provenance else { continue };
+        let objects = provenance.slices.iter().map(|span| &span.object).collect::<BTreeSet<_>>();
+        if objects.len() != 1 || provenance.slices.len() != 1 {
+            blocked.extend(provenance.slices.iter().cloned());
+            continue;
+        }
+        if let Some(leaf) = _leaf(reference, canonical) {
+            accesses.entry(leaf.object.clone()).or_default().push(leaf);
+        }
+    }
+    for (object, leaves) in &accesses {
+        for (index, one) in leaves.iter().enumerate() {
+            for other in &leaves[index + 1..] {
+                let overlaps = one.low.max(other.low) < one.high.min(other.high);
+                let same_range = (one.low, one.high) == (other.low, other.high);
+                if overlaps && (!same_range || one.type_class != other.type_class) {
+                    blocked.insert(slice(object.clone(), one.low, one.high));
+                    blocked.insert(slice(object.clone(), other.low, other.high));
+                }
+            }
+        }
+    }
+    blocked
+}
+
+/// Whether the reference reaches a byte of its own object that is blocked.
+fn _touches(reference: &MemRef, blocked: &BTreeSet<Slice>) -> bool {
+    reference.provenance.as_ref().is_some_and(|provenance| {
+        provenance.slices.iter().any(|span| blocked.iter().any(|one| span.object == one.object && span.intersects(one)))
+    })
+}
+
+pub fn _key(reference: &MemRef, blocked: &BTreeSet<Slice>, canonical: &Canonical) -> Option<Key> {
+    if reference.volatile || _touches(reference, blocked) {
+        return None;
+    }
+    if let Some(leaf) = _leaf(reference, canonical) {
+        return Some(Key::Leaf(leaf));
+    }
+    reference.root?;
+    // One pointer, decomposed, names the same bytes however it was spelled.
+    Some(Key::Ref(MemRef { pointer: None, width: 0, inbounds: false, ..reference.clone() }))
+}
+
+/// The access a cell is, `width` bytes wide.
+pub fn _reference(key: &Key, width: u32) -> MemRef {
+    match key {
+        Key::Leaf(leaf) => MemRef::reach(width, Provenance { slices: BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]), restrict: leaf.restrict.clone() }),
+        Key::Ref(reference) => MemRef { width, ..reference.clone() },
+    }
+}
+
+/// Objects known to contain more than the scalar leaf being accessed.
+pub fn _aggregate_objects<'a>(leaves: impl IntoIterator<Item = &'a Key>) -> BTreeSet<MemoryObject> {
+    let mut ranges = IndexMap::<MemoryObject, BTreeSet<(i64, i64)>>::default();
+    for leaf in leaves {
+        if let Key::Leaf(leaf) = leaf {
+            ranges.entry(leaf.object.clone()).or_default().insert((leaf.low, leaf.high));
+        }
+    }
+    ranges
+        .into_iter()
+        .filter(|(object, parts)| parts.len() > 1 || object.extent.is_some_and(|extent| parts.iter().any(|(low, high)| extent > high - low)))
+        .map(|(object, _)| object)
+        .collect()
+}
+
+/// An untyped leaf takes the one explicit type its bytes are accessed as:
+/// a byte-typed move and a field access are the same bytes. Two explicit,
+/// distinct types keep the union and type-pun rejection.
+pub fn _canonical_leaf_types<'a>(refs: impl IntoIterator<Item = &'a MemRef>) -> Canonical {
+    let untyped = Canonical::default();
+    let mut types = HashMap::<(MemoryObject, i64, i64), BTreeSet<String>>::default();
+    for reference in refs {
+        if let Some(leaf) = _leaf(reference, &untyped)
+            && let Some(type_class) = leaf.type_class
+        {
+            types.entry((leaf.object, leaf.low, leaf.high)).or_default().insert(type_class);
+        }
+    }
+    types.into_iter().filter(|(_, classes)| classes.len() == 1).map(|(key, classes)| (key, classes.into_iter().next().expect("one"))).collect()
+}
+
+pub struct Promote;
+
+impl ModulePass for Promote {
+    fn name(&self) -> &'static str {
+        "promote"
+    }
+
+    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+        promoted(module, false).unwrap_or_else(|error| panic!("promote: {error}"))
+    }
+}
+
+/// Scalarize proven aggregate leaves before scalar simplification.
+pub struct Sroa;
+
+impl ModulePass for Sroa {
+    fn name(&self) -> &'static str {
+        "sroa"
+    }
+
+    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+        promoted(module, true).unwrap_or_else(|error| panic!("sroa: {error}"))
+    }
+}
+
+/// Every defined function of `module` promoted, or with `aggregate_only`
+/// only its aggregates' leaves; the functions that changed.
+pub fn promoted(module: &mut Module, aggregate_only: bool) -> Result<Vec<GlobalId>, String> {
+    let layout = match &module.datalayout {
+        Some(text) => DataLayout::parse(text)?,
+        None => DataLayout::default(),
+    };
+    let mut changed = Vec::new();
+    for at in 0..module.globals.len() {
+        let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else { continue };
+        let plan = plan(&Unit::of(module, &layout, function), aggregate_only)?;
+        if plan.loads.is_empty() {
+            continue;
+        }
+        let Module { context, globals, .. } = module;
+        let GlobalKind::Function(function) = &mut globals[at].kind else { unreachable!("a function a moment ago") };
+        rewrite(context, function, &plan);
+        changed.push(GlobalId(at as u32));
+    }
+    Ok(changed)
+}
+
+/// What one function's promotion does: the type each cell holds, the
+/// stores that define one, and the loads that read one's stored value.
+#[derive(Debug, Default)]
+struct Plan {
+    types: Vec<TypeId>,
+    stores: HashMap<InstId, usize>,
+    loads: HashMap<InstId, usize>,
+}
+
+/// What the analyses say about one function's memory.
+struct Facts {
+    /// Each load's and store's access.
+    refs: IndexMap<InstId, MemRef>,
+    /// What each call writes.
+    calls: IndexMap<InstId, Vec<MemRef>>,
+}
+
+/// The type `inst` loads or stores.
+fn accessed(unit: &Unit, inst: InstId) -> Option<TypeId> {
+    let instruction = unit.function.instruction(inst);
+    match instruction.opcode {
+        Opcode::Load { .. } => Some(instruction.ty),
+        Opcode::Store { .. } => unit.operand_type(instruction.operands[0]),
+        _ => None,
+    }
+}
+
+fn is_load(unit: &Unit, inst: InstId) -> bool {
+    matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. })
+}
+
+/// Cells whose reads can use a known stored value: touched more than once,
+/// loaded as one type, and available along every path to some load.
+fn plan(unit: &Unit, aggregate_only: bool) -> Result<Plan, String> {
+    let refs = alias::annotated(unit)?;
+    if !refs.keys().any(|&inst| is_load(unit, inst)) {
+        return Ok(Plan::default());
+    }
+    let canonical = _canonical_leaf_types(refs.values());
+    let blocked = _blocked(refs.values(), &canonical);
+    let keys = refs.iter().filter_map(|(&inst, reference)| _key(reference, &blocked, &canonical).map(|key| (inst, key))).collect::<IndexMap<_, _>>();
+    let aggregates = aggregate_only.then(|| _aggregate_objects(keys.values()));
+    if aggregates.as_ref().is_some_and(BTreeSet::is_empty) {
+        return Ok(Plan::default());
+    }
+
+    let mut seen = IndexMap::<&Key, usize>::default();
+    let mut types = HashMap::<&Key, BTreeSet<TypeId>>::default();
+    for (&inst, key) in &keys {
+        *seen.entry(key).or_default() += 1;
+        if is_load(unit, inst) {
+            types.entry(key).or_default().extend(accessed(unit, inst));
+        }
+    }
+    let candidates = seen
+        .into_iter()
+        .filter(|(key, times)| *times > 1 && types.get(key).is_some_and(|found| found.len() == 1))
+        .filter(|(key, _)| aggregates.as_ref().is_none_or(|objects| matches!(key, Key::Leaf(leaf) if objects.contains(&leaf.object))))
+        .map(|(key, _)| (key.clone(), *types[key].first().expect("one type")))
+        .collect::<IndexMap<_, _>>();
+    if candidates.is_empty() {
+        return Ok(Plan::default());
+    }
+
+    // An access of another type is no definition or use, only a write.
+    let slots = keys
+        .iter()
+        .filter_map(|(&inst, key)| candidates.get_full(key).filter(|(_, _, ty)| accessed(unit, inst) == Some(**ty)).map(|(slot, ..)| (inst, slot)))
+        .collect::<HashMap<_, _>>();
+    let procedure = Procedure::of(*unit);
+    let calls = alias::calls_annotated(&procedure, &IndexMap::default())?.into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+    let usable = _available(unit, &Facts { refs, calls }, &candidates, &slots);
+
+    let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();
+    let renumbered = used.iter().enumerate().map(|(new, &old)| (old, new)).collect::<HashMap<_, _>>();
+    let types = used.iter().map(|&slot| candidates[slot]).collect();
+    let stores = slots.iter().filter(|(inst, slot)| !is_load(unit, **inst) && used.contains(slot)).map(|(&inst, slot)| (inst, renumbered[slot])).collect();
+    let loads = usable.into_iter().map(|inst| (inst, renumbered[&slots[&inst]])).collect();
+    Ok(Plan { types, stores, loads })
+}
+
+/// Loads a stored value reaches on every path, with no write between that
+/// may reach its cell.
+fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+    let function = unit.function;
+    let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
+    let graph = cfg::graph(function);
+    let reachable = loops::dominators(&graph, Some(entry)).into_iter().filter(|(_, doms)| !doms.is_empty()).map(|(at, _)| at).collect::<BTreeSet<_>>();
+    let predecessors = loops::predecessors(&graph);
+    let refs = cells.iter().map(|(key, &ty)| _reference(key, unit.layout.store_size(&unit.context.types, ty) as u32)).collect::<Vec<_>>();
+    // The cells whose address a value is part of: its definition, a phi's
+    // on a back edge among them, moves them.
+    let mut based = HashMap::<ValueId, Vec<usize>>::default();
+    for (at, reference) in refs.iter().enumerate() {
+        let operands = [reference.root, reference.segment, reference.base.map(Operand::Value)];
+        for value in operands.into_iter().flatten().filter_map(|one| if let Operand::Value(value) = one { Some(value) } else { None }) {
+            based.entry(value).or_default().push(at);
+        }
+    }
+    let mut every = Bits::new(cells.len());
+    (0..cells.len()).for_each(|at| every.insert(at));
+    let mut leaving = reachable.iter().map(|at| (*at, every.clone())).collect::<BTreeMap<_, _>>();
+    // Whether a write may reach a cell, per (instruction, cell): every round asks again.
+    let clobbered = RefCell::new(HashMap::<(InstId, usize), bool>::default());
+
+    let entering = |at: i64, leaving: &BTreeMap<i64, Bits>| -> Bits {
+        let parents = predecessors.get(&at).into_iter().flatten().filter(|parent| reachable.contains(parent)).collect::<Vec<_>>();
+        if parents.is_empty() || at == entry {
+            return Bits::new(cells.len());
+        }
+        let mut result = leaving[parents[0]].clone();
+        for parent in &parents[1..] {
+            result.intersect_with(&leaving[*parent]);
+        }
+        result
+    };
+
+    let through = |at: i64, mut available: Bits, mut reads: Option<&mut HashSet<InstId>>| {
+        for &inst in function.block(cfg::block(at)).instructions() {
+            let instruction = function.instruction(inst);
+            let store = matches!(instruction.opcode, Opcode::Store { .. });
+            let writes = if unmodeled_write(unit, inst) {
+                match facts.calls.get(&inst) {
+                    Some(stores) => stores.iter().collect(),
+                    None => {
+                        available = Bits::new(cells.len());
+                        continue;
+                    }
+                }
+            } else if store {
+                facts.refs.get(&inst).into_iter().collect()
+            } else {
+                Vec::new()
+            };
+            let slot = slots.get(&inst).copied();
+            if let (Some(reads), Some(slot)) = (reads.as_deref_mut(), slot)
+                && !store
+                && available.contains(slot)
+            {
+                reads.insert(inst);
+            }
+            if let Some(moved) = instruction.result.and_then(|result| based.get(&result)) {
+                moved.iter().for_each(|&at| available.remove(at));
+            }
+            if !writes.is_empty() {
+                let gone = available
+                    .iter()
+                    .filter(|&at| {
+                        *clobbered.borrow_mut().entry((inst, at)).or_insert_with(|| {
+                            writes.iter().any(|written| regions::overlapping(&refs[at], written, None, None, unit.machine).unwrap_or(true))
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                gone.into_iter().for_each(|at| available.remove(at));
+            }
+            if let Some(slot) = slot.filter(|_| store) {
+                available.insert(slot);
+            }
+        }
+        available
+    };
+
+    loop {
+        let mut changed = false;
+        for &at in &reachable {
+            let result = through(at, entering(at, &leaving), None);
+            if leaving.get(&at) != Some(&result) {
+                leaving.insert(at, result);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut reads = HashSet::default();
+    for &at in &reachable {
+        through(at, entering(at, &leaving), Some(&mut reads));
+    }
+    reads
+}
+
+/// Each edge into `block`, by the block it leaves.
+fn edges(function: &Function, block: BlockId) -> Vec<BlockId> {
+    function.block_users(block).iter().filter(|one| function.instruction(one.user).opcode.is_terminator()).filter_map(|one| function.parent(one.user)).collect()
+}
+
+/// `function` with each planned load its cell's stored value: phis where
+/// the stores' dominance frontiers put them, named down the dominator tree.
+fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
+    let entry = cfg::id(function.entry().expect("a defined function"));
+    let graph = cfg::graph(function);
+    let frontiers = loops::frontiers(&graph, Some(entry));
+    let idom = loops::immediate_dominators(&graph, Some(entry));
+    let existing = function.walk().map(|(_, inst)| function.instruction(inst)).filter(|one| one.opcode == Opcode::Phi).filter_map(|one| one.result).collect::<BTreeSet<_>>();
+    let poison = plan.types.iter().map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))).collect::<Vec<_>>();
+
+    // Each phi placed, by block and cell, with the block each input comes from.
+    let mut phis = HashMap::<(i64, usize), (InstId, Vec<BlockId>)>::default();
+    for (slot, &ty) in plan.types.iter().enumerate() {
+        let defining = plan.stores.iter().filter(|(_, one)| **one == slot).filter_map(|(inst, _)| function.parent(*inst)).map(cfg::id).collect::<BTreeSet<_>>();
+        let mut work = defining.iter().copied().collect::<Vec<_>>();
+        let mut placed = BTreeSet::new();
+        while let Some(at) = work.pop() {
+            for &frontier in frontiers.get(&at).into_iter().flatten() {
+                if !placed.insert(frontier) {
+                    continue;
+                }
+                let block = cfg::block(frontier);
+                let from = edges(function, block);
+                let operands = from.iter().flat_map(|&one| [poison[slot], Operand::Block(one)]).collect();
+                let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
+                let first = function.block(block).instructions().first().copied();
+                function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
+                phis.insert((frontier, slot), (phi, from));
+                if !defining.contains(&frontier) {
+                    work.push(frontier);
+                }
+            }
+        }
+    }
+
+    let mut children = BTreeMap::<i64, Vec<i64>>::new();
+    for (&at, &parent) in &idom {
+        if let Some(parent) = parent {
+            children.entry(parent).or_default().push(at);
+        }
+    }
+    let mut dead = Vec::new();
+    let mut stack = vec![(entry, poison.clone())];
+    while let Some((at, mut current)) = stack.pop() {
+        let block = cfg::block(at);
+        for (slot, value) in current.iter_mut().enumerate() {
+            if let Some((phi, _)) = phis.get(&(at, slot)) {
+                *value = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
+            }
+        }
+        for inst in function.block(block).instructions().to_vec() {
+            if let Some(&slot) = plan.loads.get(&inst) {
+                function.replace_all_uses_with(function.instruction(inst).result.expect("a load's value"), current[slot]);
+                dead.push(inst);
+            } else if let Some(&slot) = plan.stores.get(&inst) {
+                current[slot] = function.instruction(inst).operands[0];
+            }
+        }
+        for successor in function.successors(block) {
+            for (slot, &value) in current.iter().enumerate() {
+                let Some((phi, from)) = phis.get(&(cfg::id(successor), slot)) else { continue };
+                for (index, _) in from.iter().enumerate().filter(|(_, one)| **one == block) {
+                    function.set_operand(*phi, 2 * index, value);
+                }
+            }
+        }
+        stack.extend(children.get(&at).into_iter().flatten().map(|&child| (child, current.clone())));
+    }
+    for inst in dead {
+        function.erase(inst).expect("a promoted load has no users left");
+    }
+    // A phi no promoted load reached goes, and any input it had from a path
+    // the cell was not stored on with it.
+    ssa::pruned_phis(function, &existing);
+}
+
+#[cfg(test)]
+#[path = "promote_tests.rs"]
+mod tests;
