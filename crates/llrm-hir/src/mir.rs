@@ -633,12 +633,7 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
             Some(site) => {
                 let abi = convention(site.cleanup, site.distance)?;
-                // C pushes its arguments right to left, BASIC left to right.
-                let count = site.order.len() as i64;
-                let pushed: Vec<i64> = if abi.0 == 0 { (0..count).rev().collect() } else { (0..count).collect() };
-                if site.order != pushed {
-                    return Err(format!("a call to {callee} pushing {:?}", site.order));
-                }
+                passed(site, instruction.operands.len()).ok_or_else(|| format!("a call to {callee} pushing {:?}", site.order))?;
                 abi
             }
             None => (0, FAR),
@@ -650,12 +645,19 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             continue;
         }
         let types = &mut module.context.types;
-        let parameters = instruction.operands.iter().map(|one| value_type(types, tables.types[&operand_type(one, &values, &places)])).collect::<Emit<_>>()?;
-        let returns = match instruction.results.first() {
+        let site = function.calls.iter().find(|one| one.instruction == instruction.id);
+        let order = site.and_then(|site| passed(site, instruction.operands.len())).unwrap_or_else(|| (0..instruction.operands.len()).collect());
+        let parameters = order.iter().map(|&one| value_type(types, tables.types[&operand_type(&instruction.operands[one], &values, &places)])).collect::<Emit<_>>()?;
+        let returns = match instruction.results[..] {
             // A comparison's callee returns the sign of the first against the second.
-            Some(_) if three_way(instruction.op).is_some() => types.int(16),
-            Some(result) => value_type(types, tables.types[&values[result]])?,
-            None => types.void(),
+            [_] if three_way(instruction.op).is_some() => types.int(16),
+            [result] => value_type(types, tables.types[&values[&result]])?,
+            [] => types.void(),
+            // Answered in several registers: one aggregate, as LLVM returns them.
+            ref results => {
+                let fields = results.iter().map(|result| value_type(types, tables.types[&values[result]])).collect::<Emit<_>>()?;
+                types.intern(Type::Struct { fields, packed: false })
+            }
         };
         let ty = function_type(types, returns, parameters);
         let name = if tables.callables.contains_key(callee) { callee.to_owned() } else { format!("{RUNTIME}{callee}") };
@@ -666,6 +668,23 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         tables.conventions.insert(callee.to_owned(), abi.0);
     }
     Ok(())
+}
+
+/// A call's operands in the order its arguments are passed: as `site`
+/// pushes them, BASIC's first pushed first and C's last pushed first, so the
+/// convention's own order pushes them as the site does. None where `order`
+/// is no permutation of the operands.
+fn passed(site: &model::CallAbi, count: usize) -> Option<Vec<usize>> {
+    let mut order: Vec<usize> = site.order.iter().map(|&one| usize::try_from(one).ok()).collect::<Option<_>>()?;
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    if sorted != (0..count).collect::<Vec<_>>() {
+        return None;
+    }
+    if site.cleanup == model::StackCleanup::Caller {
+        order.reverse();
+    }
+    Some(order)
 }
 
 /// The intrinsic a HIR instruction from a `from` to a `to` calls, if any:
@@ -1313,10 +1332,19 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             Op::Call => {
                 let callee = instruction.callee.as_deref().ok_or("a call without a callee")?;
-                let arguments = self.operands(instruction)?;
-                let returns = match instruction.results.first() {
-                    Some(&result) => self.result_type(result)?,
-                    None => self.b.context.types.void(),
+                let operands = self.operands(instruction)?;
+                let site = self.function.calls.iter().find(|one| one.instruction == instruction.id);
+                let arguments: Vec<Value> = match site.and_then(|site| passed(site, operands.len())) {
+                    Some(order) => order.iter().map(|&one| operands[one]).collect(),
+                    None => operands,
+                };
+                let returns = match instruction.results[..] {
+                    [result] => self.result_type(result)?,
+                    [] => self.b.context.types.void(),
+                    ref results => {
+                        let fields = results.iter().map(|&result| self.result_type(result)).collect::<Emit<_>>()?;
+                        self.b.context.types.intern(Type::Struct { fields, packed: false })
+                    }
                 };
                 let result = match self.handling_call(callee, returns)? {
                     Some(result) => result,
@@ -1330,7 +1358,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     }
                 };
                 if let Some(result) = result {
-                    self.define(instruction, result);
+                    if instruction.results.len() > 1 {
+                        for (index, &one) in instruction.results.iter().enumerate() {
+                            let field = self.b.extract_value(result, index as u32, "");
+                            self.values.insert(one, field);
+                        }
+                    } else {
+                        self.define(instruction, result);
+                    }
                 }
             }
             other => return Err(format!("HIR {other}")),

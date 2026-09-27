@@ -201,8 +201,7 @@ fn procedure(
     target: &Target<'_>,
     runtime: RuntimeProfile,
 ) -> Result<(masm::Procedure, Option<i64>), String> {
-    let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
-    let machined = assemble::machined(module, name, &contracts, pool, target)?;
+    let machined = assemble::machined(module, name, abi, pool, target)?;
     let finalized = basic::finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let is_main = names[&(Space::Segment, i64::from(id.0))] == MAIN;
