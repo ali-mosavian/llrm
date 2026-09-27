@@ -2099,3 +2099,20 @@ define void @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
     let pushes: Vec<&String> = got.iter().filter(|line| line.starts_with("push") && line.contains("[bp+")).collect();
     assert_eq!(pushes.len(), 2, "{got:?}");
 }
+
+/// An i64 divided by a sign-extended i32 whose quotient fits a dword is one
+/// idiv: divided as magnitudes it took two divs and sign fixups, nbody's
+/// 262144 / d costing 504 more instructions than the old route's.
+#[test]
+fn test_a_quotient_that_fits_a_dword_is_one_idiv() {
+    let text = "define i64 @f(i32 %d) addrspace(1) {
+  %w = sext i32 %d to i64
+  %q = sdiv i64 262144, %w
+  ret i64 %q
+}
+";
+    let got = listing(text, "f");
+    let divides: Vec<&String> = got.iter().filter(|line| line.starts_with("div") || line.starts_with("idiv")).collect();
+    assert_eq!(divides.len(), 1, "{got:?}");
+    assert!(divides[0].starts_with("idiv"), "{got:?}");
+}
