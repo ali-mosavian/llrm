@@ -204,8 +204,8 @@ fn def_seg_is_a_store_the_runtime_leaves_alone() {
                 if module.context.get(value).kind == ConstantKind::Int(0xA000) && module.context.get(pointer).kind == ConstantKind::Global(cell))
     });
     assert!(stored, "{}", llrm_mir::print::module(&module));
-    let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    let globals = llrm_analysis::globalsaa::analysis(&module, &program).expect("analyzes");
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let globals = llrm_analysis::globalsaa::analysis(&module, &mut analyses).expect("analyzes");
     assert!(globals.tracked(cell));
     let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_bc::RUNTIME))).1.contains(&cell);
     assert!(!writes("B$ERAS") && writes("B$DSG0"));

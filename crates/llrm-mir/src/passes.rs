@@ -320,6 +320,11 @@ impl Analyses {
         &self.outer
     }
 
+    /// `A`'s result, if computed: LLVM's `getCachedResult`.
+    pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
+        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").0))
+    }
+
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(&mut self, context: &Context, layout: &DataLayout, function: &Function) -> Rc<A::Result> {
         let key = TypeId::of::<A>();
@@ -451,6 +456,11 @@ impl ModuleAnalyses {
         }
         let layout = self.program.layout.clone();
         self.functions.get_mut(&id).expect("inserted above").get::<A>(&module.context, &layout, function)
+    }
+
+    /// `A` of function `id`, if its manager holds it.
+    pub fn cached_function<A: Analysis>(&self, id: GlobalId) -> Option<Rc<A::Result>> {
+        self.functions.get(&id)?.cached::<A>()
     }
 
     /// Function `id`'s manager under `outer`, emptied where `outer` is not

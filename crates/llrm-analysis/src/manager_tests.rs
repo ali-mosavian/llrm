@@ -5,12 +5,13 @@ use std::rc::Rc;
 
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
+use llrm_mir::passes::{Analyses, Analysis, FunctionPass, ModuleAnalyses, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
 use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{Annotated, CallEffects, DominatedEdges, Pointers, Registers, Summaries, ThroughMemory};
 use crate::alias::{self, Procedure};
+use crate::cfg::Shape;
 use crate::consts::{self, Calls};
 use crate::memory::Unit;
 use crate::ranges;
@@ -228,4 +229,14 @@ b2:
     assert!(Rc::ptr_eq(&seen[0], &seen[1]), "found again though the CFG was kept");
     assert!(!Rc::ptr_eq(&seen[1], &seen[2]));
     assert_eq!(seen[1], seen[2]);
+}
+
+/// Summaries and GlobalsAA ran points-to over every body with a shape of
+/// its own: 100k shapes a pipeline run. Each is its body's manager's.
+#[test]
+fn summaries_read_each_bodys_shape_from_its_manager() {
+    let module = parsed("define i16 @f(ptr %p) {\nentry:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n");
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
 }

@@ -23,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
+use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{GlobalsAA, Summaries};
@@ -307,7 +308,8 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let exact = matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private);
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
         let Some(summary) = known.get(name) else { continue };
-        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals));
+        let shape = analyses.function::<Shape>(module, id);
+        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
         let states = |flag: &str| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, flag));
