@@ -11,13 +11,14 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, InstId, Module, ValueId};
+use llrm_mir::module::{Function, GlobalValue, InstId, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
 use llrm_mir::target::Machine;
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
+use crate::{effects, floatfacts};
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -70,7 +71,8 @@ impl Analysis for Annotated {
 
 /// What each call reads and writes, its callee as `Summaries` says:
 /// `alias::calls_annotated`. Where `Summaries` was not required, each
-/// call is to an unknown callee.
+/// call is to an unknown callee. Either way a call does no more than its
+/// attributes state (`effects::call`).
 pub struct CallEffects;
 
 impl Analysis for CallEffects {
@@ -86,8 +88,23 @@ impl Analysis for CallEffects {
             Some(found) => found.as_ref().map_err(String::clone)?,
             None => &none,
         };
-        alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)
+        let calls = alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)?;
+        Ok(stated(context, &outer.globals, function, calls))
     }
+}
+
+/// `calls` held to what each call's attributes allow (`effects::call`).
+pub fn stated(context: &Context, globals: &[GlobalValue], function: &Function, mut calls: IndexMap<InstId, Effect>) -> IndexMap<InstId, Effect> {
+    for (&at, effect) in calls.iter_mut() {
+        let allowed = effects::call(context, globals, function, at);
+        if !allowed.reads {
+            effect.loads.clear();
+        }
+        if !allowed.writes {
+            effect.stores.clear();
+        }
+    }
+    calls
 }
 
 /// Every value known without solving memory: `consts::known` of no calls.
@@ -101,6 +118,38 @@ impl Analysis for Registers {
     }
 }
 
+/// What each call writes, as `CallEffects` says: the `Calls` consts and
+/// floatfacts take.
+pub struct Writes;
+
+impl Analysis for Writes {
+    type Result = Result<Calls, String>;
+    const NAME: &'static str = "writes";
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let effects = analyses.get::<CallEffects>(context, layout, function);
+        Ok(Result::as_ref(&*effects).map_err(String::clone)?.iter().map(|(&at, effect)| (at, effect.stores.clone())).collect())
+    }
+}
+
+/// `Writes`, or where it failed none: each call then writes what
+/// `memory::unmodeled_write` says.
+pub fn writes(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Calls {
+    Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
+}
+
+/// Float values, integers and memory in one solve, each call writing what
+/// `writes` says: `floatfacts::solved_with`.
+pub struct FloatFacts;
+
+impl Analysis for FloatFacts {
+    type Result = floatfacts::Solved;
+    const NAME: &'static str = "float-facts";
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let calls = writes(context, layout, function, analyses);
+        floatfacts::solved_with(&Unit::within(context, layout, function, analyses.outer()), &calls, None)
+    }
+}
+
 /// Every value known, memory solved alongside and each call writing what
 /// `CallEffects` says.
 pub struct ThroughMemory;
@@ -109,8 +158,7 @@ impl Analysis for ThroughMemory {
     type Result = Result<IndexMap<ValueId, Known>, String>;
     const NAME: &'static str = "through-memory";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        let calls: Calls = Result::as_ref(&*effects).map_err(String::clone)?.iter().map(|(&at, effect)| (at, effect.stores.clone())).collect();
+        let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
         Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()), Some(&calls), None, None))
     }
 }

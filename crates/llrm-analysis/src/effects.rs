@@ -64,10 +64,15 @@ pub fn unmodeled_read(context: &Context, declarations: &Declarations, function: 
     unmodeled(context, declarations, function, inst).reads
 }
 
-/// Whether the call `inst` may touch memory at all, through its arguments
-/// or otherwise.
+/// What the call `inst` may do to memory, through its arguments or
+/// otherwise; none where `inst` is no call.
+pub fn call(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
+    call_effects(context, declarations, function, inst, |_| true)
+}
+
+/// Whether the call `inst` may touch memory at all.
 pub fn touches_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    call_effects(context, declarations, function, inst, |_| true) != Effects::NONE
+    call(context, declarations, function, inst) != Effects::NONE
 }
 
 /// Whether a raise here can reach a handler in this body, which reads memory.

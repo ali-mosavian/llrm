@@ -2,6 +2,7 @@
 //! does it there, with that pass's tests. A pass asks llrm-analysis for
 //! its facts and names nothing about the machine.
 
+pub mod affine;
 pub mod algebraic;
 pub mod canonical;
 #[cfg(test)]
@@ -12,12 +13,16 @@ pub mod dead;
 pub mod dse;
 pub mod decide;
 pub mod edges;
+pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
+pub mod floatloop;
 pub mod fold;
 pub mod gvn;
+pub mod hoist;
 pub mod inline;
 pub mod interprocedural;
+pub mod ivshare;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
@@ -40,4 +45,11 @@ pub mod unswitch;
 // Not ported, meaning nothing where an address is an operand: `pointeraccess`
 // split a packed far pointer's memory references into offset and selector
 // words for the old register allocator; a pointer here is its type, and
-// isel splits it (called from `transform`'s `SplitPointers`).
+// isel splits it. So `transform`'s `SplitPointers`, which ran it, is not
+// ported either.
+// Not ported, an analysis here: `transform`'s `PointerProvenance` wrote
+// `alias::annotated`'s references into the body; alias's `Annotated`
+// manager entry answers them on demand.
+// Not ported, meaning nothing where a call's arguments are its operands:
+// `transform`'s `Place` (`placed`, `_argument_run`, `_may_pass`, `_meets`)
+// moved what stood among a call's argument pushes ahead of them.

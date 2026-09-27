@@ -41,7 +41,7 @@ fn fold_keeps_every_corpus_module_verifying_and_settles() {
     let changed = settles("fold", |module, id| {
         let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
         let (context, function) = function_mut(module, id);
-        crate::fold::folded(context, &layout, function, &outer)
+        crate::fold::folded(context, &layout, function, &outer, &llrm_analysis::consts::Calls::default())
     });
     assert!(changed > 0, "the corpus has something to fold");
 }
@@ -65,4 +65,33 @@ fn algebraic_keeps_every_corpus_module_verifying_and_settles() {
         crate::algebraic::simplified(context, &layout, function, &mut analyses)
     });
     assert!(changed > 0, "the corpus has identities to simplify");
+}
+
+/// Summaries are the module's, so asked once per module, not per body.
+#[test]
+fn hoist_keeps_every_corpus_module_verifying_and_settles() {
+    let mut changed = 0;
+    for (name, mut module) in corpus() {
+        let layout = llrm_analysis::testing::layout(&module);
+        let (callees, sizes, metadata) = (llrm_mir::memory::callees(&module), llrm_mir::valuetracking::sizes(&module, &layout), module.metadata.clone());
+        let mut outer = Outer::of(&module, None);
+        outer.require::<llrm_analysis::manager::Summaries>(&module, &layout);
+        let outer = std::rc::Rc::new(outer);
+        for id in bodies(&module) {
+            let mut rounds = 0;
+            loop {
+                let mut declared = llrm_mir::passes::Declared::of(&module);
+                let (context, function) = function_mut(&mut module, id);
+                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes, declared: &mut declared };
+                if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer))) {
+                    break;
+                }
+                assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "hoist: {name}");
+                rounds += 1;
+                assert!(rounds < 64, "hoist: {name} does not settle");
+            }
+            changed += usize::from(rounds > 0);
+        }
+    }
+    assert!(changed > 0, "the corpus has invariant work");
 }

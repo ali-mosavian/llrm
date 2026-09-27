@@ -297,11 +297,22 @@ pub fn _reaches(
 /// writes its footprint. `regions::overlapping` decides against each
 /// write, on `machine`, and an answer it cannot give overlaps.
 pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
+    _clear(one, between, accesses, machine, |other| accesses.writes(other))
+}
+
+/// `_undisturbed`, a volatile access writing only its own bytes
+/// (`Accesses::stored`): the old hoist let a precise volatile store pass
+/// disjoint work.
+pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
+    _clear(one, between, accesses, machine, |other| accesses.stored(function, other))
+}
+
+fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, machine: Option<&dyn Machine>, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
     let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, machine).unwrap_or(true);
-    between.iter().all(|&other| accesses.writes(other).is_some_and(|written| !written.iter().any(overlaps)))
+    between.iter().all(|&other| writes(other).is_some_and(|written| !written.iter().any(overlaps)))
 }
 
 /// Store-to-load forwarding: each load a known value serves becomes that

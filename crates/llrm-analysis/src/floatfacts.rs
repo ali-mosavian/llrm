@@ -530,6 +530,17 @@ pub struct LoopExit {
 /// Proven numeric exits of two-block counted loops whose float state is in
 /// memory.
 pub fn loop_exits(unit: &Unit, calls: &Calls) -> Vec<LoopExit> {
+    // Solved only once a loop has the shape asked for: most bodies have none.
+    let solved = std::cell::OnceCell::new();
+    _exits(unit, calls, || solved.get_or_init(|| solved_with(unit, calls, None)))
+}
+
+/// `loop_exits`, given `solved_with(unit, calls, None)`.
+pub fn exits(unit: &Unit, calls: &Calls, solved: &Solved) -> Vec<LoopExit> {
+    _exits(unit, calls, || solved)
+}
+
+fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec<LoopExit> {
     let function = unit.function;
     let stores = |inst: InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. }) && rule(unit, inst).is_some();
     if !function.walk().any(|(_, inst)| stores(inst)) {
@@ -538,9 +549,6 @@ pub fn loop_exits(unit: &Unit, calls: &Calls) -> Vec<LoopExit> {
     let Some(entry) = function.entry() else {
         return Vec::new();
     };
-    // Solved only once a loop has the shape asked for: most bodies have none.
-    let solved = std::cell::OnceCell::new();
-    let solve = || solved.get_or_init(|| (consts::known(unit, Some(calls), None, None), cells(unit, calls)));
     let graph = cfg::graph(function);
     let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
     let predecessors = loops::predecessors(&graph);
@@ -580,7 +588,7 @@ pub fn loop_exits(unit: &Unit, calls: &Calls) -> Vec<LoopExit> {
         {
             continue;
         }
-        let (integers, memory) = solve();
+        let Solved { integers, cells: memory, .. } = solve();
         let Some(count) = induction::agreed_count(&induction::counted(unit, &loop_, Some(integers), false)) else {
             continue;
         };
@@ -628,7 +636,7 @@ pub fn exit_cells(unit: &Unit, calls: &Calls) -> IndexMap<(i64, i64), Cells> {
 
 /// Numeric facts, optionally given independently established entry cells.
 pub fn known(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> IndexMap<ValueId, Finite> {
-    _solved(unit, calls, initial).0
+    solved_with(unit, calls, initial).facts
 }
 
 /// Exact integer conversion results.
@@ -666,7 +674,15 @@ pub fn converted(unit: &Unit, calls: &Calls, facts: Option<&IndexMap<ValueId, Fi
 
 /// Memory facts including exact floating stores.
 pub fn cells(unit: &Unit, calls: &Calls) -> HeldCells {
-    _solved(unit, calls, None).1
+    solved_with(unit, calls, None).cells
+}
+
+/// One solve: consts' integers, the float facts, and memory with both.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Solved {
+    pub integers: IndexMap<ValueId, Known>,
+    pub facts: IndexMap<ValueId, Finite>,
+    pub cells: HeldCells,
 }
 
 /// `integers`, and the bits of each stored value `facts` knows.
@@ -681,7 +697,8 @@ fn _with_stored(unit: &Unit, integers: &IndexMap<ValueId, Known>, facts: &IndexM
     known
 }
 
-fn _solved(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> (IndexMap<ValueId, Finite>, HeldCells) {
+/// `known` and `cells` in one solve, and the integers under them.
+pub fn solved_with(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> Solved {
     let function = unit.function;
     let integers = consts::known(unit, Some(calls), None, initial);
     let rules = function.walk().filter_map(|(_, inst)| rule(unit, inst).map(|rule| (inst, rule))).collect::<Vec<_>>();
@@ -743,7 +760,7 @@ fn _solved(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> (IndexMap<Val
             }
         }
     }
-    (facts, memory)
+    Solved { integers, facts, cells: memory }
 }
 
 #[cfg(test)]
