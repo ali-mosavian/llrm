@@ -3,11 +3,17 @@
 | Path | Holds |
 | --- | --- |
 | `crates/support/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
+| `crates/ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
+| `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter |
+| `crates/opt/llrm-analysis` | MIR analyses, and `graph`: dominance and loops over any IR's blocks |
+| `crates/opt/llrm-transforms` | MIR to MIR passes and the pipeline |
 | `crates/target/llrm-x86-code16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
 | `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
-| `crates/ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
-| `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
-| `crates/backend/llrm-core` | HIR lowering and interpreter, MIR, the optimizer, the x86 backend, and BC raising |
+| `crates/backend/llrm-core` | HIR lowering and interpreter, the optimize and codegen driver, the x86 backend, and BC raising |
+| `crates/bc/llrm-bcmachine` | BC objects: x86 decode, the instruction model, object reading, legacy lift and flags |
+| `crates/bc/llrm-bc` | The BC object frontend: machine code raised onto MIR |
+| `crates/bc/llrm-bcdriver` | The rich route for BC objects |
+| `crates/frontends/llrm-qbruntime` | The QB-family runtime's `B$` routine contracts and `runtime.toml` |
 | `crates/frontends/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
 | `crates/frontends/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |
 | `crates/frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`) |
@@ -35,7 +41,7 @@ rewrite BC objects. The rest is grouped by responsibility:
 | `analysis` | SSA, liveness, ranges, loops, induction, memory/value facts |
 | `optimize` | MIR transformations |
 | `backend` | Lowering, instruction selection, allocation, frame/layout, peepholes, object writing |
-| `abi` | Runtime contracts, `runtime.toml`, and the QB runtime ABI (`abi::qb`) |
+| `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
 | `frontends::bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
 | `legacy` | Older lifting and call absorption still shared by raising |
 

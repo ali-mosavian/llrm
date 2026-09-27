@@ -35,6 +35,7 @@ llrm-core = { path = "crates/backend/llrm-core" }
 llrm-nib = { path = "crates/frontends/llrm-nib" }
 llrm-qb = { path = "crates/frontends/llrm-qb" }
 llrm-c = { path = "crates/frontends/llrm-c" }
+llrm-qbruntime = { path = "crates/frontends/llrm-qbruntime" }
 
 [package]
 name = "llrm"

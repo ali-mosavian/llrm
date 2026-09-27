@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
-use llrm_bcmachine::abi::runtime::{self, Control, Memory};
+use llrm_qbruntime::{self as runtime, Control, Memory};
 use llrm_bcmachine::frontends::bc::declen::Insn;
 use llrm_bcmachine::model::ir::nodes::{Call, Node};
 use llrm_bcmachine::model::ir::{Loc, Operation, Semantics};

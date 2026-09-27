@@ -110,7 +110,7 @@ pub fn initialized(
     let selected = match contracts {
         Some(one) => one,
         None => {
-            owned = runtime::for_module(found, None).map_err(|e| e.0)?;
+            owned = crate::abi::callsite::for_module(found, None).map_err(|e| e.0)?;
             &owned
         }
     };

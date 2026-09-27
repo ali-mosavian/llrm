@@ -103,7 +103,7 @@ fn test_qrender_main_spill_uses_shutdown_control_proof() {
             .into_iter()
             .map(|name| (name.to_owned(), runtime::Contract { inputs: Some(inputs.clone()), ..runtime::worst(name) }))
             .collect();
-        let mut contracts = runtime::for_module(&found, Some(&external)).unwrap();
+        let mut contracts = crate::abi::callsite::for_module(&found, Some(&external)).unwrap();
         let raised = testing::raised_from(&found, &testing::partitioned(path), Some(&mut contracts));
         let bodies: IndexMap<i64, MirBody> =
             raised.values.iter().map(|(_, body)| (body.entry, MirBody::clone(body))).collect();

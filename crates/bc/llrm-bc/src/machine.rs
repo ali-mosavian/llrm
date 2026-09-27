@@ -11,7 +11,7 @@ use iced_x86::{Code, Register};
 use llrm_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
 use llrm_bcmachine::abi::handlers;
 use llrm_x86_code16::machine::Machine;
-use llrm_bcmachine::abi::runtime::{self, Contract, Control, Reg};
+use llrm_qbruntime::{self as runtime, Contract, Control, Reg};
 use llrm_bcmachine::frontends::bc::blocks::{self, Block};
 use llrm_bcmachine::frontends::bc::extent::{Body, BodyKind};
 use llrm_bcmachine::frontends::bc::raising_control;
@@ -296,7 +296,7 @@ impl<'m> Facts<'m> {
         let decoded = decode::decode_module(found, machine)?;
         let mapped = blocks::code_map(found)?;
         let all = blocks::partition(found, &mapped);
-        let mut contracts = runtime::for_module(found, None).map_err(|error| error.to_string())?;
+        let mut contracts = llrm_bcmachine::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
         let header = blocks::has_header(found);
         let procedures: IndexMap<usize, cvinfo::Procedure> =
             if header { cvinfo::parse(&found.records).procedures.into_iter().map(|one| (one.offset as usize, one)).collect() } else { IndexMap::default() };

@@ -91,7 +91,7 @@ fn test_read_and_write_contracts_are_independent() {
     for (reads, writes) in [(Memory::Any, Memory::None), (Memory::None, Memory::Any)] {
         let found = testing::loaded(PL_MOVE).unwrap();
         assert!(found.program_data.is_some());
-        let mut contracts: IndexMap<i64, Contract> = runtime::for_module(&found, None)
+        let mut contracts: IndexMap<i64, Contract> = crate::abi::callsite::for_module(&found, None)
             .unwrap()
             .into_iter()
             .map(|(at, contract)| {
@@ -114,7 +114,7 @@ fn test_read_and_write_contracts_are_independent() {
 fn test_selected_unknown_contract_keeps_program_data_live() {
     let found = testing::loaded(PL_MOVE).unwrap();
     assert!(found.program_data.is_some());
-    let mut contracts: IndexMap<i64, Contract> = runtime::for_module(&found, None)
+    let mut contracts: IndexMap<i64, Contract> = crate::abi::callsite::for_module(&found, None)
         .unwrap()
         .into_iter()
         .map(|(at, contract)| {

@@ -207,7 +207,7 @@ pub fn _rebuilt(
     let blocks = split::partition(&found, &mapped);
     // One map for the whole module, and the same object reaches the raise
     // and the lowering: a contract chosen twice can be chosen differently.
-    let mut contracts = runtime::for_module(&found, external_contracts).map_err(|error| value_error(error.0))?;
+    let mut contracts = crate::abi::callsite::for_module(&found, external_contracts).map_err(|error| value_error(error.0))?;
     let mut native_frames: IndexMap<i64, nativeframe::Plan> = IndexMap::default();
     if !split::has_header(&found) {
         let partition = match extent::partition(&found) {

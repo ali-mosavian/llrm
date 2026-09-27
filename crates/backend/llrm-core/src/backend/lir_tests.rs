@@ -62,7 +62,7 @@ fn test_string_copy_keeps_its_implicit_address_registers() {
     // fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy.
     let data = std::fs::read(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/fpdeep-p-g2.obj")).unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
-    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let mut contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
     let raised = mir::bodies(&found, &blocks, Some(&mut contracts), false, false).unwrap();
     let (name, body) = &raised.values[0];
@@ -86,7 +86,7 @@ fn test_a_procedure_hands_back_dx_ax() {
     // procs p-ot's TWICE& left its answer in bx and ax, and its callers read dx:ax.
     let data = std::fs::read(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/procs-p-ot.obj")).unwrap();
     let found = module::of(&omf::parse(&data).unwrap()).unwrap();
-    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let mut contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
     let raised = mir::bodies(&found, &blocks, Some(&mut contracts), false, false).unwrap();
     let (name, body) = raised.values.iter().find(|(name, _)| name.contains("TWICE")).unwrap();
@@ -165,7 +165,7 @@ fn test_bcs_own_assignment_satisfies_every_requirement() {
 fn test_lowering_is_one_instruction_per_operation_unless_something_expands() {
     let (found, _blocks, raised) = raised("hotlop-p-g2");
     let (name, body) = &raised.values[0];
-    let contracts = runtime::for_module(&found, None).unwrap();
+    let contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let low = lowered(name, body, &found, &raised, &contracts, None);
     let ops: Vec<_> = body.blocks.iter().flat_map(|block| &block.ops).collect();
     let insns: Vec<_> = low.blocks.iter().flat_map(|block| &block.insns).collect();
@@ -194,7 +194,7 @@ fn test_an_allocatable_value_stays_a_value_through_lowering() {
         transform::Applied { blocks: Some(blocks), found: Some(found.clone()), ..Default::default() },
     )
     .unwrap();
-    let contracts = runtime::for_module(&found, None).unwrap();
+    let contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let low = lowered(name, &body, &found, &raised, &contracts, None);
     // By what they compute, not by where they sit.
     let rows: Vec<&ir::Semantics> =
@@ -253,7 +253,7 @@ fn test_an_increment_is_its_own_operation() {
 fn test_a_stores_address_is_the_value_that_computed_it() {
     // arrprm printed ' 0  0' for ' 7  8'.
     let (found, blocks, raised) = raised("addrm-p-g2");
-    let contracts = runtime::for_module(&found, None).unwrap();
+    let contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let mut seen = 0;
     for (name, body) in &raised.values {
         let body = transform::applied(
@@ -305,7 +305,7 @@ fn test_an_opaque_address_keeps_the_registers_it_is_written_in() {
     let data = testing::data(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlpx-p-g2.obj"));
     let rebuilt = crate::rewrite::rewrite(&data, &crate::rewrite::Rewrite::new(false)).unwrap().0;
     let found = testing::loaded_bytes(&rebuilt).unwrap();
-    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let mut contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let blocks = blocks::partition(&found, &blocks::code_map(&found).unwrap());
     let raised = mir::bodies(&found, &blocks, Some(&mut contracts), false, false).unwrap();
     let (name, body) = &raised.values[0];

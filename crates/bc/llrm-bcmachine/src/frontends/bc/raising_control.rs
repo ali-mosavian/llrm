@@ -1,7 +1,7 @@
 //! Port of `qbopt/frontend/raising_control.py`: apply established runtime
 //! control contracts before constructing value SSA.
 
-use crate::abi::runtime::{Contract, Control};
+use llrm_qbruntime::{Contract, Control};
 use crate::frontends::bc::blocks::{Block, Ends};
 use crate::support::hash::IndexMap;
 

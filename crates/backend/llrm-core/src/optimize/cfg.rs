@@ -482,11 +482,11 @@ mod tests {
     /// An unknown or returning END-shaped call must not erase a reachable path.
     #[test]
     fn test_only_established_terminal_contracts_remove_return_edges() {
-        use crate::abi::runtime::{self, Control};
+        use crate::abi::{callsite, runtime::Control};
         use crate::testing;
         let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/udtrng-p-g2.obj"));
         let mapped = crate::frontends::bc::blocks::code_map(&found).unwrap();
-        let contracts = runtime::for_module(&found, None).unwrap();
+        let contracts = callsite::for_module(&found, None).unwrap();
         let original: Vec<_> = crate::frontends::bc::blocks::partition(&found, &mapped)
             .into_iter()
             .filter(|block| {

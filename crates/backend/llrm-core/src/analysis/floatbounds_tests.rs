@@ -217,7 +217,7 @@ fn test_helper_conversion_respects_its_effect_contract() {
     for change in ["unknown", "writes", "control", "inputs"] {
         let path = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/fpicse-p-g2.obj");
         let found = testing::loaded(path).unwrap();
-        let mut contracts = runtime::for_module(&found, None).unwrap();
+        let mut contracts = crate::abi::callsite::for_module(&found, None).unwrap();
         for (at, rule) in contracts.iter_mut() {
             if found.calls.get(at).map(String::as_str) != Some("B$FILD") {
                 continue;

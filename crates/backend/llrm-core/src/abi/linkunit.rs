@@ -222,7 +222,7 @@ impl LinkUnit {
         };
         // Start with the module's complete per-site view, including event
         // entries, dynamic cleanup and language-ABI inference.
-        let selected = runtime::for_module(&found, None)?;
+        let selected = crate::abi::callsite::for_module(&found, None)?;
         let mut contracts: IndexMap<String, Contract> = IndexMap::default();
         let mut calls: Vec<(&i64, &String)> = found.calls.iter().collect();
         calls.sort();

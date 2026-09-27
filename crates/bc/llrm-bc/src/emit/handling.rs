@@ -159,7 +159,7 @@ impl Emitter<'_, '_, '_> {
         let why = format!("{name} clobbers it");
         let disturbed = || -> Emit<Vec<Register>> {
             let contract = self.unit.facts.contract(at).filter(|one| one.established).ok_or_else(|| format!("{name}'s contract is not established"))?;
-            Ok(llrm_bcmachine::abi::runtime::disturbs(contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect())
+            Ok(llrm_qbruntime::disturbs(contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect())
         };
         match name {
             REGISTER => {

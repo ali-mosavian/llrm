@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use iced_x86::Code;
 
 use crate::abi::handlers::registered;
-use crate::abi::runtime::{self, Contract};
+use llrm_qbruntime::{self as runtime, Contract};
 use crate::frontends::bc::blocks;
 use crate::objectfile::module::{self, Module};
 use crate::objectfile::omf::{self, Fixup};

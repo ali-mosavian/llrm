@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use super::sunk_stores;
-use crate::abi::runtime;
+use crate::abi::callsite;
 use crate::analysis::loops;
 use crate::model::mir::{Arg, Const, Kind, MemRef, MirBody};
 use crate::objectfile::module::{self, Space};
@@ -30,7 +30,7 @@ type Bounds = IndexMap<(Space, i64), Vec<i64>>;
 fn hotlop() -> (Rc<MirBody>, BTreeSet<i64>, Bounds, MemRef) {
     let found = testing::module(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj"));
     let blocks = testing::blocks_of(&found);
-    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let mut contracts = callsite::for_module(&found, None).unwrap();
     let body = testing::raised_from(&found, &blocks, Some(&mut contracts)).values[0].1.clone();
     let counter =
         body.blocks.iter().flat_map(|block| &block.ops).find(|op| op.at == 0x5E).unwrap().stores[0].clone();

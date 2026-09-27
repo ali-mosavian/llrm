@@ -426,7 +426,7 @@ fn _native(body: RaisedBody, found: &Module, bounds_checks: bool) -> Result<Rais
     let roots: BTreeSet<Value> = body.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.uses.iter().copied()).collect();
     let pruned = ssa::pruned_phis(&Rc::new(std::mem::replace(&mut body.body, MirBody::new(0, Vec::new()))), &roots);
     body.body = Rc::try_unwrap(pruned).unwrap_or_else(|shared| (*shared).clone());
-    let contracts = runtime::for_module(found, None).map_err(|error| error.0)?;
+    let contracts = crate::abi::callsite::for_module(found, None).map_err(|error| error.0)?;
     let shared = Rc::new(body.body.clone());
     let known = consts::known(&shared, None, None, None, None);
     let memory = if bounds_checks {

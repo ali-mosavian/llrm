@@ -10,9 +10,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::abi::{events, handlers, runtime};
+use llrm_qbruntime::INLINE_TABLE;
+
+use crate::abi::{callsite, events, handlers};
 use crate::frontends::bc::blocks::{
-    Block, CodeMap, ENTRY, Ends, INLINE_TABLE, code_map, event_stub, has_header, local_call_target,
+    Block, CodeMap, ENTRY, Ends, code_map, event_stub, has_header, local_call_target,
     partition as block_partition,
 };
 use crate::frontends::bc::raising_control;
@@ -253,7 +255,7 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
     let mapped = code_map(module)?;
 
     let all_blocks = block_partition(module, &mapped);
-    let contracts = runtime::for_module(module, None).expect("no external contract to mismatch");
+    let contracts = callsite::for_module(module, None).expect("no external contract to mismatch");
     let all_blocks = raising_control::terminal_edges(all_blocks, &contracts);
     let blocks_by_at: IndexMap<usize, Block> = all_blocks.iter().map(|blk| (blk.at, blk.clone())).collect();
     let names = match omf::pubdef_names(&module.records, module.seg) {

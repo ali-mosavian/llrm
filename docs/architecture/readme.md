@@ -168,7 +168,7 @@ The main ownership split is:
 | Segment, group, symbol, call and object-bound facts | `crates/target/llrm-omf/src/module.rs` |
 | Instruction lengths and BC emulator forms | `crates/bc/llrm-bcmachine/src/frontends/bc/declen.rs` |
 | Reachability, inline tables and basic blocks | `crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs` |
-| BC calling and runtime contracts | `crates/bc/llrm-bcmachine/src/abi/runtime.rs`, `runtime.toml` |
+| BC calling and runtime contracts | `crates/frontends/llrm-qbruntime/src/lib.rs`, `runtime.toml`; per call site, `crates/bc/llrm-bcmachine/src/abi/callsite.rs` |
 | Idiom recognition | `crates/backend/llrm-core/src/frontends/bc/raising_*.rs`, coordinated by `crates/backend/llrm-core/src/model/mir.rs` |
 | Pure analyses used by passes | `crates/backend/llrm-core/src/analysis/` |
 

@@ -169,7 +169,7 @@ fn test_selector_proof_checks_the_loop_exit_path() {
     let public = &raised.values[0].1;
     // _selector_dead is raise-time recognition; reconstruct the private view.
     let body = mir::_with_raise_context(public, &raised.hints[&public.entry], &raised.source);
-    let contracts = runtime::for_module(&found, None).unwrap();
+    let contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let hary = |op: &Op| op.kind == Kind::Call && found.calls.get(&op.at).map(String::as_str) == Some("B$HARY");
     let block = body.blocks.iter().find(|block| block.ops.iter().filter(|op| hary(op)).count() == 2).unwrap();
     let (position, consumer) = block

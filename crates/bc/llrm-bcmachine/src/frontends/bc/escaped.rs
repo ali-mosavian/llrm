@@ -53,7 +53,7 @@ pub fn _instructions(found: &Module) -> Option<Vec<Insn>> {
 
 /// Numeric argument pushes, including nested long-arithmetic call frames.
 pub fn _numeric_arguments(found: &Module, instructions: Option<&[Insn]>) -> BTreeSet<i64> {
-    use crate::abi::runtime;
+    use llrm_qbruntime as runtime;
     use crate::frontends::bc::{blocks, stack};
 
     let local = defines(&found.records, found.seg);

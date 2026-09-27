@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use iced_x86::Register;
-use llrm_bcmachine::abi::runtime::{self, Contract, Control, Memory};
-use llrm_bcmachine::frontends::bc::blocks;
+use llrm_qbruntime::{self as runtime, Contract, Control, Memory};
+
 use llrm_bcmachine::model::ir::nodes::{Node, span};
 use llrm_bcmachine::support::hash::IndexMap;
 use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
@@ -101,7 +101,7 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
                 other if facts.event_poll(other) => (EVENT_POLL, span(other).0),
                 _ => continue,
             };
-            if blocks::INLINE_TABLE.contains(name) {
+            if llrm_qbruntime::INLINE_TABLE.contains(name) {
                 dispatches = true;
                 continue;
             }

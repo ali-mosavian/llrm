@@ -607,7 +607,7 @@ fn _bodies(
     let Ok(mapped) = crate::frontends::bc::blocks::code_map(&found) else {
         return Ok((Some(found), Vec::new()));
     };
-    let mut contracts = crate::abi::runtime::for_module(&found, external).map_err(|error| error.to_string())?;
+    let mut contracts = crate::abi::callsite::for_module(&found, external).map_err(|error| error.to_string())?;
     let blocks = crate::frontends::bc::blocks::partition(&found, &mapped);
     let raised = mir::bodies(&found, &blocks, Some(&mut contracts), basic_semantics, bounds_checks)?;
     Ok((Some(found), raised.values))

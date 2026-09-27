@@ -1274,7 +1274,7 @@ pub fn bodies(
     let contracts: &mut IndexMap<i64, runtime::Contract> = match contracts {
         Some(contracts) => contracts,
         None => {
-            own = runtime::for_module(found, None).map_err(|error| error.to_string())?;
+            own = crate::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
             &mut own
         }
     };

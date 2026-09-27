@@ -99,7 +99,7 @@ fn test_event_and_error_modules_keep_their_original_alias_facts() {
     for fixture in [concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/chain-p-evt.obj"), concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/divmod-p-g2.obj")] {
         let found = load(fixture);
         let body = RaisedBody::new(MirBody::new(0x30, Vec::new()));
-        let contracts = runtime::for_module(&found, None).unwrap();
+        let contracts = crate::abi::callsite::for_module(&found, None).unwrap();
         assert_eq!(annotated(body.clone(), &found, &[], &contracts), body, "{fixture}");
     }
 }
@@ -142,7 +142,7 @@ fn test_push_pop_frame_operand_is_not_its_implicit_stack_access() {
 fn test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination() {
     let path = concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/qrender-pl-move-v-g3.obj");
     let found = testing::loaded(path).unwrap();
-    let mut contracts = runtime::for_module(&found, None).unwrap();
+    let mut contracts = crate::abi::callsite::for_module(&found, None).unwrap();
     let raised = crate::model::mir::bodies(&found, &testing::partitioned(path), Some(&mut contracts), false, false).unwrap();
     let op = raised
         .values

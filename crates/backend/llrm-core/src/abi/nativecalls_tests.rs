@@ -10,7 +10,8 @@
 use std::path::Path;
 
 use super::{cleanups, interfaces};
-use crate::abi::runtime::{self, Memory};
+use crate::abi::callsite;
+use crate::abi::runtime::Memory;
 use crate::backend::nativeframe;
 use crate::frontends::bc::blocks::{self, Block};
 use crate::frontends::bc::extent;
@@ -41,7 +42,7 @@ fn test_private_calls_and_explicit_pascal_cleanup_balance_recursive_body() {
     let plan = nativeframe::plan(&owned, body.seed).unwrap();
     let by_address: IndexMap<usize, i64> = cleanup.iter().map(|(&at, &size)| (at as usize, size)).collect();
     assert!(nativeframe::balanced(&owned, &plan, &by_address));
-    let contracts = interfaces(&module, &partition, &parts, &runtime::for_module(&module, None).unwrap());
+    let contracts = interfaces(&module, &partition, &parts, &callsite::for_module(&module, None).unwrap());
     assert_eq!(contracts[&0x3C4].cleanup, Some(0));
     assert!(!contracts[&0x3C4].established);
     assert_eq!(contracts[&0x3C4].writes, Memory::Any);

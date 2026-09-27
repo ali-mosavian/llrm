@@ -5,7 +5,7 @@
 //! instead of calling.
 
 use iced_x86::Register;
-use llrm_bcmachine::abi::runtime;
+use llrm_qbruntime as runtime;
 use llrm_bcmachine::legacy::calls::LEFT_FIRST;
 use llrm_bcmachine::model::ir::nodes::Node;
 use llrm_mir::{BinaryOp, CastOp};

@@ -8,6 +8,7 @@ description = "The BC object frontend: machine code raised onto llrm-mir"
 [dependencies]
 llrm-bcmachine = { workspace = true }
 llrm-x86-code16 = { workspace = true }
+llrm-qbruntime = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }

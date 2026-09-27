@@ -10,6 +10,7 @@ llrm-support = { workspace = true }
 llrm-x86-code16 = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-bcmachine = { workspace = true }
+llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }

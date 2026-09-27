@@ -546,7 +546,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 self.b.position(self.block);
                 self.b.br(target);
             }
-            (Ends::Table, Some(Node::Call(call))) if blocks::INLINE_TABLE.contains(call.name.as_str()) => return self.dispatch(&call.insn, &call.name),
+            (Ends::Table, Some(Node::Call(call))) if llrm_qbruntime::INLINE_TABLE.contains(call.name.as_str()) => return self.dispatch(&call.insn, &call.name),
             (Ends::Table, _) => return Err("a jump through a table".to_owned()),
             (Ends::Indirect, _) => return Err("an indirect jump".to_owned()),
             (other, _) => return Err(format!("a block that ends {}", other.value())),
@@ -565,7 +565,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let index = self.register(Register::BX)?;
         let contract = self.unit.facts.contract(insn.at).ok_or_else(|| format!("{name} has no contract"))?.clone();
         let disturbed: Vec<Register> =
-            llrm_bcmachine::abi::runtime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
+            llrm_qbruntime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
         let why = format!("{name} clobbers it");
         self.clobber(&disturbed, &why);
         let error = match self.unit.callees.named.get(crate::runtime::ERROR) {
@@ -1727,7 +1727,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             Some(Err(why)) => return Err(why.clone()),
             None => return Err(format!("{callee} is undeclared")),
         };
-        let direct: Vec<Register> = llrm_bcmachine::abi::runtime::direct_slots(&contract).into_iter().filter_map(crate::machine::from_contract).collect();
+        let direct: Vec<Register> = llrm_qbruntime::direct_slots(&contract).into_iter().filter_map(crate::machine::from_contract).collect();
         let mut arguments = Vec::new();
         for &root in &spec.inputs {
             arguments.push(if direct.contains(&root) { self.register(word(root))? } else { self.b.int(16, 0) });
@@ -1742,10 +1742,10 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             self.popped(stack)?;
         }
         let disturbed: Vec<Register> =
-            llrm_bcmachine::abi::runtime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
+            llrm_qbruntime::disturbs(&contract).into_iter().filter_map(crate::machine::from_contract).filter(|&one| one != crate::machine::FLAGS).collect();
         let why = format!("{callee} clobbers it");
         self.clobber(&disturbed, &why);
-        if contract.clobbers.contains(&llrm_bcmachine::abi::runtime::Reg::Es) {
+        if contract.clobbers.contains(&llrm_qbruntime::Reg::Es) {
             let ty = self.var_type(Var::Es);
             let one = self.sentinel(ty, format!("reads es after {why}"));
             self.set(Var::Es, one);
