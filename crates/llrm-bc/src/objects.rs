@@ -15,6 +15,8 @@ use llrm_bcmachine::objectfile::module::{self, Space};
 use llrm_bcmachine::objectfile::{cvinfo, omf};
 use llrm_mir::{CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId};
 
+use llrm_mir::program::SegmentLayout;
+
 use crate::machine::Facts;
 use crate::{FAR, SEGMENT};
 
@@ -38,16 +40,21 @@ pub struct Carving {
 }
 
 impl Carving {
-    /// One object's: BC's code runs with SS = DS = DGROUP.
-    pub fn of(facts: &Facts) -> Carving {
+    /// One object's, in the program whose segments `segments` lays out: a
+    /// segment is DGROUP's, or COMMON, as the program links it, by name.
+    pub fn of(facts: &Facts, segments: &SegmentLayout) -> Carving {
         let found = facts.found;
         let code = omf::code_segment(&found.records).map(|(index, _, _)| index);
+        let named = omf::segments(&found.records);
+        let indexes = |names: &dyn Fn(&str) -> bool| -> BTreeSet<i64> {
+            named.iter().enumerate().filter(|(_, one)| one.as_ref().is_some_and(|(name, _)| names(name))).map(|(at, _)| at as i64).collect()
+        };
         let mut carving = Carving {
-            dgroup: found.dgroup.members.clone(),
-            shared: found.dgroup.shared.clone(),
+            dgroup: indexes(&|name| segments.data_group.members.iter().any(|one| one == name)),
+            shared: indexes(&|name| segments.data_group.common.contains(name)),
             code,
             code_named: code.is_some_and(|code| names_code(facts, code)),
-            stack_in_data: true,
+            stack_in_data: segments.stack_in_data,
             ..Carving::default()
         };
         for ((space, segment), offsets) in module::landmarks(found) {

@@ -29,6 +29,9 @@ use llrm_bcmachine::abi::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
 use llrm_bcmachine::objectfile::module::{self as found_module, Family};
+use llrm_bcmachine::objectfile::omf;
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::program::SegmentLayout;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module, Type};
 
 use crate::emit::Unit;
@@ -76,15 +79,38 @@ impl Raised {
     }
 }
 
-/// The module raised whole, with its runtime and where the object put its
-/// globals, or the first function refused.
+/// The module raised whole, as a program of its own, with its runtime and
+/// where the object put its globals, or the first function refused.
 pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
-    let raised = raise_each(found, machine)?;
+    raise_in(found, machine, &segments([found]))
+}
+
+/// `raise`, the module one of a program whose segments `segments` lays out.
+pub fn raise_in(found: &found_module::Module, machine: &Machine, segments: &SegmentLayout) -> Result<Raised, Refusal> {
+    let raised = raise_each_in(found, machine, segments)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
         None => Ok(raised),
     }
+}
+
+/// The segments of the program `modules` are, as LINK lays them out: DGROUP
+/// what any module's GRPDEF puts there, COMMON what any combines so, by
+/// name; BC's code runs with SS = DS.
+pub fn segments<'m>(modules: impl IntoIterator<Item = &'m found_module::Module>) -> SegmentLayout {
+    let mut layout = SegmentLayout::of(&DataLayout::parse(DATALAYOUT).expect("llrm's layout"));
+    for found in modules {
+        let named = omf::segments(&found.records);
+        let name = |index: &i64| named.get(*index as usize).cloned().flatten().map(|(name, _)| name);
+        for member in found.dgroup.members.iter().filter_map(name) {
+            if !layout.data_group.members.contains(&member) {
+                layout.data_group.members.push(member);
+            }
+        }
+        layout.data_group.common.extend(found.dgroup.shared.iter().filter_map(name));
+    }
+    layout
 }
 
 /// The bytes below BP the runtime's frame header takes.
@@ -110,6 +136,12 @@ fn main_frame(found: &found_module::Module) -> Option<(i64, i64)> {
 
 /// Every body raised, each refusal recorded against its function.
 pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
+    raise_each_in(found, machine, &segments([found]))
+}
+
+/// `raise_each`, the module one of a program whose segments `segments`
+/// lays out.
+pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: &SegmentLayout) -> Result<Raised, Refusal> {
     let module_refusal = |reason: String| Refusal { function: MODULE.to_owned(), reason };
     let facts = Facts::new(found, machine).map_err(module_refusal)?;
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
@@ -159,7 +191,7 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
         }
         functions.push((index, name, global));
     }
-    let objects = Objects::build(&Carving::of(&facts), found, &mut module).map_err(module_refusal)?;
+    let objects = Objects::build(&Carving::of(&facts, segments), found, &mut module).map_err(module_refusal)?;
     let interfaces = runtime::interfaces(&facts);
     let callees = runtime::declare(&facts, &mut module, &interfaces);
     intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));

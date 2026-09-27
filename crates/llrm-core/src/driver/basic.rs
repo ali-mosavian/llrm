@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_mir::program::SegmentLayout;
 use llrm_mir::{GlobalId, GlobalKind, Module};
 
 use super::Options;
@@ -598,9 +599,12 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
 
 /// A lifter's `module` compiled into the BASIC module object `object` lays
 /// out, the object file `name`: linked against `runtime`, a module of
-/// declarations alone, what the layout places kept, optimized, assembled.
-pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::RuntimeProfile, options: &Options, name: &str) -> Result<Vec<u8>, String> {
+/// declarations alone, in a program whose segments `segments` lays out,
+/// what the layout places kept, optimized, assembled.
+#[allow(clippy::too_many_arguments)]
+pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::RuntimeProfile, segments: &SegmentLayout, options: &Options, name: &str) -> Result<Vec<u8>, String> {
     let mut program = super::linked(vec![module], runtime, options)?;
+    program.segments = segments.clone();
     let placed = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {
         Item::Global { name, .. } => Some(name.clone()),
         Item::Datum(_) | Item::Object(_) => None,

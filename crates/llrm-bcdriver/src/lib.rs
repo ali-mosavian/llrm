@@ -17,6 +17,7 @@ use llrm_core::abi::machine::{self, Machine};
 use llrm_core::driver::{self, basic};
 use llrm_core::hir::model::RuntimeProfile;
 use llrm_mir::GlobalId;
+use llrm_mir::program::SegmentLayout;
 use llrm_omf::module::{self as found_module, Family};
 use llrm_omf::omf::{self, Record};
 
@@ -46,8 +47,8 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         let found = found_module::of(&records).ok_or_else(|| format!("{name}: the module has no code segment"))?;
         parsed.push((name, records, found));
     }
-    let dgroup = linked_dgroup(parsed.iter().map(|(_, records, found)| (records.as_slice(), found)));
-    parsed.iter().map(|(name, records, found)| recompiled(records, found, &dgroup, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
+    let segments = llrm_bc::segments(parsed.iter().map(|(_, _, found)| found));
+    parsed.iter().map(|(name, records, found)| recompiled(records, found, &segments, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
 }
 
 /// `data`, a program of one BC object, compiled again for `cpu`.
@@ -62,30 +63,11 @@ fn on(cpu: &str) -> Machine {
     Machine { cpu: cpu.to_owned(), ..machine::BUILT_IN.clone() }
 }
 
-/// The segments LINK puts in DGROUP: each module's GRPDEF names some.
-fn linked_dgroup<'r>(modules: impl Iterator<Item = (&'r [Rc<Record>], &'r found_module::Module)>) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for (records, found) in modules {
-        let segments = omf::segments(records);
-        names.extend(found.dgroup.members.iter().filter_map(|&index| segments.get(index as usize).cloned().flatten().map(|(name, _)| name)));
-    }
-    names
-}
-
-/// One module of a program whose DGROUP is `dgroup`, compiled again.
-fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTreeSet<String>, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
-    // The raise reads DGROUP from the module's own GRPDEF: a segment another
-    // module groups would be carved as far data here.
+/// One module of a program whose segments `layout` lays out, compiled again.
+fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &SegmentLayout, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
     let segments = omf::segments(records);
-    for (index, one) in segments.iter().enumerate() {
-        if let Some((segment, _)) = one {
-            if dgroup.contains(segment) && !found.dgroup.members.contains(&(index as i64)) {
-                return Err(format!("{segment} is in the program's DGROUP but not in this module's"));
-            }
-        }
-    }
     let records = records.to_vec();
-    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise(found, machine).map_err(|refusal| refusal.to_string())?;
+    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
     let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
     let named = |id: GlobalId| module.global(id).name.clone().ok_or("an unnamed global");
     let mut symbols = BTreeMap::new();
@@ -115,7 +97,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         Family::Vbdos => RuntimeProfile::Vbdos,
         other => return Err(format!("a {other:?} object")),
     };
-    basic::lifted(module, runtime, &object, family, &driver::Options::of(machine.clone()), name)
+    basic::lifted(module, runtime, &object, family, layout, &driver::Options::of(machine.clone()), name)
 }
 
 /// Each data segment the object had, in its order, holding its objects in
