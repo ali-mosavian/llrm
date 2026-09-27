@@ -147,7 +147,7 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
 fn fpdeep() -> String {
     let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
     let raised = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
-    let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_cycles::target::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
+    let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_code16::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
     llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
     let text = llrm_mir::print::module(&program.modules[0]);
     text[text.find("define void @main").expect("main")..].to_owned()

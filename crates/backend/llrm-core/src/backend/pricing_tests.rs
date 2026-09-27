@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use iced_x86::Register;
 
-use crate::cycles::cycles::*;
+use llrm_x86_code16::cycles::*;
 use crate::backend::{cpu, schedule};
 use crate::model::{ir, lir};
 

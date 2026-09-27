@@ -4,7 +4,6 @@ pub mod abi;
 pub mod analysis;
 pub mod backend;
 pub mod driver;
-pub use llrm_cycles as cycles;
 pub mod flow;
 pub mod frontends;
 pub mod hir;

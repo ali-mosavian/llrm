@@ -22,7 +22,7 @@ tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
 llrm-support = { path = "crates/support/llrm-support" }
-llrm-cycles = { path = "crates/target/llrm-cycles" }
+llrm-x86-code16 = { path = "crates/target/llrm-x86-code16" }
 llrm-omf = { path = "crates/target/llrm-omf" }
 llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
 llrm-bc = { path = "crates/bc/llrm-bc" }

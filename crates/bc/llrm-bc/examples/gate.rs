@@ -34,7 +34,7 @@ fn main() {
     for path in paths {
         let Ok(Some(found)) = llrm_omf::module::load(&path) else { continue };
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
-        let raised = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| llrm_bc::raise_each(&found, &llrm_bcmachine::abi::machine::BUILT_IN))) {
+        let raised = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| llrm_bc::raise_each(&found, &llrm_x86_code16::machine::BUILT_IN))) {
             Ok(Ok(raised)) => raised,
             Ok(Err(refusal)) => {
                 modules += 1;

@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 use crate::support::hash::IndexMap;
 
-use crate::cycles::timings;
+use llrm_x86_code16::timings;
 use crate::model::passes::{
     AddressForm, DEFAULT_MAX_UNROLL_ITERATIONS, DEFAULT_MAX_UNROLLED_OPERATIONS, OperationCosts,
 };
@@ -46,7 +46,7 @@ pub struct Profile {
 impl Profile {
     /// The MIR target this profile prices: real-mode DOS on its CPU.
     pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-        std::rc::Rc::new(crate::cycles::target::Dos::priced(&self._costs, self.prefix_cost, self.register_capacity, self.call_register_capacity))
+        std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.register_capacity, self.call_register_capacity))
     }
 
     /// The dataclass constructor with every defaulted field at its default.

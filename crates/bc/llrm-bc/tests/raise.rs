@@ -7,7 +7,7 @@ use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, GlobalKind, GlobalVaria
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
@@ -411,7 +411,7 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
 fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/nbody-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
 }
 
@@ -430,7 +430,7 @@ fn an_indexed_array_is_one_object() {
 fn an_element_address_passes_the_descriptor_last() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/ndarr-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let text = llrm_mir::print::module(&module);
     let calls: Vec<Vec<&str>> = text
         .lines()
@@ -453,7 +453,7 @@ fn erl_is_the_line_bcs_statement_table_gives() {
     for name in ["erlnum-q-o.obj", "erlnum-p-g2.obj", "erlnum-v-g3.obj"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions").join(name);
         let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-        let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{name}: {refusal}")).module;
+        let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{name}: {refusal}")).module;
         let text = llrm_mir::print::module(&module);
         let table = text.lines().find(|line| line.contains("$QB$ERL$main") && line.contains(" = internal constant")).expect("the ERL table");
         let lines: std::collections::BTreeSet<&str> = table.split("i16 ").skip(1).map(|one| one.trim_end_matches([',', ' ', ']'])).collect();

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use iced_x86::{Code, Register};
 use llrm_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
 use llrm_bcmachine::abi::handlers;
-use llrm_bcmachine::abi::machine::Machine;
+use llrm_x86_code16::machine::Machine;
 use llrm_bcmachine::abi::runtime::{self, Contract, Control, Reg};
 use llrm_bcmachine::frontends::bc::blocks::{self, Block};
 use llrm_bcmachine::frontends::bc::extent::{Body, BodyKind};

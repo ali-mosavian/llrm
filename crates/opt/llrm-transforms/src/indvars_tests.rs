@@ -505,7 +505,7 @@ fn a_pointer_beside_a_stored_counter_counts_its_offset_to_zero() {
 fn strength_leaves_a_pointer_counted_to_zero() {
     let mut module = parsed(&pointer_beside_a_stored_counter());
     let before = results(&module, &[&[0]]);
-    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_cycles::target::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_code16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
     assert!(after.contains(", 0\n") && !after.contains("%p ="), "{after}");

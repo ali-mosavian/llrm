@@ -178,9 +178,9 @@ dependencies = [
 name = "llrm-analysis"
 version = "0.1.0"
 dependencies = [
- "llrm-cycles",
  "llrm-mir",
  "llrm-support",
+ "llrm-x86-code16",
  "num-bigint",
  "num-traits",
 ]
@@ -195,6 +195,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",
+ "llrm-x86-code16",
 ]
 
 [[package]]
@@ -203,10 +204,10 @@ version = "0.1.0"
 dependencies = [
  "llrm-bc",
  "llrm-core",
- "llrm-cycles",
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",
+ "llrm-x86-code16",
 ]
 
 [[package]]
@@ -216,6 +217,7 @@ dependencies = [
  "iced-x86",
  "llrm-omf",
  "llrm-support",
+ "llrm-x86-code16",
  "toml",
 ]
 
@@ -226,7 +228,6 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-core",
- "llrm-cycles",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",
@@ -248,12 +249,12 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-bcmachine",
- "llrm-cycles",
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",
  "llrm-support",
  "llrm-transforms",
+ "llrm-x86-code16",
  "num-bigint",
  "num-traits",
  "regex",
@@ -263,21 +264,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
-]
-
-[[package]]
-name = "llrm-cycles"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "indexmap",
- "llrm-mir",
- "llrm-support",
- "num-bigint",
- "num-traits",
- "rustc-hash",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -299,7 +285,6 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-core",
- "llrm-cycles",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",
@@ -329,7 +314,6 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-core",
- "llrm-cycles",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",
@@ -361,11 +345,27 @@ name = "llrm-transforms"
 version = "0.1.0"
 dependencies = [
  "llrm-analysis",
- "llrm-cycles",
+ "llrm-mir",
+ "llrm-support",
+ "llrm-x86-code16",
+ "num-bigint",
+ "num-traits",
+]
+
+[[package]]
+name = "llrm-x86-code16"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
  "llrm-mir",
  "llrm-support",
  "num-bigint",
  "num-traits",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

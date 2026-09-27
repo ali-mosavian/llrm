@@ -3,7 +3,7 @@
 | Path | Holds |
 | --- | --- |
 | `crates/support/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
-| `crates/target/llrm-cycles` | The instruction-cost model |
+| `crates/target/llrm-x86-code16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
 | `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
 | `crates/ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
 | `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
@@ -20,9 +20,8 @@
 | `toolchain` | What the build scripts bootstrap: `wccq` (`owshim`), jwasm, jwlink, DOSBox-X |
 | `tools` | Developer tools; see `tools/readme.md` |
 
-`llrm-core` depends on `llrm-support`, `llrm-cycles`, `llrm-omf` and
-`llrm-hir`, and re-exports them as `support`, `cycles`, `objectfile` and
-`hir::{model, codec, verify, escape}`. The frontends depend on `llrm-core`
+`llrm-core` re-exports `llrm-support`, `llrm-omf` and `llrm-hir` as
+`support`, `objectfile` and `hir::{model, codec, verify, escape}`. The frontends depend on `llrm-core`
 and never on each other. `LLRM_ROOT` (`.cargo/config.toml`) is the
 repository root for any crate's tests.
 

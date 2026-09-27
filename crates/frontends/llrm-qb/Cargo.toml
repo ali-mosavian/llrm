@@ -9,7 +9,6 @@ description = "The QuickBASIC-family source frontend"
 llrm-core = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
-llrm-cycles = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }

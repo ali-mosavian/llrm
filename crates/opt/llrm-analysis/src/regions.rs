@@ -511,7 +511,7 @@ pub(crate) mod tests {
     use crate::ranges::Interval;
     use crate::testing::{DOS, function, layout, parsed, value};
 
-    pub use llrm_cycles::target::Dos;
+    pub use llrm_x86_code16::Dos;
 
     /// `module` alone, a program for real-mode DOS.
     pub fn dos(module: &Module) -> std::rc::Rc<llrm_mir::program::ProgramProxy> {

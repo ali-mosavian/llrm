@@ -8,7 +8,7 @@ use iced_x86::{Mnemonic, OpKind, Register};
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use crate::abi::machine::Machine;
+use llrm_x86_code16::machine::Machine;
 use crate::frontends::bc::blocks::{Block, CodeMap, INLINE_TABLE, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};

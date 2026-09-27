@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use iced_x86::{Code, Register};
 
 use super::*;
-use crate::abi::machine::BUILT_IN;
+use llrm_x86_code16::machine::BUILT_IN;
 use crate::frontends::bc::blocks::Ends;
 use crate::frontends::bc::declen::decode;
 use crate::frontends::bc::extent::BodyKind;

@@ -25,7 +25,7 @@ pub mod tags;
 use std::collections::BTreeMap;
 
 pub use llrm_hir::mir::{DATALAYOUT, FAR, RUNTIME, SEGMENT};
-use llrm_bcmachine::abi::machine::Machine;
+use llrm_x86_code16::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
 use llrm_bcmachine::objectfile::module::{self as found_module, Family};
