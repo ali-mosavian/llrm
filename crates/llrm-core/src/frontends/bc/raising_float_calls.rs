@@ -11,7 +11,6 @@ use crate::model::ir::{Loc, Operation, St};
 use crate::model::mir::{self, Arg, Const, Held, Kind, OpCode, Opaque, OrderedMap, RaisedBody, Synth, Value};
 use crate::model::mir::SourceMap;
 use crate::objectfile::module::{self, Module};
-use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 
 const _WIDTHS: [(&str, u32); 2] = [("B$FILD", 4), ("B$FIL2", 2)];
@@ -64,7 +63,7 @@ pub fn raised(
     contracts: &IndexMap<i64, Contract>,
     source_map: &mut SourceMap,
 ) -> RaisedBody {
-    let emulated = omf::externals(&found.records).iter().any(|one| one == "FIDRQQ");
+    let emulated = module::emulated(&found.records);
     let mut serial = ssa::values(&body).map(|one| one.id).max().unwrap_or(0);
     let mut variable = ssa::values(&body).map(|one| one.variable).max().unwrap_or(0);
     let local = module::defines(&found.records, found.seg);

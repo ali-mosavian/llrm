@@ -30,7 +30,6 @@ pub enum BodyKind {
     EventStub,
     EventHandler,
     ErrorHandler,
-    ResumeEntry,
 }
 
 impl BodyKind {
@@ -42,7 +41,6 @@ impl BodyKind {
             BodyKind::EventStub => "EVENT_STUB",
             BodyKind::EventHandler => "EVENT_HANDLER",
             BodyKind::ErrorHandler => "ERROR_HANDLER",
-            BodyKind::ResumeEntry => "RESUME_ENTRY",
         }
     }
 
@@ -54,7 +52,6 @@ impl BodyKind {
             BodyKind::EventStub => "event-stub",
             BodyKind::EventHandler => "event-handler",
             BodyKind::ErrorHandler => "error-handler",
-            BodyKind::ResumeEntry => "resume-entry",
         }
     }
 }
@@ -71,6 +68,9 @@ pub struct Body {
     pub seed: usize,
     pub name: Option<String>,
     pub ranges: Vec<(usize, usize)>,
+    /// Where the runtime enters it besides its seed: each statement RESUME
+    /// continues at that nothing in the body flows to.
+    pub entries: Vec<usize>,
 }
 
 impl Body {
@@ -264,6 +264,10 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
         others.remove(seed);
         reached.insert(*seed, _reachable(*seed, &others, &blocks_by_at, module, &mapped));
     }
+    // RESUME re-enters code at a statement the body's own flow may never
+    // reach, as after an ERROR: each such statement is another entry of the
+    // body whose code it lies in, the nearest main or procedure seed below.
+    let mut entries: IndexMap<usize, Vec<usize>> = IndexMap::default();
     if !handlers.is_empty() {
         let owned: BTreeSet<usize> = reached.values().flatten().copied().collect();
         let resumable: BTreeSet<usize> = module
@@ -272,12 +276,15 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             .map(|&at| at as usize)
             .filter(|at| blocks_by_at.contains_key(at) && !owned.contains(at))
             .collect();
-        for &seed in &resumable {
-            seeds.push((BodyKind::ResumeEntry, seed, Some("resume entry".to_owned())));
+        let bodies: BTreeSet<usize> =
+            seeds.iter().filter(|(kind, _, _)| matches!(kind, BodyKind::Main | BodyKind::Procedure)).map(|(_, seed, _)| *seed).collect();
+        for &entry in &resumable {
+            let Some(&owner) = bodies.range(..=entry).next_back() else { continue };
             let mut others: BTreeSet<usize> = owned.union(&resumable).copied().collect();
-            // `owned | (resumable - {seed})`, and resumable excludes owned
-            others.remove(&seed);
-            reached.insert(seed, _reachable(seed, &others, &blocks_by_at, module, &mapped));
+            others.remove(&entry);
+            let more = _reachable(entry, &others, &blocks_by_at, module, &mapped);
+            reached.get_mut(&owner).expect("a seed's reach").extend(more);
+            entries.entry(owner).or_default().push(entry);
         }
     }
 
@@ -295,6 +302,7 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             seed: *seed,
             name: name.clone(),
             ranges: _ranges(&mapped, &blocks_by_at, &reached[seed]),
+            entries: entries.get(seed).cloned().unwrap_or_default(),
         })
         .collect();
     let owned_by = |at: &usize| owners.get(at).copied().unwrap_or(0);

@@ -116,3 +116,16 @@ fn test_a_module_with_no_header_is_refused_not_guessed() {
     let headerless = bare(&found, found.code[0x30..].to_vec(), 0, found.code.len() as i64 - 0x30);
     assert!(partition(&headerless).is_err());
 }
+
+/// After ERROR, the rest of main is reached only by RESUME: each statement
+/// it continues at was a body of its own, and two of them into one FOR loop
+/// both claimed the loop, which failed the partition.
+#[test]
+fn test_statements_resume_enters_are_the_main_bodys_entries() {
+    let (_found, result) = extents("onerr-q-o.obj");
+    assert!(result.complete(), "{:?}", result.conflicts);
+    let main = bodies(&result, BodyKind::Main);
+    assert_eq!(main.len(), 1);
+    assert!(main[0].entries.contains(&0x49), "{:x?}", main[0].entries);
+    assert_eq!(result.bodies.len(), 2, "main and the handler");
+}

@@ -105,7 +105,7 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
                 dispatches = true;
                 continue;
             }
-            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) || name == crate::access::ADDRESS {
+            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || crate::emit::owns(name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) || name == crate::access::ADDRESS {
                 continue;
             }
             let Some(contract) = facts.contract(at) else { continue };

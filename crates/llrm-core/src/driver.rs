@@ -10,7 +10,15 @@ use llrm_mir::program::Program;
 use llrm_mir::{GlobalId, Module};
 
 use crate::abi::machine::Machine;
-use crate::backend::cpu::{self, Profile};
+use crate::abi::qb::HirAbi;
+use crate::backend::assemble;
+use crate::backend::cpu::{self, Profile, ProfileOrName};
+use crate::backend::masm;
+use crate::backend::target::Segments;
+use crate::hir::model;
+use crate::backend::ehprepare;
+use crate::model::ir::{Operation, Semantics};
+use crate::model::lir;
 
 /// What a compile is for: the machine, whose CPU prices the choices, and
 /// where the pipeline writes each stage.
@@ -30,10 +38,31 @@ impl Options {
     }
 }
 
+/// `program` compiled for the machine: emitted, optimized, then each module
+/// selected and assembled, its code in `<MODULE>_TEXT` and each function
+/// linked by its symbol. Each module's listing goes beside the stages.
+pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm::Module>, String> {
+    let (mut mir, _) = emitted(program, options)?;
+    optimized(&mut mir, options)?;
+    let functions = program.modules.iter().flat_map(|module| &module.functions);
+    let abi = HirAbi { runtime: program.runtime, objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect() };
+    let segments = Segments::of(&options.machine);
+    let mut out = Vec::new();
+    for (module, hir) in mir.modules.iter().zip(&program.modules) {
+        let assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
+        if let Some(directory) = &options.dump {
+            let name = if program.modules.len() > 1 { format!("listing-{}.asm", hir.name) } else { "listing.asm".to_owned() };
+            std::fs::write(directory.join(name), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+        }
+        out.push(assembled);
+    }
+    Ok(out)
+}
+
 /// `program` as MIR, a module per HIR module, linked against the runtime
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
-pub fn emitted(program: &crate::hir::model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -51,8 +80,54 @@ pub fn linked(modules: Vec<Module>, runtime: Module, options: &Options) -> Resul
     Program::new(modules, options.cpu()?.target())?.with_runtime(runtime)
 }
 
-/// `program` through the pipeline.
+/// `program` through the pipeline, then each module prepared for
+/// instruction selection: a landing pad made one the runtime enters.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { dump: options.dump.clone(), ..Default::default() };
-    llrm_transforms::pipeline::applied(program, &applied)
+    llrm_transforms::pipeline::applied(program, &applied)?;
+    program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)
+}
+
+/// ON ERROR's part of assembly that no frontend lays out: ERR's word the
+/// landing stub keeps, as data for a DGROUP segment.
+pub fn landed_data(module: &Module) -> Vec<masm::Datum> {
+    if module.named(ehprepare::LANDED).is_none() {
+        return Vec::new();
+    }
+    vec![masm::Datum::Object(masm::Label { name: ehprepare::LANDED.to_owned() }), masm::Datum::Bytes(vec![0, 0])]
+}
+
+/// Whether a driver frames `function`: a naked one, as the landing stub,
+/// runs on the frame the runtime made.
+pub fn framed(module: &Module, function: GlobalId) -> bool {
+    !module.global(function).function().is_some_and(|one| one.attrs.iter().any(|attr| matches!(attr, llrm_mir::Attribute::Flag(flag) if flag == "naked")))
+}
+
+/// The statement-table row RESUME NEXT reaches a landing pad by: the pad's
+/// block `landing`, in the procedure assembled `number`th.
+pub fn landing_row(number: usize, landing: i64) -> (i64, i64, String, i64) {
+    (number as i64, 0, masm::label(number, landing), 0)
+}
+
+/// OF_STA's table: each row a statement's offset and BASIC line, ended by
+/// a zero word, as a procedure of inline data.
+pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
+    let mut code: Vec<masm::InlinePart> = Vec::new();
+    for (_procedure, _order, label, line) in rows {
+        code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
+        code.push(masm::InlinePart::Bytes((*line as u16).to_le_bytes().to_vec()));
+    }
+    code.push(masm::InlinePart::Bytes(vec![0, 0]));
+    let what = Semantics { name: Some("statement-table".to_owned()), ..Semantics::new(Operation::Call) };
+    let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    let body = lir::LirBody::new("$QB$STAT", 1, vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)])], Default::default(), Default::default());
+    masm::Procedure {
+        name: "$QB$STAT".into(),
+        public: false,
+        far: false,
+        body,
+        reserve: 0,
+        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        interrupt: None,
+    }
 }

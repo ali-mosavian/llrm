@@ -490,6 +490,24 @@ def rcflip() -> list[str]:
     return [f"SUM={num(total)}", "DONE"]
 
 
+def onerr() -> list[str]:
+    """tests/suite/onerr.bas: what each handled error leaves behind.
+
+    SPACE$(-1), CHR$(300) and LEFT$(s, -1) are illegal function calls,
+    error 5. ERR reads 0 once RESUME has run. In the loop, i = 4 and 5 fail
+    inside LEFT$ and RESUME NEXT carries on with the sum.
+    """
+    return [
+        f"ERROR={seq(52, 0)}",
+        f"SPACE={num(5)}",
+        f"RETRY={seq(5, 65)}",
+        f"LABEL={num(7)}",
+        f"LOOP={seq(5, 15)}",
+        f"KEPT={seq(305419896, 9)}",
+        "DONE",
+    ]
+
+
 PROGRAMS = {
     "arith": arith,
     "wendgo": wendgo,
@@ -536,6 +554,7 @@ PROGRAMS = {
     "nestud": nestud,
     "arrprm": arrprm,
     "byref2": byref2,
+    "onerr": onerr,
 }
 
 
