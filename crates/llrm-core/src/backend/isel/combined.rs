@@ -30,7 +30,7 @@ pub(super) fn combined(blocks: Vec<LirBlock>) -> Vec<LirBlock> {
     // x86 can express a C read-modify-write update in one memory operand.
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, _memory_arguments(&insns, &uses, &exposed))).collect();
-    let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, paired_pushes(&insns))).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, paired_pushes(&insns, &uses, &exposed))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, _immediate_arguments(&insns, &uses))).collect();
     let mut made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &exposed))).collect();
@@ -100,39 +100,75 @@ fn pushed_word(one: &Insn) -> Option<&ir::Mem> {
 }
 
 /// Two word pushes of one dword's halves, the high first, as one dword
-/// push: both leave the same four bytes, the low at the lower address.
-fn paired_pushes(insns: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
+/// push: both leave the same four bytes, the low at the lower address. A
+/// half may be pushed from memory or from a one-use load nothing changes
+/// before the push.
+fn paired_pushes(insns: &[Arc<Insn>], uses: &IndexMap<u32, i64>, exposed: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
+    let mut loaded: IndexMap<u32, (Arc<Insn>, ir::Mem)> = IndexMap::default();
+    let mut dead: Vec<Arc<Insn>> = Vec::new();
     let mut out: Vec<Arc<Insn>> = Vec::with_capacity(insns.len());
     let mut index = 0;
     while index < insns.len() {
+        let one = &insns[index];
+        // The memory a word push reads, and the load it replaces if any.
+        let word = |push: &Insn| -> Option<(ir::Mem, Option<Arc<Insn>>)> {
+            if let Some(cell) = pushed_word(push) {
+                return Some((cell.clone(), None));
+            }
+            let (value, 2) = push.what.as_ref().and_then(pushed_value)? else { return None };
+            let (load, cell) = loaded.get(&value)?;
+            (count(uses, value) == 1 && !exposed.contains(&value) && push.defines.is_empty() && !push.volatile && plain(push))
+                .then(|| (cell.clone(), Some(Arc::clone(load))))
+        };
         let paired = insns.get(index + 1).and_then(|next| {
-            let (high, low) = (pushed_word(&insns[index])?, pushed_word(next)?);
+            let ((high, high_load), (low, low_load)) = (word(one)?, word(next)?);
             let above = ir::Mem {
                 addr: low.addr.map(|addr| addr.plus(2)),
                 offset: if low.addr.is_some() { low.offset } else { low.offset + 2 },
                 ..low.clone()
             };
             let same_registers = (high.through, high.index_through) == (low.through, low.index_through);
-            (*high == above && same_registers && high.offset == above.offset && ir::root(low.through) != Register::ESP).then(|| {
-                let mut one = (**next).clone();
-                let mut what = one.what.take().expect("a push");
+            (high == above && same_registers && ir::root(low.through) != Register::ESP).then(|| {
+                let mut pushed = (**next).clone();
+                let mut what = pushed.what.take().expect("a push");
                 what.sources = vec![Loc::Mem(ir::Mem { width: 4, ..low.clone() })];
-                one.what = Some(what);
-                Arc::new(one)
+                pushed.what = Some(what);
+                if let Some(load) = &low_load {
+                    pushed.uses = load.uses.clone();
+                    pushed.op = load.op.clone();
+                    pushed.symbol = load.symbol;
+                }
+                dead.extend(high_load.into_iter().chain(low_load));
+                Arc::new(pushed)
             })
         });
-        match paired {
-            Some(one) => {
-                out.push(one);
-                index += 2;
+        let taken = if paired.is_some() { 2 } else { 1 };
+        for one in &insns[index..index + taken] {
+            let what = one.what.as_ref();
+            let writes_memory = what.is_none_or(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))));
+            let writes_fixed = what.is_none_or(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Reg(_))));
+            let barrier = what.is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Call | Operation::Return));
+            if writes_memory || writes_fixed || barrier || !one.clobbers.is_empty() {
+                loaded.clear();
             }
-            None => {
-                out.push(Arc::clone(&insns[index]));
-                index += 1;
+            for value in &one.defines {
+                loaded.shift_remove(value);
+            }
+            if let Some((Operation::Move, Some("mov"), [Loc::Held(dest)], [Loc::Mem(source)])) =
+                what.map(|what| (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..]))
+            {
+                if dest.width == 2 && source.width == 2 && one.defines == [dest.value] && !one.volatile && plain(one) && ir::root(source.through) != Register::ESP {
+                    loaded.insert(dest.value, (Arc::clone(one), source.clone()));
+                }
             }
         }
+        match paired {
+            Some(one) => out.push(one),
+            None => out.push(Arc::clone(one)),
+        }
+        index += taken;
     }
-    out
+    lir::without(&out, |one| dead.iter().any(|dead| Arc::ptr_eq(dead, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
 }
 
 /// Select immediate pushes without keeping literal addresses live across calls.

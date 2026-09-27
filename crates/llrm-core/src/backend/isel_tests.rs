@@ -2136,3 +2136,21 @@ define void @f(i16 %a) addrspace(1) {
     // Only %b, computed before the call, needs a slot.
     assert_eq!(got.iter().filter(|line| line.starts_with("mov word ptr [bp-")).count(), 1, "{got:?}");
 }
+
+/// A far pointer loaded from memory only to be passed on is one dword push:
+/// loaded as two words, format.put_text read one more memory operand per
+/// call than the old route's dword.
+#[test]
+fn test_a_far_pointer_loaded_to_be_passed_is_one_push() {
+    let text = "declare void @g(ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %t) addrspace(1) {
+  %at = getelementptr i8, ptr addrspace(1) %t, i16 4
+  %p = load ptr addrspace(1), ptr addrspace(1) %at
+  %n = load i16, ptr addrspace(1) %t
+  call addrspace(1) void @g(ptr addrspace(1) %p, i16 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("push dword ptr es:[")), "{got:?}");
+}
