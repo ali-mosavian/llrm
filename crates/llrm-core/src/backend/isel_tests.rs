@@ -2182,3 +2182,16 @@ two:
     assert_eq!(got.iter().filter(|line| line.contains("[bp+")).count(), 2, "{got:?}");
     assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 5, "{got:?}");
 }
+
+/// A parameter passed in the frame's own bytes is refused: its slot is
+/// addressable, so selected it would break `sealed_arguments`, and a call
+/// passing one would push the pointer where the callee expects the bytes.
+#[test]
+fn test_parameters_passed_in_the_frame_are_refused() {
+    for attribute in ["byval(i32)", "inalloca(i32)", "byref(i32)"] {
+        let text = format!("define i16 @f(ptr {attribute} %p) addrspace(1) {{\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n");
+        assert!(selected(&text, "f").is_err(), "{attribute}");
+        let text = format!("declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n");
+        assert!(selected(&text, "f").is_err(), "a call's {attribute}");
+    }
+}
