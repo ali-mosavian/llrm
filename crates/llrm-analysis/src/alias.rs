@@ -1498,7 +1498,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
 
     let mut out = IndexMap::default();
     for (block, inst) in unit.function.walk() {
-        if let Some(reference) = MemRef::of(unit, inst) {
+        if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
             out.insert(inst, tag(&reference, cfg::id(block))?);
         }
     }

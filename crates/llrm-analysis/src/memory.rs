@@ -35,6 +35,7 @@ use std::fmt;
 
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context, GlobalId, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
@@ -588,6 +589,22 @@ impl MemRef {
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
         Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
+    }
+
+    /// The bytes a call to `llvm.memset` of a constant length fills, as
+    /// LLVM's `MemoryLocation::getForDest` names them: a write like a
+    /// store's.
+    pub fn filled(unit: &Unit, inst: InstId) -> Option<Self> {
+        let instruction = unit.function.instruction(inst);
+        let Opcode::Call(_) = instruction.opcode else { return None };
+        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
+        let name = unit.globals.get(callee.0 as usize)?.name.as_deref()?;
+        if Intrinsic::named(name) != Some(Intrinsic::MemSet) {
+            return None;
+        }
+        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok().filter(|&one| one > 0)?;
+        let volatile = unit.int_constant(instruction.operands[3])? != 0;
+        Some(Self { volatile, ..Self::at(unit, instruction.operands[0], width) })
     }
 
     /// `width` bytes of `provenance`'s objects that a call's effect names,

@@ -6,7 +6,7 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_MemoryQueries, _result, ARITH, Calls, Known, division, initialized, known, masked};
+use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, masked};
 use crate::memory::{MemRef, MemoryKind, MemoryObject, Provenance, Unit};
 use crate::regions::tests::Dos;
 use crate::testing::{DOS, function, layout, parsed, value};
@@ -196,8 +196,9 @@ fn test_int64_shift_uses_all_six_count_bits() {
 }
 
 #[test]
-fn an_arithmetic_shift_is_not_folded_as_a_logical_one() {
-    assert_eq!(one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x8000, 16))]), None);
+fn an_arithmetic_shift_keeps_the_sign() {
+    assert_eq!(one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x8000, 16))]), Some(Known::new(0xC000, 16)));
+    assert_eq!(one("ashr i16 %x, 1", "i16").result("y", &[("x", Known::new(0x4000, 16))]), Some(Known::new(0x2000, 16)));
 }
 
 #[test]
@@ -210,12 +211,14 @@ fn test_constant_steps_wrap_at_the_value_width() {
     }
 }
 
+/// A division is computed where it does not fault, as `division` gives it.
 #[test]
-fn test_division_is_not_folded() {
-    for kind in [BinaryOp::SDiv, BinaryOp::UDiv, BinaryOp::SRem, BinaryOp::URem] {
-        assert!(!ARITH.iter().any(|(one, _)| *one == kind));
-        let parsed = one(&format!("{} i16 7, 2", llrm_mir::opcode::spelling(&llrm_mir::opcode::BINARY, kind)), "i16");
-        assert_eq!(parsed.result("y", &[]), None);
+fn test_division_is_folded_where_it_does_not_fault() {
+    for (kind, answer) in [(BinaryOp::SDiv, Some(-3_i64)), (BinaryOp::UDiv, Some(0x7FFC)), (BinaryOp::SRem, Some(-1)), (BinaryOp::URem, Some(1))] {
+        let spelling = llrm_mir::opcode::spelling(&llrm_mir::opcode::BINARY, kind);
+        let parsed = one(&format!("{spelling} i16 -7, 2"), "i16");
+        assert_eq!(parsed.result("y", &[]), answer.map(|n| Known::new(masked(&BigInt::from(n), 16), 16)), "{spelling}");
+        assert_eq!(one(&format!("{spelling} i16 -7, 0"), "i16").result("y", &[]), None, "{spelling}");
     }
 }
 
