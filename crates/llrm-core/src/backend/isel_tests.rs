@@ -2083,3 +2083,36 @@ fn test_an_i64_divided_by_a_variable_is_the_inline_helper() {
     assert_eq!(helper, 1, "{got:?}");
     assert!(got.iter().any(|line| line == "add eax, ebx") && got.iter().any(|line| line == "adc edx, ecx"), "{got:?}");
 }
+
+/// Adjacent argument words forwarded from memory are dword pushes: pushed a
+/// word at a time, os.write's forwarded far buffer cost one more memory
+/// operand per call than the old route's.
+#[test]
+fn test_a_far_pointer_argument_from_memory_is_one_push() {
+    let text = "declare void @g(ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
+  call addrspace(1) void @g(ptr addrspace(1) %p, i16 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let pushes: Vec<&String> = got.iter().filter(|line| line.starts_with("push") && line.contains("[bp+")).collect();
+    assert_eq!(pushes.len(), 2, "{got:?}");
+}
+
+/// An i64 divided by a sign-extended i32 whose quotient fits a dword is one
+/// idiv: divided as magnitudes it took two divs and sign fixups, nbody's
+/// 262144 / d costing 504 more instructions than the old route's.
+#[test]
+fn test_a_quotient_that_fits_a_dword_is_one_idiv() {
+    let text = "define i64 @f(i32 %d) addrspace(1) {
+  %w = sext i32 %d to i64
+  %q = sdiv i64 262144, %w
+  ret i64 %q
+}
+";
+    let got = listing(text, "f");
+    let divides: Vec<&String> = got.iter().filter(|line| line.starts_with("div") || line.starts_with("idiv")).collect();
+    assert_eq!(divides.len(), 1, "{got:?}");
+    assert!(divides[0].starts_with("idiv"), "{got:?}");
+}
