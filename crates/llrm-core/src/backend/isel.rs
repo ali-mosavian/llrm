@@ -248,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -308,6 +308,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         edges: IndexMap::default(),
         chains: IndexMap::default(),
         merges: IndexMap::default(),
+        zeroed,
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
         abi,
@@ -406,6 +407,8 @@ struct Selector<'m, 'c, 'p> {
     /// Branches on the `and` (true) or `or` of two compares: a compare and
     /// a branch each, the second in the block of `chains`.
     merges: IndexMap<InstId, (bool, InstId, InstId)>,
+    /// The frame starts its locals zeroed, as B$ENRA zero-fills them.
+    zeroed: bool,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
     /// Each call's contract and register interface, from the ABI that
@@ -460,6 +463,10 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.private = crate::model::mir::outside(&reach);
+        if self.zeroed {
+            let prezeroed = self.prezeroed();
+            self.consumed.extend(prezeroed);
+        }
         for &block in layout {
             let from = block_at[&block];
             let terminator = function.terminator(block).expect("a terminator");
@@ -994,6 +1001,50 @@ impl Selector<'_, '_, '_> {
         (default, cases)
     }
 
+    /// The entry block's zero writes to a local nothing has touched yet:
+    /// what the zeroed frame already holds. A local's address is its
+    /// alloca's, so nothing reaches it before the alloca's first user.
+    fn prezeroed(&self) -> BTreeSet<InstId> {
+        let function = self.function;
+        let mut out = BTreeSet::new();
+        let Some(&entry) = function.layout().first() else { return out };
+        let order: IndexMap<InstId, usize> = function.block(entry).instructions().iter().enumerate().map(|(index, &inst)| (inst, index)).collect();
+        for (&inst, &index) in &order {
+            let Some(local) = self.zero_write(inst) else { continue };
+            if function.users(local).iter().all(|one| one.user == inst || out.contains(&one.user) || order.get(&one.user).is_none_or(|&at| at > index)) {
+                out.insert(inst);
+            }
+        }
+        out
+    }
+
+    /// The local `inst` fills with zeros, where it is a store or memset of
+    /// zero straight to an alloca.
+    fn zero_write(&self, inst: InstId) -> Option<ValueId> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let zero = |operand: Operand| match operand {
+            Operand::Constant(one) => matches!(self.module.context.get(one).kind, ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Null | ConstantKind::Zero),
+            _ => false,
+        };
+        let (value, destination) = match instruction.opcode {
+            Opcode::Store { volatile: false, .. } => (instruction.operands[0], instruction.operands[1]),
+            Opcode::Call(_) => {
+                let [destination, value, _, volatile, Operand::Constant(callee)] = instruction.operands[..] else { return None };
+                let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+                let name = self.module.global(global).name.as_deref()?;
+                if Intrinsic::named(name) != Some(Intrinsic::MemSet) || !zero(volatile) {
+                    return None;
+                }
+                (value, destination)
+            }
+            _ => return None,
+        };
+        let Operand::Value(local) = destination else { return None };
+        let ValueDef::Instruction(alloca) = function.value(local).def else { return None };
+        (zero(value) && matches!(function.instruction(alloca).opcode, Opcode::Alloca { .. })).then_some(local)
+    }
+
     /// The branch `inst`'s condition as the `and` (true) or `or` of two
     /// integer compares only it reads, from its own block, as LLVM's
     /// FindMergedConditions takes a condition apart. A call's flags must be
@@ -1331,7 +1382,7 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
             self.pointers.insert(address, scaled);
             return Ok(());
         }
@@ -1461,7 +1512,7 @@ impl Selector<'_, '_, '_> {
     /// defines them (`addressforms::promote`), so no register is added. The
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
-    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64) -> Option<Pointer> {
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
         let form = self.secondary?;
         let Operand::Value(index) = index else { return None };
         let function = self.function;
@@ -1471,7 +1522,8 @@ impl Selector<'_, '_, '_> {
         }
         let proven = self.accesses(address).into_iter().all(|access| {
             let fact = function.parent(access).and_then(|block| self.facts.get(&cfg::id(block))).and_then(|known| known.get(&index));
-            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into()) && (self.typed.contains(&access) || self.exact.contains(&index))
+            let unwrapped = |fact: &ranges::Interval| factor == 1 || fact.high.clone() * factor <= i16::MAX.into();
+            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into() && unwrapped(fact)) && (self.typed.contains(&access) || self.exact.contains(&index))
         });
         if !proven {
             return None;
@@ -1501,21 +1553,21 @@ impl Selector<'_, '_, '_> {
 
     /// `index` times `scale` with the index's own multiply by a constant
     /// taken into the scale, as LLVM's address matcher folds a `mul` or
-    /// `shl` into it; one that may wrap is left as it is.
-    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64) {
-        let Operand::Value(value) = index else { return (index, scale) };
-        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale) };
+    /// `shl` into it; and the factor the index's range must keep from
+    /// wrapping, 1 where `nsw` already does.
+    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64, i64) {
+        let Operand::Value(value) = index else { return (index, scale, 1) };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale, 1) };
         let instruction = self.function.instruction(inst);
-        if !instruction.flags.contains(llrm_mir::opcode::Flags::NSW) {
-            return (index, scale);
-        }
+        let (Opcode::Binary(_), [_, by]) = (&instruction.opcode, &instruction.operands[..]) else { return (index, scale, 1) };
         let width = self.width(instruction.ty).unwrap_or(0);
-        let factor = match (&instruction.opcode, self.constant(instruction.operands[1], width)) {
+        let factor = match (&instruction.opcode, self.constant(*by, width)) {
             (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => factor,
             (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => 1 << count,
-            _ => return (index, scale),
+            _ => return (index, scale, 1),
         };
-        (instruction.operands[0], scale * factor)
+        let wraps = if instruction.flags.contains(llrm_mir::opcode::Flags::NSW) { 1 } else { factor };
+        (instruction.operands[0], scale * factor, wraps)
     }
 
     /// The pointer `operand` offsets by constants.

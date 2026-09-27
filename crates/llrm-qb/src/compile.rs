@@ -1304,9 +1304,10 @@ impl Rich {
         Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects, preserved: Default::default() } })
     }
 
-    fn machined(&self, program: &model::Program, name: &str, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
+    /// `name` selected and machined; `zeroed`: B$ENRA frames it, zero-filling its locals.
+    fn machined(&self, program: &model::Program, name: &str, zeroed: bool, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
         let cpu = targets::profile(ProfileOrName::Name(&self.cpu)).map_err(CompileError::Value)?;
-        let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true };
+        let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true, zeroed };
         let machined = assemble::machined(&self.mir, name, &self.abi, pool, &target).map_err(CompileError::Value)?;
         let final_ = finalized(&machined.body, machined.popped)?;
         // A runtime routine is called by its own name.
@@ -1429,8 +1430,10 @@ pub fn assembled_by(
     let pool_start = module.data.iter().map(|one| one.id + 1).max().unwrap_or(0).max(rich.as_ref().map_or(0, |rich| rich.mir.globals.len() as i64));
     let pool = Rc::new(RefCell::new(Pool::new(pool_start)));
     for (index, function) in functions.iter().copied().enumerate() {
+        // A module body is never framed inline.
+        let inline_frame = function.name != "__main" && _inline_frame(program, module, function);
         let machined = match &rich {
-            Some(rich) => rich.machined(program, &function.name, &pool)?,
+            Some(rich) => rich.machined(program, &function.name, !inline_frame, &pool)?,
             None => _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?,
         };
         let mut callees = machined.callees.clone();
@@ -1496,7 +1499,7 @@ pub fn assembled_by(
         let module_body = function.name == "__main";
         let public = !module_body && function.linkage == model::FunctionLinkage::External;
         let mut native_reserve = 0;
-        if !module_body && _inline_frame(program, module, function) {
+        if inline_frame {
             // The frontend's own stores zero the locals that need it.
             native_reserve = reserve;
         } else if !module_body {
@@ -1616,7 +1619,7 @@ pub fn assembled_by(
             if llrm_core::driver::framed(&rich.mir, id) {
                 return emission(format!("@{name}, which no HIR function makes, asks for a frame"));
             }
-            let machined = rich.machined(program, &name, &pool)?;
+            let machined = rich.machined(program, &name, false, &pool)?;
             let mut callees = machined.callees;
             for (at, callee) in &machined.calls {
                 referenced_calls.insert(callee.clone());

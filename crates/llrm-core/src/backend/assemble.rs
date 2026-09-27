@@ -50,7 +50,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu, segments, runtime: "", basic: false };
+    let target = Target { cpu, segments, runtime: "", basic: false, zeroed: false };
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -122,6 +122,8 @@ pub struct Target<'t> {
     pub segments: &'t Segments,
     pub runtime: &'t str,
     pub basic: bool,
+    /// A framed function's locals start zeroed: B$ENRA zero-fills them.
+    pub zeroed: bool,
 }
 
 /// A function selected and through the machine phases, as llc's
@@ -144,7 +146,8 @@ pub struct Machined {
 /// `name` of `module` selected and run through the machine phases, float
 /// constants in `pool`.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments);
+    let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
+    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, zeroed);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;

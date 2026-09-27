@@ -277,6 +277,24 @@ fn test_entry_reload_requires_agreement_on_every_edge() {
     }
 }
 
+/// A store of a register back into the slot it holds is dead: qbsp's
+/// RPointLeaf reloaded a spilled pointer and stored it straight back, on
+/// each side of a call, every iteration.
+#[test]
+fn test_storing_a_slot_back_from_its_reload_is_dead() {
+    let register = rl(Register::BX, 2);
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-32), 2) });
+    let reload = insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![register.clone()], vec![cell.clone()])), vec![], vec![]);
+    let back = insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![cell.clone()], vec![register.clone()])), vec![], vec![]);
+    let other = insn(3, Some((3, 3)), Some(sem(Operation::Move, "mov", vec![cell], vec![rl(Register::CX, 2)])), vec![], vec![]);
+    let input = body("back", 1, vec![block(1, vec![Arc::new(reload), Arc::new(back), Arc::new(other)], vec![])]);
+
+    let done = spillforward::forwarded(&input);
+
+    let stores: Vec<_> = done.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| matches!(what.dests[..], [Loc::Mem(_)])).map(|what| what.sources.clone()).collect();
+    assert_eq!(stores, vec![vec![rl(Register::CX, 2)]]);
+}
+
 #[test]
 fn test_forwarded_spill_reload_retains_its_virtual_definition() {
     // BASIC nbody's store read value#979 after spill forwarding removed its reload.
