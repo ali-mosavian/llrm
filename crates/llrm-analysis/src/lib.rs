@@ -9,6 +9,7 @@
 //! `Analysis::run` sees no module metadata or globals.
 
 pub mod alias;
+pub mod avail;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
@@ -19,6 +20,7 @@ pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
 pub mod memory;
+pub mod memoryssa;
 pub mod noreturn;
 pub mod occurrence;
 pub mod pointerfacts;
