@@ -1874,7 +1874,7 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &nib_compile::machine()).expect("assembles");
+    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
@@ -1894,7 +1894,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return a < b && !a == 0 || b == 7\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() }).expect("assembles");
+        let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));
@@ -1923,4 +1923,19 @@ fn test_a_borrowed_view_promises_its_descriptor() {
     let multiply = function(&program, "multiply");
     let promised = |parameter| model::Promise { parameter, bytes: 10, unaliased: true, readonly: true };
     assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
+}
+
+/// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
+/// -O2 does, an object as large.
+#[test]
+fn test_the_level_reaches_the_rich_route() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = root().join("examples/dice.nib");
+    let object = |level: &str| {
+        let output = directory.path().join(format!("dice{level}.obj"));
+        let argv = [source.display().to_string(), level.to_owned(), "-o".to_owned(), output.display().to_string()];
+        assert_eq!(crate::cli::main(&argv), 0);
+        std::fs::read(output).expect("the object").len()
+    };
+    assert!(object("-Os") < object("-O2"));
 }

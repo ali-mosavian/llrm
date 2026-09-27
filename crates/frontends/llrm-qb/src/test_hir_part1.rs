@@ -40,7 +40,7 @@ fn lowered(program: &model::Program) -> Vec<hir::Lowered> {
 /// `namespace["dumped"](source, output, dialect=..., runtime=..., includes=())`.
 fn dumped(source: &std::path::Path, output: &std::path::Path, dialect: &str, runtime: &str) {
     let frontend = super::driver::Frontend::new(dialect, runtime);
-    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered, &llrm_core::abi::machine::BUILT_IN).expect("dumps");
+    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("dumps");
 }
 
 fn machine(
@@ -114,8 +114,8 @@ fn test_qb_cli_reads_the_machine_it_is_given() {
     let path = directory.path().join("386.toml");
     std::fs::write(&path, llrm_core::abi::machine::DOS.replace("cpu = \"486\"", "cpu = \"386\"")).expect("writes");
     let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
-    assert_eq!(args.machine.cpu, "386");
-    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").machine, *llrm_core::abi::machine::BUILT_IN);
+    assert_eq!(args.codegen.machine.cpu, "386");
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BUILT_IN);
 }
 
 #[test]

@@ -2,10 +2,12 @@
 //! executable, plus `tools/modernstages.py`'s `--dump DIR`.
 //!
 //! ```text
-//! llrm-nib SOURCE [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy]
+//! llrm-nib SOURCE [--entry ENTRY] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] [OPTIONS]
 //! ```
 //!
-//! Without `-o`, the object goes beside the source unless `--dump` is given.
+//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them. Without
+//! `-o`, the object, or with `-S` the assembly, goes beside the source
+//! unless `--dump` is given.
 //! `--procedure-segments` gives each procedure a code segment, all of one
 //! name, for a linker that drops unreferenced ones (jwlink's `option
 //! eliminate`); Microsoft LINK wants each name defined once. With
@@ -18,15 +20,19 @@ use std::path::PathBuf;
 use super::compile as nib;
 use super::driver;
 use super::nibstages;
+use llrm_core::backend::cpu::ProfileOrName;
+use llrm_core::backend::masm;
 use llrm_core::backend::omfwrite::CodeLayout;
-use llrm_core::flow;
-use llrm_core::model::passes::{Options, O2};
+use llrm_core::driver::{self as codegen, flags::{self, Flags}};
+use llrm_core::model::passes::Options;
 
-const USAGE: &str = "usage: llrm-nib [-h] [-o OUTPUT] [--entry ENTRY] [-O {s,2}] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] [--machine MACHINE] source";
+fn usage() -> String {
+    format!("usage: llrm-nib [-h] [--entry ENTRY] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] {} source", flags::USAGE)
+}
 
 struct Arguments {
     source: PathBuf,
-    output: Option<PathBuf>,
+    flags: Flags,
     entry: String,
     options: Options,
     dump: Option<PathBuf>,
@@ -34,19 +40,23 @@ struct Arguments {
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
     legacy: bool,
-    /// The target: the built-in DOS on `nib::CPU` unless `--machine` names another.
-    machine: llrm_core::abi::machine::Machine,
+    /// The target, the built-in DOS on `nib::CPU` unless `--machine` names
+    /// another, and the pipeline.
+    codegen: codegen::Options,
 }
 
 fn parse_args(argv: &[String]) -> Result<Arguments, String> {
-    let (mut source, mut output, mut entry, mut options, mut dump) = (None, None, "main".to_owned(), O2(), None);
+    let (mut source, mut flags, mut entry, mut dump) = (None, Flags::default(), "main".to_owned(), None);
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
     let mut frontend = super::Frontend::default();
     let mut legacy = false;
-    let mut machine = nib::machine();
     let mut at = 0;
     while at < argv.len() {
+        if flags.take(argv, &mut at)? {
+            at += 1;
+            continue;
+        }
         let argument = argv[at].as_str();
         let (flag, inline) = match argument.split_once('=') {
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
@@ -60,16 +70,12 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             argv.get(at).cloned().ok_or_else(|| format!("argument {name}: expected one argument"))
         };
         match flag {
-            "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--entry" => entry = value("--entry")?,
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "--legacy" => legacy = true,
-            "--machine" => machine = llrm_core::abi::machine::Machine::load(std::path::Path::new(&value("--machine")?))?,
-            "-O" => options = flow::level_option(&value("-O")?)?,
-            _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -77,7 +83,8 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    Ok(Arguments { source, output, entry, options, dump, layout, used_by, frontend, legacy, machine })
+    let codegen = flags.driver(flags.machine(nib::machine())?);
+    Ok(Arguments { source, options: flags.legacy(), flags, entry, dump, layout, used_by, frontend, legacy, codegen })
 }
 
 /// The symbols `objects` import.
@@ -95,7 +102,7 @@ pub fn main(argv: &[String]) -> i32 {
     let args = match parse_args(argv) {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("{USAGE}\nllrm-nib: error: {message}");
+            eprintln!("{}\nllrm-nib: error: {message}", usage());
             return 2;
         }
     };
@@ -103,19 +110,24 @@ pub fn main(argv: &[String]) -> i32 {
         if let Some(dump) = &args.dump {
             nibstages::dumped(&args.source, dump, &args.frontend, &args.options)?;
         }
-        let output = match (&args.output, &args.dump) {
+        let output = match (&args.flags.output, &args.dump) {
             (Some(output), _) => output.clone(),
-            (None, None) => args.source.with_extension("obj"),
+            (None, None) => args.source.with_extension(if args.flags.assembly { "asm" } else { "obj" }),
             (None, Some(_)) => return Ok(()),
         };
         let mut program = driver::parsed(&args.source, &args.frontend, None).map_err(|error| error.0)?;
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        let bytes = if args.legacy {
-            nib::written_as(&program, &args.entry, &args.source, &args.options, args.layout)?
+        let module = if args.legacy {
+            nib::assembled(&program, &args.entry, ProfileOrName::Name(nib::CPU), &args.options)?
         } else {
-            nib::written_from_mir(&program, &args.entry, &args.source, args.layout, &args.machine)?
+            nib::assembled_from_mir(&program, &args.entry, &args.codegen)?
+        };
+        let bytes = if args.flags.assembly {
+            masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
+        } else {
+            nib::object(&module, &args.source, args.layout)?
         };
         std::fs::write(&output, &bytes).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());

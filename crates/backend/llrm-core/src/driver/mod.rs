@@ -5,6 +5,7 @@
 
 pub mod basic;
 mod data;
+pub mod flags;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,17 +25,19 @@ use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 use data::Placed;
 
-/// What a compile is for: the machine, whose CPU prices the choices, and
-/// where the pipeline writes each stage.
+/// What a compile is for: the machine, whose CPU prices the choices, the
+/// passes that run, and where the pipeline writes each stage.
+#[derive(Clone)]
 pub struct Options {
     pub machine: Machine,
+    pub pipeline: llrm_transforms::pipeline::Options,
     pub dump: Option<PathBuf>,
 }
 
 impl Options {
-    /// For `machine`, the stages written where `LLRM_MIR_STAGES` names.
+    /// For `machine` at -O2, the stages written where `LLRM_MIR_STAGES` names.
     pub fn of(machine: Machine) -> Self {
-        Self { machine, dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into) }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into) }
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -94,7 +97,7 @@ pub fn linked(modules: Vec<Module>, runtime: Module, options: &Options) -> Resul
 /// instruction selection: a landing pad made one the runtime enters. Each
 /// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
-    let applied = llrm_transforms::pipeline::Applied { dump: options.dump.clone(), ..Default::default() };
+    let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     verified(program, "the pipeline")

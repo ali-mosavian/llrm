@@ -108,14 +108,6 @@ pub fn optimized<'a>(
     )
 }
 
-/// GCC's spelling, `-Os` or `-O2`: `level_option`'s `named`.
-pub fn level_option(text: &str) -> Result<Options, String> {
-    LEVELS()
-        .get(format!("O{text}").as_str())
-        .cloned()
-        .ok_or_else(|| format!("unknown level -O{text}; choose -Os or -O2"))
-}
-
 /// Return a well-formed body or name the phase boundary that is not.
 pub fn verified(body: LirBody, stage: &str, in_ssa: bool) -> Result<LirBody, Malformed> {
     let complaints = verify::verify(&body, in_ssa);

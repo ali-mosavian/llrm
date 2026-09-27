@@ -15,7 +15,7 @@ use iced_x86::Register;
 use llrm_core::support::hash::{IndexMap, IndexSet};
 
 use super::abi::{physicalize, AbiError};
-use llrm_core::driver::basic::{self, _initialize_frame, _insn, _reg, _runtime_frame, _semantics, finalized, written_basic};
+use llrm_core::driver::{self, basic::{self, _initialize_frame, _insn, _reg, _runtime_frame, _semantics, finalized, written_basic}};
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
 use llrm_core::abi::machine::{self, Machine};
@@ -1270,7 +1270,7 @@ fn _lowered_machine(
 /// The rich route: the HIR emitted as MIR, optimized, and assembled by the
 /// driver into the BASIC module object laid out here, each data object as
 /// this names it and lays it down.
-fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::Module, CompileError> {
+fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result<masm::Module, CompileError> {
     let program = &_positional_data(program)?;
     let module = &program.modules[0];
     let procedures = module.functions.iter().map(|one| &one.name).chain(module.callables.iter().map(|one| &one.name));
@@ -1332,7 +1332,7 @@ fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::M
         requests: graphics,
         frames,
     };
-    Ok(basic::compiled(program, &object, &llrm_core::driver::Options::of(machine.clone()))?)
+    Ok(basic::compiled(program, &object, codegen)?)
 }
 
 /// Which middle and back end a module's functions reach machine form by.
@@ -1350,7 +1350,7 @@ pub fn assembled(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<masm::Module, CompileError> {
-    assembled_by(program, observer, options, Route::Lowered, &machine::BUILT_IN)
+    assembled_by(program, observer, options, Route::Lowered, &driver::Options::of(machine::BUILT_IN.clone()))
 }
 
 /// A function in machine form: its LIR with returns cleaned, the inline
@@ -1371,7 +1371,7 @@ pub fn assembled_by(
     mut observer: Option<&mut StageObserver<'_>>,
     options: &Options,
     route: Route,
-    machine: &Machine,
+    codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
     hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
     _observe(&mut observer, "hir", StageValue::Program(program), None, None)?;
@@ -1381,7 +1381,7 @@ pub fn assembled_by(
         return emission("one OMF object represents exactly one QB module");
     }
     if route == Route::Selected {
-        return rich_assembled(program, machine);
+        return rich_assembled(program, codegen);
     }
     let module = &program.modules[0];
     let graphics = _graphics_dependencies(module);
@@ -1408,7 +1408,7 @@ pub fn assembled_by(
     let pool_start = module.data.iter().map(|one| one.id + 1).max().unwrap_or(0);
     let pool = Rc::new(RefCell::new(Pool::new(pool_start)));
     for (index, function) in functions.iter().copied().enumerate() {
-        let machined = _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?;
+        let machined = _lowered_machine(program, module, function, &semantic[index], options, &codegen.machine, &mut observer, &pool, &empty_occurrences)?;
         let mut callees = machined.callees.clone();
         let mut resume_blocks: IndexMap<i64, i64> = IndexMap::default();
         let mut data_markers: IndexMap<i64, i64> = IndexMap::default();
@@ -1661,7 +1661,7 @@ pub fn object_bytes(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<Vec<u8>, CompileError> {
-    object_bytes_by(program, source, observer, options, Route::Lowered, &machine::BUILT_IN)
+    object_bytes_by(program, source, observer, options, Route::Lowered, &driver::Options::of(machine::BUILT_IN.clone()))
 }
 
 pub fn object_bytes_by(
@@ -1670,9 +1670,9 @@ pub fn object_bytes_by(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
     route: Route,
-    machine: &Machine,
+    codegen: &driver::Options,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = omfwrite::live(&assembled_by(program, observer, options, route, machine)?)
+    let module = omfwrite::live(&assembled_by(program, observer, options, route, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     Ok(written_basic(&module, _header(program)?, &name)?)

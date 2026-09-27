@@ -355,7 +355,7 @@ pub fn assembled(
 
 /// The same through the rich MIR: the HIR emitted as MIR, optimized, then
 /// selected and assembled whole.
-pub fn assembled_from_mir(program: &model::Program, entry: &str, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, String> {
+pub fn assembled_from_mir(program: &model::Program, entry: &str, options: &llrm_core::driver::Options) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
@@ -373,8 +373,7 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, machine: &llrm_
         None if library => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
-    let options = llrm_core::driver::Options::of(machine.clone());
-    Ok(llrm_core::driver::compiled(&public, &options)?.swap_remove(0))
+    Ok(llrm_core::driver::compiled(&public, options)?.swap_remove(0))
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
@@ -436,14 +435,11 @@ pub fn written(program: &model::Program, entry: &str, source: &Path, options: &O
 /// lets a linker that drops unreferenced segments keep only what is
 /// called; every Nib call is far, so that is safe.
 pub fn written_as(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
-    _object(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, source, layout)
+    object(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, source, layout)
 }
 
-pub fn written_from_mir(program: &model::Program, entry: &str, source: &Path, layout: omfwrite::CodeLayout, machine: &llrm_core::abi::machine::Machine) -> Result<Vec<u8>, String> {
-    _object(&assembled_from_mir(program, entry, machine)?, source, layout)
-}
-
-fn _object(module: &masm::Module, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+/// `module` as an OMF object, its code laid out as `layout` says.
+pub fn object(module: &masm::Module, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
     omfwrite::written_as(module, &name, layout).map_err(|error| error.to_string())
 }

@@ -4,48 +4,57 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--include DIR]... [--mir] [-o OUTPUT] [-O {s,2}] [--dump DIR]
-//!         [--machine TOML] [--isel]
-//!
-//! `--isel` compiles through the rich MIR and instruction selection.
+//!         [--mbf] [--whole-program] [--array-merging] [--include DIR]... [--mir] [--dump DIR] [--legacy] [OPTIONS]
 //! ```
+//!
+//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them. `--legacy`
+//! compiles through the old MIR.
 
 use std::path::PathBuf;
 
 use super::compile;
 use super::driver::{parsed, Frontend};
 use super::qbstages;
-use llrm_core::flow;
+use llrm_core::backend::masm;
+use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 use llrm_core::hir::{codec, dump, lower};
-use llrm_core::abi::machine::Machine;
-use llrm_core::model::passes::{Options, O2};
+use llrm_core::model::passes::Options;
 
-const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
-[--array-order {column-major,row-major}] [--dump-hir DUMP_HIR] [--huge-arrays] [--checked-arrays] \
-[--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
-[--dump DUMP] [--machine MACHINE] [--legacy] source";
+fn usage() -> String {
+    format!(
+        "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
+[--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] \
+[--include INCLUDE] [--mir] [--dump DUMP] [--legacy] {} source",
+        flags::USAGE
+    )
+}
 
 pub(super) struct Arguments {
     pub(super) source: PathBuf,
     pub(super) frontend: Frontend,
     pub(super) dump_hir: Option<PathBuf>,
     pub(super) mir: bool,
-    pub(super) output: Option<PathBuf>,
+    pub(super) flags: Flags,
+    /// The old MIR's options, for `--legacy`.
     pub(super) options: Options,
     pub(super) dump: Option<PathBuf>,
     pub(super) route: compile::Route,
-    /// The target: the built-in DOS unless `--machine` names another.
-    pub(super) machine: Machine,
+    /// The target, the built-in DOS unless `--machine` names another, and
+    /// the pipeline.
+    pub(super) codegen: codegen::Options,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
     let mut frontend = Frontend::new("vbdos", "vbdos");
-    let (mut dump_hir, mut mir, mut output, mut options, mut dump) = (None, false, None, O2(), None);
+    let (mut dump_hir, mut mir, mut flags, mut dump) = (None, false, Flags::default(), None);
     let mut route = compile::Route::Selected;
-    let mut machine = llrm_core::abi::machine::BUILT_IN.clone();
     let mut at = 0;
     while at < argv.len() {
+        if flags.take(argv, &mut at)? {
+            at += 1;
+            continue;
+        }
         let argument = argv[at].as_str();
         let (flag, inline) = match argument.split_once('=') {
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
@@ -81,11 +90,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--mir" => mir = true,
             "--legacy" => route = compile::Route::Lowered,
-            "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
-            "--machine" => machine = Machine::load(std::path::Path::new(&value("--machine")?))?,
-            "-O" => options = flow::level_option(&value("-O")?)?,
-            _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -93,27 +98,32 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    if mir && output.is_some() {
+    if mir && flags.output.is_some() {
         return Err("--mir and --output cannot be used together".into());
     }
-    Ok(Arguments { source, frontend, dump_hir, mir, output, options, dump, route, machine })
+    let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BUILT_IN.clone())?);
+    Ok(Arguments { source, frontend, dump_hir, mir, options: flags.legacy(), flags, dump, route, codegen })
 }
 
 pub fn main(argv: &[String]) -> i32 {
     let args = match parse_args(argv) {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("{USAGE}\nllrm-qb: error: {message}");
+            eprintln!("{}\nllrm-qb: error: {message}", usage());
             return 2;
         }
     };
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
-            qbstages::dumped(&args.source, dump, &args.frontend, &args.options, args.route, &args.machine)?;
+            qbstages::dumped(&args.source, dump, &args.frontend, &args.options, args.route, &args.codegen)?;
         }
         let program = parsed(&args.source, &args.frontend, args.dump_hir.as_deref()).map_err(|error| error.0)?;
-        if let Some(output) = &args.output {
-            let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route, &args.machine).map_err(|error| error.to_string())?;
+        if args.flags.assembly {
+            let module = compile::assembled_by(&program, None, &args.options, args.route, &args.codegen).map_err(|error| error.to_string())?;
+            let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
+            std::fs::write(output, masm::text(&module).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+        } else if let Some(output) = &args.flags.output {
+            let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route, &args.codegen).map_err(|error| error.to_string())?;
             std::fs::write(output, bytes).map_err(|error| error.to_string())?;
         } else if args.mir {
             for body in lower::lower(&program).map_err(|error| error.to_string())? {

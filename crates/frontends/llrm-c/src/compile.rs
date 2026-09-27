@@ -27,6 +27,7 @@ use std::rc::Rc;
 use llrm_core::backend::{
     cpu, executed, frame, jumps, lower, lower_int64, masm, omfwrite,
 };
+use llrm_core::driver::flags::{self, Flags};
 use llrm_core::flow;
 use llrm_core::model::lir;
 use llrm_core::model::passes::Options;
@@ -373,10 +374,10 @@ pub fn assembled(
 
 /// C through the rich MIR: translated to HIR, then compiled by the driver,
 /// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
-pub fn selected(text: &str, module: &str, dump: Option<&Path>, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, CompileError> {
+pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options) -> Result<masm::Module, CompileError> {
     let unit = hir::unit(&stream::parse(text))?;
     let program = translate::program(&unit, module)?;
-    let mut options = llrm_core::driver::Options::of(machine.clone());
+    let mut options = codegen.clone();
     if let Some(dump) = dump {
         fs::create_dir_all(dump)?;
         options.dump = Some(dump.to_path_buf());
@@ -818,7 +819,7 @@ fn write(dump: Option<&Path>, stage: &str, text: impl FnOnce() -> String) -> std
 
 struct Args {
     source: PathBuf,
-    output: Option<PathBuf>,
+    flags: Flags,
     dump: Option<PathBuf>,
     opt: bool,
     cpu: String,
@@ -827,8 +828,9 @@ struct Args {
     /// The old MIR's route, for a program the rich MIR refuses; `--opt`
     /// optimizes on it.
     legacy: bool,
-    /// The target: the built-in DOS unless `--machine` names another; `--cpu` prices it.
-    machine: llrm_core::abi::machine::Machine,
+    /// The target, the built-in DOS on a 386 unless `--machine` names
+    /// another, and the pipeline.
+    codegen: llrm_core::driver::Options,
 }
 
 /// The code-generator stream wccq records for one C file.
@@ -862,57 +864,49 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
     fs::read_to_string(&out).map_err(|error| failed(error.to_string()))
 }
 
-const USAGE: &str =
-    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--legacy] [--opt] [--cpu CPU] [--machine MACHINE] [-O {s,2}] source";
+fn usage() -> String {
+    format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] [--legacy] [--opt] {} source", flags::USAGE)
+}
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
-    let (mut source, mut output, mut dump, mut opt, mut cpu) =
-        (None, None, None, false, None);
+    let (mut source, mut flags, mut dump, mut opt, mut legacy) = (None, Flags::default(), None, false, false);
     let mut include = Vec::new();
-    let mut legacy = false;
-    let mut machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-    let mut options = llrm_core::model::passes::O2();
-    let mut rest = argv.iter();
-    while let Some(one) = rest.next() {
+    let mut at = 0;
+    while at < argv.len() {
+        if flags.take(argv, &mut at)? {
+            at += 1;
+            continue;
+        }
+        let argument = argv[at].as_str();
         let mut value = |name: &str| {
-            rest.next()
-                .cloned()
-                .ok_or(format!("argument {name}: expected one argument"))
+            at += 1;
+            argv.get(at).cloned().ok_or(format!("argument {name}: expected one argument"))
         };
-        match one.as_str() {
-            "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
+        match argument {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
             "--legacy" => legacy = true,
-            "--cpu" => cpu = Some(value("--cpu")?),
-            "--machine" => machine = llrm_core::abi::machine::Machine::load(Path::new(&value("--machine")?))?,
-            level if level.starts_with("-O") => {
-                let text = if level.len() > 2 { level[2..].to_owned() } else { value("-O")? };
-                options = flow::level_option(&text).map_err(|message| format!("argument -O: {message}"))?;
-            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
             path if source.is_none() => source = Some(PathBuf::from(path)),
             extra => return Err(format!("unrecognized arguments: {extra}")),
         }
+        at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    if let Some(cpu) = &cpu {
-        machine.cpu = cpu.clone();
-    }
-    let cpu = machine.cpu.clone();
+    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() })?;
     Ok(Args {
         source,
-        output,
         dump,
         opt,
-        cpu,
-        options,
+        cpu: machine.cpu.clone(),
+        options: flags.legacy(),
         include,
         legacy: legacy || opt,
-        machine,
+        codegen: flags.driver(machine),
+        flags,
     })
 }
 
@@ -921,7 +915,7 @@ pub fn main(argv: &[String]) -> i32 {
     let args = match parse_args(argv) {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("{USAGE}\nllrm-c: error: {message}");
+            eprintln!("{}\nllrm-c: error: {message}", usage());
             return 2;
         }
     };
@@ -931,10 +925,7 @@ pub fn main(argv: &[String]) -> i32 {
         } else {
             recorded(&args.source, &args.include)?
         };
-        let output = args
-            .output
-            .clone()
-            .unwrap_or_else(|| args.source.with_extension("asm"));
+        let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
             .source
             .file_stem()
@@ -943,10 +934,10 @@ pub fn main(argv: &[String]) -> i32 {
         let built = if args.legacy {
             assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?
         } else {
-            selected(&text, module, args.dump.as_deref(), &args.machine)?
+            selected(&text, module, args.dump.as_deref(), &args.codegen)?
         };
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
-        if output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
+        if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             fs::write(&output, omfwrite::written(&built, name)?)?;
         } else {
             fs::write(&output, masm::text(&built)?)?;
@@ -1184,7 +1175,7 @@ mod tests {
     #[test]
     fn test_a_void_function_is_selected() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 }
