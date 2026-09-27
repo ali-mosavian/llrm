@@ -449,6 +449,11 @@ fn _actuals(procedure: &Procedure, facts: &PointsTo, at: InstId) -> Vec<Provenan
         .collect()
 }
 
+/// Whether `slice` outlives its function's activation: no frame object.
+fn outlives(slice: &Slice) -> bool {
+    !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
+}
+
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
@@ -466,7 +471,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
         };
         for one in provenance.slices {
             let unknown = one.object.kind == MemoryKind::Unknown;
-            if !matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack) {
+            if outlives(&one) {
                 if read {
                     reads.insert(one);
                 } else {
@@ -593,6 +598,9 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 unknown_read |= effect.unknown_read;
                 unknown_write |= effect.unknown_write;
             }
+            // A callee's frame is gone when it returns: what its calls touch
+            // there, like its own accesses, is no effect of calling it.
+            let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
             let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write };
             if made != result[name] {
                 result.insert(name.clone(), made);
@@ -1172,23 +1180,20 @@ pub fn points_to(
         for &inst in instructions(block.at) {
             let op = function.instruction(inst);
             let mut newly = BTreeSet::new();
+            // What a call reads a pointer out of, it may keep.
+            let mut lent = BTreeSet::new();
             if calls.contains(&inst) {
                 if let Some(arguments) = arguments {
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
-                    match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                        None => {
-                            for (_, one) in actual.iter().enumerate().filter(|(index, _)| !_borrowed(unit, inst, *index)) {
-                                newly.extend(one.slices.iter().map(|one| one.object.clone()));
-                            }
+                    let kept = |index: usize| -> Result<bool, String> {
+                        match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
+                            None => Ok(!_borrowed(unit, inst, index)),
+                            Some(selected) => Ok(selected.iter().map(_index).collect::<Result<Vec<_>, _>>()?.contains(&(index as i64))),
                         }
-                        Some(selected) => {
-                            for index in selected {
-                                let index = _index(index)?;
-                                if 0 <= index && index < actual.len() as i64 {
-                                    newly.extend(actual[index as usize].slices.iter().map(|one| one.object.clone()));
-                                }
-                            }
-                        }
+                    };
+                    for (index, one) in actual.iter().enumerate() {
+                        let objects = one.slices.iter().map(|one| one.object.clone());
+                        if kept(index)? { newly.extend(objects) } else { lent.extend(objects) }
                     }
                 } else {
                     // The callee's own address is no argument.
@@ -1221,7 +1226,10 @@ pub fn points_to(
                 _ if unmodeled_write(unit, inst) => {}
                 _ => {}
             }
-            mine.push(pointees(newly, &cells));
+            let lent_numbers = lent.iter().map(number).collect::<HashSet<_>>();
+            let mut published = pointees(newly, &cells);
+            published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
+            mine.push(published);
         }
         publishes.insert(block.at, mine);
     }
