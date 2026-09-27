@@ -1369,6 +1369,8 @@ knowledge:
 2. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
    already separate (`--basic-semantics`, `--bounds-checks`); broader lowering
    coverage must preserve that separation.
+3. Facts that belong in a description are written as code, often in several
+   places. [tables.md](tables.md) maps them.
 
 The project goal remains the architectural acceptance criterion: produce what a
 modern optimizing compiler would produce, with every documented suite program
