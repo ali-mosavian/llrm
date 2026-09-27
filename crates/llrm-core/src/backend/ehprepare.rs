@@ -60,6 +60,9 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     };
     let name = module.global(owner).name.clone().unwrap_or_default();
     let why = |what: String| format!("@{name}: {what}");
+    if pad(module.global(owner).function().expect("a function")).map_err(why)?.is_none() {
+        return unregistered(module, &name, onerror, &nounwind).map_err(why);
+    }
     let register = declare(module)?;
     let routine = module.named(REGISTER).expect("declared");
     let routine = module.reference(routine);
@@ -70,7 +73,7 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     let null = Constant { ty: module.context.types.ptr(FAR), kind: ConstantKind::Null };
     let null = module.context.constant(null);
     let (context, function) = module.function_mut(&name).expect("the handled function");
-    let pad = pad(function).map_err(why)?;
+    let pad = pad(function).map_err(why)?.expect("a pad");
     // Every call that may raise outside the handler is an invoke to the pad;
     // the handler's own calls are not, and the runtime would land their
     // errors on the pad again rather than end the program.
@@ -125,12 +128,23 @@ fn unwinds(context: &Context, nounwind: &BTreeSet<GlobalId>, function: &Function
     }
 }
 
-/// The one block a landingpad starts.
-fn pad(function: &Function) -> Result<BlockId, String> {
+/// ON ERROR in `name`, which has no landing pad left: where nothing it
+/// calls may raise, no handler is ever entered, and none is registered.
+fn unregistered(module: &mut Module, name: &str, onerror: Option<GlobalId>, nounwind: &BTreeSet<GlobalId>) -> Result<(), String> {
+    let (context, function) = module.function_mut(name).expect("the handled function");
+    if function.walk().any(|(_, inst)| unwinds(context, nounwind, function, inst)) {
+        return Err("a call that may raise an error but no landing pad".to_owned());
+    }
+    let sites: Vec<InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| onerror.is_some() && callee(context, function, inst) == onerror).collect();
+    sites.into_iter().try_for_each(|inst| function.erase(inst).map_err(|error| error.to_string()))
+}
+
+/// The one block a landingpad starts, if any.
+fn pad(function: &Function) -> Result<Option<BlockId>, String> {
     let pads: Vec<BlockId> = function.layout().iter().copied().filter(|&block| landing_pad(function, block).is_some()).collect();
     match pads[..] {
-        [one] => Ok(one),
-        [] => Err("a personality but no landing pad".to_owned()),
+        [one] => Ok(Some(one)),
+        [] => Ok(None),
         _ => Err("more than one landing pad, which the one module handler cannot choose between".to_owned()),
     }
 }

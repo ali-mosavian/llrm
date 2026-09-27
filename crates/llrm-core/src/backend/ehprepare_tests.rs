@@ -120,3 +120,25 @@ fn the_pad_is_selected_last_and_the_landing_is_its_own_procedure() {
     assert_eq!(first.name, "__LANDING");
     assert!(assembled.procedures.iter().any(|one| one.name == "$QB$LANDING"));
 }
+
+/// ON ERROR GOTO with nothing after it that may raise: the pipeline left no
+/// landing pad, and on-error-emission and gosuberr were refused for it.
+/// There is no handler to register.
+#[test]
+fn a_handler_nothing_can_reach_is_not_registered() {
+    let mut module = parsed(
+        r#"
+define void @main() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
+entry:
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
+  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  unreachable
+}
+"#,
+    );
+    prepared(&mut module).expect("prepared");
+    let errors = llrm_mir::verify::verify(&module);
+    assert!(errors.is_empty(), "{errors:?}");
+    let text = printed(&module);
+    assert!(!text.contains("call cc1000 addrspace(1) void @llrm.qb.onerror") && !text.contains("B$OEGA("), "{text}");
+}
