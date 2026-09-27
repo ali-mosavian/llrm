@@ -27,6 +27,8 @@ pub(super) enum Resume {
 
 pub(super) struct Handling {
     handled: Handled,
+    /// Whether ON ERROR GOTO last named the handler: 1, or 0 for none.
+    active: Operand,
     pad: BlockId,
     selector: Operand,
     site: Operand,
@@ -52,9 +54,8 @@ impl Emitter<'_, '_, '_> {
         let handler = self.body.handler.as_ref().expect("a handler");
         let word = self.b.context.types.int(16);
         let site = self.b.alloca(word, "site");
-        let mut statements = self.unit.facts.statements.clone();
-        statements.sort_unstable();
-        statements.dedup();
+        let active = llrm_hir::onerror::active(&mut self.b);
+        let statements: Vec<usize> = self.unit.facts.statements.iter().map(|&(at, _)| at).collect();
         let starts: BTreeSet<usize> =
             self.body.blocks.iter().filter(|block| !handler.blocks.contains(&block.at)).flat_map(|block| block.insns.iter().map(|insn| insn.at)).collect();
         // RESUME label continues at its label, which starts no statement where
@@ -67,8 +68,10 @@ impl Emitter<'_, '_, '_> {
         let null = self.b.context.types.ptr(0);
         let null = Operand::Constant(self.b.context.constant(Constant { ty: null, kind: ConstantKind::Null }));
         let selector = self.b.landing_pad(handled.pad, &[null], "landed");
+        llrm_hir::onerror::landed(&mut self.b, &handled);
         self.handling = Some(Handling {
             handled,
+            active,
             pad,
             selector,
             site,
@@ -167,10 +170,10 @@ impl Emitter<'_, '_, '_> {
                     (None, Some(0)) => false,
                     _ => return Err("an ON ERROR GOTO whose handler is not the module's one".to_owned()),
                 };
-                let handled = self.handling.as_ref().map(|one| one.handled).ok_or("an ON ERROR GOTO in a SUB, whose errors are not selected yet")?;
+                let handling = self.handling.as_ref().ok_or("an ON ERROR GOTO in a SUB, whose errors are not selected yet")?;
+                let (handled, active, inside) = (handling.handled, handling.active, handling.inside);
                 self.popped(4)?;
-                let flag = self.b.int(1, i128::from(enabled));
-                self.b.call_as(llrm_mir::opcode::BASIC, handled.onerror_type, Operand::Constant(handled.onerror), &[flag], "");
+                llrm_hir::onerror::goto(&mut self.b, &handled, active, u16::from(enabled), inside)?;
                 let disturbed = disturbed()?;
                 self.clobber(&disturbed, &why);
                 for (bit, _) in BITS {
@@ -194,9 +197,21 @@ impl Emitter<'_, '_, '_> {
                 self.clobber(&disturbed, &why);
                 self.set_register(Register::AX, code)
             }
-            ERL => Err("ERL: the recompiled object keeps no line table to answer it from, which is not selected yet".to_owned()),
+            ERL => {
+                // The runtime's ERL knows no line of the recompiled code.
+                let handling = self.handling.as_ref().filter(|one| one.inside).ok_or("ERL outside the error handler")?;
+                let (handled, site) = (handling.handled, handling.site);
+                let word = self.b.context.types.int(16);
+                // A LONG in DX:AX, whose high word a line never reaches.
+                let line = llrm_hir::onerror::erl(&mut self.b, &handled, site, word);
+                self.clobber(&disturbed()?, &why);
+                let zero = self.b.int(16, 0);
+                self.set_register(Register::AX, line)?;
+                self.set_register(Register::DX, zero)
+            }
             NEXT | AGAIN | LABEL => {
                 let handling = self.handling.as_mut().filter(|one| one.inside).ok_or("a RESUME outside the error handler")?;
+                llrm_hir::onerror::resuming(&mut self.b, &handling.handled);
                 let target = if name == LABEL {
                     let label = *self.unit.facts.resumptions.get(&(at as i64)).ok_or("a RESUME whose label is not a constant")? as usize;
                     let target = *handling.rows.get(&label).ok_or_else(|| format!("a RESUME to {label:#06x}, which starts no statement of the body"))?;

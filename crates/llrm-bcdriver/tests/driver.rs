@@ -188,3 +188,28 @@ fn a_handled_module_defines_its_landing() {
         assert!(!externals.iter().any(|one| one == "__LANDING" || one.starts_with("$QB$")), "{name}: {externals:?}");
     }
 }
+
+/// The runtime reports an error's line from the last statement-table row
+/// before it: with the landing pad's row alone, laid last, an unhandled
+/// error before it reported "No line number" where BC's reports line 0.
+#[test]
+fn every_procedure_starts_a_statement_table_row() {
+    let records = recompiled("onerr-q-o.obj");
+    let module = llrm_omf::module::of(&records).expect("a module");
+    let word = |at: i64| i64::from(u16::from_le_bytes([module.code[at as usize], module.code[at as usize + 1]]));
+    let start = word(0x0A);
+    let rows: Vec<i64> = (0..).map(|row| start + 4 * row).take_while(|&at| module.operands.contains_key(&at)).map(word).collect();
+    assert!(rows.len() >= 2 && rows.iter().min() < rows.iter().max(), "{rows:x?}");
+}
+
+/// Data no frontend lays out -- ON ERROR's ERL table, the ERR its landing
+/// keeps -- goes where BC keeps its constants: erlnum's table was left a
+/// reference to nothing defined.
+#[test]
+fn data_emission_adds_is_laid_out() {
+    for name in ["erlnum-q-o.obj", "erlnum-v-g3.obj"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions").join(name);
+        let data = std::fs::read(path).expect("reads");
+        llrm_bcdriver::compiled(&data, "386", name).unwrap_or_else(|why| panic!("{name}: {why}"));
+    }
+}

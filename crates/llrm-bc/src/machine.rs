@@ -285,8 +285,10 @@ pub struct Facts<'m> {
     pub registrations: BTreeMap<i64, i64>,
     /// The label each RESUME label continues at, by its call.
     pub resumptions: BTreeMap<i64, i64>,
-    /// Where each statement starts, from the statement table.
-    pub statements: Vec<usize>,
+    /// Where each statement starts, in address order, and its ERL: from the
+    /// statement table, whose rows for statements without code share the
+    /// next one's start, which keeps the last's line.
+    pub statements: Vec<(usize, i64)>,
 }
 
 impl<'m> Facts<'m> {
@@ -355,7 +357,11 @@ impl<'m> Facts<'m> {
         let handlers = bodies.iter().any(|body| matches!(body.body.kind, BodyKind::ErrorHandler | BodyKind::EventHandler));
         let registrations = handlers::error_registrations(found);
         let resumptions = handlers::resumptions(found);
-        let statements = blocks::statements(found);
+        let mut statements = blocks::statements(found);
+        statements.sort_by_key(|&(at, _)| at);
+        statements.reverse();
+        statements.dedup_by_key(|&mut (at, _)| at);
+        statements.reverse();
         Ok(Facts { found, bodies, contracts, procedures, event_stub, handlers, registrations, resumptions, statements })
     }
 

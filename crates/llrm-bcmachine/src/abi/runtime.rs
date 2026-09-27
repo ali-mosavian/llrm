@@ -662,13 +662,6 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
                 ),
             ),
             (
-                "B$FERL",
-                concat!(
-                    "error.asm 013b loads the stored error line into AX, XORs DX,DX ",
-                    "at 013e and RETFs at 0140; no incoming arithmetic flag is read."
-                ),
-            ),
-            (
                 "B$RNZP",
                 concat!(
                     "random.asm 0079 loads the stack argument at BP+0Ah, XORs its ",

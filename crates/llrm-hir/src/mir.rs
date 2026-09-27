@@ -308,7 +308,10 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let Some(global) = global else { continue };
         let handled = match (function.error_handler, &statements) {
             (None, _) => Ok(None),
-            (Some(_), Ok(_)) => onerror::handled(&mut module, global).map(Some),
+            (Some(_), Ok(rows)) => {
+                let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
+                onerror::handled(&mut module, global, &lines).map(Some)
+            }
             (Some(_), Err(why)) => Err(why.clone()),
         };
         let handled = match handled {

@@ -508,6 +508,15 @@ def onerr() -> list[str]:
     ]
 
 
+def erlnum() -> list[str]:
+    """tests/suite/erlnum.bas: ERR and ERL for each error, then DONE.
+
+    ERROR 11 precedes any numbered line, so its ERL is 0. SPACE$(-1) runs on
+    the line after 100 and CHR$(300) on line 200: error 5 on both.
+    """
+    return [f"ERL={seq(11, 0)}", f"ERL={seq(12, 100)}", f"ERL={seq(5, 100)}", f"ERL={seq(5, 200)}", "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
     "wendgo": wendgo,
@@ -555,6 +564,7 @@ PROGRAMS = {
     "arrprm": arrprm,
     "byref2": byref2,
     "onerr": onerr,
+    "erlnum": erlnum,
 }
 
 

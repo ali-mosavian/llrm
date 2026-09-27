@@ -108,13 +108,14 @@ fn verified(program: &Program, stage: &str) -> Result<(), String> {
     }
 }
 
-/// ON ERROR's part of assembly that no frontend lays out: ERR's word the
-/// landing stub keeps, as data for a DGROUP segment.
-pub fn landed_data(module: &Module) -> Vec<masm::Datum> {
-    if module.named(ehprepare::LANDED).is_none() {
-        return Vec::new();
-    }
-    vec![masm::Datum::Object(masm::Label { name: ehprepare::LANDED.to_owned() }), masm::Datum::Bytes(vec![0, 0])]
+/// The data no frontend lays out, which emission and the pipeline made --
+/// ON ERROR's ERL table and the ERR its landing keeps -- each defined
+/// variable `laid` does not claim, for a DGROUP segment.
+pub fn added_data(module: &Module, laid: &dyn Fn(GlobalId) -> bool, names: &crate::support::hash::IndexMap<(crate::model::ir::Space, i64), String>) -> Result<Vec<masm::Datum>, String> {
+    let added = module.globals.iter().enumerate().map(|(at, _)| GlobalId(at as u32)).filter(|&id| {
+        matches!(&module.global(id).kind, llrm_mir::GlobalKind::Variable(variable) if variable.initializer.is_some()) && !laid(id)
+    });
+    added.map(|id| crate::backend::globals::datums(module, id, names)).collect::<Result<Vec<_>, _>>().map(|all| all.concat())
 }
 
 /// Whether a driver frames `function`: a naked one, as the landing stub,
@@ -127,6 +128,13 @@ pub fn framed(module: &Module, function: GlobalId) -> bool {
 /// block `landing`, in the procedure assembled `number`th.
 pub fn landing_row(number: usize, landing: i64) -> (i64, i64, String, i64) {
     (number as i64, 0, masm::label(number, landing), 0)
+}
+
+/// The statement-table row at the procedure assembled `number`th's first
+/// block `entry`, at line 0: the runtime reports an error's line from the
+/// last row before it, and no numbered line precedes this one's code.
+pub fn entry_row(number: usize, entry: i64) -> (i64, i64, String, i64) {
+    (number as i64, -1, masm::label(number, entry), 0)
 }
 
 /// OF_STA's table: each row a statement's offset and BASIC line, ended by

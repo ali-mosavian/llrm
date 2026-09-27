@@ -2375,11 +2375,44 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
     assert!(opcodes.iter().any(|one| matches!(one, llrm_mir::Opcode::Invoke(_))));
 }
 
+/// ERL in the handler reads the faulting statement's line from a table by
+/// the site RESUME switches on; it was refused, as the recompiled object
+/// keeps no line table for the runtime's.
 #[test]
-fn erl_is_refused_for_the_line_table_it_reads() {
+fn erl_is_the_faulting_statements_line() {
     let directory = tempfile::TempDir::new().unwrap();
-    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
+    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let emitted = llrm_core::hir::mir::emit(&program).remove(0);
-    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL")), "{:?}", emitted.refused);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\"") || line.starts_with("@$QB$ERL$__main")).expect("the ERL table");
+    assert!(table.contains("i16 100"), "{table}");
+    assert!(text.contains("@$QB$ERL$__main, i16 0, i16 %") || text.contains("@\"$QB$ERL$__main\", i16 0, i16 %"), "{text}");
+}
+
+/// ON ERROR GOTO names another handler: the pad goes to whichever was named
+/// last. Was refused as "a second ON ERROR GOTO handler".
+#[test]
+fn the_pad_goes_to_the_handler_named_last() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "TWO.BAS", b"ON ERROR GOTO first\nERROR 5\nON ERROR GOTO second\nERROR 6\nEND\nfirst:\nPRINT 1\nRESUME NEXT\nsecond:\nPRINT 2\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
+    let pad = main.layout().iter().copied().find(|&block| main.block(block).instructions().iter().any(|&one| matches!(main.instruction(one).opcode, llrm_mir::Opcode::LandingPad { .. }))).expect("the pad");
+    let last = *main.block(pad).instructions().last().expect("a terminator");
+    assert!(matches!(main.instruction(last).opcode, llrm_mir::Opcode::Switch), "{}", llrm_mir::print::module(&emitted.module));
+}
+
+/// Outside the handler ERL is the runtime's, which knows no line of the
+/// recompiled code.
+#[test]
+fn erl_outside_the_handler_is_refused() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nPRINT ERL\nEND\nh:\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL outside the error handler")), "{:?}", emitted.refused);
 }

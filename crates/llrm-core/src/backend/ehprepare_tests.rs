@@ -9,8 +9,9 @@ declare cc1000 void @llrm.qb.onerror(i1) addrspace(1) nounwind
 declare i32 @llrm.qb.personality(...) addrspace(1)
 "#;
 
-/// Prints A&+1 after registering the handler; the handler keeps ERR and
-/// what `%x` was, then resumes after the faulting statement.
+/// Prints A&+1 after registering the handler; the handler, with trapping
+/// off, keeps ERR and what `%x` was, then turns it on and resumes after the
+/// faulting statement.
 const HANDLED: &str = r#"
 @"A&" = internal global [4 x i8] zeroinitializer
 @"CAUGHT%" = internal global [2 x i8] zeroinitializer
@@ -28,10 +29,12 @@ next:
   unreachable
 landing:
   %e = landingpad { ptr, i32 } catch ptr null
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)
   %err = extractvalue { ptr, i32 } %e, 1
   %code = trunc i32 %err to i16
   store i16 %code, ptr @"CAUGHT%"
   store i32 %x, ptr @"A&"
+  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 true)
   %k = load i16, ptr %site
   switch i16 %k, label %next [ i16 1, label %next ]
 }
@@ -86,12 +89,23 @@ entry:
     assert!(refused.contains("errors raised inside SUBs"), "{refused}");
 }
 
+/// The handler runs with trapping off: an error its call raises ends the
+/// program, so the call stays one. Was refused as an error the handler raises.
 #[test]
-fn an_error_the_handler_raises_is_refused() {
-    let nested = HANDLED.replace("  %k = load i16, ptr %site", "  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)\n  %k = load i16, ptr %site");
+fn a_call_the_handler_makes_stays_a_call() {
+    let nested = HANDLED.replace("  store i16 %code, ptr @\"CAUGHT%\"", "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)");
     let mut module = parsed(&nested);
+    prepared(&mut module).expect("prepared");
+}
+
+/// Where trapping may be on, the runtime would land a call's error on the
+/// pad with no site stored for RESUME.
+#[test]
+fn a_call_that_may_raise_where_trapping_is_on_is_refused() {
+    let trapped = HANDLED.replace("  call cc1000 addrspace(1) void @llrm.qb.onerror(i1 false)\n", "").replace("  store i16 %code, ptr @\"CAUGHT%\"", "  store i16 %code, ptr @\"CAUGHT%\"\n  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 2)");
+    let mut module = parsed(&trapped);
     let refused = prepared(&mut module).expect_err("refused");
-    assert!(refused.contains("errors raised in a handler"), "{refused}");
+    assert!(refused.contains("where ON ERROR is on"), "{refused}");
 }
 
 /// Code only a RESUME reaches is the body's, not the handler's, though the

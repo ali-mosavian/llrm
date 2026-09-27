@@ -1587,6 +1587,9 @@ pub fn assembled_by(
                 statement_targets.push((procedure_number as i64, layout_order[at], masm::label(procedure_number, *at), *line));
             }
         }
+        if rich.is_some() {
+            statement_targets.extend(final_body.blocks.first().map(|entry| llrm_core::driver::entry_row(procedure_number, entry.at)));
+        }
         statement_targets.extend(machined.landing.map(|at| llrm_core::driver::landing_row(procedure_number, at)));
         procedures.push(masm::Procedure {
             name: if module_body { "$QB$MAIN".to_owned() } else { _object_name(&function.name) },
@@ -1630,10 +1633,9 @@ pub fn assembled_by(
     procedures.push(llrm_core::driver::statement_table(&statement_targets));
     let (mut names, mut data_by_segment) = _data(module, &pool.borrow())?;
     if let Some(rich) = &rich {
-        data_by_segment["BC_CN"].extend(llrm_core::driver::landed_data(&rich.mir));
-    }
-    if let Some(rich) = &rich {
         names = rich.names(&names, pool.borrow().entries().map(|(_, id)| id));
+        let laid: std::collections::HashSet<llrm_mir::GlobalId> = rich.data.values().copied().collect();
+        data_by_segment["BC_CN"].extend(llrm_core::driver::added_data(&rich.mir, &|global| laid.contains(&global), &names).map_err(CompileError::Value)?);
     }
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
     let data_keys = match &rich {

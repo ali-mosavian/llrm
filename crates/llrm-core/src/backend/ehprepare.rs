@@ -75,22 +75,53 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     let null = Constant { ty: module.context.types.ptr(FAR), kind: ConstantKind::Null };
     let null = module.context.constant(null);
     let (context, function) = module.function_mut(&name).expect("the handled function");
-    // Every call that may raise outside the handler is an invoke to the pad;
-    // the handler's own calls are not, and the runtime would land their
-    // errors on the pad again rather than end the program.
-    for (_, inst) in function.walk() {
-        match function.instruction(inst).opcode {
-            Opcode::Resume => return Err(why("a landing pad that resumes unwinding: an error its handler passes on is not selected yet".to_owned())),
-            Opcode::Call(_) if unwinds(context, &nounwind, function, inst) => {
-                return Err(why("a call that may raise an error but is no invoke, as the handler's are: errors raised in a handler are not selected yet".to_owned()));
+    if function.walk().any(|(_, inst)| function.instruction(inst).opcode == Opcode::Resume) {
+        return Err(why("a landing pad that resumes unwinding: an error its handler passes on is not selected yet".to_owned()));
+    }
+    // Where trapping may be on, every call that may raise is an invoke to the
+    // pad: the runtime would land a call's error there with no site stored.
+    let on = trapping(context, function, onerror);
+    for &block in function.layout() {
+        let mut trapped = on[&block];
+        for &inst in function.block(block).instructions() {
+            if trapped && matches!(function.instruction(inst).opcode, Opcode::Call(_)) && unwinds(context, &nounwind, function, inst) {
+                return Err(why("a call that may raise an error where ON ERROR is on, which is no invoke to the pad".to_owned()));
             }
-            _ => {}
+            trapped = trapping_after(context, function, onerror, inst, trapped);
         }
     }
     registered(context, function, onerror, (register, routine), landing, null).map_err(why)?;
     selected(context, function, pad, landed).map_err(why)?;
     demote_phis(context, function, pad).map_err(why)?;
     demote_live(context, function, pad).map_err(why)
+}
+
+/// Whether trapping may be on where each block starts: off at entry, on
+/// where the runtime lands, and as each ON ERROR leaves it.
+fn trapping(context: &Context, function: &Function, onerror: Option<GlobalId>) -> BTreeMap<BlockId, bool> {
+    let mut on: BTreeMap<BlockId, bool> = function.layout().iter().map(|&block| (block, false)).collect();
+    let mut pending: Vec<BlockId> = function.layout().to_vec();
+    while let Some(block) = pending.pop() {
+        let out = function.block(block).instructions().iter().fold(on[&block], |trapped, &inst| trapping_after(context, function, onerror, inst, trapped));
+        for next in function.successors(block) {
+            if out && !on[&next] {
+                on.insert(next, true);
+                pending.push(next);
+            }
+        }
+    }
+    on
+}
+
+fn trapping_after(context: &Context, function: &Function, onerror: Option<GlobalId>, inst: InstId, trapped: bool) -> bool {
+    let instruction = function.instruction(inst);
+    if matches!(instruction.opcode, Opcode::LandingPad { .. }) {
+        return true;
+    }
+    if onerror.is_none() || callee(context, function, inst) != onerror {
+        return trapped;
+    }
+    !matches!(instruction.operands[0], Operand::Constant(one) if context.get(one).kind == ConstantKind::Int(0))
 }
 
 fn flagged(attrs: &[Attribute], flag: &str) -> bool {
@@ -203,12 +234,11 @@ fn registered(context: &mut Context, function: &mut Function, onerror: Option<Gl
         if !matches!(instruction.opcode, Opcode::Call(_)) {
             return Err("an ON ERROR that is an invoke".to_owned());
         }
-        let enabled = match instruction.operands[0] {
-            Operand::Constant(one) => context.get(one).kind != ConstantKind::Int(0),
+        let target = match instruction.operands[0] {
+            Operand::Constant(one) => Operand::Constant(if context.get(one).kind == ConstantKind::Int(0) { null } else { landing }),
             _ => return Err("an ON ERROR whose handler is not constant".to_owned()),
         };
         let info = CallInfo { function_type: ty, calling_convention: BASIC, return_attrs: Vec::new(), argument_attrs: vec![Vec::new()], attrs: Vec::new(), tail: Default::default() };
-        let target = Operand::Constant(if enabled { landing } else { null });
         let made = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![target, Operand::Constant(routine)], Flags::default(), None);
         function.insert(made, Position::Before(inst))?;
         function.erase(inst)?;

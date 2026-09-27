@@ -145,6 +145,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
         }
+        rows.extend(procedure.body.blocks.first().map(|entry| driver::entry_row(procedures.len(), entry.at)));
         rows.extend(landing.map(|at| driver::landing_row(procedures.len(), at)));
         procedures.push(procedure);
     }
@@ -158,7 +159,8 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         names.insert((Space::Segment, id), label.clone());
         pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    pooled.extend(driver::landed_data(&module));
+    let laid: std::collections::BTreeSet<GlobalId> = placement.objects.iter().map(|&(_, _, global)| global).collect();
+    pooled.extend(driver::added_data(&module, &|global| laid.contains(&global), &names)?);
     if !pooled.is_empty() {
         match data.iter_mut().find(|(name, _)| name == CONSTANTS) {
             Some((_, datums)) => datums.extend(pooled),
