@@ -1778,3 +1778,73 @@ n:
     let (load, store) = (got.iter().position(|one| one == "fld qword ptr [bx]"), got.iter().position(|one| one.starts_with("mov dword ptr [bx]")));
     assert!(load.is_some() && load < store, "{got:?}");
 }
+
+/// A cell whose offset `exact_offsets` proves is `Mem::exact`, so
+/// `exactaddress` folds its `add si,si` into the address: unmarked, the
+/// isel route kept every such chain the old route folded.
+#[test]
+fn test_an_exact_elements_offset_is_folded_into_a_scaled_address() {
+    let sum = |inbounds: &str| {
+        format!(
+            "@a = global [8 x i16] zeroinitializer
+
+define i16 @f() addrspace(1) {{
+entry:
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %e = getelementptr {inbounds} [8 x i16], ptr @a, i16 0, i16 %i
+  %v = load i16, ptr %e
+  %t = add i16 %s, %v
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, 8
+  br i1 %more, label %body, label %done
+done:
+  ret i16 %t
+}}
+"
+        )
+    };
+    let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[esi+esi]");
+    // Without `inbounds` nothing places the start: the offset may wrap.
+    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+}
+
+/// A word product only cells read is the 67h form's scaled index on the
+/// 386, as the old route's addressforms makes it: `[ebx+esi*2]`, the index
+/// and the base widened where they are loaded.
+#[test]
+fn test_a_non_negative_typed_index_is_scaled_in_the_67h_form() {
+    let text = |guard: &str| {
+        format!(
+            "define i16 @f(ptr %p, ptr %q) addrspace(1) {{
+entry:
+  %i = load i16, ptr %q
+  %b = load ptr, ptr %p
+  %c = icmp {guard} i16 %i, 0
+  br i1 %c, label %ok, label %no
+ok:
+  %e = getelementptr inbounds i16, ptr %b, i16 %i
+  %v = load i16, ptr %e, !tbaa !1
+  ret i16 %v
+no:
+  ret i16 0
+}}
+
+!0 = !{{!\"int\"}}
+!1 = !{{!0, !0, i64 0}}
+"
+        )
+    };
+    let got = listing_on("386", &text("sge"), "f");
+    assert_eq!(got[6..8], ["movzx eax, word ptr [si]", "movzx ebx, word ptr [bx]"], "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
+    // A negative index names another byte 32 bits wide; the 486 prices
+    // the form above a spill.
+    for (cpu, guard) in [("386", "ne"), ("486", "sge")] {
+        let got = listing_on(cpu, &text(guard), "f");
+        assert!(!got.iter().any(|line| line.contains("movzx") || line.contains("*2")), "{cpu} {guard}: {got:?}");
+    }
+}

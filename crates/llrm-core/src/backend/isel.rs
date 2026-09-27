@@ -7,6 +7,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use llrm_analysis::cfg;
+use llrm_analysis::memory::{MemRef, Unit};
+use llrm_analysis::ranges::{self, Facts};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
@@ -15,10 +18,11 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
-use crate::backend::{arithmetic, division};
+use crate::backend::{addressforms, arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
 mod combined;
@@ -202,16 +206,17 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 #[derive(Clone, Copy, Debug)]
 ///
 /// An `index` is a register the address adds, `[bp+si+disp]` or
-/// `[bx+si+disp]`, where only accesses read the address: see `indexed`.
+/// `[bx+si+disp]`, where only accesses read the address: see `indexed`;
+/// `scale` multiplies it in the 67h form, `[ebx+esi*4]`.
 enum Pointer {
     Frame { disp: i64, index: Option<Held> },
-    Based { base: Held, index: Option<Held>, offset: i64 },
+    Based { base: Held, index: Option<Held>, scale: i64, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one.
     Global { space: Space, index: i64, offset: i64, base: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
-    Far { selector: Held, base: Option<Held>, index: Option<Held>, offset: i64 },
+    Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
 pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
@@ -222,6 +227,16 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
     let convention = convention(module, &layout, global)?;
+    let unit = Unit::of(module, &layout, function);
+    let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
+    let secondary = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4).filter(|form| form.before_spill(&cpu.operations));
+    let (facts, typed) = match secondary {
+        None => (Facts::default(), BTreeSet::new()),
+        Some(_) => {
+            let typed = function.walk().map(|(_, inst)| inst).filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some())).collect();
+            (ranges::scoped(&unit).map_err(Unselected)?, typed)
+        }
+    };
     let mut selector = Selector {
         module,
         function,
@@ -242,6 +257,12 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
         cpu,
+        exact,
+        exact_sums: BTreeSet::new(),
+        secondary,
+        facts,
+        typed,
+        promoted: BTreeSet::new(),
         pending: IndexMap::default(),
         phi_inputs: IndexMap::default(),
         edges: IndexMap::default(),
@@ -294,6 +315,19 @@ struct Selector<'m, 'c, 'p> {
     callees: llrm_mir::memory::Callees,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    /// Index values every access names exactly at any wider width.
+    exact: BTreeSet<ValueId>,
+    /// The registers indexing cells `exact` proves: each such cell is
+    /// `Mem::exact`, for `exactaddress`.
+    exact_sums: BTreeSet<u32>,
+    /// The 67h form, where the target prices it below a spill.
+    secondary: Option<&'c AddressForm>,
+    /// Each block's interval facts, where `secondary` asks them.
+    facts: Facts,
+    /// The accesses of a typed lvalue.
+    typed: BTreeSet<InstId>,
+    /// Word values a scaled address reads as dwords, widened where defined.
+    promoted: BTreeSet<u32>,
     /// What each block computes for its successors' phis, before its terminator.
     pending: IndexMap<BlockId, Vec<Arc<Insn>>>,
     /// The register each (phi, predecessor) reads, where that block made it.
@@ -457,7 +491,7 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = combined::combined(blocks);
+        let blocks = self.widen(combined::combined(blocks))?;
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
@@ -893,13 +927,13 @@ impl Selector<'_, '_, '_> {
         }
         let ty = self.function.value(value).ty;
         if let Some(&(base, selector)) = self.fars.get(&value) {
-            return Ok(Pointer::Far { selector, base, index: None, offset: 0 });
+            return Ok(Pointer::Far { selector, base, index: None, scale: 1, offset: 0 });
         }
         if !matches!(self.types().get(ty), Type::Pointer(0)) {
             return refuse(format!("an access through a {}", self.types().display(ty)));
         }
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, offset: 0 })
+        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, scale: 1, offset: 0 })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -953,6 +987,17 @@ impl Selector<'_, '_, '_> {
         let far = self.is_far(instruction.ty);
         let width = if far { 2 } else { self.width(instruction.ty)? };
         let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
+        let pointer = self.pointer(instruction.operands[0])?;
+        let address = instruction.result.expect("an address");
+        let one = match variable[..] {
+            [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
+            _ => None,
+        };
+        if let Some(scaled) = one.and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
+            self.pointers.insert(address, scaled);
+            return Ok(());
+        }
+        let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));
         let mut sum: Option<Held> = None;
         for (position, scale) in variable {
             let index = instruction.operands[1 + position];
@@ -986,9 +1031,10 @@ impl Selector<'_, '_, '_> {
                 }
             });
         }
-        let pointer = self.pointer(instruction.operands[0])?;
-        let address = instruction.result.expect("an address");
         let sum = sum.expect("a variable index");
+        if exact {
+            self.exact_sums.insert(sum.value);
+        }
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
         if let Pointer::Global { space, index, offset: start, base: None } = pointer {
@@ -1007,9 +1053,9 @@ impl Selector<'_, '_, '_> {
         if self.only_addressed(address) {
             let indexed = match pointer.moved(offset as i64) {
                 Pointer::Frame { disp, index: None } => Some(Pointer::Frame { disp, index: Some(sum) }),
-                Pointer::Based { base, index: None, offset } => Some(Pointer::Based { base, index: Some(sum), offset }),
-                Pointer::Far { selector, base: Some(base), index: None, offset } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), offset }),
-                Pointer::Far { selector, base: None, index: None, offset } => Some(Pointer::Far { selector, base: Some(sum), index: None, offset }),
+                Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
+                Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
+                Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(sum), index: None, scale: 1, offset }),
                 _ => None,
             };
             if let Some(indexed) = indexed {
@@ -1018,7 +1064,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let start = match pointer {
-            Pointer::Based { base, index: None, offset: 0 } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
+            Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
             Pointer::Far { base: None, index: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
@@ -1069,6 +1115,129 @@ impl Selector<'_, '_, '_> {
                 }
                 _ => false,
             })
+    }
+
+    /// `pointer` indexed by `index` times `scale` in the 67h form, as the old
+    /// route's addressforms folds a word product only cells read:
+    /// `[ebx+esi*4]`. The index and the base are widened where a load
+    /// defines them (`addressforms::promote`), so no register is added. The
+    /// wider sum names the same byte where the index is a non-negative word
+    /// at every access, and the access is typed or its offset exact.
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64) -> Option<Pointer> {
+        let form = self.secondary?;
+        let Operand::Value(index) = index else { return None };
+        let function = self.function;
+        let address = function.instruction(inst).result?;
+        if scale <= 1 || !form.scales.contains(&scale) || !self.only_addressed(address) || !self.promotable(index) {
+            return None;
+        }
+        let proven = self.accesses(address).into_iter().all(|access| {
+            let fact = function.parent(access).and_then(|block| self.facts.get(&cfg::id(block))).and_then(|known| known.get(&index));
+            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into()) && (self.typed.contains(&access) || self.exact.contains(&index))
+        });
+        if !proven {
+            return None;
+        }
+        let root = match self.root(function.instruction(inst).operands[0]) {
+            Operand::Value(root) => Some(root),
+            _ => None,
+        };
+        let wide = Held { value: self.value(index), width: 4 };
+        let (scaled, base) = match pointer {
+            Pointer::Based { base, index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
+                (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset }, Some(base))
+            }
+            Pointer::Far { selector, base: Some(base), index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
+                (Pointer::Far { selector, base: Some(Held { width: 4, ..base }), index: Some(wide), scale, offset }, Some(base))
+            }
+            // No base: twice the index is the index added to itself.
+            Pointer::Far { selector, base: None, index: None, offset, .. } if scale == 2 => {
+                (Pointer::Far { selector, base: Some(wide), index: Some(wide), scale: 1, offset }, None)
+            }
+            Pointer::Far { selector, base: None, index: None, offset, .. } => (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None),
+            _ => return None,
+        };
+        self.promoted.extend(base.map(|base| base.value).into_iter().chain([wide.value]));
+        Some(scaled)
+    }
+
+    /// The pointer `operand` offsets by constants.
+    fn root(&self, mut operand: Operand) -> Operand {
+        while let Operand::Value(value) = operand {
+            let ValueDef::Instruction(inst) = self.function.value(value).def else { break };
+            let instruction = self.function.instruction(inst);
+            let Opcode::GetElementPtr { source } = instruction.opcode else { break };
+            if !self.layout.collect_offset(self.types(), source, &self.indices(inst)).1.is_empty() {
+                break;
+            }
+            operand = instruction.operands[0];
+        }
+        operand
+    }
+
+    /// Whether `value` is a word a load or a parameter defines: its
+    /// definition can be `movzx`, as `addressforms::promote` rewrites it.
+    fn promotable(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let ty = function.value(value).ty;
+        let word = self.is_far(ty) || (!self.is_float(ty) && matches!(self.width(ty), Ok(2)));
+        word && match function.value(value).def {
+            ValueDef::Argument(_) => true,
+            ValueDef::Instruction(inst) => {
+                matches!(function.instruction(inst).opcode, Opcode::Load { .. })
+                    && !self.cells.contains(&inst)
+                    && !self.consumed.contains(&inst)
+                    && !self.words.contains_key(&inst)
+            }
+        }
+    }
+
+    /// The loads and stores through `address`, directly or at a constant
+    /// offset.
+    fn accesses(&self, address: ValueId) -> Vec<InstId> {
+        let function = self.function;
+        function
+            .users(address)
+            .iter()
+            .flat_map(|one| match function.instruction(one.user).opcode {
+                Opcode::GetElementPtr { .. } => function.instruction(one.user).result.map_or_else(Vec::new, |result| self.accesses(result)),
+                _ => vec![one.user],
+            })
+            .collect()
+    }
+
+    /// `blocks` with each cell `exact_sums` indexes marked exact, and each
+    /// word value a scaled address reads widened where it is defined.
+    fn widen(&mut self, blocks: Vec<LirBlock>) -> Result<Vec<LirBlock>, Unselected> {
+        let marked = |what: &Semantics| {
+            let exact = |operand: &Loc| match operand {
+                Loc::Mem(cell) if [cell.base, cell.index].iter().flatten().any(|one| self.exact_sums.contains(&one.value)) => {
+                    Loc::Mem(Mem { exact: true, ..cell.clone() })
+                }
+                _ => operand.clone(),
+            };
+            Semantics { dests: what.dests.iter().map(exact).collect(), sources: what.sources.iter().map(exact).collect(), ..what.clone() }
+        };
+        let blocks: Vec<LirBlock> = blocks
+            .into_iter()
+            .map(|block| {
+                let insns = block.insns.iter().map(|one| Arc::new(Insn { what: one.what.as_ref().map(marked), ..(**one).clone() })).collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        if self.promoted.is_empty() {
+            return Ok(blocks);
+        }
+        let by_at: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+        assert_eq!(by_at.len(), blocks.len(), "a block per address");
+        let mut next = self.next;
+        let mut fresh = || {
+            next += 1;
+            next
+        };
+        let mut promoted = addressforms::promote(&by_at, &self.promoted, &mut fresh).map_err(Unselected)?;
+        self.next = next;
+        Ok(blocks.into_iter().map(|block| block.with_insns(promoted.shift_remove(&block.at).expect("each block"))).collect())
     }
 
     /// `div` and `idiv` divide dx:ax, the high word made by `cwd` or zero,
@@ -1137,13 +1306,14 @@ impl Selector<'_, '_, '_> {
                 ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
             },
             Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
-            Pointer::Based { base, index: None, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            Pointer::Based { base, index: None, offset, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
             // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
-            Pointer::Based { base, index: Some(index), offset } => {
-                Mem { base: Some(base), index: Some(index), offset, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset)), width) }
+            Pointer::Based { base, index: Some(index), scale, offset } => {
+                Mem { base: Some(base), index: Some(index), scale, offset, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset)), width) }
             }
-            Pointer::Far { selector, base, index, offset } => Mem {
+            Pointer::Far { selector, base, index, scale, offset } => Mem {
                 offset,
+                scale,
                 disp_width: 2,
                 base,
                 index,
@@ -1189,7 +1359,7 @@ impl Selector<'_, '_, '_> {
             return Ok((halves[0], halves[1]));
         }
         match self.pointer(operand)? {
-            Pointer::Far { selector, base: Some(base), index: None, offset: 0 } => Ok((base, selector)),
+            Pointer::Far { selector, base: Some(base), index: None, offset: 0, .. } => Ok((base, selector)),
             pointer @ Pointer::Far { selector, .. } => {
                 let moved = self.fresh_held(2);
                 out.push(insn(at, self.address(pointer, moved)));
@@ -1957,9 +2127,9 @@ impl Pointer {
     fn moved(self, by: i64) -> Pointer {
         match self {
             Pointer::Frame { disp, index } => Pointer::Frame { disp: disp + by, index },
-            Pointer::Based { base, index, offset } => Pointer::Based { base, index, offset: offset + by },
+            Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
             Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
-            Pointer::Far { selector, base, index, offset } => Pointer::Far { selector, base, index, offset: offset + by },
+            Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },
         }
     }
 }
