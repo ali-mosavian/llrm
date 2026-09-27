@@ -2482,3 +2482,14 @@ fn erl_outside_the_handler_is_refused() {
     let emitted = llrm_core::hir::mir::emit(&program).remove(0);
     assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL outside the error handler")), "{:?}", emitted.refused);
 }
+
+/// DEF SEG stored to a b$seg the rich route defined in the module's own
+/// data, so every BSAVE saved from the runtime's b$seg: DGROUP.
+#[test]
+fn test_def_seg_stores_the_runtime_segment_cell() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
+    let program = parsed_as(&source, "qb45", "qb45");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("assembles");
+    assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
+}

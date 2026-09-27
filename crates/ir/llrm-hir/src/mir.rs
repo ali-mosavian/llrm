@@ -269,8 +269,8 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let global = declare_data(&mut module, object, layout.as_ref().ok().copied());
         data.insert(object.id, global);
         match layout {
-            // Another module's object this module lays out nothing of: declared only.
-            Ok(_) if object.linkage == model::DataLinkage::External && sizes[&object.id] == 0 => {}
+            // Another module's object, however much of it this module reads: declared only.
+            Ok(_) if object.linkage == model::DataLinkage::External => {}
             Ok(_) => defined.push((object, global)),
             Err(why) => refused.push((object.name.clone(), why)),
         }

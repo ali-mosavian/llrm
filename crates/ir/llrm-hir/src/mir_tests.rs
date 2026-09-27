@@ -196,7 +196,7 @@ fn an_external_object_is_as_large_as_its_places() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("@b$seg = global [2 x i8]"), "{text}");
+    assert!(text.contains("@b$seg = external global [2 x i8]"), "{text}");
 }
 
 /// plasma reloaded each array's segment word every iteration: HIR's
