@@ -8,7 +8,7 @@ use iced_x86::{Mnemonic, OpKind, Register};
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use crate::abi::machine;
+use crate::abi::machine::Machine;
 use crate::frontends::bc::blocks::{Block, CodeMap, INLINE_TABLE, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
@@ -76,7 +76,7 @@ pub fn _instruction_node(module: &Module, insn: &Insn) -> Node {
 }
 
 /// Every byte of `body`'s own ranges, as ordered Nodes.
-pub fn decode_body(module: &Module, mapped: &CodeMap, blocks: &[Block], body: &Body) -> Vec<Arc<Node>> {
+pub fn decode_body(module: &Module, mapped: &CodeMap, blocks: &[Block], body: &Body, machine: &Machine) -> Vec<Arc<Node>> {
     let insns_by_at: IndexMap<usize, &Insn> =
         blocks.iter().flat_map(|block| block.insns.iter()).map(|insn| (insn.at, insn)).collect();
     let tables_by_start: IndexMap<usize, usize> = mapped.tables.iter().copied().collect();
@@ -99,11 +99,11 @@ pub fn decode_body(module: &Module, mapped: &CodeMap, blocks: &[Block], body: &B
             last = Some(node);
         }
     }
-    _at_devices(&nodes, &blocks.iter().map(|block| block.at).collect())
+    _at_devices(&nodes, &blocks.iter().map(|block| block.at).collect(), machine)
 }
 
 /// Each `in` and `out` whose port is a literal, at its device's memory reach.
-pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>) -> Vec<Arc<Node>> {
+pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>, machine: &Machine) -> Vec<Arc<Node>> {
     let mut out: Vec<Arc<Node>> = nodes.to_vec();
     for (index, node) in nodes.iter().enumerate() {
         let Node::Opaque(opaque) = node.as_ref() else {
@@ -121,7 +121,7 @@ pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>) -> Vec<Arc<Nod
         } else {
             continue;
         };
-        if port.is_some_and(|port| machine::current().silent_port(port)) {
+        if port.is_some_and(|port| machine.silent_port(port)) {
             let mut replaced = opaque.clone();
             replaced.effects.loads = Vec::new();
             replaced.effects.stores = Vec::new();
@@ -163,7 +163,7 @@ pub struct BodyIR {
 }
 
 /// Every body of `module`, total-decoded -- or why it could not be.
-pub fn decode_module(module: &Module) -> Result<Vec<BodyIR>, String> {
+pub fn decode_module(module: &Module, machine: &Machine) -> Result<Vec<BodyIR>, String> {
     let mapped = code_map(module)?;
     let found = body_partition(module)?;
     if !found.complete() {
@@ -173,7 +173,7 @@ pub fn decode_module(module: &Module) -> Result<Vec<BodyIR>, String> {
     Ok(found
         .bodies
         .iter()
-        .map(|body| BodyIR { body: body.clone(), nodes: decode_body(module, &mapped, &blocks, body) })
+        .map(|body| BodyIR { body: body.clone(), nodes: decode_body(module, &mapped, &blocks, body, machine) })
         .collect())
 }
 

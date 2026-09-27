@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use iced_x86::{Code, Register};
 
 use super::*;
+use crate::abi::machine::BUILT_IN;
 use crate::frontends::bc::blocks::Ends;
 use crate::frontends::bc::declen::decode;
 use crate::frontends::bc::extent::BodyKind;
@@ -23,7 +24,7 @@ const OPERATOR_OBJECTS: [&str; 4] = ["pds-g2.obj", "qb45.obj", "vbdos-g2.obj", "
 
 fn _decode(source: &PathBuf) -> (Module, Vec<BodyIR>) {
     let found = loaded(source).unwrap();
-    let result = decode_module(&found).unwrap_or_else(|refused| panic!("{}: {refused}", source.display()));
+    let result = decode_module(&found, &BUILT_IN).unwrap_or_else(|refused| panic!("{}: {refused}", source.display()));
     (found, result)
 }
 
@@ -208,7 +209,7 @@ fn test_restore_idiom_is_recognised_not_split_into_opaques() {
     };
     let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())] };
 
-    let nodes = decode_body(&found, &mapped, &[block], &body);
+    let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
     let kinds: Vec<&str> = nodes
         .iter()
         .map(|node| match node.as_ref() {
@@ -266,7 +267,7 @@ fn test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings() {
     let mut unmodelled = BTreeSet::new();
     for path in objects() {
         let found = loaded(&path).unwrap();
-        let Ok(result) = decode_module(&found) else {
+        let Ok(result) = decode_module(&found, &BUILT_IN) else {
             continue;
         };
         for body_ir in &result {
@@ -290,7 +291,7 @@ fn test_every_body_of_every_kind_is_fully_modelled() {
     let mut refused: IndexMap<BodyKind, usize> = IndexMap::default();
     for path in objects() {
         let found = loaded(&path).unwrap();
-        let Ok(result) = decode_module(&found) else {
+        let Ok(result) = decode_module(&found, &BUILT_IN) else {
             continue;
         };
         for body_ir in &result {
@@ -315,7 +316,7 @@ fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
     let found = hand_built(&code);
     let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
     let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())] };
-    let nodes = decode_body(&found, &mapped, &[block], &body);
+    let nodes = decode_body(&found, &mapped, &[block], &body, &BUILT_IN);
 
     let port = &nodes[1];
     assert!(barrier(port.semantics()));
@@ -326,4 +327,20 @@ fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
     assert_eq!(pinned(&nodes[0]), Some(BTreeSet::new()));
     assert_eq!(port.effects().loads, *ANY_MEMORY);
     assert_eq!(port.effects().stores, *ANY_MEMORY);
+}
+
+#[test]
+fn test_a_port_is_silent_only_where_the_machine_says() {
+    // mov dx,3C8h; out dx,al: the VGA DAC's write index.
+    let code = [hx("BA C8 03"), hx("EE"), hx("C3")].concat();
+    let insns = insns_of(&code);
+    let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
+    let found = hand_built(&code);
+    let mapped = CodeMap { starts: insns.iter().map(|insn| insn.at).collect(), ..CodeMap::default() };
+    let body = Body { kind: BodyKind::Main, seed: 0, name: None, ranges: vec![(0, code.len())] };
+    let stores = |machine| decode_body(&found, &mapped, &[block.clone()], &body, machine)[1].effects().stores.clone();
+
+    assert!(stores(&BUILT_IN).is_empty());
+    let loud = Machine { silent_ports: Vec::new(), ..BUILT_IN.clone() };
+    assert_eq!(stores(&loud), *ANY_MEMORY);
 }

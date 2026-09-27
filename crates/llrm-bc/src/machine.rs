@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use iced_x86::{Code, Register};
 use llrm_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
+use llrm_bcmachine::abi::machine::Machine;
 use llrm_bcmachine::abi::runtime::{self, Contract, Control, Reg};
 use llrm_bcmachine::frontends::bc::blocks::{self, Block};
 use llrm_bcmachine::frontends::bc::extent::{Body, BodyKind};
@@ -273,8 +274,8 @@ pub struct Facts<'m> {
 }
 
 impl<'m> Facts<'m> {
-    pub fn new(found: &'m Module) -> Result<Self, String> {
-        let decoded = decode::decode_module(found)?;
+    pub fn new(found: &'m Module, machine: &Machine) -> Result<Self, String> {
+        let decoded = decode::decode_module(found, machine)?;
         let mapped = blocks::code_map(found)?;
         let all = blocks::partition(found, &mapped);
         let mut contracts = runtime::for_module(found, None).map_err(|error| error.to_string())?;
