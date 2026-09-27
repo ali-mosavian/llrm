@@ -4,7 +4,7 @@
 //! no memory, and which CPU its code is priced for. One description per target, read from TOML;
 //! real-mode DOS is the default.
 
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
 pub const DOS: &str = include_str!("machines/dos.toml");
 
@@ -124,18 +124,6 @@ impl Machine {
     pub fn silent_port(&self, port: i64) -> bool {
         self.silent_ports.iter().any(|&(low, high)| low <= port && port < high)
     }
-}
-
-static CURRENT: OnceLock<Machine> = OnceLock::new();
-
-/// Choose the target once, before compiling. Refused after the first use.
-pub fn configure(machine: Machine) -> Result<(), String> {
-    CURRENT.set(machine).map_err(|_| "the target machine is already fixed".to_owned())
-}
-
-/// The target: whatever `configure` chose, else real-mode DOS.
-pub fn current() -> &'static Machine {
-    CURRENT.get_or_init(|| Machine::parse(DOS).expect("the built-in DOS description parses"))
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use super::driver::{parsed, Frontend};
 use super::qbstages;
 use llrm_core::flow;
 use llrm_core::hir::{codec, dump, lower};
+use llrm_core::abi::machine::Machine;
 use llrm_core::model::passes::{Options, O2};
 
 const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
@@ -33,6 +34,8 @@ pub(super) struct Arguments {
     pub(super) options: Options,
     pub(super) dump: Option<PathBuf>,
     pub(super) route: compile::Route,
+    /// The target: the built-in DOS unless `--machine` names another.
+    pub(super) machine: Machine,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -40,6 +43,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut frontend = Frontend::new("vbdos", "vbdos");
     let (mut dump_hir, mut mir, mut output, mut options, mut dump) = (None, false, None, O2(), None);
     let mut route = compile::Route::Lowered;
+    let mut machine = llrm_core::abi::machine::BUILT_IN.clone();
     let mut at = 0;
     while at < argv.len() {
         let argument = argv[at].as_str();
@@ -79,10 +83,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--isel" => route = compile::Route::Selected,
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
-            "--machine" => {
-                let machine = llrm_core::abi::machine::Machine::load(std::path::Path::new(&value("--machine")?))?;
-                llrm_core::abi::machine::configure(machine)?;
-            }
+            "--machine" => machine = Machine::load(std::path::Path::new(&value("--machine")?))?,
             "-O" => options = flow::level_option(&value("-O")?)?,
             _ if flag.starts_with("-O") && flag.len() > 2 => options = flow::level_option(&flag[2..])?,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -95,7 +96,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     if mir && output.is_some() {
         return Err("--mir and --output cannot be used together".into());
     }
-    Ok(Arguments { source, frontend, dump_hir, mir, output, options, dump, route })
+    Ok(Arguments { source, frontend, dump_hir, mir, output, options, dump, route, machine })
 }
 
 pub fn main(argv: &[String]) -> i32 {
@@ -108,11 +109,11 @@ pub fn main(argv: &[String]) -> i32 {
     };
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
-            qbstages::dumped(&args.source, dump, &args.frontend, &args.options, args.route)?;
+            qbstages::dumped(&args.source, dump, &args.frontend, &args.options, args.route, &args.machine)?;
         }
         let program = parsed(&args.source, &args.frontend, args.dump_hir.as_deref()).map_err(|error| error.0)?;
         if let Some(output) = &args.output {
-            let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route).map_err(|error| error.to_string())?;
+            let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route, &args.machine).map_err(|error| error.to_string())?;
             std::fs::write(output, bytes).map_err(|error| error.to_string())?;
         } else if args.mir {
             for body in lower::lower(&program).map_err(|error| error.to_string())? {

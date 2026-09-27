@@ -1865,7 +1865,7 @@ fn test_code_is_priced_for_the_machines_cpu() {
     );
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let lines = stripped_lines(&listing(&program));
-    assert_eq!(llrm_core::abi::machine::current().cpu, "486");
+    assert_eq!(llrm_core::abi::machine::BUILT_IN.cpu, "486");
     assert!(!lines.iter().any(|line| line.starts_with("imul")), "{lines:#?}");
 }
 
@@ -2301,7 +2301,7 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).expect("assembles");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::abi::machine::BUILT_IN).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2315,7 +2315,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/suite/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).unwrap_or_else(|error| panic!("{name}: {error}"));
+        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
 
@@ -2327,7 +2327,7 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected).expect("compiles");
+    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::abi::machine::BUILT_IN).expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");

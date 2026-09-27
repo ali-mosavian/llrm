@@ -321,11 +321,12 @@ pub fn names() -> Vec<&'static str> {
 pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, String> {
     match value.into() {
         ProfileOrName::Profile(value) => Ok(value),
-        ProfileOrName::Name(value) => _BY_NAME
-            .get(value)
-            .copied()
-            .ok_or_else(|| format!("unknown CPU target: {value}")),
+        ProfileOrName::Name(value) => named(value),
     }
+}
+
+pub fn named(name: &str) -> Result<&'static Profile, String> {
+    _BY_NAME.get(name).copied().ok_or_else(|| format!("unknown CPU target: {name}"))
 }
 
 #[cfg(test)]
