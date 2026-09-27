@@ -72,6 +72,16 @@ pub fn covering<'a>(reference: &'a MemRef, known: &BTreeMap<ValueId, Interval>) 
     Cow::Owned(MemRef { disp, base: None, scale: 0, base_width: 0, width, ..reference.clone() })
 }
 
+/// Whether every byte `reference` may touch lies inside the object its
+/// root names, its index within `known`: dereferenceable, as LLVM's
+/// `isDereferenceablePointer` says of a constant offset, here of a bounded
+/// one.
+pub fn inside_object(unit: &Unit, reference: &MemRef, known: &BTreeMap<ValueId, Interval>) -> bool {
+    let covered = covering(reference, known);
+    let extent = covered.root.and_then(|root| crate::memory::object_of(unit, root)).and_then(|object| object.extent);
+    covered.base.is_none() && covered.object && covered.segment.is_none() && extent.is_some_and(|extent| 0 <= covered.disp && covered.disp + i64::from(covered.width) <= extent)
+}
+
 /// The block a successor edge leaves and the conditional branch there:
 /// its condition, and the block it goes to when that holds.
 fn branch(unit: &Unit, block: BlockId) -> Option<(Operand, BlockId)> {
