@@ -8,15 +8,16 @@
 //! the 16-bit one only through registers this proves.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use iced_x86::Register;
 
 use crate::analysis::intervals::_graph;
 use crate::analysis::loops;
-use crate::backend::liveness;
+use crate::backend::{liveness, target};
 use crate::backend::peephole::{_register_effects, id};
-use crate::model::ir::{Loc, Operation, Reg};
-use crate::model::lir::{Insn, LirBody};
+use crate::model::ir::{Loc, Operation, Reg, Semantics};
+use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
@@ -114,6 +115,146 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
         }
     }
     result
+}
+
+/// `movzx root,word` for each root in `roots`, before `block`'s terminator.
+pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
+    let mut insns = block.insns.clone();
+    let at = insns.last().map_or(block.at, |one| one.at);
+    let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) { insns.len() - 1 } else { insns.len() };
+    for (index, root) in ROOTS.iter().enumerate() {
+        if roots & 1 << index == 0 {
+            continue;
+        }
+        let word = target::named(*root, 2);
+        let what = Semantics {
+            name: Some("movzx".into()),
+            dests: vec![Loc::Reg(Reg { register: *root, width: 4 })],
+            sources: vec![Loc::Reg(Reg { register: word, width: 2 })],
+            ..Semantics::new(Operation::Extend)
+        };
+        insns.insert(position, Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new())));
+    }
+    block.with_insns(insns)
+}
+
+/// `body` with the upper half of each loop's `roots` zeroed on entry, where
+/// every way in may take it: one successor, and those lanes dead there
+/// unless `held` says no value lives in them.
+pub fn preheaded(body: &LirBody, wanted: &IndexMap<i64, Roots>, held: bool) -> (LirBody, IndexMap<i64, Roots>) {
+    let graph = _graph(&body.blocks);
+    let found = loops::loops(&graph, Some(body.entry));
+    let predecessors = loops::predecessors(&graph);
+    let exits = liveness::dead_at_exit(body);
+    let mut placed: IndexMap<i64, Roots> = IndexMap::default();
+    let mut per_block: IndexMap<i64, Roots> = IndexMap::default();
+    for (header, roots) in wanted {
+        let Some(inside) = found.iter().find(|one| one.header == *header).map(|one| &one.body) else {
+            continue;
+        };
+        let entries: Vec<i64> = predecessors.get(header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect();
+        let mut allowed = *roots;
+        for (index, root) in ROOTS.iter().enumerate() {
+            let upper = [(*root, 2), (*root, 3)];
+            let takes = !entries.is_empty()
+                && entries.iter().all(|at| {
+                    body.blocks.iter().find(|block| block.at == *at).is_some_and(|block| block.succ == [*header])
+                        && (!held || upper.iter().all(|lane| exits[at].contains(lane)))
+                });
+            if !takes {
+                allowed &= !(1 << index);
+            }
+        }
+        if allowed == 0 {
+            continue;
+        }
+        placed.insert(*header, allowed);
+        for at in entries {
+            *per_block.entry(at).or_default() |= allowed;
+        }
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| match per_block.get(&block.at) {
+            Some(roots) => extended(block, *roots),
+            None => block.clone(),
+        })
+        .collect();
+    (body.with_blocks(blocks), placed)
+}
+
+/// The roots `one`'s cells read 32 bits wide through a register holding no
+/// value, the frame pointer: nothing defines their upper half.
+fn unheld(one: &Insn) -> Roots {
+    let Some(what) = &one.what else {
+        return 0;
+    };
+    let wide = |register: Register, held: bool| if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 };
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .filter_map(|operand| match operand {
+            Loc::Mem(cell) => Some(wide(cell.through, cell.base.is_some()) | wide(cell.index_through, cell.index.is_some())),
+            _ => None,
+        })
+        .fold(0, |roots, one| roots | one)
+}
+
+/// `body` with the upper half of every unheld root a cell reads zero: one
+/// `movzx` in the preheader of the innermost loop around the cell, or
+/// before the first cell of a block no preheader proves.
+pub fn established(body: &LirBody) -> LirBody {
+    let graph = _graph(&body.blocks);
+    let natural = loops::loops(&graph, Some(body.entry));
+    let innermost = |at: i64| natural.iter().filter(|one| one.body.contains(&at)).min_by_key(|one| one.body.len()).map(|one| one.header);
+    let mut body = body.clone();
+    let mut preheaders = true;
+    loop {
+        let zero = before(&body);
+        let missing: Vec<(i64, usize, Roots)> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter().map(move |one| (block.at, one)))
+            .map(|(at, one)| (at, id(one), unheld(one) & !zero[&id(one)]))
+            .filter(|(_, _, roots)| *roots != 0)
+            .collect();
+        if missing.is_empty() {
+            return body;
+        }
+        if std::mem::take(&mut preheaders) {
+            let mut wanted: IndexMap<i64, Roots> = IndexMap::default();
+            for (at, _, roots) in &missing {
+                if let Some(header) = innermost(*at) {
+                    *wanted.entry(header).or_default() |= roots;
+                }
+            }
+            if !wanted.is_empty() {
+                body = preheaded(&body, &wanted, false).0;
+                continue;
+            }
+        }
+        let mut first: IndexMap<i64, (usize, Roots)> = IndexMap::default();
+        for (at, position, roots) in missing {
+            first.entry(at).or_insert((position, roots));
+        }
+        let blocks = body
+            .blocks
+            .iter()
+            .map(|block| match first.get(&block.at) {
+                None => block.clone(),
+                Some((position, roots)) => {
+                    let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
+                    let mut insns = block.insns.clone();
+                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns;
+                    let when = insns[at].at;
+                    insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
+                    block.with_insns(insns)
+                }
+            })
+            .collect();
+        body = body.with_blocks(blocks);
+    }
 }
 
 #[cfg(test)]

@@ -20,9 +20,9 @@ use crate::backend::affine::{self, Step};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{DeadAfter, _flag_lanes, _lanes, _read_before_redefined, _register_effects, id};
-use crate::backend::upperzero::{self, Roots, ROOTS};
+use crate::backend::upperzero::{self, Roots};
 use crate::backend::{liveness, regthrash, target};
-use crate::model::ir::{self, Held, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Held, Loc, Mem, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::AddressForm;
 use crate::support::hash::{HashMap, HashSet, IndexMap};
@@ -419,72 +419,6 @@ fn folds(body: &LirBody, form: &AddressForm, cpu: &Profile) -> Vec<Fold> {
     found
 }
 
-/// `movzx root,word` for each root in `roots`, before `block`'s terminator.
-fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
-    let mut insns = block.insns.clone();
-    let at = insns.last().map_or(block.at, |one| one.at);
-    let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) { insns.len() - 1 } else { insns.len() };
-    for (index, root) in ROOTS.iter().enumerate() {
-        if roots & 1 << index == 0 {
-            continue;
-        }
-        let word = target::named(*root, 2);
-        let what = Semantics {
-            name: Some("movzx".into()),
-            dests: vec![Loc::Reg(Reg { register: *root, width: 4 })],
-            sources: vec![Loc::Reg(Reg { register: word, width: 2 })],
-            ..Semantics::new(Operation::Extend)
-        };
-        insns.insert(position, Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new())));
-    }
-    block.with_insns(insns)
-}
-
-/// `body` with the upper half of each loop's `roots` zeroed on entry, where
-/// every way in may take it: one successor, and those lanes dead there.
-fn preheaded(body: &LirBody, wanted: &IndexMap<i64, Roots>) -> (LirBody, IndexMap<i64, Roots>) {
-    let graph = _graph(&body.blocks);
-    let found = loops::loops(&graph, Some(body.entry));
-    let predecessors = loops::predecessors(&graph);
-    let exits = liveness::dead_at_exit(body);
-    let mut placed: IndexMap<i64, Roots> = IndexMap::default();
-    let mut per_block: IndexMap<i64, Roots> = IndexMap::default();
-    for (header, roots) in wanted {
-        let Some(inside) = found.iter().find(|one| one.header == *header).map(|one| &one.body) else {
-            continue;
-        };
-        let entries: Vec<i64> = predecessors.get(header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect();
-        let mut allowed = *roots;
-        for (index, root) in ROOTS.iter().enumerate() {
-            let upper = [(*root, 2), (*root, 3)];
-            let takes = !entries.is_empty()
-                && entries.iter().all(|at| {
-                    body.blocks.iter().find(|block| block.at == *at).is_some_and(|block| block.succ == [*header])
-                        && upper.iter().all(|lane| exits[at].contains(lane))
-                });
-            if !takes {
-                allowed &= !(1 << index);
-            }
-        }
-        if allowed == 0 {
-            continue;
-        }
-        placed.insert(*header, allowed);
-        for at in entries {
-            *per_block.entry(at).or_default() |= allowed;
-        }
-    }
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| match per_block.get(&block.at) {
-            Some(roots) => extended(block, *roots),
-            None => block.clone(),
-        })
-        .collect();
-    (body.with_blocks(blocks), placed)
-}
-
 /// Fold each exact address's chain the cost model prefers, until none is left.
 pub fn exact_addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
@@ -540,7 +474,7 @@ fn folded(body: &LirBody, form: &AddressForm, profile: &Profile) -> Option<LirBo
                 placeable.push(*candidate);
             }
         }
-        let (extended, _) = preheaded(body, &wanted);
+        let (extended, _) = upperzero::preheaded(body, &wanted, true);
         let zero = upperzero::before(&extended);
         let proven: Vec<&Fold> = placeable
             .into_iter()

@@ -2498,3 +2498,86 @@ no:
         assert_eq!(branches.len(), 2, "{join}: {got:?}");
     }
 }
+
+/// A 32-bit counter proven small indexes every frame array at its own
+/// scale, `[ebp+esi*4-disp]` with one register, and EBP's upper half zeroed once before the
+/// loop: truncated, each array took a shift and a register of its own.
+#[test]
+fn test_a_wide_counter_indexes_frame_arrays_at_each_scale() {
+    let text = "define i32 @f() addrspace(1) {
+entry:
+  %l = alloca [16 x i32]
+  %w = alloca [16 x i16]
+  %b = alloca [16 x i8]
+  br label %body
+body:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %s = phi i32 [ 0, %entry ], [ %t, %body ]
+  %pl = getelementptr inbounds i32, ptr %l, i32 %i
+  %pw = getelementptr inbounds i16, ptr %w, i32 %i
+  %pb = getelementptr inbounds i8, ptr %b, i32 %i
+  %vl = load i32, ptr %pl, !tbaa !1
+  %vw = load i16, ptr %pw, !tbaa !3
+  %vb = load i8, ptr %pb, !tbaa !5
+  %xw = sext i16 %vw to i32
+  %xb = sext i8 %vb to i32
+  %u = add i32 %vl, %xw
+  %t = add i32 %u, %xb
+  %j = add nuw nsw i32 %i, 1
+  %more = icmp ult i32 %j, 16
+  br i1 %more, label %body, label %done
+done:
+  ret i32 %t
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+!2 = !{!\"int\"}
+!3 = !{!2, !2, i64 0}
+!4 = !{!\"char\"}
+!5 = !{!4, !4, i64 0}
+";
+    let got = listing(text, "f");
+    let top = got.iter().position(|line| line.ends_with(':') && line != "L0_0:").expect("a loop label");
+    let end = top + got[top..].iter().position(|line| line.starts_with('j')).expect("the back edge");
+    let looped = &got[top..end];
+    let cells: Vec<&String> = looped.iter().filter(|line| line.contains('[')).collect();
+    assert_eq!(cells.len(), 3, "{got:?}");
+    let index = |cell: &str| cell.split_once("[ebp+").map(|(_, rest)| rest[..3].to_owned());
+    let shared = index(cells[0]).expect("a frame cell 32 bits wide");
+    for (cell, scale) in cells.iter().zip(["*4", "*2", ""]) {
+        assert!(index(cell).as_ref() == Some(&shared) && cell.contains(&format!("{shared}{scale}")), "{cell}: {got:?}");
+    }
+    assert!(got[..top].contains(&"movzx ebp, bp".to_owned()), "{got:?}");
+    assert!(!looped.iter().any(|line| line.starts_with("shl ") || line.starts_with("movzx ebp")), "{got:?}");
+}
+
+/// A dword counter counted up to zero is a negative index, still one word
+/// sign-extended: `[ebp+esi*4-disp]` names the same byte. Required
+/// non-negative, the counted-down loop lost the form.
+#[test]
+fn test_a_negative_dword_counter_indexes_a_frame_array() {
+    let text = "define i32 @f() addrspace(1) {
+entry:
+  %l = alloca [16 x i32]
+  %end = getelementptr inbounds i8, ptr %l, i16 64
+  br label %body
+body:
+  %i = phi i32 [ -16, %entry ], [ %j, %body ]
+  %s = phi i32 [ 0, %entry ], [ %t, %body ]
+  %p = getelementptr inbounds i32, ptr %end, i32 %i
+  %v = load i32, ptr %p, !tbaa !1
+  %t = add i32 %s, %v
+  %j = add nsw i32 %i, 1
+  %more = icmp ne i32 %j, 0
+  br i1 %more, label %body, label %done
+done:
+  ret i32 %t
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("[ebp+") && line.contains("*4")), "{got:?}");
+}

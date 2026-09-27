@@ -226,6 +226,16 @@ fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unse
     }
 }
 
+/// Whether `inst` indexes an address by a variable dword.
+fn dword_indexed(module: &Module, function: &Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    matches!(instruction.opcode, Opcode::GetElementPtr { .. })
+        && instruction.operands[1..].iter().any(|&operand| {
+            matches!(operand, Operand::Value(_))
+                && function.operand_type(&module.context, operand).is_some_and(|ty| matches!(module.context.types.get(ty), Type::Int(32)))
+        })
+}
+
 fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
     Err(Unselected(what.into()))
 }
@@ -238,7 +248,7 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 /// `[bx+si+disp]`, where only accesses read the address: see `indexed`;
 /// `scale` multiplies it in the 67h form, `[ebx+esi*4]`.
 enum Pointer {
-    Frame { disp: i64, index: Option<Held> },
+    Frame { disp: i64, index: Option<Held>, scale: i64 },
     Based { base: Held, index: Option<Held>, scale: i64, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one.
@@ -258,10 +268,12 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let convention = convention(module, &layout, global)?;
     let unit = Unit::of(module, &layout, function);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
-    let secondary = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4).filter(|form| form.before_spill(&cpu.operations));
-    let (facts, typed) = match secondary {
-        None => (Facts::default(), BTreeSet::new()),
-        Some(_) => {
+    let wide = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4);
+    let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
+    let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
+    let (facts, typed) = match secondary.is_some() || dword_indexed {
+        false => (Facts::default(), BTreeSet::new()),
+        true => {
             let typed = function.walk().map(|(_, inst)| inst).filter(|&inst| MemRef::of(&unit, inst).is_some_and(|one| one.typed.is_some())).collect();
             (ranges::scoped(&unit).map_err(Unselected)?, typed)
         }
@@ -294,6 +306,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         exact,
         exact_sums: BTreeSet::new(),
         secondary,
+        wide,
         facts,
         typed,
         promoted: BTreeSet::new(),
@@ -376,7 +389,10 @@ struct Selector<'m, 'c, 'p> {
     exact_sums: BTreeSet<u32>,
     /// The 67h form, where the target prices it below a spill.
     secondary: Option<&'c AddressForm>,
-    /// Each block's interval facts, where `secondary` asks them.
+    /// The 67h form, which a dword index needs whatever it costs: the MIR
+    /// chose that index.
+    wide: Option<&'c AddressForm>,
+    /// Each block's interval facts, where a scaled index asks them.
     facts: Facts,
     /// The accesses of a typed lvalue.
     typed: BTreeSet<InstId>,
@@ -455,7 +471,7 @@ impl Selector<'_, '_, '_> {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     self.depth += size + size % 2;
                     let address = function.instruction(inst).result.expect("an address");
-                    self.pointers.insert(address, Pointer::Frame { disp: -self.depth, index: None });
+                    self.pointers.insert(address, Pointer::Frame { disp: -self.depth, index: None, scale: 1 });
                     if llrm_analysis::frameescape::exposes(function, address) {
                         reach.insert((-self.depth, -self.depth + size));
                     }
@@ -509,11 +525,11 @@ impl Selector<'_, '_, '_> {
             let ty = function.value(parameter).ty;
             if self.is_float(ty) {
                 let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
-                self.float_loaded(held, "fld", Pointer::Frame { disp, index: None }, size, false, block_at[&entry], &mut prologue);
+                self.float_loaded(held, "fld", Pointer::Frame { disp, index: None, scale: 1 }, size, false, block_at[&entry], &mut prologue);
                 continue;
             }
             if self.is_far(function.value(parameter).ty) {
-                let (offset, selector) = self.far_loaded(Pointer::Frame { disp, index: None }, false, block_at[&entry], &mut prologue);
+                let (offset, selector) = self.far_loaded(Pointer::Frame { disp, index: None, scale: 1 }, false, block_at[&entry], &mut prologue);
                 self.fars.insert(parameter, (Some(offset), selector));
                 continue;
             }
@@ -1268,7 +1284,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { index: Some(_), .. } | Pointer::Based { index: Some(_), .. } | Pointer::Far { index: Some(_), .. } => {
                 unreachable!("an indexed address is read only by accesses")
             }
-            Pointer::Frame { disp, index: None } => {
+            Pointer::Frame { disp, index: None, .. } => {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
@@ -1441,7 +1457,7 @@ impl Selector<'_, '_, '_> {
         // only by cells: the add goes. Word addressing has no scale.
         if self.only_addressed(address) {
             let indexed = match pointer.moved(offset as i64) {
-                Pointer::Frame { disp, index: None } => Some(Pointer::Frame { disp, index: Some(sum) }),
+                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(sum), index: None, scale: 1, offset }),
@@ -1513,17 +1529,25 @@ impl Selector<'_, '_, '_> {
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
     fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
-        let form = self.secondary?;
         let Operand::Value(index) = index else { return None };
         let function = self.function;
+        // A dword index is already the wide register; a word one is widened
+        // where defined, which the target must price below a spill.
+        let dword = self.width(function.value(index).ty).ok() == Some(4);
+        let form = if dword { self.wide? } else { self.secondary? };
         let address = function.instruction(inst).result?;
-        if scale <= 1 || !form.scales.contains(&scale) || !self.only_addressed(address) || !self.promotable(index) {
+        let scaled = scale > 1 || (dword && matches!(pointer, Pointer::Frame { .. }));
+        if !scaled || !form.scales.contains(&scale) || !self.only_addressed(address) || !(dword || self.promotable(index)) {
             return None;
         }
+        // A word index is zero-extended, so it must be non-negative; a dword
+        // one is truncated to the word the gep adds, so it must be one.
+        let bits = if dword { 32 } else { 16 };
         let proven = self.accesses(address).into_iter().all(|access| {
             let fact = function.parent(access).and_then(|block| self.facts.get(&cfg::id(block))).and_then(|known| known.get(&index));
-            let unwrapped = |fact: &ranges::Interval| factor == 1 || fact.high.clone() * factor <= i16::MAX.into();
-            fact.is_some_and(|fact| fact.width == 16 && fact.low >= 0.into() && unwrapped(fact)) && (self.typed.contains(&access) || self.exact.contains(&index))
+            let word = |fact: &ranges::Interval| fact.low.clone() * factor >= i16::MIN.into() && fact.high.clone() * factor <= i16::MAX.into();
+            let sound = |fact: &ranges::Interval| if dword { word(fact) } else { fact.low >= 0.into() && (factor == 1 || word(fact)) };
+            fact.is_some_and(|fact| fact.width == bits && sound(fact)) && (self.typed.contains(&access) || self.exact.contains(&index))
         });
         if !proven {
             return None;
@@ -1534,6 +1558,7 @@ impl Selector<'_, '_, '_> {
         };
         let wide = Held { value: self.value(index), width: 4 };
         let (scaled, base) = match pointer {
+            Pointer::Frame { disp, index: None, .. } => (Pointer::Frame { disp, index: Some(wide), scale }, None),
             Pointer::Based { base, index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
                 (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset }, Some(base))
             }
@@ -1547,7 +1572,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { selector, base: None, index: None, offset, .. } => (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None),
             _ => return None,
         };
-        self.promoted.extend(base.map(|base| base.value).into_iter().chain([wide.value]));
+        self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
         Some(scaled)
     }
 
@@ -1705,13 +1730,15 @@ impl Selector<'_, '_, '_> {
 
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
-            Pointer::Frame { disp, index: None } => frame(disp, width),
+            Pointer::Frame { disp, index: None, .. } => frame(disp, width),
             // As addressforms spells an indexed frame cell: BP and the index,
-            // the displacement a literal no relocation owns, through SS.
-            Pointer::Frame { disp, index: Some(index) } => Mem {
-                through: Register::BP,
+            // the displacement a literal no relocation owns, through SS. A
+            // dword index is the 67h form's, whose base is EBP.
+            Pointer::Frame { disp, index: Some(index), scale } => Mem {
+                through: if index.width == 4 { Register::EBP } else { Register::BP },
                 disp_width: 2,
                 index: Some(index),
+                scale,
                 ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
             },
             Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
@@ -2720,7 +2747,7 @@ impl Selector<'_, '_, '_> {
     /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
     fn temporary(&mut self, size: i64) -> Pointer {
         self.depth += size + size % 2;
-        Pointer::Frame { disp: -self.depth, index: None }
+        Pointer::Frame { disp: -self.depth, index: None, scale: 1 }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
@@ -2748,7 +2775,7 @@ impl Selector<'_, '_, '_> {
 impl Pointer {
     fn moved(self, by: i64) -> Pointer {
         match self {
-            Pointer::Frame { disp, index } => Pointer::Frame { disp: disp + by, index },
+            Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
             Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
             Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
             Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },

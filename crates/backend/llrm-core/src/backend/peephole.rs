@@ -155,7 +155,8 @@ impl LIRTransform for Peephole {
         let body = doubled(&body, &self.cpu)?;
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
-        Ok(self._frame(machinedce::eliminated(body)))
+        // Last: EBP zeroed above for each cell reading it 32 bits wide.
+        Ok(crate::backend::upperzero::established(&self._frame(machinedce::eliminated(body))))
     }
 }
 
