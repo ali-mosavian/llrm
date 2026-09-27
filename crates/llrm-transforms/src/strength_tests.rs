@@ -173,12 +173,15 @@ b2:
 }
 
 /// `i` counts to 64 as a word; its product with 109 as a dword steps by
-/// 109. With no trips, nothing proves the extension exact.
+/// 109. With no trips, nothing proves the extension exact. The stores
+/// keep the loops from being evaluated away.
 #[test]
 fn test_zero_extended_counter_product_is_carried_as_a_wide_recurrence() {
     for bound in [0, 1, 2, 64] {
         let text = format!(
-            "define i32 @f() {{
+            "@out = global i32 0
+
+define i32 @f() {{
 b0:
   br label %b1
 
@@ -191,6 +194,7 @@ b1:
 b2:
   %e = zext i16 %i to i32
   %p = mul i32 %e, 109
+  store i32 %p, ptr @out
   %s.next = add i32 %s, %p
   %i.next = add i16 %i, 1
   br label %b1
@@ -294,7 +298,9 @@ b3:
 fn test_an_exact_quotient_becomes_a_recurrence() {
     for bound in [0, 2, 4, 40] {
         let text = format!(
-            "define i16 @f() {{
+            "@out = global i16 0
+
+define i16 @f() {{
 b0:
   br label %b1
 
@@ -306,6 +312,7 @@ b1:
 
 b2:
   %q = sdiv i16 %i, 2
+  store i16 %q, ptr @out
   %s.next = add i16 %s, %q
   %i.next = add i16 %i, 2
   br label %b1
@@ -491,4 +498,35 @@ fn every_corpus_reduction_verifies_and_settles() {
         assert!(runs[2] == runs[1], "{name}: a third run changed it");
     }
     assert!(fired > 0, "the corpus multiplies a counter somewhere");
+}
+
+/// Strength credits `i * 6` as the loop's control, since indvars removes the
+/// old counter after it; with the tail unwired, `%i` stayed beside the new
+/// recurrence, one more register and add a trip.
+#[test]
+fn the_replaced_counter_is_gone_after_strength() {
+    let printed = same(
+        "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %x, %b0 ], [ %sum, %b2 ]
+  %go = icmp slt i16 %i, 10
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %scaled = mul i16 %i, 6
+  %sum = xor i16 %acc, %scaled
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+",
+        &[&[0], &[7], &[-1]],
+    );
+    assert!(!printed.contains("%i =") && printed.contains("icmp ne i16 %lsr.iv"), "{printed}");
 }

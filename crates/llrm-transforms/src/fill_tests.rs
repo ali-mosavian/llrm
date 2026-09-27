@@ -128,11 +128,15 @@ fn an_undeclared_memset_is_no_fill() {
 }
 
 /// Trips times two bytes may wrap the index where no GEP is `inbounds`
-/// and nothing bounds the trips.
+/// and an unsigned test bounds the trips only by the width; a signed
+/// test from 0 bounds them by half of it, so the words fit.
 #[test]
 fn a_word_count_that_may_wrap_is_kept() {
     let body = |inbounds: &str| format!("  %p = getelementptr {inbounds}[64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 0, ptr %p\n");
-    kept(&looped("i16", "%n", &body(""), "%e"), TRIPS);
-    let (text, changed) = fill(&looped("i16", "%n", &body("inbounds "), "%e"), TRIPS);
+    let unsigned = |text: String| text.replace("icmp slt", "icmp ult");
+    let trips: &[&[i128]] = &[&[0, 0], &[1, 0], &[1, 1], &[40, 39], &[40, 40]];
+    kept(&unsigned(looped("i16", "%n", &body(""), "%e")), trips);
+    let (text, changed) = fill(&unsigned(looped("i16", "%n", &body("inbounds "), "%e")), trips);
     assert!(changed && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %2, i1 false)"), "{text}");
+    assert!(fill(&looped("i16", "%n", &body(""), "%e"), TRIPS).1);
 }
