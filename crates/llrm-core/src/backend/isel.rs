@@ -27,6 +27,7 @@ use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
 mod combined;
+mod unwind;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -138,6 +139,8 @@ pub struct Selected {
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
+    /// The `at` of what starts the landing pad, which the runtime enters.
+    pub landing: Option<i64>,
 }
 
 /// A call's contract, asked of the ABI that knows the callee: its name,
@@ -310,12 +313,13 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         far: BTreeSet::new(),
+        landing: None,
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
         pool,
     };
     let body = selector.body(name, &convention)?;
-    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
 }
 
 struct Selector<'m, 'c, 'p> {
@@ -399,6 +403,8 @@ struct Selector<'m, 'c, 'p> {
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
     far: BTreeSet<i64>,
+    /// The `at` of what starts the landing pad.
+    landing: Option<i64>,
     /// The blocks execution can reach.
     reachable: BTreeSet<BlockId>,
     /// Calls whose result is the flags their contract says they leave.
@@ -412,7 +418,9 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         // Only what execution can reach is selected, as LLVM's code generator
         // drops unreachable blocks.
-        let mut work = vec![function.entry().expect("a body")];
+        // A landing pad is entered by the runtime, not by an edge.
+        let pads = self.pads();
+        let mut work: Vec<BlockId> = std::iter::once(function.entry().expect("a body")).chain(pads.iter().copied()).collect();
         while let Some(block) = work.pop() {
             if self.reachable.insert(block) {
                 work.extend(self.successors(block));
@@ -499,22 +507,29 @@ impl Selector<'_, '_, '_> {
         }
         // Selected in reverse postorder, so every definition before its
         // readers, as a folded address must be; laid out as the function is.
+        // A pad's blocks come after what the entry reaches: its code reads
+        // nothing the entry's code made but memory.
         let mut order = Vec::new();
-        let (mut seen, mut stack) = (BTreeSet::new(), vec![(entry, 0)]);
-        seen.insert(entry);
-        while let Some((block, next)) = stack.pop() {
-            let successors = self.successors(block);
-            match successors.get(next) {
-                Some(&one) => {
-                    stack.push((block, next + 1));
-                    if seen.insert(one) {
-                        stack.push((one, 0));
-                    }
-                }
-                None => order.push(block),
+        let mut seen = BTreeSet::new();
+        for root in std::iter::once(entry).chain(pads.iter().copied()) {
+            if !seen.insert(root) {
+                continue;
             }
+            let (mut finished, mut stack) = (Vec::new(), vec![(root, 0)]);
+            while let Some((block, next)) = stack.pop() {
+                let successors = self.successors(block);
+                match successors.get(next) {
+                    Some(&one) => {
+                        stack.push((block, next + 1));
+                        if seen.insert(one) {
+                            stack.push((one, 0));
+                        }
+                    }
+                    None => finished.push(block),
+                }
+            }
+            order.extend(finished.into_iter().rev());
         }
-        order.reverse();
         let mut made: IndexMap<BlockId, Vec<LirBlock>> = IndexMap::default();
         for &block in &order {
             self.current = Some(block);
@@ -586,7 +601,8 @@ impl Selector<'_, '_, '_> {
             })
             .collect();
         let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks)))?;
-        let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
+        let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
+        let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.sealed_arguments = true;
         body.inputs = self.inputs.clone();
         body.ordered = true;
@@ -917,6 +933,8 @@ impl Selector<'_, '_, '_> {
             [condition @ Operand::Constant(_), Operand::Block(taken), Operand::Block(otherwise)] if terminator.opcode == Opcode::Br => {
                 vec![if self.constant(condition, 1) == Some(0) { otherwise } else { taken }]
             }
+            // The unwind edge is the runtime's, not the machine's.
+            [.., Operand::Block(normal), Operand::Block(_), _] if matches!(terminator.opcode, Opcode::Invoke(_)) => vec![normal],
             _ => function.successors(block),
         }
     }
@@ -1992,6 +2010,13 @@ impl Selector<'_, '_, '_> {
                 in_the_frame(&info.argument_attrs)?;
                 self.call(inst, info.calling_convention, at, out)?;
             }
+            Opcode::Invoke(info) => {
+                in_the_frame(&info.argument_attrs)?;
+                self.call(inst, info.calling_convention, at, out)?;
+                let block = function.parent(inst).expect("a placed invoke");
+                out.push(insn(at, jump(block_at[&self.successors(block)[0]])));
+            }
+            Opcode::LandingPad { .. } => self.landing_pad(inst, at, out)?,
             // Nothing runs after it: the block ends with what came before.
             Opcode::Unreachable => {}
             _ => return refuse(instruction.opcode.mnemonic()),
@@ -2006,6 +2031,8 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let instruction = function.instruction(inst);
         let (callee, arguments) = instruction.operands.split_last().expect("a callee");
+        // An invoke's two destinations are not arguments.
+        let arguments = if matches!(instruction.opcode, Opcode::Invoke(_)) { &arguments[..arguments.len() - 2] } else { arguments };
         let Operand::Constant(callee) = *callee else { return refuse("an indirect call") };
         let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return refuse("a call of a constant") };
         let global = self.module.global(global);

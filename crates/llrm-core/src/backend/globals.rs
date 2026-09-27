@@ -46,7 +46,9 @@ pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMa
         } else {
             format!("G${at}")
         };
-        if global.address_space != 0 && matches!(global.kind, GlobalKind::Variable(_)) {
+        // A far function's segment too: a far pointer to code, as ON
+        // ERROR registers its handler, takes it.
+        if global.address_space != 0 {
             out.insert((Space::Group, segment_of(id)), format!("seg {symbol}"));
         }
         out.insert((space(module, id), i64::from(id.0)), symbol);

@@ -188,6 +188,31 @@ impl Builder<'_> {
         self.emit(Opcode::Call(Box::new(info)), returns, operands, Flags::default(), name)
     }
 
+    /// A call by convention `convention` that continues at `normal`, or at
+    /// `unwind` when the callee unwinds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn invoke_as(&mut self, convention: u32, function_type: TypeId, callee: Operand, arguments: &[Operand], normal: BlockId, unwind: BlockId, name: &str) -> Option<Operand> {
+        let Type::Function { returns, .. } = self.context.types.get(function_type) else { panic!("a function type") };
+        let returns = *returns;
+        let info = CallInfo {
+            function_type,
+            calling_convention: convention,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); arguments.len()],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let operands = arguments.iter().copied().chain([Operand::Block(normal), Operand::Block(unwind), callee]).collect();
+        self.emit(Opcode::Invoke(Box::new(info)), returns, operands, Flags::default(), name)
+    }
+
+    /// `landingpad ty catch clause..`, the first instruction of an unwind
+    /// destination.
+    pub fn landing_pad(&mut self, ty: TypeId, catches: &[Operand], name: &str) -> Operand {
+        let clauses = vec![crate::opcode::Clause::Catch; catches.len()];
+        self.value(Opcode::LandingPad { cleanup: false, clauses }, ty, catches.to_vec(), Flags::default(), name)
+    }
+
     pub fn phi(&mut self, ty: TypeId, incoming: &[(Operand, BlockId)], name: &str) -> Operand {
         let operands = incoming.iter().flat_map(|&(value, block)| [value, Operand::Block(block)]).collect();
         self.value(Opcode::Phi, ty, operands, Flags::default(), name)
