@@ -1,11 +1,58 @@
 //! Helpers adapted from llrm-core's `optimize/transform.rs`, each copied as
 //! a ported pass needs it; the pipeline itself is not ported yet.
 //! `_unreachable` is `llrm_analysis::cfg::_unreachable`.
+//!
+//! What `gvn` reads -- `_PURE`, `_computation`, `_reaches`, `_undisturbed`
+//! and `subexpressions` -- came with it. Left behind, each of the old
+//! representation:
+//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into
+//!   word halves and copied between registers; here every value is whole
+//!   and nothing is a copy, so `stands` (what a copy numbered as) is the
+//!   substitution itself.
+//! - `live` and `halves`: which half of a value was read. A value is read
+//!   when it has users; `gvn` asked only about flags.
+//! - `reused_divides`, `divided_twice`: one divide had two answers, one
+//!   dead. `sdiv` and `srem` are separate here, and two equal divides are
+//!   one expression `subexpressions` finds.
+//! - `_read` and the `flags` checks: no value is the machine's flags.
+//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`,
+//!   `_unchanged_float_environment`, `_erased_floating`: x87 exceptions,
+//!   precision and the float environment. Floating arithmetic has no
+//!   exceptions here (see `llrm_analysis::effects`), so it is as pure as
+//!   integer arithmetic.
+//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased
+//!   operation's source bytes. `replace_all_uses_with` reaches phis too.
+//! - `forwarded` (store-to-load forwarding): waits on `analysis::avail`.
+//! - The `dgroup` parameter: a segment is not a MIR fact.
+//!
+//! Tests of these, from `optimize/transform_tests.rs` and
+//! `analysis/induction_tests.rs`, are here, the addresses and constants
+//! now instructions; `test_cse_replaces_phi_uses_of_a_deleted_initializer`
+//! keeps one case, its others varying variables, source bytes and a copied
+//! constant. `test_a_third_equal_divide_reads_the_answer_the_first_computed`
+//! tests `subexpressions`, which serves a divide here. Stay behind:
+//! - test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader and
+//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and
+//!   copies.
+//! - test_deferred_runtime_float_reuse_respects_environment,
+//!   test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not
+//!   and test_proven_copy_unlocks_strict_floating_cse (ignored there): the
+//!   x87 environment and exactness, the last two reading BC fixtures.
+//! - test_both_lngmix_divides_absorb: a BC corpus through `wholeseg`.
+//! - test_value_reuse_is_one_gvn_pre_pass: the pipeline is not ported.
+//! - Waiting on `analysis::avail`, as `forwarded` does:
+//!   test_forwarding_extends_lifetime_without_conflating_shared_addresses
+//!   and test_a_served_read_names_the_value_and_not_a_register (also a BC
+//!   corpus).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::Opcode;
+use llrm_analysis::{cfg, ssa};
+use llrm_graph::loops;
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::types::TypeId;
+use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
@@ -62,11 +109,529 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
     }
 }
 
+// CSE only ever removes an operation whose whole answer is in its operands.
+//
+// By mnemonic, each old kind's instruction: `sub` is also Neg, `xor` Not,
+// `getelementptr` PtrOffset and Address, `icmp` each comparison, the casts
+// Convert, SignExtend and Extract. FixedMul, Smulhi and Concat were
+// machine idioms with no one instruction; Copy has none.
+pub const _PURE: [&str; 18] = [
+    "add", "sub", "mul", "getelementptr", "udiv", "sdiv", "urem", "srem", "and", "or", "xor", "shl", "lshr", "ashr",
+    "trunc", "zext", "sext", "icmp",
+];
+
+/// The old `op.floating` kinds `_computation` took: arithmetic and the
+/// conversions to and from integers. Fsqrt is an intrinsic call here.
+pub fn _floating(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)
+            | Opcode::Cast(CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP)
+    )
+}
+
+/// One operation where two computed the same thing from the same values;
+/// whether any went.
+///
+/// `avoid_store_crossing` keeps a load from being served across a store.
+pub fn subexpressions(function: &mut Function, avoid_store_crossing: bool) -> Result<bool, String> {
+    let graph = cfg::graph(function);
+    let doms = loops::dominators(&graph, function.entry().map(cfg::id));
+    let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
+
+    let mut seen: IndexMap<_Computation, Vec<(usize, usize, InstId)>> = IndexMap::default();
+    // What a name is rewritten to, and so what it numbers as.
+    let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
+    let mut gone: BTreeSet<InstId> = BTreeSet::new();
+    for &block in function.layout() {
+        let here = order[&block];
+        let instructions = function.block(block).instructions();
+        for (index, &inst) in instructions.iter().enumerate() {
+            let op = function.instruction(inst);
+            let Some(key) = _computation(op, &swap) else {
+                continue;
+            };
+            let candidates = seen.entry(key).or_default();
+            let first = candidates
+                .iter()
+                .rev()
+                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &doms, function.layout(), block))
+                .copied();
+            let Some((at, where_, earlier)) = first else {
+                candidates.push((here, index, inst));
+                continue;
+            };
+            let loads = matches!(op.opcode, Opcode::Load { .. });
+            if loads && (at != here || !_undisturbed(function, &instructions[where_ + 1..index])) {
+                candidates.push((here, index, inst));
+                continue;
+            }
+            if loads
+                && avoid_store_crossing
+                && instructions[where_ + 1..index].iter().any(|&crossed| matches!(function.instruction(crossed).opcode, Opcode::Store { .. }))
+            {
+                candidates.push((here, index, inst));
+                continue;
+            }
+            let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
+                continue;
+            };
+            swap.insert(mine, Operand::Value(theirs));
+            gone.insert(inst);
+        }
+    }
+
+    if gone.is_empty() {
+        return Ok(false);
+    }
+    // A leader is never itself swapped, so the order is free.
+    for (&value, &with) in &swap {
+        function.replace_all_uses_with(value, with);
+    }
+    for inst in gone {
+        function.erase(inst)?;
+    }
+    Ok(true)
+}
+
+/// Python's `_computation` key tuple.
+///
+/// `name` was the old operation's variant; it is the opcode, whose
+/// predicate, cast or element type is part of it, with the flags. The
+/// result widths are the result type. `operands` is `(unordered, named)`:
+/// a commutative pair is sorted and deduplicated.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct _Computation {
+    pub opcode: Opcode,
+    pub flags: Flags,
+    pub ty: TypeId,
+    pub operands: (bool, Vec<Operand>),
+}
+
+/// What this operation computes, or None where that is not only its
+/// operands. Each operand is named as `stands` rewrites it.
+///
+/// A load is its pointer's bytes, as an old load was its cell's; a
+/// volatile one is the old barrier.
+pub fn _computation(op: &Instruction, stands: &BTreeMap<ValueId, Operand>) -> Option<_Computation> {
+    let floating = _floating(&op.opcode);
+    let load = matches!(op.opcode, Opcode::Load { volatile: false, .. });
+    if !(_PURE.contains(&op.opcode.mnemonic()) || load) && !floating {
+        return None;
+    }
+    if op.result.is_none() || op.operands.is_empty() {
+        return None;
+    }
+    let mut named = Vec::new();
+    for &one in &op.operands {
+        match one {
+            Operand::Value(_) => named.push(ssa::provider(one, stands).ok()?),
+            Operand::Constant(_) => named.push(one),
+            Operand::Block(_) => return None,
+        }
+    }
+    let unordered = named.len() == 2
+        && matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+                | Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
+        );
+    if unordered {
+        // Any total order will do.
+        let order = |operand: &Operand| format!("{operand:?}");
+        if order(&named[0]) > order(&named[1]) {
+            named.swap(0, 1);
+        }
+        if named[0] == named[1] {
+            named.pop();
+        }
+    }
+    Some(_Computation { opcode: op.opcode.clone(), flags: op.flags, ty: op.ty, operands: (unordered, named) })
+}
+
+/// Whether the earlier operation has certainly run by the later one.
+pub fn _reaches(
+    at: usize,
+    where_: usize,
+    then: usize,
+    index: usize,
+    doms: &BTreeMap<i64, BTreeSet<i64>>,
+    layout: &[BlockId],
+    block: BlockId,
+) -> bool {
+    if at == then {
+        return where_ < index;
+    }
+    doms.get(&cfg::id(block)).is_some_and(|dominating| dominating.contains(&cfg::id(layout[at])))
+}
+
+/// Whether a load still reads what the load before it read, with `between`
+/// run in between.
+///
+/// The old one asked `regions::overlapping` whether a store wrote the cell;
+/// until regions is ported every store may, as its unknown answer did.
+pub fn _undisturbed(function: &Function, between: &[InstId]) -> bool {
+    for &other in between {
+        match function.instruction(other).opcode {
+            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Store { .. } | Opcode::Load { volatile: true, .. } => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::testing::{parsed, printed};
+    use llrm_mir::module::Module;
 
-    use super::_trivial_phis;
+    use crate::testing::{f, parsed, printed, results};
+
+    use super::{_trivial_phis, subexpressions};
+
+    /// `text` numbered: its printed form, and whether anything went. What
+    /// `@f` returns for `inputs` is what it returned before.
+    fn numbered(text: &str, inputs: &[&[i128]]) -> (String, bool) {
+        let before = parsed(text);
+        let mut module: Module = before.clone();
+        let changed = subexpressions(f(&mut module), false).unwrap();
+        let text = printed(&module);
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
+        (text, changed)
+    }
+
+    /// `text`, left as it was.
+    fn kept(text: &str) {
+        let mut module = parsed(text);
+        let before = printed(&module);
+        assert!(!subexpressions(f(&mut module), false).unwrap(), "{before}");
+        assert_eq!(printed(&module), before);
+    }
+
+    const XY: &[&[i128]] = &[&[0, 0], &[3, 5], &[-7, 2], &[0x7fff, 1]];
+
+    #[test]
+    fn test_a_repeated_expression_is_computed_once() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = mul i16 %x, %y
+  %b = mul i16 %x, %y
+  %r = sub i16 %a, %b
+  ret i16 %r
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert_eq!(
+            text,
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = mul i16 %x, %y
+  %r = sub i16 %a, %a
+  ret i16 %r
+}
+"
+        );
+    }
+
+    #[test]
+    fn test_operands_in_either_order_are_one_commutative_expression() {
+        for (op, ty) in [("add", "i16"), ("xor", "i16"), ("icmp eq", "i1"), ("icmp ne", "i1")] {
+            let text = format!(
+                "define i32 @f(i16 %x, i16 %y) {{
+b0:
+  %a = {op} i16 %x, %y
+  %b = {op} i16 %y, %x
+  %s = zext {ty} %a to i32
+  %t = zext {ty} %b to i32
+  %r = add i32 %s, %t
+  ret i32 %r
+}}
+"
+            );
+            let (text, changed) = numbered(&text, XY);
+            assert!(changed, "{op}");
+            // and so are the two widenings
+            assert!(text.contains("%r = add i32 %s, %s"), "{text}");
+        }
+    }
+
+    #[test]
+    fn test_an_ordered_expression_with_its_operands_swapped_stays() {
+        for (op, ty) in [("sub", "i16"), ("shl", "i16"), ("icmp slt", "i1")] {
+            kept(&format!(
+                "define i32 @f(i16 %x, i16 %y) {{
+b0:
+  %a = {op} i16 %x, %y
+  %b = {op} i16 %y, %x
+  %s = zext {ty} %a to i32
+  %t = zext {ty} %b to i32
+  %r = add i32 %s, %t
+  ret i32 %r
+}}
+"
+            ));
+        }
+    }
+
+    /// Same opcode, but one operand, the flags or the type differs.
+    #[test]
+    fn test_expressions_differing_in_an_operand_flags_or_type_stay() {
+        for (first, second) in [
+            ("%a = add i16 %x, 1", "%b = add i16 %x, 2"),
+            ("%a = add nsw i16 %x, 1", "%b = add i16 %x, 1"),
+            ("%a = udiv exact i16 %x, 2", "%b = udiv i16 %x, 2"),
+            ("%a = sext i8 %n to i16", "%b = zext i8 %n to i16"),
+        ] {
+            kept(&format!(
+                "define i16 @f(i16 %x, i8 %n) {{
+b0:
+  {first}
+  {second}
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+            ));
+        }
+        kept(
+            "define i32 @f(i8 %n) {
+b0:
+  %a = zext i8 %n to i16
+  %b = zext i8 %n to i32
+  %w = zext i16 %a to i32
+  %r = add i32 %w, %b
+  ret i32 %r
+}
+",
+        );
+    }
+
+    #[test]
+    fn test_a_dominated_repeat_reads_the_dominating_value() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = and i16 %x, %y
+  %c = icmp eq i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %b = and i16 %y, %x
+  ret i16 %b
+
+b2:
+  ret i16 %a
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert!(text.contains("b1:\n  ret i16 %a\n"), "{text}");
+    }
+
+    /// Neither arm runs before the other.
+    #[test]
+    fn test_a_repeat_in_a_sibling_block_is_kept() {
+        kept(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %c = icmp eq i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = or i16 %x, %y
+  ret i16 %a
+
+b2:
+  %b = or i16 %x, %y
+  ret i16 %b
+}
+",
+        );
+    }
+
+    /// matrix printed T=0 for T=380 after CSE deleted a zero still named by
+    /// its loop phi.
+    #[test]
+    fn test_cse_replaces_phi_uses_of_a_deleted_initializer() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %first = add i16 %x, 7
+  br label %b1
+
+b1:
+  %second = add i16 %x, 7
+  br label %b2
+
+b2:
+  %result = phi i16 [ %second, %b1 ]
+  %r = add i16 %result, %second
+  ret i16 %r
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert!(!text.contains("%second"), "{text}");
+        assert!(text.contains("%result = phi i16 [ %first, %b1 ]\n  %r = add i16 %result, %first"), "{text}");
+    }
+
+    /// Descriptor addresses encoded as zero must not become the same value.
+    #[test]
+    fn test_cse_keeps_distinct_linker_addresses() {
+        for other in ["@b", "null"] {
+            kept(&format!(
+                "@a = global i16 0
+@b = global i16 0
+
+define i16 @f() {{
+b0:
+  %first = ptrtoint ptr @a to i16
+  %second = ptrtoint ptr {other} to i16
+  %r = add i16 %first, %second
+  ret i16 %r
+}}
+"
+            ));
+        }
+    }
+
+    #[test]
+    fn test_cse_reuses_one_frame_object_address() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %frame = alloca [66 x i16]
+  %first = getelementptr i8, ptr %frame, i16 4
+  %duplicate = getelementptr i8, ptr %frame, i16 4
+  store i16 %x, ptr %first
+  %r = load i16, ptr %duplicate
+  ret i16 %r
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert!(!text.contains("%duplicate"), "{text}");
+        assert!(text.contains("%r = load i16, ptr %first"), "{text}");
+    }
+
+    /// An address took its cell for a read, so no two addresses of one
+    /// descriptor were ever one value and no load through them was shared.
+    #[test]
+    fn test_cse_reuses_one_cell_address() {
+        let (text, changed) = numbered(
+            "@descriptor = global [20 x i8] zeroinitializer
+
+define i16 @f(i16 %x, i16 %y) {
+b0:
+  %first = getelementptr i8, ptr @descriptor, i16 18
+  %duplicate = getelementptr i8, ptr @descriptor, i16 18
+  store i16 %x, ptr %first
+  %r = load i16, ptr %duplicate
+  ret i16 %r
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert!(!text.contains("%duplicate"), "{text}");
+    }
+
+    /// lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no
+    /// operand": the third divide was served the second's quotient, which
+    /// the second no longer computed.
+    #[test]
+    fn test_a_third_equal_divide_reads_the_answer_the_first_computed() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %q0 = sdiv i16 %x, %y
+  %r0 = srem i16 %x, %y
+  %q1 = sdiv i16 %x, %y
+  %r1 = srem i16 %x, %y
+  %q2 = sdiv i16 %x, %y
+  %r2 = srem i16 %x, %y
+  %a = add i16 %r1, %q2
+  %b = add i16 %a, %q0
+  ret i16 %b
+}
+",
+            &[&[7, 2], &[-9, 4], &[100, -3]],
+        );
+        assert!(changed);
+        assert!(text.contains("  %a = add i16 %r0, %q0\n  %b = add i16 %a, %q0\n"), "{text}");
+        assert_eq!(text.matches("sdiv").count() + text.matches("srem").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn test_a_load_is_reused_until_memory_may_change() {
+        let body = |between: &str| {
+            format!(
+                "declare void @g()
+
+define i16 @f(i16 %x, i16 %y) {{
+b0:
+  %p = alloca i16
+  %q = alloca i16
+  store i16 %x, ptr %p
+  %a = load i16, ptr %p
+{between}  %b = load i16, ptr %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+            )
+        };
+        let (text, changed) = numbered(&body("  %n = add i16 %x, 1\n"), XY);
+        assert!(changed);
+        assert!(text.contains("%r = add i16 %a, %a"), "{text}");
+        for between in ["  store i16 %y, ptr %q\n", "  call void @g()\n", "  %v = load volatile i16, ptr %q\n"] {
+            kept(&body(between));
+        }
+        kept(&body("").replace("%b = load i16", "%b = load volatile i16"));
+    }
+
+    /// The first load has not certainly run, nor did the old one look.
+    #[test]
+    fn test_a_load_in_another_block_is_loaded_again() {
+        kept(
+            "define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p
+  br label %b1
+
+b1:
+  %b = load i16, ptr %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+        );
+    }
+
+    #[test]
+    fn test_floating_arithmetic_is_one_expression() {
+        let (text, changed) = numbered(
+            "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %u = sitofp i16 %x to double
+  %v = sitofp i16 %x to double
+  %a = fdiv double %u, 3.0
+  %b = fdiv double %v, 3.0
+  %s = fadd double %a, %b
+  %r = fptosi double %s to i16
+  ret i16 %r
+}
+",
+            XY,
+        );
+        assert!(changed);
+        assert!(text.contains("%s = fadd double %a, %a"), "{text}");
+    }
 
     /// A dead arm and the block it came from go; the join it leaves with one
     /// value is that value.
