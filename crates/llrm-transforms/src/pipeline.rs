@@ -36,7 +36,7 @@ use llrm_graph::loops;
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
-use llrm_mir::passes::{Analyses, FunctionPass, Outer, PassManager, PreservedAnalyses, Stage, Unit};
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::target::Machine;
 
 use crate::interprocedural::Interprocedural;
@@ -129,12 +129,18 @@ pub struct Applied {
     pub registers: i64,
     /// Those that stay live across an ordinary call.
     pub call_registers: i64,
-    /// Semantic work only.
-    pub costs: OperationCosts,
+    /// What analyses ask of the machine, its prices included.
     pub target: Option<Rc<dyn Machine>>,
     /// Where each body's changed steps are written, `N/NNN-stage.ll`, the
     /// Nth body run; the manager writes the module after it there.
     pub dump: Option<PathBuf>,
+}
+
+impl Applied {
+    /// The target's prices; unit prices where there is none.
+    fn costs(&self) -> OperationCosts {
+        self.target.as_ref().map_or_else(OperationCosts::default, |target| target.costs())
+    }
 }
 
 /// The passes, in order, that `applied` leaves on.
@@ -142,7 +148,6 @@ pub struct Applied {
 /// A pass that is off is not in it, rather than in it and skipped, so what
 /// runs is what this returns.
 pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
-    let costs = || applied.costs.clone();
     let limits = || applied.options.limits.clone();
     let every: Vec<Box<dyn FunctionPass>> = vec![
         // Aggregate/object leaves become ordinary SSA before any scalar or
@@ -164,14 +169,14 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(hoist::Hoist),
         Box::new(loopmotion::LoopMotion),
         Box::new(dse::Dse),
-        Box::new(gvn::Gvn { costs: costs(), registers: applied.registers }),
+        Box::new(gvn::Gvn { registers: applied.registers }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(strength::Strength { costs: costs(), registers: applied.registers, call_registers: applied.call_registers }),
+        Box::new(strength::Strength { costs: applied.costs(), registers: applied.registers, call_registers: applied.call_registers }),
         Box::new(algebraic::Algebraic),
         Box::new(dead::Dead),
-        Box::new(unroll::Unroll { costs: costs(), limits: limits() }),
-        Box::new(peel::Peel { costs: costs(), limits: limits() }),
+        Box::new(unroll::Unroll { limits: limits() }),
+        Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill),
         Box::new(indvars::CountToZero),
     ];
@@ -211,7 +216,7 @@ pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, St
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
     let target = applied.target.clone();
     manager.add_module(Interprocedural {
-        costs: applied.costs.clone(),
+        costs: applied.costs(),
         roots: roots(module),
         pipeline: Box::new(move |module, id, _| rerun(module, id, &mut again, target.clone()).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
@@ -241,13 +246,14 @@ fn rerun(module: &mut Module, id: GlobalId, fixed: &mut Fixed, target: Option<Rc
     outer.require::<Summaries>(module, &layout);
     let callees = llrm_mir::memory::callees(module);
     let sizes = llrm_mir::valuetracking::sizes(module, &layout);
-    let Module { context, globals, metadata, .. } = module;
+    let mut declared = Declared::of(module);
+    let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes };
+    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared };
     fixed.run(&mut unit, &mut Analyses::new(Rc::new(outer)));
-    Ok(())
+    declared.place(module)
 }
 
 /// The pipeline over one body, the old `_Transaction`: the structural
@@ -285,7 +291,7 @@ impl Fixed {
         let unswitch = applied.options.unswitch.then(|| {
             let options = Options { unswitch: false, ..applied.options.clone() };
             let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
-            unswitch::Unswitch { costs: applied.costs.clone(), passes: vec![Box::new(Fixed::new(&reoptimize))] }
+            unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
         });
         Self { boundary, passes, unrollers, peelers, unswitch, only: only.is_some(), dump: applied.dump.clone(), runs: 0 }
     }

@@ -382,47 +382,31 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
     Ok(assembled)
 }
 
-/// The machine's foreign memory, as MIR analyses ask it.
-struct Foreign(&'static llrm_core::abi::machine::Machine);
+/// The configured machine as MIR analyses ask it: its foreign memory, and
+/// the prices of `arch`.
+struct Target {
+    machine: &'static llrm_core::abi::machine::Machine,
+    arch: String,
+}
 
-impl llrm_mir::target::Machine for Foreign {
+impl llrm_mir::target::Machine for Target {
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
-        self.0.foreign_span(selectors, offsets, width)
+        self.machine.foreign_span(selectors, offsets, width)
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_cycles::target::costs(&self.arch)
     }
 }
 
 /// The rich MIR pipeline configured by `target` alone, as `flow::optimized`
 /// configures the old one. `LLRM_MIR_STAGES` names where its steps go.
-// Shared with the other frontend's copy; its home is llrm-core's `flow`.
+// The other frontend has the same; its home is llrm-core's `flow`.
 fn rich_pipeline(target: &targets::Profile) -> llrm_transforms::pipeline::Applied {
-    let costs = &target.operations;
     llrm_transforms::pipeline::Applied {
         registers: target.register_capacity,
         call_registers: target.call_register_capacity,
-        costs: llrm_transforms::profit::OperationCosts {
-            add: costs.add,
-            multiply: costs.multiply,
-            divide: costs.divide,
-            shift: costs.shift,
-            address: costs.address,
-            load: costs.load,
-            store: costs.store,
-            memory_update: costs.memory_update,
-            branch: costs.branch,
-            prefix: costs.prefix,
-            r#move: costs.r#move,
-            call: costs.call,
-            return_: costs.return_,
-            float_add: costs.float_add,
-            float_multiply: costs.float_multiply,
-            float_divide: costs.float_divide,
-            float_load: costs.float_load,
-            float_store: costs.float_store,
-            extend: costs.extend,
-            fill: costs.fill,
-            fill_cell: costs.fill_cell,
-        },
-        target: Some(Rc::new(Foreign(llrm_core::abi::machine::current()))),
+        target: Some(Rc::new(Target { machine: llrm_core::abi::machine::current(), arch: target.name.clone() })),
         dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
         ..Default::default()
     }
