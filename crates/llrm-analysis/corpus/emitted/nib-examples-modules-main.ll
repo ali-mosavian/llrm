@@ -1,0 +1,150 @@
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+
+@$str1 = internal constant [8 x i8] c"\08\00\01\00\01\00,\00"
+@$str2 = internal constant [12 x i8] c"\08\00\05\00\05\00 left\00"
+@$str3 = internal constant [13 x i8] c"\08\00\06\00\06\00 right\00"
+
+define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) %0, i16 %1) addrspace(1) {
+b1:
+  %2 = alloca [4 x i8]
+  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 4, i1 false)
+  %3 = load i16, ptr addrspace(1) %0
+  %4 = add i16 %3, %1
+  %5 = getelementptr i8, ptr addrspace(1) %0, i16 2
+  %6 = load i16, ptr addrspace(1) %5
+  store i16 %4, ptr %2, !tbaa !2
+  %7 = getelementptr inbounds i8, ptr %2, i16 2
+  store i16 %6, ptr %7, !tbaa !2
+  %8 = addrspacecast ptr %2 to ptr addrspace(1)
+  %9 = load i32, ptr addrspace(1) %8, !tbaa !2
+  ret i32 %9
+}
+
+define internal i8 @shapes.geometry.side(ptr addrspace(1) %0) addrspace(1) {
+b1:
+  %1 = alloca i8
+  store i8 0, ptr %1
+  %2 = load i16, ptr addrspace(1) %0
+  %3 = icmp slt i16 %2, 0
+  %4 = sext i1 %3 to i8
+  %5 = icmp ne i8 %4, 0
+  br i1 %5, label %b2, label %b3
+
+b2:
+  store i8 0, ptr %1, !tbaa !2
+  br label %b4
+
+b3:
+  store i8 1, ptr %1, !tbaa !2
+  br label %b4
+
+b4:
+  %6 = load i8, ptr %1, !tbaa !2
+  ret i8 %6
+}
+
+define internal i16 @shapes.geometry.secret() addrspace(1) {
+b1:
+  ret i16 7
+}
+
+define internal ptr @report.describe(ptr addrspace(1) %0) addrspace(1) {
+b1:
+  %1 = call addrspace(1) i8 @shapes.geometry.side(ptr addrspace(1) %0)
+  %2 = icmp eq i8 %1, 0
+  %3 = sext i1 %2 to i8
+  %4 = icmp ne i8 %3, 0
+  br i1 %4, label %b4, label %b3
+
+b3:
+  call addrspace(1) void @N$PBEG()
+  %5 = load i16, ptr addrspace(1) %0
+  call addrspace(1) void @N$PI2(i16 %5)
+  %6 = getelementptr i8, ptr @$str1, i16 6
+  call addrspace(1) void @N$PS(ptr %6)
+  %7 = getelementptr i8, ptr addrspace(1) %0, i16 2
+  %8 = load i16, ptr addrspace(1) %7
+  call addrspace(1) void @N$PI2(i16 %8)
+  %9 = getelementptr i8, ptr @$str3, i16 6
+  call addrspace(1) void @N$PS(ptr %9)
+  %10 = call addrspace(1) ptr @N$PEND()
+  ret ptr %10
+
+b4:
+  call addrspace(1) void @N$PBEG()
+  %11 = load i16, ptr addrspace(1) %0
+  call addrspace(1) void @N$PI2(i16 %11)
+  %12 = getelementptr i8, ptr @$str1, i16 6
+  call addrspace(1) void @N$PS(ptr %12)
+  %13 = getelementptr i8, ptr addrspace(1) %0, i16 2
+  %14 = load i16, ptr addrspace(1) %13
+  call addrspace(1) void @N$PI2(i16 %14)
+  %15 = getelementptr i8, ptr @$str2, i16 6
+  call addrspace(1) void @N$PS(ptr %15)
+  %16 = call addrspace(1) ptr @N$PEND()
+  ret ptr %16
+}
+
+define internal i16 @main() addrspace(1) {
+b1:
+  %0 = alloca ptr
+  %1 = alloca [4 x i8]
+  %2 = alloca [4 x i8]
+  %3 = alloca ptr
+  %4 = alloca [4 x i8]
+  store ptr null, ptr %0
+  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 4, i1 false)
+  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 4, i1 false)
+  store ptr null, ptr %3
+  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 4, i1 false)
+  store i16 -3, ptr %4, !tbaa !2
+  %5 = getelementptr inbounds i8, ptr %4, i16 2
+  store i16 4, ptr %5, !tbaa !2
+  %6 = addrspacecast ptr %4 to ptr addrspace(1)
+  %7 = call addrspace(1) ptr @report.describe(ptr addrspace(1) %6)
+  store ptr %7, ptr %3, !tbaa !2
+  %8 = load ptr, ptr %3, !tbaa !2
+  call addrspace(1) void @N$PS(ptr %8)
+  call addrspace(1) void @N$PN()
+  %9 = addrspacecast ptr %4 to ptr addrspace(1)
+  %10 = call addrspace(1) i32 @shapes.geometry.Point.shifted(ptr addrspace(1) %9, i16 5)
+  %11 = addrspacecast ptr %1 to ptr addrspace(1)
+  store i32 %10, ptr addrspace(1) %11, !tbaa !2
+  %12 = load i16, ptr %1, !tbaa !2
+  %13 = getelementptr inbounds i8, ptr %1, i16 2
+  %14 = load i16, ptr %13, !tbaa !2
+  store i16 %12, ptr %2, !tbaa !2
+  %15 = getelementptr inbounds i8, ptr %2, i16 2
+  store i16 %14, ptr %15, !tbaa !2
+  %16 = addrspacecast ptr %2 to ptr addrspace(1)
+  %17 = call addrspace(1) ptr @report.describe(ptr addrspace(1) %16)
+  store ptr %17, ptr %0, !tbaa !2
+  %18 = load ptr, ptr %0, !tbaa !2
+  call addrspace(1) void @N$PS(ptr %18)
+  call addrspace(1) void @N$PN()
+  %19 = load ptr, ptr %0, !tbaa !2
+  call addrspace(1) void @N$BDRP(ptr %19)
+  %20 = load ptr, ptr %3, !tbaa !2
+  call addrspace(1) void @N$BDRP(ptr %20)
+  ret i16 0
+}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+
+declare void @N$PBEG() addrspace(1)
+
+declare void @N$PI2(i16) addrspace(1)
+
+declare void @N$PS(ptr) addrspace(1)
+
+declare ptr @N$PEND() addrspace(1)
+
+declare void @N$PN() addrspace(1)
+
+declare void @N$BDRP(ptr) addrspace(1)
+
+!0 = !{!"llrm hir"}
+!1 = !{!"place", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!"allocation", !0, i64 0}
+!4 = !{!3, !3, i64 0}

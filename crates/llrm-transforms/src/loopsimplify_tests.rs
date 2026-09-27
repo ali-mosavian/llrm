@@ -1,9 +1,9 @@
 //! Adapted from llrm-core's `optimize/loopsimplify_tests.rs`, the port of
 //! `tests/test_loopsimplify.py`, each body now MIR text.
 //!
-//! Stay behind, reading BC corpora: test_adjacent_angle_loops_reach_a_fixed_point
+//! The BC corpora's test_adjacent_angle_loops_reach_a_fixed_point
 //! (qrender's MDL_ANGLEMOD) and test_real_timer_loop_has_one_backedge (nbody's
-//! and fpbench's PITSNAP).
+//! and fpbench's PITSNAP) are asked of the rich-MIR corpus instead.
 
 use std::collections::BTreeSet;
 
@@ -407,4 +407,39 @@ out:
     assert_eq!(shape(&after, "head"), (1, 1, true));
     let inputs: &[&[u128]] = &[&[0], &[5], &[9], &[20]];
     assert_eq!(results(&after, inputs), results(&before, inputs));
+}
+
+/// Each function of the rich-MIR corpus: the latch count of its loops
+/// before and after it is simplified, and whether simplifying again changed
+/// it. Each simplified module must verify.
+fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
+    let mut out = Vec::new();
+    for (name, mut module) in llrm_analysis::testing::corpus() {
+        let names: Vec<String> = module.functions().filter(|(_, _, one)| one.entry().is_some()).filter_map(|(_, global, _)| global.name.clone()).collect();
+        for function_name in names {
+            let (_, function) = module.function_mut(&function_name).unwrap();
+            let latches = |function: &llrm_mir::module::Function| loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>();
+            let before = latches(function);
+            simplified(function);
+            let after = latches(function);
+            let again = simplified(function);
+            out.push((format!("{name}/@{function_name}"), before, after, again));
+        }
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{name}");
+    }
+    out
+}
+
+/// Generalizes the BC corpus's two loopsimplify tests: MDL_ANGLEMOD's
+/// adjacent loops once never reached a fixed point, and PITSNAP's timer loop
+/// had two back edges. Every corpus loop ends with one latch, and a second
+/// run changes nothing.
+#[test]
+fn every_corpus_loop_ends_with_one_latch_at_a_fixed_point() {
+    let results = corpus_simplified();
+    assert!(results.iter().any(|(_, before, _, _)| before.iter().any(|&latches| latches > 1)), "the corpus has a loop with two latches");
+    for (name, _, after, again) in results {
+        assert!(after.iter().all(|&latches| latches == 1), "{name}: {after:?}");
+        assert!(!again, "{name}: a second run changed it");
+    }
 }

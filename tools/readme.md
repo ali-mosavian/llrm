@@ -5,6 +5,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | Tool | Does |
 |---|---|
 | `nib-build.sh` | builds a Nib program into a DOS `.EXE` |
+| `mir-corpus.sh` | regenerates `crates/llrm-analysis/corpus`, the rich MIR the corpus tests read |
 | `baseline.sh OUT` | every stage dump of the OMF corpus and Nib examples; `diff -r` two of them |
 | `e2e/e2e.py` | BC compiles `tests/suite`, `llrm-omf` rewrites, LINK links, DOSBox runs, output compared |
 | `e2e/matrix.py` | `e2e` over all twelve BC configurations |
