@@ -446,3 +446,40 @@ fn ports_are_the_targets_intrinsics() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%2 = call i16 @llrm.ia16.in.i16(i16 %0)\n  call void @llrm.ia16.out.i16(i16 %0, i16 %2)"), "{text}");
 }
+
+/// The runtime's promise was the old raise's `WRITERS` table alone, so the
+/// rich MIR took every routine to write b$seg and to run program code. It
+/// is stated on the declarations: DEF SEG writes b$seg, INKEY$ writes none
+/// of the named cells, and a routine that may run program code promises
+/// nothing.
+#[test]
+fn a_runtime_promise_is_stated_on_its_routines() {
+    use crate::mir::{Runtime, emit_promised};
+    use crate::model::{DataLinkage, DataObject};
+    let call = |id, callee: &str| {
+        let mut call = Instruction::new(id, Op::Call, Vec::new(), Vec::new());
+        call.callee = Some(callee.to_owned());
+        call
+    };
+    let mut function = difference();
+    function.blocks[0].instructions.extend([call(2, "B$DSEG"), call(3, "B$INKY"), call(4, "B$RUN")]);
+    let mut program = program(function);
+    let mut segment = DataObject::new(3, "b$seg", vec![0, 0]);
+    (segment.linkage, segment.addressed) = (DataLinkage::External, false);
+    program.modules[0].data = vec![segment];
+    let writes = |routine: &str| match routine {
+        "B$DSEG" => Some(vec!["b$seg".to_owned()]),
+        "B$INKY" => Some(Vec::new()),
+        _ => None,
+    };
+    let emitted = emit_promised(&program, Some(&Runtime { writes: &writes })).remove(0);
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&text).unwrap()), text);
+    assert!(text.contains("!llrm.named = !{!5}\n!llrm.writes = !{!6, !7}\n"), "{text}");
+    assert!(text.contains("!5 = !{ptr @b$seg}\n!6 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!7 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{text}");
+    for (routine, promised) in [("B$DSEG", true), ("B$INKY", true), ("B$RUN", false)] {
+        let line = text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(line.contains("nocallback"), promised, "{line}");
+    }
+}
