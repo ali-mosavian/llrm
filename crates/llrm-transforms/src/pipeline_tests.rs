@@ -97,3 +97,66 @@ b3:
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
     }
 }
+
+/// matmul8's init: an inner loop branching on `i == j` is peeled, then its
+/// outer loop, which decides every branch. Peel ran once per body, so the
+/// outer loop stayed rolled around eight undecided diamonds.
+#[test]
+fn a_loop_whose_inner_loop_was_peeled_is_peeled_in_turn() {
+    let text = "define i16 @main() {
+b0:
+  %a = alloca [64 x i16]
+  br label %outer
+
+outer:
+  %i = phi i16 [ 0, %b0 ], [ %in, %outerlatch ]
+  %go = icmp slt i16 %i, 8
+  br i1 %go, label %inner, label %done
+
+inner:
+  %j = phi i16 [ 0, %outer ], [ %jn, %latch ]
+  %more = icmp slt i16 %j, 8
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %row = shl i16 %i, 3
+  %at = add i16 %row, %j
+  %slot = getelementptr inbounds i16, ptr %a, i16 %at
+  %same = icmp eq i16 %i, %j
+  br i1 %same, label %diagonal, label %other
+
+diagonal:
+  store i16 2, ptr %slot
+  br label %latch
+
+other:
+  %sum = add i16 %i, %j
+  %r = srem i16 %sum, 3
+  store i16 %r, ptr %slot
+  br label %latch
+
+latch:
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %in = add i16 %i, 1
+  br label %outer
+
+done:
+  %p = getelementptr inbounds i16, ptr %a, i16 13
+  %v = load i16, ptr %p
+  %q = getelementptr inbounds i16, ptr %a, i16 18
+  %w = load i16, ptr %q
+  %t = add i16 %v, %w
+  ret i16 %t
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let before = interpret::run(&module, "main", Vec::new(), FUEL);
+    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos::default())), ..Applied::default() };
+    pipeline::applied(&mut module, &applied).unwrap();
+    let after = llrm_mir::print::module(&module);
+    assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), before, "{after}");
+    assert!(!after.contains(" phi "), "{after}");
+}
