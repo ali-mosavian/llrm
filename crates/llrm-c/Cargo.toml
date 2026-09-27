@@ -8,6 +8,8 @@ description = "The C frontend, through Open Watcom's front end"
 [dependencies]
 llrm-core = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-cycles = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }

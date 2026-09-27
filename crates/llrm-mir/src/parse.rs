@@ -154,6 +154,19 @@ impl Parser {
         }
     }
 
+    /// An `i64`.
+    fn offset(&mut self) -> Parsed<i64> {
+        match self.next() {
+            Token::Int { negative, magnitude } if magnitude <= u128::from(u64::MAX >> 1) + u128::from(negative) => {
+                Ok(if negative { (magnitude as i128).wrapping_neg() as i64 } else { magnitude as i64 })
+            }
+            _ => {
+                self.at -= 1;
+                self.fail(format!("expected an i64, found {}", self.describe()))
+            }
+        }
+    }
+
     fn unsigned(&mut self) -> Parsed<u64> {
         match self.next() {
             Token::Int { negative: false, magnitude } if magnitude <= u128::from(u64::MAX) => Ok(magnitude as u64),
@@ -598,6 +611,24 @@ impl Parser {
                     }
                     self.expect_punct(')')?;
                     out.push(Attribute::Memory(effects));
+                }
+                Token::Word(word) if word == "initializes" => {
+                    self.next();
+                    self.expect_punct('(')?;
+                    let mut ranges = Vec::new();
+                    loop {
+                        self.expect_punct('(')?;
+                        let lower = self.offset()?;
+                        self.expect_punct(',')?;
+                        let upper = self.offset()?;
+                        self.expect_punct(')')?;
+                        ranges.push((lower, upper));
+                        if !self.eat_punct(',') {
+                            break;
+                        }
+                    }
+                    self.expect_punct(')')?;
+                    out.push(Attribute::Initializes(ranges));
                 }
                 _ => return Ok(out),
             }

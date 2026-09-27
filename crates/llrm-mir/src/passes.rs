@@ -149,6 +149,11 @@ impl PreservedAnalyses {
         self
     }
 
+    /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
+    pub fn are_all_preserved(&self) -> bool {
+        self.all
+    }
+
     fn keeps(&self, analysis: TypeId) -> bool {
         self.all || self.kept.contains(&analysis)
     }
@@ -179,6 +184,11 @@ impl Outer {
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<M: ModuleAnalysis>(&self) -> Option<Rc<M::Result>> {
         self.modules.get(&TypeId::of::<M>()).map(|one| Rc::clone(one).downcast::<M::Result>().expect("keyed by its type"))
+    }
+
+    /// `cached`, borrowed for as long as the proxy.
+    pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
+        self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
     }
 
     /// Whether an analysis computed under `other` read what this holds.
@@ -246,7 +256,9 @@ impl Analyses {
         result
     }
 
-    fn invalidate(&mut self, preserved: &PreservedAnalyses) {
+    /// Drops what `preserved` does not keep: LLVM's
+    /// `FunctionAnalysisManager::invalidate`, for a pass running others.
+    pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
         self.cache.retain(|key, _| preserved.keeps(*key));
     }
 

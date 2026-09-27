@@ -32,10 +32,6 @@ fn calls(function: &Function) -> Vec<InstId> {
     function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_))).collect()
 }
 
-fn layout(module: &Module) -> DataLayout {
-    DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap()
-}
-
 #[test]
 fn test_module_constant_returns_require_every_exit_to_agree() {
     let module = parsed(
@@ -149,102 +145,6 @@ b:
     assert_eq!(found[&sites[0]].iter().map(|one| one.map(|one| number(&module, one))).collect::<Vec<_>>(), [Some(4)]);
     assert_eq!(found[&sites[1]], vec![None]);
     assert!(constant_parameters(&module, &names(&module, &["choose"])).is_empty());
-}
-
-#[test]
-fn test_pure_call_removal_drops_the_unused_call() {
-    let mut module = parsed(
-        "define internal i16 @leaf(i16 %x) {
-b:
-  ret i16 %x
-}
-
-define i16 @caller() {
-b:
-  %r = call i16 @leaf(i16 9)
-  ret i16 42
-}
-",
-    );
-    let pure = pure_procedures(&module);
-    let declarations = effects::declarations(&module);
-    let (context, caller) = module.function_mut("caller").unwrap();
-    assert!(remove_dead_pure_calls(context, &declarations, caller, &pure));
-    let left: Vec<&str> = caller.walk().map(|(_, inst)| caller.instruction(inst).opcode.mnemonic()).collect();
-    assert_eq!(left, ["ret"]);
-}
-
-#[test]
-fn test_purity_refuses_nontermination_and_nonlocal_stores() {
-    let module = parsed(
-        "@g = global i16 0
-
-define void @loop() {
-b:
-  br label %b
-}
-
-define void @write() {
-b:
-  store i16 1, ptr @g
-  ret void
-}
-",
-    );
-    assert_eq!(pure_procedures(&module), BTreeSet::new());
-}
-
-#[test]
-fn test_a_stated_pure_callee_and_a_frame_store_keep_a_body_pure() {
-    let module = parsed(
-        "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
-declare i16 @unknown(i16)
-
-define i16 @local(i16 %x) {
-b:
-  %slot = alloca [2 x i16]
-  %high = getelementptr inbounds i16, ptr %slot, i16 1
-  store i16 %x, ptr %high
-  %y = load i16, ptr %high
-  %z = call i16 @llvm.smax.i16(i16 %y, i16 0)
-  ret i16 %z
-}
-
-define i16 @opaque(i16 %x) {
-b:
-  %z = call i16 @unknown(i16 %x)
-  ret i16 %z
-}
-",
-    );
-    assert_eq!(pure_procedures(&module), names(&module, &["local"]));
-}
-
-#[test]
-fn test_readonly_procedure_allows_only_direct_nonvolatile_static_reads() {
-    let module = parsed(
-        "@g = global i16 0
-
-define i16 @read() {
-b:
-  %v = load i16, ptr @g
-  ret i16 %v
-}
-
-define i16 @volatile() {
-b:
-  %v = load volatile i16, ptr @g
-  ret i16 %v
-}
-
-define void @write() {
-b:
-  store i16 1, ptr @g
-  ret void
-}
-",
-    );
-    assert_eq!(readonly_procedures(&module, &layout(&module)), names(&module, &["read"]));
 }
 
 #[test]
@@ -492,156 +392,6 @@ b:
 }
 
 #[test]
-fn purity_reaches_a_caller_of_a_pure_body_but_not_a_self_recursive_one() {
-    let module = parsed(
-        "define internal i16 @leaf(i16 %x) {
-b:
-  %y = add i16 %x, 1
-  ret i16 %y
-}
-
-define i16 @middle(i16 %x) {
-b:
-  %y = call i16 @leaf(i16 %x)
-  ret i16 %y
-}
-
-define i16 @recursive(i16 %x) {
-b:
-  %y = call i16 @recursive(i16 %x)
-  ret i16 %y
-}
-",
-    );
-    assert_eq!(pure_procedures(&module), names(&module, &["leaf", "middle"]));
-}
-
-#[test]
-fn purity_refuses_reads_of_globals_parameters_and_volatile_frame_accesses() {
-    let module = parsed(
-        "@g = global i16 0
-
-define i16 @global() {
-b:
-  %v = load i16, ptr @g
-  ret i16 %v
-}
-
-define i16 @parameter(ptr %p) {
-b:
-  %v = load i16, ptr %p
-  ret i16 %v
-}
-
-define i16 @volatile() {
-b:
-  %slot = alloca i16
-  %v = load volatile i16, ptr %slot
-  ret i16 %v
-}
-",
-    );
-    assert_eq!(pure_procedures(&module), BTreeSet::new());
-}
-
-#[test]
-fn a_call_that_states_only_memory_none_is_not_pure_without_willreturn_and_nounwind() {
-    let module = parsed(
-        "declare i16 @quiet(i16) memory(none)
-declare i16 @returns(i16) memory(none) willreturn nounwind
-
-define i16 @f(i16 %x) {
-b:
-  %y = call i16 @quiet(i16 %x)
-  ret i16 %y
-}
-
-define i16 @g(i16 %x) {
-b:
-  %y = call i16 @returns(i16 %x)
-  ret i16 %y
-}
-",
-    );
-    assert_eq!(pure_procedures(&module), names(&module, &["g"]));
-}
-
-#[test]
-fn dead_call_removal_keeps_used_results_impure_callees_and_invokes() {
-    let mut module = parsed(
-        "declare void @effect()
-declare i32 @__gxx_personality_v0(...)
-
-define internal i16 @leaf(i16 %x) {
-b:
-  ret i16 %x
-}
-
-define i16 @caller() personality ptr @__gxx_personality_v0 {
-b:
-  %used = call i16 @leaf(i16 1)
-  call void @effect()
-  %dead = invoke i16 @leaf(i16 2) to label %ok unwind label %pad
-
-ok:
-  ret i16 %used
-
-pad:
-  %lp = landingpad { ptr, i32 } cleanup
-  resume { ptr, i32 } %lp
-}
-",
-    );
-    let pure = pure_procedures(&module);
-    let declarations = effects::declarations(&module);
-    let before = llrm_mir::print::module(&module);
-    let (context, caller) = module.function_mut("caller").unwrap();
-    assert!(!remove_dead_pure_calls(context, &declarations, caller, &pure));
-    assert_eq!(llrm_mir::print::module(&module), before);
-}
-
-#[test]
-fn readonly_reaches_callers_and_refuses_far_external_and_pointer_reads() {
-    let module = parsed(
-        "@near = global i16 0
-@far_data = addrspace(1) global i16 0
-@external_data = external global i16
-
-define i16 @read() {
-b:
-  %v = load i16, ptr @near
-  ret i16 %v
-}
-
-define i16 @caller() {
-b:
-  %v = call i16 @read()
-  ret i16 %v
-}
-
-define i16 @far() {
-b:
-  %v = load i16, ptr addrspace(1) @far_data
-  ret i16 %v
-}
-
-define i16 @external() {
-b:
-  %v = load i16, ptr @external_data
-  ret i16 %v
-}
-
-define i16 @pointer(ptr %p) {
-b:
-  %v = load i16, ptr %p
-  ret i16 %v
-}
-",
-    );
-    assert_eq!(readonly_procedures(&module, &layout(&module)), names(&module, &["read", "caller"]));
-}
-
-#[test]
 fn a_private_body_that_returns_on_one_path_is_not_noreturn() {
     let module = parsed(
         "declare void @exit(i16) noreturn
@@ -691,7 +441,7 @@ const REPLACEABLE: [&str; 5] = ["weak", "weak_odr", "linkonce", "linkonce_odr", 
 /// A replaceable body's constant return and purity were taken as facts of
 /// whichever body links in: its calls lost their results and effects.
 #[test]
-fn a_body_the_linker_may_replace_proves_no_return_constant_purity_or_readonly() {
+fn a_body_the_linker_may_replace_proves_no_return_constant() {
     for linkage in REPLACEABLE {
         let module = parsed(&format!(
             "@g = global i16 0
@@ -715,7 +465,5 @@ b:
         ));
         let exact = names(&module, &["exact"]);
         assert_eq!(constant_returns(&module).keys().copied().collect::<BTreeSet<_>>(), exact, "{linkage}");
-        assert_eq!(pure_procedures(&module), exact, "{linkage}");
-        assert_eq!(readonly_procedures(&module, &layout(&module)), exact, "{linkage}");
     }
 }

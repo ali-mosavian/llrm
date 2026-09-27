@@ -127,19 +127,61 @@ pub fn stated(attrs: &[Attribute]) -> Effects {
     stated_at(attrs, |_| true)
 }
 
-/// What `attrs` allow at the locations `counted` admits (`None` is
-/// `memory(...)`'s default, `Some("argmem")` a named one).
+/// The locations `memory(...)` tells apart: what the pointer arguments
+/// point to, memory no pointer of the module reaches, and every other
+/// (`None`).
+const LOCATIONS: [Option<&str>; 3] = [Some("argmem"), Some("inaccessiblemem"), None];
+
+/// What `attrs` allow at the locations `counted` admits (`None` is every
+/// one but `argmem` and `inaccessiblemem`).
 pub fn stated_at(attrs: &[Attribute], counted: impl Fn(Option<&str>) -> bool) -> Effects {
+    LOCATIONS.into_iter().filter(|&one| counted(one)).map(|one| at(attrs, one)).fold(Effects::NONE, |one, other| Effects { reads: one.reads || other.reads, writes: one.writes || other.writes })
+}
+
+/// What `attrs` allow on the memory a call's pointer arguments point to,
+/// and on every other location the module sees, as LLVM's `MemoryEffects`
+/// keeps them per location. `inaccessiblemem` is neither.
+pub fn located(attrs: &[Attribute]) -> (Effects, Effects) {
+    (at(attrs, Some("argmem")), at(attrs, None))
+}
+
+/// What `attrs` allow on memory no pointer of the module reaches:
+/// `inaccessiblemem`.
+pub fn inaccessible(attrs: &[Attribute]) -> Effects {
+    at(attrs, Some("inaccessiblemem"))
+}
+
+/// What `attrs` allow on one of `LOCATIONS`.
+fn at(attrs: &[Attribute], location: Option<&str>) -> Effects {
+    let access = |one: &str| Effects { reads: one == "read" || one == "readwrite", writes: one == "write" || one == "readwrite" };
+    let mut effects = Effects::ANY;
+    for attr in attrs {
+        let stated = match attr {
+            Attribute::Memory(locations) => {
+                let default = locations.iter().find(|(one, _)| one.is_none()).map_or(Effects::NONE, |(_, one)| access(one));
+                match location {
+                    Some(_) => locations.iter().find(|(one, _)| one.as_deref() == location).map_or(default, |(_, one)| access(one)),
+                    // Another named location, as `errnomem`, is part of the rest.
+                    None => locations.iter().filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref())).fold(default, |effects, (_, one)| {
+                        let one = access(one);
+                        Effects { reads: effects.reads || one.reads, writes: effects.writes || one.writes }
+                    }),
+                }
+            }
+            Attribute::Flag(_) => through(std::slice::from_ref(attr)),
+            _ => continue,
+        };
+        effects = Effects { reads: effects.reads && stated.reads, writes: effects.writes && stated.writes };
+    }
+    effects
+}
+
+/// What `readnone`, `readonly` or `writeonly` among `attrs` allow, on a
+/// function or on one pointer parameter.
+pub fn through(attrs: &[Attribute]) -> Effects {
     let mut effects = Effects::ANY;
     for attr in attrs {
         match attr {
-            Attribute::Memory(locations) => {
-                effects = Effects::NONE;
-                for (_, access) in locations.iter().filter(|(location, _)| counted(location.as_deref())) {
-                    effects.reads |= access == "read" || access == "readwrite";
-                    effects.writes |= access == "write" || access == "readwrite";
-                }
-            }
             Attribute::Flag(flag) if flag == "readnone" => effects = Effects::NONE,
             Attribute::Flag(flag) if flag == "readonly" => effects.writes = false,
             Attribute::Flag(flag) if flag == "writeonly" => effects.reads = false,
@@ -147,6 +189,12 @@ pub fn stated_at(attrs: &[Attribute], counted: impl Fn(Option<&str>) -> bool) ->
         }
     }
     effects
+}
+
+/// The byte ranges `initializes` among `attrs` says are written before
+/// anything reads them.
+pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
+    attrs.iter().find_map(|attr| if let Attribute::Initializes(ranges) = attr { Some(ranges.as_slice()) } else { None }).unwrap_or_default()
 }
 
 /// What `inst` may do to memory.

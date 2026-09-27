@@ -14,9 +14,8 @@
 //! segment) and `Allocation` (a descriptor's heap block: the rich MIR marks
 //! it on the access instead, as the `!tbaa` type "allocation").
 //!
-//! Every global is `captured`: nothing in the rich MIR says an internal
-//! global's address stays private, which the old raise's private segments
-//! did.
+//! A global is `captured` unless the unit's GlobalsAA tracks it: the old
+//! raise's private segments.
 //!
 //! Old `MemRef` spelled an address as an x86 operand -- a space, a segment
 //! index, a displacement and a register base -- with an SSA `base` and
@@ -34,12 +33,14 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use llrm_mir::context::{ConstantExpr, ConstantKind, Context, signed};
+use llrm_mir::context::{ConstantExpr, ConstantKind, Context, GlobalId, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::IndexMap;
 
+use crate::globalsaa::Globals;
 use crate::regions::Machine;
 
 /// Python `qbopt.model.memory:Kind`.
@@ -381,11 +382,29 @@ pub struct Unit<'a> {
     pub metadata: &'a [MetadataNode],
     pub globals: &'a [GlobalValue],
     pub function: &'a Function,
+    /// Each access with the provenance alias found (`alias::annotated`).
+    pub references: Option<&'a IndexMap<InstId, MemRef>>,
+    /// What GlobalsAA proves of the module's globals; without it every
+    /// global is captured.
+    pub globals_aa: Option<&'a Globals>,
 }
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function }
+        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None }
+    }
+
+    pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
+        Self { globals_aa: Some(globals_aa), ..self }
+    }
+
+    pub fn with_references(self, references: &'a IndexMap<InstId, MemRef>) -> Self {
+        Self { references: Some(references), ..self }
+    }
+
+    /// The access `inst` makes: alias's, where the unit has its references.
+    pub fn reference(&self, inst: InstId) -> Option<MemRef> {
+        self.references.and_then(|all| all.get(&inst).cloned()).or_else(|| MemRef::of(self, inst))
     }
 
     pub fn operand_type(&self, operand: Operand) -> Option<TypeId> {
@@ -446,14 +465,20 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
         }
         Operand::Constant(id) => {
             let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
-            let extent = match &unit.globals.get(global.0 as usize)?.kind {
-                GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
-                GlobalKind::Function(_) => return None,
-            };
-            Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, ..MemoryObject::new(MemoryKind::Global) })
+            global_object(unit, global)
         }
         Operand::Block(_) => None,
     }
+}
+
+/// The object a global variable is.
+pub fn global_object(unit: &Unit, global: GlobalId) -> Option<MemoryObject> {
+    let extent = match &unit.globals.get(global.0 as usize)?.kind {
+        GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
+        GlobalKind::Function(_) => return None,
+    };
+    let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
+    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, ..MemoryObject::new(MemoryKind::Global) })
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its

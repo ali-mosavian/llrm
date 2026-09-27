@@ -31,4 +31,5 @@ testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
 llrm-omf = { workspace = true, features = ["testing"] }
+llrm-transforms = { workspace = true }
 regex = { workspace = true }

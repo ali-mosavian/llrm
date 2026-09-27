@@ -296,11 +296,15 @@ pub fn _recurrence_span(start: &BigInt, step: &BigInt, advances: &BigInt, width:
 /// predecessor's facts narrowed by that edge, or else from its immediate
 /// dominator's, and each edge is applied once.
 pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
+    dominated_edges_with(unit, &consts::known(unit, None, None, None))
+}
+
+/// `dominated_edges`, given what `consts::known` finds without memory.
+pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
     let function = unit.function;
     let Some(entry) = function.entry() else {
         return Ok(IndexMap::default());
     };
-    let facts = consts::known(unit, None, None, None);
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let immediate = loops::immediate_dominators(&graph, Some(cfg::id(entry)));
@@ -310,12 +314,12 @@ pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, In
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
             Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
-                on_edge(unit, cfg::block(parent), block, inherited, Some(&facts))?.unwrap_or_else(|| inherited.clone())
+                on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?.unwrap_or_else(|| inherited.clone())
             }
             _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or_default(),
         };
         for &inst in function.block(block).instructions() {
-            let (Some(interval), Some(result)) = (_computed(unit, inst, &scoped, &facts), function.instruction(inst).result) else {
+            let (Some(interval), Some(result)) = (_computed(unit, inst, &scoped, facts), function.instruction(inst).result) else {
                 continue;
             };
             let interval = match scoped.get(&result) {
@@ -353,14 +357,18 @@ pub type Facts = IndexMap<i64, IndexMap<ValueId, Interval>>;
 /// dominate the block. A block in no counted loop keeps the facts of the
 /// branch edges that dominate it.
 pub fn bounded(unit: &Unit) -> Result<Facts, String> {
+    bounded_with(unit, &consts::known(unit, None, None, None))
+}
+
+/// `bounded`, given what `consts::known` finds without memory.
+pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Facts, String> {
     let function = unit.function;
-    let facts = consts::known(unit, None, None, None);
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let dominators = loops::dominators(&graph, None);
     let mut result = Facts::default();
     for loop_ in loops::loops(&graph, None) {
-        let proofs = induction::counted_unless_stopped(unit, &loop_, Some(&facts), false);
+        let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
         let mut inside = loop_.body.clone();
@@ -378,8 +386,8 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
         if let (1, Some(advances)) = (trips.len(), trips.first()) {
             for counter in induction::basics(unit, &loop_).values() {
                 let width = counter.start.width();
-                let start = induction::_signed(&counter.start, &facts, width);
-                let step = induction::_signed(&counter.step, &facts, width);
+                let start = induction::_signed(&counter.start, facts, width);
+                let step = induction::_signed(&counter.step, facts, width);
                 if let (Some(start), Some(step)) = (start, step)
                     && let Some(interval) = _recurrence_span(&start, &step, advances, width)
                 {
@@ -403,7 +411,7 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
             let before = known.len();
             for &inst in &operations {
                 if let Some(result) = function.instruction(inst).result.filter(|result| !known.contains_key(result))
-                    && let Some(interval) = _computed(unit, inst, &known, &facts)
+                    && let Some(interval) = _computed(unit, inst, &known, facts)
                 {
                     known.insert(result, interval);
                 }
@@ -452,7 +460,7 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
             }
         }
     }
-    for (at, known) in dominated_edges(unit)? {
+    for (at, known) in dominated_edges_with(unit, facts)? {
         result.entry(at).or_insert(known);
     }
     Ok(result)
@@ -571,10 +579,12 @@ fn _exact_sum(unit: &Unit, value: ValueId, at: i64, scoped: &Facts, bits: u32, d
 /// Every value `consts` knows without solving memory, as the singleton
 /// interval an alias query reads.
 pub fn constants(unit: &Unit) -> IndexMap<ValueId, Interval> {
-    consts::known(unit, None, None, None)
-        .into_iter()
-        .map(|(value, fact)| (value, Interval { low: fact.n.clone(), high: fact.n, width: fact.width }))
-        .collect()
+    intervals(&consts::known(unit, None, None, None))
+}
+
+/// Each known value as the interval of it alone.
+pub fn intervals(known: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, Interval> {
+    known.iter().map(|(value, fact)| (*value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width })).collect()
 }
 
 /// Exact values computed without consulting memory.

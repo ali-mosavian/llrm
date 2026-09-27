@@ -94,10 +94,10 @@ impl Accesses {
         Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone()))))
     }
 
-    /// `unit`'s accesses unresolved: each reference as the instruction
-    /// spells it, each call writing its footprint in `calls`.
+    /// `unit`'s accesses unresolved: each reference as the unit has it
+    /// (`Unit::reference`), each call writing its footprint in `calls`.
     pub fn plain(unit: &Unit, calls: &Calls) -> Self {
-        let references = unit.function.walk().filter_map(|(_, inst)| MemRef::of(unit, inst).map(|one| (inst, one))).collect();
+        let references = unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(stores.clone()))))
     }
 

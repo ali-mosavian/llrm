@@ -145,6 +145,10 @@ fn attributes(context: &Context, attrs: &[Attribute]) -> String {
                 let bits = context.types.int_bits(*ty).expect("a range is of an integer type");
                 format!("range({} {}, {})", context.types.display(*ty), signed(*lower, bits), signed(*upper, bits))
             }
+            Attribute::Initializes(ranges) => {
+                let list: Vec<String> = ranges.iter().map(|(lower, upper)| format!("({lower}, {upper})")).collect();
+                format!("initializes({})", list.join(", "))
+            }
             Attribute::Str(key, None) => string(key.as_bytes()),
             Attribute::Str(key, Some(value)) => format!("{}={}", string(key.as_bytes()), string(value.as_bytes())),
         })

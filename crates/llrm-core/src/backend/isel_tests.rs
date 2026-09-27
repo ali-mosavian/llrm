@@ -1888,3 +1888,32 @@ fn test_an_i64_halfs_unread_computation_is_not_made() {
     // One `sar`, the dividend's sign; none for the quotient's high dword.
     assert_eq!(names.iter().filter(|name| **name == "sar").count(), 1, "{names:?}");
 }
+
+/// isel asks whether a call between a load and its only reader writes
+/// memory, as the callee's attributes state; only llrm-mir's function-attrs
+/// stated them of a defined body, so a load across a call to one that
+/// writes nothing was not `fild`'s cell. The whole-module stamp states them.
+#[test]
+fn a_load_is_folded_across_a_call_to_a_stamped_body_that_writes_nothing() {
+    let text = "@g = global i16 0
+@h = global i16 0
+
+define internal i16 @reads() addrspace(1) {
+  %v = load i16, ptr @h
+  ret i16 %v
+}
+
+define double @f() addrspace(1) {
+  %v = load i16, ptr @g
+  %r = call addrspace(1) i16 @reads()
+  %d = sitofp i16 %v to double
+  ret double %d
+}
+";
+    let mut module = parsed(text);
+    llrm_transforms::interprocedural::stamped(&mut module).unwrap();
+    let stamped = llrm_mir::print::module(&module);
+    let stamped = stamped.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n");
+    assert!(listing(&stamped, "f").iter().any(|line| line == "fild word ptr g"), "{stamped}");
+    assert!(!listing(text, "f").iter().any(|line| line == "fild word ptr g"));
+}

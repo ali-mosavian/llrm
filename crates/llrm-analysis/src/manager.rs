@@ -2,23 +2,20 @@
 //! (`passes::Analyses`), the role llrm-core's `analysis/manager.rs` played:
 //! a pass asks, the manager computes once and drops what a pass did not
 //! preserve. An entry reads its module and target through the outer proxy
-//! (`passes::Outer`), and alias's callee summaries are a module analysis
-//! there, as LLVM's `GlobalsAA`.
-//!
-//! `Annotated` and `DominatedEdges` still solve the points-to and the
-//! constants they build on themselves, rather than ask `Pointers` and
-//! `Registers`.
+//! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
+//! outside code reaches but by name, and alias's callee summaries.
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, GlobalValue, InstId, Module, ValueId};
+use llrm_mir::module::{Function, InstId, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
 use llrm_mir::target::Machine;
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
-use crate::{effects, floatfacts};
+use crate::globalsaa::{self, Globals};
+use crate::floatfacts;
 use crate::memory::{MemRef, Unit};
 use crate::ranges::{self, Interval};
 
@@ -26,22 +23,39 @@ impl<'a> Unit<'a> {
     /// `function` as the manager's analyses see it: its module and target
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function }
+        let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
+        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None }
+    }
+}
+
+/// Which globals no code outside the module reaches but by name:
+/// `globalsaa::analysis`.
+pub struct GlobalsAA;
+
+impl ModuleAnalysis for GlobalsAA {
+    type Result = Result<Globals, String>;
+    const NAME: &'static str = "globals-aa";
+    fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
+        globalsaa::analysis(module, layout, target)
     }
 }
 
 /// Each defined function's memory effects, by name: `alias::summaries` of
-/// the whole module.
+/// the whole module, its globals as `GlobalsAA` finds them.
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
     fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
+        // A module analysis sees no other: GlobalsAA's answer is found again.
+        let globals = globalsaa::analysis(module, layout, target)?;
         let procedures = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
-            .filter_map(|(_, global, function)| Some((global.name.clone()?, Procedure::of(Unit { machine: target, ..Unit::of(module, layout, function) }))))
+            .filter_map(|(_, global, function)| {
+                Some((global.name.clone()?, Procedure::of(Unit { machine: target, ..Unit::of(module, layout, function) }.with_globals_aa(&globals))))
+            })
             .collect();
         alias::summaries(&procedures, None)
     }
@@ -65,14 +79,17 @@ impl Analysis for Annotated {
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        alias::annotated(&Unit::within(context, layout, function, analyses.outer()))
+        let pointers = analyses.get::<Pointers>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
+        alias::annotated_with(&Unit::within(context, layout, function, analyses.outer()), pointers, &registers)
     }
 }
 
 /// What each call reads and writes, its callee as `Summaries` says:
 /// `alias::calls_annotated`. Where `Summaries` was not required, each
 /// call is to an unknown callee. Either way a call does no more than its
-/// attributes state (`effects::call`).
+/// attributes state, as alias reads them.
 pub struct CallEffects;
 
 impl Analysis for CallEffects {
@@ -80,31 +97,21 @@ impl Analysis for CallEffects {
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let outer = analyses.outer();
-        // As LLVM's function passes read an outer result only if cached:
-        // with no summaries, every callee is unknown.
-        let summaries = outer.cached::<Summaries>();
-        let none = IndexMap::default();
-        let summaries = match summaries.as_deref() {
-            Some(found) => found.as_ref().map_err(String::clone)?,
-            None => &none,
-        };
-        let calls = alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)?;
-        Ok(stated(context, &outer.globals, function, calls))
+        call_effects(&Unit::within(context, layout, function, outer), outer)
     }
 }
 
-/// `calls` held to what each call's attributes allow (`effects::call`).
-pub fn stated(context: &Context, globals: &[GlobalValue], function: &Function, mut calls: IndexMap<InstId, Effect>) -> IndexMap<InstId, Effect> {
-    for (&at, effect) in calls.iter_mut() {
-        let allowed = effects::call(context, globals, function, at);
-        if !allowed.reads {
-            effect.loads.clear();
-        }
-        if !allowed.writes {
-            effect.stores.clear();
-        }
-    }
-    calls
+/// What each call of `unit` reads and writes, its callee as `Summaries`
+/// says where `outer` holds it, and otherwise an unknown one, as LLVM's
+/// function passes read an outer result only if cached.
+pub fn call_effects(unit: &Unit, outer: &Outer) -> Result<IndexMap<InstId, Effect>, String> {
+    let summaries = outer.cached::<Summaries>();
+    let none = IndexMap::default();
+    let known = match summaries.as_deref() {
+        Some(found) => found.as_ref().map_err(String::clone)?,
+        None => &none,
+    };
+    alias::calls_annotated(&Procedure::of(*unit), known)
 }
 
 /// Every value known without solving memory: `consts::known` of no calls.
@@ -159,7 +166,9 @@ impl Analysis for ThroughMemory {
     const NAME: &'static str = "through-memory";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
-        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()), Some(&calls), None, None))
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        Ok(consts::known(&Unit::within(context, layout, function, analyses.outer()).with_references(references), Some(&calls), None, None))
     }
 }
 
@@ -171,7 +180,8 @@ impl Analysis for DominatedEdges {
     type Result = Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String>;
     const NAME: &'static str = "dominated-edges";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        ranges::dominated_edges(&Unit::within(context, layout, function, analyses.outer()))
+        let registers = analyses.get::<Registers>(context, layout, function);
+        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()), &registers)
     }
 }
 

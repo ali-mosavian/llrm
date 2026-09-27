@@ -1,5 +1,6 @@
 //! Canonical forms, as LLVM's InstCombine puts them: compares with the
-//! constant on the right, no neutral terms.
+//! constant on the right, no neutral terms, and a zero test at the width of
+//! what it tests.
 //!
 //! Adapted from llrm-core's `optimize/canonical.rs`, the port of
 //! `qbopt/optimize/canonical.py`. Folding makes `icmp C, v` whenever a
@@ -16,8 +17,8 @@
 
 use llrm_mir::context::{Context, ConstantKind};
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand};
-use llrm_mir::opcode::{IntPredicate, Opcode};
+use llrm_mir::module::{Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Loops, PreservedAnalyses, Unit, Dominators};
 
 use crate::algebraic;
@@ -68,19 +69,21 @@ fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
     function.erase(inst).expect("its uses were replaced");
 }
 
-/// Each of `algebraic::identity`'s identities, and a test `x <=u 0` is
-/// `x == 0`. Whether anything changed.
+/// Each of `algebraic::identity`'s identities, a test `x <=u 0` is
+/// `x == 0`, and `_zero_tested`'s. Whether anything changed.
 ///
 /// A rewrite states what it computes from a proof in full -- rotation's
 /// trip count is `bound - start + inclusive` for any start -- and the
 /// neutral terms go here, so no rewrite folds its own.
-pub fn identities(context: &Context, function: &mut Function) -> bool {
+pub fn identities(context: &mut Context, function: &mut Function) -> bool {
     let mut changed = false;
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
         if let Some(kept) = algebraic::identity(context, function, inst) {
             let result = function.instruction(inst).result.expect("a value");
             function.replace_all_uses_with(result, kept);
             function.erase(inst).expect("its uses were replaced");
+            changed = true;
+        } else if _zero_tested(context, function, inst) {
             changed = true;
         } else if _zero_test(context, function, inst) {
             let instruction = function.instruction(inst);
@@ -96,6 +99,54 @@ pub fn identities(context: &Context, function: &mut Function) -> bool {
         }
     }
     changed
+}
+
+/// `x == 0` or `x != 0` of an extended `x` tests `x` at its own width, an
+/// extension keeping whether a value is zero; and of an `i1`, `x != 0` is
+/// `x` and `x == 0` is `not x`. A frontend's truth, a sign-extended `i1`,
+/// is tested so, and induction reads the compare beneath it.
+fn _zero_tested(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = instruction.opcode else { return false };
+    let (tested, result) = (instruction.operands[0], instruction.result.expect("a value"));
+    if _integer(context, instruction.operands[1]) != Some(0) {
+        return false;
+    }
+    let extended = match tested {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => match function.instruction(def).opcode {
+                Opcode::Cast(CastOp::ZExt | CastOp::SExt) => Some(function.instruction(def).operands[0]),
+                _ => None,
+            },
+            ValueDef::Argument(_) => None,
+        },
+        _ => None,
+    };
+    let x = extended.unwrap_or(tested);
+    let ty = function.operand_type(context, x).expect("a typed operand");
+    let with = match (context.types.int_bits(ty), predicate) {
+        (Some(1), IntPredicate::Ne) => x,
+        (Some(1), _) => {
+            let all = Operand::Constant(context.int(ty, 1));
+            _before(function, inst, Opcode::Binary(BinaryOp::Xor), ty, vec![x, all])
+        }
+        _ if extended.is_some() => {
+            let zero = Operand::Constant(context.int(ty, 0));
+            let truth = function.instruction(inst).ty;
+            _before(function, inst, Opcode::ICmp(predicate), truth, vec![x, zero])
+        }
+        _ => return false,
+    };
+    function.replace_all_uses_with(result, with);
+    function.erase(inst).expect("its uses were replaced");
+    true
+}
+
+/// A new `opcode` of type `ty` placed before `at`: its value.
+fn _before(function: &mut Function, at: InstId, opcode: Opcode, ty: llrm_mir::types::TypeId, operands: Vec<Operand>) -> Operand {
+    let new = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+    function.insert(new, Position::Before(at)).expect("a placed instruction");
+    Operand::Value(function.instruction(new).result.expect("a value"))
 }
 
 /// An `icmp` against zero on the right.

@@ -4,8 +4,8 @@
 //! LLVM's counterpart: LICM's scalar promotion, function-wide; `Sroa`'s, SROA.
 //!
 //! Adapted from llrm-core's `optimize/promote.rs`. What an access names is
-//! `alias::annotated`'s answer, what a call writes `alias::calls_annotated`'s
-//! with every callee unknown, and whether a write reaches a cell
+//! `alias::annotated`'s answer, what a call writes `manager::call_effects`',
+//! and whether a write reaches a cell
 //! `regions::overlapping`'s. Globals and callees' attributes come through
 //! the outer proxy.
 //!
@@ -38,7 +38,8 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::alias::{self, Procedure};
+use llrm_analysis::alias;
+use llrm_analysis::manager;
 use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit, unmodeled_write};
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
@@ -229,7 +230,7 @@ fn run(unit: &mut passes::Unit, analyses: &Analyses, aggregate_only: bool, name:
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, aggregate_only: bool) -> Result<bool, String> {
-    let plan = plan(&Unit::within(context, layout, function, outer), aggregate_only)?;
+    let plan = plan(&Unit::within(context, layout, function, outer), outer, aggregate_only)?;
     if plan.loads.is_empty() {
         return Ok(false);
     }
@@ -270,7 +271,7 @@ fn is_load(unit: &Unit, inst: InstId) -> bool {
 
 /// Cells whose reads can use a known stored value: touched more than once,
 /// loaded as one type, and available along every path to some load.
-fn plan(unit: &Unit, aggregate_only: bool) -> Result<Plan, String> {
+fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String> {
     let refs = alias::annotated(unit)?;
     if !refs.keys().any(|&inst| is_load(unit, inst)) {
         return Ok(Plan::default());
@@ -306,8 +307,7 @@ fn plan(unit: &Unit, aggregate_only: bool) -> Result<Plan, String> {
         .iter()
         .filter_map(|(&inst, key)| candidates.get_full(key).filter(|(_, _, ty)| accessed(unit, inst) == Some(**ty)).map(|(slot, ..)| (inst, slot)))
         .collect::<HashMap<_, _>>();
-    let procedure = Procedure::of(*unit);
-    let calls = alias::calls_annotated(&procedure, &IndexMap::default())?.into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+    let calls = manager::call_effects(unit, outer)?.into_iter().map(|(at, effect)| (at, effect.stores)).collect();
     let usable = _available(unit, &Facts { refs, calls }, &candidates, &slots);
 
     let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();

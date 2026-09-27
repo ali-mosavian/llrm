@@ -1623,11 +1623,19 @@ impl Rich {
         if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
             return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
         }
-        let mut emitted = hir::mir::emit(program).swap_remove(0);
+        let family = program.runtime.value();
+        let writes = |routine: &str| llrm_core::abi::runtime::named_writes(routine, family).map(|cells| cells.into_iter().map(str::to_owned).collect());
+        let mut emitted = hir::mir::emit_promised(program, Some(&hir::mir::Runtime { writes: &writes })).swap_remove(0);
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        llrm_mir::transforms::optimized(&mut emitted.module).map_err(CompileError::Value)?;
+        // The one MIR target, real-mode DOS at 486 prices.
+        let applied = llrm_transforms::pipeline::Applied {
+            target: Some(Rc::new(llrm_cycles::target::Dos)),
+            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            ..Default::default()
+        };
+        llrm_transforms::pipeline::applied(&mut emitted.module, &applied).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
         Ok(Rich { mir: emitted.module, data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
     }

@@ -164,6 +164,7 @@ pub struct SsaUpdater {
     available: BTreeMap<BlockId, Operand>,
     entered: BTreeMap<BlockId, Operand>,
     visiting: BTreeSet<BlockId>,
+    revisiting: BTreeSet<BlockId>,
     inserted: Vec<InstId>,
 }
 
@@ -176,6 +177,7 @@ impl SsaUpdater {
             available: BTreeMap::new(),
             entered: BTreeMap::new(),
             visiting: BTreeSet::new(),
+            revisiting: BTreeSet::new(),
             inserted: Vec::new(),
         }
     }
@@ -205,9 +207,16 @@ impl SsaUpdater {
         }
         let predecessors = function.predecessors(block);
         if predecessors.len() == 1 {
-            // A cycle of single predecessors is unreachable.
             if !self.visiting.insert(block) {
-                return self.poison(context);
+                // Back round a cycle: through a join, the join's phi is
+                // entered and ends the walk; a cycle of single predecessors
+                // alone, met twice, is unreachable.
+                if !self.revisiting.insert(block) {
+                    return self.poison(context);
+                }
+                let value = self.value_at_end_of_block(context, function, predecessors[0]);
+                self.revisiting.remove(&block);
+                return value;
             }
             let value = self.value_at_end_of_block(context, function, predecessors[0]);
             self.visiting.remove(&block);
@@ -573,6 +582,34 @@ b3:
         );
         assert_eq!(placed, 1);
         assert!(text.contains("b1:\n  %v = phi i16 [ %x, %b0 ], [ %y, %b2 ]\n  %u = add i16 %v, 0\n"), "{text}");
+    }
+
+    /// Rotating nbody's outer loop read its counter after the inner one as
+    /// a phi of poison: a walk out of a single-predecessor block came back
+    /// to it round the loop and called the cycle unreachable.
+    #[test]
+    fn a_value_defined_before_a_loop_reaches_its_body_round_the_back_edge() {
+        let (text, placed) = updated(
+            "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %u = add i16 %x, 0
+  br i1 %c, label %b1, label %b3
+
+b3:
+  ret i16 %u
+}
+",
+            "u",
+            &[("b0", "x")],
+        );
+        assert_eq!(placed, 0, "{text}");
+        assert!(text.contains("%u = add i16 %x, 0"), "{text}");
     }
 
     const DIAMOND: &str = "define i16 @f(i16 %x, i1 %c) {

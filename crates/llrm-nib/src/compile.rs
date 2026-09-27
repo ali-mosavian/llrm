@@ -351,8 +351,8 @@ pub fn assembled(
     })
 }
 
-/// The same through the rich MIR: the HIR emitted as MIR, then selected
-/// and assembled whole. It runs no MIR passes yet.
+/// The same through the rich MIR: the HIR emitted as MIR, optimized, then
+/// selected and assembled whole.
 pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrName<'static>) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
@@ -363,13 +363,20 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         return Err(format!("@{name}: {why}"));
     }
     let mut mir = emitted.module;
-    llrm_mir::transforms::optimized(&mut mir)?;
-    // The entry is public for the runtime to call; a library has none.
+    // The entry is public for the runtime to call; a library has none. The
+    // pipeline's whole-module step reads who may call what.
     match mir.named(entry) {
         Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,
         None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
+    // The rich route's target is the one MIR target, real-mode DOS at 486 prices.
+    let applied = llrm_transforms::pipeline::Applied {
+        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+        ..Default::default()
+    };
+    llrm_transforms::pipeline::applied(&mut mir, &applied)?;
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
     let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
