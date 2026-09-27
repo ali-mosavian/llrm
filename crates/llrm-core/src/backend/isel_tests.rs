@@ -1686,3 +1686,30 @@ fn test_an_and_only_compared_with_zero_is_test() {
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
     assert!(tested("12", "0").iter().any(|one| one.starts_with("and ")), "{:?}", tested("12", "0"));
 }
+
+/// A block every path from which ends in `unreachable` is cold, laid out
+/// after the hot code, as the old route's noreturn::cold marks a failed
+/// bounds check's: it sat between the loop and its exit.
+#[test]
+fn test_a_block_that_cannot_return_is_laid_out_last() {
+    let text = "declare void @panic() addrspace(1)
+define i16 @f(i16 %i, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %k = phi i16 [ 0, %entry ], [ %k1, %fine ]
+  %ok = icmp ult i16 %k, %n
+  br i1 %ok, label %fine, label %fail
+fail:
+  call addrspace(1) void @panic()
+  unreachable
+fine:
+  %k1 = add i16 %k, 1
+  %d = icmp eq i16 %k1, %i
+  br i1 %d, label %done, label %loop
+done:
+  ret i16 %k1
+}
+";
+    assert_eq!(listing(text, "f").last().map(String::as_str), Some("call far ptr panic"));
+}

@@ -443,11 +443,46 @@ impl Selector<'_, '_, '_> {
             }
             blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
         }
-        let blocks = combined::combined(layout.iter().flat_map(|block| made.shift_remove(block).unwrap_or_default()).collect());
+        let cold = self.cold(&order);
+        let blocks = layout
+            .iter()
+            .flat_map(|block| {
+                let chain = made.shift_remove(block).unwrap_or_default();
+                chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
+            })
+            .collect();
+        let blocks = combined::combined(blocks);
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
         Ok(body)
+    }
+
+    /// Blocks from which every path ends in `unreachable`, as the old
+    /// route's noreturn::cold finds those ending in a terminal call: a least
+    /// fixed point, so a loop that never exits is not cold, and none is
+    /// when the entry is.
+    fn cold(&self, blocks: &[BlockId]) -> BTreeSet<BlockId> {
+        let function = self.function;
+        let mut found = BTreeSet::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in blocks {
+                let ends = match function.instruction(function.terminator(block).expect("a terminator")).opcode {
+                    Opcode::Unreachable => true,
+                    Opcode::Ret => false,
+                    _ => {
+                        let successors = self.successors(block);
+                        !successors.is_empty() && successors.iter().all(|one| found.contains(one))
+                    }
+                };
+                if ends && found.insert(block) {
+                    changed = true;
+                }
+            }
+        }
+        if found.contains(&function.entry().expect("a body")) { BTreeSet::new() } else { found }
     }
 
     /// A comparison whose only reader is its block's branch stays flags.
