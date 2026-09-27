@@ -189,9 +189,8 @@ fn test_unswitch_prices_at_the_target_costs() {
         let mut module = parsed(&text);
         let divide = module.function_mut("divide").unwrap().1.clone();
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.target = target;
         manager.add(super::Unswitch { passes: vec![Box::new(Replace(divide))] });
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, target.unwrap_or_else(|| std::rc::Rc::new(llrm_mir::target::Neutral))).unwrap();
         printed(&module) != printed(&parsed(&text))
     };
     assert!(kept(None));
@@ -221,9 +220,8 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     let seen = std::rc::Rc::default();
     let mut module = parsed(INVARIANT);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 }));
     manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
     assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");

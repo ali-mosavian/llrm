@@ -30,7 +30,7 @@ fn simplified(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(super::Algebraic);
-    passes.run(&mut after).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
 

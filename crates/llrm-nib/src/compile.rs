@@ -371,12 +371,10 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let profile = targets::profile(cpu)?;
-    let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
-    };
+    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+    let mut mir = llrm_mir::program::Program::new(vec![mir], profile.target())?;
     llrm_transforms::pipeline::applied(&mut mir, &applied)?;
+    let mir = mir.modules.pop().expect("one module");
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
     let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;

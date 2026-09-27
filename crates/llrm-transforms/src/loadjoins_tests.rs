@@ -22,7 +22,7 @@ fn joined(mut module: Module, insert: bool) -> Module {
     manager.verify_each = true;
     manager.require::<Summaries>();
     manager.add(LoadJoins { insert });
-    manager.run(&mut module).expect("verifies");
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("verifies");
     module
 }
 
@@ -418,7 +418,7 @@ fn test_every_corpus_module_verifies_after_loadjoins() {
         manager.verify_each = true;
         manager.require::<Summaries>();
         manager.add(LoadJoins { insert: true });
-        let stages = manager.run(&mut module).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let stages = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{name}: {error}"));
         changed += stages.len();
     }
     assert!(changed > 0, "loadjoins changed nothing in the corpus");

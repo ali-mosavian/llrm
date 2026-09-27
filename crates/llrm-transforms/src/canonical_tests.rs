@@ -72,7 +72,7 @@ fn canonical(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(super::Canonical);
-    passes.run(&mut module).expect("runs");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     (before, module)
 }
 
@@ -234,7 +234,7 @@ b3:
     passes.verify_each = true;
     passes.add(super::Canonical);
     passes.add(crate::rotate::Rotate);
-    passes.run(&mut module).expect("runs");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     let shown = printed(&module);
     let entry = shown.split("b0:\n").nth(1).unwrap().lines().next().unwrap();
     assert_eq!(entry.trim(), "br label %b2", "{shown}");

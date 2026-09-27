@@ -62,5 +62,5 @@ pub fn optimized_with(module: &mut Module, names: &[&str]) -> Result<(), String>
     for name in names {
         manager.passes.push(pass(name)?);
     }
-    manager.run(module).map(|_| ())
+    manager.run_module(module, std::rc::Rc::new(crate::target::Neutral)).map(|_| ())
 }

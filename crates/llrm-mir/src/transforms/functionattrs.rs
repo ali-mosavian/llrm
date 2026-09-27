@@ -10,7 +10,7 @@ use crate::loops::LoopInfo;
 use crate::memory::{self, Callees, Effects};
 use crate::module::{Function, GlobalKind, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
-use crate::passes::ModulePass;
+use crate::passes::{ModuleAnalyses, ModulePass};
 use crate::scalarevolution::Evolution;
 use crate::valuetracking;
 
@@ -21,12 +21,9 @@ impl ModulePass for FunctionAttrs {
         "function-attrs"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
         let graph = CallGraph::new(module);
-        let layout = match &module.datalayout {
-            Some(text) => crate::datalayout::DataLayout::parse(text).unwrap_or_default(),
-            None => Default::default(),
-        };
+        let layout = analyses.program().layout.clone();
         let mut callees = memory::callees(module);
         let mut changed = Vec::new();
         for id in graph.bottom_up() {

@@ -631,7 +631,7 @@ b0:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Promote);
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         printed(&module);
         module
     };

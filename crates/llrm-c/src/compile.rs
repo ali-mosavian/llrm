@@ -389,19 +389,17 @@ impl assemble::Abi for MediumModel {
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> Result<masm::Module, CompileError> {
     let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
     let unit = hir::unit(&stream::parse(text))?;
-    let raise_mir::Emitted { module: mut mir, segments } = raise_mir::emitted(&unit)?;
+    let raise_mir::Emitted { module: mir, segments } = raise_mir::emitted(&unit)?;
     write(dump, "raised.ll", || llrm_mir::print::module(&mir))?;
     let problems = llrm_mir::verify::verify(&mir);
     if !problems.is_empty() {
         return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
     }
     let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
-    let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
-    };
-    llrm_transforms::pipeline::applied(&mut mir, &applied)?;
+    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+    let mut program = llrm_mir::program::Program::new(vec![mir], profile.target())?;
+    llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    let mir = program.modules.pop().expect("one module");
     write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
     let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Name(target))?;
     // Data where the stream placed it, isel's float constants after DGROUP's.

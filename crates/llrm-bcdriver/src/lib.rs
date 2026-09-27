@@ -97,13 +97,11 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         }
     }
     let records = records.to_vec();
-    let (mut module, placement) = llrm_bc::raise_placed(found).map_err(|refusal| refusal.to_string())?;
-    let applied = llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
-    };
-    llrm_transforms::pipeline::applied(&mut module, &applied)?;
+    let (module, placement) = llrm_bc::raise_placed(found).map_err(|refusal| refusal.to_string())?;
+    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
+    let mut program = llrm_mir::program::Program::new(vec![module], profile.target())?;
+    llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    let module = program.modules.pop().expect("one module");
     let errors = llrm_mir::verify::verify(&module);
     if let Some(first) = errors.first() {
         return Err(format!("the pipeline left invalid MIR: {first}"));

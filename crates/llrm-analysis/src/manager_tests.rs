@@ -6,7 +6,7 @@ use std::rc::Rc;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, FunctionPass, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
-use llrm_mir::target::Machine;
+use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
 use super::{Annotated, CallEffects, DominatedEdges, Pointers, Registers, Summaries, ThroughMemory};
@@ -81,7 +81,7 @@ fn seen(steps: impl FnOnce(&Seen) -> Vec<Step>) -> (Vec<Rc<Answer>>, Module) {
     for step in steps(&seen) {
         passes.add(step);
     }
-    passes.run(&mut module).unwrap();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     (seen.take(), module)
 }
 
@@ -130,7 +130,6 @@ b0:
         let r = value(function(&module, "f"), "r");
         let got = Rc::new(RefCell::new(None));
         let mut passes = PassManager::default();
-        passes.target = dos.then(|| Rc::new(Dos::default()) as Rc<dyn Machine>);
         passes.require::<Summaries>();
         let into = Rc::clone(&got);
         passes.add(step(
@@ -140,7 +139,8 @@ b0:
             },
             PreservedAnalyses::all(),
         ));
-        passes.run(&mut module).unwrap();
+        let target: Rc<dyn Machine> = if dos { Rc::new(Dos::default()) } else { Rc::new(Neutral) };
+        passes.run_module(&mut module, target).unwrap();
         got.take().map(|fact| fact.n)
     };
     assert_eq!(known(false), None);

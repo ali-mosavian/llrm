@@ -18,11 +18,13 @@ fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String,
     let roots = ids(module, roots);
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
+    let mut analyses = ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
     let proved = optimized::<String>(
         module,
+        &mut analyses,
         &roots,
         &costs,
-        &mut |module, id, stage| {
+        &mut |module, _, id, stage| {
             stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
             Ok(())
         },
@@ -174,8 +176,8 @@ fn test_the_step_runs_as_a_module_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_module(Interprocedural { target: Some(std::rc::Rc::new(target)), roots: BTreeSet::new(), pipeline: Box::new(|_, _, _| {}), proved: None });
-    let stages = manager.run(&mut module).unwrap();
+    manager.add_module(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None });
+    let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
 }
@@ -326,7 +328,7 @@ fn dropped(text: &str) -> BTreeSet<String> {
         uses.walk().filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst)).map(|id| module.global(id).name.clone().unwrap()).collect::<BTreeSet<_>>()
     };
     let before = callees(&module);
-    let declarations = effects::declarations(&module);
+    let declarations = llrm_analysis::effects::declarations(&module);
     let (context, uses) = module.function_mut("uses").unwrap();
     facts::remove_dead_pure_calls(context, &declarations, uses);
     before.difference(&callees(&module)).cloned().collect()

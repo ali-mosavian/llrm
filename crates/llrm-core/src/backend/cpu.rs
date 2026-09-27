@@ -44,6 +44,11 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The MIR target this profile prices: real-mode DOS on its CPU.
+    pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        std::rc::Rc::new(crate::cycles::target::Dos::priced(&self._costs, self.prefix_cost, self.register_capacity, self.call_register_capacity))
+    }
+
     /// The dataclass constructor with every defaulted field at its default.
     pub fn new(
         name: &str,

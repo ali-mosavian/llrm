@@ -8,8 +8,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, ValueId};
-use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
-use llrm_mir::program::ProgramProxy;
+use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_support::hash::IndexMap;
 
 use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
@@ -35,8 +34,8 @@ pub struct GlobalsAA;
 impl ModuleAnalysis for GlobalsAA {
     type Result = Result<Globals, String>;
     const NAME: &'static str = "globals-aa";
-    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
-        globalsaa::analysis(module, program)
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        globalsaa::analysis(module, analyses.program())
     }
 }
 
@@ -47,8 +46,9 @@ pub struct Summaries;
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
-    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
-        // A module analysis sees no other: GlobalsAA's answer is found again.
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        // GlobalsAA's answer is found again.
+        let program = analyses.program();
         let globals = globalsaa::analysis(module, program)?;
         let procedures = module
             .functions()

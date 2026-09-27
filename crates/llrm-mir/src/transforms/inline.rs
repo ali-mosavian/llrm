@@ -11,7 +11,7 @@ use crate::memory::callee;
 use crate::edit::Position;
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
 use crate::opcode::{Attribute, Flags, Opcode};
-use crate::passes::ModulePass;
+use crate::passes::{ModuleAnalyses, ModulePass};
 use crate::types::Type;
 
 /// LLVM's default threshold of 225, at its 5 per instruction.
@@ -24,7 +24,7 @@ impl ModulePass for Inline {
         "inline"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
         let graph = CallGraph::new(module);
         let mut changed = Vec::new();
         for caller in graph.bottom_up() {

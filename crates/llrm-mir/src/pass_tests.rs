@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use crate::context::Context;
 use crate::datalayout::DataLayout;
@@ -6,8 +7,8 @@ use crate::context::GlobalId;
 use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses, Unit};
-use crate::program::ProgramProxy;
+use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses, Unit};
+use crate::target::Neutral;
 
 const TEXT: &str = "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
 
@@ -86,11 +87,11 @@ impl FunctionPass for DropReturn {
 fn a_pass_keeping_dominators_it_changed_is_caught() {
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.add(Retarget(PreservedAnalyses::none().preserve::<Dominators>()));
-    assert_eq!(passes.run(&mut module()).err().as_deref(), Some("retarget claims to preserve dominators but changed them"));
+    assert_eq!(passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(), Some("retarget claims to preserve dominators but changed them"));
 
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.add(Retarget(PreservedAnalyses::none()));
-    assert!(passes.run(&mut module()).is_ok());
+    assert!(passes.run_module(&mut module(), Rc::new(Neutral)).is_ok());
 }
 
 #[test]
@@ -100,7 +101,7 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     passes.add(Look(PreservedAnalyses::all()));
     passes.add(Look(PreservedAnalyses::none()));
     passes.add(Look(PreservedAnalyses::all()));
-    passes.run(&mut module()).unwrap();
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(COMPUTED.get(), 2);
 }
 
@@ -115,7 +116,7 @@ fn each_stage_carries_its_own_changes() {
     let mut passes = PassManager::default();
     passes.add(Look(PreservedAnalyses::all()));
     passes.add(Retarget(PreservedAnalyses::none()));
-    let stages = passes.run(&mut module).unwrap();
+    let stages = passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     let changes: Vec<(&str, &[Change])> = stages.iter().map(|one| (one.pass, one.changes.as_slice())).collect();
     assert_eq!(changes, [("look", &[][..]), ("retarget", &[Change::Rewritten(branch)][..])]);
 }
@@ -125,7 +126,7 @@ fn verify_each_names_the_pass_that_broke_the_module() {
     let mut passes = PassManager { verify_each: true, ..Default::default() };
     passes.add(Look(PreservedAnalyses::all()));
     passes.add(DropReturn);
-    let error = passes.run(&mut module()).unwrap_err();
+    let error = passes.run_module(&mut module(), Rc::new(Neutral)).unwrap_err();
     assert!(error.starts_with("after drop-return: "), "{error}");
 }
 
@@ -139,7 +140,7 @@ fn a_bisection_limit_skips_the_runs_after_it() {
     let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let mut passes = PassManager { bisect: Some(1), ..Default::default() };
     passes.add(Retarget(PreservedAnalyses::none()));
-    let stages = passes.run(&mut module).unwrap();
+    let stages = passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     assert_eq!(stages.len(), 1);
     let printed = crate::print::module(&module);
     assert!(printed.contains("@g(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b"), "{printed}");
@@ -184,7 +185,7 @@ impl ModulePass for MarkReadonly {
         "mark-readonly"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
         let g = module.named("g").unwrap();
         let GlobalKind::Function(function) = &mut module.globals[g.0 as usize].kind else { panic!("a function") };
         function.attrs.push(Attribute::Flag("readonly".to_owned()));
@@ -204,7 +205,7 @@ fn a_change_to_what_an_analysis_read_of_the_module_drops_it() {
     passes.add(Ask);
     passes.add_module(MarkReadonly);
     passes.add(Ask);
-    passes.run(&mut module).unwrap();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     assert_eq!(SEEN.take(), [false, true]);
 }
 
@@ -218,7 +219,7 @@ struct Bodies;
 impl ModuleAnalysis for Bodies {
     type Result = usize;
     const NAME: &'static str = "bodies";
-    fn run(module: &Module, _: &ProgramProxy) -> usize {
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> usize {
         SUMMED.set(SUMMED.get() + 1);
         module.functions().filter(|(_, _, function)| !function.is_declaration()).count()
     }
@@ -246,7 +247,7 @@ fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
     passes.add(Counts(PreservedAnalyses::none().preserve_module::<Bodies>()));
     passes.add(Counts(PreservedAnalyses::none()));
     passes.add(Counts(PreservedAnalyses::all()));
-    passes.run(&mut module()).unwrap();
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(SUMMED.get(), 2);
 }
 
@@ -270,5 +271,5 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
     passes.require::<Bodies>();
     passes.add(Empty);
-    assert_eq!(passes.run(&mut module()).err().as_deref(), Some("empty claims to preserve bodies but changed them"));
+    assert_eq!(passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(), Some("empty claims to preserve bodies but changed them"));
 }

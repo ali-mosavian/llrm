@@ -6,7 +6,7 @@
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use crate::memory::callee;
 use crate::module::{GlobalKind, Linkage, Module, Operand};
-use crate::passes::ModulePass;
+use crate::passes::{ModuleAnalyses, ModulePass};
 
 pub struct Ipsccp;
 
@@ -15,7 +15,7 @@ impl ModulePass for Ipsccp {
         "ipsccp"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
         let mut changed = Vec::new();
         for (at, global) in module.globals.iter().enumerate() {
             let id = GlobalId(at as u32);
