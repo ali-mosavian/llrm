@@ -11,16 +11,17 @@
 //! no copies here, so an already spelled `scaled + base` is one whose
 //! operand is its base. What was replaced is left for `dead`.
 //!
-//! `_motion_blocked` is the old `transform::motion_blocked`: the old hoist
-//! refused a loop holding a call. It is the hoist's fact, to be asked of
-//! loopmotion once that is ported. The old module had no tests.
+//! Dropped: `transform::motion_blocked`, the old hoist's refusal of a loop
+//! holding a call, which clobbered the machine's registers. A base is
+//! arithmetic on values the loop does not define, which the ported hoist
+//! moves across any call. The old module had no tests.
 
 use std::collections::BTreeMap;
 
 use llrm_analysis::induction::{self, AffineOperand, Derived};
 use llrm_analysis::{cfg, memory};
 use llrm_graph::loops::Loop;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use num_bigint::BigInt;
@@ -48,7 +49,7 @@ impl FunctionPass for Affine {
 }
 
 /// Each loop-affine value built from its scaled counter and one invariant
-/// base, where the loop lets that base move out; whether any was.
+/// base; whether any was.
 pub fn canonical(unit: &mut Unit, outer: &Outer) -> bool {
     let rewrites = {
         let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer);
@@ -85,15 +86,13 @@ pub fn canonical(unit: &mut Unit, outer: &Outer) -> bool {
 }
 
 /// The counter and result `one` is rewritten through, when its affine form
-/// has an invariant value term, the loop lets that term's base move out,
-/// and it is not already `counter * by + base`.
+/// has an invariant value term and is not already `counter * by + base`.
 fn _rewritable(view: &memory::Unit, loop_: &Loop, one: &Derived) -> Option<(ValueId, ValueId)> {
     let function = view.function;
     let answer = function.instruction(one.op).result?;
     if one.pointer.is_some()
         || view.int_bits(Operand::Value(answer)) != Some(one.of.start.width())
         || !one.offsets.iter().any(|(offset, _)| matches!(offset, AffineOperand::Value(..)))
-        || _motion_blocked(function, loop_)
     {
         return None;
     }
@@ -106,15 +105,6 @@ fn _rewritable(view: &memory::Unit, loop_: &Loop, one: &Derived) -> Option<(Valu
     let spelled = op.opcode == Opcode::Binary(BinaryOp::Add)
         && matches!(&one.offsets[..], [(AffineOperand::Value(base, _), coefficient)] if *coefficient == BigInt::from(1) && op.operands.contains(&Operand::Value(*base)));
     (!spelled).then_some((one.of.value, answer))
-}
-
-/// Whether the loop holds a call, which the old hoist refused whole.
-fn _motion_blocked(function: &Function, loop_: &Loop) -> bool {
-    loop_
-        .body
-        .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions())
-        .any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
 }
 
 #[cfg(test)]
