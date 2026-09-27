@@ -209,6 +209,16 @@ fn fpemu_prints_its_float_results() {
     }
 }
 
+/// `B$FILD` reads AX and DX, not EAX's high word: read as both words, QB's
+/// fpemu refused main, "reads the high word of EAX after B$PEI4".
+#[test]
+fn a_call_reads_its_inputs_as_words() {
+    let expected = printed("fpemu-p-g2.obj", 13);
+    for fixture in ["fpemu-q-o.obj", "fpemu-q-noo.obj", "fpemu-q-o-zd.obj"] {
+        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+    }
+}
+
 /// fpdeep: `p(i) * p(i)` holds two values from one address, and `fdivp`
 /// writes st(1) before the pop renumbers it. p = 12, 28, 60; k = 4; d = 12.
 #[test]

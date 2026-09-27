@@ -93,7 +93,8 @@ pub fn call_touches(routine: &Contract) -> Option<(Words, Words)> {
     let changed: Registers = runtime::disturbs(routine).into_iter().filter_map(from_contract).collect();
     let mut disturbed = whole(TRACKED.into_iter().filter(|one| changed.contains(one)));
     disturbed.insert(Word::Flags);
-    let reads = runtime::direct_slots(routine).into_iter().filter_map(from_contract).flat_map(|one| words(if one == FLAGS { one } else { one })).collect();
+    // A contract names 16-bit registers: an input is its root's low word.
+    let reads = runtime::direct_slots(routine).into_iter().filter_map(from_contract).map(|one| if one == FLAGS { Word::Flags } else { Word::Low(one) }).collect();
     Some((disturbed, reads))
 }
 
