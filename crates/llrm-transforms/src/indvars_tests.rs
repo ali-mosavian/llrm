@@ -510,3 +510,35 @@ fn strength_leaves_a_pointer_counted_to_zero() {
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
     assert!(after.contains(", 0\n") && !after.contains("%p ="), "{after}");
 }
+
+/// The counter read after the loop stays its own: the pointer still counts
+/// to zero, as the old route's did. The port refused, and suite/stride
+/// compared the counter every trip.
+#[test]
+fn a_counter_read_after_the_loop_leaves_the_pointer_counting_to_zero() {
+    let text = pointer_beside_a_stored_counter().replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r");
+    let (changed, module) = through(&text, &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap());
+    let after = printed(&module);
+    assert!(changed && !after.contains("icmp ne i16 %v, 81"), "{after}");
+}
+
+/// A pointer takes control only where the counter then dies: kept alive by
+/// a read in the loop, the counter counts to zero itself. The pointer's
+/// offset took control, and arena kept both, a step each.
+#[test]
+fn a_counter_the_loop_reads_counts_to_zero_itself() {
+    let text = pointer_beside_a_stored_counter().replace("  store i16 %v, ptr %p", "  %w = add i16 %v, 7\n  store i16 %w, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r");
+    let (changed, module) = through(&text, &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap());
+    let after = printed(&module);
+    assert!(changed && after.contains("%p =") && !after.contains("icmp ne i16 %v, 81"), "{after}");
+}
+
+/// Read only after the loop, the counter leaves as its final value and
+/// dies: the header test kept it stepping for that read alone.
+#[test]
+fn a_counter_read_only_after_the_loop_dies() {
+    let text = pointer_beside_a_stored_counter().replace("  store i16 %v, ptr %p", "  store i16 7, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r");
+    let (changed, module) = through(&text, &[&[0]], |context, layout, function, analyses| zeroed(context, layout, function, analyses).unwrap());
+    let after = printed(&module);
+    assert!(changed && after.contains("add i16 %got, 81") && !after.contains("%p ="), "{after}");
+}

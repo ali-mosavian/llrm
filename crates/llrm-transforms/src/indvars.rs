@@ -555,6 +555,7 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
         return Ok(false);
     };
     done.insert(plan.loop_.header);
+    let itself = plan.candidate == plan.proof.counter;
     if let Some(pointer) = plan.pointer.take() {
         let width = plan.proof.width();
         let (phi, stepping, value) = _offset(context, function, &pointer, plan.preheader, width)?;
@@ -574,9 +575,15 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
     };
     let mut seeds = Seeds { context: &mut *context, function: &mut *function, at: entering, width };
     let count = induction::trips(proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
-    let distance = seeds.computed(BinaryOp::Mul, vec![count, AffineOperand::constant(plan.step.clone(), width)]);
+    let distance = seeds.computed(BinaryOp::Mul, vec![count.clone(), AffineOperand::constant(plan.step.clone(), width)]);
     let bias = seeds.computed(BinaryOp::Add, vec![start, distance.clone()]);
     let rebased = _rebased(&mut seeds, &plan.uses, &bias, width);
+    // Tested at its header, the counter another recurrence ends leaves as its final value.
+    let finished = (plan.rotated.is_none() && !itself && proof.counter.start.width() == width).then(|| {
+        let distance = seeds.computed(BinaryOp::Mul, vec![count.clone(), proof.counter.step.clone()]);
+        let finished = seeds.computed(BinaryOp::Add, vec![proof.counter.start.clone(), distance]);
+        seeds.operand(&finished)
+    });
     let begun = seeds.computed(BinaryOp::Sub, vec![AffineOperand::constant(0, width), distance]);
     let begun = seeds.operand(&begun);
     let bias = seeds.operand(&bias);
@@ -617,13 +624,16 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
     match &plan.rotated {
         Some((shape, _, _, _, _)) => rotate::_rotate(context, function, shape, guard.map(Operand::Value))?,
         None => {
-            // After the loop the recurrence is its final value.
+            // After the loop each recurrence is its final value.
             let exit = plan.exit.expect("an exit");
             let dominance = cfg::Dominance::of(function);
-            for one in function.users(plan.candidate.value).to_vec() {
-                let at = _block_of(function, one.user);
-                if !plan.loop_.body.contains(&at) && dominance.dominates(cfg::id(exit), at) {
-                    function.set_operand(one.user, one.index as usize, bias);
+            let finals = [(plan.candidate.value, Some(bias)), (proof.counter.value, finished)];
+            for (value, last) in finals.into_iter().filter_map(|(value, last)| Some((value, last?))) {
+                for one in function.users(value).to_vec() {
+                    let at = _block_of(function, one.user);
+                    if !plan.loop_.body.contains(&at) && dominance.dominates(cfg::id(exit), at) {
+                        function.set_operand(one.user, one.index as usize, last);
+                    }
                 }
             }
         }
@@ -650,19 +660,29 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
         let tested = proof.zero_tested();
         let runs = proof.count.as_ref().is_some_and(|count| count >= &BigInt::from(1)) || induction::nonempty(unit, &loop_);
         let symbolic = proof.count.is_none();
+        // Another recurrence taking control pays only where the counter then dies.
+        let stepping = match _from(function, proof.phi, cfg::block(proof.latch)) {
+            Some(Operand::Value(update)) if function.users(update).iter().all(|one| one.user == proof.phi) => _defining(function, update),
+            _ => None,
+        };
+        // Read after the loop, it leaves as its final value.
+        let dies = stepping.is_some_and(|stepping| {
+            function.users(proof.counter.value).iter().all(|one| one.user == proof.compare || one.user == stepping || !loop_.body.contains(&_block_of(function, one.user)))
+        });
+        let credit = i64::from(dies);
         let mut ordered = induction::basics(unit, &loop_).into_values().filter_map(|candidate| {
             let itself = candidate == proof.counter;
             let (uses, _) = _uses(unit, &loop_, proof, &candidate, itself)?;
             let unknown = symbolic || induction::_signed(&candidate.start, facts, width).is_none();
             let moved = if unknown { uses.iter().filter(|one| matches!(one, Use::Address { .. })).count() as i64 } else { 0 };
-            Some((moved - i64::from(!itself), !itself, candidate))
+            Some((moved - if itself { 0 } else { credit }, !itself, candidate))
         }).collect::<Vec<_>>();
         // A pointer counts as its byte offset, when that offset is an index.
         let indexes = |one: &PointerRecurrence| unit.space(Operand::Value(one.value)).map(|space| unit.layout.pointer(space).index_bits) == Some(width);
         let pointers = induction::pointers(unit, &loop_).into_iter().filter(indexes).map(|one| (one.value, one)).collect::<IndexMap<_, _>>();
         ordered.extend(pointers.values().map(|one| {
             let step = AffineOperand::constant(one.step.clone(), width);
-            (-1, true, Affine { value: one.value, start: AffineOperand::constant(0, width), step, header: loop_.header })
+            (-credit, true, Affine { value: one.value, start: AffineOperand::constant(0, width), step, header: loop_.header })
         }));
         ordered.sort_by(|one, other| (one.0, one.1).cmp(&(other.0, other.1)));
         for (_, _, candidate) in ordered {
@@ -749,7 +769,7 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
                 let at = _block_of(function, one.user);
                 !loop_.body.contains(&at) && !dominance.dominates(cfg::id(exit), at)
             });
-            if counter_left || candidate_left || (!itself && function.users(proof.counter.value).iter().any(|one| !loop_.body.contains(&_block_of(function, one.user)))) {
+            if counter_left || candidate_left {
                 continue;
             }
             return Some(Zeroing { proof: proof.clone(), candidate: candidate.clone(), phi, stepping, step, uses, rotated: None, exit: Some(exit), preheader, loop_: loop_.clone(), pointer });
