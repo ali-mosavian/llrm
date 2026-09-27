@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::induction::{Affine, AffineOperand, Derived};
 use llrm_analysis::testing::{DOS, function, value};
-use llrm_mir::module::{Function, InstId, Module};
+use llrm_mir::module::{Function, InstId, Module, Operand};
 use num_bigint::BigInt;
 
 use super::{Strength, _formula_set};
@@ -445,7 +445,7 @@ fn test_formula_selection_prices_complete_sibling_groups() {
     let candidates = [small.clone(), large.clone()].concat();
     let costly_addresses = OperationCosts { add: 1, address: 100, load: 1, memory_update: 1, ..OperationCosts::default() };
 
-    let selected = _formula_set(f, &candidates, Some(4), &BTreeSet::new(), &costly_addresses, None);
+    let selected = _formula_set(f, &candidates, Some(4), &BTreeSet::new(), &costly_addresses, None, &BTreeSet::new());
 
     assert_eq!(selected, [vec![small[0].clone()], large[1..].to_vec()].concat());
 }
@@ -459,7 +459,7 @@ fn test_formula_selection_recomputes_a_cheap_scaled_index_under_pressure() {
         let by = if kept { AffineOperand::Value(value(f, "v"), 16) } else { AffineOperand::constant(2, 16) };
         let one = formula(at[0], &counter(f, "c", 16), by, vec![]);
         let references = BTreeMap::from([(value(f, "x"), 1)]);
-        let selected = _formula_set(f, &[one], Some(0), &BTreeSet::new(), &costs, Some(&references));
+        let selected = _formula_set(f, &[one], Some(0), &BTreeSet::new(), &costs, Some(&references), &BTreeSet::new());
         assert_eq!(!selected.is_empty(), kept, "{line}");
     }
 }
@@ -476,7 +476,25 @@ fn test_formula_selection_prices_a_complete_affine_formula_under_pressure() {
     );
     let costs = OperationCosts { add: 2, multiply: 22, shift: 3, address: 2, load: 4, memory_update: 8, ..OperationCosts::default() };
     let references = BTreeMap::from([(value(f, "x"), 1)]);
-    assert_eq!(_formula_set(f, std::slice::from_ref(&complete), Some(0), &BTreeSet::new(), &costs, Some(&references)), vec![complete]);
+    assert_eq!(_formula_set(f, std::slice::from_ref(&complete), Some(0), &BTreeSet::new(), &costs, Some(&references), &BTreeSet::new()), vec![complete]);
+}
+
+/// Nib's matmul8 recomputed `a + k * 4` each trip, its base reloaded,
+/// once affine spelled it so: priced as a shift and an address against a
+/// spilled pointer, the base it frees and its product were uncounted.
+#[test]
+fn test_formula_selection_carries_a_lone_address_that_frees_its_base() {
+    let module = parsed("define void @f(ptr %base, i16 %c) {\nb0:\n  %x = mul i16 %c, 4\n  %p = getelementptr i8, ptr %base, i16 %x\n  store i16 0, ptr %p\n  ret void\n}\n");
+    let f = function(&module, "f");
+    let made = |name: &str| f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(value(f, name))).expect("defined");
+    let of = counter(f, "c", 16);
+    let scaled = formula(made("x"), &of, AffineOperand::constant(4, 16), vec![]);
+    let address = Derived { pointer: Some(Operand::Value(value(f, "base"))), ..formula(made("p"), &of, AffineOperand::constant(4, 16), vec![]) };
+    // A 486's prices.
+    let costs = OperationCosts { add: 1, shift: 2, address: 2, load: 1, memory_update: 3, ..OperationCosts::default() };
+    let references = BTreeMap::from([(value(f, "x"), 1), (value(f, "p"), 1), (value(f, "base"), 1)]);
+    let selected = _formula_set(f, &[scaled, address.clone()], Some(0), &BTreeSet::new(), &costs, Some(&references), &BTreeSet::from([value(f, "base")]));
+    assert_eq!(selected, vec![address]);
 }
 
 /// Over the rich-MIR corpus: every reduced module verifies, some loop is

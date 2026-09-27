@@ -94,3 +94,12 @@ fn test_an_affine_address_is_its_base_indexed_by_the_scaled_counter() {
     let mut again = parsed(&after);
     assert_eq!(managed(&mut again, Affine), after);
 }
+
+/// Nib's matmul_fixed read `a[i * 8 + j]` and `b[i * 8 + j]` through one
+/// index; spelled off a base each, they held two bases in memory.
+#[test]
+fn test_addresses_sharing_one_index_are_left() {
+    let text = looped("  %x = add i16 %i, %m\n  %p = getelementptr inbounds i16, ptr @a, i16 %x\n  %q = getelementptr inbounds i8, ptr @a, i16 %x\n  %y = load i16, ptr %p\n  %z = load i8, ptr %q\n  %e = zext i8 %z to i16\n  %v = add i16 %y, %e\n");
+    let (before, after) = spelled(&text.replace("b0:\n  br label %b1", "b0:\n  %m = and i16 %k, 255\n  br label %b1"));
+    assert_eq!(after, before);
+}

@@ -228,7 +228,21 @@ fn _plan(
     }
     // A derived recurrence which can replace its source loop counter does
     // not consume another recurrence slot.
-    let chosen = _formula_set(function, group, Some(room), &credits, costs, Some(&_references(function)));
+    let references = _references(function);
+    // A base only one formula reads is reloaded at each use where that
+    // formula is not carried, unless it is a constant address.
+    let held = group
+        .iter()
+        .filter_map(|one| match one.pointer {
+            Some(Operand::Value(base)) if references.get(&base) == Some(&1) => Some(base),
+            _ => None,
+        })
+        .filter(|&base| {
+            let at = memory::MemRef::at(view, Operand::Value(base), 1);
+            at.base.is_some() || !matches!(at.root, Some(Operand::Constant(_)))
+        })
+        .collect::<BTreeSet<_>>();
+    let chosen = _formula_set(function, group, Some(room), &credits, costs, Some(&references), &held);
     let classes = group
         .iter()
         .filter(|one| _bare(one) && credits.contains(&one.op))
@@ -722,6 +736,7 @@ pub(crate) fn _formula_set(
     credited: &BTreeSet<InstId>,
     costs: &OperationCosts,
     references: Option<&BTreeMap<ValueId, i64>>,
+    held: &BTreeSet<ValueId>,
 ) -> Vec<Derived> {
     let result = |one: &Derived| function.instruction(one.op).result;
     let op = |one: &Derived| function.instruction(one.op);
@@ -801,23 +816,48 @@ pub(crate) fn _formula_set(
         selected.insert(parent.op);
     }
 
-    // A lone formula over budget: compare the work it removes with the
-    // memory traffic of carrying it as a spilled recurrence.
+    // Formulas over budget, grouped by the scaled counter they read:
+    // compare the work dropping them all adds with the memory traffic of
+    // carrying each as a spilled recurrence. The group computes its
+    // product once, and each `held` base is then reloaded at each use
+    // instead of dying (ivopts' cost of a use given its candidates).
     while slots(&selected) > room {
-        let overflow = candidates.iter().filter(|one| selected.contains(&one.op) && !credited.contains(&one.op)).collect::<Vec<_>>();
-        let mut priced = Vec::<(i64, i64, &Derived)>::new();
-        for (order, one) in overflow.into_iter().enumerate() {
-            let uses = result(one).map_or(1, |value| references.get(&value).copied().unwrap_or(1));
-            let spilled = costs.memory_update + uses * costs.load;
-            priced.push((_recompute_cost(function, one, costs) - spilled, -(order as i64), one));
+        let product = |one: &Derived| {
+            _operands(op(one)).find_map(|value| {
+                candidates.iter().find(|scaled| scaled.of == one.of && scaled.by == one.by && _bare(scaled) && result(scaled) == Some(value))
+            })
+        };
+        let mut groups = BTreeMap::<InstId, (Option<&Derived>, Vec<&Derived>)>::new();
+        for one in candidates.iter().filter(|one| selected.contains(&one.op) && !credited.contains(&one.op)) {
+            let scaled = product(one);
+            groups.entry(scaled.map_or(one.op, |scaled| scaled.op)).or_insert((scaled, Vec::new())).1.push(one);
         }
-        let Some((benefit, _order, loser)) = priced.into_iter().reduce(|best, one| if (one.0, one.1) < (best.0, best.1) { one } else { best }) else {
+        let mut priced = Vec::<(i64, i64, Vec<&Derived>)>::new();
+        for (order, (scaled, members)) in groups.into_values().enumerate() {
+            let shared = scaled.map_or(0, |scaled| _recompute_cost(function, scaled, costs));
+            // The product costs nothing more where something the loop keeps reads it anyway.
+            let kept = scaled.and_then(result).is_some_and(|value| function.users(value).iter().any(|user| !selected.contains(&user.user)));
+            let mut benefit = if kept { 0 } else { shared };
+            for one in &members {
+                let uses = result(one).map_or(1, |value| references.get(&value).copied().unwrap_or(1));
+                let spilled = costs.memory_update + uses * costs.load;
+                let base = match one.pointer {
+                    Some(Operand::Value(base)) if held.contains(&base) => uses * costs.load,
+                    _ => 0,
+                };
+                benefit += _recompute_cost(function, one, costs) - shared + base - spilled;
+            }
+            priced.push((benefit, -(order as i64), members));
+        }
+        let Some((benefit, _order, losers)) = priced.into_iter().reduce(|best, one| if (one.0, one.1) < (best.0, best.1) { one } else { best }) else {
             break;
         };
         if benefit > 0 {
             break;
         }
-        selected.remove(&loser.op);
+        for loser in losers {
+            selected.remove(&loser.op);
+        }
     }
 
     candidates.iter().filter(|one| selected.contains(&one.op)).cloned().collect()
