@@ -1306,7 +1306,7 @@ impl Rich {
         let (mut mir, mut data) = llrm_core::driver::emitted(program, &options).map_err(|why| EmissionError(why))?;
         llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
-        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects } })
+        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects, preserved: Default::default() } })
     }
 
     fn machined(&self, program: &model::Program, function: &model::Function, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {

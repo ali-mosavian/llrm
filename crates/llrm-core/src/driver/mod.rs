@@ -4,6 +4,7 @@
 //! the program states and never asks which frontend made it.
 
 pub mod basic;
+mod data;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,11 +14,12 @@ use llrm_mir::{GlobalId, Module};
 
 use crate::abi::machine::Machine;
 use crate::abi::qb::HirAbi;
-use crate::backend::assemble;
+use crate::backend::{assemble, executed};
 use crate::backend::cpu::{self, Profile, ProfileOrName};
 use crate::backend::masm;
 use crate::backend::target::Segments;
 use crate::hir::model;
+use data::Placed;
 
 /// What a compile is for: the machine, whose CPU prices the choices, and
 /// where the pipeline writes each stage.
@@ -38,20 +40,24 @@ impl Options {
 }
 
 /// `program` compiled for the machine: emitted, optimized, then each module
-/// selected and assembled, its code in `<MODULE>_TEXT` and each function
-/// linked by its symbol. Each module's listing goes beside the stages.
+/// selected and assembled, its code in `<MODULE>_TEXT`, each function linked
+/// by its symbol and its data where the frontend put it. Each module's
+/// listing and executed costs go beside the stages.
 pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm::Module>, String> {
-    let (mut mir, _) = emitted(program, options)?;
+    let (mut mir, data) = emitted(program, options)?;
+    let placed: Vec<Placed> = mir.modules.iter().zip(&program.modules).zip(&data).map(|((module, hir), data)| Placed::of(module, hir, data)).collect();
     optimized(&mut mir, options)?;
-    let functions = program.modules.iter().flat_map(|module| &module.functions);
-    let abi = HirAbi { runtime: program.runtime, objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect() };
+    let abi = HirAbi::of(program)?;
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
-    for (module, hir) in mir.modules.iter().zip(&program.modules) {
-        let assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
+    for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
+        let mut assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
+        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref())?;
         if let Some(directory) = &options.dump {
-            let name = if program.modules.len() > 1 { format!("listing-{}.asm", hir.name) } else { "listing.asm".to_owned() };
-            std::fs::write(directory.join(name), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
+            let written = |name: &str, text: String| std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string());
+            written("listing.asm", masm::text(&assembled).map_err(|error| error.to_string())?)?;
+            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
         }
         out.push(assembled);
     }

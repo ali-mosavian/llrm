@@ -115,7 +115,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
         other => return Err(format!("a {other:?} object")),
     };
     let (code_segment, code_name, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
-    let abi = HirAbi { runtime, objects: Default::default() };
+    let abi = HirAbi { runtime, objects: Default::default(), preserved: Default::default() };
     let mut names = globals::names(&module, &|name| abi.linked(name))?;
     names.extend(llrm_core::hir::lower::symbol_names());
     let main = module.named("main").ok_or("no main body")?;

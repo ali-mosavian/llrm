@@ -24,9 +24,8 @@ use llrm_core::optimize::rotate;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use llrm_core::abi::runtime;
 use llrm_core::backend::{
-    assemble, cpu, executed, frame, globals, jumps, lower, lower_int64, masm, omfwrite,
+    cpu, executed, frame, jumps, lower, lower_int64, masm, omfwrite,
 };
 use llrm_core::flow;
 use llrm_core::model::lir;
@@ -372,86 +371,17 @@ pub fn assembled(
     Ok(built)
 }
 
-/// Each call's contract and each MIR name's symbol, as isel asks them.
-struct MediumModel;
-
-impl assemble::Abi for MediumModel {
-    fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<runtime::Contract, String> {
-        Ok(raise_hir::medium_model(callee.to_owned(), !pops, pushed))
-    }
-
-    fn linked(&self, name: &str) -> String {
-        name.to_owned()
-    }
-}
-
-/// C through the rich MIR: translated to HIR, then compiled by the driver
-/// and selected by isel. `LLRM_MIR_STAGES` dumps each pass.
+/// C through the rich MIR: translated to HIR, then compiled by the driver,
+/// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, CompileError> {
     let unit = hir::unit(&stream::parse(text))?;
     let program = translate::program(&unit, module)?;
-    let options = llrm_core::driver::Options::of(machine.clone());
-    let (mut linked, data) = llrm_core::driver::emitted(&program, &options)?;
-    let raised = &linked.modules[0];
-    write(dump, "raised.ll", || llrm_mir::print::module(raised))?;
-    // Each data segment in the order HIR places objects, with the globals it holds.
-    let mut segments: Vec<(String, Vec<String>)> = Vec::new();
-    for object in &program.modules[0].data {
-        let Some(segment) = &object.segment else { continue };
-        let name = raised.global(data[0][&object.id]).name.clone().expect("a named object");
-        match segments.iter_mut().find(|(one, _)| one == segment) {
-            Some((_, names)) => names.push(name),
-            None => segments.push((segment.clone(), vec![name])),
-        }
+    let mut options = llrm_core::driver::Options::of(machine.clone());
+    if let Some(dump) = dump {
+        fs::create_dir_all(dump)?;
+        options.dump = Some(dump.to_path_buf());
     }
-    let private: BTreeSet<String> =
-        program.modules[0].data.iter().filter(|one| one.address == llrm_core::hir::AddressKind::Far).filter_map(|one| one.segment.clone()).collect();
-    llrm_core::driver::optimized(&mut linked, &options)?;
-    let mir = linked.modules.pop().expect("one module");
-    write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
-    let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Profile(options.cpu()?), &llrm_core::backend::target::Segments::of(machine))?;
-    // Data where the stream placed it, isel's float constants after DGROUP's.
-    let pool = built.data.drain(..).flat_map(|(_, items)| items).skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K")));
-    let pool: Vec<masm::Datum> = pool.collect();
-    for (segment, names) in &segments {
-        let mut items = Vec::new();
-        for name in names {
-            let Some(global) = mir.named(name) else { continue };
-            let llrm_mir::GlobalKind::Variable(variable) = &mir.global(global).kind else { continue };
-            if let Some(to) = variable.align {
-                items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
-            }
-            for datum in globals::datums(&mir, global, &built.names)? {
-                items.push(match datum {
-                    masm::Datum::Bytes(bytes) if segment == "_BSS" => masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None }),
-                    datum => datum,
-                });
-            }
-            if mir.global(global).linkage == llrm_mir::Linkage::External {
-                built.publics.push(name.clone());
-            }
-        }
-        built.data.push((segment.clone(), items));
-    }
-    if !pool.is_empty() {
-        built.data.push(("CONST".to_owned(), pool));
-    }
-    for (at, global) in mir.globals.iter().enumerate() {
-        if let llrm_mir::GlobalKind::Variable(variable) = &global.kind
-            && variable.initializer.is_none()
-        {
-            let name = built.names[&(Space::External, at as i64)].clone();
-            built.externs.push((name, if global.address_space == 0 { "byte" } else { "far-byte" }.to_owned()));
-        }
-    }
-    built.externs.sort();
-    built.private = private;
-    write(dump, "cost", || built.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
-    if dump.is_some() {
-        let text = masm::text(&built)?;
-        write(dump, "asm", || text)?;
-    }
-    Ok(built)
+    Ok(llrm_core::driver::compiled(&program, &options)?.pop().expect("one module"))
 }
 
 /// Internal procedure symbols used as values rather than direct callees.
