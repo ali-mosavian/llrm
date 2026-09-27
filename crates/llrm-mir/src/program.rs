@@ -60,12 +60,16 @@ pub struct Exports {
     /// The functions it calls whatever their linkage: the entry points and
     /// what the runtime calls back.
     pub entries: BTreeSet<String>,
+    /// The globals kept though nothing names them, outside code no more
+    /// than any other: what the object's layout places, as LLVM's
+    /// `llvm.compiler.used`.
+    pub kept: BTreeSet<String>,
 }
 
 impl Exports {
     /// `linked` alone: the program is the whole link but its runtime.
     pub fn closed(linked: BTreeSet<String>) -> Self {
-        Self { linked: Some(linked), entries: BTreeSet::new() }
+        Self { linked: Some(linked), entries: BTreeSet::new(), kept: BTreeSet::new() }
     }
 
     /// Whether outside code may reach `global`.

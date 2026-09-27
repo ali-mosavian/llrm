@@ -5,7 +5,7 @@
 //! SUB/FUNCTION bodies and their data inside the BASIC module envelope.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::rc::Rc;
@@ -15,11 +15,9 @@ use iced_x86::Register;
 use llrm_core::support::hash::{IndexMap, IndexSet};
 
 use super::abi::{physicalize, AbiError};
-use llrm_core::driver::basic::{_initialize_frame, _insn, _reg, _runtime_frame, _semantics, finalized, written_basic};
+use llrm_core::driver::basic::{self, _initialize_frame, _insn, _reg, _runtime_frame, _semantics, finalized, written_basic};
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::abi::qb::HirAbi;
-use llrm_core::backend::assemble::{self, Abi};
 use llrm_core::abi::machine::{self, Machine};
 use llrm_core::backend::target::Segments;
 use llrm_core::backend::{addressvalues, frame, globals, lower, masm, omfwrite};
@@ -164,19 +162,19 @@ fn _bytes_of(values: &[i64]) -> Vec<u8> {
 
 type Names = IndexMap<(Space, i64), String>;
 
-#[allow(clippy::type_complexity)]
-fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
-    let mut names: Names = llrm_core::hir::lower::symbol_names();
+/// The data objects BASIC lays down in its segments: the module's own, less
+/// the DATA stream and statement table the envelope writes.
+fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
     let reserved = [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT];
-    let internal: IndexMap<i64, &model::DataObject> = module
-        .data
-        .iter()
-        .filter(|one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
-        .map(|one| (one.id, one))
-        .collect();
+    module.data.iter().filter(move |one| one.linkage == model::DataLinkage::Internal && !reserved.contains(&one.name.as_str()))
+}
+
+/// Each data object's symbol, by its HIR id: its own name where external.
+fn _data_names(module: &model::Module) -> Names {
+    let mut names: Names = llrm_core::hir::lower::symbol_names();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
-        if reserved.contains(&object_.name.as_str()) {
+        if [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT].contains(&object_.name.as_str()) {
             continue;
         }
         let (key, name) = if object_.linkage == model::DataLinkage::External {
@@ -187,18 +185,29 @@ fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String,
         taken.insert(name.to_uppercase());
         names.insert(key, name);
     }
+    names
+}
 
+/// The BASIC segment a data object goes in: far ones FSL_CONST, read-only
+/// ones BC_CN, the rest BC_DATA.
+fn _segment(object_: &model::DataObject) -> &'static str {
+    if matches!(object_.address, model::AddressKind::Far | model::AddressKind::Huge) {
+        "FSL_CONST"
+    } else if object_.readonly {
+        "BC_CN"
+    } else {
+        "BC_DATA"
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String, Vec<masm::Datum>>), CompileError> {
+    let mut names = _data_names(module);
+    let internal: IndexMap<i64, &model::DataObject> = _placed(module).map(|one| (one.id, one)).collect();
     let mut grouped: IndexMap<String, Vec<masm::Datum>> =
         ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name.to_owned(), Vec::new())).collect();
     for object_ in internal.values() {
-        let segment = if matches!(object_.address, model::AddressKind::Far | model::AddressKind::Huge) {
-            "FSL_CONST"
-        } else if object_.readonly {
-            "BC_CN"
-        } else {
-            "BC_DATA"
-        };
-        let items = &mut grouped[segment];
+        let items = &mut grouped[_segment(object_)];
         let label = names[&(Space::Segment, object_.id)].clone();
         items.push(masm::Datum::Object(masm::Label { name: label }));
         let mut cursor = 0;
@@ -657,33 +666,6 @@ fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
     // The addends live in the image. The remaining words are zero.
     pack_into(&mut out, 12, 2); // OF_DS is BC_DS + 2.
     Ok(out)
-}
-
-/// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
-fn _ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
-    let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut instructions = Vec::new();
-        let mut exits = false;
-        for instruction in &block.insns {
-            let mut instruction = Arc::clone(instruction);
-            if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
-                exits = true;
-                sites.insert(instruction.at, masm::Callee::new("B$CENP", true));
-                let mut replaced = (*instruction).clone();
-                replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
-                instruction = Arc::new(replaced);
-            }
-            instructions.push(instruction);
-        }
-        // Only the rewritten return becomes non-returning. Branch and jump
-        // blocks retain their CFG edges; MASM listing uses the untaken edge to
-        // insert an explicit jump when it is not the next laid-out block.
-        let succ = if exits { vec![] } else { block.succ.clone() };
-        blocks.push(lir::LirBlock { succ, ..block.with_insns(instructions) });
-    }
-    (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }
 
 /// Replace source-positioned ON ERROR markers with the runtime protocol.
@@ -1278,72 +1260,75 @@ fn _lowered_machine(
         far_calls: physical.far_calls,
         reserve,
         source_instructions: body.source_instructions.clone().unwrap_or_default(),
-        inline: IndexMap::default(),
-        landing: None,
     })
 }
 
-/// The rich route's module: the HIR emitted as MIR and optimized, each
-/// data object's global, and how its calls link.
-struct Rich {
-    mir: llrm_mir::Module,
-    cpu: String,
-    segments: Segments,
-    data: std::collections::HashMap<i64, llrm_mir::GlobalId>,
-    abi: HirAbi,
-}
-
-impl Rich {
-    fn new(program: &model::Program, machine: &Machine) -> Result<Self, CompileError> {
-        let program = &_positional_data(program)?;
-        let module = &program.modules[0];
-        let options = llrm_core::driver::Options::of(machine.clone());
-        let (mut mir, mut data) = llrm_core::driver::emitted(program, &options).map_err(|why| EmissionError(why))?;
-        llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
-        let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
-        Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: data.pop().expect("one module"), abi: HirAbi { runtime: program.runtime, objects, preserved: Default::default() } })
+/// The rich route: the HIR emitted as MIR, optimized, and assembled by the
+/// driver into the BASIC module object laid out here, each data object as
+/// this names it and lays it down.
+fn rich_assembled(program: &model::Program, machine: &Machine) -> Result<masm::Module, CompileError> {
+    let program = &_positional_data(program)?;
+    let module = &program.modules[0];
+    let procedures = module.functions.iter().map(|one| &one.name).chain(module.callables.iter().map(|one| &one.name));
+    let symbols: BTreeMap<String, String> = procedures.map(|name| (name.clone(), _object_name(name))).collect();
+    let data = _data_names(module).into_iter().filter(|((space, _), _)| matches!(space, Space::Segment | Space::External)).map(|((_, id), name)| (id, name)).collect();
+    let mut placed: IndexMap<&str, Vec<basic::Item>> = ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
+    for object_ in _placed(module) {
+        placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
-
-    fn machined(&self, program: &model::Program, name: &str, pool: &Rc<RefCell<Pool>>) -> Result<Machined, CompileError> {
-        let cpu = targets::profile(ProfileOrName::Name(&self.cpu)).map_err(CompileError::Value)?;
-        let target = assemble::Target { cpu, segments: &self.segments, runtime: program.runtime.value(), basic: true };
-        let contracts = |callee: &str, pops: bool, pushed: i64| self.abi.contract(callee, pops, pushed);
-        let machined = assemble::machined(&self.mir, name, &contracts, pool, &target).map_err(CompileError::Value)?;
-        let final_ = finalized(&machined.body, machined.popped)?;
-        // A runtime routine is called by its own name.
-        let calls = machined
-            .calls
-            .into_iter()
-            .map(|(at, name)| (at, name.strip_prefix(hir::mir::RUNTIME).map_or_else(|| name.clone(), str::to_owned)))
-            .collect();
-        Ok(Machined {
-            body: final_.body,
-            callees: final_.callees,
-            calls,
-            far_calls: machined.far,
-            reserve: machined.reserve,
-            source_instructions: IndexMap::default(),
-            inline: machined.inline,
-            landing: machined.landing,
+    let frames = module
+        .functions
+        .iter()
+        .map(|function| {
+            let frame = if _inline_frame(program, module, function) { basic::Frame::Own } else { basic::Frame::Runtime { strings: _temporary_string_slots(module, function) } };
+            (function.name.clone(), frame)
         })
+        .collect();
+    let vbdos = program.runtime == model::RuntimeProfile::Vbdos;
+    if !vbdos && !placed["FSL_CONST"].is_empty() {
+        return emission(format!("{} cannot place literals in VBDOS FSL_CONST", program.runtime.value()));
     }
-
-    /// Each symbol selected code names, keyed as isel keys a global, by its
-    /// MIR id: a data object's as `qb` names it, anything else as it links;
-    /// and the pool's entries `pool` keys.
-    fn names(&self, qb: &Names, pool: impl Iterator<Item = i64>) -> Names {
-        let mut names = hir::lower::symbol_names();
-        let objects: std::collections::HashMap<llrm_mir::GlobalId, i64> = self.data.iter().map(|(&object, &global)| (global, object)).collect();
-        for (at, global) in self.mir.globals.iter().enumerate() {
-            let id = llrm_mir::GlobalId(at as u32);
-            let object = objects.get(&id).and_then(|object| qb.get(&(Space::Segment, *object)).or_else(|| qb.get(&(Space::External, *object))));
-            let name = object.cloned().unwrap_or_else(|| self.abi.linked(global.name.as_deref().unwrap_or_default()));
-            names.extend(globals::segment_name(&self.mir, id, &name));
-            names.insert((globals::space(&self.mir, id), i64::from(id.0)), name);
-        }
-        names.extend(pool.map(|id| ((Space::Segment, id), qb[&(Space::Segment, id)].clone())));
-        names
+    let rows = (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
+    let read_data = _read_data_items(module, rows)?;
+    let graphics = _graphics_dependencies(module);
+    let datum = basic::Item::Datum;
+    let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
+    let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
+        ("BR_DATA", vec![]),
+        ("BR_SKYS", vec![]),
+        ("COMMON", vec![]),
+        ("BC_DATA", [vec![datum(masm::Datum::Bytes(vec![0; 6]))], placed.swap_remove("BC_DATA").unwrap_or_default()].concat()),
+        ("NMALLOC", vec![]),
+        ("ENMALLOC", vec![]),
+        ("BC_FT", vec![]),
+        ("BC_CN", placed.swap_remove("BC_CN").unwrap_or_default()),
+        ("BC_DS", read_data.into_iter().chain([masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]).map(datum).collect()),
+        ("BC_SAB", vec![label("$QB$SAB")]),
+        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true }))]),
+    ];
+    let mut private: BTreeSet<String> = BTreeSet::new();
+    if vbdos {
+        segments.push(("FDATA", vec![]));
+        segments.push(("FSL_CONST", placed.swap_remove("FSL_CONST").unwrap_or_default()));
+        private.extend(["FDATA".to_owned(), "FSL_CONST".to_owned()]);
     }
+    if vbdos && !graphics.is_empty() {
+        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false }))).collect()));
+        private.insert("QB_LINK".into());
+    }
+    let object = basic::Object {
+        code: format!("{}_CODE", _object_name(&module.name)),
+        header: _header(program)?,
+        main: "__main".to_owned(),
+        symbols,
+        data,
+        segments: segments.into_iter().map(|(name, items)| basic::Segment { name: name.to_owned(), items, size: None }).collect(),
+        constants: "BC_CN".to_owned(),
+        private,
+        requests: graphics,
+        frames,
+    };
+    Ok(basic::compiled(program, &object, &llrm_core::driver::Options::of(machine.clone()))?)
 }
 
 /// Which middle and back end a module's functions reach machine form by.
@@ -1364,10 +1349,10 @@ pub fn assembled(
     assembled_by(program, observer, options, Route::Lowered, &machine::BUILT_IN)
 }
 
-/// A function in machine form, as either route makes it: its LIR with
-/// returns cleaned, the inline code its x87 intrinsics became, each call's
-/// callee and which are far, the bytes its frame reserves, and where each
-/// source statement's code begins.
+/// A function in machine form: its LIR with returns cleaned, the inline
+/// code its x87 intrinsics became, each call's callee and which are far,
+/// the bytes its frame reserves, and where each source statement's code
+/// begins.
 struct Machined {
     body: lir::LirBody,
     callees: IndexMap<i64, masm::Callee>,
@@ -1375,10 +1360,6 @@ struct Machined {
     far_calls: BTreeSet<i64>,
     reserve: i64,
     source_instructions: IndexMap<i64, i64>,
-    /// The code laid down in place of each call to an inline helper.
-    inline: IndexMap<i64, Vec<u8>>,
-    /// The landing pad's block, which the statement table names.
-    landing: Option<i64>,
 }
 
 pub fn assembled_by(
@@ -1395,22 +1376,17 @@ pub fn assembled_by(
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
+    if route == Route::Selected {
+        return rich_assembled(program, machine);
+    }
     let module = &program.modules[0];
     let graphics = _graphics_dependencies(module);
     let functions: Vec<&model::Function> = module.functions.iter().collect();
-    let rich = match route {
-        Route::Selected => Some(Rich::new(program, machine)?),
-        Route::Lowered => None,
-    };
-    let semantic = if rich.is_some() {
-        Vec::new()
-    } else {
-        let semantic = hir::lower::lower(program).map_err(|error| CompileError::Value(error.0))?;
-        if semantic.len() != functions.len() {
-            return emission("HIR lowering did not preserve the function table");
-        }
-        _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?
-    };
+    let semantic = hir::lower::lower(program).map_err(|error| CompileError::Value(error.0))?;
+    if semantic.len() != functions.len() {
+        return emission("HIR lowering did not preserve the function table");
+    }
+    let semantic = _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?;
 
     let callable_names: IndexMap<&str, String> =
         module.callables.iter().map(|one| (one.name.as_str(), _object_name(&one.name))).collect();
@@ -1418,22 +1394,17 @@ pub fn assembled_by(
         module.callables.iter().filter(|one| one.defined).map(|one| _object_name(&one.name)).collect();
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     let data_rows = _read_data_lines(module)?;
-    // The rich route keys each row by its position; only BC's labels need a code key.
-    let data_keys: IndexMap<i64, i64> =
-        if rich.is_some() { IndexMap::default() } else { (0..data_rows.len() as i64).map(|row| (row, -(row + 1))).collect() };
+    let data_keys: IndexMap<i64, i64> = (0..data_rows.len() as i64).map(|row| (row, -(row + 1))).collect();
     let mut code_names: IndexMap<i64, String> = data_keys.values().map(|key| (*key, String::new())).collect();
     let statement_metadata = _statement_metadata(module)?;
     let mut statement_targets: Vec<(i64, i64, String, i64)> = Vec::new();
     let mut referenced_calls: BTreeSet<String> = BTreeSet::new();
     let empty_occurrences = IndexMap::default();
-    // Pool keys follow every data object's and, on the rich route, every global's.
-    let pool_start = module.data.iter().map(|one| one.id + 1).max().unwrap_or(0).max(rich.as_ref().map_or(0, |rich| rich.mir.globals.len() as i64));
+    // Pool keys follow every data object's.
+    let pool_start = module.data.iter().map(|one| one.id + 1).max().unwrap_or(0);
     let pool = Rc::new(RefCell::new(Pool::new(pool_start)));
     for (index, function) in functions.iter().copied().enumerate() {
-        let machined = match &rich {
-            Some(rich) => rich.machined(program, &function.name, &pool)?,
-            None => _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?,
-        };
+        let machined = _lowered_machine(program, module, function, &semantic[index], options, machine, &mut observer, &pool, &empty_occurrences)?;
         let mut callees = machined.callees.clone();
         let mut resume_blocks: IndexMap<i64, i64> = IndexMap::default();
         let mut data_markers: IndexMap<i64, i64> = IndexMap::default();
@@ -1483,9 +1454,6 @@ pub fn assembled_by(
                 }
                 error_registrations.insert(*at, (address, parts[2] == "L"));
                 continue;
-            } else if let Some(code) = machined.inline.get(at) {
-                callees.insert(*at, masm::Callee { name: name.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
-                continue;
             } else {
                 object_name = callable_names.get(name.as_str()).cloned().unwrap_or_else(|| name.clone());
             }
@@ -1530,7 +1498,7 @@ pub fn assembled_by(
         callees.extend(registrations);
         if module_body {
             let exits;
-            (final_body, exits) = _ends_program(&final_body);
+            (final_body, exits) = basic::ends_program(&final_body);
             callees.extend(exits);
             referenced_calls.insert("B$CENP".to_owned());
         }
@@ -1587,10 +1555,6 @@ pub fn assembled_by(
                 statement_targets.push((procedure_number as i64, layout_order[at], masm::label(procedure_number, *at), *line));
             }
         }
-        if rich.is_some() {
-            statement_targets.extend(final_body.blocks.first().map(|entry| llrm_core::driver::entry_row(procedure_number, entry.at)));
-        }
-        statement_targets.extend(machined.landing.map(|at| llrm_core::driver::landing_row(procedure_number, at)));
         procedures.push(masm::Procedure {
             name: if module_body { "$QB$MAIN".to_owned() } else { _object_name(&function.name) },
             public,
@@ -1609,39 +1573,11 @@ pub fn assembled_by(
         });
     }
 
-    // What the backend's prepare step added besides the HIR's functions:
-    // the landing stub, which runs on the runtime's own frame.
-    if let Some(rich) = &rich {
-        for (id, global, function) in rich.mir.functions() {
-            let name = global.name.clone().unwrap_or_default();
-            if function.is_declaration() || functions.iter().any(|one| one.name == name) {
-                continue;
-            }
-            if llrm_core::driver::framed(&rich.mir, id) {
-                return emission(format!("@{name}, which no HIR function makes, asks for a frame"));
-            }
-            let machined = rich.machined(program, &name, &pool)?;
-            let mut callees = machined.callees;
-            for (at, callee) in &machined.calls {
-                referenced_calls.insert(callee.clone());
-                callees.insert(*at, masm::Callee::new(callee.clone(), machined.far_calls.contains(at)));
-            }
-            procedures.push(masm::Procedure { name, public: false, far: true, body: addressvalues::converted(&machined.body), reserve: 0, callees, interrupt: None });
-        }
-    }
     statement_targets.sort();
     procedures.push(llrm_core::driver::statement_table(&statement_targets));
-    let (mut names, mut data_by_segment) = _data(module, &pool.borrow())?;
-    if let Some(rich) = &rich {
-        names = rich.names(&names, pool.borrow().entries().map(|(_, id)| id));
-        let laid: std::collections::HashSet<llrm_mir::GlobalId> = rich.data.values().copied().collect();
-        data_by_segment["BC_CN"].extend(llrm_core::driver::added_data(&rich.mir, &|global| laid.contains(&global), &names).map_err(CompileError::Value)?);
-    }
+    let (mut names, data_by_segment) = _data(module, &pool.borrow())?;
     names.extend(code_names.iter().map(|(key, name)| ((Space::Segment, *key), name.clone())));
-    let data_keys = match &rich {
-        Some(_) => (0..data_rows.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect(),
-        None => _labeled_data_keys(&data_keys, &code_names)?,
-    };
+    let data_keys = _labeled_data_keys(&data_keys, &code_names)?;
     let read_data = _read_data_items(module, data_keys)?;
     let external_data: BTreeSet<String> = module
         .data

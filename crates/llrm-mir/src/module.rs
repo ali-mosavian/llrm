@@ -385,6 +385,25 @@ impl Module {
         }
     }
 
+    /// The module without the globals `keep` refuses, the rest renumbered
+    /// in their order; a constant naming one gone becomes poison.
+    pub fn retain_globals(&mut self, keep: &dyn Fn(GlobalId) -> bool) {
+        let mut renumbered = Vec::with_capacity(self.globals.len());
+        let mut next = 0;
+        for at in 0..self.globals.len() as u32 {
+            renumbered.push(keep(GlobalId(at)).then(|| {
+                next += 1;
+                GlobalId(next - 1)
+            }));
+        }
+        self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        let mut at = 0;
+        self.globals.retain(|_| {
+            at += 1;
+            renumbered[at - 1].is_some()
+        });
+    }
+
     /// A function type's return type and parameters.
     pub fn signature(&self, function_type: TypeId) -> (TypeId, &[TypeId], bool) {
         match self.context.types.get(function_type) {
