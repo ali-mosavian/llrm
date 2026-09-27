@@ -90,7 +90,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     std::fs::write(dir.join("fault.asm"), ".model medium\n.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n").unwrap();
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
-    run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj", "--isel"]);
+    run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
     run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "slice.obj", "file", "dos.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
@@ -137,7 +137,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
 }
 
 /// llrm-c's two routes, the old MIR's (--opt) and the rich MIR's through
-/// isel (--isel), run each parity fixture to bench/parity/expected.json's
+/// isel (the default), run each parity fixture to bench/parity/expected.json's
 /// value: the gate for retiring the old route.
 #[test]
 fn test_c_parity_fixtures_agree_on_both_routes() {
@@ -161,9 +161,10 @@ fn test_c_parity_fixtures_agree_on_both_routes() {
     for (number, name) in names.iter().enumerate() {
         let start = parity.join(format!("{name}-start.asm"));
         run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{name}_s.obj"), start.to_str().unwrap()]);
-        for route in ["--opt", "--isel"] {
-            let program = format!("P{number}{}", &route[2..3].to_uppercase());
-            run("llrm-c", &[parity.join(format!("{name}.cgs")).to_str().unwrap(), route, "-o", &format!("{program}.obj")]);
+        for (route, flags) in [("O", &["--opt"][..]), ("I", &[][..])] {
+            let program = format!("P{number}{route}");
+            let source = parity.join(format!("{name}.cgs"));
+            run("llrm-c", &[&[source.to_str().unwrap()][..], flags, &["-o", &format!("{program}.obj")]].concat());
             run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", &format!("{name}_s.obj"), "file", &format!("{program}.obj"), "op", "quiet"]);
             autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
             runs.push((name.clone(), route, program));

@@ -23,7 +23,7 @@ use llrm_core::model::passes::{Options, O2};
 const USAGE: &str = "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] \
 [--array-order {column-major,row-major}] [--dump-hir DUMP_HIR] [--huge-arrays] [--checked-arrays] \
 [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--include INCLUDE] [--mir] [-o OUTPUT] [-O {s,2}] \
-[--dump DUMP] [--machine MACHINE] [--isel] source";
+[--dump DUMP] [--machine MACHINE] [--legacy] source";
 
 pub(super) struct Arguments {
     pub(super) source: PathBuf,
@@ -42,7 +42,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut source = None;
     let mut frontend = Frontend::new("vbdos", "vbdos");
     let (mut dump_hir, mut mir, mut output, mut options, mut dump) = (None, false, None, O2(), None);
-    let mut route = compile::Route::Lowered;
+    let mut route = compile::Route::Selected;
     let mut machine = llrm_core::abi::machine::BUILT_IN.clone();
     let mut at = 0;
     while at < argv.len() {
@@ -80,7 +80,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--array-merging" => frontend.array_merging = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--mir" => mir = true,
-            "--isel" => route = compile::Route::Selected,
+            "--legacy" => route = compile::Route::Lowered,
             "-o" | "--output" => output = Some(PathBuf::from(value("-o/--output")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--machine" => machine = Machine::load(std::path::Path::new(&value("--machine")?))?,

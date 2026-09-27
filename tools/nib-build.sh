@@ -27,7 +27,7 @@ for part in "$@"; do
     name=$(basename "$part")
     case $part in
     *.asm) "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$name.obj" "$part" ;;
-    *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" --opt "$level" >/dev/null ;;
+    *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"

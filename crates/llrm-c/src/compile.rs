@@ -2,7 +2,7 @@
 //! the backend, to an object or jwasm source.
 //!
 //! ```text
-//! llrm-c pal.cgs -o pal.obj [--dump DIR] [--opt | --isel]
+//! llrm-c pal.cgs -o pal.obj [--dump DIR] [--legacy [--opt]]
 //! ```
 //!
 //! Stages not yet ported stop with [`CompileError::NotPorted`], naming the
@@ -824,7 +824,9 @@ struct Args {
     cpu: String,
     options: Options,
     include: Vec<String>,
-    isel: bool,
+    /// The old MIR's route, for a program the rich MIR refuses; `--opt`
+    /// optimizes on it.
+    legacy: bool,
     /// The target: the built-in DOS unless `--machine` names another; `--cpu` prices it.
     machine: llrm_core::abi::machine::Machine,
 }
@@ -861,13 +863,13 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
 }
 
 const USAGE: &str =
-    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--isel] [--cpu CPU] [--machine MACHINE] [-O {s,2}] source";
+    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--legacy] [--opt] [--cpu CPU] [--machine MACHINE] [-O {s,2}] source";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut output, mut dump, mut opt, mut cpu) =
         (None, None, None, false, None);
     let mut include = Vec::new();
-    let mut isel = false;
+    let mut legacy = false;
     let mut machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
     let mut options = llrm_core::model::passes::O2();
     let mut rest = argv.iter();
@@ -882,7 +884,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
-            "--isel" => isel = true,
+            "--legacy" => legacy = true,
             "--cpu" => cpu = Some(value("--cpu")?),
             "--machine" => machine = llrm_core::abi::machine::Machine::load(Path::new(&value("--machine")?))?,
             level if level.starts_with("-O") => {
@@ -909,7 +911,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         cpu,
         options,
         include,
-        isel,
+        legacy: legacy || opt,
         machine,
     })
 }
@@ -938,10 +940,10 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = if args.isel {
-            selected(&text, module, args.dump.as_deref(), &args.machine)?
-        } else {
+        let built = if args.legacy {
             assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?
+        } else {
+            selected(&text, module, args.dump.as_deref(), &args.machine)?
         };
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
