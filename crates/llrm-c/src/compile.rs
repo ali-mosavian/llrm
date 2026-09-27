@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use llrm_core::support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{hir, libfunc, raise_hir, raise_mir, stream};
+use super::{hir, libfunc, raise_hir, stream, translate};
 use llrm_core::analysis::{alias, interprocedural};
 use llrm_core::optimize::interprocedural as module;
 use llrm_core::optimize::rotate;
@@ -385,21 +385,29 @@ impl assemble::Abi for MediumModel {
     }
 }
 
-/// C through the rich MIR: raised by `raise_mir`, optimized by the ported
-/// pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
+/// C through the rich MIR: translated to HIR, then compiled by the driver
+/// and selected by isel. `LLRM_MIR_STAGES` dumps each pass.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, CompileError> {
     let unit = hir::unit(&stream::parse(text))?;
-    let raise_mir::Emitted { module: mir, segments } = raise_mir::emitted(&unit)?;
-    write(dump, "raised.ll", || llrm_mir::print::module(&mir))?;
-    let problems = llrm_mir::verify::verify(&mir);
-    if !problems.is_empty() {
-        return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
-    }
-    let library = libfunc::library(&mir).map_err(hir::Unsupported)?;
+    let program = translate::program(&unit, module)?;
     let options = llrm_core::driver::Options::of(machine.clone());
-    let mut program = llrm_core::driver::linked(vec![mir], library, &options)?;
-    llrm_core::driver::optimized(&mut program, &options)?;
-    let mir = program.modules.pop().expect("one module");
+    let (mut linked, data) = llrm_core::driver::emitted(&program, &options)?;
+    let raised = &linked.modules[0];
+    write(dump, "raised.ll", || llrm_mir::print::module(raised))?;
+    // Each data segment in the order HIR places objects, with the globals it holds.
+    let mut segments: Vec<(String, Vec<String>)> = Vec::new();
+    for object in &program.modules[0].data {
+        let Some(segment) = &object.segment else { continue };
+        let name = raised.global(data[0][&object.id]).name.clone().expect("a named object");
+        match segments.iter_mut().find(|(one, _)| one == segment) {
+            Some((_, names)) => names.push(name),
+            None => segments.push((segment.clone(), vec![name])),
+        }
+    }
+    let private: BTreeSet<String> =
+        program.modules[0].data.iter().filter(|one| one.address == llrm_core::hir::AddressKind::Far).filter_map(|one| one.segment.clone()).collect();
+    llrm_core::driver::optimized(&mut linked, &options)?;
+    let mir = linked.modules.pop().expect("one module");
     write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
     let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Profile(options.cpu()?), &llrm_core::backend::target::Segments::of(machine))?;
     // Data where the stream placed it, isel's float constants after DGROUP's.
@@ -437,7 +445,7 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, machine: &llrm_co
         }
     }
     built.externs.sort();
-    built.private = unit.segments.values().filter(|one| one.attr & hir::PRIVATE != 0).map(|one| one.name.clone()).collect();
+    built.private = private;
     write(dump, "cost", || built.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
     if dump.is_some() {
         let text = masm::text(&built)?;

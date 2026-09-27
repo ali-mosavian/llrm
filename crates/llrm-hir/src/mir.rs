@@ -40,7 +40,7 @@ pub struct Emitted {
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
     // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
-    let zeroed = program.dialect != model::Dialect::Quickr;
+    let zeroed = program.zeroed_locals && program.dialect != model::Dialect::Quickr;
     program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed)).collect()
 }
 
@@ -112,6 +112,25 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     if !writes.is_empty() {
         out.named_metadata.push(("llrm.writes".to_owned(), writes));
     }
+    for (module, global) in modules.iter().flat_map(|(module, _)| module.functions().filter(|(_, _, one)| one.is_declaration()).map(move |(id, _, _)| (*module, id))) {
+        let Some(name) = module.global(global).name.as_deref() else { continue };
+        if !promises.reads_arguments.iter().any(|one| one == name.strip_prefix(RUNTIME).unwrap_or(name)) {
+            continue;
+        }
+        let Some(one) = (match out.named(name) {
+            Some(one) => Some(one),
+            None => out.declared(module, global)?,
+        }) else {
+            continue;
+        };
+        let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
+        function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
+        for at in 0..function.parameters().len() {
+            if matches!(out.context.types.get(function.value(function.parameters()[at]).ty), Type::Pointer(_)) {
+                function.parameter_attrs[at].push(Attribute::Flag("nocapture".to_owned()));
+            }
+        }
+    }
     Ok(out)
 }
 
@@ -169,9 +188,37 @@ impl Tags {
     }
 }
 
+/// The `!tbaa` access tag of each type the language's aliasing classes
+/// cover, by HIR type id: a type node per class under its parent's, as
+/// clang builds C's.
+fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMap<i64, MetadataId>> {
+    let zero = module.context.types.int(64);
+    let zero = MetadataOperand::Constant(module.context.int(zero, 0));
+    let mut nodes: HashMap<&str, MetadataId> = HashMap::new();
+    let mut tags = HashMap::new();
+    for class in classes {
+        let mut operands = vec![MetadataOperand::String(class.name.clone())];
+        if let Some(parent) = &class.parent {
+            let parent = *nodes.get(parent.as_str()).ok_or_else(|| format!("alias class {} before its parent {parent}", class.name))?;
+            operands.extend([MetadataOperand::Node(parent), zero.clone()]);
+        }
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        let node = MetadataId(module.metadata.len() as u32 - 1);
+        nodes.insert(&class.name, node);
+        if class.parent.is_some() {
+            module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Node(node), MetadataOperand::Node(node), zero.clone()] });
+            let tag = MetadataId(module.metadata.len() as u32 - 1);
+            tags.extend(class.types.iter().map(|&one| (one, tag)));
+        }
+    }
+    Ok(tags)
+}
+
 struct Tables<'h> {
     array_order: model::ArrayOrder,
     tags: Tags,
+    /// The aliasing class tag of an access as a type, by its id.
+    classes: HashMap<i64, MetadataId>,
     /// Whether a frame starts zeroed.
     zeroed: bool,
     layout: DataLayout,
@@ -198,7 +245,12 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         callees: HashMap::new(),
         conventions: HashMap::new(),
         tags: Tags::new(&mut module),
+        classes: HashMap::new(),
     };
+    match class_tags(&mut module, &hir.alias_classes) {
+        Ok(classes) => tables.classes = classes,
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
@@ -208,6 +260,8 @@ fn emit_module(hir: &model::Module, array_order: model::ArrayOrder, zeroed: bool
         let global = declare_data(&mut module, object, layout.as_ref().ok().copied());
         data.insert(object.id, global);
         match layout {
+            // Another module's object this module lays out nothing of: declared only.
+            Ok(_) if object.linkage == model::DataLinkage::External && sizes[&object.id] == 0 => {}
             Ok(_) => defined.push((object, global)),
             Err(why) => refused.push((object.name.clone(), why)),
         }
@@ -329,10 +383,12 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
     let byte = module.context.types.int(8);
     let bytes = module.context.types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
     let linkage = match (ty, object.linkage) {
-        (None, _) | (Some(_), model::DataLinkage::External) => Linkage::External,
+        (None, _) | (Some(_), model::DataLinkage::External | model::DataLinkage::Exported) => Linkage::External,
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
+        (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
+    let align = object.align.map(|one| one as u64);
+    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
     global
@@ -445,7 +501,9 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
         let attrs = &mut defined.parameter_attrs[at];
         attrs.extend(promise.unaliased.then(|| Attribute::Flag("noalias".to_owned())));
         attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
-        attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
+        if promise.bytes > 0 {
+            attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
+        }
     }
     Ok((global, abi.0))
 }
@@ -862,6 +920,19 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// A place's address, what it holds, whether it is volatile, and the
     /// `!tbaa` tag its accesses carry.
     fn place(&mut self, operand: &Operand) -> Emit<(Value, TypeId, bool, Option<MetadataId>)> {
+        let accessed = match operand {
+            Operand::PlaceRef(one) => Some(self.places[&one.place].r#type),
+            Operand::ArrayElement(one) => self.tables.types[&self.places[&one.place].r#type].element,
+            Operand::ProjectedPlace(model::ProjectedPlace { r#type, .. }) | Operand::IndirectPlace(model::IndirectPlace { r#type, .. }) | Operand::DescriptorPlace(model::DescriptorPlace { r#type, .. }) => Some(*r#type),
+            Operand::ValueRef(_) | Operand::Constant(_) => None,
+        };
+        let (pointer, ty, volatile, tag) = self.untyped_place(operand)?;
+        // The language's aliasing class says more than where the place is.
+        let class = accessed.and_then(|one| self.tables.classes.get(&one).copied());
+        Ok((pointer, ty, volatile, class.or(tag)))
+    }
+
+    fn untyped_place(&mut self, operand: &Operand) -> Emit<(Value, TypeId, bool, Option<MetadataId>)> {
         match operand {
             Operand::PlaceRef(one) => {
                 let place = self.places[&one.place];
@@ -1013,7 +1084,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let result = self.b.binary(binary, a, b, Flags::default(), "");
+            let flags = if instruction.nowrap && matches!(op, Op::Add | Op::Sub | Op::Mul) { Flags::NSW } else { Flags::default() };
+            let result = self.b.binary(binary, a, b, flags, "");
             self.define(instruction, result);
             return Ok(());
         }
@@ -1032,8 +1104,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 (false, _) => self.b.icmp(signed, a, b, ""),
             };
             let ty = self.result_type(instruction.results[0])?;
-            // BASIC's truth is all ones.
-            let result = self.b.cast(CastOp::SExt, truth, ty, "");
+            // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
+            let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
+            let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
             self.define(instruction, result);
             return Ok(());
         }
@@ -1064,6 +1137,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[1])?;
                 self.b.store(value, pointer, volatile);
                 self.tagged(tag);
+            }
+            Op::Address if instruction.operands.is_empty() => {
+                let callee = instruction.callee.as_deref().ok_or("an address of nothing")?;
+                let function = Value::Constant(*self.tables.callees.get(callee).ok_or_else(|| format!("@{callee} undeclared"))?);
+                let ty = self.result_type(instruction.results[0])?;
+                let pointer = match (self.b.context.types.get(self.b.type_of(function)), self.b.context.types.get(ty)) {
+                    (Type::Pointer(from), Type::Pointer(to)) if from == to => function,
+                    (Type::Pointer(_), Type::Pointer(_)) => self.b.cast(CastOp::AddrSpaceCast, function, ty, ""),
+                    (_, other) => return Err(format!("a function's address as {other:?}")),
+                };
+                self.define(instruction, pointer);
             }
             Op::Address => {
                 let (pointer, _, _, _) = self.place(&instruction.operands[0])?;
@@ -1104,7 +1188,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a negated non-integer")?;
                 let zero = self.b.int(bits, 0);
-                let result = self.b.binary(BinaryOp::Sub, zero, value, Flags::default(), "");
+                let flags = if instruction.nowrap { Flags::NSW } else { Flags::default() };
+                let result = self.b.binary(BinaryOp::Sub, zero, value, flags, "");
                 self.define(instruction, result);
             }
             Op::Not => {
@@ -1138,7 +1223,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let i16 = self.b.context.types.int(16);
                 let displacement = self.convert(displacement, signed, i16)?;
                 let byte = self.b.context.types.int(8);
-                let result = self.b.gep(byte, pointer, &[displacement], Flags::default(), "");
+                let flags = if instruction.inbounds { Flags::INBOUNDS } else { Flags::default() };
+                let result = self.b.gep(byte, pointer, &[displacement], flags, "");
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -1176,6 +1262,21 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let result = self.b.fneg(value, "");
                 self.define(instruction, result);
+            }
+            Op::Call if instruction.callee.is_none() => {
+                let site = self.function.calls.iter().find(|one| one.instruction == instruction.id).ok_or("an indirect call without its ABI")?;
+                let (convention, _) = convention(site.cleanup, site.distance)?;
+                let operands = self.operands(instruction)?;
+                let [callee, ref arguments @ ..] = operands[..] else { return Err("an indirect call of nothing".to_owned()) };
+                let returns = match instruction.results.first() {
+                    Some(&result) => self.result_type(result)?,
+                    None => self.b.context.types.void(),
+                };
+                let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
+                let ty = function_type(&mut self.b.context.types, returns, parameters);
+                if let Some(result) = self.b.call_as(convention, ty, callee, arguments, "") {
+                    self.define(instruction, result);
+                }
             }
             Op::Call => {
                 let callee = instruction.callee.as_deref().ok_or("a call without a callee")?;
@@ -1241,6 +1342,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Type::Float(FloatKind::Float), Type::Float(FloatKind::Double)) => CastOp::FPExt,
             (Type::Float(FloatKind::Double), Type::Float(FloatKind::Float)) => CastOp::FPTrunc,
             (Type::Float(_), Type::Int(_)) => return Ok(self.intrinsic(Op::Convert, value, to)?.expect("a rounding")),
+            (Type::Int(_), Type::Pointer(_)) => CastOp::IntToPtr,
+            (Type::Pointer(_), Type::Int(_)) => CastOp::PtrToInt,
+            (Type::Pointer(_), Type::Pointer(_)) => CastOp::AddrSpaceCast,
             (a, b) => return Err(format!("a conversion from {a:?} to {b:?}")),
         };
         Ok(self.b.cast(op, value, to, ""))
@@ -1263,7 +1367,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.b.switch(value, self.block(terminator.targets[0]), &cases);
             }
             TerminatorKind::Return => {
-                let value = terminator.operands.first().map(|one| self.value(one)).transpose()?;
+                let mut value = terminator.operands.first().map(|one| self.value(one)).transpose()?;
+                let Type::Function { returns, .. } = self.b.context.types.get(self.b.function.ty).clone() else { unreachable!("a function type") };
+                if value.is_none() && !self.b.context.types.is_void(returns) {
+                    // No value from a function that has one: nothing the caller may read.
+                    value = Some(Value::Constant(self.b.context.constant(Constant { ty: returns, kind: ConstantKind::Poison })));
+                }
                 self.b.ret(value);
             }
             TerminatorKind::Unreachable => self.b.unreachable(),

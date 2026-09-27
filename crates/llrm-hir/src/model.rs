@@ -69,6 +69,7 @@ str_enum!(Dialect {
     Vbdos("VBDOS") = "vbdos",
     Quickr("QUICKR") = "quickr",
     Nib("NIB") = "nib",
+    C("C") = "c",
 });
 
 str_enum!(TargetProfile {
@@ -183,6 +184,10 @@ str_enum!(Storage {
 str_enum!(DataLinkage {
     Internal("INTERNAL") = "internal",
     External("EXTERNAL") = "external",
+    // Defined here, visible to other modules.
+    Exported("EXPORTED") = "exported",
+    // Internal, and nameless: a literal.
+    Private("PRIVATE") = "private",
 });
 
 str_enum!(FunctionLinkage {
@@ -346,6 +351,7 @@ str_enum!(Op {
     Copy("COPY") = "copy",
     Load("LOAD") = "load",
     Store("STORE") = "store",
+    // A place's address; with no operand, the address of the function `callee` names.
     Address("ADDRESS") = "address",
     PtrOffset("PTR_OFFSET") = "ptr_offset",
     PointerSegment("POINTER_SEGMENT") = "pointer_segment",
@@ -412,6 +418,7 @@ str_enum!(Op {
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
+    // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
     // Inline machine code: operands go into its input registers, results
     // come out of its output registers. `Instruction.asm` says which.
@@ -443,13 +450,15 @@ pub struct Instruction {
     pub asm: Option<Asm>,
     /// The signed result fits its width, as the language promises.
     pub nowrap: bool,
+    /// A PTR_OFFSET's result stays inside its pointer's object.
+    pub inbounds: bool,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false, inbounds: false }
     }
 }
 
@@ -605,6 +614,9 @@ pub struct DataObject {
     // False when no code takes its address, this module's or another's: only
     // a reference naming it reaches it.
     pub addressed: bool,
+    // The segment the frontend places it in, and its alignment in bytes.
+    pub segment: Option<String>,
+    pub align: Option<i64>,
 }
 
 impl DataObject {
@@ -618,8 +630,20 @@ impl DataObject {
             linkage: DataLinkage::Internal,
             address: AddressKind::Near,
             addressed: true,
+            segment: None,
+            align: None,
         }
     }
+}
+
+/// A class of the language's type-based aliasing, as LLVM's `!tbaa` type
+/// nodes: an access as one of `types` aliases only accesses in this class,
+/// an ancestor or a descendant. A class with no parent is a root.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AliasClass {
+    pub name: String,
+    pub parent: Option<String>,
+    pub types: Vec<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -630,11 +654,12 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub data: Vec<DataObject>,
     pub callables: Vec<Callable>,
+    pub alias_classes: Vec<AliasClass>,
 }
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new() }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new() }
     }
 }
 
@@ -657,6 +682,9 @@ pub struct RuntimePromises {
     pub writers: Vec<CellWriters>,
     /// The routines that raise no error.
     pub nounwind: Vec<String>,
+    /// The routines that only read what their pointer arguments reach and
+    /// keep none of them, by their own names: C's strlen.
+    pub reads_arguments: Vec<String>,
 }
 
 impl RuntimePromises {
@@ -672,6 +700,7 @@ impl RuntimePromises {
             calling_back: Some(calling_back.into_iter().map(str::to_owned).collect()),
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
+            reads_arguments: Vec::new(),
         }
     }
 
@@ -695,6 +724,9 @@ pub struct Program {
     pub array_order: ArrayOrder,
     pub float_mode: FloatMode,
     pub float_semantics: FloatSemantics,
+    /// A frame's locals start zeroed; false where the language leaves them
+    /// indeterminate.
+    pub zeroed_locals: bool,
     pub promises: RuntimePromises,
     /// The functions code outside the program calls whatever their
     /// linkage: the runtime's way into it.
@@ -712,6 +744,7 @@ impl Program {
             array_order: ArrayOrder::ColumnMajor,
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
+            zeroed_locals: true,
             promises: RuntimePromises::default(),
             entries: Vec::new(),
         }
