@@ -639,7 +639,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let segments = Segments::of(&options.machine);
-    let target = Target { cpu: options.cpu()?, segments: &segments, runtime: runtime.value(), basic: true };
+    let cpu = options.cpu()?;
     let mut procedures = Vec::new();
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     let mut rows = Vec::new();
@@ -651,6 +651,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             continue;
         }
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
+        // B$ENRA zero-fills a runtime frame's locals.
+        let target = Target { cpu, segments: &segments, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
         let (procedure, landing) = procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)?;
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
