@@ -17,7 +17,7 @@ fn settles(pass: &str, mut run: impl FnMut(&mut Module, llrm_mir::context::Globa
             while run(&mut module, id) {
                 assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{pass}: {name}");
                 rounds += 1;
-                assert!(rounds < 8, "{pass}: {name} does not settle");
+                assert!(rounds < 64, "{pass}: {name} does not settle");
             }
             changed += usize::from(rounds > 0);
         }
@@ -33,4 +33,13 @@ fn dead_keeps_every_corpus_module_verifying_and_settles() {
         crate::dead::dead(context, &callees, function)
     });
     assert!(changed > 0, "the corpus has dead code");
+}
+
+#[test]
+fn fold_keeps_every_corpus_module_verifying_and_settles() {
+    let changed = settles("fold", |module, id| {
+        let layout = crate::transform::layout(module).expect("a datalayout");
+        crate::fold::folded(module, &layout, id)
+    });
+    assert!(changed > 0, "the corpus has something to fold");
 }

@@ -8,6 +8,7 @@ mod corpus_tests;
 pub mod cfg;
 pub mod dead;
 pub mod edges;
+pub mod fold;
 pub mod inline;
 pub mod interprocedural;
 pub mod lcssa;

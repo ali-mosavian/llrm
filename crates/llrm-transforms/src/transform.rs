@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
@@ -30,6 +31,11 @@ pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeS
         }
     }
     alive
+}
+
+/// `module`'s datalayout.
+pub(crate) fn layout(module: &Module) -> Result<DataLayout, String> {
+    module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse)
 }
 
 /// Every function of `module` that has a body.
