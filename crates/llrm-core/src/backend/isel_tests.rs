@@ -471,12 +471,13 @@ define i16 @f(i16 %i) addrspace(1) {
 }
 
 /// An initializer's bytes, and a relocation for each address in it: near,
-/// far, a far pointer's offset word, and its segment.
+/// far, a far pointer's offset word, and its segment. A far pointer to near
+/// data is DGROUP's: its group offset and DGROUP's selector.
 #[test]
 fn test_initializers_are_bytes_and_relocations() {
     use crate::backend::masm::{Datum, Label, Pointer};
     let text = "@far = internal addrspace(1) global [2 x i8] c\"HI\"
-@rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)) }
+@rec = internal global { i8, i16, ptr, ptr addrspace(1), i16, ptr addrspace(2), ptr addrspace(1) } { i8 7, i16 -2, ptr getelementptr (i8, ptr @rec, i16 3), ptr addrspace(1) @far, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @far, i16 1) to i16), ptr addrspace(2) addrspacecast (ptr addrspace(1) @far to ptr addrspace(2)), ptr addrspace(1) addrspacecast (ptr getelementptr (i8, ptr @rec, i16 1) to ptr addrspace(1)) }
 ";
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
@@ -491,6 +492,8 @@ fn test_initializers_are_bytes_and_relocations() {
             pointer("far", 0, true),
             pointer("far", 1, false),
             Datum::SegmentWord("far".to_owned()),
+            pointer("rec", 1, false),
+            Datum::SegmentWord("DGROUP".to_owned()),
         ]
     );
 }

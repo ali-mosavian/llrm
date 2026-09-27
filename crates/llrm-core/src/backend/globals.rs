@@ -60,6 +60,22 @@ fn is_symbol(name: &str) -> bool {
         && characters.all(|one| one.is_ascii_alphanumeric() || "_$@?".contains(one))
 }
 
+/// The group near data is in.
+pub const DGROUP: &str = "DGROUP";
+
+/// A far pointer to `name`, `offset` into it. One to near data is DGROUP's
+/// selector and the group-relative offset, as a near pointer made far is:
+/// a single POINTER fixup would take the target segment's own selector,
+/// which code pairing it with a near offset (a BASIC array descriptor's
+/// AD_fhd and AD_oAdjusted) reads the wrong cells through.
+pub fn far_pointer(name: String, offset: i64, near: bool) -> Vec<Datum> {
+    if near {
+        vec![Datum::Pointer(Pointer { name, offset, far: false }), Datum::SegmentWord(DGROUP.to_owned())]
+    } else {
+        vec![Datum::Pointer(Pointer { name, offset, far: true })]
+    }
+}
+
 /// A defined variable's data: its label, then its initializer's bytes and
 /// relocations.
 pub fn datums(module: &Module, global: GlobalId, names: &IndexMap<(Space, i64), String>) -> Result<Vec<Datum>, String> {
@@ -137,9 +153,15 @@ impl Initializer<'_> {
         let context = &self.module.context;
         let constant = context.get(id);
         let datum = match (&constant.kind, context.types.get(constant.ty)) {
-            (_, Type::Pointer(space @ (0 | 1))) => {
+            (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
-                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: *space == 1 })
+                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false })
+            }
+            (_, Type::Pointer(1)) => {
+                let (global, offset) = target(self.module, self.layout, id)?;
+                let near = self.module.global(global).address_space == 0 && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
+                self.out.extend(far_pointer(self.symbol(global), offset, near));
+                return Ok(());
             }
             (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }), Type::Pointer(2)) => {
                 let (global, _) = target(self.module, self.layout, *value)?;

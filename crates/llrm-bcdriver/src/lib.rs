@@ -43,8 +43,6 @@ const STATEMENTS: usize = 10;
 /// The header word holding the main body's frame size, which the main
 /// body's own frame now carries.
 const MAIN_FRAME: usize = 0x22;
-/// The group BASIC's near data is in.
-const DGROUP: &str = "DGROUP";
 /// Where BC keeps its constants.
 const CONSTANTS: &str = "BC_CN";
 
@@ -242,11 +240,6 @@ fn data_segments(
     for &(segment, start, global) in &placement.objects {
         placed.entry(segment).or_default().push((start, global));
     }
-    let near: BTreeSet<String> = (0..module.globals.len() as u32)
-        .map(GlobalId)
-        .filter(|&id| module.global(id).address_space == 0 && matches!(module.global(id).kind, GlobalKind::Variable(_)))
-        .filter_map(|id| names.get(&(globals::space(module, id), i64::from(id.0))).cloned())
-        .collect();
     let mut out = Vec::new();
     for (index, segment) in segments.iter().enumerate() {
         let index = index as i64;
@@ -263,19 +256,7 @@ fn data_segments(
             if start != at {
                 return Err(format!("{name} has a gap at {at:#x}"));
             }
-            let datums: Vec<masm::Datum> = globals::datums(module, global, names)?
-                .into_iter()
-                .flat_map(|datum| match datum {
-                    // A far pointer to DGROUP data is DGROUP-relative in both
-                    // halves, as BC writes an array descriptor's: its own
-                    // segment's selector with the group-relative offset
-                    // BASIC's code adds to shifts every access (arrprm).
-                    masm::Datum::Pointer(masm::Pointer { name, offset, far: true }) if near.contains(&name) => {
-                        vec![masm::Datum::Pointer(masm::Pointer { name, offset, far: false }), masm::Datum::SegmentWord(DGROUP.to_owned())]
-                    }
-                    other => vec![other],
-                })
-                .collect();
+            let datums = globals::datums(module, global, names)?;
             let bytes: i64 = datums.iter().map(size_of).sum();
             for datum in &datums {
                 if let masm::Datum::Pointer(masm::Pointer { name: target, offset, .. }) = datum {
