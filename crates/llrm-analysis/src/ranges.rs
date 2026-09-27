@@ -6,15 +6,9 @@
 //! read a flags value and a branch's test; an increment is an `add`. Old
 //! `Copy` has no counterpart.
 //!
-//! Waiting for induction's port, the back edge of this dependency cycle:
-//! `bounded` (a counted loop's counters and what they compute), `scoped`
-//! (bounded, narrowed by `dominated_edges`) and `exact_offsets` (whose
-//! leaves `scoped` bounds). Their tests wait with them:
-//! `test_guard_refines_subscript_without_leaking_to_the_join`,
-//! `test_a_value_the_header_makes_is_bounded_inside_the_loop`,
-//! `test_a_compare_under_the_same_compare_is_decided_outside_any_loop` (its
-//! `bounded` half; `dominated_edges` answers it here),
-//! `test_a_posttested_header_knows_its_counter`.
+//! `exact_offsets` is of an access into its own object's address, the
+//! only root whose offset is known to start at 0; the old far origin has
+//! no counterpart.
 //!
 //! Skipped, BC object corpora: `test_fpdeep_one_based_index_has_a_bounded_byte_offset`,
 //! `test_addrm_long_array_value_keeps_counter_bounds`,
@@ -24,7 +18,7 @@
 //! another operation set has no counterpart.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_graph::loops;
 use llrm_mir::context::signed;
@@ -35,6 +29,7 @@ use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::{self, Known};
+use crate::induction;
 use crate::memory::{MemRef, Unit};
 
 /// A non-wrapping mathematical interval at a fixed width.
@@ -352,6 +347,228 @@ fn edges(unit: &Unit, parent: BlockId, block: BlockId) -> usize {
     unit.function
         .terminator(parent)
         .map_or(0, |one| unit.function.instruction(one).operands.iter().filter(|operand| **operand == Operand::Block(block)).count())
+}
+
+pub type Facts = IndexMap<i64, IndexMap<ValueId, Interval>>;
+
+/// Each block's intervals from the counted loops holding it: its counters,
+/// what the loop computes from them, narrowed by the branch edges that
+/// dominate the block. A block in no counted loop keeps the facts of the
+/// branch edges that dominate it.
+pub fn bounded(unit: &Unit) -> Result<Facts, String> {
+    let function = unit.function;
+    let facts = consts::known(unit, None, None, None);
+    let graph = cfg::graph(function);
+    let predecessors = loops::predecessors(&graph);
+    let dominators = loops::dominators(&graph, None);
+    let mut result = Facts::default();
+    for loop_ in loops::loops(&graph, None) {
+        let proofs = induction::counted_unless_stopped(unit, &loop_, Some(&facts), false);
+        // A header that tests before the trip also sees the exit value; one
+        // tested after it sees only the trip's.
+        let mut inside = loop_.body.clone();
+        if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
+            inside.remove(&loop_.header);
+        }
+        let mut known = IndexMap::<ValueId, Interval>::default();
+        let mut trips = BTreeSet::new();
+        for proof in &proofs {
+            if let (Some((low, high)), Some(count)) = (proof.span(), &proof.count) {
+                known.insert(proof.counter.value, Interval { low, high, width: proof.counter.start.width() });
+                trips.insert(count - 1);
+            }
+        }
+        if let (1, Some(advances)) = (trips.len(), trips.first()) {
+            for counter in induction::basics(unit, &loop_).values() {
+                let width = counter.start.width();
+                let start = induction::_signed(&counter.start, &facts, width);
+                let step = induction::_signed(&counter.step, &facts, width);
+                if let (Some(start), Some(step)) = (start, step)
+                    && let Some(interval) = _recurrence_span(&start, &step, advances, width)
+                {
+                    known.insert(counter.value, interval);
+                }
+            }
+        }
+        if known.is_empty() {
+            continue;
+        }
+        // The header's values too: seen from inside, they are the trip's,
+        // though the header itself also sees the exit value.
+        let operations = function
+            .layout()
+            .iter()
+            .filter(|&&block| inside.contains(&cfg::id(block)) || cfg::id(block) == loop_.header)
+            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
+            .collect::<Vec<_>>();
+        loop {
+            let before = known.len();
+            for &inst in &operations {
+                if let Some(result) = function.instruction(inst).result.filter(|result| !known.contains_key(result))
+                    && let Some(interval) = _computed(unit, inst, &known, &facts)
+                {
+                    known.insert(result, interval);
+                }
+            }
+            if known.len() == before {
+                break;
+            }
+        }
+        for &at in &inside {
+            let mut scoped = known.clone();
+            for block in &graph {
+                for &successor in &block.succ {
+                    let parents = predecessors.get(&successor).ok_or_else(|| successor.to_string())?;
+                    if parents.len() == 1
+                        && parents.contains(&block.at)
+                        && dominators.get(&at).is_some_and(|dominating| dominating.contains(&successor))
+                        && let Some(narrowed) = on_edge(unit, cfg::block(block.at), cfg::block(successor), &scoped, Some(&facts))?
+                    {
+                        scoped = narrowed;
+                    }
+                }
+            }
+            loop {
+                // What each value set in this sweep held before it.
+                let mut before = IndexMap::<ValueId, Option<Interval>>::default();
+                for &inst in &operations {
+                    let Some(mut interval) = _computed(unit, inst, &scoped, &facts) else { continue };
+                    let result = function.instruction(inst).result.expect("_computed answers a result");
+                    if let Some(previous) = scoped.get(&result).filter(|previous| previous.width == interval.width) {
+                        let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
+                        if low > high {
+                            continue;
+                        }
+                        interval = Interval { low, high, width: interval.width };
+                    }
+                    let previous = scoped.insert(result, interval);
+                    before.entry(result).or_insert(previous);
+                }
+                if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
+                    break;
+                }
+            }
+            let destination = result.entry(at).or_default();
+            for (value, interval) in scoped {
+                narrow(destination, value, interval);
+            }
+        }
+    }
+    for (at, known) in dominated_edges(unit)? {
+        result.entry(at).or_insert(known);
+    }
+    Ok(result)
+}
+
+/// `interval` for `value` in `known`, met with what it already held at that width.
+fn narrow(known: &mut IndexMap<ValueId, Interval>, value: ValueId, interval: Interval) {
+    match known.get(&value) {
+        None => {
+            known.insert(value, interval);
+        }
+        Some(previous) if previous.width == interval.width => {
+            let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
+            if low <= high {
+                known.insert(value, Interval { low, high, width: interval.width });
+            }
+        }
+        Some(_) => {}
+    }
+}
+
+/// Every interval known at each block: a loop's counters and what they
+/// compute, narrowed by the branch edges that dominate it.
+pub fn scoped(unit: &Unit) -> Result<Facts, String> {
+    let mut result = bounded(unit)?;
+    for (at, edges) in dominated_edges(unit)? {
+        let known = result.entry(at).or_default();
+        for (value, interval) in edges {
+            match known.get(&value) {
+                Some(previous) if previous.width == interval.width => narrow(known, value, interval),
+                _ => {
+                    known.insert(value, interval);
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// The values that index accesses whose offset every wider sum names exactly.
+///
+/// An index added to its object's own address is summed at the pointer's
+/// index width, which wraps. The sum names the same bytes at any wider
+/// width when every partial sum of the offset, as the affine operations
+/// computing it would be cut anywhere, is a non-negative integer below
+/// 2**index_bits: zero extension is then the identity. `inbounds` is the
+/// promise that places the start. A value is exact only if every access it
+/// indexes is.
+pub fn exact_offsets(unit: &Unit) -> Result<BTreeSet<ValueId>, String> {
+    let scoped = scoped(unit)?;
+    let mut verdict = IndexMap::<ValueId, bool>::default();
+    for (block, inst) in unit.function.walk() {
+        let Some(reference) = MemRef::of(unit, inst) else { continue };
+        let Some(base) = reference.base else { continue };
+        let bits = reference.index_bits;
+        let exact = reference.inbounds
+            && reference.object
+            && reference.base_width == bits
+            && _exact_sum(unit, base, cfg::id(block), &scoped, bits, 16).is_some_and(|(low, high)| {
+                let (low, high) = (BigInt::from(reference.disp) + low * reference.scale, BigInt::from(reference.disp) + high * reference.scale);
+                low >= BigInt::from(0) && high < BigInt::from(1) << bits
+            });
+        *verdict.entry(base).or_insert(true) &= exact;
+    }
+    Ok(verdict.into_iter().filter(|(_, exact)| *exact).map(|(value, _)| value).collect())
+}
+
+/// The integer range of `value`, where it and every affine partial sum
+/// computing it is a non-negative integer below 2**bits; leaves read at `at`.
+fn _exact_sum(unit: &Unit, value: ValueId, at: i64, scoped: &Facts, bits: u32, depth: usize) -> Option<(BigInt, BigInt)> {
+    // Past the depth, a node is unproven, not a leaf.
+    if depth == 0 {
+        return None;
+    }
+    let limit = BigInt::from(1) << bits;
+    let inside = |(low, high): (BigInt, BigInt)| (low >= BigInt::from(0) && high < limit).then_some((low, high));
+    let operand = |one: Operand| -> Option<(BigInt, BigInt)> {
+        if unit.int_bits(one) != Some(bits) {
+            return None;
+        }
+        match one {
+            Operand::Value(value) => _exact_sum(unit, value, at, scoped, bits, depth - 1),
+            _ => unit.int_constant(one).map(|n| (BigInt::from(n), BigInt::from(n))),
+        }
+    };
+    let constant = |one: Operand| unit.int_constant(one).map(BigInt::from);
+    let made = unit.defining(Operand::Value(value));
+    if let Some((_, op)) = made {
+        let affine = match (&op.opcode, op.operands.as_slice()) {
+            (Opcode::Binary(BinaryOp::Add), &[left, right]) => Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 + r.0, l.1 + r.1))),
+            (Opcode::Binary(BinaryOp::Sub), &[left, right]) if constant(right).is_some() => {
+                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 - r.1, l.1 - r.0)))
+            }
+            (Opcode::Binary(BinaryOp::Mul), &[left, right]) | (Opcode::Binary(BinaryOp::Mul), &[right, left]) if constant(right).is_some() => {
+                Some(operand(left).zip(operand(right)).map(|(l, r)| (l.0 * &r.0, l.1 * r.0)))
+            }
+            (Opcode::Binary(BinaryOp::Shl), &[left, right]) => {
+                let count = constant(right).and_then(|count| u32::try_from(count).ok()).filter(|count| *count < bits);
+                Some(operand(left).zip(count).map(|(l, count)| (l.0 << count, l.1 << count)))
+            }
+            _ => None,
+        };
+        if let Some(bounds) = affine {
+            return bounds.and_then(inside);
+        }
+    }
+    // A leaf: whatever it is, it is read in this block.
+    let defined = made.and_then(|(inst, _)| unit.function.parent(inst)).map(cfg::id);
+    let fact = scoped
+        .get(&at)
+        .and_then(|known| known.get(&value))
+        .or_else(|| defined.and_then(|block| scoped.get(&block)).and_then(|known| known.get(&value)))?;
+    (fact.width == bits).then(|| (fact.low.clone(), fact.high.clone())).and_then(inside)
 }
 
 /// Every value `consts` knows without solving memory, as the singleton
