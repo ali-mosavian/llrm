@@ -465,6 +465,16 @@ fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure 
 /// table needs an address at the first retained machine operation of each
 /// statement. Split allocated LIR only at those operation identities; no
 /// operation is copied, deleted, or re-ordered.
+/// The MIR instruction `instruction` came from: the lowered route's
+/// operation, or on the selected route the call it is, isel keying a call
+/// by its instruction.
+fn _source(instruction: &lir::Insn) -> Option<i64> {
+    match &instruction.op {
+        Some(op) => Some(op.at),
+        None => instruction.what.as_ref().filter(|what| what.op == Operation::Call).map(|_| instruction.at),
+    }
+}
+
 fn _split_statement_blocks(body: &lir::LirBody, markers: &BTreeSet<i64>) -> (lir::LirBody, IndexMap<i64, i64>) {
     let mut next_block = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut made: Vec<lir::LirBlock> = Vec::new();
@@ -476,7 +486,7 @@ fn _split_statement_blocks(body: &lir::LirBody, markers: &BTreeSet<i64>) -> (lir
             // MIR addresses are unique within a body. MIR operation ids are
             // not a source-statement key: source instruction 22 and an
             // independently generated jump may both carry id 22.
-            let source = instruction.op.as_ref().map(|op| op.at);
+            let source = _source(instruction);
             if let Some(source) = source {
                 if markers.contains(&source) && !located.contains(&source) {
                     positions.entry(index).or_default().push(source);
@@ -565,7 +575,7 @@ fn _restore_label_arguments(
     for block in &body.blocks {
         let mut instructions = block.insns.clone();
         for index in 0..instructions.len() {
-            let Some(source) = instructions[index].op.as_ref().map(|op| op.at) else { continue };
+            let Some(source) = _source(&instructions[index]) else { continue };
             let Some(row) = restores.get(&source) else { continue };
             if index == 0 {
                 return emission("RESTORE label argument was separated from its call");
@@ -615,7 +625,7 @@ fn _remove_data_markers(
     for block in &body.blocks {
         let mut instructions = Vec::new();
         for instruction in &block.insns {
-            let source = instruction.op.as_ref().map(|op| op.at);
+            let source = _source(instruction);
             let row = source.and_then(|source| markers.get(&source));
             let (Some(source), Some(row)) = (source, row) else {
                 instructions.push(Arc::clone(instruction));
@@ -1583,13 +1593,10 @@ struct Rich {
 impl Rich {
     fn new(program: &model::Program, module: &model::Module) -> Result<Self, CompileError> {
         // What the post-selection passes do not yet place in rich-MIR code.
-        if !_read_data_lines(module)?.is_empty() {
-            return emission("DATA statements are not selected from the rich MIR yet");
-        }
         if !_statement_metadata(module)?.is_empty() {
             return emission("a statement table is not selected from the rich MIR yet");
         }
-        if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || !one.external_entries.is_empty()) {
+        if let Some(function) = module.functions.iter().find(|one| one.error_handler.is_some() || one.external_entries.iter().any(|&entry| entry != one.entry)) {
             return emission(format!("{}: an error handler is not selected from the rich MIR yet", function.name));
         }
         let mut emitted = hir::mir::emit(program).swap_remove(0);

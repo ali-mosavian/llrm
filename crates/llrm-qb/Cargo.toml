@@ -22,4 +22,5 @@ toml = { workspace = true }
 
 [dev-dependencies]
 regex = { workspace = true }
+llrm-analysis = { workspace = true }
 llrm-core = { workspace = true, features = ["testing"] }
