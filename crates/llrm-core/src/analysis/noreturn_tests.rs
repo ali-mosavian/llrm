@@ -149,6 +149,7 @@ fn test_qrender_main_spill_uses_shutdown_control_proof() {
             found.absorbed.keys().copied().collect(),
             Some(&contracts),
             "386",
+            &crate::backend::target::BUILT_IN,
             lower::Lowered {
                 noreturn: proven.contains(&0x30),
                 nodes: raised.source.nodes.clone(),

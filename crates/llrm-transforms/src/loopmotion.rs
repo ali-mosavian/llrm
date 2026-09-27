@@ -56,7 +56,8 @@ impl FunctionPass for LoopMotion {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match sunk_stores(unit.context, unit.layout, unit.callees, unit.function, analyses) {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        match sunk_stores(unit.context, unit.layout, outer.callees(), unit.function, analyses) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopmotion: {error}"),

@@ -150,7 +150,7 @@ fn test_gvn_numbers_then_joins() {
     manager.verify_invalidation = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %s = add i16 %a, %a\n"), "{after}");
     assert!(after.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{after}");
@@ -180,7 +180,7 @@ b0:
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %r = add i16 %a, %a\n"), "{after}");
 }
@@ -195,7 +195,7 @@ fn managed(text: &str) -> String {
     manager.verify_invalidation = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
     after
@@ -274,9 +274,8 @@ b3:
         let mut module = before.clone();
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
-        manager.target = Some(std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() }));
         manager.add(Gvn::default());
-        manager.run(&mut module).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
         let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
         assert_eq!(results(&module, inputs), results(&before, inputs));
         printed(&module).contains("%b = load i16, ptr @x")
@@ -333,7 +332,7 @@ b0:
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let text = printed(&module);
     assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
 }

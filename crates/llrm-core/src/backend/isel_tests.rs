@@ -17,7 +17,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
     let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
-    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"))
+    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BUILT_IN)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -28,7 +28,7 @@ fn assembled(text: &str) -> String {
 
 /// The module's text as `cpu` prices it.
 fn assembled_on(cpu: &str, text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name(cpu)).expect("assembles");
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name(cpu), &crate::backend::target::BUILT_IN).expect("assembles");
     crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
@@ -1935,7 +1935,8 @@ define double @f() addrspace(1) {
 }
 ";
     let mut module = parsed(text);
-    llrm_transforms::interprocedural::stamped(&mut module).unwrap();
+    let mut analyses = llrm_mir::passes::ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    llrm_transforms::interprocedural::stamped(&mut module, &mut analyses).unwrap();
     let stamped = llrm_mir::print::module(&module);
     let stamped = stamped.lines().filter(|line| !line.starts_with("target datalayout")).collect::<Vec<_>>().join("\n");
     assert!(listing(&stamped, "f").iter().any(|line| line == "fild word ptr g"), "{stamped}");
@@ -2229,4 +2230,17 @@ b1:
             "mov ecx, 196608", "mov eax, ebx", "cdq", "shld edx, ebx, 16", "shl eax, 16", "idiv ecx", "shld edx, eax, 16", "pop bp", "retf",
         ]
     );
+}
+
+/// A parameter passed in the frame's own bytes is refused: its slot is
+/// addressable, so selected it would break `sealed_arguments`, and a call
+/// passing one would push the pointer where the callee expects the bytes.
+#[test]
+fn test_parameters_passed_in_the_frame_are_refused() {
+    for attribute in ["byval(i32)", "inalloca(i32)", "byref(i32)"] {
+        let text = format!("define i16 @f(ptr {attribute} %p) addrspace(1) {{\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n");
+        assert!(selected(&text, "f").is_err(), "{attribute}");
+        let text = format!("declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n");
+        assert!(selected(&text, "f").is_err(), "a call's {attribute}");
+    }
 }

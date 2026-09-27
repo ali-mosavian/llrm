@@ -28,7 +28,6 @@ use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::target::Machine;
 use llrm_mir::types::Type;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_traits::ToPrimitive;
@@ -41,11 +40,6 @@ pub use llrm_mir::target::OperationCosts;
 /// What `outer`'s target prices each operation at.
 pub fn costs(outer: &Outer) -> OperationCosts {
     outer.target().costs()
-}
-
-/// What `target` prices each operation at; neutral unit prices without one.
-pub fn target_costs(target: Option<&dyn Machine>) -> OperationCosts {
-    target.map_or_else(OperationCosts::default, Machine::costs)
 }
 
 /// How many integer values `outer`'s target holds in registers, and how

@@ -270,7 +270,7 @@ fn test_the_pass_keeps_what_the_function_returns() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.add(LoopClosedSSA);
-    manager.run(&mut module).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert!(printed(&module).contains("%carried.lcssa = phi"));
     assert_eq!(results(&module, inputs), expected);
 }

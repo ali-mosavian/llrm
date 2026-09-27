@@ -14,7 +14,7 @@
 //!   is `Applied::dump`, a file per changed step of each body.
 //! - `Where`'s segment, BC blocks and object file went with the BC
 //!   frontend; its index scales and address forms were strength's, which
-//!   prices neither here. The machine's facts are `target`'s.
+//!   prices neither here. The machine's facts are the program's target's.
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
 //!   Hoist's store sinking is loopmotion's pass.
 //! - `flow::optimized`'s rule that an irreducible body is not promoted is
@@ -24,17 +24,15 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use llrm_analysis::cfg;
 use llrm_analysis::manager::Summaries;
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
 use llrm_mir::print;
-use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PassManager, PreservedAnalyses, Stage, Unit};
-use llrm_mir::target::Machine;
+use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
+use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
@@ -121,8 +119,6 @@ pub struct Applied {
     pub options: Options,
     /// The one pass to run, by name.
     pub only: Option<String>,
-    /// What analyses ask of the machine: its prices and registers.
-    pub target: Option<Rc<dyn Machine>>,
     /// Where each body's changed steps are written, `N/NNN-stage.ll`, the
     /// Nth body run; the manager writes the module after it there.
     pub dump: Option<PathBuf>,
@@ -179,61 +175,44 @@ fn settles_after(name: &str) -> u8 {
     }
 }
 
-/// `module` through the pipeline.
-pub fn applied(module: &mut Module, applied: &Applied) -> Result<(), String> {
-    recorded(module, applied).map(|_| ())
+/// `program` through the pipeline.
+pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
+    recorded(program, applied).map(|_| ())
 }
 
 /// `applied`, with what the pipeline did to each function.
-pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, String> {
+pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
-    manager.target = applied.target.clone();
     manager.require::<Summaries>();
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
     let mut again = Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
-    let target = applied.target.clone();
     manager.add_module(Interprocedural {
-        target: applied.target.clone(),
-        roots: roots(module),
-        pipeline: Box::new(move |module, id, _| rerun(module, id, &mut again, target.clone()).unwrap_or_else(|error| panic!("pipeline: {error}"))),
+        pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
     });
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
-    manager.run(module)
+    manager.run(program)
 }
 
-/// The bodies something outside the module may call.
-fn roots(module: &Module) -> BTreeSet<GlobalId> {
-    module
-        .functions()
-        .filter(|(_, global, function)| !function.is_declaration() && !matches!(global.linkage, Linkage::Internal | Linkage::Private))
-        .map(|(id, _, _)| id)
-        .collect()
-}
-
-/// `fixed` over body `id` alone, as the manager runs a function pass.
-fn rerun(module: &mut Module, id: GlobalId, fixed: &mut Fixed, target: Option<Rc<dyn Machine>>) -> Result<(), String> {
-    let layout = match &module.datalayout {
-        Some(text) => DataLayout::parse(text)?,
-        None => DataLayout::default(),
-    };
-    let mut outer = Outer::of(module, target);
-    outer.require::<Summaries>(module);
-    let callees = llrm_mir::memory::callees(module);
-    let sizes = llrm_mir::valuetracking::sizes(module, &layout);
+/// `fixed` over body `id` alone, as the manager runs a function pass, its
+/// module's analyses those `analyses` holds.
+fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
+    let layout = analyses.program().layout.clone();
+    let outer = analyses.outer(module);
     let mut declared = Declared::of(module);
     let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
-    let mut unit = Unit { context, layout: &layout, function, callees: &callees, metadata, sizes: &sizes, declared: &mut declared };
-    fixed.run(&mut unit, &mut Analyses::new(Rc::new(outer)));
+    let mut unit = Unit { context, layout: &layout, function, metadata, declared: &mut declared };
+    let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
+    analyses.invalidate(&preserved);
     declared.place(module)
 }
 
@@ -410,7 +389,7 @@ impl Run {
         self.version += 1;
         let Some(directory) = &self.dump else { return };
         // The body beside every global's declaration, which is what it names.
-        let mut globals = analyses.outer().globals.clone();
+        let mut globals = analyses.outer().globals.to_vec();
         globals.push(GlobalValue {
             name: Some("pipeline.body".to_owned()),
             linkage: Linkage::Internal,

@@ -44,6 +44,7 @@ fn lowered(
         source.absorbed.keys().copied().collect(),
         Some(contracts),
         "386",
+        &crate::backend::target::BUILT_IN,
         lower::Lowered {
             coverage: source.coverage.clone(),
             nodes: source.nodes.clone(),

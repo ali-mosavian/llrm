@@ -10,6 +10,7 @@ use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 
 use crate::abi::runtime::Contract;
 use crate::backend::cpu::{Profile, ProfileOrName};
+use crate::backend::target::Segments;
 use crate::backend::constpool::Pool;
 use crate::backend::isel::{self, Selected};
 use crate::backend::{addressvalues, frame, globals, jumps, masm};
@@ -28,7 +29,7 @@ pub trait Abi {
 }
 
 /// `module` as masm, its code in the segment `code`.
-pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>) -> Result<masm::Module, String> {
+pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     names.extend(crate::hir::lower::symbol_names());
@@ -37,7 +38,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu, runtime: "", basic: false };
+    let target = Target { cpu, segments, runtime: "", basic: false };
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -101,11 +102,12 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     })
 }
 
-/// What the machine a frontend compiles for is: its processor, the
-/// runtime family whose frame it calls into, and whether floats keep
-/// BASIC's semantics.
+/// What the machine a frontend compiles for is: its processor, its segment
+/// registers, the runtime family whose frame it calls into, and whether
+/// floats keep BASIC's semantics.
 pub struct Target<'t> {
     pub cpu: &'t Profile,
+    pub segments: &'t Segments,
     pub runtime: &'t str,
     pub basic: bool,
 }
@@ -127,7 +129,7 @@ pub struct Machined {
 /// `name` of `module` selected and run through the machine phases, float
 /// constants in `pool`.
 pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut(), target.cpu);
+    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut(), target.cpu, target.segments);
     let Selected { body, convention, calls, inline, far, depth } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;
@@ -135,7 +137,7 @@ pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, poo
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu))? {
+    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

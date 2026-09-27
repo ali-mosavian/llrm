@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
+
+use crate::abi::machine::{self, Machine};
 use crate::support::hash::IndexMap;
 
 use crate::model::ir::{self, Loc, Operation, Semantics};
@@ -349,13 +351,14 @@ pub fn named(register: Register, width: i64) -> Register {
 /// The registers an operand may take, in the order to try them.
 ///
 /// LLVM's `AllocationOrder`. `None` means the operand said nothing.
-pub fn order(r#where: Option<&BTreeSet<Register>>) -> Vec<Register> {
+pub fn order(r#where: Option<&BTreeSet<Register>>, segments: &Segments) -> Vec<Register> {
     let Some(r#where) = r#where else {
         return AVAILABLE.to_vec();
     };
     let wanted: BTreeSet<Register> = r#where.iter().map(|one| ir::root(*one)).collect();
     if !wanted.is_empty() && wanted.is_subset(&SEGMENTS) {
-        return SELECTORS
+        return segments
+            .selectors
             .iter()
             .copied()
             .filter(|one| wanted.contains(one))
@@ -379,45 +382,48 @@ pub static SEGMENTS: LazyLock<BTreeSet<Register>> = LazyLock::new(|| {
     ])
 });
 
-/// The ones a selector value may be placed in, most preferred first: every
-/// one the machine's program model does not reserve. Where the stack reaches
-/// the data group, the data segment register is free between the points that
-/// need it (`needs_data_group`), so it comes last.
-pub static SELECTORS: LazyLock<Vec<Register>> = LazyLock::new(|| {
-    let segments = &crate::abi::machine::current().segments;
-    let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
-    let mut reserved = vec![&segments.stack, &segments.code];
-    if !segments.stack_is_data {
-        reserved.push(&segments.data);
+/// The segment registers as the machine's program model assigns them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Segments {
+    /// Where a selector value may be placed, most preferred first: every one
+    /// the program model does not reserve. Where the stack reaches the data
+    /// group, the data segment register is free between the points that need
+    /// it (`needs_data_group`), so it comes last.
+    pub selectors: Vec<Register>,
+    /// The one every access without a prefix reads.
+    pub data: Register,
+    /// The one that reaches the data group while `data` holds something
+    /// else: the stack's, where the stack lives in the data group.
+    pub through: Option<Register>,
+}
+
+impl Segments {
+    pub fn of(machine: &Machine) -> Self {
+        let segments = &machine.segments;
+        let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
+        let register = |name: &String| {
+            *crate::backend::select::SEGMENTS
+                .keys()
+                .find(|one| named(one, name))
+                .unwrap_or_else(|| panic!("the machine's {name} is not a segment register"))
+        };
+        let mut reserved = vec![&segments.stack, &segments.code];
+        if !segments.stack_is_data {
+            reserved.push(&segments.data);
+        }
+        Self {
+            selectors: [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
+                .into_iter()
+                .filter(|one| !reserved.iter().any(|name| named(one, name)))
+                .collect(),
+            data: register(&segments.data),
+            through: segments.stack_is_data.then(|| register(&segments.stack)),
+        }
     }
-    [Register::ES, Register::FS, Register::GS, Register::DS, Register::SS, Register::CS]
-        .into_iter()
-        .filter(|one| !reserved.iter().any(|name| named(one, name)))
-        .collect()
-});
+}
 
-/// The segment register every access without a prefix reads.
-pub static DATA_SEGMENT: LazyLock<Register> = LazyLock::new(|| {
-    let data = &crate::abi::machine::current().segments.data;
-    *crate::backend::select::SEGMENTS
-        .iter()
-        .find(|(_, name)| name.eq_ignore_ascii_case(data))
-        .expect("the machine's data segment is a segment register")
-        .0
-});
-
-/// The register that reaches the data group while the data segment register
-/// holds something else: the stack's, where the stack lives in the data group.
-pub static DATA_THROUGH: LazyLock<Option<Register>> = LazyLock::new(|| {
-    let segments = &crate::abi::machine::current().segments;
-    segments.stack_is_data.then(|| {
-        *crate::backend::select::SEGMENTS
-            .iter()
-            .find(|(_, name)| name.eq_ignore_ascii_case(&segments.stack))
-            .expect("the machine's stack segment is a segment register")
-            .0
-    })
-});
+/// The built-in machine's.
+pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&machine::BUILT_IN));
 
 /// Whether `one` needs the data segment register to hold the data group: it
 /// calls, returns, traps or is opaque; it is an x87 instruction, whose
@@ -608,6 +614,19 @@ mod tests {
 
     /// al and ah share eax and share no byte.
     #[test]
+    fn test_segment_registers_follow_the_machine() {
+        assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);
+        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, Some(Register::SS)));
+        let apart = crate::abi::machine::Machine {
+            segments: crate::abi::machine::Segments { stack_is_data: false, ..machine::BUILT_IN.segments.clone() },
+            ..machine::BUILT_IN.clone()
+        };
+        let apart = Segments::of(&apart);
+        assert_eq!(apart.selectors, [Register::ES, Register::FS, Register::GS]);
+        assert_eq!((apart.data, apart.through), (Register::DS, None));
+    }
+
+    #[test]
     fn test_a_register_names_which_bytes_of_its_root_it_is() {
         assert!(!overlaps(Register::AL, Register::AH));
         assert!(overlaps(Register::AL, Register::AX));
@@ -650,8 +669,8 @@ mod tests {
 
         assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            crate::backend::allocate::classes(&body, &BTreeSet::new())[&2],
-            SELECTORS.iter().copied().collect::<BTreeSet<_>>()
+            crate::backend::allocate::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
+            BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
         );
     }
 

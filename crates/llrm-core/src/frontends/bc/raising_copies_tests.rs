@@ -175,7 +175,7 @@ fn test_copy_has_explicit_memory_and_pointer_results() {
         assert_eq!(disps(&writes, true), (0..4).map(|index| 0x1a + step * index).collect::<Vec<_>>());
         assert!(reads.iter().zip(&writes).all(|(load, store)| store.args == load.results));
         assert!(!raised.blocks[0].ops.iter().any(|op| !op.merges.is_empty() && op.at >= 0x154));
-        let lowered = lower::lowered("copy", &raised, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+        let lowered = lower::lowered("copy", &raised, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, Default::default())
             .unwrap();
         let moves = lowered.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move));
         assert_eq!(moves.count(), 8, "{byte:#x}");
@@ -306,7 +306,7 @@ fn test_unproved_copy_environment_is_not_assumed() {
 }
 
 fn lowered(body: &MirBody) -> crate::model::lir::LirBody {
-    lower::lowered("copy", body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", Default::default())
+    lower::lowered("copy", body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, Default::default())
         .unwrap()
 }
 
@@ -317,7 +317,7 @@ fn test_copy_selects_without_clobbering_arithmetic_flags() {
     let mut low = lowered(&scalar(body, &found));
     let frame = crate::backend::frame::of(&low, Some(&IndexMap::default()), "", None).unwrap();
     let frame = Rc::new(std::cell::RefCell::new(frame));
-    for mut stage in crate::flow::machine(&IndexMap::default(), Some(frame), None, Some(&IndexMap::default()), false, "386").unwrap() {
+    for mut stage in crate::flow::machine(&IndexMap::default(), Some(frame), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN).unwrap() {
         low = stage.transform(low).unwrap();
     }
     for op in low.insns() {

@@ -291,8 +291,8 @@ pub fn erasable(context: &Context, declarations: &Declarations, function: &Funct
 /// Direct private procedures that cannot reach a normal return: noreturn's
 /// fixed point over the `eligible` bodies.  An unknown, external or public
 /// callee stays a returning edge.
-pub fn noreturn_procedures(module: &Module, eligible: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    noreturn::inferred(module, eligible)
+pub fn noreturn_procedures(module: &Module, declarations: &Declarations, eligible: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
+    noreturn::inferred(module, declarations, eligible)
 }
 
 /// Noreturn's terminal-call cut, at the direct calls to `noreturn` bodies.

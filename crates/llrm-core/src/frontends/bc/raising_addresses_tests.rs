@@ -125,6 +125,7 @@ fn test_long_extraction_preserves_the_far_store_selector() {
         BTreeSet::new(),
         Some(&contracts),
         "386",
+        &crate::backend::target::BUILT_IN,
         options,
     )
     .unwrap();

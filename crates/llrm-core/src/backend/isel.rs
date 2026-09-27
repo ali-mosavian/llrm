@@ -18,6 +18,7 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
+use crate::backend::target::Segments;
 use crate::backend::{addressforms, arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -77,11 +78,26 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
+/// Refuses an argument passed in the frame's own bytes: its slot would be
+/// addressable, which `sealed_arguments` denies, and the bytes are not what
+/// a push of the pointer passes.
+fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselected> {
+    for attribute in attributes.iter().flatten() {
+        if let llrm_mir::Attribute::Type(name, _) = attribute {
+            if matches!(name.as_str(), "byval" | "inalloca" | "byref") {
+                return refuse(format!("a {name} argument"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
 fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
+    in_the_frame(&function.parameter_attrs)?;
     let first = if far(global)? { 6 } else { 4 };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
     let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
@@ -232,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -271,6 +287,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
         cpu,
+        segments,
         exact,
         exact_sums: BTreeSet::new(),
         secondary,
@@ -338,6 +355,8 @@ struct Selector<'m, 'c, 'p> {
     callees: llrm_mir::memory::Callees,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    /// Which segment registers the machine's program model leaves free.
+    segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
     exact: BTreeSet<ValueId>,
     /// The registers indexing cells `exact` proves: each such cell is
@@ -1969,7 +1988,10 @@ impl Selector<'_, '_, '_> {
                 }
                 out.push(Arc::new(one));
             }
-            Opcode::Call(info) => self.call(inst, info.calling_convention, at, out)?,
+            Opcode::Call(info) => {
+                in_the_frame(&info.argument_attrs)?;
+                self.call(inst, info.calling_convention, at, out)?;
+            }
             // Nothing runs after it: the block ends with what came before.
             Opcode::Unreachable => {}
             _ => return refuse(instruction.opcode.mnemonic()),
@@ -2007,6 +2029,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
+        }
+        if let Some(declared) = global.function() {
+            in_the_frame(&declared.parameter_attrs)?;
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
@@ -2092,8 +2117,8 @@ impl Selector<'_, '_, '_> {
         }
         let what = semantics(Operation::Call, "call", vec![], vec![]);
         out.push(Arc::new(Insn {
-            clobbers: call_clobbers(&contract),
-            clobbers_high: call_clobbered_high(&contract),
+            clobbers: call_clobbers(&contract, self.segments),
+            clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])

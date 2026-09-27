@@ -575,7 +575,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pins: &IndexMap<u32, Register>) -> allocate::Assignment {
-        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386")).expect("allocates")
+        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN).expect("allocates")
     }
 
     fn merged(one: &IndexMap<u32, Register>, other: &IndexMap<u32, Register>) -> IndexMap<u32, Register> {
@@ -703,6 +703,7 @@ mod tests {
             BTreeSet::new(),
             Some(&contracts),
             "386",
+            &crate::backend::target::BUILT_IN,
             options,
         )
         .unwrap();
@@ -727,7 +728,7 @@ mod tests {
             })
             .collect();
         let [reload, access] = decoded.as_slice() else { panic!("{} instructions", decoded.len()) };
-        assert!(target::SELECTORS.contains(&reload.op0_register()));
+        assert!(target::BUILT_IN.selectors.contains(&reload.op0_register()));
         assert_eq!(
             access.segment_prefix(),
             reload.op0_register(),
@@ -775,6 +776,7 @@ mod tests {
             BTreeSet::new(),
             Some(&contracts),
             "386",
+            &crate::backend::target::BUILT_IN,
             options,
         )
         .unwrap();
@@ -804,7 +806,7 @@ mod tests {
             4,
         );
         let cx = pinned(&[(1, Register::CX)]);
-        let body = allocate::explicit_selectors(&_body(vec![saved, overwrite, (**read).clone()]), Some(&cx));
+        let body = allocate::explicit_selectors(&_body(vec![saved, overwrite, (**read).clone()]), Some(&cx), &target::BUILT_IN);
         let (body, pins) = constrained(&body, Some(&cx)).unwrap();
         let placed = allocate::applied(&body, &allocated(&body, &merged(&cx, &pins))).unwrap();
         let insns = placed.insns();
@@ -1037,7 +1039,7 @@ mod tests {
         let insns = split.insns();
         let copies: Vec<_> =
             insns.iter().filter(|one| what(one).name.as_deref() == Some("mov") && one.uses == vec![1]).collect();
-        let confined = allocate::classes(&split, &BTreeSet::new());
+        let confined = allocate::classes(&split, &BTreeSet::new(), &target::BUILT_IN);
 
         assert_eq!(opened, BTreeSet::from([1]));
         assert_eq!(copies.len(), 2);

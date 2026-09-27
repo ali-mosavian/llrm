@@ -16,15 +16,15 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::backend::target;
+use crate::backend::target::{self, Segments};
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::objectfile::module::{Addr, Space};
 
 /// Whether `body` names the data segment register itself: it then manages
 /// that register, and allocation leaves it alone.
-pub fn names_data_segment(body: &LirBody) -> bool {
-    let data = *target::DATA_SEGMENT;
+pub fn names_data_segment(body: &LirBody, segments: &Segments) -> bool {
+    let data = segments.data;
     body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
         one.requires.iter().chain(&one.delivers).any(|(_, register)| ir::root(*register) == data)
             || one.what.as_ref().is_some_and(|what| {
@@ -39,11 +39,12 @@ pub fn names_data_segment(body: &LirBody) -> bool {
 /// `body`, allocated, with the data group reached through the stack segment
 /// wherever the data segment register may hold a value, and restored before
 /// every point that needs it.
-pub fn restored(body: &LirBody, data_free: bool) -> LirBody {
-    let Some(through) = *target::DATA_THROUGH else {
+pub fn restored(body: &LirBody, data_free: bool, segments: &Segments) -> LirBody {
+    let data = segments.data;
+    let Some(through) = segments.through else {
         return body.clone();
     };
-    if !data_free || !body.blocks.iter().flat_map(|block| &block.insns).any(|one| _writes_data(one)) {
+    if !data_free || !body.blocks.iter().flat_map(|block| &block.insns).any(|one| _writes_data(one, data)) {
         return body.clone();
     }
     let at: BTreeMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
@@ -52,7 +53,7 @@ pub fn restored(body: &LirBody, data_free: bool) -> LirBody {
     loop {
         let mut changed = false;
         for (index, block) in body.blocks.iter().enumerate() {
-            let out = _walk(&block.insns, dirty[index], through, None);
+            let out = _walk(&block.insns, dirty[index], data, through, None);
             for next in &block.succ {
                 let next = at[next];
                 if out && !dirty[next] {
@@ -68,12 +69,12 @@ pub fn restored(body: &LirBody, data_free: bool) -> LirBody {
     let mut out = body.clone();
     for (index, block) in body.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insns.len());
-        let left = _walk(&block.insns, dirty[index], through, Some(&mut insns));
+        let left = _walk(&block.insns, dirty[index], data, through, Some(&mut insns));
         if left && block.succ.is_empty() {
             let last = insns.last().cloned();
             let position = if last.as_ref().is_some_and(|one| _leaves(one)) { insns.len() - 1 } else { insns.len() };
             let beside = last.unwrap_or_else(|| Arc::new(Insn::new(block.at, Some((block.at, block.at)), None, vec![], vec![])));
-            insns.insert(position, _restore(&beside, through));
+            insns.insert(position, _restore(&beside, data, through));
         }
         out.blocks[index] = block.with_insns(insns);
     }
@@ -82,26 +83,25 @@ pub fn restored(body: &LirBody, data_free: bool) -> LirBody {
 
 /// Walk `insns` from `dirty`, returning whether the register may hold
 /// something else after them; into `out`, the rewritten instructions.
-fn _walk(insns: &[Arc<Insn>], mut dirty: bool, through: Register, mut out: Option<&mut Vec<Arc<Insn>>>) -> bool {
+fn _walk(insns: &[Arc<Insn>], mut dirty: bool, data: Register, through: Register, mut out: Option<&mut Vec<Arc<Insn>>>) -> bool {
     for one in insns {
         if dirty && target::needs_data_group(one) {
             if let Some(out) = out.as_deref_mut() {
-                out.push(_restore(one, through));
+                out.push(_restore(one, data, through));
             }
             dirty = false;
         }
         if let Some(out) = out.as_deref_mut() {
             out.push(if dirty { _through(one, through) } else { Arc::clone(one) });
         }
-        if _writes_data(one) {
+        if _writes_data(one, data) {
             dirty = true;
         }
     }
     dirty
 }
 
-fn _writes_data(one: &Insn) -> bool {
-    let data = *target::DATA_SEGMENT;
+fn _writes_data(one: &Insn, data: Register) -> bool {
     one.what.as_ref().is_some_and(|what| {
         what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == data))
     })
@@ -113,12 +113,12 @@ fn _leaves(one: &Insn) -> bool {
 }
 
 /// The data segment register loaded with the data group, beside `one`.
-fn _restore(one: &Insn, through: Register) -> Arc<Insn> {
+fn _restore(one: &Insn, data: Register, through: Register) -> Arc<Insn> {
     let at = one.covers.map_or(one.at, |covers| covers.0);
     let what = Semantics {
         op: Operation::Move,
         name: Some("mov".to_owned()),
-        dests: vec![Loc::Reg(ir::Reg { register: *target::DATA_SEGMENT, width: 2 })],
+        dests: vec![Loc::Reg(ir::Reg { register: data, width: 2 })],
         sources: vec![Loc::Reg(ir::Reg { register: through, width: 2 })],
         target: None,
         indirect: false,

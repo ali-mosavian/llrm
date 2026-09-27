@@ -624,7 +624,7 @@ fn test_a_pinned_conversion_result_survives_lowering_into_floatalloc() {
     let mut hints = AllocationHints::new();
     hints.pins.insert((200, 0), Register::EAX);
     let options = lower::Lowered { hints: Some(&hints), ..Default::default() };
-    let low = lower::lowered("pinned", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", options)
+    let low = lower::lowered("pinned", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, options)
         .unwrap();
     let allocated = allocated(&low, Some(&mut Frame::new(-10)), None, false, "386").unwrap();
     let result = Loc::Held(Held { value: integer.id, width: 4 });

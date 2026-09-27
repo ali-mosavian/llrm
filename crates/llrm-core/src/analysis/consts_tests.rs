@@ -198,6 +198,7 @@ fn test_folded_extraction_has_no_implicit_machine_result() {
         BTreeSet::new(),
         None,
         "386",
+        &crate::backend::target::BUILT_IN,
         lower::Options::default(),
     )
     .unwrap();

@@ -175,7 +175,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN)
         .unwrap()
         .pop()
         .unwrap()
@@ -448,7 +448,7 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386")
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN)
         .unwrap()
         .pop()
         .unwrap()
@@ -670,7 +670,7 @@ fn test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() {
     let calls: IndexMap<i64, String> = [(10, "B$RUNERR".to_owned())].into_iter().collect();
     let contracts: IndexMap<i64, runtime::Contract> = [(10, never)].into_iter().collect();
 
-    let low = lower::lowered("checked", &body, Some(&calls), BTreeSet::new(), Some(&contracts), "386", Default::default())
+    let low = lower::lowered("checked", &body, Some(&calls), BTreeSet::new(), Some(&contracts), "386", &crate::backend::target::BUILT_IN, Default::default())
         .unwrap();
 
     assert_eq!(placed(&low).unwrap().blocks.iter().map(|block| block.at).collect::<Vec<_>>(), vec![0, 20, 10]);
