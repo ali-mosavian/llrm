@@ -2083,3 +2083,19 @@ fn test_an_i64_divided_by_a_variable_is_the_inline_helper() {
     assert_eq!(helper, 1, "{got:?}");
     assert!(got.iter().any(|line| line == "add eax, ebx") && got.iter().any(|line| line == "adc edx, ecx"), "{got:?}");
 }
+
+/// Adjacent argument words forwarded from memory are dword pushes: pushed a
+/// word at a time, os.write's forwarded far buffer cost one more memory
+/// operand per call than the old route's.
+#[test]
+fn test_a_far_pointer_argument_from_memory_is_one_push() {
+    let text = "declare void @g(ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
+  call addrspace(1) void @g(ptr addrspace(1) %p, i16 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let pushes: Vec<&String> = got.iter().filter(|line| line.starts_with("push") && line.contains("[bp+")).collect();
+    assert_eq!(pushes.len(), 2, "{got:?}");
+}

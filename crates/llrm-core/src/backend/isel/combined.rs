@@ -30,6 +30,7 @@ pub(super) fn combined(blocks: Vec<LirBlock>) -> Vec<LirBlock> {
     // x86 can express a C read-modify-write update in one memory operand.
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, _memory_arguments(&insns, &uses, &exposed))).collect();
+    let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, paired_pushes(&insns))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, _immediate_arguments(&insns, &uses))).collect();
     let mut made: IndexMap<i64, Vec<Arc<Insn>>> =
         made.into_iter().map(|(at, insns)| (at, _rematerialized_arguments(&insns, &uses, &exposed))).collect();
@@ -83,6 +84,55 @@ fn immediate_copy(what: &ir::Semantics) -> Option<(u32, u32, ir::Imm)> {
         }
         _ => None,
     }
+}
+
+/// The word a plain push reads from memory.
+fn pushed_word(one: &Insn) -> Option<&ir::Mem> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.name.as_deref(), &what.dests[..], &what.sources[..]) {
+        (Operation::Push, Some("push"), [], [Loc::Mem(word)])
+            if word.width == 2 && one.uses.is_empty() && one.defines.is_empty() && !one.volatile && plain(one) =>
+        {
+            Some(word)
+        }
+        _ => None,
+    }
+}
+
+/// Two word pushes of one dword's halves, the high first, as one dword
+/// push: both leave the same four bytes, the low at the lower address.
+fn paired_pushes(insns: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
+    let mut out: Vec<Arc<Insn>> = Vec::with_capacity(insns.len());
+    let mut index = 0;
+    while index < insns.len() {
+        let paired = insns.get(index + 1).and_then(|next| {
+            let (high, low) = (pushed_word(&insns[index])?, pushed_word(next)?);
+            let above = ir::Mem {
+                addr: low.addr.map(|addr| addr.plus(2)),
+                offset: if low.addr.is_some() { low.offset } else { low.offset + 2 },
+                ..low.clone()
+            };
+            let same_registers = (high.through, high.index_through) == (low.through, low.index_through);
+            (*high == above && same_registers && high.offset == above.offset && ir::root(low.through) != Register::ESP).then(|| {
+                let mut one = (**next).clone();
+                let mut what = one.what.take().expect("a push");
+                what.sources = vec![Loc::Mem(ir::Mem { width: 4, ..low.clone() })];
+                one.what = Some(what);
+                Arc::new(one)
+            })
+        });
+        match paired {
+            Some(one) => {
+                out.push(one);
+                index += 2;
+            }
+            None => {
+                out.push(Arc::clone(&insns[index]));
+                index += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Select immediate pushes without keeping literal addresses live across calls.
