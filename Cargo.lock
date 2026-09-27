@@ -225,6 +225,7 @@ dependencies = [
  "llrm-mir",
  "llrm-omf",
  "llrm-support",
+ "llrm-transforms",
  "num-bigint",
  "num-traits",
  "regex",

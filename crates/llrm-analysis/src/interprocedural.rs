@@ -18,9 +18,11 @@
 //! - `specialize_parameters` and `propagate_returns` replace uses with the
 //!   constant rather than seeding `initial` or defining fresh copies, which
 //!   leaves nothing to redo and no `done` set to keep.
-//! - A callee's own attributes state what the fixed points would prove of a
-//!   body this module lacks: `memory(none)`, `willreturn` and `nounwind`
-//!   admit a call to the pure and readonly sets, and `noreturn` ends a path.
+//! - Purity is stated, not a set: the whole-module step stamps each body's
+//!   attributes, and a call is pure or erasable as it and its callee state
+//!   (`stated_pure`, `erasable`). What the old fixed points proved,
+//!   `returns_without_looping` and `cannot_fault` answer for the stamp.
+//!   `noreturn` ends a path.
 //! - Division is C's and floating exceptions the machine's, so the old
 //!   trapping and floating kinds refuse nothing; the old `Escape`, `Opaque`
 //!   and `Fill` are calls, judged as calls.
@@ -33,6 +35,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::memory;
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::types::Type;
@@ -181,7 +184,7 @@ pub fn propagate_returns(context: &Context, function: &mut Function, returns: &R
 }
 
 /// Whether every CFG path ends in RETURN without revisiting a block.
-fn _acyclic_returning(function: &Function) -> bool {
+pub fn returns_without_looping(function: &Function) -> bool {
     let graph = cfg::graph(function);
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let mut visiting = BTreeSet::new();
@@ -220,19 +223,6 @@ fn _acyclic_returning(function: &Function) -> bool {
     }
 }
 
-/// Whether the call `inst` states it touches no memory and always comes
-/// back normally.
-fn _stated_pure(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    !effects::touches_memory(context, declarations, function, inst)
-        && effects::states(context, declarations, function, inst, "willreturn")
-        && effects::states(context, declarations, function, inst, "nounwind")
-}
-
-/// Whether the call `inst` goes to a member of `admitted`, or says it could.
-fn _admitted(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, admitted: &BTreeSet<GlobalId>) -> bool {
-    effects::callee(context, function, inst).is_some_and(|target| admitted.contains(&target)) || _stated_pure(context, declarations, function, inst)
-}
-
 /// Whether the body here is the one that runs: LLVM's `hasExactDefinition`.
 /// The linker may swap any other for a different one.
 fn _exact(linkage: Linkage) -> bool {
@@ -258,107 +248,44 @@ fn _access(function: &Function, inst: InstId) -> Option<(Operand, bool, bool)> {
     }
 }
 
-fn _local_effects(context: &Context, declarations: &Declarations, function: &Function, pure: &BTreeSet<GlobalId>) -> bool {
-    if !_acyclic_returning(function) {
-        return false;
-    }
-    let framed = frameescape::framed(function);
-    let is_local = |pointer: Operand| matches!(pointer, Operand::Value(value) if framed.contains_key(&value));
-    for (_, inst) in function.walk() {
-        if matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
-            if !_admitted(context, declarations, function, inst, pure) {
-                return false;
-            }
-            continue;
-        }
-        if let Some((pointer, volatile, _)) = _access(function, inst)
-            && (volatile || !is_local(pointer))
-        {
-            return false;
-        }
-    }
-    true
-}
-
-/// Direct procedures with no observable effects and guaranteed return.
-///
-/// The least fixed point admits an acyclic call chain once all its callees
-/// are admitted.  Recursive SCCs remain conservative because removing one
-/// would otherwise remove possible nontermination.
-pub fn pure_procedures(module: &Module) -> BTreeSet<GlobalId> {
-    let declarations = effects::declarations(module);
-    let bodies = _bodies(module);
-    let mut pure = BTreeSet::new();
-    loop {
-        let mut made = pure.clone();
-        made.extend(bodies.iter().filter(|(_, function)| _local_effects(&module.context, &declarations, function, &pure)).map(|(id, _)| *id));
-        if made == pure {
-            return pure;
-        }
-        pure = made;
-    }
-}
-
-/// Acyclic user bodies whose unused calls have no observable effect.
-///
-/// This is intentionally broader than `pure_procedures`: an ordinary,
-/// direct read of this module's static data is not observable in C when its
-/// result is unused.  It remains narrower than a general no-fault proof:
-/// pointer-based, far/externally selected, volatile and floating reads stay
-/// out, as do all non-frame writes.  Callers may use this fact only to erase
-/// a dead result; it is not an inlining or alias-preservation permission.
-pub fn readonly_procedures(module: &Module, layout: &DataLayout) -> BTreeSet<GlobalId> {
-    let declarations = effects::declarations(module);
-    let bodies = _bodies(module);
-    let mut readonly = BTreeSet::new();
-    loop {
-        let mut made = readonly.clone();
-        made.extend(
-            bodies.iter().filter(|(_, function)| _readonly_effects(module, layout, &declarations, function, &readonly)).map(|(id, _)| *id),
-        );
-        if made == readonly {
-            return readonly;
-        }
-        readonly = made;
-    }
-}
-
-fn _readonly_effects(module: &Module, layout: &DataLayout, declarations: &Declarations, function: &Function, readonly: &BTreeSet<GlobalId>) -> bool {
-    if !_acyclic_returning(function) {
-        return false;
-    }
+/// Whether no access of `function` can fault: each is non-volatile and in
+/// its frame (`frameescape::framed`) or a constant offset
+/// (`pointerfacts`) from a near global variable this module defines. A
+/// pointer, an external or far selector may name memory that is not there.
+pub fn cannot_fault(module: &Module, layout: &DataLayout, function: &Function) -> bool {
     let context = &module.context;
     let framed = frameescape::framed(function);
     let offsets = pointerfacts::offsets(context, layout, function);
     let is_local = |pointer: Operand| matches!(pointer, Operand::Value(value) if framed.contains_key(&value));
-    // A direct near static data reference is guaranteed to name this
-    // module's mapped data.  Do not infer the same from an arbitrary
-    // pointer, external selector or far access.
     let is_static = |pointer: Operand| {
         let Some((Operand::Constant(base), _)) = offsets.relative(pointer) else { return false };
         let ConstantKind::Global(global) = context.get(base).kind else { return false };
         let global = module.global(global);
         global.address_space == 0 && matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_some())
     };
-    for (_, inst) in function.walk() {
-        if matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
-            if !_admitted(context, declarations, function, inst, readonly) {
-                return false;
-            }
-            continue;
-        }
-        let Some((pointer, volatile, store)) = _access(function, inst) else { continue };
-        if volatile {
-            return false;
-        }
-        // Internal frame writes disappear with the call.  Any write to a
-        // nonlocal object remains observable, even if it is otherwise an
-        // exact direct reference.
-        if !is_local(pointer) && (store || !is_static(pointer)) {
-            return false;
-        }
-    }
-    true
+    function.walk().all(|(_, inst)| _access(function, inst).is_none_or(|(pointer, volatile, _)| !volatile && (is_local(pointer) || is_static(pointer))))
+}
+
+/// Exactly defined bodies whose attributes state they touch no memory and
+/// always come back normally.
+pub fn stated_pure(module: &Module) -> BTreeSet<GlobalId> {
+    _bodies(module)
+        .into_iter()
+        .filter(|(_, function)| {
+            let attrs = &function.attrs;
+            memory::stated(attrs) == memory::Effects::NONE && memory::has(attrs, "willreturn") && memory::has(attrs, "nounwind")
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Whether the call `inst` could go unnoticed: it states it writes no
+/// memory and always comes back normally, as LLVM's
+/// `wouldInstructionBeTriviallyDead` asks.
+pub fn erasable(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+    !effects::writes_memory(context, declarations, function, inst)
+        && effects::states(context, declarations, function, inst, "willreturn")
+        && effects::states(context, declarations, function, inst, "nounwind")
 }
 
 /// Direct private procedures that cannot reach a normal return: noreturn's
@@ -374,15 +301,16 @@ pub fn terminal_calls(context: &mut Context, declarations: &Declarations, functi
     noreturn::after_terminal_calls(context, function, &sites)
 }
 
-/// Remove effect-free calls whose result nothing still reads.
-pub fn remove_dead_pure_calls(context: &Context, declarations: &Declarations, function: &mut Function, pure: &BTreeSet<GlobalId>) -> bool {
+/// Remove the calls whose result nothing still reads and that could go
+/// unnoticed (`erasable`).
+pub fn remove_dead_pure_calls(context: &Context, declarations: &Declarations, function: &mut Function) -> bool {
     let removed: Vec<InstId> = function
         .walk()
         .map(|(_, inst)| inst)
         .filter(|&inst| {
             let instruction = function.instruction(inst);
             matches!(instruction.opcode, Opcode::Call(_))
-                && _admitted(context, declarations, function, inst, pure)
+                && erasable(context, declarations, function, inst)
                 && instruction.result.is_none_or(|result| function.users(result).is_empty())
         })
         .collect();

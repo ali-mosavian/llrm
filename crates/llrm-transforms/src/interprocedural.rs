@@ -32,7 +32,7 @@ use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::Effects;
-use llrm_mir::module::{GlobalKind, Linkage, Module};
+use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{ModuleAnalysis, ModulePass};
 use llrm_mir::types::Type;
@@ -117,7 +117,10 @@ pub fn optimized<E: From<String>>(
 
     // Inline only after each independent body has reached its local fixed
     // point; the splice's result goes straight back through the pipeline.
-    let pure = facts::pure_procedures(module);
+    // What each body does, stated on it, is what inlining and the dead-call
+    // removal below read.
+    stamped(module).map_err(E::from)?;
+    let pure = facts::stated_pure(module);
     let mut inline_round = 0;
     loop {
         let counts = inline::call_counts(module);
@@ -212,16 +215,12 @@ pub fn optimized<E: From<String>>(
             break;
         }
     }
-    let layout = match &module.datalayout {
-        Some(text) => DataLayout::parse(text).map_err(E::from)?,
-        None => DataLayout::default(),
-    };
+    // Propagation may have left a body doing less than it states.
     stamped(module).map_err(E::from)?;
-    let readonly = facts::readonly_procedures(module, &layout);
     let declarations = effects::declarations(module);
     for &id in &procedures {
         let (context, function) = function_mut(module, id);
-        if facts::remove_dead_pure_calls(context, &declarations, function, &readonly) {
+        if facts::remove_dead_pure_calls(context, &declarations, function) {
             reoptimised(module, id, "ipa-pure.")?;
         }
     }
@@ -247,12 +246,19 @@ pub fn optimized<E: From<String>>(
     Ok(Proved { noreturn, reachable: reachable(module, &procedures, roots) })
 }
 
-/// Each body whose definition is exact stamped with what alias's summary
-/// says of it, as LLVM's FunctionAttrs states it: `memory(...)`, and on
-/// each pointer parameter `nocapture`, `readnone`, `readonly` or
-/// `writeonly`, and `initializes`; callees first, so a caller sees what
-/// its callees initialize. An attribute already stated stays. The bodies
-/// stamped.
+/// Each body whose definition is exact stamped with what it is proved to
+/// do, as LLVM's FunctionAttrs states it, callees first so a caller sees
+/// what they state:
+/// - `memory(...)`: alias's summary through the pointer parameters and
+///   elsewhere, its own frame aside; volatile accesses and callees reach
+///   inaccessible memory. A stated one only narrows.
+/// - on each pointer parameter it keeps no copy of, `nocapture`, then
+///   `readnone`, `readonly` or `writeonly`, and `initializes`.
+/// - `willreturn` where every path returns without looping and every call
+///   states it; `nounwind` where every call states it and no access can
+///   fault (`interprocedural::cannot_fault`).
+///
+/// Any other attribute already stated stays. The bodies stamped.
 pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
     let layout = match &module.datalayout {
         Some(text) => DataLayout::parse(text)?,
@@ -260,6 +266,7 @@ pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
     };
     let known = Summaries::run(module, &layout, None)?;
     let globals = globalsaa::analysis(module, &layout, None)?;
+    let mut declarations = effects::declarations(module);
     let mut changed = Vec::new();
     for id in CallGraph::new(module).bottom_up() {
         let global = module.global(id);
@@ -268,15 +275,28 @@ pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
         let Some(summary) = known.get(name) else { continue };
         let procedure = Procedure::of(Unit::of(module, &layout, function).with_globals_aa(&globals));
         let initialized = alias::initialized(&procedure, &known)?;
+        let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
+        let states = |flag: &str| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, flag));
+        let returns = facts::returns_without_looping(function) && states("willreturn");
+        let nounwind = states("nounwind") && facts::cannot_fault(module, &layout, function);
         let volatile = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }));
+        let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
+        for &inst in &calls {
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
+            let declared = llrm_mir::memory::callee(&module.context, function, inst).and_then(|one| declarations.get(one.0 as usize)).and_then(GlobalValue::function).map_or(Effects::ANY, |one| llrm_mir::memory::inaccessible(&one.attrs));
+            hidden = _either(hidden, _both(declared, llrm_mir::memory::inaccessible(&info.attrs)));
+        }
         let pointers = function.parameters().iter().map(|&one| matches!(module.context.types.get(function.value(one).ty), Type::Pointer(_))).collect::<Vec<_>>();
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
-        if !function.attrs.iter().any(|one| matches!(one, Attribute::Memory(_))) {
-            function.attrs.extend(_memory(summary, volatile));
+        _narrowed(&mut function.attrs, summary, hidden);
+        let has = llrm_mir::memory::has;
+        for (flag, proved) in [("willreturn", returns), ("nounwind", nounwind)] {
+            if proved && !has(&function.attrs, flag) {
+                function.attrs.push(Attribute::Flag(flag.to_owned()));
+            }
         }
         for (index, attrs) in function.parameter_attrs.iter_mut().enumerate().filter(|(index, _)| pointers[*index]) {
-            let has = |attrs: &[Attribute], flag: &str| attrs.iter().any(|one| matches!(one, Attribute::Flag(stated) if stated == flag));
             let identity = Some(Identity::Int(index as i64));
             if summary.captures.contains(&identity) {
                 continue;
@@ -302,20 +322,34 @@ pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
             }
         }
         if before != (function.attrs.clone(), function.parameter_attrs.clone()) {
+            declarations[id.0 as usize] = module.global(id).declaration();
             changed.push(id);
         }
     }
     Ok(changed)
 }
 
-/// `memory(...)` for what `summary` reads and writes through its pointer
-/// parameters and elsewhere, its own frame aside; volatile accesses touch
-/// inaccessible memory, as LLVM models them. None where it allows all.
-fn _memory(summary: &Summary, volatile: bool) -> Option<Attribute> {
+fn _both(one: Effects, other: Effects) -> Effects {
+    Effects { reads: one.reads && other.reads, writes: one.writes && other.writes }
+}
+
+fn _either(one: Effects, other: Effects) -> Effects {
+    Effects { reads: one.reads || other.reads, writes: one.writes || other.writes }
+}
+
+/// `attrs`' `memory(...)` narrowed to what `summary` reads and writes
+/// through the pointer parameters and elsewhere, its own frame aside, and
+/// to `hidden` on inaccessible memory.
+fn _narrowed(attrs: &mut Vec<Attribute>, summary: &Summary, hidden: Effects) {
     let local = |one: &Slice| matches!(one.object.kind, MemoryKind::Frame | MemoryKind::Stack);
     let found = |slices: &BTreeSet<Slice>, parameter: bool| slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter);
-    let arguments = Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) };
-    let other = Effects { reads: found(&summary.reads, false) || summary.unknown_read, writes: found(&summary.writes, false) || summary.unknown_write };
+    let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
+    let arguments = _both(stated_arguments, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
+    let other = _both(stated_other, Effects { reads: found(&summary.reads, false) || summary.unknown_read, writes: found(&summary.writes, false) || summary.unknown_write });
+    let hidden = _both(llrm_mir::memory::inaccessible(attrs), hidden);
+    if (arguments, hidden, other) == (stated_arguments, llrm_mir::memory::inaccessible(attrs), stated_other) {
+        return;
+    }
     let access = |one: Effects| {
         match (one.reads, one.writes) {
             (true, true) => "readwrite",
@@ -325,20 +359,19 @@ fn _memory(summary: &Summary, volatile: bool) -> Option<Attribute> {
         }
         .to_owned()
     };
-    if other == Effects::ANY && arguments == Effects::ANY {
-        return None;
-    }
+    let named = [("argmem", arguments), ("inaccessiblemem", hidden)].into_iter().filter(|(_, one)| *one != other).map(|(location, one)| (Some(location.to_owned()), access(one))).collect::<Vec<_>>();
     let mut locations = Vec::new();
-    if other != Effects::NONE || (arguments == Effects::NONE && !volatile) {
+    if other != Effects::NONE || named.is_empty() {
         locations.push((None, access(other)));
     }
-    if arguments != other {
-        locations.push((Some("argmem".to_owned()), access(arguments)));
-    }
-    if volatile && other != Effects::ANY {
-        locations.push((Some("inaccessiblemem".to_owned()), "readwrite".to_owned()));
-    }
-    Some(Attribute::Memory(locations))
+    locations.extend(named);
+    // What `readnone`, `readonly` or `writeonly` said, it now says.
+    attrs.retain(|one| match one {
+        Attribute::Memory(_) => false,
+        Attribute::Flag(flag) => !["readnone", "readonly", "writeonly"].contains(&flag.as_str()),
+        _ => true,
+    });
+    attrs.push(Attribute::Memory(locations));
 }
 
 /// The procedure `id`, with the context its types and constants live in.

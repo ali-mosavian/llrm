@@ -218,6 +218,13 @@ b:
   ret void
 }
 
+define internal void @ordered() {
+b:
+  %slot = alloca i16
+  store volatile i16 1, ptr %slot
+  ret void
+}
+
 define i16 @f(i16 %a) {
 b:
   %cell = alloca i16
@@ -241,12 +248,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) {",
-            "define internal void @keep(ptr %p) memory(write, argmem: none) {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite) {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn {",
+            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn {",
             "define internal void @hides(ptr %p) {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none) {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn {",
         ],
         "{text}"
     );
@@ -299,4 +307,287 @@ b:
     assert_eq!(loads(read, false), 1);
     assert_eq!(loads("call void @write(ptr @x)", true), 1);
     assert_eq!(loads("call void @unknown(ptr @x)", true), 1);
+}
+
+/// The bodies of `text` its stamp states pure, by name.
+fn pure(text: &str) -> BTreeSet<String> {
+    let mut module = parsed(text);
+    stamped(&mut module).unwrap();
+    facts::stated_pure(&module).into_iter().map(|id| module.global(id).name.clone().unwrap()).collect()
+}
+
+/// The callees whose unused calls in `@uses` of `text`, stamped, go.
+fn dropped(text: &str) -> BTreeSet<String> {
+    let mut module = parsed(text);
+    stamped(&mut module).unwrap();
+    let callees = |module: &Module| {
+        let uses = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("uses")).expect("@uses").2;
+        uses.walk().filter_map(|(_, inst)| llrm_mir::memory::callee(&module.context, uses, inst)).map(|id| module.global(id).name.clone().unwrap()).collect::<BTreeSet<_>>()
+    };
+    let before = callees(&module);
+    let declarations = effects::declarations(&module);
+    let (context, uses) = module.function_mut("uses").unwrap();
+    facts::remove_dead_pure_calls(context, &declarations, uses);
+    before.difference(&callees(&module)).cloned().collect()
+}
+
+fn named(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|one| (*one).to_owned()).collect()
+}
+
+/// Ported from llrm-analysis, where the pure and readonly sets were their
+/// own fixed points beside the stamp.
+#[test]
+fn an_unused_call_to_a_pure_body_goes() {
+    let text = "define internal i16 @leaf(i16 %x) {
+b:
+  ret i16 %x
+}
+
+define i16 @uses() {
+b:
+  %r = call i16 @leaf(i16 9)
+  ret i16 42
+}
+";
+    assert_eq!(dropped(text), named(&["leaf"]));
+}
+
+#[test]
+fn purity_refuses_nontermination_nonlocal_accesses_and_what_callees_do_not_state() {
+    let text = "@g = global i16 0
+
+declare i16 @unknown(i16)
+declare i16 @quiet(i16) memory(none)
+declare i16 @returns(i16) memory(none) willreturn nounwind
+declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+define void @loop() {
+b:
+  br label %b
+}
+
+define void @write() {
+b:
+  store i16 1, ptr @g
+  ret void
+}
+
+define i16 @global() {
+b:
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+
+define i16 @parameter(ptr %p) {
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+
+define i16 @volatile() {
+b:
+  %slot = alloca i16
+  %v = load volatile i16, ptr %slot
+  ret i16 %v
+}
+
+define i16 @local(i16 %x) {
+b:
+  %slot = alloca [2 x i16]
+  %high = getelementptr inbounds i16, ptr %slot, i16 1
+  store i16 %x, ptr %high
+  %y = load i16, ptr %high
+  %z = call i16 @llvm.smax.i16(i16 %y, i16 0)
+  ret i16 %z
+}
+
+define i16 @opaque(i16 %x) {
+b:
+  %z = call i16 @unknown(i16 %x)
+  ret i16 %z
+}
+
+define i16 @f(i16 %x) {
+b:
+  %y = call i16 @quiet(i16 %x)
+  ret i16 %y
+}
+
+define i16 @h(i16 %x) {
+b:
+  %y = call i16 @returns(i16 %x)
+  ret i16 %y
+}
+
+define internal i16 @leaf(i16 %x) {
+b:
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define i16 @middle(i16 %x) {
+b:
+  %y = call i16 @leaf(i16 %x)
+  ret i16 %y
+}
+
+define i16 @recursive(i16 %x) {
+b:
+  %y = call i16 @recursive(i16 %x)
+  ret i16 %y
+}
+";
+    assert_eq!(pure(text), named(&["local", "h", "leaf", "middle"]));
+}
+
+/// A read of this module's near static data goes unnoticed; a far, an
+/// external or a pointer's may fault, a volatile one is ordered.
+#[test]
+fn an_unused_call_that_only_reads_static_data_goes() {
+    let text = "@g = global i16 0
+@far_data = addrspace(1) global i16 0
+@external_data = external global i16
+
+define i16 @read() {
+b:
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+
+define i16 @caller() {
+b:
+  %v = call i16 @read()
+  ret i16 %v
+}
+
+define i16 @volatile() {
+b:
+  %v = load volatile i16, ptr @g
+  ret i16 %v
+}
+
+define void @write() {
+b:
+  store i16 1, ptr @g
+  ret void
+}
+
+define i16 @far() {
+b:
+  %v = load i16, ptr addrspace(1) @far_data
+  ret i16 %v
+}
+
+define i16 @external() {
+b:
+  %v = load i16, ptr @external_data
+  ret i16 %v
+}
+
+define i16 @pointer(ptr %p) {
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+
+define void @uses(ptr %p) {
+b:
+  %a = call i16 @read()
+  %b = call i16 @caller()
+  %c = call i16 @volatile()
+  call void @write()
+  %d = call i16 @far()
+  %e = call i16 @external()
+  %f = call i16 @pointer(ptr %p)
+  ret void
+}
+";
+    assert_eq!(dropped(text), named(&["read", "caller"]));
+}
+
+#[test]
+fn dead_call_removal_keeps_used_results_impure_callees_and_invokes() {
+    let text = "declare void @effect()
+declare i32 @__gxx_personality_v0(...)
+
+define internal i16 @leaf(i16 %x) {
+b:
+  ret i16 %x
+}
+
+define i16 @uses() personality ptr @__gxx_personality_v0 {
+b:
+  %used = call i16 @leaf(i16 1)
+  call void @effect()
+  %dead = invoke i16 @leaf(i16 2) to label %ok unwind label %pad
+
+ok:
+  ret i16 %used
+
+pad:
+  %lp = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %lp
+}
+";
+    assert_eq!(dropped(text), BTreeSet::new());
+}
+
+/// A body the linker may swap for another states nothing.
+#[test]
+fn a_body_the_linker_may_replace_is_stamped_with_nothing() {
+    for linkage in ["weak", "weak_odr", "linkonce", "linkonce_odr", "available_externally"] {
+        let text = format!(
+            "@g = global i16 0
+
+define {linkage} i16 @five() {{
+b:
+  ret i16 5
+}}
+
+define {linkage} i16 @read() {{
+b:
+  %v = load i16, ptr @g
+  ret i16 %v
+}}
+
+define i16 @exact() {{
+b:
+  ret i16 5
+}}
+
+define void @uses() {{
+b:
+  %a = call i16 @five()
+  %b = call i16 @read()
+  %c = call i16 @exact()
+  ret void
+}}
+"
+        );
+        assert_eq!(pure(&text), named(&["exact"]), "{linkage}");
+        assert_eq!(dropped(&text), named(&["exact"]), "{linkage}");
+    }
+}
+
+/// What the stamp stated of each corpus body, as `interprocedural_stamped.txt`
+/// holds it. The old pure and readonly sets proved a subset: a callee's
+/// frame-only `llvm.memset` and a loop the frontend states `willreturn`
+/// now count.
+#[test]
+fn the_corpus_is_stamped_as_it_was() {
+    let mut lines = Vec::new();
+    for (name, mut module) in llrm_analysis::testing::corpus() {
+        stamped(&mut module).unwrap();
+        let text = printed(&module);
+        lines.extend(text.lines().filter(|line| line.starts_with("define")).map(|line| format!("{name} {}", line.trim_end_matches(" {"))));
+    }
+    let found = lines.join("\n") + "\n";
+    // `STAMP_WRITE=1` rewrites the file where a rule changes on purpose.
+    if std::env::var_os("STAMP_WRITE").is_some() {
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/src/interprocedural_stamped.txt"), &found).unwrap();
+    }
+    let expected = include_str!("interprocedural_stamped.txt");
+    let changed = found.lines().zip(expected.lines()).find(|(one, other)| one != other);
+    assert!(found == expected, "first difference: {changed:?}; {} lines, expected {}", found.lines().count(), expected.lines().count());
 }
