@@ -10,6 +10,7 @@ use crate::testing::{managed, parsed, printed, results};
 fn looped(body: &str) -> String {
     format!(
         "@w = global i16 0
+@a = global [300 x i16] zeroinitializer
 
 define void @g() {{
 b0:
@@ -79,4 +80,17 @@ fn test_a_value_already_scaled_plus_base_is_left() {
 fn test_a_call_that_writes_memory_leaves_the_base_spelled() {
     let (_, after) = spelled(&looped("  call void @g()\n  %a = sub i16 %i, %k\n  %v = mul i16 %a, 2\n"));
     assert!(after.contains("  %0 = mul i16 %i, 2\n  %1 = mul i16 %k, -2\n  %2 = add i16 %0, %1\n"), "{after}");
+}
+
+/// deedlines' CYCLEBLOBS stepped seven pointers `f(x - xp(k))`, six of them
+/// in memory: an address was never spelled as its invariant base indexed by
+/// the scaled counter, so the terms shared no `x * 2`.
+#[test]
+fn test_an_affine_address_is_its_base_indexed_by_the_scaled_counter() {
+    let text = looped("  %x = add i16 %i, %m\n  %p = getelementptr inbounds i16, ptr @a, i16 %x\n  %v = load i16, ptr %p\n");
+    let (_, after) = spelled(&text.replace("b0:\n  br label %b1", "b0:\n  %m = and i16 %k, 255\n  br label %b1"));
+    assert!(after.contains("  %0 = mul i16 %i, 2\n"), "{after}");
+    assert!(after.contains(", i16 %0\n  %v = load i16, ptr %"), "{after}");
+    let mut again = parsed(&after);
+    assert_eq!(managed(&mut again, Affine), after);
 }

@@ -72,15 +72,22 @@ pub fn canonical(unit: &mut Unit, analyses: &mut Analyses) -> bool {
     };
     for ((counter, answer), one) in &rewrites {
         let ty = unit.function.value(*answer).ty;
+        let int = unit.function.value(*counter).ty;
         let scaled = match &one.by {
             AffineOperand::Const(by) if by.n == BigInt::from(1) => Operand::Value(*counter),
             by => {
                 let by = _operand(unit, by);
-                _emitted(unit, Opcode::Binary(BinaryOp::Mul), ty, vec![Operand::Value(*counter), by], one.op)
+                _emitted(unit, Opcode::Binary(BinaryOp::Mul), int, vec![Operand::Value(*counter), by], one.op)
             }
         };
         let base = _starts(unit, one, false, one.op);
-        let sum = _emitted(unit, Opcode::Binary(BinaryOp::Add), ty, vec![scaled, base], one.op);
+        let sum = match one.pointer {
+            Some(_) => {
+                let source = unit.context.types.int(8);
+                _emitted(unit, Opcode::GetElementPtr { source }, ty, vec![base, scaled], one.op)
+            }
+            None => _emitted(unit, Opcode::Binary(BinaryOp::Add), ty, vec![scaled, base], one.op),
+        };
         unit.function.replace_all_uses_with(*answer, sum);
     }
     !rewrites.is_empty()
@@ -91,20 +98,38 @@ pub fn canonical(unit: &mut Unit, analyses: &mut Analyses) -> bool {
 fn _rewritable(view: &memory::Unit, loop_: &Loop, one: &Derived) -> Option<(ValueId, ValueId)> {
     let function = view.function;
     let answer = function.instruction(one.op).result?;
-    if one.pointer.is_some()
-        || view.int_bits(Operand::Value(answer)) != Some(one.of.start.width())
-        || !one.offsets.iter().any(|(offset, _)| matches!(offset, AffineOperand::Value(..)))
-    {
+    let width = match one.pointer {
+        Some(_) => view.space(Operand::Value(answer)).map(|space| view.layout.pointer(space).index_bits),
+        None => view.int_bits(Operand::Value(answer)),
+    };
+    if width != Some(one.of.start.width()) || !one.offsets.iter().any(|(offset, _)| matches!(offset, AffineOperand::Value(..))) {
         return None;
     }
     let ValueDef::Instruction(phi) = function.value(one.of.value).def else { return None };
     if function.instruction(phi).opcode != Opcode::Phi || function.parent(phi) != Some(cfg::block(loop_.header)) {
         return None;
     }
-    // Already `scaled + base`: one value offset, added.
+    // Already `scaled + base`: one value offset, added; an address, its
+    // invariant base indexed by the scaled counter alone.
     let op = function.instruction(one.op);
-    let spelled = op.opcode == Opcode::Binary(BinaryOp::Add)
-        && matches!(&one.offsets[..], [(AffineOperand::Value(base, _), coefficient)] if *coefficient == BigInt::from(1) && op.operands.contains(&Operand::Value(*base)));
+    let scaled = |operand: Operand| {
+        operand == Operand::Value(one.of.value)
+            || view.defining(operand).is_some_and(|(_, made)| made.opcode == Opcode::Binary(BinaryOp::Mul) && made.operands.contains(&Operand::Value(one.of.value)))
+    };
+    let invariant = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| !loop_.body.contains(&cfg::id(block))),
+            ValueDef::Argument(_) => true,
+        },
+        _ => true,
+    };
+    let spelled = match one.pointer {
+        Some(_) => matches!(op.opcode, Opcode::GetElementPtr { .. }) && matches!(op.operands[..], [base, index] if invariant(base) && scaled(index)),
+        None => {
+            op.opcode == Opcode::Binary(BinaryOp::Add)
+                && matches!(&one.offsets[..], [(AffineOperand::Value(base, _), coefficient)] if *coefficient == BigInt::from(1) && op.operands.contains(&Operand::Value(*base)))
+        }
+    };
     (!spelled).then_some((one.of.value, answer))
 }
 

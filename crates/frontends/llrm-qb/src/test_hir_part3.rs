@@ -1706,6 +1706,17 @@ DEF SEG = &HA000\r\nFOR x = 24 TO 295\r\ndn = sp(yy(1) + f(x - xp(1))) + sp(yy(2
 sp(yy(3) + f(x - xp(3))) + sp(yy(4) + f(x - xp(4))) + sp(yy(5) + f(x - xp(5))) + sp(yy(6) + f(x - xp(6))) + \
 sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
 
+/// On the default route CYCLEBLOBS stepped one pointer per `f(x - xp(k))`,
+/// six of them in memory, an `add [bp-N], 2` each per pixel: no address was
+/// spelled as its invariant base indexed by one shared `x * 2`.
+#[test]
+fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "T.BAS", SEVEN_TERMS.as_bytes());
+    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    assert!(!regex::Regex::new(r"add\s+word ptr \[bp-\d+\]").unwrap().is_match(&inner), "{inner}");
+}
+
 /// cycleblobs computed each `f(x - xp(k))` index as `(x - xp(k)) * 2` per
 /// pixel: seven subtracts and seven multiplies of the counter, where one
 /// `x * 2` plus a hoisted `-2 * xp(k)` per term does.
