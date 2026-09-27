@@ -472,11 +472,13 @@ pub fn statement_table(module: &Module) -> Option<(usize, usize)> {
     None
 }
 
-/// The code offset each OF_STA row names: where each statement starts, in
-/// the table's order.
-pub fn statements(module: &Module) -> Vec<usize> {
+/// Each OF_STA row, in the table's order: the code offset where its
+/// statement starts, and the BASIC line ERL answers there -- the last
+/// numbered line at or before it, 0 before any.
+pub fn statements(module: &Module) -> Vec<(usize, i64)> {
     let Some((start, end)) = statement_table(module) else { return Vec::new() };
-    (start..end - 2).step_by(4).filter_map(|at| module.operands.get(&(at as i64)).map(|address| address.disp as usize)).collect()
+    let line = |at: usize| i64::from(u16::from_le_bytes([module.code[at + 2], module.code[at + 3]]));
+    (start..end - 2).step_by(4).filter_map(|at| module.operands.get(&(at as i64)).map(|address| (address.disp as usize, line(at)))).collect()
 }
 
 /// Runs of relocations no instruction accounts for, which are a table.

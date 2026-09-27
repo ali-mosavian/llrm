@@ -355,6 +355,21 @@ evidence = '''
 87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
 
+["B$FERL"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = true
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "dx", "flags"]
+established = true
+inputs = []
+evidence = '''
+error.asm, at 00b5 in BCOM45.LIB and 013b in BCL71ENR.LIB and VBDCL10E.LIB: `MOV AX,[b$errlin]` / `XOR DX,DX` / RETF -- ERL, a LONG whose high word is zero, and nothing more. Like B$FERR it reads only the runtime's own error state.
+'''
+
 ["B$FERR"]
 cleanup = 0
 control = "returns"
@@ -503,6 +518,21 @@ established = true
 inputs = []
 evidence = '''
 rt/error.asm: `cProc B$OEGA,<FAR,PUBLIC>` with parmD erradr -- the ON ERROR GOTO statement handler. It sets OFD_ONERROR in the module's own data, and its header says `erradr == 0 and an error is in progress, will jump to B$SERR instead of returning`: OEGA_10 does `MOV BP,[BP]` / `ADD SP,8` and `JMP B$SERR ;Process error (Never Returns)`, which is the path into the user's handler.
+'''
+
+["B$OEGP"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = false
+error_handling = true
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+error.asm, at 0046 in BCL71ENR.LIB and VBDCL10E.LIB: ON LOCAL ERROR GOTO, one word, the handler's offset in the caller's code segment. It stores it in the caller's frame, [bx-0Eh] / [bx-10h] under `MOV BX,[BP]`, and RETF 2; with 0 while that frame's handler runs it jumps to the path OEGA_10 takes into B$SERR, as B$OEGA does. QB 4.5 has none.
 '''
 
 ["B$OGTA"]

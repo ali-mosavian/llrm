@@ -655,6 +655,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
         }
+        rows.extend(procedure.body.blocks.first().map(|entry| super::entry_row(procedures.len(), entry.at)));
         rows.extend(landing.map(|at| super::landing_row(procedures.len(), at)));
         procedures.push(procedure);
     }
@@ -669,7 +670,11 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         names.insert((Space::Segment, id), label.clone());
         pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    pooled.extend(super::landed_data(module));
+    let laid: BTreeSet<&str> = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {
+        Item::Global { name, .. } => Some(name.as_str()),
+        Item::Datum(_) | Item::Object(_) => None,
+    }).collect();
+    pooled.extend(super::added_data(module, &|id| module.global(id).name.as_deref().is_some_and(|name| laid.contains(name)), &names)?);
     if !pooled.is_empty() {
         match data.iter_mut().find(|(name, _)| *name == object.constants) {
             Some((_, datums)) => datums.extend(pooled),

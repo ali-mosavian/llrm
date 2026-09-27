@@ -23,7 +23,9 @@ pub fn declared() -> String {
     format!("{}{ADDRESS}", crate::RUNTIME)
 }
 
-/// Declares `B$HARY` where the module calls it: `{bx, es} (bx, ...)`.
+/// Declares `B$HARY` where the module calls it: `{bx, es} (...)`. Each call
+/// is typed by its own words, the pushed ones in push order and then the
+/// descriptor in BX, as HIR's emitter passes them.
 pub fn declare(facts: &crate::machine::Facts, module: &mut llrm_mir::Module) -> Option<(llrm_mir::ConstantId, llrm_mir::TypeId)> {
     let called = facts.bodies.iter().flat_map(|body| body.nodes.values()).any(|node| matches!(&**node, Node::Call(call) if call.name == ADDRESS));
     if !called || facts.bodies.iter().any(|body| body.body.name.as_deref() == Some(ADDRESS)) {
@@ -32,7 +34,7 @@ pub fn declare(facts: &crate::machine::Facts, module: &mut llrm_mir::Module) -> 
     let types = &mut module.context.types;
     let word = types.int(16);
     let pair = types.intern(llrm_mir::Type::Struct { fields: vec![word, word], packed: false });
-    let ty = types.intern(llrm_mir::Type::Function { returns: pair, parameters: vec![word], variadic: true });
+    let ty = types.intern(llrm_mir::Type::Function { returns: pair, parameters: vec![], variadic: true });
     let global = module.add_function(&declared(), ty, llrm_mir::Linkage::External).ok()?;
     let one = &mut module.globals[global.0 as usize];
     one.address_space = crate::FAR;
@@ -57,11 +59,12 @@ fn element(emitter: &mut Emitter) -> Emit<()> {
     let depth = emitter.depth();
     let count = emitter.stack_word(depth, 2)?;
     let rank = emitter.constant(count).filter(|&rank| rank > 0).ok_or_else(|| format!("{ADDRESS}'s subscript count is not a constant"))?;
-    let mut arguments = vec![emitter.register(Register::BX)?];
-    for index in 0..=rank {
-        arguments.push(emitter.stack_word(depth - 2 * (rank - index), 2)?);
-    }
-    let &(callee, ty) = emitter.unit.intrinsics.get(&declared()).ok_or("B$HARY undeclared")?;
+    let mut arguments = (0..=rank).map(|index| emitter.stack_word(depth - 2 * (rank - index), 2)).collect::<Emit<Vec<_>>>()?;
+    arguments.push(emitter.register(Register::BX)?);
+    let &(callee, declared) = emitter.unit.intrinsics.get(&declared()).ok_or("B$HARY undeclared")?;
+    let llrm_mir::Type::Function { returns, .. } = *emitter.b.context.types.get(declared) else { unreachable!("a function") };
+    let word = emitter.b.context.types.int(16);
+    let ty = emitter.b.context.types.intern(llrm_mir::Type::Function { returns, parameters: vec![word; arguments.len()], variadic: false });
     let answer = emitter.call_as(llrm_mir::opcode::BASIC, ty, callee, &arguments)?.expect("an answer");
     emitter.popped(2 * (rank + 1))?;
     let (address, selector) = (emitter.b.extract_value(answer, 0, ""), emitter.b.extract_value(answer, 1, ""));

@@ -286,6 +286,9 @@ struct Compiler {
     error_handler: Option<u32>,
     error_handler_local: bool,
     error_handlers: BTreeSet<u32>,
+    /// The module body has ON ERROR GOTO, whose handler takes an error any
+    /// procedure raises, on that procedure's frame, and RESUMEs there.
+    module_handled: bool,
     next_type: u32,
     next_value: u32,
     next_place: u32,
@@ -427,9 +430,11 @@ fn built(
     compiler.reserve_data_labels(&module.statements, &mut read_data_offset)?;
     compiler.reserve_labels(&module.statements)?;
     compiler.statements(module)?;
+    compiler.end_statement();
     compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
+    compiler.module_handled = compiler.functions.iter().any(|one| one.id == 1 && one.error_handler.is_some() && !one.error_handler_local);
 
     compiler.module_variables = compiler.variables.clone();
     // A procedure sees only what the module declared SHARED; the rest of
@@ -596,6 +601,7 @@ fn built(
             .map_err(|error| SemanticError {
                 message: format!("{}: {}", procedure.name, error.message),
             })?;
+        compiler.end_statement();
         compiler.finish();
         compiler.cleanup_local_strings()?;
         compiler.cleanup_local_arrays()?;
@@ -1268,6 +1274,7 @@ impl Compiler {
             error_handler: None,
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
+            module_handled: false,
             next_type: 12,
             next_value: 1,
             next_place: 1,
@@ -1353,8 +1360,10 @@ impl Compiler {
         self.prune_unreachable(&parameters);
         let retained: BTreeSet<u32> = self.blocks.iter().map(|block| block.id).collect();
         let load_lines = std::mem::take(&mut self.load_lines);
-        let external_entries: Vec<u32> = self
-            .statement_entries
+        // A procedure the module's handler serves resumes from its own pad,
+        // which reaches its statements as any branch does.
+        let resumed = if self.error_handler.is_some() { self.statement_entries.as_slice() } else { &[] };
+        let external_entries: Vec<u32> = resumed
             .iter()
             .map(|(block, _, _)| *block)
             .chain(self.data_entries.iter().copied())
@@ -2688,6 +2697,15 @@ impl Compiler {
         self.statement_list(&module.statements)
     }
 
+    /// The body's end, END SUB's or the module's, where RESUME NEXT after
+    /// the last statement continues.
+    fn end_statement(&mut self) {
+        if self.error_handler.is_some() || self.module_handled {
+            let line = self.pending_numeric_line.unwrap_or(0);
+            self.begin_resumable_statement(line);
+        }
+    }
+
     fn begin_resumable_statement(&mut self, line: u16) {
         if !self.blocks[self.current_block].instructions.is_empty()
             || self.blocks[self.current_block].terminator.is_some()
@@ -2721,7 +2739,7 @@ impl Compiler {
                     | Statement::Data { .. }
                     | Statement::Label(_, _)
             );
-            if self.error_handler.is_some() && !metadata_only {
+            if (self.error_handler.is_some() || self.module_handled) && !metadata_only {
                 // A numbered BASIC line remains the active ERL value for
                 // every following statement until another numeric label.
                 // PDS 7.1 BC emits that number on every statement-table row;

@@ -423,3 +423,40 @@ fn an_indexed_array_is_one_object() {
     let text = llrm_mir::print::module(&raised("fpdeep-q-o.obj"));
     assert!(text.contains("@BC_DATA.0002 = ") && !text.contains("@BC_DATA.0006 = "), "{text}");
 }
+
+/// `B$HARY`'s words as HIR's emitter passes them: the pushed ones in push
+/// order, their count last of those, then the descriptor in BX.
+#[test]
+fn an_element_address_passes_the_descriptor_last() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/ndarr-q-o.obj");
+    let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let text = llrm_mir::print::module(&module);
+    let calls: Vec<Vec<&str>> = text
+        .lines()
+        .filter_map(|line| line.split_once(" @llrm.qb.B$HARY(").filter(|_| line.contains(" = call "))?.1.strip_suffix(')'))
+        .map(|arguments| arguments.split(", ").collect())
+        .collect();
+    assert!(!calls.is_empty());
+    for words in calls {
+        let count = words.len() - 2;
+        assert_eq!(words[count], format!("i16 {count}"), "{words:?}");
+    }
+}
+
+/// ERL in the handler reads the faulting statement's line from the lines
+/// BC's statement table gives each statement: erlnum raises on no numbered
+/// line, then on and after line 100, then on line 200. Was refused, as the
+/// recompiled object keeps no line table for the runtime's B$FERL.
+#[test]
+fn erl_is_the_line_bcs_statement_table_gives() {
+    for name in ["erlnum-q-o.obj", "erlnum-p-g2.obj", "erlnum-v-g3.obj"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions").join(name);
+        let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+        let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{name}: {refusal}")).module;
+        let text = llrm_mir::print::module(&module);
+        let table = text.lines().find(|line| line.contains("$QB$ERL$main") && line.contains(" = internal constant")).expect("the ERL table");
+        let lines: std::collections::BTreeSet<&str> = table.split("i16 ").skip(1).map(|one| one.trim_end_matches([',', ' ', ']'])).collect();
+        assert_eq!(lines, ["0", "100", "200"].into_iter().collect(), "{name}: {table}");
+    }
+}

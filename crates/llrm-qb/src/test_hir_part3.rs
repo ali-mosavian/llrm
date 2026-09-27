@@ -2388,11 +2388,82 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
     assert!(opcodes.iter().any(|one| matches!(one, llrm_mir::Opcode::Invoke(_))));
 }
 
+/// ERL in the handler reads the faulting statement's line from a table by
+/// the site RESUME switches on; it was refused, as the recompiled object
+/// keeps no line table for the runtime's.
 #[test]
-fn erl_is_refused_for_the_line_table_it_reads() {
+fn erl_is_the_faulting_statements_line() {
     let directory = tempfile::TempDir::new().unwrap();
-    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
+    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let emitted = llrm_core::hir::mir::emit(&program).remove(0);
-    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL")), "{:?}", emitted.refused);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\" =") || line.starts_with("@$QB$ERL$__main =")).expect("the ERL table");
+    assert!(table.contains("i16 100"), "{table}");
+    assert!(text.contains("@$QB$ERL$__main, i16 0, i16 %") || text.contains("@\"$QB$ERL$__main\", i16 0, i16 %"), "{text}");
+}
+
+/// ON ERROR GOTO names another handler: the pad goes to whichever was named
+/// last. Was refused as "a second ON ERROR GOTO handler".
+#[test]
+fn the_pad_goes_to_the_handler_named_last() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "TWO.BAS", b"ON ERROR GOTO first\nERROR 5\nON ERROR GOTO second\nERROR 6\nEND\nfirst:\nPRINT 1\nRESUME NEXT\nsecond:\nPRINT 2\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
+    let pad = main.layout().iter().copied().find(|&block| main.block(block).instructions().iter().any(|&one| matches!(main.instruction(one).opcode, llrm_mir::Opcode::LandingPad { .. }))).expect("the pad");
+    let last = *main.block(pad).instructions().last().expect("a terminator");
+    assert!(matches!(main.instruction(last).opcode, llrm_mir::Opcode::Switch), "{}", llrm_mir::print::module(&emitted.module));
+}
+
+/// ON LOCAL ERROR: the SUB's own handler is its landing pad, registered by
+/// the local intrinsic. Was refused as "ON LOCAL ERROR, whose handler is a
+/// procedure's".
+#[test]
+fn a_procedures_own_handler_is_its_landing_pad() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "LOCAL.BAS", b"DECLARE SUB s ()\nCALL s\nEND\nSUB s\nON LOCAL ERROR GOTO h\nERROR 53\nEXIT SUB\nh:\nRESUME NEXT\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@llrm.qb.onlocalerror(i1 true)") && !text.contains("@llrm.qb.onerror("), "{text}");
+    assert!(text.contains("landingpad"), "{text}");
+}
+
+/// An error a SUB raises lands on the SUB's own pad, which calls the module
+/// handler, run as its own function, and switches on the RESUME it answers;
+/// that function turns trapping back on however few pads it serves. Was
+/// refused as "errors raised inside SUBs"; with the handler function's
+/// registration erased, POWRES's second error was fatal.
+#[test]
+fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "SUBERR.BAS", b"DECLARE SUB r ()\nON ERROR GOTO h\nCALL r\nEND\nh:\nRESUME NEXT\nSUB r\nERROR 5\nPRINT 1\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let mut emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let sub = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("R")).expect("R").2;
+    assert!(sub.walk().any(|(_, inst)| matches!(sub.instruction(inst).opcode, llrm_mir::Opcode::LandingPad { .. })));
+    // As the runtime's promises mark it when the program is linked.
+    emitted.module.function_mut("llrm.qb.B$CEND").expect("END").1.attrs.push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+    llrm_core::backend::ehprepare::prepared(&mut emitted.module).expect("prepared");
+    let text = llrm_mir::print::module(&emitted.module);
+    let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
+    let handler = &handler[..handler.find("\n}\n").expect("its end")];
+    assert!(handler.contains("@llrm.qb.B$OEGA(ptr addrspace(1) @$QB$LANDING)"), "{handler}");
+}
+
+/// Outside the handler ERL is the runtime's, which knows no line of the
+/// recompiled code.
+#[test]
+fn erl_outside_the_handler_is_refused() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nPRINT ERL\nEND\nh:\nRESUME NEXT\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL outside the error handler")), "{:?}", emitted.refused);
 }

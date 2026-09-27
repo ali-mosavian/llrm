@@ -79,7 +79,7 @@ CONFIGS = {
 
 # Switches a particular program needs, on top of the configuration's own. /X is
 # what lets an error handler RESUME, and all three compilers take it.
-EXTRA = {"divmod": "/X", "errent": "/X", "onerr": "/X"}
+EXTRA = {"erlnum": "/X", "divmod": "/X", "errent": "/X", "onerr": "/X"}
 
 
 def switches_for(config: Config, program: str) -> str:
