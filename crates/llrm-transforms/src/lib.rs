@@ -5,3 +5,7 @@
 pub mod canonical;
 pub mod edges;
 pub mod loopsimplify;
+pub mod profit;
+// Not ported, meaning nothing where a value is whole: `wholephis` and
+// `wholestores` joined word halves of the old MIR's split values (called
+// from `algebraic`).
