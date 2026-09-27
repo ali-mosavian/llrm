@@ -631,8 +631,11 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     let width = _width(unit, Operand::Value(result))?;
     let op = unit.function.instruction(inst);
     if matches!(op.opcode, Opcode::Load { volatile: false, .. }) {
-        let reference = MemRef::of(unit, inst)?;
-        return _read(_cell(here?, &_addressed(unit, &reference, known)).as_ref(), width);
+        let reference = _addressed(unit, &MemRef::of(unit, inst)?, known);
+        if let Some(bits) = crate::memory::constant_bits(unit, &reference) {
+            return Some(Known::new(bits, width));
+        }
+        return _read(_cell(here?, &reference).as_ref(), width);
     }
     if op.opcode == Opcode::Cast(CastOp::Trunc) {
         return _read(_operand(unit, op.operands[0], known, here).as_ref(), width);

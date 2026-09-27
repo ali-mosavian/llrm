@@ -72,7 +72,7 @@ pub fn decided(context: &mut Context, layout: &DataLayout, function: &mut Functi
 
 /// `decided`, `analyses` holding what is known of `function`.
 fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> Result<bool, String> {
-    let threaded = _threaded(context, function);
+    let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
         analyses.invalidate(&PreservedAnalyses::none());
     }
@@ -235,6 +235,52 @@ pub fn _executable_successors(
         return None;
     }
     Some(all)
+}
+
+/// A predecessor that only jumps to a block holding just a phi and a
+/// branch on it, and gives the phi a constant, goes straight where that
+/// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
+/// header keeps its edges. Whether anything changed.
+pub fn _phi_threaded(context: &mut Context, function: &mut Function) -> Result<bool, String> {
+    let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
+    let mut changed = false;
+    for block in function.layout().to_vec() {
+        let instructions = function.block(block).instructions().to_vec();
+        let [phi, last] = instructions[..] else { continue };
+        let branch = function.instruction(last);
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else { continue };
+        let reads_only = function.users(condition).len() == 1;
+        let is_phi = function.instruction(phi).opcode == Opcode::Phi;
+        if headers.contains(&cfg::id(block)) || branch.opcode != Opcode::Br || !is_phi || function.instruction(phi).result != Some(condition) || !reads_only {
+            continue;
+        }
+        for (value, from) in crate::lcssa::arms(function, phi) {
+            let Operand::Constant(id) = value else { continue };
+            let ConstantKind::Int(bits) = context.get(id).kind else { continue };
+            let target = if bits & 1 == 1 { taken } else { other };
+            let jump = function.terminator(from).expect("a terminator");
+            let only_jumps = function.instruction(jump).operands == [Operand::Block(block)];
+            if !only_jumps || target == block || function.predecessors(target).contains(&from) {
+                continue;
+            }
+            // What the target's phis took from `block` they now take from `from` too.
+            for one in edges::phis(function, target) {
+                let mut incoming = crate::lcssa::arms(function, one);
+                let (carried, _) = *incoming.iter().find(|(_, source)| *source == block).expect("an arm from the block");
+                incoming.push((if carried == Operand::Value(condition) { value } else { carried }, from));
+                function.set_operands(one, crate::lcssa::from_arms(&incoming));
+            }
+            let kept = crate::lcssa::arms(function, phi).into_iter().filter(|(_, source)| *source != from).collect::<Vec<_>>();
+            function.set_operands(phi, crate::lcssa::from_arms(&kept));
+            function.set_operands(jump, vec![Operand::Block(target)]);
+            changed = true;
+        }
+    }
+    if changed {
+        cfg::_unreachable(context, function);
+        transform::_trivial_phis(function)?;
+    }
+    Ok(changed)
 }
 
 /// Blocks holding only a jump bypassed, where what they jump to has no

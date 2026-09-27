@@ -431,6 +431,9 @@ fn _inputs(
     let op = unit.function.instruction(inst);
     if let Opcode::Load { .. } = op.opcode {
         let reference = queries.resolve(&MemRef::of(unit, inst)?);
+        if let Some(bits) = crate::memory::constant_bits(unit, &reference) {
+            return Some(vec![decoded(&bits, rule.inputs[0])?]);
+        }
         let bits = consts::_cell(here?, &reference)?;
         return Some(vec![decoded(&bits.n, rule.inputs[0])?]);
     }

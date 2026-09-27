@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
+    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
     rotate, strength, unroll, unswitch,
 };
 
@@ -189,6 +189,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
+    // As LLVM's O2 runs GlobalOpt before the function pipeline.
+    manager.add_module(globalopt::GlobalOpt);
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.

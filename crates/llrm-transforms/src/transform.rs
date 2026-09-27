@@ -105,8 +105,9 @@ pub fn _comparison(function: &Function, block: BlockId, branch: InstId) -> Optio
 }
 
 /// Resolve single-valued joins after an edge disappears: each phi keeps
-/// only its predecessors' inputs, and one naming a single other value is
-/// that value.
+/// only its predecessors' inputs, one naming a single other value is that
+/// value, and one with an earlier phi's arms is that phi (LLVM's
+/// `EliminateDuplicatePHINodes`).
 pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
     let predecessors = function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
     loop {
@@ -127,10 +128,37 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                 }
             }
         }
-        if !changed {
+        if !_duplicate_phis(function)? && !changed {
             return Ok(());
         }
     }
+}
+
+/// Each phi whose arms, edge for edge, are an earlier phi's in its block
+/// replaced by that phi. Whether any was.
+fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
+    let mut changed = false;
+    for block in function.layout().to_vec() {
+        let mut seen = std::collections::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::new();
+        for phi in edges::phis(function, block) {
+            let op = function.instruction(phi);
+            let (ty, result) = (op.ty, op.result.expect("a phi's value"));
+            let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
+            incoming.sort_by_key(|&(from, _)| from);
+            match seen.entry((ty, incoming)) {
+                std::collections::hash_map::Entry::Occupied(earlier) => {
+                    function.replace_all_uses_with(result, Operand::Value(*earlier.get()));
+                    function.set_operands(phi, Vec::new());
+                    function.erase(phi)?;
+                    changed = true;
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(result);
+                }
+            }
+        }
+    }
+    Ok(changed)
 }
 
 // CSE only ever removes an operation whose whole answer is in its operands.
@@ -977,5 +1005,31 @@ b2:
 }
 "
         );
+    }
+
+    /// SROA built a loop phi per slice beside promote's identical ones,
+    /// and nbody carried twelve i32 values twice.
+    #[test]
+    fn a_phi_with_an_earlier_phis_arms_is_that_phi() {
+        let mut module = parsed(
+            "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  %r = phi i16 [ %x, %b0 ], [ %t, %b1 ]
+  %s = phi i16 [ %t, %b1 ], [ %x, %b0 ]
+  %t = add i16 %r, 1
+  %u = add i16 %s, %t
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %u
+}
+",
+        );
+        _trivial_phis(module.function_mut("f").unwrap().1).unwrap();
+        let after = printed(&module);
+        assert!(after.matches("phi").count() == 1 && after.contains("add i16 %r, %t"), "{after}");
     }
 }
