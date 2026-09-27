@@ -9,7 +9,7 @@
 # llrm-c raises straight to the old MIR.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${1:-$root/crates/llrm-analysis/corpus}
+out=${1:-$root/crates/opt/llrm-analysis/corpus}
 demos=${QBDEMOS:-$HOME/work/qbdemos/orig}
 cargo build -q --release --bin llrm-qb --bin llrm-nib --bin hir-mir --manifest-path "$root/Cargo.toml" 2>/dev/null || { echo "mir-corpus: build fails" >&2; exit 2; }
 bin=$root/target/release
@@ -64,5 +64,5 @@ done
 for source in $(find "$root/tests/fixtures/nib" "$root/examples" -name '*.nib' | sort); do
   nib "nib-$(echo "${source#"$root"/}" | sed -e 's|^tests/fixtures/nib/||' -e 's|/|-|g' -e 's/\.nib$//')" "$source"
 done
-nib nib-runtime "$root/crates/llrm-nib/src/runtime/runtime.nib"
+nib nib-runtime "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib"
 echo "emitted: $(ls "$out/emitted" | wc -l), optimized: $(ls "$out/optimized" | wc -l), $(du -sh "$out" | cut -f1)"

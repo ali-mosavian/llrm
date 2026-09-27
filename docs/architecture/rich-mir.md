@@ -1,6 +1,6 @@
 # Rich portable MIR
 
-Status: steps 0 to 3 landed (`tools/baseline.sh`, `crates/llrm-mir`, the
+Status: steps 0 to 3 landed (`tools/baseline.sh`, `crates/ir/llrm-mir`, the
 rewrite ledger, LIR meta instructions, LLVM IR in `llrm-mir`); the compiler
 still runs on the old MIR.
 
@@ -142,7 +142,7 @@ The round trip is `test_round_trip_is_byte_identical` and
 
 No old field is deleted in this step.
 
-Landed as `crates/llrm-mir`, which has no dependencies: MIR cannot name a
+Landed as `crates/ir/llrm-mir`, which has no dependencies: MIR cannot name a
 decoder, object file or target, and a test keeps it that way. The adapter and
 compatibility widths wait for the first producer in step 3, since nothing
 emits the new MIR yet. Its private text syntax gives way to LLVM's in

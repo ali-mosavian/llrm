@@ -37,7 +37,7 @@ fails when a name is absent from the generated grammar or opcode catalog.
 ## Adapted, not copied
 
 The runtime parser boundary is implemented locally under
-`crates/qbfront/src/generated_parser/`:
+`crates/frontends/qbfront/src/generated_parser/`:
 
 | qbasic-port reference | Local responsibility |
 |---|---|

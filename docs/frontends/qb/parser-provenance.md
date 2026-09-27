@@ -39,15 +39,15 @@ license basis explicitly rather than inventing one.
 
 ## Current in-tree result
 
-Production currently uses the typed recursive parser under `crates/qbfront`.
+Production currently uses the typed recursive parser under `crates/frontends/qbfront`.
 Alongside it, the pinned port's `crates/buildprs` generator sources are
-vendored under `crates/qbfront/crates/buildprs`, and the recovered production
-grammar inputs are `crates/qbfront/grammar/qbasbnf.prs` and
-`crates/qbfront/grammar/peropcod.txt`. Captured `buildprs.exe` output remains
-under `crates/qbfront/fixtures/buildprs/qbasic-1.1` as a golden, not as a
+vendored under `crates/frontends/qbfront/crates/buildprs`, and the recovered production
+grammar inputs are `crates/frontends/qbfront/grammar/qbasbnf.prs` and
+`crates/frontends/qbfront/grammar/peropcod.txt`. Captured `buildprs.exe` output remains
+under `crates/frontends/qbfront/fixtures/buildprs/qbasic-1.1` as a golden, not as a
 production input.
 
-The generated-table parser under `crates/qbfront/src/generated_parser` builds
+The generated-table parser under `crates/frontends/qbfront/src/generated_parser` builds
 the local typed syntax tree directly. It does not import p-code as an IR and
 does not call the recursive parser from generated actions. During migration,
 the recursive parser is the production path and differential oracle; the

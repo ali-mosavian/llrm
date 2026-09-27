@@ -1,6 +1,7 @@
 [workspace]
-members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-bc", "crates/llrm-bcdriver", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
-default-members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-bc", "crates/llrm-bcdriver", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+# qbfront is its own workspace; llrm-qb runs it as a program.
+members = [".", "crates/*/llrm-*"]
+default-members = [".", "crates/*/llrm-*"]
 resolver = "3"
 
 [workspace.package]
@@ -20,21 +21,21 @@ sha2 = "0.10"
 tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
-llrm-support = { path = "crates/llrm-support" }
-llrm-cycles = { path = "crates/llrm-cycles" }
-llrm-omf = { path = "crates/llrm-omf" }
-llrm-bcmachine = { path = "crates/llrm-bcmachine" }
-llrm-bc = { path = "crates/llrm-bc" }
-llrm-bcdriver = { path = "crates/llrm-bcdriver" }
-llrm-hir = { path = "crates/llrm-hir" }
-llrm-mir = { path = "crates/llrm-mir" }
-llrm-graph = { path = "crates/llrm-graph" }
-llrm-analysis = { path = "crates/llrm-analysis" }
-llrm-transforms = { path = "crates/llrm-transforms" }
-llrm-core = { path = "crates/llrm-core" }
-llrm-nib = { path = "crates/llrm-nib" }
-llrm-qb = { path = "crates/llrm-qb" }
-llrm-c = { path = "crates/llrm-c" }
+llrm-support = { path = "crates/support/llrm-support" }
+llrm-cycles = { path = "crates/target/llrm-cycles" }
+llrm-omf = { path = "crates/target/llrm-omf" }
+llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
+llrm-bc = { path = "crates/bc/llrm-bc" }
+llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
+llrm-hir = { path = "crates/ir/llrm-hir" }
+llrm-mir = { path = "crates/ir/llrm-mir" }
+llrm-graph = { path = "crates/opt/llrm-graph" }
+llrm-analysis = { path = "crates/opt/llrm-analysis" }
+llrm-transforms = { path = "crates/opt/llrm-transforms" }
+llrm-core = { path = "crates/backend/llrm-core" }
+llrm-nib = { path = "crates/frontends/llrm-nib" }
+llrm-qb = { path = "crates/frontends/llrm-qb" }
+llrm-c = { path = "crates/frontends/llrm-c" }
 
 [package]
 name = "llrm"

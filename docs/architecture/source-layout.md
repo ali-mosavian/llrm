@@ -2,16 +2,16 @@
 
 | Path | Holds |
 | --- | --- |
-| `crates/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
-| `crates/llrm-cycles` | The instruction-cost model |
-| `crates/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
-| `crates/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
-| `crates/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
-| `crates/llrm-core` | HIR lowering and interpreter, MIR, the optimizer, the x86 backend, and BC raising |
-| `crates/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
-| `crates/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |
-| `crates/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`) |
-| `crates/qbfront` | The QB parser, run by `llrm-qb` as a program, and its compatibility corpus |
+| `crates/support/llrm-support` | Helpers every crate shares: Python-compatible repr and JSON, hashing, code pages, diagnostics |
+| `crates/target/llrm-cycles` | The instruction-cost model |
+| `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
+| `crates/ir/llrm-hir` | The common HIR: model, JSON codec, verifier, escape facts |
+| `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter; nothing produces it yet |
+| `crates/backend/llrm-core` | HIR lowering and interpreter, MIR, the optimizer, the x86 backend, and BC raising |
+| `crates/frontends/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
+| `crates/frontends/llrm-qb` | The QB-family frontend: driver, inline x87, stage dumps |
+| `crates/frontends/llrm-c` | C through Open Watcom's front end (`toolchain/owshim/`) |
+| `crates/frontends/qbfront` | The QB parser, run by `llrm-qb` as a program, and its compatibility corpus |
 | `src/bin` | The `llrm-*` tools, `nibfront` and `nib-lsp` (package `llrm`) |
 | `tests` | Integration tests, fixtures, and the BASIC suite |
 | `bench` | Benchmark programs |

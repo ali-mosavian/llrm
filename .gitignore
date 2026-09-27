@@ -1,6 +1,6 @@
 build/
 /target/
-/crates/qbfront/target/
-/crates/*/target/
+/crates/frontends/qbfront/target/
+/crates/*/*/target/
 .DS_Store
 ._*

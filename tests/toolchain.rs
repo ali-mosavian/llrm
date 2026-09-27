@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/llrm-nib/src/runtime/start.asm");
+    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/frontends/llrm-nib/src/runtime/start.asm");
     let assembled = Command::new(bin.join("jwasm"))
         .args(["-q", "-c", "-Cp", "-Zg", "-omf"])
         .arg(format!("-Fo{}", scratch.path().join("START.OBJ").display()))
@@ -82,7 +82,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/llrm-nib/src/runtime");
+    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }
@@ -113,7 +113,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/llrm-nib/src/runtime");
+    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }

@@ -265,8 +265,8 @@ code-generation: it emits no OMF or executable and supplies no real-mode ABI.
 Its captured output is the known answer that the freestanding real-mode backend
 must reproduce exactly.
 
-The frontend document is accepted by `crates/llrm-hir/src/codec.rs`, `crates/llrm-hir/src/verify.rs`
-and `crates/llrm-core/src/hir/lower.rs`, then follows llrm's shared optimization, lowering,
+The frontend document is accepted by `crates/ir/llrm-hir/src/codec.rs`, `crates/ir/llrm-hir/src/verify.rs`
+and `crates/backend/llrm-core/src/hir/lower.rs`, then follows llrm's shared optimization, lowering,
 allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 
