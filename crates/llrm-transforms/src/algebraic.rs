@@ -371,27 +371,31 @@ fn _bitwise_chain(context: &mut Context, function: &mut Function, inst: InstId) 
     true
 }
 
-/// `x + 0`, `x - 0`, `x | 0`, `x ^ 0`, a shift by 0, `x * 1` and `x & -1`
-/// are `x`; `x * 0` and `x & 0` are 0, and `x | -1` is -1.
 fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
-    let Some((op, left, right, width)) = _binary(context, function, inst) else { return false };
+    let Some(answer) = identity(context, function, inst) else { return false };
+    _forward(function, inst, answer);
+    true
+}
+
+/// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
+/// `x ^ 0`, a shift by 0, `x * 1` and `x & -1` are `x`; `x * 0` and `x & 0`
+/// are 0, and `x | -1` is -1.
+pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
+    let (op, left, right, width) = _binary(context, function, inst)?;
     let commutes = matches!(op, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor);
     let pairs = [(left, right), (right, left)];
-    for &(kept, other) in &pairs[..1 + usize::from(commutes)] {
-        let Some(number) = _integer(context, other) else { continue };
+    pairs[..1 + usize::from(commutes)].iter().find_map(|&(kept, other)| {
+        let number = _integer(context, other)?;
         let all = mask(width);
-        let answer = match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if number == 0 => kept,
-            BinaryOp::Mul if number == 1 => kept,
-            BinaryOp::And if number == all => kept,
-            BinaryOp::Mul | BinaryOp::And if number == 0 => other,
-            BinaryOp::Or if number == all => other,
-            _ => continue,
-        };
-        _forward(function, inst, answer);
-        return true;
-    }
-    false
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if number == 0 => Some(kept),
+            BinaryOp::Mul if number == 1 => Some(kept),
+            BinaryOp::And if number == all => Some(kept),
+            BinaryOp::Mul | BinaryOp::And if number == 0 => Some(other),
+            BinaryOp::Or if number == all => Some(other),
+            _ => None,
+        }
+    })
 }
 
 /// Put a loop-carried operand at the root of an integer `add` tree:

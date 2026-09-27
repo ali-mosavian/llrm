@@ -66,3 +66,31 @@ fn algebraic_keeps_every_corpus_module_verifying_and_settles() {
     });
     assert!(changed > 0, "the corpus has identities to simplify");
 }
+
+/// Summaries are the module's, so asked once per module, not per body.
+#[test]
+fn hoist_keeps_every_corpus_module_verifying_and_settles() {
+    let mut changed = 0;
+    for (name, mut module) in corpus() {
+        let layout = llrm_analysis::testing::layout(&module);
+        let (callees, sizes, metadata) = (llrm_mir::memory::callees(&module), llrm_mir::valuetracking::sizes(&module, &layout), module.metadata.clone());
+        let mut outer = Outer::of(&module, None);
+        outer.require::<llrm_analysis::manager::Summaries>(&module, &layout);
+        let outer = std::rc::Rc::new(outer);
+        for id in bodies(&module) {
+            let mut rounds = 0;
+            loop {
+                let (context, function) = function_mut(&mut module, id);
+                let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, callees: &callees, metadata: &metadata, sizes: &sizes };
+                if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer))) {
+                    break;
+                }
+                assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "hoist: {name}");
+                rounds += 1;
+                assert!(rounds < 64, "hoist: {name} does not settle");
+            }
+            changed += usize::from(rounds > 0);
+        }
+    }
+    assert!(changed > 0, "the corpus has invariant work");
+}

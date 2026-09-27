@@ -129,6 +129,16 @@ impl Accesses {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
     }
 
+    /// What `inst` writes to memory: `writes`, but a volatile access only
+    /// its own bytes, without its order against every other access.
+    pub fn stored(&self, function: &Function, inst: InstId) -> Option<&[MemRef]> {
+        match function.instruction(inst).opcode {
+            Opcode::Load { volatile: true, .. } => Some(&[]),
+            Opcode::Store { volatile: true, .. } => self.references.get(&inst).map(std::slice::from_ref),
+            _ => self.writes(inst),
+        }
+    }
+
     /// What `inst` reads; `None` where it may read anything.
     pub fn reads(&self, inst: InstId) -> Option<&[MemRef]> {
         self.touched.get(&inst).map_or(Some(&[]), |(reads, _)| reads.as_deref())
