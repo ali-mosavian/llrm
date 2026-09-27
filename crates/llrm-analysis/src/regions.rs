@@ -481,7 +481,7 @@ pub fn displaced_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<(Ha
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use llrm_mir::datalayout::DataLayout;
