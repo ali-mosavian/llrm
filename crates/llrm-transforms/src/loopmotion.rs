@@ -3,9 +3,9 @@
 //! after the loop. Adapted from llrm-core's `optimize/loopmotion.rs`, the
 //! port of `qbopt/optimize/loopmotion.py`.
 //!
-//! Whether two accesses meet is `regions::overlapping` of alias's
-//! references, the manager's `Annotated`, asked again after each loop that
-//! changed: a moved store's narrowing was its old block's.
+//! Whether two accesses meet is `regions::overlapping` of the references
+//! and call writes `memoryssa::Accesses` holds, asked again after each loop
+//! that changed: a moved store's narrowing was its old block's.
 //!
 //! What changed with the IR:
 //! - A store is moved, not copied; one that goes with another value has it
@@ -16,8 +16,6 @@
 //!   old refused every call; one with no effect that returns is a value.
 //! - A stored cell is in an object (`MemRef::object`), as the old `Segment`
 //!   and `Frame` spaces were, with no selector.
-//! - A call stops `_stored_at` where `Accesses` says it may write the
-//!   cell, as the old read its `stores`.
 //! - `root` followed copies, which have no instruction.
 //!
 //! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
@@ -30,7 +28,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{self, Calls, HeldCells, Known, masked};
-use llrm_analysis::manager::Annotated;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, regions};
@@ -99,11 +96,9 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             continue;
         }
         let current = fresh.as_mut().unwrap_or(&mut *analyses);
-        let annotated = current.get::<Annotated>(context, layout, function);
-        let references = Result::as_ref(&*annotated).map_err(String::clone)?;
         let accesses = Accesses::managed(context, layout, function, current)?;
         let unit = Unit::within(context, layout, function, current.outer());
-        let moved = _moved(&unit, &accesses, &loop_, &inside, references, &predecessors, &successors, &dominators, source)?;
+        let moved = _moved(&unit, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;
         }
@@ -140,13 +135,13 @@ fn _moved(
     accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
-    references: &IndexMap<InstId, MemRef>,
     predecessors: &BTreeMap<i64, BTreeSet<i64>>,
     successors: &BTreeMap<i64, Vec<i64>>,
     dominators: &BTreeMap<i64, BTreeSet<i64>>,
     source: i64,
 ) -> Result<Vec<(InstId, Option<Stored>)>, String> {
     let function = unit.function;
+    let references = &accesses.references;
     let empty = BTreeSet::new();
     let header_dominators = dominators.get(&loop_.header).unwrap_or(&empty);
     let defined_in = |value: ValueId| match function.value(value).def {
@@ -174,7 +169,7 @@ fn _moved(
     let entry = outside[0];
     let nonempty = induction::nonempty(unit, loop_);
     let invariant = if nonempty { induction::invariant(function, &loop_.body) } else { induction::Invariant::default() };
-    let mut exit = _Exit { unit, accesses, references, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
+    let mut exit = _Exit { unit, accesses, predecessors, entry: cfg::id(function.entry().expect("an entry")), memory: None };
     for &inst in operations {
         if moved.iter().any(|(one, _)| *one == inst) || !unobserved(inst) || !reaches(function.instruction(inst).operands[1]) {
             continue;
@@ -209,7 +204,6 @@ fn _invariant_value(function: &Function, inst: InstId, invariant: &induction::In
 struct _Exit<'a> {
     unit: &'a Unit<'a>,
     accesses: &'a Accesses,
-    references: &'a IndexMap<InstId, MemRef>,
     predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
     entry: i64,
     memory: Option<HeldCells>,
@@ -248,19 +242,12 @@ impl _Exit<'_> {
         let block = cfg::block(at);
         for &inst in operations(function, block).iter().rev() {
             let op = function.instruction(inst);
-            match op.opcode {
-                Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } | Opcode::Invoke(_) => return false,
-                Opcode::Call(_) => match self.accesses.writes(inst) {
-                    Some(written) if written.iter().all(|one| !regions::overlapping(reference, one, None, None, unit.program).unwrap_or(true)) => continue,
-                    _ => return false,
-                },
-                Opcode::Store { .. } => {}
-                _ => continue,
-            }
-            let Some(written) = self.references.get(&inst) else { return false };
-            if !regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true) {
+            let Some(writes) = self.accesses.stored(function, inst) else { return false };
+            let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
+            if !writes.iter().any(overlaps) {
                 continue;
             }
+            let (Opcode::Store { volatile: false, .. }, Some(written)) = (&op.opcode, self.accesses.references.get(&inst)) else { return false };
             if let Some(wanted) = _known(unit, expected) {
                 let fact = consts::initialized(unit, inst, reference).or_else(|| self.after(inst, reference));
                 if fact == Some(wanted) {

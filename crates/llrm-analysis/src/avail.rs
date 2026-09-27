@@ -191,7 +191,7 @@ impl Stored {
     fn new(unit: &Unit, accesses: &Accesses, private: Option<&dyn Fn(&MemRef) -> bool>) -> Self {
         let mut number: IndexMap<MemRef, usize> = IndexMap::default();
         for (_, inst) in unit.function.walk() {
-            if let Some(cell) = stored_cell(unit, accesses, inst) {
+            for cell in stored_cell(unit, accesses, inst).into_iter().chain(accesses.fills(inst).iter().cloned()) {
                 let next = number.len();
                 number.entry(cell).or_insert(next);
             }
@@ -262,12 +262,11 @@ impl Solve<'_, '_> {
         let mut overwritten = overwritten.clone();
         for &inst in unit.function.block(cfg::block(block)).instructions().iter().rev() {
             let opcode = &unit.function.instruction(inst).opcode;
-            let volatile = matches!(opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. });
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
             // and not an address this cannot resolve.
-            let shielded = self.private.is_some() && !volatile;
-            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.writes(inst)) else {
+            let shielded = self.private.is_some();
+            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.stored(unit.function, inst)) else {
                 if shielded && call {
                     overwritten.intersect_with(&stored.private);
                 } else {
@@ -289,16 +288,34 @@ impl Solve<'_, '_> {
             for reference in loads.iter().chain(stores) {
                 self.clobber(&mut overwritten, inst, reference, shielded && (call || !reference.named()));
             }
+            // What a call fills it writes before reading, unless it may read it otherwise.
+            for fill in self.accesses.fills(inst) {
+                let at = stored.number[fill];
+                if !loads.iter().any(|one| self.reaches(inst, one, at, shielded && (call || !one.named()))) {
+                    overwritten.insert(at);
+                }
+            }
         }
         (found, overwritten)
+    }
+
+    /// Whether an access through `reference` at `inst` may touch cell `at`,
+    /// for all the index knows; an `unnamed` one cannot reach a private cell.
+    fn within(&self, inst: InstId, reference: &MemRef, at: usize, unnamed: bool) -> bool {
+        let stored = &self.stored;
+        !(unnamed && stored.private.contains(at)) && !self.escaped.is_some_and(|escaped| escaped.apart(inst, reference, &stored.cells[at]))
+    }
+
+    /// Whether an access through `reference` at `inst` may touch cell `at`.
+    fn reaches(&self, inst: InstId, reference: &MemRef, at: usize, unnamed: bool) -> bool {
+        self.within(inst, reference, at, unnamed) && may_clobber(self.unit, None, &self.stored.cells[at], reference)
     }
 
     /// Forget the cells an access through `reference` at `inst` may touch;
     /// an `unnamed` one cannot reach a private cell.
     fn clobber(&self, overwritten: &mut Bits, inst: InstId, reference: &MemRef, unnamed: bool) {
         let stored = &self.stored;
-        let apart = |at: usize| self.escaped.is_some_and(|escaped| escaped.apart(inst, reference, &stored.cells[at]));
-        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at)) && !apart(*at);
+        let live = |at: &usize| overwritten.contains(*at) && self.within(inst, reference, *at, unnamed);
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
             None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
             Some(buckets) => buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),

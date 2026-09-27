@@ -1424,7 +1424,7 @@ impl<'a, 't> Body<'a, 't> {
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
+        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register, promises: Vec::new() });
     }
 
     fn call(&mut self, call: &hir::Call) -> R<Got> {

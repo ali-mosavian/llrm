@@ -247,6 +247,14 @@ impl Function {
         Ok(())
     }
 
+    /// Adds `attr` to the call `inst`'s argument `index`, as LLVM's
+    /// `CallBase::addParamAttr`.
+    pub fn add_argument_attr(&mut self, inst: InstId, index: usize, attr: crate::opcode::Attribute) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+        info.argument_attrs[index].push(attr);
+        self.changes.push(Change::Rewritten(inst));
+    }
+
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));

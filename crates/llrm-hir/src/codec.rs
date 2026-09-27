@@ -190,6 +190,9 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
+        if !self.promises.is_empty() {
+            out.insert("promises".to_owned(), self.promises._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -206,6 +209,7 @@ impl _Plain for model::ProcedureAbi {
         Json::Dict(out)
     }
 }
+plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
 plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", unaliased => "unaliased", readonly => "readonly");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
@@ -651,6 +655,7 @@ made_records!(
     CellWriters,
     RuntimePromises,
     Promise,
+    ArgumentPromise,
     Type,
     Place,
     Value,
@@ -974,6 +979,7 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
+        ("promises", _Hint::Tuple(&_Hint::Record(&ARGUMENT_PROMISE)), false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -983,8 +989,15 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
+            promises: _default(args, "promises", Vec::new())?,
         })
     },
+};
+
+static ARGUMENT_PROMISE: _Record = _Record {
+    name: "ArgumentPromise",
+    fields: &[("operand", _Hint::Int, true), ("bytes", _Hint::Int, true)],
+    build: |args| _object(model::ArgumentPromise { operand: _required(args, "operand")?, bytes: _required(args, "bytes")? }),
 };
 
 static CALLABLE: _Record = _Record {

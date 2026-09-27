@@ -122,6 +122,9 @@ struct CallAbi {
     order: Vec<usize>,
     caller_cleanup: bool,
     callee: Option<u32>,
+    /// Operands the callee writes a prefix of before reading any, reading
+    /// none and keeping no copy: operand, bytes.
+    fills: Vec<(usize, usize)>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -5384,6 +5387,7 @@ impl Compiler {
                     Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
                 ],
             );
+            self.filled(2, destination_width);
             return Ok(());
         }
         let (source_place, source_type, source_width) = match source {
@@ -5414,6 +5418,7 @@ impl Compiler {
                 Operand::Constant(INTEGER, Number::Integer(destination_width as i64)),
             ],
         );
+        self.filled(2, destination_width);
         Ok(())
     }
 
@@ -8818,6 +8823,12 @@ impl Compiler {
         }
     }
 
+    /// The call just emitted fills its fixed-length destination `operand`,
+    /// `bytes` wide: B$ASSN pads or truncates to it.
+    fn filled(&mut self, operand: usize, bytes: usize) {
+        self.calls.last_mut().expect("a call just emitted").fills.push((operand, bytes));
+    }
+
     fn emit_runtime_call(&mut self, callee: &str, results: Vec<u32>, operands: Vec<Operand>) {
         let order = (0..operands.len()).collect();
         self.emit_call(callee, results, operands, order, false);
@@ -8837,6 +8848,7 @@ impl Compiler {
             order: vec![0, 1],
             caller_cleanup: false,
             callee: None,
+            fills: Vec::new(),
         });
         self.blocks[self.current_block]
             .instructions
@@ -8879,6 +8891,7 @@ impl Compiler {
             order,
             caller_cleanup,
             callee: symbol,
+            fills: Vec::new(),
         });
         self.blocks[self.current_block]
             .instructions
@@ -9241,7 +9254,18 @@ impl Compiler {
                     }
                     write!(out, "{number}").unwrap();
                 }
-                out.push_str("]}");
+                out.push(']');
+                if !call.fills.is_empty() {
+                    out.push_str(",\"promises\":[");
+                    for (index, (operand, bytes)) in call.fills.iter().enumerate() {
+                        if index != 0 {
+                            out.push(',');
+                        }
+                        write!(out, "{{\"bytes\":{bytes},\"operand\":{operand}}}").unwrap();
+                    }
+                    out.push(']');
+                }
+                out.push('}');
             }
             out.push_str("],\"entry\":1,\"error_handler\":");
             match function.error_handler {

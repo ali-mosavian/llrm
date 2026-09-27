@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use llrm_mir::opcode::Attribute;
 use llrm_mir::{BlockId, Constant, ConstantKind, Operand as Value, TypeId};
 
 use super::{Body, Emit};
@@ -139,10 +140,15 @@ impl Body<'_, '_, '_> {
         Ok(Some(None))
     }
 
-    /// A call, an invoke to the pad where it may raise outside the handler.
-    pub(super) fn raising_call(&mut self, instruction: i64, raises: bool, convention: u32, ty: TypeId, callee: Value, arguments: &[Value]) -> Emit<Option<Value>> {
+    /// A call, an invoke to the pad where it may raise outside the handler;
+    /// `filled` its arguments the callee writes a prefix of before reading
+    /// any, by index and byte count.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn raising_call(&mut self, instruction: i64, raises: bool, convention: u32, ty: TypeId, callee: Value, arguments: &[Value], filled: &[(usize, i64)]) -> Emit<Option<Value>> {
         let Some(handling) = self.handling.as_mut().filter(|one| raises && !one.handling) else {
-            return Ok(self.b.call_as(convention, ty, callee, arguments, ""));
+            let answered = self.b.call_as(convention, ty, callee, arguments, "");
+            self.promised(filled);
+            return Ok(answered);
         };
         let site = handling.statements.partition_point(|one| one.instruction <= instruction).checked_sub(1).ok_or("a call before the first statement")?;
         handling.raising.insert(site);
@@ -151,8 +157,18 @@ impl Body<'_, '_, '_> {
         self.b.store(number, pointer, false);
         let next = self.b.block("");
         let answered = self.b.invoke_as(convention, ty, callee, arguments, next, pad, "");
+        self.promised(filled);
         self.b.position(next);
         Ok(answered)
+    }
+
+    /// The call just emitted's promises of `filled` arguments.
+    fn promised(&mut self, filled: &[(usize, i64)]) {
+        for &(index, bytes) in filled {
+            self.b.argument_attr(index, Attribute::Flag("nocapture".to_owned()));
+            self.b.argument_attr(index, Attribute::Flag("writeonly".to_owned()));
+            self.b.argument_attr(index, Attribute::Initializes(vec![(0, bytes)]));
+        }
     }
 
     /// Ends each RESUME NEXT and RESUME with its switch on the site.

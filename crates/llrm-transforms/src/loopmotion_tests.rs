@@ -133,6 +133,17 @@ fn test_an_accumulator_stores_its_phi_once_after_the_loop() {
     assert!(text.contains("b2:\n  %s1 = add i16 %s, %i\n  %next") && text.contains("b3:\n  store i16 %s, ptr @acc\n"), "{text}");
 }
 
+/// SUMTHREE: a call between the seed and the loop that writes only
+/// another cell leaves the seed standing, as `Accesses` says. Any writing
+/// call kept the accumulator stored every trip.
+#[test]
+fn a_call_writing_another_cell_leaves_the_seed() {
+    let seeded = accumulator("  store i16 5, ptr @acc\n  call void @w(ptr @m)\n");
+    let text = format!("@m = global i16 0\n\ndeclare void @w(ptr) memory(argmem: write)\n\n{seeded}");
+    let (text, changed) = sunk(&text.replace("declare", "define").replace("memory(argmem: write)", "memory(argmem: write) {\nb:\n  store i16 1, ptr %0\n  ret void\n}"), TRIPS);
+    assert!(changed && text.contains("b3:\n  store i16 %s, ptr @acc\n"), "{text}");
+}
+
 #[test]
 fn test_an_accumulator_without_zero_trip_initialization_stays_in_the_loop() {
     kept(&accumulator(""), TRIPS);
