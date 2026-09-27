@@ -109,12 +109,12 @@ pub fn touched(node: &Node, contracts: &IndexMap<i64, Contract>, answer: &[Regis
     if matches!(node, Node::Opaque(opaque) if opaque.insn.insn.code() == Code::Into) {
         return (Words::new(), Words::from([Word::Flags]));
     }
-    if let Node::Call(call) = node {
-        // The frame's exit hands AX and DX through and restores the rest.
-        if call.name == FRAME_EXIT {
-            return (whole([Register::EBX, Register::ECX, Register::ESI, Register::EDI, FLAGS]), Words::new());
-        }
-        if let Some(known) = contracts.get(&(call.insn.at as i64)).and_then(call_touches) {
+    // The frame's exit hands AX and DX through and restores the rest.
+    if matches!(node, Node::Call(call) if call.name == FRAME_EXIT) {
+        return (whole([Register::EBX, Register::ECX, Register::ESI, Register::EDI, FLAGS]), Words::new());
+    }
+    if node.semantics().op == Operation::Call {
+        if let Some(known) = contracts.get(&(span(node).0 as i64)).and_then(call_touches) {
             return known;
         }
     }
@@ -265,6 +265,11 @@ pub struct Facts<'m> {
     pub contracts: IndexMap<i64, Contract>,
     /// Each procedure's CodeView record, by its entry.
     pub procedures: IndexMap<usize, cvinfo::Procedure>,
+    /// Where /V and /W's event-poll adapter is, which each statement calls.
+    pub event_stub: Option<usize>,
+    /// Whether the runtime enters this module's code other than by a call:
+    /// an error or event handler, or a RESUME target.
+    pub handlers: bool,
 }
 
 impl<'m> Facts<'m> {
@@ -276,6 +281,15 @@ impl<'m> Facts<'m> {
         let header = blocks::has_header(found);
         let procedures: IndexMap<usize, cvinfo::Procedure> =
             if header { cvinfo::parse(&found.records).procedures.into_iter().map(|one| (one.offset as usize, one)).collect() } else { IndexMap::default() };
+        // A call to the event-poll adapter is a call to B$EVCK.
+        let event_stub = blocks::event_stub(found);
+        let polls: IndexMap<i64, String> = decoded
+            .iter()
+            .flat_map(|one| one.nodes.iter())
+            .filter(|node| polls(node, event_stub))
+            .map(|node| (span(node).0 as i64, crate::runtime::EVENT_POLL.to_owned()))
+            .collect();
+        contracts.extend(runtime::per_call(&polls, module::family(&found.records).value(), &BTreeSet::new()));
         let mut bodies = Vec::new();
         for one in decoded {
             let nodes: IndexMap<i64, Arc<Node>> = one.nodes.iter().map(|node| (span(node).0 as i64, node.clone())).collect();
@@ -319,7 +333,13 @@ impl<'m> Facts<'m> {
         for body in &bodies {
             contracts.extend(carried(body, &contracts));
         }
-        Ok(Facts { found, bodies, contracts, procedures })
+        let handlers = bodies.iter().any(|body| matches!(body.body.kind, BodyKind::ErrorHandler | BodyKind::EventHandler | BodyKind::ResumeEntry));
+        Ok(Facts { found, bodies, contracts, procedures, event_stub, handlers })
+    }
+
+    /// Whether `node` calls the event-poll adapter.
+    pub fn event_poll(&self, node: &Node) -> bool {
+        polls(node, self.event_stub)
     }
 
     /// The contract of the call at `at`.
@@ -330,6 +350,11 @@ impl<'m> Facts<'m> {
     pub fn family(&self) -> module::Family {
         module::family(&self.found.records)
     }
+}
+
+fn polls(node: &Node, stub: Option<usize>) -> bool {
+    let what = node.semantics();
+    what.op == Operation::Call && !what.indirect && stub.is_some() && what.target.map(|one| one as usize) == stub
 }
 
 /// How a callee answers.

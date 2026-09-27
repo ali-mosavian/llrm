@@ -327,3 +327,25 @@ fn a_string_copy_moves_its_words() {
         assert_eq!(printed(fixture, FPDEEP.len()), FPDEEP, "{fixture}");
     }
 }
+
+/// /V and /W poll events at each statement: through a near call to the
+/// module's adapter (PDS, VBDOS) or by calling B$EVCK (QB). Both were
+/// refused, "a near call (GOSUB)" and "B$EVCK's control is unknown".
+#[test]
+fn an_event_poll_is_a_call_to_evck() {
+    let expected = vec![33_818_120, 524_246_911, 490_428_791, 558_065_031, 52_774_761, -305_419_896, 524_246_911, 65_536, 65_535, 258, 772];
+    for fixture in ["arith-q-evt.obj", "arith-p-evt.obj", "arith-v-evt.obj"] {
+        assert_eq!(printed(fixture, 11), expected, "{fixture}");
+    }
+}
+
+/// ON GOTO: B$OGTA goes to the table entry after its call that BX
+/// numbers. Refused before, "B$OGTA's control is inline-table".
+#[test]
+fn on_goto_goes_to_the_entry_its_index_numbers() {
+    let (a, b) = (305_419_896_i64, 252_645_135_i64);
+    let expected = vec![1, a & b, 1, a + b, 2, a | b, 2, a - b, 3, a ^ b, 3, -a];
+    for fixture in ["jumps-q-o.obj", "jumps-p-g2.obj", "jumps-v-g3.obj"] {
+        assert_eq!(printed(fixture, 12), expected, "{fixture}");
+    }
+}

@@ -54,6 +54,17 @@ pub const MODULE: &str = "<module>";
 pub struct Raised {
     pub module: Module,
     pub outcomes: Vec<(String, Result<(), String>)>,
+    pub placement: Placement,
+}
+
+/// Where the object put what the raise made globals of, for a writer that
+/// lays the data out again: each carved object's segment (by the object's
+/// own index), first byte and global; and the segments, such as the code
+/// segment, that data points into but that hold no object.
+#[derive(Clone, Debug, Default)]
+pub struct Placement {
+    pub objects: Vec<(i64, i64, llrm_mir::GlobalId)>,
+    pub bases: BTreeMap<i64, llrm_mir::GlobalId>,
 }
 
 impl Raised {
@@ -64,11 +75,16 @@ impl Raised {
 
 /// The module raised whole, or the first function refused.
 pub fn raise(found: &found_module::Module) -> Result<Module, Refusal> {
+    raise_placed(found).map(|(module, _)| module)
+}
+
+/// `raise`, and where the object put its globals.
+pub fn raise_placed(found: &found_module::Module) -> Result<(Module, Placement), Refusal> {
     let raised = raise_each(found)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
-        None => Ok(raised.module),
+        None => Ok((raised.module, raised.placement)),
     }
 }
 
@@ -121,6 +137,10 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
     let mut procedures = BTreeMap::new();
     let mut functions = Vec::new();
     for (index, body) in facts.bodies.iter().enumerate() {
+        // Each call to the event-poll adapter is B$EVCK's (emit).
+        if body.body.kind == BodyKind::EventStub && facts.event_stub == Some(body.body.seed) {
+            continue;
+        }
         let name = function_name(&body.body);
         let (answer, popped) = match &body.interface {
             Some(Ok(interface)) => (interface.answer.clone(), interface.popped),
@@ -163,5 +183,6 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
     }
     cells::promise(&mut module, &facts, &objects);
     tags::tag(&mut module);
-    Ok(Raised { module, outcomes })
+    let placement = objects.placement();
+    Ok(Raised { module, outcomes, placement })
 }
