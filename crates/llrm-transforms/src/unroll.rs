@@ -39,7 +39,7 @@ use llrm_graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::HashMap;
@@ -101,10 +101,10 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     let graph = cfg::graph(function);
     let mut found = None;
     for loop_ in cfg::Shape::of(function).loops {
-        let Some(shape) = _shape(function, &graph, &loop_) else {
+        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
@@ -132,17 +132,16 @@ fn _work(function: &Function, block: BlockId) -> Vec<InstId> {
     operations(function, block).into_iter().filter(|&inst| !function.instruction(inst).opcode.is_terminator()).collect()
 }
 
-/// Whether `op` may run once a trip in a straight line: no control, no
-/// call, no volatile access.
-fn _repeatable(op: &Instruction) -> bool {
-    !matches!(
-        op.opcode,
-        Opcode::Call(_) | Opcode::LandingPad { .. } | Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
-    ) && !op.opcode.is_terminator()
+/// Whether `inst` may run once a trip in a straight line: no control, no
+/// call out, no volatile access.
+fn _repeatable(unit: &memory::Unit, inst: InstId) -> bool {
+    let op = unit.function.instruction(inst);
+    !unit.calls_out(inst) && !matches!(op.opcode, Opcode::LandingPad { .. } | Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }) && !op.opcode.is_terminator()
 }
 
 /// `loop_`'s shape, where it is one this can expand.
-fn _shape(function: &Function, graph: &[cfg::Block], loop_: &Loop) -> Option<Shape> {
+fn _shape(unit: &memory::Unit, graph: &[cfg::Block], loop_: &Loop) -> Option<Shape> {
+    let function = unit.function;
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let predecessors = loops::predecessors(graph);
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
@@ -180,14 +179,14 @@ fn _shape(function: &Function, graph: &[cfg::Block], loop_: &Loop) -> Option<Sha
         return None;
     }
     let repeated = path.iter().chain([&latch]).flat_map(|&at| _work(function, cfg::block(at))).collect::<Vec<_>>();
-    if repeated.iter().any(|&inst| !_repeatable(function.instruction(inst))) {
+    if repeated.iter().any(|&inst| !_repeatable(unit, inst)) {
         return None;
     }
     // The header's work runs once more than the body: it may not write.
     let tested = _work(function, cfg::block(header));
     if tested.iter().any(|&inst| {
         let op = function.instruction(inst);
-        !_repeatable(op) || matches!(op.opcode, Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Alloca { .. })
+        !_repeatable(unit, inst) || matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. })
     }) {
         return None;
     }

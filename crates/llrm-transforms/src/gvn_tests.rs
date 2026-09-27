@@ -295,3 +295,80 @@ fn a_bare_pass_manager_takes_every_call_for_unknown() {
     let bare = crate::testing::summarized(&module, Gvn::default(), false, &[&[]]);
     assert!(precise.contains("%r = add i16 %a, %a") && !bare.contains("%r = add i16 %a, %a"), "{precise}\n{bare}");
 }
+
+/// @e may call back into @f, so @h's summary took in @f's: the memset's
+/// write to @f's own frame came with it, and instantiated at @f's call to
+/// @h named @f's %a, which the reload after the call then had to wait for.
+#[test]
+fn a_summary_carries_no_frame_object_of_a_call_back() {
+    let mut module = parsed(&format!(
+        "{}define internal void @h(ptr addrspace(1) %p) {{
+b0:
+  %q = load ptr addrspace(1), ptr addrspace(1) %p
+  store i16 1, ptr addrspace(1) %q
+  call void @e()
+  ret void
+}}
+
+declare void @e()
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+
+define i16 @f() {{
+b0:
+  %a = alloca [4 x i8]
+  %v = alloca ptr addrspace(1)
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 4, i1 false)
+  %c = getelementptr inbounds i8, ptr %a, i16 1
+  store i8 7, ptr %c
+  %vf = addrspacecast ptr %v to ptr addrspace(1)
+  call void @h(ptr addrspace(1) %vf)
+  %x = load i8, ptr %c
+  %y = zext i8 %x to i16
+  ret i16 %y
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run(&mut module).unwrap();
+    let text = printed(&module);
+    assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
+}
+
+/// A view lent to @bump holds a pointer to %values; @bump reads it out
+/// and writes through it, so %values changes though only the view's
+/// address was passed. The reload after the call took the stored 20.
+#[test]
+fn what_a_lent_pointer_holds_is_written_by_the_callee() {
+    let module = parsed(&format!(
+        "{}define internal void @bump(ptr addrspace(1) nocapture %view) {{
+b0:
+  %p = load ptr addrspace(1), ptr addrspace(1) %view
+  %e = getelementptr inbounds i16, ptr addrspace(1) %p, i16 1
+  %x = load i16, ptr addrspace(1) %e
+  %y = add i16 %x, 3
+  store i16 %y, ptr addrspace(1) %e
+  ret void
+}}
+
+define i16 @f() {{
+b0:
+  %values = alloca [3 x i16]
+  %view = alloca ptr addrspace(1)
+  %e = getelementptr inbounds i16, ptr %values, i16 1
+  store i16 20, ptr %e
+  %far = addrspacecast ptr %values to ptr addrspace(1)
+  store ptr addrspace(1) %far, ptr %view
+  %v = addrspacecast ptr %view to ptr addrspace(1)
+  call void @bump(ptr addrspace(1) %v)
+  %r = load i16, ptr %e
+  ret i16 %r
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    crate::testing::summarized(&module, Gvn::default(), true, &[&[]]);
+}

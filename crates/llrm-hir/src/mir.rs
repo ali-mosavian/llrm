@@ -17,7 +17,7 @@ use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKi
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
 /// indexing by 16 bits, 16-bit segments, and 16-bit alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16";
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
@@ -69,8 +69,15 @@ pub fn emit_promised(program: &model::Program, runtime: Option<&Runtime>) -> Vec
 }
 
 fn promised(emitted: &mut Emitted, hir: &model::Module, runtime: &Runtime) {
-    let module = &mut emitted.module;
     let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect::<HashMap<_, _>>();
+    promise(&mut emitted.module, &named, runtime);
+}
+
+/// States `runtime`'s promises of `named`, the cells only a reference
+/// naming them reaches: `!llrm.named` lists them, and a routine that runs
+/// no program code is `nocallback` with an `!llrm.writes` node of the
+/// named cells it writes.
+pub fn promise(module: &mut Module, named: &HashMap<&str, GlobalId>, runtime: &Runtime) {
     let node = |module: &mut Module, globals: Vec<GlobalId>| {
         let operands = globals.into_iter().map(|one| MetadataOperand::Constant(module.reference(one))).collect();
         module.metadata.push(MetadataNode { distinct: false, operands });
@@ -132,15 +139,15 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
     }
 }
 
-/// The `!tbaa` access tags that mark HIR's promise that a far allocation
-/// is disjoint from every place: two siblings under one root.
-struct Tags {
-    place: MetadataId,
-    allocation: MetadataId,
+/// The `!tbaa` access tags that mark a frontend's promise that a far
+/// allocation is disjoint from every place: two siblings under one root.
+pub struct Tags {
+    pub place: MetadataId,
+    pub allocation: MetadataId,
 }
 
 impl Tags {
-    fn new(module: &mut Module) -> Self {
+    pub fn new(module: &mut Module) -> Self {
         let zero = module.context.types.int(64);
         let zero = MetadataOperand::Constant(module.context.int(zero, 0));
         let mut node = |operands: Vec<MetadataOperand>| {
@@ -515,10 +522,10 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let from = value_type(types, tables.types[&operand_type(operand, &values, &places)]);
             let to = value_type(types, tables.types[&values[result]]);
             if let (Ok(from), Ok(to)) = (from, to)
-                && let Some(name) = intrinsic(types, instruction.op, from, to)
+                && let Some((name, parameters)) = intrinsic(types, instruction.op, from, to).map(|name| (name, vec![from])).or_else(|| fixed(types, instruction.op, from))
                 && let Entry::Vacant(slot) = tables.callees.entry(name)
             {
-                let ty = function_type(types, to, vec![from]);
+                let ty = function_type(types, to, parameters);
                 let global = module.add_function(slot.key(), ty, Linkage::External)?;
                 slot.insert(module.reference(global));
             }
@@ -595,6 +602,18 @@ fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> 
         _ => return None,
     };
     Some(format!("llvm.{function}.{float}"))
+}
+
+/// The fixed-point intrinsic a HIR instruction on `ty` calls, and its
+/// parameters: the two operands and the fraction's bits.
+fn fixed(types: &mut Types, op: Op, ty: TypeId) -> Option<(String, Vec<TypeId>)> {
+    let name = match op {
+        Op::FixedMul => "llvm.smul.fix",
+        Op::FixedDiv => "llvm.sdiv.fix",
+        _ => return None,
+    };
+    let bits = types.int_bits(ty)?;
+    Some((format!("{name}.i{bits}"), vec![ty, ty, types.int(32)]))
 }
 
 /// The target intrinsic a HIR instruction is a call of, its operands the
@@ -1134,18 +1153,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     _ => return Err(format!("{op} by a variable fraction")),
                 };
                 let ty = self.b.type_of(a);
-                let bits = self.b.context.types.int_bits(ty).ok_or("fixed point of a non-integer")?;
-                let wide = self.b.context.types.int(bits * 2);
-                let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
-                let fraction = self.b.int(bits * 2, fraction);
-                let result = if op == Op::FixedMul {
-                    let product = self.b.binary(BinaryOp::Mul, a, b, Flags::default(), "");
-                    self.b.binary(BinaryOp::AShr, product, fraction, Flags::default(), "")
-                } else {
-                    let dividend = self.b.binary(BinaryOp::Shl, a, fraction, Flags::default(), "");
-                    self.b.binary(BinaryOp::SDiv, dividend, b, Flags::default(), "")
-                };
-                let result = self.b.cast(CastOp::Trunc, result, ty, "");
+                let (name, parameters) = fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
+                let callee = Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let fraction = self.b.int(32, fraction);
+                let function = function_type(&mut self.b.context.types, ty, parameters);
+                let result = self.b.call(function, callee, &[a, b, fraction], "").expect("a fixed-point value");
                 self.define(instruction, result);
             }
             Op::Fabs | Op::Fsqrt | Op::Fsin | Op::Fcos | Op::Fatan | Op::Flog2 | Op::Fexp2 | Op::Fround => {

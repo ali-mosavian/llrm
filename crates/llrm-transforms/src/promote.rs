@@ -394,7 +394,7 @@ fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, slots: 
                     .iter()
                     .filter(|&at| {
                         *clobbered.borrow_mut().entry((inst, at)).or_insert_with(|| {
-                            writes.iter().any(|written| regions::overlapping(&refs[at], written, None, None, unit.machine).unwrap_or(true))
+                            writes.iter().any(|written| regions::overlapping(&refs[at], written, None, None, unit.program).unwrap_or(true))
                         })
                     })
                     .collect::<Vec<_>>();

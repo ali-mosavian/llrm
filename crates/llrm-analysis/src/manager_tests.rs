@@ -130,7 +130,7 @@ b0:
         let r = value(function(&module, "f"), "r");
         let got = Rc::new(RefCell::new(None));
         let mut passes = PassManager::default();
-        passes.target = dos.then(|| Rc::new(Dos) as Rc<dyn Machine>);
+        passes.target = dos.then(|| Rc::new(Dos::default()) as Rc<dyn Machine>);
         passes.require::<Summaries>();
         let into = Rc::clone(&got);
         passes.add(step(
@@ -154,7 +154,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
     for (name, module) in corpus() {
         let layout = layout(&module);
         let mut outer = Outer::of(&module, None);
-        outer.require::<Summaries>(&module, &layout);
+        outer.require::<Summaries>(&module);
         let summaries = outer.cached::<Summaries>().unwrap();
         let summaries = Result::as_ref(&*summaries).unwrap_or_else(|error| panic!("{name}: {error}"));
         let outer = Rc::new(outer);

@@ -45,10 +45,14 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, far, popped } = machined(module, name, &contracts, &pool, &target)?;
+                let Machined { body, reserve, calls, inline, far, popped } = machined(module, name, &contracts, &pool, &target)?;
                 let body = masm::cleaned_returns(&addressvalues::converted(&body), popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
+                    if let Some(code) = inline.get(at) {
+                        callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+                        continue;
+                    }
                     // A global of this module is called by the name it is defined or declared as.
                     let linked = match module.named(callee) {
                         Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
@@ -114,6 +118,8 @@ pub struct Machined {
     pub body: LirBody,
     pub reserve: i64,
     pub calls: IndexMap<i64, String>,
+    /// The code laid down in place of each call to an inline helper.
+    pub inline: IndexMap<i64, Vec<u8>>,
     pub far: BTreeSet<i64>,
     pub popped: i64,
 }
@@ -122,7 +128,7 @@ pub struct Machined {
 /// constants in `pool`.
 pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
     let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut(), target.cpu);
-    let Selected { body, convention, calls, far, depth } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected { body, convention, calls, inline, far, depth } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
@@ -147,5 +153,5 @@ pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, poo
     }
     let frame = frame.borrow();
     let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
-    Ok(Machined { body, reserve, calls, far, popped: convention.popped })
+    Ok(Machined { body, reserve, calls, inline, far, popped: convention.popped })
 }

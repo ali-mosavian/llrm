@@ -36,7 +36,8 @@ use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{ModuleAnalysis, ModulePass};
-use llrm_mir::target::Machine;
+use llrm_mir::program::ProgramProxy;
+use llrm_mir::target::{Machine, Neutral};
 use llrm_mir::types::Type;
 
 use crate::inline;
@@ -267,8 +268,9 @@ pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
         Some(text) => DataLayout::parse(text)?,
         None => DataLayout::default(),
     };
-    let known = Summaries::run(module, &layout, None)?;
-    let globals = globalsaa::analysis(module, &layout, None)?;
+    let neutral = ProgramProxy::of(module, Rc::new(Neutral));
+    let known = Summaries::run(module, &neutral)?;
+    let globals = globalsaa::analysis(module, &neutral)?;
     let mut declarations = effects::declarations(module);
     let mut changed = Vec::new();
     for id in CallGraph::new(module).bottom_up() {

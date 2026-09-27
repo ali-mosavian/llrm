@@ -6,12 +6,21 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod access;
+pub mod addresses;
+pub mod arrays;
+pub mod cells;
+pub mod copies;
+pub mod division;
 pub mod emit;
 pub mod floats;
+pub mod longs;
 pub mod machine;
 pub mod objects;
+pub mod pairs;
 pub mod runtime;
 pub mod sites;
+pub mod tags;
 
 use std::collections::BTreeMap;
 
@@ -23,7 +32,7 @@ use llrm_mir::{GlobalKind, Linkage, Module, Type};
 
 use crate::emit::Unit;
 use crate::machine::{Answer, Facts, function_name};
-use crate::objects::Objects;
+use crate::objects::{Carving, Objects};
 
 /// A function the raise cannot express, and why. `<module>` names one
 /// that fails before any function.
@@ -45,6 +54,17 @@ pub const MODULE: &str = "<module>";
 pub struct Raised {
     pub module: Module,
     pub outcomes: Vec<(String, Result<(), String>)>,
+    pub placement: Placement,
+}
+
+/// Where the object put what the raise made globals of, for a writer that
+/// lays the data out again: each carved object's segment (by the object's
+/// own index), first byte and global; and the segments, such as the code
+/// segment, that data points into but that hold no object.
+#[derive(Clone, Debug, Default)]
+pub struct Placement {
+    pub objects: Vec<(i64, i64, llrm_mir::GlobalId)>,
+    pub bases: BTreeMap<i64, llrm_mir::GlobalId>,
 }
 
 impl Raised {
@@ -55,11 +75,16 @@ impl Raised {
 
 /// The module raised whole, or the first function refused.
 pub fn raise(found: &found_module::Module) -> Result<Module, Refusal> {
+    raise_placed(found).map(|(module, _)| module)
+}
+
+/// `raise`, and where the object put its globals.
+pub fn raise_placed(found: &found_module::Module) -> Result<(Module, Placement), Refusal> {
     let raised = raise_each(found)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
-        None => Ok(raised.module),
+        None => Ok((raised.module, raised.placement)),
     }
 }
 
@@ -112,6 +137,10 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
     let mut procedures = BTreeMap::new();
     let mut functions = Vec::new();
     for (index, body) in facts.bodies.iter().enumerate() {
+        // Each call to the event-poll adapter is B$EVCK's (emit).
+        if body.body.kind == BodyKind::EventStub && facts.event_stub == Some(body.body.seed) {
+            continue;
+        }
         let name = function_name(&body.body);
         let (answer, popped) = match &body.interface {
             Some(Ok(interface)) => (interface.answer.clone(), interface.popped),
@@ -131,9 +160,10 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         }
         functions.push((index, name, global));
     }
-    let objects = Objects::build(&facts, &mut module).map_err(module_refusal)?;
+    let objects = Objects::build(&Carving::of(&facts), found, &mut module).map_err(module_refusal)?;
     let interfaces = runtime::interfaces(&facts);
     let callees = runtime::declare(&facts, &mut module, &interfaces);
+    intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));
     let family = found_module::family(&found.records);
     let unit = Unit { facts: &facts, objects: &objects, callees: &callees, procedures, intrinsics, main_frame: main_frame(found), header: header(family) };
     let mut outcomes = Vec::new();
@@ -141,7 +171,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         let body = &facts.bodies[index];
         let outcome = {
             let mut builder = module.builder(global);
-            emit::function(&mut builder, &unit, body)
+            emit::function(&mut builder, &unit, body).map(|()| addresses::attribute(builder.function, builder.context, &objects))
         };
         if outcome.is_err() {
             let GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
@@ -151,5 +181,8 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         }
         outcomes.push((name, outcome));
     }
-    Ok(Raised { module, outcomes })
+    cells::promise(&mut module, &facts, &objects);
+    tags::tag(&mut module);
+    let placement = objects.placement();
+    Ok(Raised { module, outcomes, placement })
 }

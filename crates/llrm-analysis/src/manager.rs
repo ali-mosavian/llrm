@@ -11,7 +11,7 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalysis, Outer};
-use llrm_mir::target::Machine;
+use llrm_mir::program::ProgramProxy;
 use llrm_support::hash::IndexMap;
 
 use crate::cfg::Shape;
@@ -27,7 +27,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { machine: outer.target.as_deref(), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None }
+        Self { program: Some(outer.program()), context, layout, metadata: &outer.metadata, globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None }
     }
 }
 
@@ -38,8 +38,8 @@ pub struct GlobalsAA;
 impl ModuleAnalysis for GlobalsAA {
     type Result = Result<Globals, String>;
     const NAME: &'static str = "globals-aa";
-    fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
-        globalsaa::analysis(module, layout, target)
+    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
+        globalsaa::analysis(module, program)
     }
 }
 
@@ -50,14 +50,14 @@ pub struct Summaries;
 impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
-    fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result {
+    fn run(module: &Module, program: &ProgramProxy) -> Self::Result {
         // A module analysis sees no other: GlobalsAA's answer is found again.
-        let globals = globalsaa::analysis(module, layout, target)?;
+        let globals = globalsaa::analysis(module, program)?;
         let procedures = module
             .functions()
             .filter(|(_, _, function)| !function.is_declaration())
             .filter_map(|(_, global, function)| {
-                Some((global.name.clone()?, Procedure::of(Unit { machine: target, ..Unit::of(module, layout, function) }.with_globals_aa(&globals))))
+                Some((global.name.clone()?, Procedure::of(Unit { program: Some(program), ..Unit::of(module, &program.layout, function) }.with_globals_aa(&globals))))
             })
             .collect();
         alias::summaries(&procedures, None)

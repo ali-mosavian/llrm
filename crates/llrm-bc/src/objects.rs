@@ -1,11 +1,15 @@
 //! DGROUP carved into one global per variable. A segment is cut at every
 //! address something names -- an operand's landmark, a CodeView variable, a
-//! relocation's target -- and a cut that an access or a relocated field
-//! crosses is dropped, so that span stays one object. A COMMON segment's
-//! layout is shared with other modules, so it stays whole.
+//! relocation's target -- and a cut that an access, a long's pair of words
+//! or a relocated field crosses is dropped, so that span stays one object.
+//! A COMMON segment's layout is shared with other modules, so it stays whole.
+//!
+//! What it is carved by is `Carving`, one value: the segment layout's facts
+//! and the addresses the code names, gathered from one object.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_bcmachine::model::ir::Loc;
 use llrm_bcmachine::model::ir::nodes::Node;
 use llrm_bcmachine::objectfile::module::{self, Space};
 use llrm_bcmachine::objectfile::{cvinfo, omf};
@@ -13,6 +17,67 @@ use llrm_mir::{CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalI
 
 use crate::machine::Facts;
 use crate::{FAR, SEGMENT};
+
+/// What DGROUP is carved by: the program's segment layout -- DGROUP's
+/// segments, the COMMON ones other modules share, the code segment, whether
+/// SS is DS -- and what the code names in it: the cuts (landmarks and
+/// CodeView variables, those with a name) and the spans no cut may cross
+/// (static accesses, a long's two words, a CodeView variable's width, a
+/// DIM request's descriptor). The object's relocations cut too; they are
+/// its own.
+#[derive(Clone, Debug, Default)]
+pub struct Carving {
+    pub dgroup: BTreeSet<i64>,
+    pub shared: BTreeSet<i64>,
+    pub code: Option<i64>,
+    /// Whether code reads CS or an address in the code segment.
+    pub code_named: bool,
+    pub stack_in_data: bool,
+    pub cuts: BTreeMap<i64, BTreeMap<i64, Option<String>>>,
+    pub spans: BTreeMap<i64, Vec<(i64, i64)>>,
+}
+
+impl Carving {
+    /// One object's: BC's code runs with SS = DS = DGROUP.
+    pub fn of(facts: &Facts) -> Carving {
+        let found = facts.found;
+        let code = omf::code_segment(&found.records).map(|(index, _, _)| index);
+        let mut carving = Carving {
+            dgroup: found.dgroup.members.clone(),
+            shared: found.dgroup.shared.clone(),
+            code,
+            code_named: code.is_some_and(|code| names_code(facts, code)),
+            stack_in_data: true,
+            ..Carving::default()
+        };
+        for ((space, segment), offsets) in module::landmarks(found) {
+            if space == Space::Segment {
+                carving.cuts.entry(segment).or_default().extend(offsets.into_iter().map(|one| (one, None)));
+            }
+        }
+        for variable in cvinfo::parse(&found.records).variables {
+            if let Some(width) = variable.type_name().as_deref().and_then(width_of) {
+                carving.spans.entry(variable.segment).or_default().push((variable.offset, variable.offset + width));
+            }
+            let named = carving.cuts.entry(variable.segment).or_default().entry(variable.offset).or_default();
+            named.get_or_insert(variable.name);
+        }
+        for body in &facts.bodies {
+            for node in body.nodes.values() {
+                accesses(node, &mut carving.spans);
+            }
+            // A long's two words are one access.
+            for (segment, disp) in body.pairs.values().filter_map(|pair| pair.span()) {
+                carving.spans.entry(segment).or_default().push((disp, disp + 4));
+            }
+        }
+        // A DIM request's descriptor is one object.
+        for one in crate::arrays::requests(facts) {
+            carving.spans.entry(one.segment).or_default().push((one.start, one.end()));
+        }
+        carving
+    }
+}
 
 /// One carved object: the bytes `[start, end)` of a segment.
 #[derive(Clone, Debug)]
@@ -32,9 +97,13 @@ pub struct Objects {
     externals: BTreeMap<i64, ConstantId>,
     /// The base of each segment outside DGROUP that data points into, as
     /// a far pointer: the code segment the recompiled module still has.
-    bases: BTreeMap<i64, ConstantId>,
+    bases: BTreeMap<i64, (GlobalId, ConstantId)>,
     /// The segments outside DGROUP that hold data: each is one object.
     far: BTreeSet<i64>,
+    /// The code segment's index.
+    code: Option<i64>,
+    dgroup: BTreeSet<i64>,
+    stack_in_data: bool,
 }
 
 /// A relocated field in a data segment.
@@ -56,12 +125,63 @@ impl Objects {
         (disp < found.end || objects.range(disp..).next().is_none() && disp == found.end).then_some(found)
     }
 
+    /// The DGROUP segment and object `global` is.
+    pub fn placed(&self, global: GlobalId) -> Option<(i64, &Object)> {
+        self.segments
+            .iter()
+            .filter(|(segment, _)| !self.far.contains(segment))
+            .flat_map(|(&segment, objects)| objects.values().map(move |one| (segment, one)))
+            .find(|(_, one)| one.global == global)
+    }
+
+    /// Whether `segment` is one of DGROUP's.
+    pub fn in_dgroup(&self, segment: i64) -> bool {
+        self.dgroup.contains(&segment)
+    }
+
+    /// Whether segment register `register` names DGROUP.
+    pub fn names_data(&self, register: iced_x86::Register) -> bool {
+        register == iced_x86::Register::DS || register == iced_x86::Register::SS && self.stack_in_data
+    }
+
     pub fn external(&self, index: i64) -> Option<ConstantId> {
         self.externals.get(&index).copied()
     }
 
+    /// A near code offset held as a value, which is its original offset.
+    /// What holds one is a DATA row's key and the RESTORE that searches for
+    /// it (B$RSTB), or a handler's address; a handler is entered by the
+    /// runtime's protocol, which refuses its module, so what is left is a
+    /// key, and the original offset keeps both sides equal.
+    pub fn key(&self, segment: i64, disp: i64) -> Option<i64> {
+        (Some(segment) == self.code).then_some(disp)
+    }
+
     pub fn base(&self, segment: i64) -> Option<ConstantId> {
-        self.bases.get(&segment).copied()
+        self.bases.get(&segment).map(|&(_, reference)| reference)
+    }
+
+    /// Where each object sits: its segment, first byte and global, in
+    /// segment and address order; and the global each segment the objects
+    /// point into but the raise does not carve is.
+    pub fn placement(&self) -> crate::Placement {
+        let objects = self.segments.iter().flat_map(|(&segment, objects)| objects.values().map(move |one| (segment, one.start, one.global))).collect();
+        let bases = self.bases.iter().map(|(&segment, &(global, _))| (segment, global)).collect();
+        crate::Placement { objects, bases }
+    }
+
+    /// The code segment's base, as a far pointer.
+    pub fn code(&self) -> Option<ConstantId> {
+        self.code.and_then(|one| self.base(one))
+    }
+
+    /// Byte `disp` of a segment outside DGROUP, as a far pointer.
+    pub fn far_address(&self, context: &mut llrm_mir::Context, segment: i64, disp: i64) -> Option<ConstantId> {
+        if self.far.contains(&segment) {
+            let object = self.at(segment, disp)?;
+            return Some(offset_constant(context, object.reference, disp - object.start));
+        }
+        self.base(segment).map(|base| offset_constant(context, base, disp))
     }
 
     /// Any DGROUP object: what DS names.
@@ -69,12 +189,11 @@ impl Objects {
         self.segments.iter().filter(|(segment, _)| !self.far.contains(segment)).flat_map(|(_, objects)| objects.values()).next()
     }
 
-    pub fn build(facts: &Facts, module: &mut Module) -> Result<Objects, String> {
-        let found = facts.found;
+    pub fn build(carving: &Carving, found: &module::Module, module: &mut Module) -> Result<Objects, String> {
         let records = &found.records;
         let segments = omf::segments(records);
         let externals = omf::externals(records);
-        let mut objects = Objects::default();
+        let mut objects = Objects { dgroup: carving.dgroup.clone(), stack_in_data: carving.stack_in_data, ..Objects::default() };
         for (index, name) in externals.iter().enumerate().skip(1) {
             // BC calls a procedure of its own through an EXTDEF of its name.
             if let Some(defined) = module.named(name) {
@@ -87,8 +206,8 @@ impl Objects {
             objects.externals.insert(index as i64, module.reference(global));
         }
         // DGROUP, and every far segment its data points into, transitively.
-        let code = omf::code_segment(records).map(|(index, _, _)| index);
-        let mut data: BTreeSet<i64> = found.dgroup.members.clone();
+        let code = carving.code;
+        let mut data: BTreeSet<i64> = carving.dgroup.clone();
         loop {
             let reached: BTreeSet<i64> = relocations(records, &data)
                 .values()
@@ -101,52 +220,37 @@ impl Objects {
             }
             data.extend(reached);
         }
-        objects.far = data.difference(&found.dgroup.members).copied().collect();
+        objects.far = data.difference(&carving.dgroup).copied().collect();
         let relocations = relocations(records, &data);
+        objects.code = code;
         // The code segment is emitted again, under its own name.
-        if let Some(code) = code.filter(|&code| relocations.values().flatten().any(|one| one.target == "segment" && one.index == code)) {
+        if let Some(code) = code.filter(|&code| relocations.values().flatten().any(|one| one.target == "segment" && one.index == code) || carving.code_named) {
             let Some(Some((name, _))) = segments.get(code as usize) else { return Err("no code segment".to_owned()) };
             let byte = module.context.types.int(8);
             let variable = GlobalVariable { ty: byte, constant: true, initializer: None, align: None };
             let global = add_unique(module, name, |module, named| module.add_variable(named, variable.clone(), Linkage::External));
             module.globals[global.0 as usize].address_space = FAR;
-            objects.bases.insert(code, module.reference(global));
-        }
-        let info = cvinfo::parse(records);
-        let landmarks = module::landmarks(found);
-        let mut spans: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
-        for body in &facts.bodies {
-            for node in body.nodes.values() {
-                accesses(node, &mut spans);
-            }
+            objects.bases.insert(code, (global, module.reference(global)));
         }
         let mut carved: Vec<(i64, i64, i64, Option<String>)> = Vec::new();
         for &segment in &data {
             let Some(Some((segname, size))) = segments.get(segment as usize) else { continue };
             let size = *size;
-            if found.dgroup.shared.contains(&segment) || objects.far.contains(&segment) {
+            if carving.shared.contains(&segment) || objects.far.contains(&segment) {
                 carved.push((segment, 0, size, Some(segname.clone())));
                 continue;
             }
+            let named = carving.cuts.get(&segment);
             let mut cuts: BTreeSet<i64> = BTreeSet::from([0, size]);
-            let mut names: BTreeMap<i64, String> = BTreeMap::new();
-            cuts.extend(landmarks.get(&(Space::Segment, segment)).into_iter().flatten().copied());
-            for variable in info.variables.iter().filter(|one| one.segment == segment) {
-                cuts.insert(variable.offset);
-                names.entry(variable.offset).or_insert_with(|| variable.name.clone());
-            }
+            cuts.extend(named.into_iter().flat_map(BTreeMap::keys).copied());
+            let names: BTreeMap<i64, String> = named.into_iter().flatten().filter_map(|(&at, name)| Some((at, name.clone()?))).collect();
             for one in relocations.values().flatten() {
                 if one.target == "segment" && one.index == segment {
                     cuts.insert(one.disp);
                 }
             }
-            let mut crossing: Vec<(i64, i64)> = spans.get(&segment).cloned().unwrap_or_default();
+            let mut crossing: Vec<(i64, i64)> = carving.spans.get(&segment).cloned().unwrap_or_default();
             crossing.extend(relocations.get(&segment).into_iter().flatten().map(|one| (one.at, one.at + one.width)));
-            for variable in info.variables.iter().filter(|one| one.segment == segment) {
-                if let Some(width) = variable.type_name().as_deref().and_then(width_of) {
-                    crossing.push((variable.offset, variable.offset + width));
-                }
-            }
             for (low, high) in crossing {
                 let inside: Vec<i64> = cuts.range(low + 1..high).copied().collect();
                 for one in inside {
@@ -162,7 +266,7 @@ impl Objects {
         for (segment, start, end, name) in &carved {
             let byte = module.context.types.int(8);
             let ty = module.context.types.intern(Type::Array { element: byte, count: (end - start) as u64 });
-            let shared = found.dgroup.shared.contains(segment);
+            let shared = carving.shared.contains(segment);
             let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
             let linkage = if shared { Linkage::Common } else { Linkage::Internal };
             let named = name.clone().unwrap_or_default();
@@ -180,7 +284,7 @@ impl Objects {
             for object in objects.segments.get(&segment).cloned().unwrap_or_default().values() {
                 let inside: Vec<&Relocation> = mine.iter().filter(|one| object.start <= one.at && one.at < object.end).collect();
                 let (ty, initializer) = objects.initializer(module, object, &image, &inside)?;
-                if found.dgroup.shared.contains(&segment) && !matches!(module.context.get(initializer).kind, ConstantKind::Zero) {
+                if carving.shared.contains(&segment) && !matches!(module.context.get(initializer).kind, ConstantKind::Zero) {
                     return Err("a COMMON block with initial data".to_owned());
                 }
                 let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[object.global.0 as usize].kind else { unreachable!("a variable") };
@@ -214,6 +318,12 @@ impl Objects {
                 members.push(bytes(context, at, relocation.at));
             }
             let addend = i64::from(u16::from_le_bytes([image.get(relocation.at as usize).copied().unwrap_or(0), image.get(relocation.at as usize + 1).copied().unwrap_or(0)]));
+            if let Some(key) = (relocation.loc == omf::LOC_OFF16 && relocation.target == "segment").then(|| self.key(relocation.index, relocation.disp + addend)).flatten() {
+                let word = context.types.int(16);
+                members.push(context.constant(Constant { ty: word, kind: ConstantKind::Int(key as u16 as u128) }));
+                at = relocation.at + relocation.width;
+                continue;
+            }
             let target = match relocation.target.as_str() {
                 "segment" => match (self.at(relocation.index, relocation.disp), self.base(relocation.index)) {
                     (Some(target), _) => offset_constant(context, target.reference, relocation.disp - target.start + addend),
@@ -228,11 +338,10 @@ impl Objects {
             };
             let far = context.types.ptr(FAR);
             members.push(match relocation.loc {
-                // A near offset into a far segment is its far pointer's low word.
+                // A near offset into a far segment is its far pointer as `i16`.
                 omf::LOC_OFF16 if context.get(target).ty == far => {
-                    let (long, word) = (context.types.int(32), context.types.int(16));
-                    let whole = context.constant(Constant { ty: long, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) });
-                    context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::Trunc, value: whole }) })
+                    let word = context.types.int(16);
+                    context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) })
                 }
                 omf::LOC_OFF16 => target,
                 omf::LOC_PTR32 => cast(context, CastOp::AddrSpaceCast, target, FAR),
@@ -282,6 +391,18 @@ fn width_of(name: &str) -> Option<i64> {
         "LONG" | "SINGLE" | "STRING" => 4,
         "DOUBLE" | "CURRENCY" => 8,
         _ => name.strip_prefix("STRING * ")?.parse().ok()?,
+    })
+}
+
+/// Whether any code reads CS or an address in the code segment.
+fn names_code(facts: &Facts, code: i64) -> bool {
+    facts.bodies.iter().flat_map(|body| body.nodes.values()).any(|node| {
+        let semantics = node.semantics();
+        semantics.sources.iter().chain(&semantics.dests).any(|one| match one {
+            Loc::Reg(reg) => reg.register == iced_x86::Register::CS,
+            Loc::Imm(imm) => imm.address.is_some_and(|address| address.space == Space::Segment && address.index == code),
+            _ => false,
+        })
     })
 }
 

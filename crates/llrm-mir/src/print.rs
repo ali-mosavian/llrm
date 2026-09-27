@@ -14,7 +14,7 @@ use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    let printer = Printer { module, globals: global_names(module) };
+    let printer = Printer { context: &module.context, globals: global_names(module) };
     if let Some(layout) = &module.datalayout {
         let _ = writeln!(out, "target datalayout = {}", string(layout.as_bytes()));
     }
@@ -53,6 +53,12 @@ pub fn module(module: &Module) -> String {
         .collect();
     section(&mut out, nodes.into_iter());
     out
+}
+
+/// `function`'s blocks, naming globals by index: two bodies print alike
+/// when they are the same up to value and block numbering.
+pub fn body(context: &Context, function: &Function) -> String {
+    Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
 /// Lines under a blank line, when there are any.
@@ -162,7 +168,7 @@ fn spaced(text: String) -> String {
 }
 
 struct Printer<'a> {
-    module: &'a Module,
+    context: &'a Context,
     globals: Vec<String>,
 }
 
@@ -201,7 +207,7 @@ impl Slots {
 
 impl Printer<'_> {
     fn types(&self) -> &crate::types::Types {
-        &self.module.context.types
+        &self.context.types
     }
 
     fn ty(&self, ty: TypeId) -> String {
@@ -249,14 +255,14 @@ impl Printer<'_> {
     }
 
     fn function(&self, at: usize, global: &GlobalValue, function: &Function) -> String {
-        let (returns, parameter_types, variadic) = self.module.signature(function.ty);
+        let (returns, parameter_types, variadic) = self.signature(function.ty);
         let slots = Slots::new(function);
         let declaration = function.is_declaration();
         let mut parameters: Vec<String> = parameter_types
             .iter()
             .enumerate()
             .map(|(index, &ty)| {
-                let attrs = spaced(attributes(&self.module.context, &function.parameter_attrs[index]));
+                let attrs = spaced(attributes(&self.context, &function.parameter_attrs[index]));
                 let name = if declaration { String::new() } else { format!(" %{}", slots.values[&function.parameters[index]]) };
                 format!("{}{attrs}{name}", self.ty(ty))
             })
@@ -267,7 +273,7 @@ impl Printer<'_> {
         let mut words: Vec<String> = vec![(if declaration { "declare" } else { "define" }).to_owned()];
         words.extend(Self::linkage(global.linkage).map(str::to_owned));
         words.extend(Self::convention(function.calling_convention));
-        let return_attrs = attributes(&self.module.context, &function.return_attrs);
+        let return_attrs = attributes(&self.context, &function.return_attrs);
         if !return_attrs.is_empty() {
             words.push(return_attrs);
         }
@@ -275,7 +281,7 @@ impl Printer<'_> {
         words.push(format!("{}({})", self.globals[at], parameters.join(", ")));
         words.extend(Self::unnamed_addr(global.unnamed_addr).map(str::to_owned));
         words.extend(Self::address_space(global.address_space));
-        let attrs = attributes(&self.module.context, &function.attrs);
+        let attrs = attributes(&self.context, &function.attrs);
         if !attrs.is_empty() {
             words.push(attrs);
         }
@@ -288,6 +294,13 @@ impl Printer<'_> {
             return out;
         }
         out.push_str(" {\n");
+        out.push_str(&self.blocks(function, &slots));
+        out.push_str("}\n");
+        out
+    }
+
+    fn blocks(&self, function: &Function, slots: &Slots) -> String {
+        let mut out = String::new();
         for (index, &block) in function.layout.iter().enumerate() {
             if index > 0 {
                 out.push('\n');
@@ -297,12 +310,18 @@ impl Printer<'_> {
             }
             for &inst in &function.block(block).instructions {
                 out.push_str("  ");
-                out.push_str(&self.instruction(function, &slots, inst));
+                out.push_str(&self.instruction(function, slots, inst));
                 out.push('\n');
             }
         }
-        out.push_str("}\n");
         out
+    }
+
+    fn signature(&self, function_type: TypeId) -> (TypeId, &[TypeId], bool) {
+        match self.context.types.get(function_type) {
+            Type::Function { returns, parameters, variadic } => (*returns, parameters, *variadic),
+            other => panic!("{other:?} is not a function type"),
+        }
     }
 
     fn operand(&self, slots: &Slots, operand: Operand) -> String {
@@ -316,7 +335,7 @@ impl Printer<'_> {
     fn typed(&self, function: &Function, slots: &Slots, operand: Operand) -> String {
         match operand {
             Operand::Block(_) => format!("label {}", self.operand(slots, operand)),
-            _ => format!("{} {}", self.ty(function.operand_type(&self.module.context, operand).expect("a value")), self.operand(slots, operand)),
+            _ => format!("{} {}", self.ty(function.operand_type(&self.context, operand).expect("a value")), self.operand(slots, operand)),
         }
     }
 
@@ -379,14 +398,14 @@ impl Printer<'_> {
             Opcode::Call(info) | Opcode::Invoke(info) => {
                 let invoke = matches!(inst.opcode, Opcode::Invoke(_));
                 let arguments = if invoke { &ops[..ops.len() - 3] } else { &ops[..ops.len() - 1] };
-                let (returns, _, variadic) = self.module.signature(info.function_type);
+                let (returns, _, variadic) = self.signature(info.function_type);
                 let callee_ty = if variadic { self.ty(info.function_type) } else { self.ty(returns) };
                 let arguments: Vec<String> = arguments
                     .iter()
                     .enumerate()
                     .map(|(at, &one)| {
-                        let attrs = spaced(attributes(&self.module.context, &info.argument_attrs[at]));
-                        format!("{}{attrs} {}", self.ty(function.operand_type(&self.module.context, one).expect("a value")), self.operand(slots, one))
+                        let attrs = spaced(attributes(&self.context, &info.argument_attrs[at]));
+                        format!("{}{attrs} {}", self.ty(function.operand_type(&self.context, one).expect("a value")), self.operand(slots, one))
                     })
                     .collect();
                 let tail = match info.tail {
@@ -395,11 +414,11 @@ impl Printer<'_> {
                     Tail::MustTail => "musttail ",
                     Tail::NoTail => "notail ",
                 };
-                let return_attrs = spaced(attributes(&self.module.context, &info.return_attrs));
+                let return_attrs = spaced(attributes(&self.context, &info.return_attrs));
                 let callee_operand = *ops.last().expect("a callee");
                 let callee = self.operand(slots, callee_operand);
                 let convention = Self::convention(info.calling_convention).map_or_else(String::new, |one| format!(" {one}"));
-                let space = match function.operand_type(&self.module.context, callee_operand).map(|ty| self.module.context.types.get(ty)) {
+                let space = match function.operand_type(&self.context, callee_operand).map(|ty| self.context.types.get(ty)) {
                     Some(Type::Pointer(space)) if *space != 0 => format!(" addrspace({space})"),
                     _ => String::new(),
                 };
@@ -407,7 +426,7 @@ impl Printer<'_> {
                     "{tail}{}{flags}{convention}{return_attrs}{space} {callee_ty} {callee}({}){}",
                     inst.opcode.mnemonic(),
                     arguments.join(", "),
-                    spaced(attributes(&self.module.context, &info.attrs))
+                    spaced(attributes(&self.context, &info.attrs))
                 );
                 if invoke {
                     let _ = write!(text, "\n          to {} unwind {}", typed(ops.len() - 3), typed(ops.len() - 2));
@@ -436,11 +455,11 @@ impl Printer<'_> {
     }
 
     fn typed_constant(&self, id: ConstantId) -> String {
-        format!("{} {}", self.ty(self.module.context.get(id).ty), self.constant(id))
+        format!("{} {}", self.ty(self.context.get(id).ty), self.constant(id))
     }
 
     fn constant(&self, id: ConstantId) -> String {
-        let Constant { ty, kind } = self.module.context.get(id);
+        let Constant { ty, kind } = self.context.get(id);
         let members = |ids: &[ConstantId]| ids.iter().map(|&one| self.typed_constant(one)).collect::<Vec<_>>().join(", ");
         match kind {
             ConstantKind::Int(bits) => match self.types().int_bits(*ty) {
@@ -456,7 +475,7 @@ impl Printer<'_> {
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
-            ConstantKind::Global(global) => self.globals[global.0 as usize].clone(),
+            ConstantKind::Global(global) => self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0)),
             ConstantKind::Aggregate(ids) => match self.types().get(*ty) {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),

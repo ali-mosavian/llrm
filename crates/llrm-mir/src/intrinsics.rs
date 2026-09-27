@@ -14,6 +14,9 @@ pub enum Intrinsic {
     WithOverflow { op: BinaryOp, signed: bool },
     /// `llvm.{s,u}{max,min}`.
     MinMax { signed: bool, max: bool },
+    /// `llvm.smul.fix` and `llvm.sdiv.fix`: signed fixed point with as many
+    /// fraction bits as the third argument says.
+    Fixed { divide: bool },
     FMulAdd,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
@@ -114,10 +117,12 @@ const fn min_max(name: &'static str, signed: bool, max: bool) -> Spec {
     arithmetic(name, Intrinsic::MinMax { signed, max }, Slot::Any(0), INTS, Kind::Int)
 }
 
+const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Int(32), &["immarg"])];
+
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 25] = [
+const TABLE: [Spec; 27] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -128,6 +133,17 @@ const TABLE: [Spec; 25] = [
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
+    arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
+    // Not speculatable: a zero divisor is undefined.
+    Spec {
+        name: "llvm.sdiv.fix",
+        intrinsic: Intrinsic::Fixed { divide: true },
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: FIXED,
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
+        memory: NO_MEMORY,
+    },
     arithmetic("llvm.fmuladd", Intrinsic::FMulAdd, Slot::Any(0), &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (Slot::Any(0), &[])], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
@@ -222,6 +238,17 @@ fn mangle(types: &Types, ty: TypeId) -> String {
 }
 
 impl Intrinsic {
+    /// `llvm.smul.fix` or `llvm.sdiv.fix` of the signed `width`-bit `a` and
+    /// `b` with `scale` fraction bits, signed: at twice the width, the
+    /// product shifted down (toward negative infinity) or the dividend
+    /// shifted up and divided (toward zero), then wrapped. `None` for a
+    /// zero divisor, which is undefined.
+    pub fn fixed(divide: bool, width: u32, a: i128, b: i128, scale: u32) -> Option<i128> {
+        let wide = if divide { (a << scale).checked_div(b)? } else { (a * b) >> scale };
+        let shift = 128 - width;
+        Some((wide << shift) >> shift)
+    }
+
     fn spec(self) -> &'static Spec {
         TABLE.iter().find(|spec| spec.intrinsic == self).expect("every intrinsic is in the table")
     }

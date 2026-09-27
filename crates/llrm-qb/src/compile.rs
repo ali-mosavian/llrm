@@ -465,7 +465,7 @@ fn _label_imm(key: i64) -> Loc {
 }
 
 /// Emit MODULE_CODE.OF_STA's relocated (offset,line) rows and zero end.
-fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure {
+pub fn _statement_procedure(entries: &[(i64, i64, String, i64)]) -> masm::Procedure {
     let mut code: Vec<masm::InlinePart> = Vec::new();
     for (_procedure, _order, label, line) in entries {
         code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
@@ -820,7 +820,7 @@ fn _materialize_error_registrations(
 /// require that invariant before their first assignment.  The shared backend
 /// deliberately owns only reservation; this source ABI initialization stays
 /// in the frontend and runs before any source instruction.
-fn _initialize_frame(
+pub fn _initialize_frame(
     body: &lir::LirBody,
     size: i64,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), CompileError> {
@@ -884,7 +884,7 @@ fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, CompileE
 /// BX is the maximum number of runtime-produced STRING temporaries an HIR
 /// instruction consumes and produces together. This count must come from
 /// resolved typed expressions, never from allocator spill slots.
-fn _runtime_frame(
+pub fn _runtime_frame(
     body: &lir::LirBody,
     size: i64,
     runtime: model::RuntimeProfile,
@@ -1629,9 +1629,9 @@ impl Rich {
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        // The one MIR target, real-mode DOS at 486 prices.
+        let profile = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
         let applied = llrm_transforms::pipeline::Applied {
-            target: Some(Rc::new(llrm_cycles::target::Dos)),
+            target: Some(Rc::new(llrm_cycles::target::Dos::priced(&profile._costs, profile.prefix_cost, profile.register_capacity, profile.call_register_capacity))),
             dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
             ..Default::default()
         };
@@ -2118,6 +2118,13 @@ pub fn object_bytes_by(
 ) -> Result<Vec<u8>, CompileError> {
     let module = omfwrite::live(&assembled_by(program, observer, options, route)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
+    let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
+    written_basic(&module, _header(program)?, &name)
+}
+
+/// A BASIC module's object: `module`'s code after the 30h MODULE_CODE
+/// `header`, its data in BASIC's segments, and the statement table last.
+pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Result<Vec<u8>, CompileError> {
     // Build the same semantic segments as backend.omfwrite.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
     // serializer to write OMF.
@@ -2139,9 +2146,8 @@ pub fn object_bytes_by(
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
         _object_data(&mut segments[index], index, items, &mut symbols);
     }
-    _basic_code(&mut segments[0], &module, &mut symbols)?;
+    _basic_code(&mut segments[0], module, &mut symbols)?;
 
-    let header = _header(program)?;
     let code = &mut segments[0];
     code.image = [header, std::mem::take(&mut code.image)].concat();
     code.spans = std::iter::once([0, 48]).chain(code.spans.iter().map(|[start, end]| [start + 48, end + 48])).collect();
@@ -2187,8 +2193,7 @@ pub fn object_bytes_by(
     }
     read_segment.fixups.clear();
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
-    let records = omfwrite::_records(&module, &name, &mut segments, &symbols, &externs)
+    let records = omfwrite::_records(module, name, &mut segments, &symbols, &externs)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let emitted: Vec<u8> = records.iter().flat_map(|record| record.emit()).collect();
     _basic_segment_classes(&emitted, &module.code)

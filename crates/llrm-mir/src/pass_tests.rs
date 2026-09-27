@@ -7,7 +7,7 @@ use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
 use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses, Unit};
-use crate::target::Machine;
+use crate::program::ProgramProxy;
 
 const TEXT: &str = "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
 
@@ -218,7 +218,7 @@ struct Bodies;
 impl ModuleAnalysis for Bodies {
     type Result = usize;
     const NAME: &'static str = "bodies";
-    fn run(module: &Module, _: &DataLayout, _: Option<&dyn Machine>) -> usize {
+    fn run(module: &Module, _: &ProgramProxy) -> usize {
         SUMMED.set(SUMMED.get() + 1);
         module.functions().filter(|(_, _, function)| !function.is_declaration()).count()
     }

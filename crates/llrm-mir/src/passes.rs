@@ -1,7 +1,7 @@
 //! LLVM's new pass manager: function passes over a module, analyses cached
 //! per function and dropped unless a pass says it preserved them, and each
 //! pass's change log kept for the rewrite ledger. A function analysis reads
-//! its module and target only through `Outer`, LLVM's outer analysis
+//! its module and program only through `Outer`, LLVM's outer analysis
 //! manager proxy, which also holds the module analyses.
 //!
 //! Two instruments, as LLVM's `-verify-each` and
@@ -16,7 +16,8 @@ use crate::context::{Context, GlobalId};
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
 use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Module};
-use crate::target::Machine;
+use crate::program::ProgramProxy;
+use crate::target::{Machine, Neutral};
 
 /// What a function pass works on: its function, the context its types and
 /// constants live in, and the module's datalayout.
@@ -93,11 +94,11 @@ pub trait Analysis: 'static {
 /// A fact about the whole module, as LLVM's `GlobalsAA`: computed before
 /// each pass once required (`PassManager::require`), and dropped unless
 /// every run of a pass preserved it. Function analyses read it through
-/// `Outer::cached`.
+/// `Outer::cached`. It reads its program through `program`.
 pub trait ModuleAnalysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
     const NAME: &'static str;
-    fn run(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Self::Result;
+    fn run(module: &Module, program: &ProgramProxy) -> Self::Result;
 }
 
 /// LLVM's `DominatorTreeAnalysis`.
@@ -177,23 +178,37 @@ impl PreservedAnalyses {
 /// What a function analysis may read beyond its function: LLVM's outer
 /// analysis manager proxy, read-only. The module's metadata and globals,
 /// each function by its declaration alone since a function analysis reads
-/// no other body; the target; and the module analyses computed.
-#[derive(Clone, Default)]
+/// no other body; its program; and the module analyses computed.
+#[derive(Clone)]
 pub struct Outer {
     pub metadata: Vec<MetadataNode>,
     pub globals: Vec<GlobalValue>,
-    pub target: Option<Rc<dyn Machine>>,
+    program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
 }
 
 impl Outer {
+    /// `module`'s, a program of its own for `target`, or a neutral one.
     pub fn of(module: &Module, target: Option<Rc<dyn Machine>>) -> Self {
-        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(GlobalValue::declaration).collect(), target, modules: HashMap::new() }
+        Self::within(module, ProgramProxy::of(module, target.unwrap_or_else(|| Rc::new(Neutral))))
+    }
+
+    /// `module`'s, of `program`.
+    pub fn within(module: &Module, program: Rc<ProgramProxy>) -> Self {
+        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(GlobalValue::declaration).collect(), program, modules: HashMap::new() }
     }
 
     /// Computes `M` of `module`, for analyses asked outside a pass manager.
-    pub fn require<M: ModuleAnalysis>(&mut self, module: &Module, layout: &DataLayout) {
-        self.modules.insert(TypeId::of::<M>(), Rc::new(M::run(module, layout, self.target.as_deref())));
+    pub fn require<M: ModuleAnalysis>(&mut self, module: &Module) {
+        self.modules.insert(TypeId::of::<M>(), Rc::new(M::run(module, &self.program)));
+    }
+
+    pub fn program(&self) -> &ProgramProxy {
+        &self.program
+    }
+
+    pub fn target(&self) -> &dyn Machine {
+        &*self.program.target
     }
 
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
@@ -208,7 +223,8 @@ impl Outer {
 
     /// Whether an analysis computed under `other` read what this holds.
     fn same(&self, other: &Self) -> bool {
-        self.metadata == other.metadata
+        Rc::ptr_eq(&self.program, &other.program)
+            && self.metadata == other.metadata
             && self.globals == other.globals
             && self.modules.len() == other.modules.len()
             && self.modules.iter().all(|(key, one)| other.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
@@ -244,7 +260,6 @@ impl<A: Analysis> Cached for Entry<A> {
 }
 
 /// One function's cached analyses, and what they may read of its module.
-#[derive(Default)]
 pub struct Analyses {
     cache: HashMap<TypeId, Box<dyn Cached>>,
     outer: Rc<Outer>,
@@ -296,12 +311,12 @@ impl Analyses {
 pub(crate) struct Required {
     id: TypeId,
     name: &'static str,
-    run: fn(&Module, &DataLayout, Option<&dyn Machine>) -> Rc<dyn Any>,
+    run: fn(&Module, &ProgramProxy) -> Rc<dyn Any>,
     agree: fn(&dyn Any, &dyn Any) -> bool,
 }
 
-fn computed<M: ModuleAnalysis>(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Rc<dyn Any> {
-    Rc::new(M::run(module, layout, target))
+fn computed<M: ModuleAnalysis>(module: &Module, program: &ProgramProxy) -> Rc<dyn Any> {
+    Rc::new(M::run(module, program))
 }
 
 fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
@@ -397,23 +412,25 @@ impl PassManager {
         // when computed again the same.
         let mut modules: HashMap<TypeId, Rc<dyn Any>> = HashMap::new();
         let mut dropped: HashMap<TypeId, Rc<dyn Any>> = HashMap::new();
-        let mut outer = Rc::<Outer>::default();
+        let program = ProgramProxy::of(module, self.target.clone().unwrap_or_else(|| Rc::new(Neutral)));
+        let mut last: Option<Rc<Outer>> = None;
         for (number, pass) in self.passes.iter_mut().enumerate() {
             let name = pass.name();
             for one in &self.required {
                 if modules.contains_key(&one.id) {
                     continue;
                 }
-                let fresh = (one.run)(module, &layout, self.target.as_deref());
+                let fresh = (one.run)(module, &program);
                 let result = dropped.remove(&one.id).filter(|old| (one.agree)(&**old, &*fresh)).unwrap_or(fresh);
                 modules.insert(one.id, result);
             }
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
-            let now = Outer { modules: modules.clone(), ..Outer::of(module, self.target.clone()) };
-            if !outer.same(&now) {
-                outer = Rc::new(now);
+            let now = Outer { modules: modules.clone(), ..Outer::within(module, Rc::clone(&program)) };
+            if !last.as_ref().is_some_and(|old| old.same(&now)) {
+                last = Some(Rc::new(now));
             }
+            let outer = Rc::clone(last.as_ref().expect("set above"));
             let callees = crate::memory::callees(module);
             let sizes = crate::valuetracking::sizes(module, &layout);
             let pass = match pass {
@@ -446,7 +463,7 @@ impl PassManager {
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
-                let analyses = caches.entry(id).or_default();
+                let analyses = caches.entry(id).or_insert_with(|| Analyses::new(Rc::clone(&outer)));
                 if !Rc::ptr_eq(&analyses.outer, &outer) {
                     *analyses = Analyses::new(Rc::clone(&outer));
                 }
@@ -466,7 +483,7 @@ impl PassManager {
                 let mut stale: Vec<&str> = self
                     .required
                     .iter()
-                    .filter(|one| kept.contains(&one.id) && !(one.agree)(&*modules[&one.id], &*(one.run)(module, &layout, self.target.as_deref())))
+                    .filter(|one| kept.contains(&one.id) && !(one.agree)(&*modules[&one.id], &*(one.run)(module, &program)))
                     .map(|one| one.name)
                     .collect();
                 stale.sort_unstable();

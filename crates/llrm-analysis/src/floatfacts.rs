@@ -227,12 +227,6 @@ impl Rule {
     }
 }
 
-/// The intrinsic `inst` calls, if it calls one.
-pub fn intrinsic(unit: &Unit, inst: InstId) -> Option<Intrinsic> {
-    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
-    Intrinsic::named(unit.globals.get(callee.0 as usize)?.name.as_deref()?)
-}
-
 fn nsz() -> Flags {
     Flags::NAMES.iter().find(|(_, name)| *name == "nsz").expect("nsz is a flag").0
 }
@@ -262,7 +256,7 @@ pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
         Opcode::Cast(CastOp::FPToUI) => (Operation::Truncate, vec![float(0)?], integer(false)?),
         Opcode::Load { volatile: false, .. } => (Operation::Convert, vec![returned()?], returned()?),
         Opcode::Store { volatile: false, .. } => (Operation::Convert, vec![float(0)?], float(0)?),
-        Opcode::Call(_) => match intrinsic(unit, inst)? {
+        Opcode::Call(_) => match unit.intrinsic(inst)? {
             Intrinsic::Unary(FloatFunction::Fabs) => (Operation::Abs, vec![float(0)?], returned()?),
             Intrinsic::Unary(FloatFunction::Sqrt) => (Operation::Sqrt, vec![float(0)?], returned()?),
             // As the rounding mode says: only an integral input is exact under every one.
@@ -583,7 +577,7 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
                 !matches!(op.opcode, Opcode::Phi | Opcode::ICmp(_) | Opcode::Br | Opcode::Store { volatile: false, .. } | Opcode::Binary(BinaryOp::Sub))
                     || rule(unit, inst).is_some()
                     || Format::of(&unit.context.types, op.ty).is_some()
-                    || MemRef::of(unit, inst).is_some_and(|written| references.iter().any(|read| regions::overlapping(&written, read, None, None, unit.machine).unwrap_or(true)))
+                    || MemRef::of(unit, inst).is_some_and(|written| references.iter().any(|read| regions::overlapping(&written, read, None, None, unit.program).unwrap_or(true)))
             })
         {
             continue;

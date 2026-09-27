@@ -111,7 +111,7 @@ fn _carried(unit: &Unit, reference: &MemRef, insts: &[InstId]) -> bool {
             continue;
         };
         match unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } if regions::overlapping(reference, &access, None, None, unit.machine).unwrap_or(true) => return true,
+            Opcode::Load { .. } if regions::overlapping(reference, &access, None, None, unit.program).unwrap_or(true) => return true,
             Opcode::Store { .. } if access.addr().is_some() && access.addr() == reference.addr() && access.width == reference.width => return false,
             _ => {}
         }

@@ -8,7 +8,7 @@ use num_bigint::BigInt;
 
 use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, masked};
 use crate::memory::{MemRef, MemoryKind, MemoryObject, Provenance, Unit};
-use crate::regions::tests::Dos;
+use crate::regions::tests::dos;
 use crate::testing::{DOS, function, layout, parsed, value};
 
 struct Parsed {
@@ -285,7 +285,8 @@ fn test_a_call_reaching_nonlocal_keeps_an_uncaptured_static_constant() {
 
 #[test]
 fn a_call_that_may_write_anything_forgets_every_cell() {
-    let parsed = Parsed::new(AROUND_A_CALL);
+    // The cell's address is exposed: an unexposed alloca no call reaches.
+    let parsed = Parsed::new(&AROUND_A_CALL.replace("@g()", "@g(ptr %a)").replace("void @g(ptr %a)\n\ndefine", "void @g(ptr)\n\ndefine"));
     assert_eq!(parsed.solved("r", &Calls::default()), None);
     let unknown = reaching(&parsed, Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
     assert_eq!(parsed.solved("r", &unknown), None);
@@ -439,7 +440,8 @@ b0:
 }}
 "
         ));
-        let unit = Unit { machine: machine.then_some(&Dos as &dyn crate::regions::Machine), ..parsed.unit() };
+        let dos = dos(&parsed.module);
+        let unit = Unit { program: machine.then_some(&*dos), ..parsed.unit() };
         let got = known(&unit, Some(&Calls::default()), None, None).get(&parsed.value("r")).cloned();
         assert_eq!(got.is_some(), kept, "{selector} {machine}");
     }
@@ -616,4 +618,27 @@ b0:
     let (first, second) = (solve(&one), solve(&two));
     assert_eq!(first.get(&one.value("a")), Some(&Known::new(7, 16)));
     assert_eq!((solve(&two), solve(&one)), (second, first));
+}
+
+/// Fixed point of known numbers is a number: unrolled, T075's `fix(n) / 4`
+/// and `c * fix(k)` were calls of known operands no one computed.
+#[test]
+fn a_fixed_point_intrinsic_of_known_numbers_folds() {
+    let parsed = Parsed::new(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32)
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)
+
+define i32 @f(i32 %x) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 %x, i32 -640, i32 8)
+  %q = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 1024, i32 8)
+  %z = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 0, i32 8)
+  ret i32 %p
+}
+",
+    );
+    let x = [("x", Known::new(768, 32))];
+    assert_eq!(parsed.result("p", &x), Some(Known::new(masked(&BigInt::from(-1920), 32), 32)), "3.0 * -2.5");
+    assert_eq!(parsed.result("q", &x), Some(Known::new(192, 32)));
+    assert_eq!(parsed.result("z", &x), None, "a zero divisor is undefined");
 }

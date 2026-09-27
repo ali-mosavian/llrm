@@ -164,6 +164,7 @@ name = "llrm"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-bcdriver",
  "llrm-c",
  "llrm-core",
  "llrm-nib",
@@ -195,6 +196,19 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",
+]
+
+[[package]]
+name = "llrm-bcdriver"
+version = "0.1.0"
+dependencies = [
+ "llrm-bc",
+ "llrm-core",
+ "llrm-cycles",
+ "llrm-mir",
+ "llrm-omf",
+ "llrm-qb",
+ "llrm-transforms",
 ]
 
 [[package]]
