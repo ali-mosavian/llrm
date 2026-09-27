@@ -14,11 +14,14 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 
 use crate::abi::runtime::Contract;
 use crate::backend::constpool::{self, Pool};
+use crate::backend::cpu::Profile;
+use crate::backend::{arithmetic, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
+mod combined;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -109,6 +112,9 @@ pub struct Selected {
     pub convention: Convention,
     pub calls: IndexMap<i64, String>,
     pub far: BTreeSet<i64>,
+    /// The bytes below BP its allocas and stack temporaries take: an
+    /// indexed access names no frame slot the frame could find it by.
+    pub depth: i64,
 }
 
 /// A call's contract, asked of the ABI that knows the callee: its name,
@@ -194,18 +200,21 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 /// Where a pointer points, when it need not be a register: a frame slot
 /// is an addressing mode, and a constant offset is its displacement.
 #[derive(Clone, Copy, Debug)]
+///
+/// An `index` is a register the address adds, `[bp+si+disp]` or
+/// `[bx+si+disp]`, where only accesses read the address: see `indexed`.
 enum Pointer {
-    Frame(i64),
-    Based { base: Held, offset: i64 },
+    Frame { disp: i64, index: Option<Held> },
+    Based { base: Held, index: Option<Held>, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one.
     Global { space: Space, index: i64, offset: i64, base: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
-    Far { selector: Held, base: Option<Held>, offset: i64 },
+    Far { selector: Held, base: Option<Held>, index: Option<Held>, offset: i64 },
 }
 
-pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mut Pool) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -225,6 +234,14 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mu
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
+        cells: BTreeSet::new(),
+        stored: BTreeSet::new(),
+        words: IndexMap::default(),
+        tested: BTreeSet::new(),
+        consumed: BTreeSet::new(),
+        paired: IndexMap::default(),
+        callees: llrm_mir::memory::callees(module),
+        cpu,
         pending: IndexMap::default(),
         phi_inputs: IndexMap::default(),
         edges: IndexMap::default(),
@@ -239,7 +256,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mu
         pool,
     };
     let body = selector.body(name, &convention)?;
-    Ok(Selected { body, convention, calls: selector.calls, far: selector.far })
+    Ok(Selected { body, convention, calls: selector.calls, far: selector.far, depth: selector.depth })
 }
 
 struct Selector<'m, 'c, 'p> {
@@ -259,6 +276,24 @@ struct Selector<'m, 'c, 'p> {
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
     fused: BTreeSet<InstId>,
+    /// Loads whose only reader takes their cell as its memory operand.
+    cells: BTreeSet<InstId>,
+    /// Conversions whose only reader is a store: x87 stores them itself.
+    stored: BTreeSet<InstId>,
+    /// Dword loads read only as words: each word's offset and the value it is.
+    words: IndexMap<InstId, Vec<(i64, ValueId)>>,
+    /// ANDs only a comparison with zero reads: a `test`.
+    tested: BTreeSet<InstId>,
+    /// What another instruction's selection made: a narrowed load's
+    /// readers, the second of a quotient and remainder.
+    consumed: BTreeSet<InstId>,
+    /// A division whose remainder, or remainder whose quotient, a later
+    /// instruction of its block is: that instruction's value.
+    paired: IndexMap<InstId, ValueId>,
+    /// What each callee does to memory.
+    callees: llrm_mir::memory::Callees,
+    /// What each instruction costs, where a choice depends on it.
+    cpu: &'c Profile,
     /// What each block computes for its successors' phis, before its terminator.
     pending: IndexMap<BlockId, Vec<Arc<Insn>>>,
     /// The register each (phi, predecessor) reads, where that block made it.
@@ -304,7 +339,7 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     self.depth += size + size % 2;
-                    self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame(-self.depth));
+                    self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame { disp: -self.depth, index: None });
                 }
             }
         }
@@ -339,11 +374,11 @@ impl Selector<'_, '_, '_> {
             let ty = function.value(parameter).ty;
             if self.is_float(ty) {
                 let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
-                self.float_loaded(held, "fld", Pointer::Frame(disp), size, false, block_at[&entry], &mut prologue);
+                self.float_loaded(held, "fld", Pointer::Frame { disp, index: None }, size, false, block_at[&entry], &mut prologue);
                 continue;
             }
             if self.is_far(function.value(parameter).ty) {
-                let (offset, selector) = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
+                let (offset, selector) = self.far_loaded(Pointer::Frame { disp, index: None }, false, block_at[&entry], &mut prologue);
                 self.fars.insert(parameter, (Some(offset), selector));
                 continue;
             }
@@ -355,11 +390,34 @@ impl Selector<'_, '_, '_> {
         for &block in layout {
             for &inst in function.block(block).instructions() {
                 self.fuse(block, inst);
+                self.fold(inst);
+                self.narrowed(inst);
+                self.test(inst);
+                self.pair(inst);
             }
             self.phis_from(block)?;
         }
-        let mut blocks = Vec::new();
-        for &block in layout {
+        // Selected in reverse postorder, so every definition before its
+        // readers, as a folded address must be; laid out as the function is.
+        let mut order = Vec::new();
+        let (mut seen, mut stack) = (BTreeSet::new(), vec![(entry, 0)]);
+        seen.insert(entry);
+        while let Some((block, next)) = stack.pop() {
+            let successors = self.successors(block);
+            match successors.get(next) {
+                Some(&one) => {
+                    stack.push((block, next + 1));
+                    if seen.insert(one) {
+                        stack.push((one, 0));
+                    }
+                }
+                None => order.push(block),
+            }
+        }
+        order.reverse();
+        let mut made: IndexMap<BlockId, Vec<LirBlock>> = IndexMap::default();
+        for &block in &order {
+            let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
             for &inst in function.block(block).instructions() {
@@ -375,7 +433,7 @@ impl Selector<'_, '_, '_> {
                     insns.extend(self.pending.shift_remove(&block).unwrap_or_default());
                 }
                 if instruction.opcode == Opcode::Switch {
-                    self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), &mut blocks)?;
+                    self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), blocks)?;
                     break;
                 }
                 self.instruction(inst, &block_at, &mut insns, convention)?;
@@ -391,10 +449,46 @@ impl Selector<'_, '_, '_> {
             }
             blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
         }
+        let cold = self.cold(&order);
+        let blocks = layout
+            .iter()
+            .flat_map(|block| {
+                let chain = made.shift_remove(block).unwrap_or_default();
+                chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
+            })
+            .collect();
+        let blocks = combined::combined(blocks);
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
         Ok(body)
+    }
+
+    /// Blocks from which every path ends in `unreachable`, as the old
+    /// route's noreturn::cold finds those ending in a terminal call: a least
+    /// fixed point, so a loop that never exits is not cold, and none is
+    /// when the entry is.
+    fn cold(&self, blocks: &[BlockId]) -> BTreeSet<BlockId> {
+        let function = self.function;
+        let mut found = BTreeSet::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in blocks {
+                let ends = match function.instruction(function.terminator(block).expect("a terminator")).opcode {
+                    Opcode::Unreachable => true,
+                    Opcode::Ret => false,
+                    _ => {
+                        let successors = self.successors(block);
+                        !successors.is_empty() && successors.iter().all(|one| found.contains(one))
+                    }
+                };
+                if ends && found.insert(block) {
+                    changed = true;
+                }
+            }
+        }
+        if found.contains(&function.entry().expect("a body")) { BTreeSet::new() } else { found }
     }
 
     /// A comparison whose only reader is its block's branch stays flags.
@@ -414,6 +508,156 @@ impl Selector<'_, '_, '_> {
         {
             self.fused.insert(inst);
         }
+    }
+
+    /// Where x87 reads or writes only memory, the cell a value comes from or
+    /// goes to is the operand, as the old route placed a MIR cell operand
+    /// (`lower::_place`): an integer load only `sitofp` reads is `fild`'s
+    /// cell, a float load only a comparison reads second is `fcom`'s, and a
+    /// conversion only a store reads is stored by `fistp`, `fisttp` or
+    /// `fstp` into the store's cell.
+    fn fold(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        match (&instruction.opcode, instruction.operands.first()) {
+            (Opcode::Cast(CastOp::SIToFP), Some(&Operand::Value(value))) => {
+                let ValueDef::Instruction(load) = function.value(value).def else { return };
+                let fild = matches!(self.types().int_bits(function.value(value).ty), Some(16 | 32));
+                if fild && matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, inst) {
+                    self.cells.insert(load);
+                }
+            }
+            (Opcode::FCmp(predicate), Some(_)) => {
+                let Some((swapped, _)) = float_conditions(*predicate) else { return };
+                let Operand::Value(value) = instruction.operands[usize::from(!swapped)] else { return };
+                let ValueDef::Instruction(load) = function.value(value).def else { return };
+                // A comparison a branch reads is made beside the branch.
+                let Some(block) = function.parent(inst) else { return };
+                let at = if self.fused.contains(&inst) { function.terminator(block).expect("a terminator") } else { inst };
+                if matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, at) {
+                    self.cells.insert(load);
+                }
+            }
+            (Opcode::Store { .. }, Some(&Operand::Value(value))) => {
+                let ValueDef::Instruction(conversion) = function.value(value).def else { return };
+                let converting = function.instruction(conversion);
+                let by_x87 = match &converting.opcode {
+                    Opcode::Cast(CastOp::FPToSI) => matches!(self.types().int_bits(converting.ty), Some(16 | 32)),
+                    Opcode::Cast(CastOp::FPTrunc) => true,
+                    Opcode::Call(_) => self.lrint(conversion) && matches!(self.types().int_bits(converting.ty), Some(16 | 32)),
+                    _ => false,
+                };
+                if by_x87 && self.only_reader(value, inst) {
+                    self.stored.insert(conversion);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A dword load read only through its words is those words loaded, as
+    /// the old route's narrow selects: `trunc` reads the low word, `trunc`
+    /// of a shift right by 16 the high.
+    fn narrowed(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        if !matches!(instruction.opcode, Opcode::Load { volatile: false, .. }) || self.types().int_bits(instruction.ty) != Some(32) {
+            return;
+        }
+        let Some(loaded) = instruction.result else { return };
+        let word = |reader: InstId| {
+            let reading = function.instruction(reader);
+            (reading.opcode == Opcode::Cast(CastOp::Trunc) && self.types().int_bits(reading.ty) == Some(16)).then(|| reading.result).flatten()
+        };
+        let mut halves = Vec::new();
+        let mut readers = Vec::new();
+        for one in function.users(loaded) {
+            let reading = function.instruction(one.user);
+            if let Some(result) = word(one.user) {
+                halves.push((0, result));
+                readers.push(one.user);
+                continue;
+            }
+            let high = matches!(reading.opcode, Opcode::Binary(BinaryOp::LShr | BinaryOp::AShr)) && one.index == 0 && self.constant(reading.operands[1], 4) == Some(16);
+            let Some(shifted) = reading.result.filter(|_| high) else { return };
+            let [only] = function.users(shifted) else { return };
+            let Some(result) = word(only.user) else { return };
+            halves.push((2, result));
+            readers.extend([one.user, only.user]);
+        }
+        if !halves.is_empty() {
+            self.words.insert(inst, halves);
+            self.consumed.extend(readers);
+        }
+    }
+
+    /// An AND only a comparison with zero reads is `test`: its result is
+    /// dead, and its flags are the comparison's, as the old route's
+    /// _flag_test selects.
+    fn test(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        if !matches!(instruction.opcode, Opcode::ICmp(_)) {
+            return;
+        }
+        let (a, b) = (instruction.operands[0], instruction.operands[1]);
+        let Some(Operand::Value(value)) = [(a, b), (b, a)].into_iter().find(|&(_, zero)| self.constant(zero, 4) == Some(0)).map(|(value, _)| value) else { return };
+        let ValueDef::Instruction(and) = function.value(value).def else { return };
+        let anding = function.instruction(and);
+        let registers = anding.operands.iter().all(|one| matches!(one, Operand::Value(_)));
+        if anding.opcode == Opcode::Binary(BinaryOp::And) && registers && matches!(self.types().int_bits(anding.ty), Some(16 | 32)) && self.only_reader(value, inst) {
+            self.tested.insert(and);
+        }
+    }
+
+    /// A quotient and a remainder of the same operands in one block are
+    /// one division, which leaves both, as the old route's divmod is.
+    fn pair(&mut self, inst: InstId) {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let partner = match instruction.opcode {
+            Opcode::Binary(BinaryOp::SDiv) => BinaryOp::SRem,
+            Opcode::Binary(BinaryOp::SRem) => BinaryOp::SDiv,
+            Opcode::Binary(BinaryOp::UDiv) => BinaryOp::URem,
+            Opcode::Binary(BinaryOp::URem) => BinaryOp::UDiv,
+            _ => return,
+        };
+        if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32)) {
+            return;
+        }
+        let Some(block) = function.parent(inst) else { return };
+        let later = function.block(block).instructions().iter().skip_while(|&&one| one != inst).skip(1);
+        let found = later.copied().find(|&one| {
+            let other = function.instruction(one);
+            other.opcode == Opcode::Binary(partner) && other.operands == instruction.operands && !self.consumed.contains(&one)
+        });
+        if let Some(one) = found {
+            self.paired.insert(inst, function.instruction(one).result.expect("a result"));
+            self.consumed.insert(one);
+        }
+    }
+
+    /// Whether `value` is read once, by `user` in the block that defines it.
+    fn only_reader(&self, value: ValueId, user: InstId) -> bool {
+        let function = self.function;
+        let ValueDef::Instruction(definition) = function.value(value).def else { return false };
+        matches!(function.users(value), [only] if only.user == user) && function.parent(definition) == function.parent(user)
+    }
+
+    /// Whether nothing after `from` and before `to`, in one block, may write memory.
+    fn unwritten(&self, from: InstId, to: InstId) -> bool {
+        let function = self.function;
+        let Some(block) = function.parent(from) else { return false };
+        let instructions = function.block(block).instructions();
+        let (Some(start), Some(end)) = (instructions.iter().position(|&one| one == from), instructions.iter().position(|&one| one == to)) else { return false };
+        start < end && instructions[start + 1..end].iter().all(|&one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
+    }
+
+    /// Whether `inst` is a call of `llvm.lrint`.
+    fn lrint(&self, inst: InstId) -> bool {
+        let Some(&Operand::Constant(callee)) = self.function.instruction(inst).operands.last() else { return false };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return false };
+        self.module.global(global).name.as_deref().is_some_and(|name| llrm_mir::intrinsics::is_reserved(name) && Intrinsic::named(name) == Some(Intrinsic::LRint))
     }
 
     /// What each phi in `block` reads that is no register -- a constant,
@@ -616,12 +860,15 @@ impl Selector<'_, '_, '_> {
     /// `held` made the address `pointer` names.
     fn address(&self, pointer: Pointer, held: Held) -> Semantics {
         match pointer {
-            Pointer::Frame(disp) => {
+            Pointer::Frame { index: Some(_), .. } | Pointer::Based { index: Some(_), .. } | Pointer::Far { index: Some(_), .. } => {
+                unreachable!("an indexed address is read only by accesses")
+            }
+            Pointer::Frame { disp, index: None } => {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
             // A far pointer's offset.
-            Pointer::Based { base, offset } | Pointer::Far { base: Some(base), offset, .. } => {
+            Pointer::Based { base, offset, .. } | Pointer::Far { base: Some(base), offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
@@ -646,13 +893,13 @@ impl Selector<'_, '_, '_> {
         }
         let ty = self.function.value(value).ty;
         if let Some(&(base, selector)) = self.fars.get(&value) {
-            return Ok(Pointer::Far { selector, base, offset: 0 });
+            return Ok(Pointer::Far { selector, base, index: None, offset: 0 });
         }
         if !matches!(self.types().get(ty), Type::Pointer(0)) {
             return refuse(format!("an access through a {}", self.types().display(ty)));
         }
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, offset: 0 })
+        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, offset: 0 })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -743,14 +990,36 @@ impl Selector<'_, '_, '_> {
         let address = instruction.result.expect("an address");
         let sum = sum.expect("a variable index");
         // A global's symbol is the displacement of the register holding the
-        // index: each access addresses [index+symbol].
+        // index, [index+symbol], and the address as a value their sum.
         if let Pointer::Global { space, index, offset: start, base: None } = pointer {
-            self.pointers.insert(address, Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) });
+            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) };
+            if self.only_addressed(address) {
+                self.pointers.insert(address, indexed);
+            } else {
+                let held = Held { value: self.value(address), width };
+                out.push(insn(at, self.address(indexed, held)));
+            }
             return Ok(());
         }
+        // An address only accesses read is their base plus the sum as an
+        // index, as the old route's addressforms folds `b + (c << k)` read
+        // only by cells: the add goes. Word addressing has no scale.
+        if self.only_addressed(address) {
+            let indexed = match pointer.moved(offset as i64) {
+                Pointer::Frame { disp, index: None } => Some(Pointer::Frame { disp, index: Some(sum) }),
+                Pointer::Based { base, index: None, offset } => Some(Pointer::Based { base, index: Some(sum), offset }),
+                Pointer::Far { selector, base: Some(base), index: None, offset } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), offset }),
+                Pointer::Far { selector, base: None, index: None, offset } => Some(Pointer::Far { selector, base: Some(sum), index: None, offset }),
+                _ => None,
+            };
+            if let Some(indexed) = indexed {
+                self.pointers.insert(address, indexed);
+                return Ok(());
+            }
+        }
         let start = match pointer {
-            Pointer::Based { base, offset: 0 } | Pointer::Far { base: Some(base), offset: 0, .. } if offset == 0 => Some(base),
-            Pointer::Far { base: None, offset: 0, .. } if offset == 0 => None,
+            Pointer::Based { base, index: None, offset: 0 } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
+            Pointer::Far { base: None, index: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
@@ -776,6 +1045,32 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The shifts and adds a multiply by `factor` is, where the target
+    /// prices them below `imul`: the old route's `_scaled`.
+    fn scaled(&self, factor: Operand, ty: TypeId) -> Result<Option<Vec<(&'static str, i64)>>, Unselected> {
+        let width = self.width(ty)?;
+        let Some(n) = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n) else { return Ok(None) };
+        let chain = arithmetic::scale(n, self.cpu).map_err(Unselected)?;
+        Ok(chain.filter(|chain| chain.iter().all(|&(name, count)| name != "shl" || count < i64::from(width) * 8)))
+    }
+
+    /// Whether every reader of `value` takes it as the address of a load or
+    /// a store, directly or through a constant offset.
+    fn only_addressed(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let users = function.users(value);
+        !users.is_empty()
+            && users.iter().all(|one| match &function.instruction(one.user).opcode {
+                Opcode::Load { .. } => one.index == 0,
+                Opcode::Store { .. } => one.index == 1,
+                Opcode::GetElementPtr { source } => {
+                    let constant = self.layout.collect_offset(self.types(), *source, &self.indices(one.user)).1.is_empty();
+                    one.index == 0 && constant && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result))
+                }
+                _ => false,
+            })
+    }
+
     /// `div` and `idiv` divide dx:ax, the high word made by `cwd` or zero,
     /// and leave both quotient and remainder.
     fn divide(&mut self, op: BinaryOp, inst: InstId, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
@@ -787,8 +1082,30 @@ impl Selector<'_, '_, '_> {
             return refuse("a byte division");
         }
         let dividend = self.held(instruction.operands[0], ty, at, out)?;
-        let divisor = self.held(instruction.operands[1], ty, at, out)?;
         let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+        let other = match self.paired.get(&inst) {
+            Some(&partner) => self.value(partner),
+            None => self.fresh(),
+        };
+        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: other, width });
+        let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
+        // A signed division by a constant is a multiply by its reciprocal
+        // where the target prices that cheaper, as the old route's
+        // division::reciprocal selects.
+        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| signed) {
+            let mut next = self.next;
+            let mut fresh = || {
+                next += 1;
+                next
+            };
+            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result || self.paired.contains_key(&inst)).map_err(Unselected)?;
+            self.next = next;
+            if let Some(parts) = reciprocal {
+                out.extend(parts.into_iter().map(|what| insn(at, what)));
+                return Ok(());
+            }
+        }
+        let divisor = self.held(instruction.operands[1], ty, at, out)?;
         let high = Held { value: self.fresh(), width };
         out.push(insn(
             at,
@@ -798,8 +1115,6 @@ impl Selector<'_, '_, '_> {
                 semantics(Operation::Move, "mov", vec![Loc::Held(high)], vec![Loc::Imm(Imm { value: 0, width, address: None })])
             },
         ));
-        let (result, other) = (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: self.fresh(), width });
-        let (quotient, remainder) = if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
         let what = semantics(
             Operation::Divide,
             if signed { "idiv" } else { "div" },
@@ -812,13 +1127,26 @@ impl Selector<'_, '_, '_> {
 
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
-            Pointer::Frame(disp) => frame(disp, width),
+            Pointer::Frame { disp, index: None } => frame(disp, width),
+            // As addressforms spells an indexed frame cell: BP and the index,
+            // the displacement a literal no relocation owns, through SS.
+            Pointer::Frame { disp, index: Some(index) } => Mem {
+                through: Register::BP,
+                disp_width: 2,
+                index: Some(index),
+                ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
+            },
             Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
-            Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
-            Pointer::Far { selector, base, offset } => Mem {
+            Pointer::Based { base, index: None, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
+            Pointer::Based { base, index: Some(index), offset } => {
+                Mem { base: Some(base), index: Some(index), offset, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset)), width) }
+            }
+            Pointer::Far { selector, base, index, offset } => Mem {
                 offset,
                 disp_width: 2,
                 base,
+                index,
                 selector: Some(selector),
                 ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
             },
@@ -861,7 +1189,7 @@ impl Selector<'_, '_, '_> {
             return Ok((halves[0], halves[1]));
         }
         match self.pointer(operand)? {
-            Pointer::Far { selector, base: Some(base), offset: 0 } => Ok((base, selector)),
+            Pointer::Far { selector, base: Some(base), index: None, offset: 0 } => Ok((base, selector)),
             pointer @ Pointer::Far { selector, .. } => {
                 let moved = self.fresh_held(2);
                 out.push(insn(at, self.address(pointer, moved)));
@@ -937,6 +1265,12 @@ impl Selector<'_, '_, '_> {
                 let into = Held { value: self.value(result), width: FLOAT };
                 self.float_loaded(into, "fld", cell, 4, false, at, out);
             }
+            CastOp::SIToFP if self.cell(operand).is_some() => {
+                let load = self.cell(operand).expect("a folded load");
+                let (pointer, width) = (self.pointer(self.function.instruction(load).operands[0])?, self.width(from)?);
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fild", pointer, width, false, at, out);
+            }
             CastOp::SIToFP => {
                 let mut held = self.held(operand, from, at, out)?;
                 // fild reads a word, a dword or a qword.
@@ -972,6 +1306,39 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The load `operand` is, if its cell is its reader's operand.
+    fn cell(&self, operand: Operand) -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function.value(value).def {
+            ValueDef::Instruction(load) if self.cells.contains(&load) => Some(load),
+            _ => None,
+        }
+    }
+
+    /// The conversion `value` is, if the store reading it stores it.
+    fn converted(&self, value: ValueId) -> Option<InstId> {
+        match self.function.value(value).def {
+            ValueDef::Instruction(conversion) if self.stored.contains(&conversion) => Some(conversion),
+            _ => None,
+        }
+    }
+
+    /// A conversion stored by x87 into the cell at `pointer`: `fisttp` toward
+    /// zero, `fistp` as lrint rounds, `fstp` narrowing to a float.
+    fn store_converted(&mut self, conversion: InstId, pointer: Pointer, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(conversion);
+        let (name, operand) = match instruction.opcode {
+            Opcode::Cast(CastOp::FPToSI) => ("fisttp", instruction.operands[0]),
+            Opcode::Cast(CastOp::FPTrunc) => ("fstp", instruction.operands[0]),
+            _ => ("fistp", instruction.operands[0]),
+        };
+        let size = self.size(instruction.ty)?;
+        let held = self.float(operand, at, out)?;
+        let what = semantics(Operation::FloatStore, name, vec![Loc::Mem(Self::memory(pointer, size))], vec![Loc::Held(held)]);
+        out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        Ok(())
+    }
+
     /// `into` made of a low and a high word.
     fn joined(&mut self, into: Held, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) {
         let (wide_low, wide_high, shifted) = (self.fresh_held(4), self.fresh_held(4), self.fresh_held(4));
@@ -1000,6 +1367,29 @@ impl Selector<'_, '_, '_> {
         let type_of = |operand: Operand| function.operand_type(&self.module.context, operand).expect("a typed operand");
         match &instruction.opcode {
             Opcode::Alloca { .. } => {}
+            // Selected where its reader is: see fold.
+            _ if self.cells.contains(&inst) || self.stored.contains(&inst) || self.tested.contains(&inst) || self.consumed.contains(&inst) => {}
+            Opcode::Load { .. } if self.words.contains_key(&inst) => {
+                let pointer = self.pointer(operands[0])?;
+                let mut made: IndexMap<i64, Held> = IndexMap::default();
+                let mut halves = self.words[&inst].clone();
+                halves.sort_by_key(|&(offset, _)| offset);
+                for (offset, result) in halves {
+                    let held = Held { value: self.value(result), width: 2 };
+                    let source = match made.get(&offset) {
+                        Some(&earlier) => Loc::Held(earlier),
+                        None => Loc::Mem(Self::memory(pointer.moved(offset), 2)),
+                    };
+                    made.entry(offset).or_insert(held);
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
+                }
+            }
+            Opcode::Store { volatile, .. } if matches!(operands[0], Operand::Value(value) if self.converted(value).is_some()) => {
+                let Operand::Value(value) = operands[0] else { unreachable!("a converted value") };
+                let conversion = self.converted(value).expect("a stored conversion");
+                let pointer = self.pointer(operands[1])?;
+                self.store_converted(conversion, pointer, *volatile, at, out)?;
+            }
             Opcode::GetElementPtr { source } => {
                 if self.folded(instruction.result.expect("an address"))?.is_none() {
                     self.indexed(inst, *source, at, out)?;
@@ -1103,6 +1493,20 @@ impl Selector<'_, '_, '_> {
                     std::mem::swap(&mut a, &mut b);
                 }
                 let a = Loc::Held(self.held(a, ty, at, out)?);
+                if *op == BinaryOp::Mul
+                    && let Some(chain) = self.scaled(b, ty)?
+                {
+                    // Shifts and adds of the source, as the old route's _scaled selects.
+                    let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
+                    let mut current = a.clone();
+                    for (index, &(name, count)) in chain.iter().enumerate() {
+                        let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
+                        let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
+                        out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+                        current = Loc::Held(into);
+                    }
+                    return Ok(());
+                }
                 let b = match (self.source(b, ty, at, out)?, name) {
                     // A shift counts from cl: its count is a byte.
                     (Loc::Held(count), "shl" | "shr" | "sar") => Loc::Held(Held { width: 1, ..count }),
@@ -1378,7 +1782,7 @@ impl Selector<'_, '_, '_> {
         let (bulk, tail) = if length / 4 + (length % 4).count_ones() as i64 > MEMSET_STORES { (length / 4, length % 4) } else { (0, length) };
         if bulk > 0 {
             let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
-            let source = if matches!(pointer, Pointer::Frame(_)) { Register::SS } else { Register::DS };
+            let source = if matches!(pointer, Pointer::Frame { .. }) { Register::SS } else { Register::DS };
             let (stored, count, through) = (self.fresh_held(4), self.fresh_held(2), self.fresh_held(2));
             let (stepped, emptied) = (self.fresh_held(2), self.fresh_held(2));
             for what in [
@@ -1434,6 +1838,15 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(Test::One(condition_code(predicate)));
         }
+        if let Operand::Value(value) = a
+            && let ValueDef::Instruction(and) = self.function.value(value).def
+            && self.tested.contains(&and)
+        {
+            let operands = self.function.instruction(and).operands.clone();
+            let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));
+            out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![x, y])));
+            return Ok(Test::One(condition_code(predicate)));
+        }
         let a = Loc::Held(self.held(a, ty, at, out)?);
         let b = self.source(b, ty, at, out)?;
         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
@@ -1478,8 +1891,15 @@ impl Selector<'_, '_, '_> {
         let instruction = self.function.instruction(inst);
         let Some((swapped, test)) = float_conditions(predicate) else { return refuse(format!("fcmp {predicate:?}")) };
         let (a, b) = if swapped { (instruction.operands[1], instruction.operands[0]) } else { (instruction.operands[0], instruction.operands[1]) };
-        let (a, b) = (self.float(a, at, out)?, self.float(b, at, out)?);
-        out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), Loc::Held(b)])));
+        let b = match self.cell(b) {
+            Some(load) => {
+                let loaded = self.function.instruction(load);
+                Loc::Mem(Self::memory(self.pointer(loaded.operands[0])?, self.size(loaded.ty)?))
+            }
+            None => Loc::Held(self.float(b, at, out)?),
+        };
+        let a = self.float(a, at, out)?;
+        out.push(insn(at, semantics(Operation::Compare, "fcom", vec![], vec![Loc::Held(a), b])));
         Ok(test)
     }
 
@@ -1508,7 +1928,7 @@ impl Selector<'_, '_, '_> {
     /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
     fn temporary(&mut self, size: i64) -> Pointer {
         self.depth += size + size % 2;
-        Pointer::Frame(-self.depth)
+        Pointer::Frame { disp: -self.depth, index: None }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
@@ -1536,10 +1956,10 @@ impl Selector<'_, '_, '_> {
 impl Pointer {
     fn moved(self, by: i64) -> Pointer {
         match self {
-            Pointer::Frame(disp) => Pointer::Frame(disp + by),
-            Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
+            Pointer::Frame { disp, index } => Pointer::Frame { disp: disp + by, index },
+            Pointer::Based { base, index, offset } => Pointer::Based { base, index, offset: offset + by },
             Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
-            Pointer::Far { selector, base, offset } => Pointer::Far { selector, base, offset: offset + by },
+            Pointer::Far { selector, base, index, offset } => Pointer::Far { selector, base, index, offset: offset + by },
         }
     }
 }
