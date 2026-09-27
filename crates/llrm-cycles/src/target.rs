@@ -1,10 +1,12 @@
 //! Real-mode DOS as a target, what analyses ask of it through
 //! `llrm_mir::target::Machine`.
 
-use llrm_mir::target::Machine;
+use llrm_mir::target::{Machine, OperationCosts};
 
-/// Real-mode DOS's foreign memory, as its machine description states it:
-/// VGA and text video memory, and the ROMs above.
+use crate::timings;
+
+/// Real-mode DOS on a 486: its prices, and its foreign memory -- VGA and
+/// text video memory, and the ROMs above.
 pub struct Dos;
 
 impl Machine for Dos {
@@ -21,5 +23,56 @@ impl Machine for Dos {
             }
         }
         (end <= reached).then_some((start, end))
+    }
+
+    fn costs(&self) -> OperationCosts {
+        costs("486")
+    }
+}
+
+/// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
+/// instructions lowering picks for it.
+pub fn costs(arch: &str) -> OperationCosts {
+    let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
+    let cost = |kind: &str| timings::COST[kind][at];
+    OperationCosts {
+        add: cost("alu_rr"),
+        multiply: cost("mul_r16"),
+        divide: cost("div_r16"),
+        shift: cost("shift_ri"),
+        address: cost("lea"),
+        load: cost("mov_rm"),
+        store: cost("mov_mr"),
+        memory_update: cost("alu_mr"),
+        branch: cost("jcc"),
+        prefix: timings::PREFIX[at],
+        r#move: cost("mov_rr"),
+        call: cost("call_far"),
+        return_: cost("ret_far"),
+        float_add: cost("x87_add"),
+        float_multiply: cost("x87_mul"),
+        float_divide: cost("x87_div"),
+        float_load: cost("x87_load"),
+        float_store: cost("x87_store"),
+        extend: cost("movzx"),
+        // Saving ES, loading it with the cells' segment, and setting the
+        // value and count before `rep stos`; then restoring ES.
+        fill: cost("rep_stos") + 2 * cost("push_r") + 2 * cost("pop_seg") + 2 * cost("mov_ri"),
+        fill_cell: cost("rep_stos_cell"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_mir::target::Machine;
+
+    use super::Dos;
+
+    /// Dos prices at the 486's clocks: a 16-bit divide and multiply, and a
+    /// fill's setup around `rep stos`.
+    #[test]
+    fn dos_prices_the_486() {
+        let costs = Dos.costs();
+        assert_eq!((costs.divide, costs.multiply, costs.prefix, costs.fill_cell), (24, 13, 1, 4));
     }
 }

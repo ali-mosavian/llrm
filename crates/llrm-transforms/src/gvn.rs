@@ -46,7 +46,6 @@ use crate::{edges, loadjoins, transform};
 /// The single value-reuse pass: scalar GVN and memory-aware PRE.
 #[derive(Default)]
 pub struct Gvn {
-    pub costs: OperationCosts,
     /// Integer values that fit in registers; 0 leaves pricing out.
     pub registers: i64,
 }
@@ -60,7 +59,7 @@ impl FunctionPass for Gvn {
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &self.costs, self.registers)) {
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, self.registers)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -75,8 +74,8 @@ impl FunctionPass for Gvn {
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, costs, registers)?;
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, registers: i64) -> Result<bool, String> {
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), registers)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
