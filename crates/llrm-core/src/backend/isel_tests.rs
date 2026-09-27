@@ -2336,3 +2336,20 @@ define void @f() addrspace(1) {
     let moves: Vec<&String> = got.iter().filter(|line| line.starts_with("mov")).collect();
     assert!(moves.iter().all(|line| line.starts_with("mov word ptr") || line.starts_with("mov dword ptr")), "{got:?}");
 }
+
+/// A dword that arrives in dx:ax is joined as the old route joins it,
+/// `shl eax, 16` and `shrd eax, edx, 16`: two zero extensions, a shift and
+/// an `or` cost parity/control two more instructions per call.
+#[test]
+fn test_a_dword_from_dx_ax_is_joined_by_shrd() {
+    let text = "declare i32 @g() addrspace(1)
+define i32 @f() addrspace(1) {
+  %a = call addrspace(1) i32 @g()
+  %b = mul i32 %a, 3
+  ret i32 %b
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.starts_with("shrd")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("movzx") || line.starts_with("or ")), "{got:?}");
+}

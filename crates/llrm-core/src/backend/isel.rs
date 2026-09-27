@@ -2210,9 +2210,11 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(value), width };
             match returned(width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
+                // Delivered as dwords: `shrd` reads each whole register, and
+                // neither upper word reaches the joined value.
                 [low_register, high_register] => {
-                    let (low, high) = (Held { value: self.fresh(), width: 2 }, Held { value: self.fresh(), width: 2 });
-                    delivers = vec![(low, low_register), (high, high_register)];
+                    let (low, high) = (self.fresh_held(4), self.fresh_held(4));
+                    delivers = vec![(low, low_register.full_register32()), (high, high_register.full_register32())];
                     result = Some((held, low, high));
                 }
                 ref registers => delivers = vec![(held, registers[0])],
@@ -2241,8 +2243,13 @@ impl Selector<'_, '_, '_> {
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
-        if let Some((held, low, high)) = result {
-            self.joined(held, low, high, at, out);
+        if let Some((into, low, high)) = result {
+            let shifted = self.half();
+            self.halves.insert(into.value);
+            self.joins.insert(into.value, (Held { width: 2, ..low }, Held { width: 2, ..high }));
+            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+            out.push(insn(at, semantics(Operation::Binary, "shl", vec![Loc::Held(shifted)], vec![Loc::Held(low), sixteen.clone()])));
+            out.push(insn(at, semantics(Operation::Funnel, "shrd", vec![Loc::Held(into)], vec![Loc::Held(shifted), Loc::Held(high), sixteen])));
         }
         Ok(())
     }
