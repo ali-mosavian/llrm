@@ -683,8 +683,9 @@ pub fn _memory(cell: &ir::Mem, names: &IndexMap<(Space, i64), String>) -> Result
             };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
-        Space::Far if !registers.is_empty() => {
-            return Ok(format!("{size}{}:[{registers}{disp}]", target::name_of(address.segment)));
+        Space::Far if address.segment != Register::None => {
+            let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
+            return Ok(format!("{size}{}:[{inside}]", target::name_of(address.segment)));
         }
         _ => {}
     }

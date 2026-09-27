@@ -1165,3 +1165,21 @@ define double @f(double %x) addrspace(1) {
     let names: Vec<String> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()).filter(|what| what.op == crate::model::ir::Operation::FloatUnary).filter_map(|what| what.name.clone()).collect();
     assert_eq!(names, ["flog2", "fexp2", "fatan"]);
 }
+
+/// A segment's far pointer is offset 0: plasma's element address was
+/// `xor bx,bx; add bx,cx`, a zero made and added each iteration.
+#[test]
+fn test_a_segments_element_is_addressed_by_its_index_alone() {
+    let text = "define i16 @f(ptr %d, i16 %i) addrspace(1) {
+  %s = load i16, ptr %d
+  %p = inttoptr i16 %s to ptr addrspace(2)
+  %f = addrspacecast ptr addrspace(2) %p to ptr addrspace(1)
+  %e = getelementptr i16, ptr addrspace(1) %f, i16 %i
+  %v = load i16, ptr addrspace(1) %e
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("xor")), "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("add")).count(), 1, "{got:?}");
+}

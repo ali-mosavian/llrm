@@ -199,8 +199,9 @@ enum Pointer {
     Based { base: Held, offset: i64 },
     /// A near global's symbol, and a displacement from it.
     Global { space: Space, index: i64, offset: i64 },
-    /// A far pointer's selector and offset, and a displacement from it.
-    Far { selector: Held, base: Held, offset: i64 },
+    /// A far pointer's selector and offset, and a displacement from it; no
+    /// offset register is offset 0, as a segment's pointer has.
+    Far { selector: Held, base: Option<Held>, offset: i64 },
 }
 
 pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mut Pool) -> Result<Selected, Unselected> {
@@ -248,8 +249,9 @@ struct Selector<'m, 'c, 'p> {
     next: u32,
     pointers: IndexMap<ValueId, Pointer>,
     /// Each far pointer value's offset and selector, as LLVM's type
-    /// legalizer expands a value no register holds into two.
-    fars: IndexMap<ValueId, (Held, Held)>,
+    /// legalizer expands a value no register holds into two; no offset
+    /// register is offset 0.
+    fars: IndexMap<ValueId, (Option<Held>, Held)>,
     /// Each i64 value's low and high dwords, expanded likewise.
     wides: IndexMap<ValueId, (Held, Held)>,
     depth: i64,
@@ -340,8 +342,8 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             if self.is_far(function.value(parameter).ty) {
-                let pair = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
-                self.fars.insert(parameter, pair);
+                let (offset, selector) = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
+                self.fars.insert(parameter, (Some(offset), selector));
                 continue;
             }
             let width = self.width(function.value(parameter).ty)?;
@@ -618,9 +620,12 @@ impl Selector<'_, '_, '_> {
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
             // A far pointer's offset.
-            Pointer::Based { base, offset } | Pointer::Far { base, offset, .. } => {
+            Pointer::Based { base, offset } | Pointer::Far { base: Some(base), offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
+            }
+            Pointer::Far { base: None, offset, .. } => {
+                semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: offset, width: held.width, address: None })])
             }
             Pointer::Global { space, index, offset } => {
                 let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
@@ -732,24 +737,31 @@ impl Selector<'_, '_, '_> {
         }
         let pointer = self.pointer(instruction.operands[0])?;
         let start = match pointer {
-            Pointer::Based { base, offset: 0 } | Pointer::Far { base, offset: 0, .. } if offset == 0 => base,
+            Pointer::Based { base, offset: 0 } | Pointer::Far { base: Some(base), offset: 0, .. } if offset == 0 => Some(base),
+            Pointer::Far { base: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
                 out.push(insn(at, self.address(moved, start)));
-                start
+                Some(start)
             }
         };
         let address = instruction.result.expect("an address");
-        let result = match pointer {
-            Pointer::Far { selector, .. } if far => {
+        let sum = sum.expect("a variable index");
+        let result = match (pointer, start) {
+            // Offset 0 plus the index is the index.
+            (Pointer::Far { selector, .. }, None) => {
+                self.fars.insert(address, (Some(sum), selector));
+                return Ok(());
+            }
+            (Pointer::Far { selector, .. }, Some(_)) if far => {
                 let offset = self.fresh_held(2);
-                self.fars.insert(address, (offset, selector));
+                self.fars.insert(address, (Some(offset), selector));
                 offset
             }
             _ => Held { value: self.value(address), width },
         };
-        let sum = sum.expect("a variable index");
+        let start = start.expect("a near pointer's register");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
         Ok(())
     }
@@ -796,7 +808,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { selector, base, offset } => Mem {
                 offset,
                 disp_width: 2,
-                base: Some(base),
+                base,
                 selector: Some(selector),
                 ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
             },
@@ -839,7 +851,7 @@ impl Selector<'_, '_, '_> {
             return Ok((halves[0], halves[1]));
         }
         match self.pointer(operand)? {
-            Pointer::Far { selector, base, offset: 0 } => Ok((base, selector)),
+            Pointer::Far { selector, base: Some(base), offset: 0 } => Ok((base, selector)),
             pointer @ Pointer::Far { selector, .. } => {
                 let moved = self.fresh_held(2);
                 out.push(insn(at, self.address(pointer, moved)));
@@ -865,20 +877,15 @@ impl Selector<'_, '_, '_> {
                     let selector = self.fresh_held(2);
                     let (space, index) = crate::hir::lower::DGROUP;
                     out.push(mov(selector, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })));
-                    (offset, selector)
+                    (Some(offset), selector)
                 }
-                (CastOp::AddrSpaceCast, Type::Pointer(2)) => {
-                    let selector = self.held(operand, from, at, out)?;
-                    let offset = self.fresh_held(2);
-                    out.push(mov(offset, word(0)));
-                    (offset, selector)
-                }
+                (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
                 (CastOp::IntToPtr, Type::Int(32)) => {
                     let dword = self.held(operand, from, at, out)?;
                     let top = self.fresh_held(4);
                     let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(dword), sixteen])));
-                    (Held { width: 2, ..dword }, Held { width: 2, ..top })
+                    (Some(Held { width: 2, ..dword }), Held { width: 2, ..top })
                 }
                 _ => return refuse(format!("{op:?} to a far pointer")),
             };
@@ -1037,8 +1044,8 @@ impl Selector<'_, '_, '_> {
             Opcode::Cast(op) if self.is_float(instruction.ty) || self.is_float(type_of(operands[0])) => self.float_cast(*op, inst, at, out)?,
             Opcode::Load { volatile, .. } if self.is_far(instruction.ty) => {
                 let pointer = self.pointer(operands[0])?;
-                let pair = self.far_loaded(pointer, *volatile, at, out);
-                self.fars.insert(instruction.result.expect("a load's value"), pair);
+                let (offset, selector) = self.far_loaded(pointer, *volatile, at, out);
+                self.fars.insert(instruction.result.expect("a load's value"), (Some(offset), selector));
             }
             Opcode::Store { volatile, .. } if self.is_far(type_of(operands[0])) => {
                 let (offset, selector) = self.far(operands[0], at, out)?;
@@ -1306,7 +1313,7 @@ impl Selector<'_, '_, '_> {
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
             let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
             delivers = vec![(offset, Register::EAX), (selector, Register::EDX)];
-            self.fars.insert(value, (offset, selector));
+            self.fars.insert(value, (Some(offset), selector));
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
