@@ -9,6 +9,7 @@ pub mod inline;
 pub mod interprocedural;
 pub mod lcssa;
 pub mod lcssamerges;
+pub mod loadjoins;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod profit;
