@@ -801,13 +801,13 @@ fn _addresses_meet(one: Option<Addr>, one_width: u32, other: Option<Addr>, other
 }
 
 /// Whether `cell` still holds what it held at `define` after `one`.
-fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool) -> bool {
+fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: bool) -> bool {
     if Arc::ptr_eq(one, define) {
         return true;
     }
     let written = _written(one, cell);
     holds
-        && !_may_write(one, cell)
+        && !_may_write(one, cell, sealed)
         && !written
             .iter()
             .any(|dest| dest.addr.is_none() || _addresses_meet(cell.addr, cell.width, dest.addr, dest.width))
@@ -833,10 +833,14 @@ fn _proven_local_frame(reference: &MemRef) -> bool {
     })
 }
 
-/// Whether the MIR operation may change `cell`.
-fn _may_write(one: &Insn, cell: &Mem) -> bool {
+/// Whether the MIR operation may change `cell`; in a `sealed` body an
+/// incoming argument changes only where a frame store names it.
+fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     let op = one.op.as_deref();
     let written = _written(one, cell);
+    if sealed && _incoming_frame(cell) {
+        return written.iter().any(|dest| _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width));
+    }
     if _exact_frame(cell) && !written.is_empty() && written.iter().all(|dest| _exact_frame(dest)) {
         if written.iter().any(|dest| _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)) {
             return true;
@@ -925,7 +929,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
         for (at, block) in &blocks {
             let mut holds = into[at];
             for one in &block.insns {
-                holds = _keeps(one, define, cell, holds);
+                holds = _keeps(one, define, cell, holds, body.sealed_arguments);
             }
             if outof.get(at) != Some(&holds) {
                 outof.insert(*at, holds);
@@ -951,7 +955,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
             if wanted.contains(&key(one)) && !holds {
                 return false;
             }
-            holds = _keeps(one, define, cell, holds);
+            holds = _keeps(one, define, cell, holds, body.sealed_arguments);
         }
     }
     true
@@ -1024,7 +1028,7 @@ fn _frame_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
         let last_use = locations.iter().map(|(_block, used_at)| *used_at).max().expect("not empty");
         let mut safe = true;
         for one in &body.blocks[*block_index].insns[defined_at + 1..=last_use] {
-            if _may_write(one, source) {
+            if _may_write(one, source, body.sealed_arguments) {
                 safe = false;
                 break;
             }
@@ -1115,7 +1119,7 @@ fn _holding(one: &Arc<Insn>, value: u32, home: &Mem, store: &Arc<Insn>, holds: b
     }
     let written = _written(one, home);
     holds
-        && !_may_write(one, home)
+        && !_may_write(one, home, false)
         && !written
             .iter()
             .any(|cell| cell.addr.is_none() || _addresses_meet(home.addr, home.width, cell.addr, cell.width))

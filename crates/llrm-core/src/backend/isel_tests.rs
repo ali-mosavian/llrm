@@ -2116,3 +2116,23 @@ fn test_a_quotient_that_fits_a_dword_is_one_idiv() {
     assert_eq!(divides.len(), 1, "{got:?}");
     assert!(divides[0].starts_with("idiv"), "{got:?}");
 }
+
+/// A parameter needed after a call is loaded again from its argument slot,
+/// which nothing in the IR can address: spilled across the call instead,
+/// format.field stored and reloaded its three argument words every call.
+#[test]
+fn test_a_parameter_is_reloaded_from_its_slot_across_a_call() {
+    let text = "declare void @g() addrspace(1)
+declare void @h(i16) addrspace(1)
+define void @f(i16 %a) addrspace(1) {
+  %b = add i16 %a, 1
+  call addrspace(1) void @g()
+  call addrspace(1) void @h(i16 %a)
+  call addrspace(1) void @h(i16 %b)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    // Only %b, computed before the call, needs a slot.
+    assert_eq!(got.iter().filter(|line| line.starts_with("mov word ptr [bp-")).count(), 1, "{got:?}");
+}
