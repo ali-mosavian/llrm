@@ -219,6 +219,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 
 struct Tables<'h> {
     array_order: model::ArrayOrder,
+    /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
+    module_handler: Option<handling::ModuleHandler>,
     tags: Tags,
     /// The aliasing class tag of an access as a type, by its id.
     classes: HashMap<i64, MetadataId>,
@@ -242,6 +244,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     let mut refused = Vec::new();
     let mut tables = Tables {
         array_order,
+        module_handler: None,
         zeroed,
         layout: DataLayout::parse(DATALAYOUT).expect("llrm's layout"),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
@@ -304,15 +307,23 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         }
     }
     let statements = hir.statements();
+    let outlined = match module_handler(&mut module, &functions) {
+        Ok(outlined) => outlined,
+        Err((name, why)) => {
+            refused.push((name, why));
+            None
+        }
+    };
+    tables.module_handler = outlined.as_ref().map(|(handler, _, _)| handler.clone());
     for (function, global) in functions {
         let Some(global) = global else { continue };
-        let handled = match (function.error_handler, &statements) {
-            (None, _) => Ok(None),
-            (Some(_), Ok(rows)) => {
+        let handled = match (function.error_handler.is_some() || tables.module_handler.is_some(), &statements) {
+            (false, _) => Ok(None),
+            (true, Ok(rows)) => {
                 let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
                 onerror::handled(&mut module, global, &lines, function.error_handler_local).map(Some)
             }
-            (Some(_), Err(why)) => Err(why.clone()),
+            (true, Err(why)) => Err(why.clone()),
         };
         let handled = match handled {
             Ok(handled) => handled,
@@ -335,7 +346,37 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((function.name.clone(), why));
         }
     }
+    if let Some((handler, (global, handled), owner)) = outlined {
+        let name = module.global(global).name.clone().unwrap_or_default();
+        let mut builder = module.builder(global);
+        let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| body.outline(handler, handled));
+        if emitted.is_err() {
+            builder.function.delete_body();
+        }
+        builder.function.take_changes();
+        if let Err(why) = emitted {
+            module.globals[global.0 as usize].linkage = Linkage::External;
+            refused.push((name, why));
+        }
+    }
     Emitted { module, refused, data }
+}
+
+/// The module body's ON ERROR GOTO handlers, declared as the function they
+/// run as, with what its code refers to, and the body's HIR function.
+#[allow(clippy::type_complexity)]
+fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Option<GlobalId>)]) -> Result<Option<(handling::ModuleHandler, (GlobalId, Handled), &'h model::Function)>, (String, String)> {
+    let Some(&(owner, Some(_))) = functions.iter().find(|(one, _)| one.error_handler.is_some() && !one.error_handler_local) else { return Ok(None) };
+    let refusal = |why: String| (owner.name.clone(), why);
+    let i16 = module.context.types.int(16);
+    let ty = function_type(&mut module.context.types, i16, vec![i16, i16]);
+    let global = module.add_function(&format!("{}$handler", owner.name), ty, Linkage::Internal).map_err(refusal)?;
+    place_function(module, global, (0, FAR));
+    let handled = onerror::handled(module, global, &[], false).map_err(refusal)?;
+    let active = Value::Constant(onerror::active_global(module).map_err(refusal)?);
+    let outlined = (Value::Constant(module.reference(global)), ty);
+    let handler = handling::ModuleHandler::of(owner, active, outlined).map_err(refusal)?;
+    Ok(Some((handler, (global, handled), owner)))
 }
 
 /// A data object's type: its bytes, with each relocation a pointer, a
@@ -813,15 +854,12 @@ struct Body<'b, 'm, 'h> {
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
     handling: Option<handling::Handling>,
+    /// The module handler, where this emits its own function.
+    outlined: Option<handling::Outlined>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn new(b: &'b mut Builder<'m>, tables: &'b Tables<'h>, function: &'h model::Function) -> Emit<Self> {
-        // The runtime enters a handled function's statements where RESUME
-        // continues; any other entry is not selected.
-        if function.error_handler.is_none() && function.external_entries.iter().any(|&one| one != function.entry) {
-            return Err("an alternate entry".to_owned());
-        }
         let values = function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect();
         Ok(Self {
             b,
@@ -835,37 +873,53 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             objects: Vec::new(),
             addresses: HashMap::new(),
             handling: None,
+            outlined: None,
         })
     }
 
     fn run(&mut self, handled: Option<Handled>, statements: &[model::Statement]) -> Emit<()> {
+        // The runtime enters a handled function's statements where RESUME
+        // continues; any other entry is not selected.
+        if handled.is_none() && self.function.external_entries.iter().any(|&one| one != self.function.entry) {
+            return Err("an alternate entry".to_owned());
+        }
+        let elsewhere = self.elsewhere();
+        // RESUME may continue at the first statement: an entry of its own
+        // keeps the frame's allocas where it cannot.
+        let frame = handled.is_some().then(|| self.b.block("frame"));
         let entry = self.function.blocks.iter().find(|one| one.id == self.function.entry).ok_or("no entry block")?;
-        let order = std::iter::once(entry).chain(self.function.blocks.iter().filter(|one| one.id != self.function.entry));
+        let order = std::iter::once(entry).chain(self.function.blocks.iter().filter(|one| one.id != self.function.entry && !elsewhere.contains(&one.id)));
         for block in order {
             let id = self.b.block(&format!("b{}", block.id));
             self.blocks.insert(block.id, id);
         }
-        self.b.position(self.blocks[&entry.id]);
+        self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
         self.allocate()?;
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
+            self.b.br(self.blocks[&entry.id]);
         }
-        for block in emission_order(self.function) {
-            self.b.position(self.blocks[&block.id]);
-            self.enter_block(block.id);
-            for instruction in &block.instructions {
-                self.instruction(instruction)?;
-            }
-            // RESUME label ended the block itself.
-            let current = self.b.current().expect("a placed block");
-            if self.b.function.terminator(current).is_none() {
-                self.terminator(&block.terminator)?;
-            }
-            if block.cold {
-                mark_cold(self.b.function, self.blocks[&block.id]);
-            }
+        for block in emission_order(self.function).into_iter().filter(|one| !elsewhere.contains(&one.id)) {
+            self.emit_block(block)?;
         }
         self.close_handling()
+    }
+
+    fn emit_block(&mut self, block: &model::Block) -> Emit<()> {
+        self.b.position(self.blocks[&block.id]);
+        self.enter_block(block.id);
+        for instruction in &block.instructions {
+            self.instruction(instruction)?;
+        }
+        // RESUME label ended the block itself.
+        let current = self.b.current().expect("a placed block");
+        if self.b.function.terminator(current).is_none() {
+            self.terminator(&block.terminator)?;
+        }
+        if block.cold {
+            mark_cold(self.b.function, self.blocks[&block.id]);
+        }
+        Ok(())
     }
 
     /// An alloca for each group of local places that overlap, each zeroed
@@ -1310,7 +1364,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
-                if let Some(result) = self.b.call_as(convention, ty, callee, arguments, "") {
+                if let Some(result) = self.raising_call(instruction.id, true, convention, ty, callee, arguments)? {
                     self.define(instruction, result);
                 }
             }

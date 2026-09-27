@@ -82,7 +82,19 @@ pub fn annotated(
                 arguments.insert(operation.at, actuals(instruction));
             }
         }
-        for site in &function.calls {
+        // Lowering keeps only what an entry reaches: a call past that, as
+        // after ERROR where only a RESUME its own pad makes reaches, is none.
+        let mut reached = std::collections::BTreeSet::new();
+        let mut pending: Vec<i64> = std::iter::once(function.entry).chain(function.external_entries.iter().copied()).collect();
+        let blocks: IndexMap<i64, &model::Block> = function.blocks.iter().map(|one| (one.id, one)).collect();
+        while let Some(block) = pending.pop() {
+            if let Some(one) = blocks.get(&block).filter(|_| reached.insert(block)) {
+                pending.extend(one.terminator.targets.iter().chain(one.terminator.cases.iter().map(|(_, target)| target)).copied());
+            }
+        }
+        let unreached: std::collections::BTreeSet<i64> =
+            function.blocks.iter().filter(|one| !reached.contains(&one.id)).flat_map(|one| one.instructions.iter().map(|instruction| instruction.id)).collect();
+        for site in function.calls.iter().filter(|site| !unreached.contains(&site.instruction)) {
             let operation = call_ops.get(&Some(site.instruction as u32));
             let instruction = instructions.get(&site.instruction);
             let (Some(operation), Some(instruction)) = (operation, instruction) else {

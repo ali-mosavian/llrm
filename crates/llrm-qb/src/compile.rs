@@ -385,8 +385,12 @@ fn _statement_metadata(module: &model::Module) -> Result<Vec<(i64, i64, i64, i64
         .collect())
 }
 
-/// Statement rows excluding code reachable only inside the handler.
+/// Statement rows excluding code reachable only inside the handler; none
+/// where the function has no handler of its own to RESUME from.
 fn _statement_table_blocks(function: &model::Function) -> BTreeSet<i64> {
+    if function.error_handler.is_none() {
+        return BTreeSet::new();
+    }
     let blocks: IndexMap<i64, &model::Block> = function.blocks.iter().map(|one| (one.id, one)).collect();
     let mut handler_only: BTreeSet<i64> = BTreeSet::new();
     let mut pending: Vec<i64> = function.error_handler.into_iter().collect();

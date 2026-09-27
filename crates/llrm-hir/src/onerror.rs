@@ -72,6 +72,15 @@ pub fn active(b: &mut Builder) -> Operand {
     slot
 }
 
+/// The module's slot keeping the number of the handler ON ERROR GOTO last
+/// named in its body, 0 for none.
+pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
+    let i16 = module.context.types.int(16);
+    let none = module.context.int(i16, 0);
+    let global = module.add_variable("$QB$ACTIVE", GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None }, Linkage::Internal)?;
+    Ok(module.reference(global))
+}
+
 /// ON ERROR GOTO the handler numbered `handler`, 0 for none. Inside the
 /// handler trapping stays off until RESUME turns on what this names.
 pub fn goto(b: &mut Builder, handled: &Handled, active: Operand, handler: u16, inside: bool) -> Result<(), String> {

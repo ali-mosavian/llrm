@@ -87,12 +87,15 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
     for (name, pad) in pads {
         let why = |what: String| format!("@{name}: {what}");
         let (context, function) = module.function_mut(&name).expect("a handled function");
-        // Every call here that may raise is an invoke to the pad: with none, nothing lands.
-        let (Some(pad), Some(routines)) = (pad, &routines) else {
+        // Every call that may raise is an invoke to a pad: with none in the
+        // module, nothing lands. The module handler's function registers
+        // for every pad but has none.
+        let Some(routines) = &routines else {
             unregistered(context, function, &registrations).map_err(why)?;
             continue;
         };
         registered(context, function, routines).map_err(why)?;
+        let Some(pad) = pad else { continue };
         selected(context, function, pad, routines.landed).map_err(why)?;
         demote_phis(context, function, pad).map_err(why)?;
         demote_live(context, function, pad).map_err(why)?;

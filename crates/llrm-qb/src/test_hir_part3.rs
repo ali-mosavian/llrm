@@ -2386,7 +2386,7 @@ fn erl_is_the_faulting_statements_line() {
     let emitted = llrm_core::hir::mir::emit(&program).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let text = llrm_mir::print::module(&emitted.module);
-    let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\"") || line.starts_with("@$QB$ERL$__main")).expect("the ERL table");
+    let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\" =") || line.starts_with("@$QB$ERL$__main =")).expect("the ERL table");
     assert!(table.contains("i16 100"), "{table}");
     assert!(text.contains("@$QB$ERL$__main, i16 0, i16 %") || text.contains("@\"$QB$ERL$__main\", i16 0, i16 %"), "{text}");
 }
@@ -2419,6 +2419,29 @@ fn a_procedures_own_handler_is_its_landing_pad() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("@llrm.qb.onlocalerror(i1 true)") && !text.contains("@llrm.qb.onerror("), "{text}");
     assert!(text.contains("landingpad"), "{text}");
+}
+
+/// An error a SUB raises lands on the SUB's own pad, which calls the module
+/// handler, run as its own function, and switches on the RESUME it answers;
+/// that function turns trapping back on however few pads it serves. Was
+/// refused as "errors raised inside SUBs"; with the handler function's
+/// registration erased, POWRES's second error was fatal.
+#[test]
+fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "SUBERR.BAS", b"DECLARE SUB r ()\nON ERROR GOTO h\nCALL r\nEND\nh:\nRESUME NEXT\nSUB r\nERROR 5\nPRINT 1\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let mut emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
+    let sub = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("R")).expect("R").2;
+    assert!(sub.walk().any(|(_, inst)| matches!(sub.instruction(inst).opcode, llrm_mir::Opcode::LandingPad { .. })));
+    // As the runtime's promises mark it when the program is linked.
+    emitted.module.function_mut("llrm.qb.B$CEND").expect("END").1.attrs.push(llrm_mir::Attribute::Flag("nounwind".to_owned()));
+    llrm_core::backend::ehprepare::prepared(&mut emitted.module).expect("prepared");
+    let text = llrm_mir::print::module(&emitted.module);
+    let handler = &text[text.find("@__main$handler(i16 %0").expect("the handler function")..];
+    let handler = &handler[..handler.find("\n}\n").expect("its end")];
+    assert!(handler.contains("@llrm.qb.B$OEGA(ptr addrspace(1) @$QB$LANDING)"), "{handler}");
 }
 
 /// Outside the handler ERL is the runtime's, which knows no line of the
