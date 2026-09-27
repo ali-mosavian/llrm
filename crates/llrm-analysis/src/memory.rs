@@ -40,6 +40,8 @@ use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, MetadataNode, 
 use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
+use crate::regions::Machine;
+
 /// Python `qbopt.model.memory:Kind`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MemoryKind {
@@ -369,9 +371,11 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
 
 /// What the memory analyses read: a function, and of its module the types
 /// and constants, the layout, the metadata (`!tbaa`) and the globals (an
-/// object's size, a callee's attributes).
+/// object's size, a callee's attributes); and of the target, where it
+/// keeps no program data.
 #[derive(Clone, Copy)]
 pub struct Unit<'a> {
+    pub machine: Option<&'a dyn Machine>,
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
@@ -381,7 +385,7 @@ pub struct Unit<'a> {
 
 impl<'a> Unit<'a> {
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function }
+        Self { machine: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function }
     }
 
     pub fn operand_type(&self, operand: Operand) -> Option<TypeId> {
@@ -473,6 +477,8 @@ pub struct MemRef {
     /// The selector of a far pointer made from one, as `segment:0`: old
     /// `segment`.
     pub segment: Option<Operand>,
+    /// `segment`'s number, where it is a constant.
+    pub selector: Option<i64>,
     /// `root` is an object's own address, so `disp` is an offset in it:
     /// old `Space::Segment` and `Space::Frame`, as against a pointer.
     pub object: bool,
@@ -501,6 +507,7 @@ impl MemRef {
             scale: 0,
             base_width: 0,
             segment: None,
+            selector: None,
             object: false,
             space,
             index_bits,
@@ -533,6 +540,7 @@ impl MemRef {
         }
         made.disp = wrapped(disp, index_bits);
         made.segment = segment(unit, made.root);
+        made.selector = made.segment.and_then(|one| unit.int_constant(one)).map(|bits| bits as i64);
         made.object = object_of(unit, made.root).is_some();
         made
     }
