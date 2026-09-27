@@ -31,14 +31,14 @@ b0:
     ));
     let layout = layout(&module);
     let mut outer = Outer::of(&module, None);
-    outer.require::<GlobalsAA>(&module, &layout);
+    outer.require::<GlobalsAA>(&module);
     let f = function(&module, "f");
     if !summarized {
         let unit = Unit::within(&module.context, &layout, f, &outer);
         let calls: Calls = call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
         return known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned();
     }
-    outer.require::<Summaries>(&module, &layout);
+    outer.require::<Summaries>(&module);
     let known = Analyses::new(Rc::new(outer)).get::<ThroughMemory>(&module.context, &layout, f);
     Result::as_ref(&*known).unwrap().get(&value(f, "r")).cloned()
 }

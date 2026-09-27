@@ -105,7 +105,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
     loop {
         let mut grew = false;
         for &inst in &insts {
-            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses, outer.target.as_deref()) {
+            if run.contains(&inst) || !_movable(unit, inst, &insts, accesses, Some(outer.program())) {
                 continue;
             }
             let ready = function.instruction(inst).operands.iter().all(|&operand| match operand {
@@ -128,7 +128,7 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
 
 /// Whether `inst` computes only from its operands, or is a load nothing in
 /// the loop of `insts` may write.
-fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Accesses, machine: Option<&dyn llrm_mir::target::Machine>) -> bool {
+fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Accesses, program: Option<&llrm_mir::program::ProgramProxy>) -> bool {
     match unit.function.instruction(inst).opcode {
         Opcode::Binary(_)
         | Opcode::Cast(_)
@@ -140,7 +140,7 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
         | Opcode::Freeze
         | Opcode::ExtractValue(_)
         | Opcode::InsertValue(_) => true,
-        Opcode::Load { volatile: false, .. } => _unwritten(unit.function, inst, insts, accesses, machine),
+        Opcode::Load { volatile: false, .. } => _unwritten(unit.function, inst, insts, accesses, program),
         _ => false,
     }
 }

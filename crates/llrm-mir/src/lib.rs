@@ -20,6 +20,7 @@ pub mod opcode;
 pub mod parse;
 pub mod passes;
 pub mod print;
+pub mod program;
 pub mod scalarevolution;
 pub mod target;
 pub mod transforms;

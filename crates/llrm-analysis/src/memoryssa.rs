@@ -155,7 +155,7 @@ pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cel
     let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
     let apart = matches!((located(cell), located(store)), (Some(one), Some(other)) if offsets.disjoint(one, other));
     // An answer Rust cannot represent is taken to overlap.
-    overlapping(cell, store, known, known, unit.machine).unwrap_or(true) && !apart
+    overlapping(cell, store, known, known, unit.program).unwrap_or(true) && !apart
 }
 
 /// Whether `outer` certainly holds every byte of `inner`: both at fixed

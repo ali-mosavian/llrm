@@ -251,7 +251,7 @@ impl _Exit<'_> {
                 _ => continue,
             }
             let Some(written) = self.references.get(&inst) else { return false };
-            if !regions::overlapping(reference, written, None, None, unit.machine).unwrap_or(true) {
+            if !regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true) {
                 continue;
             }
             if let Some(wanted) = _known(unit, expected) {
@@ -321,7 +321,7 @@ fn _unobserved(unit: &Unit, inst: InstId, operations: &[InstId], references: &In
         return false;
     }
     operations.iter().filter(|&&one| one != inst).filter_map(|one| references.get(one)).all(|other| {
-        !regions::overlapping(reference, other, None, None, unit.machine).unwrap_or(true)
+        !regions::overlapping(reference, other, None, None, unit.program).unwrap_or(true)
     })
 }
 

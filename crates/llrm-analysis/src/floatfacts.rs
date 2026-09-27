@@ -583,7 +583,7 @@ fn _exits<'s>(unit: &Unit, calls: &Calls, solve: impl Fn() -> &'s Solved) -> Vec
                 !matches!(op.opcode, Opcode::Phi | Opcode::ICmp(_) | Opcode::Br | Opcode::Store { volatile: false, .. } | Opcode::Binary(BinaryOp::Sub))
                     || rule(unit, inst).is_some()
                     || Format::of(&unit.context.types, op.ty).is_some()
-                    || MemRef::of(unit, inst).is_some_and(|written| references.iter().any(|read| regions::overlapping(&written, read, None, None, unit.machine).unwrap_or(true)))
+                    || MemRef::of(unit, inst).is_some_and(|written| references.iter().any(|read| regions::overlapping(&written, read, None, None, unit.program).unwrap_or(true)))
             })
         {
             continue;

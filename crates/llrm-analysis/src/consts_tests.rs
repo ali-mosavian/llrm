@@ -8,7 +8,7 @@ use num_bigint::BigInt;
 
 use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, masked};
 use crate::memory::{MemRef, MemoryKind, MemoryObject, Provenance, Unit};
-use crate::regions::tests::Dos;
+use crate::regions::tests::dos;
 use crate::testing::{DOS, function, layout, parsed, value};
 
 struct Parsed {
@@ -439,7 +439,8 @@ b0:
 }}
 "
         ));
-        let unit = Unit { machine: machine.then_some(&Dos as &dyn crate::regions::Machine), ..parsed.unit() };
+        let dos = dos(&parsed.module);
+        let unit = Unit { program: machine.then_some(&*dos), ..parsed.unit() };
         let got = known(&unit, Some(&Calls::default()), None, None).get(&parsed.value("r")).cloned();
         assert_eq!(got.is_some(), kept, "{selector} {machine}");
     }
