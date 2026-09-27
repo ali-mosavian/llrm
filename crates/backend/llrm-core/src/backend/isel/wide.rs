@@ -174,15 +174,16 @@ impl Selector<'_, '_, '_> {
     }
 
     /// `blocks` without what makes a wide half nothing reads, as LLVM's
-    /// DAG drops the dead half its legalizer split off. A carry an `adc` or
-    /// `sbb` reads is made just before it and goes with it.
+    /// DAG drops the dead half its legalizer split off, or a product an
+    /// address's scale took. A carry an `adc` or `sbb` reads is made just
+    /// before it and goes with it.
     pub(super) fn unread_halves_dropped(&self, mut blocks: Vec<LirBlock>) -> Vec<LirBlock> {
         loop {
             let read: BTreeSet<u32> = blocks
                 .iter()
                 .flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied()).chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value))))
                 .collect();
-            let dead = |one: &Insn| !one.defines.is_empty() && one.defines.iter().all(|value| self.halves.contains(value) && !read.contains(value));
+            let dead = |one: &Insn| !one.defines.is_empty() && one.defines.iter().all(|value| (self.halves.contains(value) || self.folded.contains(value)) && !read.contains(value));
             let carries = |one: &Insn| matches!(one.what.as_ref().and_then(|what| what.name.as_deref()), Some("adc" | "sbb"));
             let mut changed = false;
             for block in &mut blocks {

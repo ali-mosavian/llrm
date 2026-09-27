@@ -2582,3 +2582,78 @@ done:
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.contains("[ebp+") && line.contains("*4")), "{got:?}");
 }
+
+/// EBP's upper half is zeroed once, before the outermost loop that leaves
+/// it alone: zeroed at each innermost loop, nbody's outer loop ran a
+/// `movzx ebp,bp` every trip.
+#[test]
+fn test_ebp_is_zeroed_once_outside_every_loop_that_keeps_it() {
+    let text = "define i32 @f(i16 %n) addrspace(1) {
+entry:
+  %l = alloca [16 x i32]
+  br label %outer
+outer:
+  %k = phi i32 [ 0, %entry ], [ %k.next, %done ]
+  %so = phi i32 [ 0, %entry ], [ %t, %done ]
+  %p = getelementptr inbounds i32, ptr %l, i32 %k
+  %w = load i32, ptr %p, !tbaa !1
+  br label %body
+body:
+  %i = phi i16 [ 0, %outer ], [ %j, %body ]
+  %s = phi i32 [ %so, %outer ], [ %t, %body ]
+  %v = load i32, ptr %p, !tbaa !1
+  %u = add i32 %s, %v
+  %t = add i32 %u, %w
+  store i32 %t, ptr %p, !tbaa !1
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, %n
+  br i1 %more, label %body, label %done
+done:
+  %k.next = add nsw i32 %k, 1
+  %again = icmp ult i32 %k.next, 16
+  br i1 %again, label %outer, label %exit
+exit:
+  ret i32 %t
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("[ebp+")), "{got:?}");
+    assert_eq!(got.iter().filter(|line| *line == "movzx ebp, bp").count(), 1, "{got:?}");
+}
+
+/// A product folded into a dword index's scale is not also computed:
+/// shellsort's loop kept `add esi,esi`, doubling a stale register nothing
+/// read.
+#[test]
+fn test_a_product_folded_into_the_scale_is_not_computed() {
+    let text = "define void @f(i16 %n) addrspace(1) {
+entry:
+  %a = alloca [128 x i8]
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, 64
+  %w = trunc i32 %i to i16
+  br i1 %more, label %body, label %done
+body:
+  %v = shl i16 %w, 7
+  %m = mul i32 %i, 2
+  %p = getelementptr inbounds i8, ptr %a, i32 %m
+  store i16 %v, ptr %p, !tbaa !1
+  %j = add i32 %i, 1
+  br label %head
+done:
+  ret void
+}
+
+!0 = !{!\"int\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.contains("*2")), "{got:?}");
+    let doubled = |line: &&String| line.split_once(' ').is_some_and(|(op, rest)| op == "add" && rest.split(", ").collect::<Vec<_>>().windows(2).any(|pair| pair[0] == pair[1]));
+    assert!(!got.iter().any(|line| doubled(&line) || line.starts_with("shl e") || line.starts_with("lea ")), "{got:?}");
+}

@@ -289,6 +289,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         fields: IndexMap::default(),
         wides: IndexMap::default(),
         halves: BTreeSet::new(),
+        folded: BTreeSet::new(),
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -354,6 +355,8 @@ struct Selector<'m, 'c, 'p> {
     wides: IndexMap<ValueId, (Held, Held)>,
     /// The registers holding those halves.
     halves: BTreeSet<u32>,
+    /// Products an address's scale took, made only where something else reads them.
+    folded: BTreeSet<u32>,
     depth: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
@@ -1400,6 +1403,13 @@ impl Selector<'_, '_, '_> {
         };
         if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
             self.pointers.insert(address, scaled);
+            // A product the scale took is computed only if something else reads it.
+            if let Some((Operand::Value(product), _)) = one
+                && matches!(function.value(product).def, ValueDef::Instruction(_))
+            {
+                let product = self.value(product);
+                self.folded.insert(product);
+            }
             return Ok(());
         }
         let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));

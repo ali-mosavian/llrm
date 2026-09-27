@@ -202,12 +202,19 @@ fn unheld(one: &Insn) -> Roots {
 }
 
 /// `body` with the upper half of every unheld root a cell reads zero: one
-/// `movzx` in the preheader of the innermost loop around the cell, or
-/// before the first cell of a block no preheader proves.
+/// `movzx` in the preheader of the outermost loop around the cell that
+/// leaves that half alone, or before the first cell of a block no
+/// preheader proves.
 pub fn established(body: &LirBody) -> LirBody {
     let graph = _graph(&body.blocks);
     let natural = loops::loops(&graph, Some(body.entry));
-    let innermost = |at: i64| natural.iter().filter(|one| one.body.contains(&at)).min_by_key(|one| one.body.len()).map(|one| one.header);
+    let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
+        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(one) & roots == 0))
+    };
+    let outermost = |at: i64, roots: Roots| {
+        let around = natural.iter().filter(|one| one.body.contains(&at));
+        around.clone().filter(|one| untouched(&one.body, roots)).max_by_key(|one| one.body.len()).or_else(|| around.min_by_key(|one| one.body.len())).map(|one| one.header)
+    };
     let mut body = body.clone();
     let mut preheaders = true;
     loop {
@@ -225,7 +232,7 @@ pub fn established(body: &LirBody) -> LirBody {
         if std::mem::take(&mut preheaders) {
             let mut wanted: IndexMap<i64, Roots> = IndexMap::default();
             for (at, _, roots) in &missing {
-                if let Some(header) = innermost(*at) {
+                if let Some(header) = outermost(*at, *roots) {
                     *wanted.entry(header).or_default() |= roots;
                 }
             }
