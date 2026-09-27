@@ -45,7 +45,7 @@ pub fn widths(type_: &str) -> Option<u32> {
     })
 }
 
-fn is_float(type_: &str) -> bool {
+pub(crate) fn is_float(type_: &str) -> bool {
     matches!(type_, "TY_SINGLE" | "TY_DOUBLE")
 }
 
@@ -68,7 +68,7 @@ fn float_unary_kind(cg_op: &str) -> Option<Kind> {
 }
 
 /// Operators OW's front end has a node for and Borland's library a routine.
-fn library_routine(cg_op: &str) -> Option<&'static str> {
+pub(crate) fn library_routine(cg_op: &str) -> Option<&'static str> {
     Some(match cg_op {
         "O_SQRT" => "sqrt",
         "O_COS" => "cos",
@@ -142,7 +142,7 @@ fn signed_word(bits: &[u8]) -> BigInt {
     BigInt::from(i32::from_le_bytes(bits.try_into().expect("four bytes")))
 }
 
-fn signed(type_: &str) -> bool {
+pub(crate) fn signed(type_: &str) -> bool {
     matches!(type_, "TY_INT_1" | "TY_INT_2" | "TY_INT_4" | "TY_INT_8" | "TY_INTEGER")
 }
 
@@ -150,7 +150,7 @@ pub(crate) fn far_pointers(type_: &str) -> bool {
     matches!(type_, "TY_LONG_POINTER" | "TY_HUGE_POINTER")
 }
 
-fn pointers(type_: &str) -> bool {
+pub(crate) fn pointers(type_: &str) -> bool {
     matches!(type_, "TY_POINTER" | "TY_NEAR_POINTER" | "TY_LONG_POINTER" | "TY_HUGE_POINTER")
 }
 
@@ -160,7 +160,7 @@ fn fresh_allocators(name: &str) -> bool {
 }
 
 /// C's aliasing classes.
-fn classes(type_: &str) -> Option<&'static str> {
+pub(crate) fn classes(type_: &str) -> Option<&'static str> {
     Some(match type_ {
         "TY_INT_2" | "TY_UINT_2" | "TY_INTEGER" | "TY_UNSIGNED" => "int2",
         "TY_INT_4" | "TY_UINT_4" => "int4",
@@ -183,6 +183,42 @@ pub const LITERAL: i64 = 1 << 20;
 pub const POOL: i64 = 1 << 21;
 /// Space.GROUP index of the selector of the segment symbol n is in; 0 is DGROUP's.
 pub const SELECTOR: i64 = 1 << 22;
+
+/// A call's contract in Borland's medium model: stack arguments, the
+/// result in AX or DX:AX, and `pushed` bytes its caller or it pops.
+pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+    runtime::Contract {
+        name,
+        cleanup: Some(if caller_pops { 0 } else { pushed }),
+        control: runtime::Control::Returns,
+        enters_user_code: false,
+        raises_error: false,
+        error_handling: false,
+        writes: runtime::Memory::Any,
+        reads: runtime::Memory::Any,
+        clobbers: BTreeSet::from([
+            runtime::Reg::Ax,
+            runtime::Reg::Bx,
+            runtime::Reg::Cx,
+            runtime::Reg::Dx,
+            runtime::Reg::Es,
+            runtime::Reg::Flags,
+        ]),
+        established: true,
+        evidence: "Borland medium model: stack arguments, result in AX or DX:AX; \
+                   SI, DI, BP and DS kept as 16-bit registers"
+            .to_owned(),
+        documented: None,
+        inputs: Some(BTreeSet::new()),
+        direct_inputs: None,
+        clobbers_reached: false,
+        caller_cleanup: if caller_pops { pushed } else { 0 },
+        i386: true,
+        direct_writes: None,
+        flags_result: false,
+        direct_reads: None,
+    }
+}
 
 /// `TESTS`: (signed, unsigned).
 fn tests(cg_op: &str) -> (Kind, Kind) {
@@ -2172,40 +2208,7 @@ impl<'a> _Raise<'a> {
                 self.pointer_seeds.insert(returned.low, Provenance::one(MemoryObject::new(MemoryKind::Unknown)));
             }
         }
-        self.contracts.insert(
-            site,
-            runtime::Contract {
-                name: callee.object_name(),
-                cleanup: Some(if caller_pops { 0 } else { pushed }),
-                control: runtime::Control::Returns,
-                enters_user_code: false,
-                raises_error: false,
-                error_handling: false,
-                writes: runtime::Memory::Any,
-                reads: runtime::Memory::Any,
-                clobbers: BTreeSet::from([
-                    runtime::Reg::Ax,
-                    runtime::Reg::Bx,
-                    runtime::Reg::Cx,
-                    runtime::Reg::Dx,
-                    runtime::Reg::Es,
-                    runtime::Reg::Flags,
-                ]),
-                established: true,
-                evidence: "Borland medium model: stack arguments, result in AX or DX:AX; \
-                           SI, DI, BP and DS kept as 16-bit registers"
-                    .to_owned(),
-                documented: None,
-                inputs: Some(BTreeSet::new()),
-                direct_inputs: None,
-                clobbers_reached: false,
-                caller_cleanup: if caller_pops { pushed } else { 0 },
-                i386: true,
-                direct_writes: None,
-                flags_result: false,
-                direct_reads: None,
-            },
-        );
+        self.contracts.insert(site, medium_model(callee.object_name(), caller_pops, pushed));
         Ok(returned)
     }
 

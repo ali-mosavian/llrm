@@ -1,7 +1,7 @@
 //! Inlining, as LLVM's inliner does it bottom-up over the call graph: a
 //! direct call to a defined function no bigger than the threshold becomes
 //! a copy of its body, its returns branching to what followed the call.
-//! A call within a cycle of calls stays.
+//! A call within a cycle of calls, or into one, stays.
 
 use std::collections::HashMap;
 
@@ -55,7 +55,7 @@ fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId,
         let fits = info.function_type == body.ty
             && !matches!(module.context.types.get(body.ty), Type::Function { variadic: true, .. })
             && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noinline" || flag == "optnone"))
-            && callee != caller
+            && !graph.reaches(callee, callee)
             && !graph.reaches(callee, caller)
             && inlinable(body);
         fits.then_some((inst, callee))

@@ -736,6 +736,34 @@ b3:
     assert_eq!(through(&["inline"], text), through(&[], text));
 }
 
+/// A call into a recursion stays a call: bench_agg's call of a recursive
+/// `take` was inlined, the copy's own call of `take` inlined again, and
+/// the inliner never stopped.
+#[test]
+fn test_inline_keeps_a_call_into_a_recursion() {
+    let text = "define internal i16 @down(i16 %n) {
+b1:
+  %0 = icmp eq i16 %n, 0
+  br i1 %0, label %b2, label %b3
+
+b2:
+  ret i16 0
+
+b3:
+  %1 = sub i16 %n, 1
+  %2 = call i16 @down(i16 %1)
+  ret i16 %2
+}
+
+define i16 @f(i16 %n) {
+b1:
+  %0 = call i16 @down(i16 %n)
+  ret i16 %0
+}
+";
+    assert_eq!(through(&["inline"], text), through(&[], text));
+}
+
 /// priced_unroll's `value(3)` checked `k` against its bounds inside
 /// `value`: every call passes 3, so `k` is 3, and a parameter calls
 /// disagree on stays.
