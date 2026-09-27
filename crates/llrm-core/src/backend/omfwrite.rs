@@ -752,8 +752,7 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
                 segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
-            // No case matches it in Python's `_data`.
-            masm::Datum::SegmentWord(_) => {}
+            masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
         }
     }
 }
@@ -1205,6 +1204,20 @@ mod tests {
 
     fn hex(text: &str) -> Vec<u8> {
         (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
+    }
+
+    /// A segment word is two bytes LINK fills with the selector. `_data`
+    /// dropped it, so a far pointer to near data lost its selector and
+    /// every datum after it moved two bytes down.
+    #[test]
+    fn test_a_segment_word_is_a_selector_fixup() {
+        let mut segment = Segment::new("_DATA", "DATA", true);
+        let mut symbols = IndexMap::default();
+        let items = [pointer("_x", 0, false), masm::Datum::SegmentWord("DGROUP".into()), label("_after")];
+        _data(&mut segment, 0, &items, &mut symbols);
+        assert_eq!(segment.image.len(), 4);
+        assert_eq!(symbols["_after"], (0, 4));
+        assert_eq!((segment.fixups[1].at, segment.fixups[1].loc, segment.fixups[1].name.as_str()), (2, BASE, "DGROUP"));
     }
 
     /// Fresh QB D_SURF retained 83 jumps whose target label was physically next.

@@ -136,8 +136,10 @@ fn int(value: &Val) -> i64 {
 }
 
 /// Each compiler's procs: QB, QB without CodeView (/Zd, whose FUNCTION
-/// answers in what its callers read), VBDOS, and VBDOS /G3's 32-bit code.
-const PROCS: [&str; 4] = ["procs-q-o.obj", "procs-q-o-zd.obj", "procs-v-g2.obj", "procs-v-g3.obj"];
+/// answers in what its callers read), VBDOS, VBDOS /G3's 32-bit code, and
+/// PDS /Ot's, which frames each procedure itself with BP and zeroes its
+/// locals with `rep stosw` (refused, "sets up its own BP frame").
+const PROCS: [&str; 5] = ["procs-q-o.obj", "procs-q-o-zd.obj", "procs-v-g2.obj", "procs-v-g3.obj", "procs-p-ot.obj"];
 
 /// `FUNCTION Twice& (n AS LONG)`: `n + n`, a carry crossing its words, BYREF.
 #[test]
@@ -348,4 +350,37 @@ fn on_goto_goes_to_the_entry_its_index_numbers() {
     for fixture in ["jumps-q-o.obj", "jumps-p-g2.obj", "jumps-v-g3.obj"] {
         assert_eq!(printed(fixture, 12), expected, "{fixture}");
     }
+}
+
+/// A frame PDS /Ot makes itself saves SI for its caller. A `push ax` that
+/// passed a string's temporary to B$PESD came right after B$LDFS popped the
+/// stack back down to that save, was taken for another save, and the call
+/// got the stack's stale word: nestud printed code bytes for `lo.tag`.
+#[test]
+fn a_push_after_the_prologue_is_no_register_save() {
+    let module = raised("nestud-p-ot.obj");
+    let inside = module.named("INSIDE").expect("raised");
+    let GlobalKind::Function(function) = &module.globals[inside.0 as usize].kind else { unreachable!() };
+    let callee = |inst: llrm_mir::InstId| -> Option<String> {
+        let one = function.instruction(inst);
+        matches!(one.opcode, Opcode::Call(_)).then(|| match one.operands.last() {
+            Some(Operand::Constant(id)) => match module.context.get(*id).kind {
+                ConstantKind::Global(global) => module.globals[global.0 as usize].name.clone(),
+                _ => None,
+            },
+            _ => None,
+        }).flatten()
+    };
+    let mut printed = 0;
+    for &block in function.layout() {
+        for &inst in function.block(block).instructions() {
+            if callee(inst).as_deref() == Some("llrm.qb.B$PESD") {
+                let Operand::Value(argument) = function.instruction(inst).operands[0] else { panic!("B$PESD of a constant") };
+                let llrm_mir::ValueDef::Instruction(made) = function.value(argument).def else { panic!("B$PESD of a parameter") };
+                assert_eq!(callee(made).as_deref(), Some("llrm.qb.B$LDFS"));
+                printed += 1;
+            }
+        }
+    }
+    assert!(printed >= 3);
 }

@@ -226,15 +226,9 @@ fn _data(module: &model::Module, pool: &Pool) -> Result<(Names, IndexMap<String,
                     return emission(format!("{}: a segment selector cannot carry an offset", object_.name));
                 }
                 items.push(masm::Datum::SegmentWord(target));
-            } else if far && internal[&relocation.target].address == model::AddressKind::Near {
-                // A BASIC array descriptor's AD_fhd pointer to DGROUP data is
-                // group-relative in both halves. BC emits an OFFSET fixup with
-                // a DGROUP frame followed by the DGROUP selector. A single OMF
-                // POINTER fixup selects the target segment instead; pairing
-                // that selector with AD_oAdjusted's group-relative offset
-                // shifted every formal-array access by BC_DATA's group offset.
-                items.push(masm::Datum::Pointer(masm::Pointer { name: target, offset: relocation.addend, far: false }));
-                items.push(masm::Datum::SegmentWord("DGROUP".to_owned()));
+            } else if far {
+                let near = internal[&relocation.target].address == model::AddressKind::Near;
+                items.extend(globals::far_pointer(target, relocation.addend, near));
             } else {
                 items.push(masm::Datum::Pointer(masm::Pointer { name: target, offset: relocation.addend, far }));
             }
@@ -341,38 +335,6 @@ fn _positional_data(program: &model::Program) -> Result<model::Program, CompileE
 /// `struct.pack_into("<H", buffer, at, value)`.
 fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
-}
-
-/// Encode QB data, including the real-mode selector-only relocation.
-fn _object_data(
-    segment: &mut omfwrite::Segment,
-    index: usize,
-    items: &[masm::Datum],
-    symbols: &mut IndexMap<String, (usize, usize)>,
-) {
-    for item in items {
-        match item {
-            masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
-                symbols.insert(name.clone(), (index, segment.image.len()));
-            }
-            masm::Datum::Fill(masm::Fill { size, byte: None }) => segment.skip(*size as usize),
-            masm::Datum::Fill(masm::Fill { size, byte: Some(byte) }) => segment.put(&vec![*byte; *size as usize], &[]),
-            masm::Datum::Pointer(masm::Pointer { name, offset, far }) => {
-                let loc = if *far { omfwrite::POINTER } else { omfwrite::OFFSET };
-                let wide = omfwrite::WIDE[&loc];
-                segment.put(&vec![0; wide], &[omfwrite::Fixup::new(0, loc, name.clone())]);
-                let at = segment.image.len() - wide;
-                pack_into(&mut segment.image, at, offset & 0xFFFF);
-            }
-            masm::Datum::SegmentWord(name) => {
-                segment.put(&[0, 0], &[omfwrite::Fixup::new(0, omfwrite::BASE, name.clone())]);
-            }
-            masm::Datum::Align(masm::Align { to }) => {
-                segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
-            }
-            masm::Datum::Bytes(item) => segment.put(item, &[]),
-        }
-    }
 }
 
 pub fn _empty_procedure(name: &str) -> masm::Procedure {
@@ -2144,7 +2106,7 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        _object_data(&mut segments[index], index, items, &mut symbols);
+        omfwrite::_data(&mut segments[index], index, items, &mut symbols);
     }
     _basic_code(&mut segments[0], module, &mut symbols)?;
 
