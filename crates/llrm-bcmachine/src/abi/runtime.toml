@@ -188,7 +188,7 @@ documented = ["ax", "bx", "cx", "dx"]
 established = true
 inputs = []
 evidence = '''
-rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption.
+rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2.
 '''
 
 ["B$EVCK"]
@@ -221,17 +221,18 @@ inc/stack.inc: si and di are `restored by B$EXSA`, and [b$curframe] is saved at 
 '''
 
 ["B$FCMD"]
-cleanup = -1
-control = "unknown"
-enters_user_code = true
+cleanup = 0
+control = "returns"
+enters_user_code = false
 raises_error = true
 error_handling = false
-writes = "ANY"
-reads = "ANY"
-clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
-established = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "flags"]
+established = true
+inputs = []
 evidence = '''
-rt/oscmd.asm has `cProc B$FCMD,<PUBLIC,FAR>` / `cBegin <nogen>` / `jmp B$FrameAFE`, and B$FrameAFE is nowhere in the tree. Its header claims `Modifies: NONE` and `AX = ptr to string desc for temp with command line`, which means it allocates and so can reach B$STCPCT, but a header over an unreadable body establishes nothing. Worst case, and marked as such.
+rt/oscmd.asm's B$FCMD is the `jmp B$FrameAFE` advanced-feature stub; the shipped libraries hold the routine, and its header says `Inputs: None` and `AX = ptr to string desc for temp with command line`. BCOM45.LIB and BCL71ENR.LIB oscmd 0023..0041: PUSH BP/SI/DI/ES, DS saved around B$CmdCopy (near, 0000..0022, PUSH SI/DI ... POP DI/SI / RET, XOR BX,BX first) copying `__acmdln` into b$Buf1, then B$STALCTMPCPY and XCHG AX,BX; POP ES/DI/SI/BP / RETF with no parameter. VBDCL10E.LIB 0023..004a is the same frame with B$StrAlcTmpCopy, skipped for an empty line (JCXZ, AX = b$nuldes). So si, di, bp, ds and es survive, cleanup is 0, no register is read, and the answer is AX. The allocation can compact string space and fail with Out of string space; it calls nothing else.
 '''
 
 ["B$FCMP"]
@@ -576,7 +577,7 @@ clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = '''
-rt/prnvalfp.asm: `MOV AX,EOL SHL 8 + VT_R8` then `JMP B$PRINT`, the same entry as B$PER4 with VT_R8=08h (inc/rtps.inc); BCOM45.LIB 0028, BCL71ENR.LIB and VBDCL10E.LIB 001e all read `mov ax,208h` / `jmp`. Everything else is B$PER4's B$PRINT: si and bp survive, the rest does not, and memory is the worst case. PRINTX pops one parameter word, a second because `TEST AL,VT_SD` is zero for 08h, and a third and fourth because `TEST AL,8` is not; BCOM45.LIB B$PRINT 00e2..00f3 matches and re-pushes the far return address before RETF, so the cleanup is 8.
+rt/prnvalfp.asm: `MOV AX,EOL SHL 8 + VT_R8` then `JMP B$PRINT`, the same entry as B$PER4 with VT_R8=08h (inc/rtps.inc); BCOM45.LIB 0028, BCL71ENR.LIB and VBDCL10E.LIB 001e all read `mov ax,208h` / `jmp`. Everything else is B$PER4's B$PRINT: si and bp survive, the rest does not, and memory is the worst case. PRINTX pops one parameter word, a second because `TEST AL,VT_SD` is zero for 08h, and a third and fourth because `TEST AL,8` is not; BCOM45.LIB B$PRINT 00e2..00f3 matches and re-pushes the far return address before RETF, so the cleanup is 8. VBDCL10E.LIB's B$PRINT (prnval.asm 0039..009a) is the same: PUSH BP/SI, dispatch through the output vectors, POP SI/BP and RETF 8 for AL=08h.
 '''
 
 ["B$PESD"]
@@ -728,7 +729,7 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = '''
-rt/string.asm: `cProc B$ASSN,<FAR,PUBLIC>,<DI,SI,ES>` with parmD pSrc, parmW cbSrc, parmD pDest, parmW cbDest, `Uses: per convention`. It reads its operands off the stack, and `OR AX,AX` sets the flags before any branch reads them. A fixed-length destination is written through pDest outright (`REP MOVSB` / `REP STOSB`); a descriptor destination goes through B$LDFS and B$SASS, or B$LSET for a descriptor source, which reach string allocation and so B$STCPCT. BCOM45.LIB 0050..00a1 and BCL71ENR.LIB 0028..0079 are the same code: PUSH SI/DI/ES on entry, every path joins POP ES/DI/SI/BP / RETF 0Ch. ES is listed anyway: VBDCL10E.LIB's farstr B$ASSN loads it and does not restore it, and that family's own variant stays in force.
+rt/string.asm: `cProc B$ASSN,<FAR,PUBLIC>,<DI,SI,ES>` with parmD pSrc, parmW cbSrc, parmD pDest, parmW cbDest, `Uses: per convention`. It reads its operands off the stack, and `OR AX,AX` sets the flags before any branch reads them. A fixed-length destination is written through pDest outright (`REP MOVSB` / `REP STOSB`); a descriptor destination goes through B$LDFS and B$SASS, or B$LSET for a descriptor source, which reach string allocation and so B$STCPCT. BCOM45.LIB 0050..00a1 and BCL71ENR.LIB 0028..0079 are the same code: PUSH SI/DI/ES on entry, every path joins POP ES/DI/SI/BP / RETF 0Ch. ES is listed anyway: VBDCL10E.LIB's farstr B$ASSN loads it and does not restore it. Its code: VBDCL10E.LIB string.asm 005e..00b3 saves SI/DI (and DS around the fixed copy), calls B$LDFS (0030..005b, which restores DS/DI/SI/BP) then B$SASS, or B$LSET, and joins POP DI/SI/BP / RETF 0Ch: the same effects, ES included.
 '''
 
 ["B$LDFS"]
@@ -743,7 +744,7 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = '''
-rt/string.asm: `cProc B$LDFS,<PUBLIC,FAR>,<ES,SI,DI>` with parmD pString, parmW cbString; it reads [cbString] into BX, calls B$STALCTMP for a temporary (BX = descriptor, DX = data), copies from pString with DS saved around the block move, and returns the descriptor in AX. What it writes is the temporary, and allocation reaches B$STCPCT, which moves other strings: string space, not the caller's data. `Exceptions: Runtime error can occur (such as 'insufficient string space')`. BCOM45.LIB 002b..004d and BCL71ENR.LIB 0000..0025 both PUSH SI/DI/ES, POP ES/DI/SI/BP and RETF 6.
+rt/string.asm: `cProc B$LDFS,<PUBLIC,FAR>,<ES,SI,DI>` with parmD pString, parmW cbString; it reads [cbString] into BX, calls B$STALCTMP for a temporary (BX = descriptor, DX = data), copies from pString with DS saved around the block move, and returns the descriptor in AX. What it writes is the temporary, and allocation reaches B$STCPCT, which moves other strings: string space, not the caller's data. `Exceptions: Runtime error can occur (such as 'insufficient string space')`. BCOM45.LIB 002b..004d and BCL71ENR.LIB 0000..0025 both PUSH SI/DI/ES, POP ES/DI/SI/BP and RETF 6. VBDCL10E.LIB string.asm 0030..005b is the same: PUSH SI/DI/DS, B$AlcTmpSH unless the count is zero (AX = b$nuldes), the block move from [bp+0Ah]:[bp+8], POP DS/DI/SI/BP / RETF 6; ES is left as the allocator set it.
 '''
 
 ["B$SASS"]
