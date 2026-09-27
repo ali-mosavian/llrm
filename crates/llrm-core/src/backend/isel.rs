@@ -2147,8 +2147,21 @@ impl Selector<'_, '_, '_> {
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
             if self.is_float(ty) {
-                // Its bytes from a stack temporary, the high dword pushed first.
+                // Its bytes from a stack temporary, the high dword pushed
+                // first; a constant's bits pushed as they are.
                 let size = self.size(ty)?;
+                if let Operand::Constant(id) = argument
+                    && matches!(size, 4 | 8)
+                    && let ConstantKind::Float(bits) = self.module.context.get(id).kind
+                {
+                    let bits = if size == 4 { u64::from(bits as u32) } else { bits };
+                    for by in (0..i64::from(size) / 4).rev() {
+                        let dword = Loc::Imm(Imm { value: (bits >> (32 * by)) as u32 as i64, width: 4, address: None });
+                        out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![dword])));
+                    }
+                    pushed += i64::from(size);
+                    continue;
+                }
                 let held = self.float(argument, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
                 for by in (0..i64::from(size) / 4).rev().map(|dword| dword * 4) {

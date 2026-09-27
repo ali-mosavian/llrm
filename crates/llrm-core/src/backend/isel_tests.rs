@@ -2353,3 +2353,19 @@ define i32 @f() addrspace(1) {
     assert!(got.iter().any(|line| line.starts_with("shrd")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("movzx") || line.starts_with("or ")), "{got:?}");
 }
+
+/// A float constant argument is pushed as its bits, as a float constant is
+/// stored: qmove loaded each from the pool and stored it to a temporary to
+/// push it from there.
+#[test]
+fn test_a_float_constant_argument_is_pushed_as_its_bits() {
+    let text = "declare void @g(float, double) addrspace(1)
+define void @f() addrspace(1) {
+  call addrspace(1) void @g(float 2.5e-01, double 1.0e+01)
+  ret void
+}
+";
+    let got = listing_on("386", text, "f");
+    assert!(!got.iter().any(|line| line.starts_with("fld") || line.starts_with("fstp")), "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("push")).count(), 3, "{got:?}");
+}
