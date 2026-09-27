@@ -2012,3 +2012,40 @@ define i16 @f(i16 %i) addrspace(1) {
     let got = listing(text, "f");
     assert_eq!(got[4..10], ["mov bx, word ptr [bp+6]", "add bx, bx", "pushw seg s", "pop es", "mov si, offset s", "mov ax, word ptr es:[bx+si]"], "{got:?}");
 }
+
+/// An i64 is a pair of dwords wherever it goes: a parameter's two cells,
+/// a phi per dword, edx:eax out of a call and a return, and a comparison's
+/// halves or-ed. isel refused "a i64 value"; C's fib64 kept both
+/// Fibonacci terms in registers as the old route did.
+#[test]
+fn test_an_i64_is_a_dword_pair_through_phis_calls_and_returns() {
+    let text = "define i64 @f(i64 %x, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %a = phi i64 [ 0, %entry ], [ %b, %loop ]
+  %b = phi i64 [ %x, %entry ], [ %c, %loop ]
+  %i = phi i16 [ %n, %entry ], [ %j, %loop ]
+  %c = add i64 %a, %b
+  %j = sub i16 %i, 1
+  %more = icmp ne i16 %j, 0
+  br i1 %more, label %loop, label %done
+done:
+  ret i64 %b
+}
+
+define i16 @g() addrspace(1) {
+  %v = call addrspace(1) i64 @f(i64 1, i16 9)
+  %d = icmp ne i64 %v, 34
+  %r = zext i1 %d to i16
+  ret i16 %r
+}
+";
+    let f = listing(text, "f");
+    let add = f.iter().position(|line| line.starts_with("add e")).expect("the low dwords' sum");
+    assert!(f[add + 1].starts_with("adc e") && !f.iter().any(|line| line.contains("[bp-")), "{f:?}");
+    let g = listing(text, "g");
+    for line in ["pushd 0", "pushd 1", "call far ptr f", "xor eax, 34", "or eax, edx"] {
+        assert!(g.iter().any(|one| one == line), "{line}: {g:?}");
+    }
+}

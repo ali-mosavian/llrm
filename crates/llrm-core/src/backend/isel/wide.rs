@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::valuetracking::sign_bits;
-use llrm_mir::{BinaryOp, CastOp};
+use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
-use super::{insn, refuse, semantics, Selector, Unselected};
+use super::{condition_code, insn, refuse, semantics, swapped, Selector, Test, Unselected};
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Insn, LirBlock};
 
@@ -52,7 +52,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// An i64 operand's halves, each in a register.
-    fn wide(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Pair, Unselected> {
+    pub(super) fn wide(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Pair, Unselected> {
         if let Some(bits) = self.constant(operand, 8) {
             let low = self.made(Operation::Move, "mov", vec![Self::dword(bits as u32 as i64)], at, out);
             let high = self.made(Operation::Move, "mov", vec![Self::dword((bits >> 32) as u32 as i64)], at, out);
@@ -228,6 +228,44 @@ impl Selector<'_, '_, '_> {
                 (lower, self.made(Operation::Move, "mov", vec![Self::dword(0)], at, out))
             }
         }
+    }
+
+    /// An i64 comparison as flags: equality by the halves' differences
+    /// or-ed, an order by `sub` and `sbb` of the halves, whose flags a
+    /// less-than or at-least reads; a greater-than compares the other way.
+    pub(super) fn wide_compare(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
+        let predicate = match predicate {
+            IntPredicate::Sgt | IntPredicate::Sle | IntPredicate::Ugt | IntPredicate::Ule => {
+                return self.wide_compare(swapped(predicate), b, a, at, out);
+            }
+            predicate => predicate,
+        };
+        let a = self.wide(a, at, out)?;
+        // A constant's halves are immediates.
+        let b = match self.constant(b, 8) {
+            Some(bits) => (Self::dword(bits as u32 as i64), Self::dword((bits >> 32) as u32 as i64)),
+            None => {
+                let (low, high) = self.wide(b, at, out)?;
+                (Loc::Held(low), Loc::Held(high))
+            }
+        };
+        let mut flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
+            let into = selector.fresh_held(4);
+            selector.put(semantics(Operation::Binary, name, vec![Loc::Held(into)], sources.to_vec()), at, out);
+            into
+        };
+        match predicate {
+            IntPredicate::Eq | IntPredicate::Ne => {
+                let low = flags(self, "xor", [Loc::Held(a.0), b.0], out);
+                let high = flags(self, "xor", [Loc::Held(a.1), b.1], out);
+                flags(self, "or", [Loc::Held(low), Loc::Held(high)], out);
+            }
+            _ => {
+                flags(self, "sub", [Loc::Held(a.0), b.0], out);
+                flags(self, "sbb", [Loc::Held(a.1), b.1], out);
+            }
+        }
+        Ok(Test::One(condition_code(predicate)))
     }
 
     /// A signed i64 divided by an i32 sign-extended: the magnitudes by two
