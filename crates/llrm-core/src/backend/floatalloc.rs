@@ -657,6 +657,7 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     if floating.is_empty() {
         return Ok(body.clone());
     }
+    let body = &_split_for_the_stack(body, &floating);
     let (live_in, live_out) = live(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
     let bundles = spillplacement::bundles(body);
@@ -729,6 +730,39 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     let mut out = body.clone();
     out.blocks = body.blocks.iter().map(|block| made.shift_remove(&block.at).expect("every block allocated")).collect();
     Ok(out)
+}
+
+/// `body` with a block of its own on each critical forward edge into a
+/// block that reads fewer floating values than its bundle holds: the
+/// values it does not read are popped there, on the one edge that brings
+/// them, and its other entries no longer push fillers to match.
+fn _split_for_the_stack(body: &LirBody, floating: &HashSet<u32>) -> LirBody {
+    let (live_in, live_out) = live(body);
+    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
+    let bundles = spillplacement::bundles(body);
+    let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
+    let mut entries: IndexMap<i64, usize> = IndexMap::default();
+    for block in &body.blocks {
+        let (entry, exit) = bundles.of[&block.at];
+        held.entry(entry).or_default().extend(floats(&live_in[&block.at]));
+        held.entry(exit).or_default().extend(floats(&live_out[&block.at]));
+        for successor in &block.succ {
+            *entries.entry(*successor).or_default() += 1;
+        }
+    }
+    let (order, _) = _reverse_postorder(body);
+    let rank: IndexMap<i64, usize> = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect();
+    let mut edges: IndexMap<(i64, i64), Vec<Arc<Insn>>> = IndexMap::default();
+    for block in body.blocks.iter().filter(|block| block.succ.len() > 1) {
+        for &into in &block.succ {
+            let forward = rank.get(&block.at).zip(rank.get(&into)).is_some_and(|(from, to)| from < to);
+            let unread = held[&bundles.of[&into].0] != floats(&live_in[&into]);
+            if forward && entries[&into] > 1 && unread {
+                edges.insert((block.at, into), Vec::new());
+            }
+        }
+    }
+    if edges.is_empty() { body.clone() } else { crate::backend::phielim::placed_on_edges(body, &edges) }
 }
 
 /// Where the instructions leaving the block begin; the stack shuffles there.
