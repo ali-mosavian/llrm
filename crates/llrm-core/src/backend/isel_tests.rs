@@ -582,7 +582,8 @@ define i16 @f(i16 %a) addrspace(1) {
 }
 
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
-/// first; beyond that `rep stosd` through es:di, the tail stored.
+/// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
+/// `stosb`, as the old route's `_fill`.
 #[test]
 fn test_a_memset_is_stores_or_a_string_fill() {
     let text = |size: u32| {
@@ -627,8 +628,8 @@ define i16 @f() addrspace(1) {{
             "mov eax, 16843009",
             "mov cx, 17",
             "rep stosd",
+            "stosw",
             "pop es",
-            "mov word ptr [bp-2], 257",
             "mov ax, word ptr [bp-70]",
             "pop di",
             "leave",
@@ -1960,4 +1961,54 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
     assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+}
+
+/// A far global is `seg name:offset name`, and a memset of a variable
+/// length `rep stosd` then `rep stosb` through it, as the old route made
+/// C's `fill_far`; isel refused "a far global", then the variable length.
+#[test]
+fn test_a_far_globals_variable_memset_is_a_string_fill_through_its_segment() {
+    let text = "@g = internal addrspace(1) global [64 x i8] zeroinitializer
+declare void @llvm.memset.p1.i16(ptr addrspace(1), i8, i16, i1)
+
+define void @f(i16 %n) addrspace(1) {
+  call void @llvm.memset.p1.i16(ptr addrspace(1) @g, i8 0, i16 %n, i1 false)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let from = got.iter().position(|line| line == "L0_0:").expect("the body") + 1;
+    assert_eq!(
+        got[from..from + 11],
+        [
+            "mov bx, word ptr [bp+6]",
+            "mov cx, bx",
+            "shr cx, 2",
+            "and bx, 3",
+            "mov di, offset g",
+            "pushw seg g",
+            "pop es",
+            "mov eax, 0",
+            "rep stosd",
+            "mov cx, bx",
+            "rep stosb",
+        ]
+    );
+}
+
+/// A far global's element is read through its segment and offset, as the
+/// old route made C's `peek`.
+#[test]
+fn test_a_far_globals_element_is_read_through_its_segment() {
+    let text = "@s = internal addrspace(1) global [16 x i8] zeroinitializer
+
+define i16 @f(i16 %i) addrspace(1) {
+  %o = shl i16 %i, 1
+  %e = getelementptr inbounds i8, ptr addrspace(1) @s, i16 %o
+  %v = load i16, ptr addrspace(1) %e
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    assert_eq!(got[4..10], ["mov bx, word ptr [bp+6]", "add bx, bx", "pushw seg s", "pop es", "mov si, offset s", "mov ax, word ptr es:[bx+si]"], "{got:?}");
 }
