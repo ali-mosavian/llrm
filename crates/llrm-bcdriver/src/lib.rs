@@ -108,10 +108,6 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
     let mut program = llrm_core::driver::linked(vec![module], runtime, &options)?;
     llrm_core::driver::optimized(&mut program, &options)?;
     let module = program.modules.pop().expect("one module");
-    let errors = llrm_mir::verify::verify(&module);
-    if let Some(first) = errors.first() {
-        return Err(format!("the pipeline left invalid MIR: {first}"));
-    }
     let runtime = match found_module::family(&records) {
         Family::Quickbasic => RuntimeProfile::Qb45,
         Family::Pds => RuntimeProfile::Pds71,

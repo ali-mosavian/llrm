@@ -74,13 +74,24 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
 }
 
 /// `modules` as one program for the machine, linked against `runtime`, a
-/// module of declarations alone.
+/// module of declarations alone; each verified.
 pub fn linked(modules: Vec<Module>, runtime: Module, options: &Options) -> Result<Program, String> {
-    Program::new(modules, options.cpu()?.target())?.with_runtime(runtime)
+    let program = Program::new(modules, options.cpu()?.target())?.with_runtime(runtime)?;
+    verified(&program, "the frontend")?;
+    Ok(program)
 }
 
-/// `program` through the pipeline.
+/// `program` through the pipeline, each module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { dump: options.dump.clone(), ..Default::default() };
-    llrm_transforms::pipeline::applied(program, &applied)
+    llrm_transforms::pipeline::applied(program, &applied)?;
+    verified(program, "the pipeline")
+}
+
+/// Refuses `program` where a module does not verify, `stage` having made it.
+fn verified(program: &Program, stage: &str) -> Result<(), String> {
+    match program.modules.iter().find_map(|module| llrm_mir::verify::verify(module).into_iter().next()) {
+        Some(first) => Err(format!("{stage} left invalid MIR: {first}")),
+        None => Ok(()),
+    }
 }
