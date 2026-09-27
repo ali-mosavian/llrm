@@ -46,7 +46,7 @@ pub struct Profile {
 impl Profile {
     /// The MIR target this profile prices: real-mode DOS on its CPU.
     pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-        std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.register_capacity, self.call_register_capacity))
+        std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.address_prefix_stall, self.register_capacity, self.call_register_capacity))
     }
 
     /// The dataclass constructor with every defaulted field at its default.
@@ -228,25 +228,10 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
 }
 
 /// Native medium-model addressing, then the legal secondary 67h form.
+/// The target's address forms, priced by `costs` and `prefix`: the 386's
+/// table has no prefix column, so its own is passed.
 fn _address_forms(costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
-    vec![
-        // A word base+index is bx or bp plus si or di, and bp is the frame:
-        // one register pairs with at most two others.
-        AddressForm {
-            partners: Some(2),
-            ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")
-        },
-        AddressForm::new(
-            4,
-            BTreeSet::from([1, 2, 4, 8]),
-            1,
-            prefix + address_stall,
-            costs.extend,
-            true,
-            None,
-        )
-        .expect("no fallback to disagree"),
-    ]
+    llrm_x86_code16::target::address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
 }
 
 fn _profile(name: &str) -> Result<Profile, String> {

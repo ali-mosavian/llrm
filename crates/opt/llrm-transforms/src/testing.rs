@@ -93,12 +93,14 @@ pub fn bodies(module: &Module) -> Vec<GlobalId> {
     module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect()
 }
 
-/// A target of the given prices and registers, and no foreign memory.
+/// A target of the given prices, registers and address forms, and no
+/// foreign memory. No forms given are `Neutral`'s.
 #[derive(Default)]
 pub struct Tuned {
     pub costs: crate::profit::OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
+    pub address_forms: Vec<llrm_mir::target::AddressForm>,
 }
 
 impl llrm_mir::target::Machine for Tuned {
@@ -116,6 +118,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        if self.address_forms.is_empty() { llrm_mir::target::Neutral.address_forms() } else { self.address_forms.clone() }
     }
 }
 

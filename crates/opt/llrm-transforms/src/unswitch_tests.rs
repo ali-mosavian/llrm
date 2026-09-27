@@ -219,7 +219,7 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     let mut module = parsed(INVARIANT);
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(super::Unswitch { passes: vec![Box::new(Seen(std::rc::Rc::clone(&seen)))] });
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2 })).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2, ..Default::default() })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
     assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");

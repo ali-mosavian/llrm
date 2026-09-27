@@ -1,7 +1,9 @@
 //! Real-mode DOS as a target, what analyses ask of it through
 //! `llrm_mir::target::Machine`.
 
-use llrm_mir::target::{Machine, OperationCosts};
+use std::collections::BTreeSet;
+
+use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 
 use crate::timings;
 
@@ -11,22 +13,28 @@ pub struct Dos {
     pub costs: OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
+    pub address_forms: Vec<AddressForm>,
 }
 
 impl Default for Dos {
     /// On a 486, with the old profile's `register_capacity` and
     /// `call_register_capacity`.
     fn default() -> Self {
-        Self { costs: costs("486"), registers: 6, call_registers: 2 }
+        let costs = costs("486");
+        let address_forms = address_forms(&costs, 0);
+        Self { costs, registers: 6, call_registers: 2, address_forms }
     }
 }
 
 impl Dos {
     /// On the CPU whose instruction forms cost `table` clocks, with
-    /// `prefix` per operand-size prefix.
-    pub fn priced(table: &[(String, i64)], prefix: i64, registers: i64, call_registers: i64) -> Self {
+    /// `prefix` per operand-size prefix and `address_stall` more for an
+    /// address-size one.
+    pub fn priced(table: &[(String, i64)], prefix: i64, address_stall: i64, registers: i64, call_registers: i64) -> Self {
         let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
-        Self { costs: operations(cost, prefix), registers, call_registers }
+        let costs = operations(cost, prefix);
+        let address_forms = address_forms(&costs, address_stall);
+        Self { costs, registers, call_registers, address_forms }
     }
 }
 
@@ -47,6 +55,22 @@ impl Machine for Dos {
     fn call_registers(&self) -> i64 {
         self.call_registers
     }
+
+    fn address_forms(&self) -> Vec<AddressForm> {
+        self.address_forms.clone()
+    }
+}
+
+/// The two indexed addresses real mode has. A word one is bx or bp plus si
+/// or di, and bp is the frame: one register pairs with at most two others.
+/// An address-size prefix buys any register as base or index, scaled by
+/// 1, 2, 4 or 8, for `costs.prefix` and `address_stall` more a use and an
+/// extension of the index to a dword.
+pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm> {
+    vec![
+        AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
+        AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix + address_stall, costs.extend, true, None).expect("no fallback to disagree"),
+    ]
 }
 
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
@@ -98,5 +122,13 @@ mod tests {
     fn dos_prices_the_486() {
         let costs = Dos::default().costs();
         assert_eq!((costs.divide, costs.multiply, costs.prefix, costs.fill_cell), (24, 13, 1, 4));
+    }
+
+    /// A word address is one of three registers and unscaled; a prefixed one
+    /// scales any register by 1, 2, 4 or 8 for a clock a use on the 486.
+    #[test]
+    fn dos_states_its_address_forms() {
+        let forms: Vec<_> = Dos::default().address_forms().iter().map(|one| (one.index_width, one.scales.iter().copied().collect::<Vec<_>>(), one.use_cost, one.address_registers())).collect();
+        assert_eq!(forms, [(2, vec![1], 0, Some(3)), (4, vec![1, 2, 4, 8], 1, None)]);
     }
 }

@@ -2,6 +2,8 @@
 //! driver names one for its program (`program::Program::target`), as
 //! LLVM's `TargetMachine` gives its analyses `TargetTransformInfo`.
 
+use std::collections::BTreeSet;
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -18,6 +20,9 @@ pub trait Machine {
 
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
+
+    /// The indexed addresses a memory access may use, native form first.
+    fn address_forms(&self) -> Vec<AddressForm>;
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.
@@ -75,6 +80,67 @@ impl Default for OperationCosts {
 }
 
 
+/// One legal indexed-address family and its costs above the native form.
+///
+/// Machine-neutral: MIR may know an address can use a four-byte index with
+/// scales 1/2/4/8, never how x86 spells it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AddressForm {
+    pub index_width: i64,
+    pub scales: BTreeSet<i64>,
+    pub extra_bytes: i64,
+    pub use_cost: i64,
+    pub extension_cost: i64,
+    pub secondary: bool,
+    // How many distinct bases one index can pair with at once; None is any.
+    pub partners: Option<i64>,
+    // Compatibility name for `secondary`; both views stay identical.
+    pub fallback: Option<bool>,
+}
+
+impl AddressForm {
+    /// The dataclass constructor and `__post_init__`.
+    pub fn new(
+        index_width: i64,
+        scales: BTreeSet<i64>,
+        extra_bytes: i64,
+        use_cost: i64,
+        extension_cost: i64,
+        secondary: bool,
+        fallback: Option<bool>,
+    ) -> Result<Self, String> {
+        if fallback.is_some() && secondary && fallback != Some(secondary) {
+            return Err("an address form cannot disagree about whether it is secondary".to_owned());
+        }
+        let selected = fallback.unwrap_or(secondary);
+        Ok(Self {
+            index_width,
+            scales,
+            extra_bytes,
+            use_cost,
+            extension_cost,
+            secondary: selected,
+            partners: None,
+            fallback: Some(selected),
+        })
+    }
+
+    /// How many registers can each hold an address alone: the one that
+    /// pairs and its partners. None is any.
+    pub fn address_registers(&self) -> Option<i64> {
+        self.partners.map(|partners| partners + 1)
+    }
+
+    /// Whether this form is cheap enough to try before a frame spill.
+    pub fn before_spill(&self, costs: &OperationCosts) -> bool {
+        let direct = self.extension_cost + self.use_cost <= costs.load;
+        let amortized = self.extension_cost <= costs.r#move
+            && self.extension_cost + self.use_cost
+                <= costs.shift + costs.address + costs.r#move + costs.store;
+        !self.secondary || direct || amortized
+    }
+}
+
 /// A target that states nothing: no foreign memory, unit prices, and no
 /// registers, which leaves pressure unpriced.
 pub struct Neutral;
@@ -94,5 +160,10 @@ impl Machine for Neutral {
 
     fn call_registers(&self) -> i64 {
         0
+    }
+
+    /// An address adds one index, unscaled and free.
+    fn address_forms(&self) -> Vec<AddressForm> {
+        vec![AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")]
     }
 }
