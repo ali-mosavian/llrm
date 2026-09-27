@@ -13,7 +13,7 @@ use crate::testing::{managed, parsed, printed, results};
 fn fold(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    folded(context, &layout, function, &outer)
+    folded(context, &layout, function, &outer, &llrm_analysis::consts::Calls::default())
 }
 
 /// `body` folded, and then its dead work gone when `clean`: its text, and
@@ -210,5 +210,41 @@ declare float @llvm.fabs.f32(float)
     ));
     let before = results(&module, &[&[]]);
     assert!(managed(&mut module, FloatFold).contains("ret float 3.000000e+00"));
+    assert_eq!(results(&module, &[&[]]), before);
+}
+
+/// @h writes nothing, which only the module's summaries say: the float
+/// @g holds survives the call.
+pub(crate) const ACROSS_A_CALL: &str = "@g = global float 0.0
+
+define void @h() {
+b0:
+  ret void
+}
+
+define float @f() {
+b0:
+  store float 1.5, ptr @g
+  call void @h()
+  %x = load float, ptr @g
+  %y = fadd float %x, %x
+  ret float %y
+}
+";
+
+/// `module` through `pass`, `Summaries` required, printed.
+pub(crate) fn summarized(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static) -> String {
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require::<llrm_analysis::manager::Summaries>();
+    manager.add(pass);
+    manager.run(module).unwrap();
+    printed(module)
+}
+
+#[test]
+fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
+    let mut module = parsed(&format!("{DOS}{ACROSS_A_CALL}"));
+    let before = results(&module, &[&[]]);
+    assert!(summarized(&mut module, FloatFold).contains("ret float 3.000000e+00"));
     assert_eq!(results(&module, &[&[]]), before);
 }
