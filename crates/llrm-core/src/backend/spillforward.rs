@@ -1,5 +1,6 @@
 //! Port of `qbopt/backend/spillforward.py`: remove reloads of a slot a
-//! register already holds on every path here.
+//! register already holds on every path here, and stores of such a register
+//! back into that slot.
 //!
 //! Within a block a register holds the bytes of every slot it has been read out
 //! of or written into since. Across blocks that fact has to be met at every
@@ -35,7 +36,8 @@ fn _empty(one: &Insn) -> bool {
         })
 }
 
-/// `facts` after `one`, and whether it is a reload `facts` makes redundant.
+/// `facts` after `one`, and whether it is a reload or store `facts` makes
+/// redundant.
 ///
 /// A fact is a (register, slot) pair meaning the register holds that slot's
 /// bytes. Anything whose register effects cannot be read, or which writes
@@ -64,6 +66,15 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
     let writes = effects.1;
     if !writes.is_disjoint(&_lanes(Register::EBP)) {
         return (Facts::default(), false);
+    }
+    if let (Operation::Move, Some("mov"), [Loc::Mem(cell)], [Loc::Reg(register)]) =
+        (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+        && _plain(one)
+        && !one.volatile
+        && one.group.is_none()
+        && facts.contains(&(*register, cell.clone()))
+    {
+        return (facts, true);
     }
 
     // `op.stores` is the last word only for an instruction that is its own op.
