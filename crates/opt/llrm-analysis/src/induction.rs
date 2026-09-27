@@ -406,33 +406,63 @@ fn _multiplier(shift: bool, by: &AffineOperand) -> AffineOperand {
     }
 }
 
-/// A `getelementptr` off an invariant pointer whose one variable index is
-/// affine: its bytes as a formula.
-fn _address(unit: &Unit, inst: InstId, forms: &IndexMap<ValueId, Form>, still: &Invariant) -> Option<Derived> {
+/// A `getelementptr` off an invariant pointer, or off such an address, whose
+/// variable indices are affine in one counter or invariant: its bytes as a
+/// formula. A chain of them is one address, as SCEV adds a GEP's index to
+/// its base's recurrence.
+fn _address(
+    unit: &Unit,
+    inst: InstId,
+    forms: &IndexMap<ValueId, Form>,
+    addresses: &IndexMap<ValueId, Derived>,
+    still: &Invariant,
+    facts: &IndexMap<ValueId, Known>,
+) -> Option<Derived> {
     let op = unit.function.instruction(inst);
     let Opcode::GetElementPtr { source } = op.opcode else { return None };
-    let pointer = op.operands[0];
-    if !still.operand(pointer) {
-        return None;
-    }
+    let (mut of, mut by, mut offsets, pointer) = match op.operands[0] {
+        pointer if still.operand(pointer) => (None, BigInt::from(0), Vec::new(), pointer),
+        Operand::Value(base) => {
+            let base = addresses.get(&base)?;
+            let AffineOperand::Const(by) = &base.by else { return None };
+            (Some(base.of.clone()), by.n.clone(), base.offsets.clone(), base.pointer?)
+        }
+        _ => return None,
+    };
+    let known = |one: Operand| match one {
+        Operand::Value(value) => facts.get(&value).filter(|fact| Some(fact.width) == unit.int_bits(one)).map(|fact| fact.n.clone()),
+        _ => unit.int_constant(one).map(BigInt::from),
+    };
     let indices = op.operands[1..]
         .iter()
-        .map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128))))
+        .map(|&one| known(one).and_then(|bits| u128::try_from(bits).ok()).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128))))
         .collect::<Vec<_>>();
     let (constant, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
-    let [(at, scale)] = variable[..] else { return None };
-    let Operand::Value(index) = op.operands[1 + at] else { return None };
-    let (counter, form_scale, offsets) = forms.get(&index)?;
-    let width = counter.start.width();
-    if unit.int_bits(Operand::Value(index)) != Some(width) || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
+    let width = unit.layout.pointer(unit.space(pointer)?).index_bits;
+    for (at, scale) in variable {
+        let Operand::Value(index) = op.operands[1 + at] else { return None };
+        if unit.int_bits(Operand::Value(index)) != Some(width) {
+            return None;
+        }
+        let scale = BigInt::from(scale);
+        match forms.get(&index) {
+            Some((counter, form_scale, terms)) if of.as_ref().is_none_or(|of| of == counter) => {
+                of = Some(counter.clone());
+                by += form_scale * &scale;
+                offsets.extend(terms.iter().map(|(one, coefficient)| (one.clone(), coefficient * &scale)));
+            }
+            None if still.contains(index) => offsets.push((AffineOperand::Value(index, width), scale)),
+            _ => return None,
+        }
+    }
+    let of = of?;
+    if of.start.width() != width {
         return None;
     }
-    let scale = BigInt::from(scale);
-    let mut offsets = offsets.iter().map(|(one, coefficient)| (one.clone(), coefficient * &scale)).collect::<Vec<_>>();
     if constant != 0 {
         offsets.push((AffineOperand::constant(constant, width), BigInt::from(1)));
     }
-    Some(Derived { op: inst, of: counter.clone(), by: AffineOperand::constant(form_scale * &scale, width), offsets, pointer: Some(pointer) })
+    Some(Derived { op: inst, of, by: AffineOperand::constant(by, width), offsets, pointer: Some(pointer) })
 }
 
 /// Sums, differences, constant multiples and shifts of recurrences, their
@@ -448,6 +478,7 @@ fn _composed(
     let mut forms: IndexMap<ValueId, Form> =
         found.iter().map(|(value, recurrence)| (*value, (recurrence.clone(), BigInt::from(1), Vec::new()))).collect();
     let mut out = IndexMap::<InstId, Derived>::default();
+    let mut addresses = IndexMap::<ValueId, Derived>::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -463,7 +494,8 @@ fn _composed(
                     continue;
                 }
                 Opcode::GetElementPtr { .. } => {
-                    if let Some(address) = _address(unit, inst, &forms, still) {
+                    if let Some(address) = _address(unit, inst, &forms, &addresses, still, facts) {
+                        changed |= addresses.insert(result, address.clone()).as_ref() != Some(&address);
                         out.insert(inst, address);
                     }
                     continue;

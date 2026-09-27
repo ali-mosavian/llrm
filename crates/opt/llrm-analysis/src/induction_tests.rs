@@ -484,8 +484,9 @@ b2:
     let found = parsed.derived();
     let field = found.iter().find(|one| one.op == parsed.made("p")).unwrap();
     assert_eq!((field.by.clone(), field.offsets.clone()), (constant(4, 16), vec![(constant(2, 16), BigInt::from(1))]));
-    // Off a pointer the loop changes: no formula.
-    assert!(found.iter().all(|one| one.op != parsed.made("q")));
+    // Off an address of the counter: one formula off `%base`.
+    let chained = found.iter().find(|one| one.op == parsed.made("q")).unwrap();
+    assert_eq!((chained.by.clone(), chained.offsets.clone()), (constant(6, 16), vec![(constant(2, 16), BigInt::from(1))]));
 }
 
 #[test]

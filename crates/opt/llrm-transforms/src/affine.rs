@@ -25,6 +25,7 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
 use crate::dead;
@@ -65,8 +66,17 @@ pub fn canonical(unit: &mut Unit, analyses: &mut Analyses) -> bool {
                 }
             }
         }
+        // Addresses one index already serves share it: each spelled off
+        // its own base would hold one base more where it saves no add.
+        let function = view.function;
+        let mut indices = IndexMap::<_, usize>::default();
+        for (loop_, one) in innermost.values().filter(|(_, one)| one.pointer.is_some()) {
+            *indices.entry((loop_.header, function.instruction(one.op).operands[1..].to_vec())).or_default() += 1;
+        }
+        let alone = |loop_: &Loop, one: &Derived| one.pointer.is_none() || indices[&(loop_.header, function.instruction(one.op).operands[1..].to_vec())] == 1;
         innermost
             .into_values()
+            .filter(|(loop_, one)| alone(loop_, one))
             .filter_map(|(loop_, one)| Some((_rewritable(&view, loop_, one)?, one.clone())))
             .collect::<Vec<_>>()
     };

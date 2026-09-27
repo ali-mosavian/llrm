@@ -146,3 +146,50 @@ fn a_word_count_that_may_wrap_is_kept() {
     assert!(changed && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %2, i1 false)"), "{text}");
     assert!(fill(&looped("i16", "%n", &body(""), "%e"), TRIPS).1);
 }
+
+/// Nib's zeroed `i16[20, 20]` stored its rows again after the memset once
+/// affine spelled the cell `gep (gep @buf, i * 40), j * 2`: the row base
+/// was no address of the outer counter, so only rows filled, 200 stores.
+#[test]
+fn a_nest_addressed_off_its_row_base_is_one_memset() {
+    let text = "@buf = global [400 x i16] zeroinitializer
+
+MEMSETdefine i16 @f(i16 %n, i16 %q) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b5 ]
+  %c = icmp slt i16 %i, 20
+  br i1 %c, label %b2, label %b6
+
+b2:
+  %row = mul i16 %i, 40
+  %base = getelementptr i8, ptr @buf, i16 %row
+  br label %b3
+
+b3:
+  %j = phi i16 [ 0, %b2 ], [ %j.next, %b4 ]
+  %d = icmp slt i16 %j, 20
+  br i1 %d, label %b4, label %b5
+
+b4:
+  %o = mul i16 %j, 2
+  %p = getelementptr i8, ptr %base, i16 %o
+  store i16 0, ptr %p
+  %j.next = add i16 %j, 1
+  br label %b3
+
+b5:
+  %i.next = add i16 %i, 1
+  br label %b1
+
+b6:
+  %r = getelementptr [400 x i16], ptr @buf, i16 0, i16 %q
+  %v = load i16, ptr %r
+  ret i16 %v
+}
+".replace("MEMSET", MEMSET);
+    let (after, _) = fill(&text, &[&[0, 0], &[0, 399]]);
+    assert!(after.contains("call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 800, i1 false)"), "{after}");
+}
