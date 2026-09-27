@@ -196,6 +196,22 @@ fn test_a_division_wider_than_a_legal_integer_stays() {
     unchanged(&unary(64, "  %r = sdiv i64 %x, 4\n  ret i64 %r\n"));
 }
 
+/// A fixed-point product or quotient by a whole number is the integer
+/// one: T075's `c[i, j] * fix(k)` and `fix(n) / 4` were an `imul` pair and
+/// `shrd`, and a wrapping division, where one multiply and a shift did.
+#[test]
+fn test_fixed_point_by_a_whole_number_is_integer_arithmetic() {
+    let values = edges(32);
+    for (name, factor, op) in [("smul", 768, "mul"), ("smul", -512, "mul"), ("sdiv", 768, "sdiv"), ("sdiv", -1024, "sdiv")] {
+        let text = format!("declare i32 @llvm.{name}.fix.i32(i32, i32, i32)\n\n{}", unary(32, &format!("  %r = call i32 @llvm.{name}.fix.i32(i32 %x, i32 {factor}, i32 8)\n  ret i32 %r\n")));
+        let done = checked(&text, &singles(&values));
+        assert!(!done.contains("call i32") && (done.contains(op) || done.contains("ashr")), "{done}");
+    }
+    // By -1.0 the quotient of the least value wraps; `sdiv` would be undefined.
+    unchanged(&format!("declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 -256, i32 8)\n  ret i32 %r\n")));
+    unchanged(&format!("declare i32 @llvm.smul.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.smul.fix.i32(i32 %x, i32 384, i32 8)\n  ret i32 %r\n")));
+}
+
 /// The pass needs no constant propagation to drop `x + 0`.
 #[test]
 fn test_integer_identities() {

@@ -30,6 +30,7 @@ use llrm_graph::loops;
 use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
@@ -55,7 +56,7 @@ impl FunctionPass for Algebraic {
 /// Every rule, to a fixed point; whether anything changed.
 pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> bool {
     // A number proved before stays proved: every rewrite keeps each
-    // surviving value's meaning, and none makes a division.
+    // surviving value's meaning, and none divides by a value.
     let divided_by_values = function.walk().any(|(_, inst)| {
         let instruction = function.instruction(inst);
         matches!(instruction.opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)) && matches!(instruction.operands[1], Operand::Value(_))
@@ -64,7 +65,8 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
     let outer = std::rc::Rc::clone(analyses.outer());
     let mut changed = false;
     loop {
-        let mut round = _divisions(context, layout, function, &outer, &facts);
+        let mut round = _whole_fixed(context, layout, function, &outer);
+        round |= _divisions(context, layout, function, &outer, &facts);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -477,6 +479,33 @@ fn _shared_shifts(context: &mut Context, function: &mut Function) -> bool {
         }
     }
     changed
+}
+
+/// A fixed-point product or quotient by a whole number `k`, its fraction
+/// bits all clear: the scale cancels, leaving `x * k` or `x / k`. A
+/// quotient by -1 stays, where the least value wraps and `sdiv` would be
+/// undefined.
+fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+    let unit = Unit::within(context, layout, function, outer);
+    let whole: Vec<(InstId, BinaryOp, i128)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let Some(Intrinsic::Fixed { divide }) = unit.intrinsic(inst) else { return None };
+            let operands = &function.instruction(inst).operands;
+            let (width, scale) = (_width(context, function, inst)?, _integer(context, operands[2])?);
+            let factor = _integer(context, operands[1])?;
+            let signed = ((factor << (128 - width)) as i128) >> (128 - width);
+            let whole = signed >> scale;
+            let clear = scale < u128::from(width) && factor & ((1 << scale) - 1) == 0 && whole != 0;
+            (clear && !(divide && whole == -1)).then_some((inst, if divide { BinaryOp::SDiv } else { BinaryOp::Mul }, whole))
+        })
+        .collect();
+    for &(inst, op, whole) in &whole {
+        let x = function.instruction(inst).operands[0];
+        let by = _constant(context, function, inst, whole as u128);
+        _replace(function, inst, Opcode::Binary(op), vec![x, by]);
+    }
+    !whole.is_empty()
 }
 
 /// Divide by a positive power of two, biasing a negative dividend to
