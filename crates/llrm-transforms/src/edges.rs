@@ -112,4 +112,109 @@ b3:
 "
         );
     }
+
+    use llrm_mir::interpret::{Val, run};
+    use llrm_mir::module::Module;
+
+    fn parsed(text: &str) -> Module {
+        llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"))
+    }
+
+    fn named(function: &Function, name: &str) -> BlockId {
+        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("a block")
+    }
+
+    fn returned(module: &Module, arguments: Vec<Val>) -> Val {
+        run(module, "f", arguments, 10_000).expect("runs")
+    }
+
+    fn int(bits: u128, width: u32) -> Val {
+        Val::Int { bits, width }
+    }
+
+    /// A counted loop whose latch branches back conditionally.
+    const COUNTED: &str = "define i16 @f(i16 %n) {
+entry:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %head ]
+  %s = phi i16 [ 1, %entry ], [ %doubled, %head ]
+  %next = add i16 %i, 1
+  %doubled = shl i16 %s, 1
+  %more = icmp ult i16 %next, %n
+  br i1 %more, label %head, label %out
+
+out:
+  ret i16 %doubled
+}
+";
+
+    #[test]
+    fn splitting_a_back_edge_keeps_what_the_loop_computes() {
+        let before = parsed(COUNTED);
+        let mut module = before.clone();
+        let (_, function) = module.function_mut("f").expect("@f");
+        let head = named(function, "head");
+        split(function, head, head, vec![]).expect("a conditional back edge");
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        for n in [0, 1, 2, 5] {
+            assert_eq!(returned(&module, vec![int(n, 16)]), returned(&before, vec![int(n, 16)]), "{n}");
+        }
+    }
+
+    #[test]
+    fn instructions_placed_on_an_edge_run_only_when_it_is_taken() {
+        let text = "@g = global i16 0
+
+define i16 @f(i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+
+spare:
+  store i16 7, ptr @g
+  ret i16 0
+}
+";
+        let mut module = parsed(text);
+        let (_, function) = module.function_mut("f").expect("@f");
+        // An unreachable block lends the store's operands.
+        let spare = function.block(named(function, "spare")).instructions()[0];
+        let model = function.instruction(spare).clone();
+        let store = function.create_instruction(model.opcode, model.ty, model.operands, model.flags, None);
+        let (b1, b3) = (named(function, "b1"), named(function, "b3"));
+        split(function, b1, b3, vec![store]).expect("splits");
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        assert_eq!(returned(&module, vec![int(0, 1)]), int(7, 16));
+        assert_eq!(returned(&module, vec![int(1, 1)]), int(0, 16));
+    }
+
+    #[test]
+    fn an_unconditional_jump_or_a_switch_edge_is_not_split() {
+        let mut module = parsed("define void @f(i16 %s) {
+b1:
+  switch i16 %s, label %b2 [ i16 1, label %b3 ]
+
+b2:
+  br label %b3
+
+b3:
+  ret void
+}
+");
+        let (_, function) = module.function_mut("f").expect("@f");
+        let before = function.clone();
+        let [b1, b2, b3] = ["b1", "b2", "b3"].map(|name| named(function, name));
+        assert!(!conditional(function, b1, b3) && !conditional(function, b2, b3));
+        assert!(split(function, b1, b3, vec![]).is_err());
+        assert!(split(function, b2, b3, vec![]).is_err());
+        assert_eq!(*function, before);
+    }
 }

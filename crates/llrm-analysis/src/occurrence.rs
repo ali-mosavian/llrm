@@ -68,4 +68,27 @@ b1:
         assert_ne!(found[0], found[1]);
         assert_eq!(found, function.block(block(function, "b1")).instructions()[..2]);
     }
+
+    #[test]
+    fn operations_and_phis_partition_every_instruction_in_layout_order() {
+        let module = parsed("define i16 @f(i1 %c, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ 1, %b1 ]
+  %y = add i16 %p, 1
+  ret i16 %y
+}
+");
+        let function = function(&module, "f");
+        let everything = function.walk().map(|(_, inst)| inst).collect::<Vec<_>>();
+        let ops = operations(function).map(|(inst, _, _)| inst).collect::<Vec<_>>();
+        let found = phis(function).map(|(inst, at, _)| (inst, at)).collect::<Vec<_>>();
+        assert_eq!(found, [(everything[2], block(function, "b2"))]);
+        assert_eq!(ops, [everything[0], everything[1], everything[3], everything[4]]);
+    }
 }

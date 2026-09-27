@@ -310,4 +310,83 @@ b1:
             vec![defined, used, exited, second, defined, used, phi_result, used, third, exited, used, defined]
         );
     }
+
+    #[test]
+    fn a_phi_read_only_by_a_live_phi_survives_pruning() {
+        let mut module = parsed(
+            "define i16 @f(i1 %c, i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %inner = phi i16 [ %x, %b0 ], [ %inner, %b1 ]
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %outer = phi i16 [ %inner, %b1 ]
+  %dead = phi i16 [ %inner, %b1 ]
+  ret i16 %outer
+}
+",
+        );
+        let f = module.function_mut("f").unwrap().1;
+        assert!(pruned_phis(f, &BTreeSet::new()));
+        let names = phis(f).map(|(_, _, phi)| f.value(phi.result.unwrap()).name.clone().unwrap()).collect::<Vec<_>>();
+        assert_eq!(names, ["inner", "outer"]);
+        assert!(f.check_uses().is_empty());
+    }
+
+    #[test]
+    fn a_body_without_phis_is_left_unpruned() {
+        let mut module = parsed(
+            "define i16 @f(i16 %x) {
+b0:
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+",
+        );
+        let f = module.function_mut("f").unwrap().1;
+        let before = f.clone();
+        assert!(!pruned_phis(f, &BTreeSet::new()));
+        assert_eq!(*f, before);
+    }
+
+    #[test]
+    fn use_index_lists_a_repeated_reader_once_and_counts_terminators_but_not_phis() {
+        let module = parsed(
+            "define i16 @f(i16 %x) {
+b0:
+  %y = mul i16 %x, %x
+  br label %b1
+
+b1:
+  %p = phi i16 [ %x, %b0 ]
+  ret i16 %y
+}
+",
+        );
+        let f = function(&module, "f");
+        let ops = operations(f).map(|(inst, _, _)| inst).collect::<Vec<_>>();
+        let (x, y) = (value(f, "x"), value(f, "y"));
+        assert_eq!(use_index(f, None), BTreeMap::from([(x, vec![ops[0]]), (y, vec![ops[2]])]));
+    }
+
+    #[test]
+    fn a_value_substituted_by_a_constant_reads_the_constant() {
+        let mut module = parsed(
+            "define i16 @f(i16 %x) {
+b0:
+  %y = add i16 %x, %x
+  ret i16 %y
+}
+",
+        );
+        let i16 = module.context.types.int(16);
+        let seven = module.context.int(i16, 7);
+        let f = function(&module, "f");
+        let (_, _, add) = operations(f).next().unwrap();
+        let swap = BTreeMap::from([(value(f, "x"), Operand::Constant(seven))]);
+        assert_eq!(substituted(add, &swap).unwrap(), vec![Operand::Constant(seven); 2]);
+    }
 }

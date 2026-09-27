@@ -63,3 +63,108 @@ fn test_a_term_that_is_not_neutral_stays() {
     assert!(!identities(context, function));
     assert_eq!(llrm_mir::print::module(&body), before);
 }
+
+/// `text` through `Canonical` under the pass manager's verifier and
+/// preserved-analyses check.
+fn canonical(text: &str) -> (Module, Module) {
+    let before = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let mut module = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.add(super::Canonical);
+    passes.run(&mut module).expect("runs");
+    (before, module)
+}
+
+fn printed(module: &Module) -> String {
+    llrm_mir::print::module(module)
+}
+
+#[test]
+fn a_constant_on_the_left_of_any_compare_moves_right_with_the_same_answer() {
+    for predicate in ["eq", "ne", "ult", "ule", "ugt", "uge", "slt", "sle", "sgt", "sge"] {
+        let text = format!(
+            "define i16 @f(i16 %x) {{
+b0:
+  %c = icmp {predicate} i16 5, %x
+  %r = zext i1 %c to i16
+  ret i16 %r
+}}
+"
+        );
+        let (before, after) = canonical(&text);
+        let compare = printed(&after).lines().find(|line| line.contains("icmp")).unwrap().to_owned();
+        assert!(compare.ends_with("i16 %x, 5"), "{predicate}: {compare}");
+        for x in [0, 4, 5, 6, 0x8000, 0xFFFF] {
+            assert_eq!(returned(&after, x), returned(&before, x), "{predicate} {x}");
+        }
+    }
+}
+
+#[test]
+fn a_compare_of_two_constants_or_two_values_is_left_alone() {
+    let text = "define i1 @f(i16 %x) {
+b0:
+  %k = icmp slt i16 3, 4
+  %v = icmp slt i16 %x, %x
+  %r = and i1 %k, %v
+  ret i1 %r
+}
+";
+    let (before, after) = canonical(text);
+    assert_eq!(printed(&after), printed(&before));
+}
+
+#[test]
+fn a_constant_zero_on_the_left_of_uge_becomes_an_equality_test() {
+    let (before, after) = canonical(
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp uge i16 0, %x
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+",
+    );
+    assert!(printed(&after).contains("icmp eq i16 %x, 0"), "{}", printed(&after));
+    for x in [0, 1, 0xFFFF] {
+        assert_eq!(returned(&after, x), returned(&before, x), "{x}");
+    }
+}
+
+#[test]
+fn neutral_terms_fold_on_either_side_but_zero_minus_x_stays() {
+    let (before, after) = canonical(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 0, %x
+  %m = mul i16 1, %a
+  %n = sub i16 0, %m
+  ret i16 %n
+}
+",
+    );
+    assert_eq!(
+        printed(&after),
+        "define i16 @f(i16 %x) {
+b0:
+  %n = sub i16 0, %x
+  ret i16 %n
+}
+"
+    );
+    for x in [0, 1, 7, 0xFFFF] {
+        assert_eq!(returned(&after, x), returned(&before, x), "{x}");
+    }
+}
+
+#[test]
+fn signed_and_other_tests_against_zero_are_left_alone() {
+    for test in ["slt", "sle", "sgt", "sge", "ult", "uge", "eq", "ne"] {
+        let body = _body("add", 1, test);
+        let mut folded = body.clone();
+        let (context, function) = folded.function_mut("f").expect("@f");
+        assert!(!identities(context, function), "{test}");
+        assert_eq!(printed(&folded), printed(&body), "{test}");
+    }
+}
