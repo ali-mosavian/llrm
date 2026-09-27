@@ -309,6 +309,20 @@ pub struct GlobalValue {
 }
 
 impl GlobalValue {
+    /// This global as its declaration: a function without its body.
+    pub fn declaration(&self) -> GlobalValue {
+        GlobalValue {
+            name: self.name.clone(),
+            linkage: self.linkage,
+            unnamed_addr: self.unnamed_addr,
+            address_space: self.address_space,
+            kind: match &self.kind {
+                GlobalKind::Function(function) => GlobalKind::Function(Box::new(function.declaration())),
+                GlobalKind::Variable(variable) => GlobalKind::Variable(variable.clone()),
+            },
+        }
+    }
+
     pub fn function(&self) -> Option<&Function> {
         match &self.kind {
             GlobalKind::Function(function) => Some(function),

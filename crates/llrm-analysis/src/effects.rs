@@ -2,8 +2,8 @@
 //! effects not described by an instruction's own operands.
 //!
 //! A load or store names its bytes. A call states the rest as LLVM does,
-//! with `memory(...)`, `readnone` or `readonly` at the call site and on its
-//! callee, so this reads those attributes where the old code read the
+//! with `memory(...)`, `readnone`, `readonly` or `writeonly` at the call site
+//! and on its callee, as `llrm_mir::memory` reads them, where the old code read the
 //! raise's `memory_complete` mark. A volatile access is the old barrier.
 //!
 //! Division is C's and floating exceptions are the machine's, so the old
@@ -11,100 +11,63 @@
 //! meaning: a raise reaches a handler in this body only along an `invoke`'s
 //! unwind edge, and `exposes_memory` asks for that edge.
 
-use llrm_mir::module::{Function, InstId, Module, Operand};
-use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::{ConstantKind, Context, GlobalId};
-use llrm_support::hash::HashMap;
+pub use llrm_mir::memory::callee;
+use llrm_mir::memory::{Effects, has, stated_at};
+use llrm_mir::module::{Function, GlobalValue, InstId, Module};
+use llrm_mir::opcode::Opcode;
+use llrm_mir::Context;
 
-/// A function's declared attributes, which a call to it reads.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Declaration {
-    pub attrs: Vec<Attribute>,
-    pub parameters: Vec<Vec<Attribute>>,
+/// Every global as its declaration, by id, which a call to it reads:
+/// gathered once, since a pass holds its own function mutably while it asks
+/// about the others. `llrm_mir::memory` says what their attributes mean.
+pub type Declarations = [GlobalValue];
+
+pub fn declarations(module: &Module) -> Vec<GlobalValue> {
+    module.globals.iter().map(GlobalValue::declaration).collect()
 }
 
-/// Every function's declaration, by id: gathered once, since a pass holds
-/// its own function mutably while it asks about the others.
-pub type Declarations = HashMap<GlobalId, Declaration>;
-
-pub fn declarations(module: &Module) -> Declarations {
-    module
-        .functions()
-        .map(|(id, _, function)| (id, Declaration { attrs: function.attrs.clone(), parameters: function.parameter_attrs.clone() }))
-        .collect()
-}
-
-/// The function `inst` calls directly, if it is a call.
-pub fn callee(context: &Context, function: &Function, inst: InstId) -> Option<GlobalId> {
-    let instruction = function.instruction(inst);
-    let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
-    match instruction.operands.last() {
-        Some(Operand::Constant(id)) => match context.get(*id).kind {
-            ConstantKind::Global(global) => Some(global),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn has(attrs: &[Attribute], flag: &str) -> bool {
-    attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag))
+fn declared<'a>(context: &Context, declarations: &'a Declarations, function: &Function, inst: InstId) -> Option<&'a Function> {
+    declarations.get(callee(context, function, inst)?.0 as usize).and_then(GlobalValue::function)
 }
 
 /// Whether the call `inst` or its callee carries the attribute `flag`.
 pub fn states(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, flag: &str) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    has(&info.attrs, flag) || callee(context, function, inst).and_then(|one| declarations.get(&one)).is_some_and(|one| has(&one.attrs, flag))
+    has(&info.attrs, flag) || declared(context, declarations, function, inst).is_some_and(|one| has(&one.attrs, flag))
 }
 
-/// Whether `attrs` let a call `access` ("read" or "write") a location
-/// `counted` admits.
-fn allows(attrs: &[Attribute], access: &str, counted: impl Fn(Option<&str>) -> bool) -> bool {
-    let mut allowed = true;
-    for attr in attrs {
-        match attr {
-            Attribute::Memory(locations) => {
-                allowed = locations.iter().any(|(location, granted)| counted(location.as_deref()) && (granted == access || granted == "readwrite"));
-            }
-            Attribute::Flag(flag) if flag == "readnone" => allowed = false,
-            Attribute::Flag(flag) if flag == "readonly" && access == "write" => allowed = false,
-            Attribute::Flag(flag) if flag == "writeonly" && access == "read" => allowed = false,
-            _ => {}
-        }
-    }
-    allowed
+/// What the call `inst` may do to locations `counted` admits: what both the
+/// call site and the callee allow.
+fn call_effects(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, counted: impl Fn(Option<&str>) -> bool + Copy) -> Effects {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return Effects::NONE };
+    let site = stated_at(&info.attrs, counted);
+    let declared = declared(context, declarations, function, inst).map_or(Effects::ANY, |one| stated_at(&one.attrs, counted));
+    Effects { reads: site.reads && declared.reads, writes: site.writes && declared.writes }
 }
 
-/// Whether the call `inst` may `access` a location `counted` admits: both
-/// the call site and the callee must allow it.
-fn call_allows(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, access: &str, counted: impl Fn(Option<&str>) -> bool + Copy) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    let declared = callee(context, function, inst).and_then(|one| declarations.get(&one)).is_none_or(|one| allows(&one.attrs, access, counted));
-    allows(&info.attrs, access, counted) && declared
-}
-
-fn unmodeled(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, access: &str) -> bool {
+/// What an instruction may do to memory its operands do not name.
+fn unmodeled(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
     match function.instruction(inst).opcode {
-        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => volatile,
-        Opcode::Call(_) | Opcode::Invoke(_) => call_allows(context, declarations, function, inst, access, |location| location != Some("argmem")),
-        _ => false,
+        Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } => Effects::ANY,
+        Opcode::Call(_) | Opcode::Invoke(_) => call_effects(context, declarations, function, inst, |location| location != Some("argmem")),
+        _ => Effects::NONE,
     }
 }
 
 /// Whether an instruction may write memory its operands do not name.
 pub fn unmodeled_write(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    unmodeled(context, declarations, function, inst, "write")
+    unmodeled(context, declarations, function, inst).writes
 }
 
 /// Whether an instruction may read memory its operands do not name.
 pub fn unmodeled_read(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    unmodeled(context, declarations, function, inst, "read")
+    unmodeled(context, declarations, function, inst).reads
 }
 
 /// Whether the call `inst` may touch memory at all, through its arguments
 /// or otherwise.
 pub fn touches_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    ["read", "write"].iter().any(|access| call_allows(context, declarations, function, inst, access, |_| true))
+    call_effects(context, declarations, function, inst, |_| true) != Effects::NONE
 }
 
 /// Whether a raise here can reach a handler in this body, which reads memory.
@@ -182,6 +145,38 @@ b:
         assert_eq!(found[1], (false, false, true));
         assert_eq!(found[2], (true, false, true));
         assert_eq!(found[3], (false, true, true));
+    }
+
+    /// Effects and `memory::of` read one statement of a callee's memory: a
+    /// `writeonly` call read memory for `of`, not for effects.
+    #[test]
+    fn effects_agree_with_what_memory_says_a_call_does() {
+        let module = parsed(
+            "declare void @anything(ptr)
+declare void @reads(ptr) readonly
+declare void @writes(ptr) memory(write)
+declare void @none(ptr) readnone
+
+define void @f(ptr %p) {
+b:
+  call void @anything(ptr %p) writeonly
+  call void @anything(ptr %p)
+  call void @reads(ptr %p)
+  call void @writes(ptr %p)
+  call void @none(ptr %p)
+  ret void
+}
+",
+        );
+        let declarations = declarations(&module);
+        let callees = llrm_mir::memory::callees(&module);
+        let f = function(&module, "f");
+        let context = &module.context;
+        for (_, inst) in f.walk().filter(|&(_, inst)| matches!(f.instruction(inst).opcode, Opcode::Call(_))) {
+            let of = llrm_mir::memory::of(context, &callees, f, inst);
+            let effects = Effects { reads: unmodeled_read(context, &declarations, f, inst), writes: unmodeled_write(context, &declarations, f, inst) };
+            assert_eq!(effects, of, "{inst:?}");
+        }
     }
 
     #[test]

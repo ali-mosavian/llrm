@@ -168,17 +168,7 @@ pub struct Outer {
 
 impl Outer {
     pub fn of(module: &Module, target: Option<Rc<dyn Machine>>) -> Self {
-        let declared = |global: &GlobalValue| GlobalValue {
-            name: global.name.clone(),
-            linkage: global.linkage,
-            unnamed_addr: global.unnamed_addr,
-            address_space: global.address_space,
-            kind: match &global.kind {
-                GlobalKind::Function(function) => GlobalKind::Function(Box::new(function.declaration())),
-                GlobalKind::Variable(variable) => GlobalKind::Variable(variable.clone()),
-            },
-        };
-        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(declared).collect(), target, modules: HashMap::new() }
+        Self { metadata: module.metadata.clone(), globals: module.globals.iter().map(GlobalValue::declaration).collect(), target, modules: HashMap::new() }
     }
 
     /// Computes `M` of `module`, for analyses asked outside a pass manager.
