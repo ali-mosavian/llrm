@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
-default-members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-bc", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
+default-members = [".", "crates/llrm-support", "crates/llrm-graph", "crates/llrm-cycles", "crates/llrm-omf", "crates/llrm-bcmachine", "crates/llrm-bc", "crates/llrm-hir", "crates/llrm-mir", "crates/llrm-analysis", "crates/llrm-transforms", "crates/llrm-core", "crates/llrm-nib", "crates/llrm-qb", "crates/llrm-c"]
 resolver = "3"
 
 [workspace.package]
@@ -24,6 +24,7 @@ llrm-support = { path = "crates/llrm-support" }
 llrm-cycles = { path = "crates/llrm-cycles" }
 llrm-omf = { path = "crates/llrm-omf" }
 llrm-bcmachine = { path = "crates/llrm-bcmachine" }
+llrm-bc = { path = "crates/llrm-bc" }
 llrm-hir = { path = "crates/llrm-hir" }
 llrm-mir = { path = "crates/llrm-mir" }
 llrm-graph = { path = "crates/llrm-graph" }
