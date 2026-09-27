@@ -219,13 +219,15 @@ fn a_call_reads_its_inputs_as_words() {
     }
 }
 
+/// What fpdeep prints: p = 12, 28, 60; k = 4; d = 12.
+const FPDEEP: [i64; 20] = [1, 144, 1, 6, 1, 512, 2, 784, 2, 14, 2, 768, 3, 3600, 3, 30, 3, 896, 144, 6];
+
 /// fpdeep: `p(i) * p(i)` holds two values from one address, and `fdivp`
-/// writes st(1) before the pop renumbers it. p = 12, 28, 60; k = 4; d = 12.
+/// writes st(1) before the pop renumbers it.
 #[test]
 fn fpdeep_keeps_two_values_on_the_stack() {
-    let expected = vec![1, 144, 1, 6, 1, 512, 2, 784, 2, 14, 2, 768, 3, 3600, 3, 30, 3, 896, 144, 6];
     for fixture in ["fpdeep-q-o.obj", "fpdeep-q-noo.obj"] {
-        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+        assert_eq!(printed(fixture, FPDEEP.len()), FPDEEP, "{fixture}");
     }
 }
 
@@ -315,4 +317,13 @@ fn a_sign_extended_dividend_is_a_word_division() {
     let text = llrm_mir::print::module(&raised("rcflip-q-o.obj"));
     let divisions: Vec<&str> = text.lines().filter(|line| line.contains(" sdiv ") || line.contains(" srem ")).collect();
     assert!(!divisions.is_empty() && divisions.iter().all(|line| line.contains(" i16 ")), "{divisions:#?}");
+}
+
+/// fpdeep /G2 and /V copy `d = 12`'s eight bytes with four bare `movsw`,
+/// which refused the whole program as unmodelled.
+#[test]
+fn a_string_copy_moves_its_words() {
+    for fixture in ["fpdeep-p-g2.obj", "fpdeep-v-g2.obj"] {
+        assert_eq!(printed(fixture, FPDEEP.len()), FPDEEP, "{fixture}");
+    }
 }

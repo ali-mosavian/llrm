@@ -1314,30 +1314,35 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 None => pointer,
             });
         }
-        match segment {
-            Register::DS | Register::SS => {
-                let pointer = match resolved {
-                    Some(address) => self.symbol(address)?,
-                    None => {
-                        let ptr = self.b.context.types.ptr(0);
-                        let at = self.plus(sum, disp);
-                        return Ok(self.cast(CastOp::IntToPtr, at, ptr));
-                    }
-                };
+        match (segment, resolved) {
+            (Register::DS | Register::SS, Some(address)) => {
+                let pointer = self.symbol(address)?;
                 Ok(match sum {
                     Some(sum) => self.indexed(pointer, sum),
                     None => pointer,
                 })
             }
+            (Register::ES, Some(_)) => Err("es: with a relocated displacement".to_owned()),
+            (Register::DS | Register::SS | Register::ES, None) => {
+                let at = self.plus(sum, disp);
+                self.segmented(segment, at)
+            }
+            (other, _) => Err(format!("{}: memory", name(other))),
+        }
+    }
+
+    /// The address `segment:offset`, the offset a word.
+    pub fn segmented(&mut self, segment: Register, offset: Operand) -> Emit<Operand> {
+        match segment {
+            Register::DS | Register::SS => {
+                let ptr = self.b.context.types.ptr(0);
+                Ok(self.cast(CastOp::IntToPtr, offset, ptr))
+            }
             Register::ES => {
-                if resolved.is_some() {
-                    return Err("es: with a relocated displacement".to_owned());
-                }
                 let es = self.get(Var::Es);
                 let far = self.b.context.types.ptr(FAR);
                 let base = self.cast(CastOp::AddrSpaceCast, es, far);
-                let at = self.plus(sum, disp);
-                Ok(self.indexed(base, at))
+                Ok(self.indexed(base, offset))
             }
             other => Err(format!("{}: memory", name(other))),
         }

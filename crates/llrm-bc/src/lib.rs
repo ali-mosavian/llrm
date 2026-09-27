@@ -6,6 +6,7 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod copies;
 pub mod division;
 pub mod emit;
 pub mod floats;
