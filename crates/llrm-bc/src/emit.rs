@@ -343,11 +343,6 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             return Err("locals overlap the runtime's frame header".to_owned());
         }
         let arguments = self.layout.and_then(|one| one.arguments);
-        if high == low {
-            // Nothing is in it: `frame_pointer` answers no address from it.
-            let ptr = self.b.context.types.ptr(0);
-            return Ok(Layout { low, high, locals: poison(self.b, ptr), arguments });
-        }
         let byte = self.b.context.types.int(8);
         let ty = self.b.context.types.intern(Type::Array { element: byte, count: (high - low) as u64 });
         let locals = self.b.alloca(ty, "frame");

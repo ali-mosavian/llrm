@@ -236,10 +236,6 @@ impl Objects {
         for &segment in &data {
             let Some(Some((segname, size))) = segments.get(segment as usize) else { continue };
             let size = *size;
-            // An empty segment holds no object.
-            if size == 0 {
-                continue;
-            }
             if carving.shared.contains(&segment) || objects.far.contains(&segment) {
                 carved.push((segment, 0, size, Some(segname.clone())));
                 continue;

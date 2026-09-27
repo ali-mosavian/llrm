@@ -181,3 +181,41 @@ done:
     assert_eq!(results(&module, &[&[]]), results(&before, &[&[]]), "{after}");
     assert_eq!(after.matches("store i16").count(), 2, "{after}");
 }
+
+/// A zero-byte global and alloca, as an empty segment or frame raises:
+/// each overlaps nothing, as in LLVM. Sroa and Dse panicked on them,
+/// "an alias slice must contain at least one byte".
+#[test]
+fn a_zero_byte_object_overlaps_nothing() {
+    let mut module = parsed(
+        "@z = global [0 x i8] zeroinitializer
+@g = global i16 0
+
+declare void @u(ptr)
+
+define i16 @f(i16 %x) {
+b0:
+  %e = alloca [0 x i8]
+  %s = alloca i16
+  store i16 %x, ptr %s
+  call void @u(ptr %e)
+  call void @u(ptr @z)
+  %q = getelementptr i8, ptr %e, i16 %x
+  %c = icmp eq ptr %q, @z
+  store i16 1, ptr @g
+  store i16 %x, ptr @g
+  %v = load i16, ptr %s
+  ret i16 %v
+}
+",
+    );
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(crate::promote::Sroa);
+    manager.add(Promote);
+    manager.add(Dse);
+    manager.run(&mut module).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("store i16 1") && after.contains("ret i16 %x"), "{after}");
+}

@@ -75,16 +75,10 @@ pub enum CellKey {
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
-fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<MemoryObject>) -> Result<BTreeSet<Slice>, String> {
+fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<MemoryObject>) -> BTreeSet<Slice> {
     let mut objects = provenances.into_iter().flat_map(|provenance| provenance.slices.iter().map(|one| one.object.clone())).collect::<BTreeSet<_>>();
     objects.extend(escaped.iter().cloned());
-    objects
-        .into_iter()
-        .map(|object| match object.extent {
-            Some(extent) => Slice::new(object, 0, extent, 1, 1).map_err(|error| error.to_string()),
-            None => Ok(Slice::whole(object)),
-        })
-        .collect()
+    objects.into_iter().filter_map(Slice::every_byte).collect()
 }
 
 /// Python `qbopt.analysis.alias:PointsTo`.
@@ -371,7 +365,7 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     for (index, one) in actual.iter().enumerate() {
         let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
-        let objects = _whole([one], &BTreeSet::new())?;
+        let objects = _whole([one], &BTreeSet::new());
         if through.reads {
             reads.extend(objects.iter().cloned());
         }
@@ -393,7 +387,7 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
 /// through its arguments.
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let mut reads = NONLOCAL.slices.clone();
-    reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default())?);
+    reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
@@ -649,12 +643,12 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             }
         };
         if effect.unknown_read {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
+            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             effect.reads.extend(_tracked(&procedure.unit));
         }
         if effect.unknown_write {
-            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default())?;
+            let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             effect.writes.extend(_tracked(&procedure.unit));
         }
@@ -844,16 +838,9 @@ fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option
 /// natural-loop header, use the standard abstract-interpretation widening
 /// instead. Keeping object identity and restrict roots still proves the
 /// important disjointness facts; only the changing subrange is forgotten.
-fn _widened(provenance: &Provenance) -> Result<Provenance, String> {
-    let slices = provenance
-        .slices
-        .iter()
-        .map(|one| match one.object.extent {
-            Some(extent) => Slice::new(one.object.clone(), 0, extent, 1, 1).map_err(|error| error.to_string()),
-            None => Ok(Slice::whole(one.object.clone())),
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(Provenance { slices, restrict: provenance.restrict.clone() })
+fn _widened(provenance: &Provenance) -> Provenance {
+    let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object.clone())).collect();
+    Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
 fn _cell_key(reference: &MemRef) -> Option<CellKey> {
@@ -896,7 +883,7 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
             }
             // Arithmetic by an unknown integer remains within each known
             // object, but no longer has a byte offset precise enough to compare.
-            _widened(&fact).map(Some)
+            Ok(Some(_widened(&fact)))
         }
         _ => Ok(None),
     }
@@ -1001,7 +988,7 @@ pub fn points_to(
                             if has_back_edge {
                                 if let Some(previous) = previous_incoming.get(&key) {
                                     if fact != *previous {
-                                        fact = _widened(&previous.union(&fact))?;
+                                        fact = _widened(&previous.union(&fact));
                                     }
                                 }
                             }
@@ -1024,7 +1011,7 @@ pub fn points_to(
                             if carried {
                                 if let Some(previous) = values.get(&result) {
                                     if current != previous {
-                                        fact = Some(_widened(&previous.union(current))?);
+                                        fact = Some(_widened(&previous.union(current)));
                                     }
                                 }
                             }
@@ -1075,7 +1062,7 @@ pub fn points_to(
                         if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
                             for one in &targets.slices {
                                 // Whole objects: stored offsets may shift each trip around a loop.
-                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)))?;
+                                let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)));
                                 if fields.get(&one.object) != Some(&grown) {
                                     fields.insert(one.object.clone(), grown);
                                     changed.set(true);
