@@ -65,9 +65,12 @@ pub fn stored_from(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(Me
     }
 }
 
-/// The cell `inst` purely stores to, whatever it put there.
+/// The cell `inst` purely stores to, whatever it put there: a store's, or
+/// the bytes a `memset` fills.
 pub fn stored_cell(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<MemRef> {
-    stored_from(unit, accesses, inst).map(|(cell, _)| cell)
+    stored_from(unit, accesses, inst)
+        .map(|(cell, _)| cell)
+        .or_else(|| MemRef::filled(unit, inst).filter(|one| !one.volatile).and_then(|_| accesses.references.get(&inst).cloned()))
 }
 
 /// Whether `holder` can stand for `value`: it has its type.
