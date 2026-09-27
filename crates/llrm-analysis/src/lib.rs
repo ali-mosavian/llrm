@@ -3,5 +3,8 @@
 //! passes in llrm-transforms ask it.
 
 pub mod cfg;
+pub mod liveness;
+pub mod occurrence;
+pub mod ssa;
 #[cfg(test)]
 pub mod testing;
