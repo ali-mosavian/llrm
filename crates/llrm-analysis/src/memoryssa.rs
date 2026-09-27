@@ -3,8 +3,7 @@
 //!
 //! Stores, writing calls and volatile accesses define a single memory
 //! state; loads and reading calls use it. The clobber walker skips writes
-//! `may_clobber` rules out. A call writes its footprint in `Calls`, else
-//! what `memory::unmodeled_write` leaves open.
+//! `may_clobber` rules out. What each instruction touches is `Accesses`'.
 //!
 //! A site is an instruction. Dropped, with no rich MIR counterpart: the x87
 //! writes (`floating`, `Fcheck`), each query's `dgroup` (foreign memory is
@@ -20,6 +19,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use crate::cfg;
+use crate::alias::{self, Procedure, Summary};
 use crate::consts::Calls;
 use crate::memory::{MemRef, Unit, unmodeled_write};
 use crate::pointerfacts::{self, Location};
@@ -51,32 +51,69 @@ impl Access {
     }
 }
 
-/// What `inst` writes: its store's bytes, or its call's footprint in
-/// `calls`; `None` where it may write anything.
-pub fn writes(unit: &Unit, calls: &Calls, inst: InstId) -> Option<Vec<MemRef>> {
-    if let Some(footprint) = calls.get(&inst) {
-        return Some(footprint.clone());
-    }
-    if unmodeled_write(unit, inst) {
-        return None;
-    }
-    Some(match unit.function.instruction(inst).opcode {
-        Opcode::Store { .. } => MemRef::of(unit, inst).into_iter().collect(),
-        _ => Vec::new(),
-    })
+/// What an instruction reads and what it writes; `None` for anything.
+type Footprint = (Option<Vec<MemRef>>, Option<Vec<MemRef>>);
+
+/// What each instruction reads and writes, as MemorySSA and its clients
+/// ask: old `Op.loads` and `Op.stores`. A load's or store's bytes are its
+/// reference; a call's are its footprint, else anything its attributes
+/// allow.
+#[derive(Clone, Debug, Default)]
+pub struct Accesses {
+    /// Each load's and store's reference.
+    pub references: IndexMap<InstId, MemRef>,
+    /// Of each instruction touching memory, what it reads and what it
+    /// writes; `None` for anything.
+    touched: IndexMap<InstId, Footprint>,
 }
 
-/// What `inst` reads: its load's bytes; `None` where it may read anything.
-pub fn reads(unit: &Unit, inst: InstId) -> Option<Vec<MemRef>> {
-    match &unit.function.instruction(inst).opcode {
-        Opcode::Load { volatile: false, .. } => Some(MemRef::of(unit, inst).into_iter().collect()),
-        Opcode::Load { .. } | Opcode::Store { volatile: true, .. } => None,
-        Opcode::Call(info) | Opcode::Invoke(info) => {
-            let callee = llrm_mir::memory::callee(unit.context, unit.function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
-            let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
-            (!reading).then(Vec::new)
+impl Accesses {
+    /// `unit`'s accesses as `alias` resolves them: each reference with its
+    /// provenance, each call's effect instantiated from `known` callees.
+    pub fn resolved(unit: &Unit, known: &IndexMap<String, Summary>) -> Result<Self, String> {
+        let references = alias::annotated(unit)?;
+        let effects = alias::calls_annotated(&Procedure::of(*unit), known)?;
+        Ok(Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone())))))
+    }
+
+    /// `unit`'s accesses unresolved: each reference as the instruction
+    /// spells it, each call writing its footprint in `calls`.
+    pub fn plain(unit: &Unit, calls: &Calls) -> Self {
+        let references = unit.function.walk().filter_map(|(_, inst)| MemRef::of(unit, inst).map(|one| (inst, one))).collect();
+        Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(stores.clone()))))
+    }
+
+    /// `footprint` gives a call's reads and writes, where known.
+    fn new(unit: &Unit, references: IndexMap<InstId, MemRef>, footprint: impl Fn(InstId) -> Option<Footprint>) -> Self {
+        let function = unit.function;
+        let mut touched = IndexMap::default();
+        for (_, inst) in function.walk() {
+            let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
+            let found = match &function.instruction(inst).opcode {
+                Opcode::Load { volatile: false, .. } => (Some(reference()), Some(Vec::new())),
+                Opcode::Store { volatile: false, .. } => (Some(Vec::new()), Some(reference())),
+                Opcode::Load { .. } | Opcode::Store { .. } => (None, None),
+                Opcode::Call(info) | Opcode::Invoke(info) => {
+                    let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
+                    let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
+                    let (reads, writes) = footprint(inst).unwrap_or((None, None));
+                    (if reading { reads } else { Some(Vec::new()) }, if unmodeled_write(unit, inst) { writes } else { Some(Vec::new()) })
+                }
+                _ => continue,
+            };
+            touched.insert(inst, found);
         }
-        _ => Some(Vec::new()),
+        Self { references, touched }
+    }
+
+    /// What `inst` writes; `None` where it may write anything.
+    pub fn writes(&self, inst: InstId) -> Option<&[MemRef]> {
+        self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
+    }
+
+    /// What `inst` reads; `None` where it may read anything.
+    pub fn reads(&self, inst: InstId) -> Option<&[MemRef]> {
+        self.touched.get(&inst).map_or(Some(&[]), |(reads, _)| reads.as_deref())
     }
 }
 
@@ -118,7 +155,7 @@ pub struct MemorySSA<'a> {
     pub accesses: Vec<Access>,
     pub sites: IndexMap<InstId, Access>,
     pub phis: IndexMap<i64, Access>,
-    /// What each def writes, as `writes` says.
+    /// What each def writes, as `Accesses::writes` says.
     written: IndexMap<InstId, Option<Vec<MemRef>>>,
     unit: Unit<'a>,
 }
@@ -218,7 +255,7 @@ impl MemorySSA<'_> {
 ///
 /// Preallocating entries handles backedges without iterative guesses about
 /// memory versions. A block no edge enters keeps an invocation input.
-pub fn built<'a>(unit: &Unit<'a>, calls: &Calls) -> MemorySSA<'a> {
+pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -231,9 +268,9 @@ pub fn built<'a>(unit: &Unit<'a>, calls: &Calls) -> MemorySSA<'a> {
     for block in &graph {
         let mut current = entries[&block.at];
         for &inst in function.block(cfg::block(block.at)).instructions() {
-            let writes = writes(unit, calls, inst);
+            let writes = accesses.writes(inst).map(<[MemRef]>::to_vec);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
-            if !defines && reads(unit, inst).is_some_and(|loads| loads.is_empty()) {
+            if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {
                 continue;
             }
             let kind = if defines { Kind::Def } else { Kind::Use };

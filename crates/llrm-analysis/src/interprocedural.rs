@@ -235,7 +235,7 @@ fn _admitted(context: &Context, declarations: &Declarations, function: &Function
 
 /// Whether the body here is the one that runs: LLVM's `hasExactDefinition`.
 /// The linker may swap any other for a different one.
-fn _exact(linkage: Linkage) -> bool {
+pub fn _exact(linkage: Linkage) -> bool {
     matches!(linkage, Linkage::External | Linkage::Internal | Linkage::Private)
 }
 

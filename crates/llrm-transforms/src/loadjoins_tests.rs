@@ -36,7 +36,7 @@ fn after(body: &str, insert: bool, inputs: &[&[i128]]) -> String {
     let text = printed(&once);
     assert_eq!(printed(&joined(parsed(&text), insert)), text, "a second run changes nothing");
     assert_eq!(results(&once, inputs), results(&before, inputs), "{text}");
-    text.split("define").nth(1).map(|f| format!("define{f}")).expect("@f")
+    text.split("define").find(|f| f.contains(" @f(")).map(|f| format!("define{f}")).expect("@f")
 }
 
 /// `body` is left as it was.
@@ -384,6 +384,27 @@ b5:
 #[test]
 fn test_a_provider_of_another_type_is_not_used() {
     unchanged(&diamond("", "").replace("store i16 10, ptr CELL", "store ptr @g, ptr CELL"), false);
+}
+
+/// Alias proves `@h` apart from `@g`, whether a store or a callee writes it.
+#[test]
+fn test_two_distinct_globals_are_proven_apart() {
+    for write in ["store i16 30, ptr @h", "call void @seth()"] {
+        let body = format!(
+            "@h = global i16 0
+
+define void @seth() {{
+b0:
+  store i16 30, ptr @h
+  ret void
+}}
+
+{}",
+            diamond("", write)
+        );
+        let text = after(&body, false, BOTH);
+        assert!(text.contains("%x1 = phi i16 [ 10, %b1 ], [ 20, %b2 ]"), "{write}: {text}");
+    }
 }
 
 /// The pass keeps every corpus module verifying.

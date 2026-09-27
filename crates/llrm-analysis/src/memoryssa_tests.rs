@@ -9,6 +9,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Module};
 
 use super::*;
+use crate::consts::Calls;
 use crate::testing::{DOS, block, function, layout, parsed};
 
 struct Parsed {
@@ -46,7 +47,7 @@ fn cell(unit: &Unit, inst: InstId) -> MemRef {
 }
 
 fn graph<'a>(unit: &Unit<'a>) -> MemorySSA<'a> {
-    built(unit, &Calls::default())
+    built(unit, &Accesses::plain(unit, &Calls::default()))
 }
 
 fn incoming(access: &Access) -> Vec<(Option<i64>, usize)> {
@@ -354,7 +355,7 @@ b0:
     let unit = parsed.unit();
     let (store, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2));
     for (footprint, clobber) in [(site(&unit, "b0", 3), store), (load, call)] {
-        let graph = built(&unit, &Calls::from_iter([(call, vec![cell(&unit, footprint)])]));
+        let graph = built(&unit, &Accesses::plain(&unit, &Calls::from_iter([(call, vec![cell(&unit, footprint)])])));
         assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(clobber).id]));
     }
 }
@@ -510,4 +511,43 @@ b0:
     assert!(!same_bytes(&unit, &low, &high));
     assert!(covers(&unit, &pointed, &half) && !covers(&unit, &half, &pointed));
     assert!(!covers(&unit, &pointed, &long), "unrelated roots");
+}
+
+/// `@g` and `@h` are apart only once alias names each access's object; a
+/// call is apart only once its callee's summary says it writes `@h` alone.
+#[test]
+fn test_resolved_accesses_prove_two_globals_apart() {
+    let parsed = Parsed::new(&format!(
+        "@h = global [64 x i8] zeroinitializer
+
+define void @seth() {{
+b0:
+  store i16 3, ptr @h
+  ret void
+}}
+
+define i16 @f() {{
+b0:
+  store i16 1, ptr {CELL}
+  store i16 2, ptr @h
+  call void @seth()
+  %x = load i16, ptr {CELL}
+  ret i16 %x
+}}
+"
+    ));
+    let unit = parsed.unit();
+    let seth = Procedure::of(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth")));
+    let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
+    let (first, second, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
+    for (accesses, clobber) in [
+        (Accesses::plain(&unit, &Calls::default()), call),
+        (Accesses::resolved(&unit, &IndexMap::default()).unwrap(), call),
+        (Accesses::resolved(&unit, &known).unwrap(), first),
+    ] {
+        let graph = built(&unit, &accesses);
+        assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(clobber).id]));
+    }
+    let plain = Accesses::plain(&unit, &Calls::from_iter([(call, vec![])]));
+    assert_eq!(built(&unit, &plain).clobbers(load, &plain.references[&load]), BTreeSet::from([graph(&unit).at(second).id]), "unresolved, @h may be @g");
 }

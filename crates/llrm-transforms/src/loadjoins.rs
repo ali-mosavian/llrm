@@ -17,17 +17,18 @@
 //! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
 //!   `source_backed` and `raised` marks.
 //!
-//! It is a module pass, since `memory::Unit` reads the module's globals.
-//! Calls write what `memory::unmodeled_write` leaves open until alias
-//! gives their footprints.
+//! It is a module pass: `memory::Unit` reads the module's globals, and a
+//! call's footprint is its callee's `alias` summary, of every body the
+//! linker keeps.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use llrm_analysis::avail::{loaded_into, stored_from};
-use llrm_analysis::consts::Calls;
+use llrm_analysis::alias::{self, Procedure};
+use llrm_analysis::interprocedural::_exact;
 use llrm_analysis::memory::{MemRef, Unit};
-use llrm_analysis::memoryssa::{self, same_bytes};
+use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
 use llrm_graph::loops::{self, Dominance, Loop};
 use llrm_mir::datalayout::DataLayout;
@@ -57,12 +58,25 @@ impl ModulePass for LoadJoins {
             None => DataLayout::default(),
         };
         let callees = llrm_mir::memory::callees(module);
+        // What each body the linker keeps reads and writes, for its callers.
+        let known = {
+            let procedures = module
+                .globals
+                .iter()
+                .filter(|global| _exact(global.linkage))
+                .filter_map(|global| Some((global.name.clone()?, global.function().filter(|one| !one.is_declaration())?)))
+                .map(|(name, function)| (name, Procedure::of(Unit::of(module, &layout, function))))
+                .collect();
+            alias::summaries(&procedures, None).unwrap_or_else(|error| panic!("loadjoins: {error}"))
+        };
         let mut changed = Vec::new();
         for at in 0..module.globals.len() {
             let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else {
                 continue;
             };
-            let joined = planned(&Unit::of(module, &layout, function), &callees, &Calls::default(), self.insert);
+            let unit = Unit::of(module, &layout, function);
+            let accesses = Accesses::resolved(&unit, &known).unwrap_or_else(|error| panic!("loadjoins: {error}"));
+            let joined = planned(&unit, &callees, &accesses, self.insert);
             if joined.is_empty() {
                 continue;
             }
@@ -106,8 +120,8 @@ fn on_edge(function: &Function, load: InstId, parent: BlockId) -> Option<Operand
 }
 
 /// What a load or store at `inst` leaves in its cell.
-fn provided(unit: &Unit, inst: InstId) -> Option<(MemRef, Operand)> {
-    stored_from(unit, inst).or_else(|| loaded_into(unit, inst).map(|(cell, value)| (cell, Operand::Value(value))))
+fn provided(unit: &Unit, accesses: &Accesses, inst: InstId) -> Option<(MemRef, Operand)> {
+    stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))))
 }
 
 /// The CFG facts a join is judged by.
@@ -146,7 +160,7 @@ fn insertable(unit: &Unit, callees: &Callees, shape: &Shape, parent: BlockId, jo
 }
 
 /// Every join load to replace by a phi, decided on `unit` as it stands.
-fn planned(unit: &Unit, callees: &Callees, calls: &Calls, insert: bool) -> Vec<Joined> {
+fn planned(unit: &Unit, callees: &Callees, accesses: &Accesses, insert: bool) -> Vec<Joined> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
@@ -154,10 +168,10 @@ fn planned(unit: &Unit, callees: &Callees, calls: &Calls, insert: bool) -> Vec<J
     if !predecessors.values().any(|parents| parents.len() > 1) {
         return Vec::new();
     }
-    let memory = memoryssa::built(unit, calls);
+    let memory = memoryssa::built(unit, accesses);
     let places: HashMap<InstId, (i64, usize)> =
         function.layout().iter().flat_map(|&block| function.block(block).instructions().iter().enumerate().map(move |(index, &inst)| (inst, (cfg::id(block), index)))).collect();
-    let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, site).map(|(cell, value)| (site, cell, value))).collect();
+    let providers: Vec<(InstId, MemRef, Operand)> = memory.sites.keys().filter_map(|&site| provided(unit, accesses, site).map(|(cell, value)| (site, cell, value))).collect();
     let shape = Shape {
         dominance: loops::dominance(&graph, entry),
         depth: loops::dominators(&graph, entry).into_iter().map(|(at, above)| (at, above.len())).collect(),
@@ -172,7 +186,7 @@ fn planned(unit: &Unit, callees: &Callees, calls: &Calls, insert: bool) -> Vec<J
         }
         let join = cfg::block(block.at);
         for (index, &load) in function.block(join).instructions().iter().enumerate() {
-            let Some((reference, result)) = loaded_into(unit, load) else {
+            let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };
             let ty = function.value(result).ty;
