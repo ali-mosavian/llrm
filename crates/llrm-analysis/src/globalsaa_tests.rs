@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_mir::passes::{Analyses, ModuleAnalyses};
+use llrm_mir::passes::{Analyses, ModuleAnalyses, Outer};
 use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
@@ -217,4 +217,19 @@ fn a_global_the_program_does_not_export_is_kept_across_the_runtime() {
     assert_eq!(kept_in("@g = global i16 0\n", second, call, closed.clone()), seven());
     assert_eq!(kept_in("@g = global i16 0\n", second, call, Exports::Open), None);
     assert_eq!(kept_in("@g = global i16 0\n@slot = global ptr @g\n", second, call, closed), None);
+}
+
+/// A call of a routine a pass declared after the outer facts were taken:
+/// it may call back. Indexing the outer globals by its id panicked.
+#[test]
+fn a_callee_declared_after_the_outer_facts_may_call_back() {
+    let taken = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  ret void\n}\n");
+    let now = parsed("@g = internal global i16 0\n\ndefine void @f() {\nb0:\n  call void @late()\n  ret void\n}\n\ndeclare void @late() nocallback\n");
+    let mut outer = Outer::of(&taken, None);
+    outer.require::<GlobalsAA>(&taken);
+    let layout = layout(&now);
+    let f = function(&now, "f");
+    let unit = Unit::within(&now.context, &layout, f, &outer);
+    let (_, call) = f.walk().next().expect("the call");
+    assert!(crate::globalsaa::calls_back(&unit, call));
 }

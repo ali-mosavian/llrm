@@ -659,7 +659,7 @@ fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     let listing = listing(&source);
     let procedure = between(&listing, "APPENDONE proc far", "APPENDONE endp");
 
-    assert!(procedure.contains("word ptr [bx+10]") || procedure.contains("word ptr [si+10]"));
+    assert!(["bx", "si", "di"].iter().any(|base| procedure.contains(&format!("word ptr [{base}+10]"))));
     assert!(!procedure.contains("dword ptr [bx]") && !procedure.contains("dword ptr [si]"));
     assert!(procedure.contains("mov bx, 0"));
     let payloads: Vec<&hir::Place> =

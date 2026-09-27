@@ -215,6 +215,20 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
     if what.op == Operation::Fill {
         return true;
     }
+    // A call writes what its MIR operation lists, or anything.
+    if what.op == Operation::Call {
+        if one.unmodeled_write() {
+            return true;
+        }
+        let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
+        let listed = one.op.as_ref().map_or(&[][..], |op| op.stores.as_slice());
+        if listed.iter().any(|reference| {
+            !(framed && reference.spares(crate::backend::spiller::_frame_disp(cell), cell.width))
+                && (reference.addr.is_none() || regions::addresses(reference.addr, reference.width, _reached(cell), cell.width, None).unwrap_or(true))
+        }) {
+            return true;
+        }
+    }
     if what.dests.iter().any(|dest| {
         matches!(dest, Loc::Mem(dest) if dest.addr.is_none()
             // Rust-only endpoint overflow reads as "may overlap".

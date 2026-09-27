@@ -366,16 +366,44 @@ fn test_arithmetic_overwrites_the_operand_that_dies() {
     assert_eq!((memory[first], memory[second], memory[third], stack), (-6.0, -1.0, -8.0, vec![]));
 }
 
+/// A call that lists its writes as sparing the frame leaves the cell; one
+/// that lists nothing may write it, and was read as writing nothing.
+fn _sparing_the_frame(body: LirBody) -> LirBody {
+    use crate::model::mir;
+    let mut call = mir::Op::new(0, mir::OpCode::nothing(), "call", vec![], vec![]);
+    call.kind = mir::Kind::Call;
+    call.memory_complete = true;
+    call.stores = vec![mir::MemRef { excludes: vec![mir::WHOLE_FRAME], ..mir::MemRef::new(None, 4) }];
+    let call = Arc::new(call);
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block.with_insns(
+                block
+                    .insns
+                    .iter()
+                    .map(|one| match &one.what {
+                        Some(what) if what.op == Operation::Call => Arc::new(Insn { op: Some(Arc::clone(&call)), ..Insn::clone(one) }),
+                        _ => Arc::clone(one),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
 #[test]
 fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
     // A value loaded before a call and stored after it refused the whole object.
     for boundary in [Operation::Call, Operation::Barrier] {
         let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
-        let body = _body(vec![
+        let body = _sparing_the_frame(_body(vec![
             _load(1, &source),
             sem(boundary, if boundary == Operation::Call { "call" } else { "" }, vec![], vec![]),
             _store(&target, 1),
-        ]);
+        ]));
         let result = with_frame(&body, &mut Frame::new(-8));
         let shape: Vec<(String, Vec<Loc>, Vec<Loc>)> = result
             .insns()
@@ -393,6 +421,12 @@ fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
             ]
         );
     }
+    // A call that lists nothing may write the cell: it is not read again.
+    let (source, target) = (frame_cell(-4, 4), frame_cell(-8, 4));
+    let body = _body(vec![_load(1, &source), sem(Operation::Call, "call", vec![], vec![]), _store(&target, 1)]);
+    let insns = with_frame(&body, &mut Frame::new(-8)).insns();
+    let call = insns.iter().position(|one| what(one).op == Operation::Call).expect("the call");
+    assert!(!insns[call..].iter().any(|one| name(one) == "fld" && what(one).sources == vec![m(&source)]), "{insns:#?}");
 }
 
 #[test]

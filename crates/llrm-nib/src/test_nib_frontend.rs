@@ -1866,7 +1866,9 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 }
 
 /// Nib through the rich MIR: emitted, selected and assembled whole, the
-/// entry public and each function by its object name.
+/// entry public and each function by its object name. `twice`, folded into
+/// its one call, is still assembled: nothing drops what no root reaches,
+/// which the old route does.
 #[test]
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
@@ -1878,7 +1880,7 @@ fn test_a_program_compiles_through_the_rich_mir() {
         lines,
         [
             ".model medium", ".386", "public _main", ".data", ".code TWICE_TEXT",
-            "_twice proc far", "L0_0:", "mov ax, 42", "retf", "_twice endp",
+            "_twice proc far", "push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "add ax, ax", "pop bp", "retf", "_twice endp",
             "_main proc far", "L1_0:", "mov ax, 42", "retf", "_main endp",
             "end",
         ]

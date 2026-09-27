@@ -940,7 +940,7 @@ fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
         return false;
     };
     for reference in &op.stores {
-        if _in_frame(cell) && reference.excludes.contains(&mir::WHOLE_FRAME) {
+        if _in_frame(cell) && reference.spares(_frame_disp(cell), cell.width) {
             continue;
         }
         if _incoming_frame(cell) && _proven_local_frame(reference) {
@@ -951,6 +951,11 @@ fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
         }
     }
     false
+}
+
+/// A fixed frame cell's displacement; none for one indexed or based.
+pub(crate) fn _frame_disp(cell: &Mem) -> Option<i64> {
+    _exact_frame(cell).then(|| cell.addr.expect("a frame cell").disp)
 }
 
 fn _in_frame(cell: &Mem) -> bool {
