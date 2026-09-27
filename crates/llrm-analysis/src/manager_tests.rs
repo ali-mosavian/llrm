@@ -154,7 +154,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
     for (name, module) in corpus() {
         let layout = layout(&module);
         let mut outer = Outer::of(&module, None);
-        outer.require::<Summaries>(&module, &layout);
+        outer.require::<Summaries>(&module);
         let summaries = outer.cached::<Summaries>().unwrap();
         let summaries = Result::as_ref(&*summaries).unwrap_or_else(|error| panic!("{name}: {error}"));
         let outer = Rc::new(outer);

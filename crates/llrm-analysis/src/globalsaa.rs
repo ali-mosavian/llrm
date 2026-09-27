@@ -23,10 +23,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
-use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::target::Machine;
+use llrm_mir::program::ProgramProxy;
 
 use crate::alias;
 use crate::memory::{Identity, MemoryKind, Unit};
@@ -138,7 +137,8 @@ fn referenced(module: &Module) -> BTreeSet<GlobalId> {
     out
 }
 
-pub fn analysis(module: &Module, layout: &DataLayout, target: Option<&dyn Machine>) -> Result<Globals, String> {
+pub fn analysis(module: &Module, program: &ProgramProxy) -> Result<Globals, String> {
+    let layout = &program.layout;
     let named = listed(module, "llrm.named").into_iter().flat_map(|(first, rest)| first.into_iter().chain(rest)).collect::<BTreeSet<_>>();
     let writes = listed(module, "llrm.writes").into_iter().filter_map(|(routine, cells)| Some((routine?, cells))).collect();
     let mut tracked = module
@@ -152,7 +152,7 @@ pub fn analysis(module: &Module, layout: &DataLayout, target: Option<&dyn Machin
         .collect::<BTreeSet<_>>();
     let bodies = module.functions().filter(|(_, _, function)| !function.is_declaration()).collect::<Vec<_>>();
     for (_, _, function) in &bodies {
-        let facts = alias::points_to(&Unit { machine: target, ..Unit::of(module, layout, function) }, None, None)?;
+        let facts = alias::points_to(&Unit { program: Some(program), ..Unit::of(module, layout, function) }, None, None)?;
         for object in facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global) {
             if let Some(Identity::Global(global)) = object.identity {
                 tracked.remove(&GlobalId(global));

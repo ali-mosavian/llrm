@@ -58,7 +58,7 @@ use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::target::Machine;
+use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
 
@@ -159,7 +159,7 @@ pub fn _floating(opcode: &Opcode) -> bool {
 /// whether any went.
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, machine: Option<&dyn Machine>) -> Result<bool, String> {
+pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, program: Option<&ProgramProxy>) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let doms = loops::dominators(&graph, function.entry().map(cfg::id));
     let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
@@ -187,7 +187,7 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
                 continue;
             };
             let loads = matches!(op.opcode, Opcode::Load { .. });
-            if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses, machine)) {
+            if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses, program)) {
                 candidates.push((here, index, inst));
                 continue;
             }
@@ -295,23 +295,23 @@ pub fn _reaches(
 ///
 /// `accesses` says what each writes, a volatile access anything; a call
 /// writes its footprint. `regions::overlapping` decides against each
-/// write, on `machine`, and an answer it cannot give overlaps.
-pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
-    _clear(one, between, accesses, machine, |other| accesses.writes(other))
+/// write, on `program`, and an answer it cannot give overlaps.
+pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
+    _clear(one, between, accesses, program, |other| accesses.writes(other))
 }
 
 /// `_undisturbed`, a volatile access writing only its own bytes
 /// (`Accesses::stored`): the old hoist let a precise volatile store pass
 /// disjoint work.
-pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses, machine: Option<&dyn Machine>) -> bool {
-    _clear(one, between, accesses, machine, |other| accesses.stored(function, other))
+pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
+    _clear(one, between, accesses, program, |other| accesses.stored(function, other))
 }
 
-fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, machine: Option<&dyn Machine>, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
+fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, program: Option<&ProgramProxy>, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
-    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, machine).unwrap_or(true);
+    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, program).unwrap_or(true);
     between.iter().all(|&other| writes(other).is_some_and(|written| !written.iter().any(overlaps)))
 }
 
@@ -465,10 +465,11 @@ b0:
         let reused = |dos: bool| {
             let mut module = parsed(&text);
             let layout = llrm_analysis::testing::layout(&module);
-            let machine = dos.then_some(&llrm_cycles::target::Dos as &dyn llrm_mir::target::Machine);
+            let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_cycles::target::Dos));
+            let program = dos.then_some(&*program);
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            let accesses = Accesses::resolved(&Unit { machine, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();
-            subexpressions(f(&mut module), &accesses, false, machine).unwrap()
+            let accesses = Accesses::resolved(&Unit { program, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();
+            subexpressions(f(&mut module), &accesses, false, program).unwrap()
         };
         assert!(reused(true) && !reused(false));
     }

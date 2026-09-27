@@ -225,7 +225,7 @@ fn rerun(module: &mut Module, id: GlobalId, fixed: &mut Fixed, target: Option<Rc
         None => DataLayout::default(),
     };
     let mut outer = Outer::of(module, target);
-    outer.require::<Summaries>(module, &layout);
+    outer.require::<Summaries>(module);
     let callees = llrm_mir::memory::callees(module);
     let sizes = llrm_mir::valuetracking::sizes(module, &layout);
     let mut declared = Declared::of(module);

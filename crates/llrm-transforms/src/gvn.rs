@@ -103,7 +103,7 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
         let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, avoid_store_crossing)?;
-        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, outer.target.as_deref())?;
+        let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()))?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;

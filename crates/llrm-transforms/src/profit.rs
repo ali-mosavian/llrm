@@ -39,10 +39,9 @@ pub const UNKNOWN_TRIPS: i64 = 10;
 
 pub use llrm_mir::target::OperationCosts;
 
-/// What `outer`'s target prices each operation at; neutral unit prices
-/// where it names no target.
+/// What `outer`'s target prices each operation at.
 pub fn costs(outer: &Outer) -> OperationCosts {
-    target_costs(outer.target.as_deref())
+    outer.target().costs()
 }
 
 /// What `target` prices each operation at; neutral unit prices without one.
@@ -51,10 +50,9 @@ pub fn target_costs(target: Option<&dyn Machine>) -> OperationCosts {
 }
 
 /// How many integer values `outer`'s target holds in registers, and how
-/// many across a call; 0 each where it names no target, which leaves
-/// pressure unpriced.
+/// many across a call; 0 each leaves pressure unpriced.
 pub fn registers(outer: &Outer) -> (i64, i64) {
-    outer.target.as_ref().map_or((0, 0), |target| (target.registers(), target.call_registers()))
+    (outer.target().registers(), outer.target().call_registers())
 }
 
 fn floating(context: &Context, function: &Function, operand: Operand) -> bool {

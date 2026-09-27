@@ -16,8 +16,9 @@
 //! it apart. `allocation` (a descriptor's object) is the `!tbaa` type
 //! "allocation" now, which `typed_apart` reads.
 //!
-//! Which linear memory holds no program data is the target's fact:
-//! `Machine`, which the pass manager hands analyses as `Outer::target`.
+//! Which linear memory holds no program data is the target's fact, and
+//! which address spaces hold program data the segment layout's: both the
+//! program's, which the pass manager hands analyses as `Outer::program`.
 //!
 //! Tests skipped, the lattice's: `hierarchy_coarse_dgroup_meets_linked_static_but_stack_does_not`,
 //! `one_hole_covers_but_the_union_of_holes_does_not`,
@@ -49,7 +50,7 @@ use crate::ranges::{Interval, covering};
 
 const FLOOR: i64 = -(1_i64 << 31);
 
-pub use llrm_mir::target::Machine;
+use llrm_mir::program::ProgramProxy;
 
 /// Failure to express a narrowed slice in `Slice`'s endpoints. Refusing
 /// retains conservatism; wrapping would narrow it.
@@ -77,8 +78,8 @@ fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
 
 /// The linear bytes `reference` reaches, when its selector's range lands it
 /// wholly in memory the machine keeps no program data in.
-fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, machine: Option<&dyn Machine>) -> Option<Slice> {
-    let machine = machine?;
+fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Option<Slice> {
+    let machine = &*program?.target;
     // A selector or offset is an unsigned word; ranges may carry it signed,
     // and an offset wraps within its segment.
     let words = |low: BigInt, high: BigInt| -> Option<(i64, i64)> {
@@ -113,8 +114,8 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, mach
 
 /// What `reference` may name under `facts`: its linear bytes when its
 /// segment lands it in foreign memory, else its provenance narrowed.
-fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, machine: Option<&dyn Machine>) -> Result<Option<Provenance>, RegionError> {
-    if let Some(slice) = foreign(reference, facts, machine) {
+fn refined(reference: &MemRef, facts: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Result<Option<Provenance>, RegionError> {
+    if let Some(slice) = foreign(reference, facts, program) {
         return Ok(Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() }));
     }
     reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
@@ -182,18 +183,18 @@ fn narrowed(reference: &MemRef, provenance: &Provenance, facts: Option<&BTreeMap
     Ok(Provenance { slices: BTreeSet::from([slice]), restrict: provenance.restrict.clone() })
 }
 
-/// Whether one reference lands in foreign memory and the other in the data
-/// group. A near access goes through the data or stack segment, both the
-/// data group; it holds program data, and foreign memory holds none.
+/// Whether one reference lands in foreign memory and the other in program
+/// data, as the segment layout places its address space.
 fn foreign_apart(
     one: &MemRef,
     other: &MemRef,
     known: Option<&BTreeMap<ValueId, Interval>>,
     other_known: Option<&BTreeMap<ValueId, Interval>>,
-    machine: Option<&dyn Machine>,
+    program: Option<&ProgramProxy>,
 ) -> bool {
-    let grouped = |reference: &MemRef| reference.space == 0;
-    (grouped(one) && foreign(other, other_known, machine).is_some()) || (grouped(other) && foreign(one, known, machine).is_some())
+    let Some(program) = program else { return false };
+    let grouped = |reference: &MemRef| program.segments.program_data(reference.space);
+    (grouped(one) && foreign(other, other_known, Some(program)).is_some()) || (grouped(other) && foreign(one, known, Some(program)).is_some())
 }
 
 /// Python `qbopt.analysis.regions:may_alias`.
@@ -205,12 +206,12 @@ pub fn may_alias(
     other: &MemRef,
     known: Option<&BTreeMap<ValueId, Interval>>,
     other_known: Option<&BTreeMap<ValueId, Interval>>,
-    machine: Option<&dyn Machine>,
+    program: Option<&ProgramProxy>,
 ) -> Result<bool, RegionError> {
-    if typed_apart(one, other) || foreign_apart(one, other, known, other_known, machine) {
+    if typed_apart(one, other) || foreign_apart(one, other, known, other_known, program) {
         return Ok(false);
     }
-    match (refined(one, known, machine)?, refined(other, other_known, machine)?) {
+    match (refined(one, known, program)?, refined(other, other_known, program)?) {
         (Some(one), Some(other)) => Ok(one.intersects(&other)),
         _ => Ok(true),
     }
@@ -226,9 +227,9 @@ pub fn overlapping(
     other: &MemRef,
     known: Option<&BTreeMap<ValueId, Interval>>,
     other_known: Option<&BTreeMap<ValueId, Interval>>,
-    machine: Option<&dyn Machine>,
+    program: Option<&ProgramProxy>,
 ) -> Result<bool, RegionError> {
-    if typed_apart(one, other) || foreign_apart(one, other, known, other_known, machine) {
+    if typed_apart(one, other) || foreign_apart(one, other, known, other_known, program) {
         return Ok(false);
     }
     // Canonical references carry their own object identity. Keep their base
@@ -237,7 +238,7 @@ pub fn overlapping(
     if one.provenance.is_some() && other.provenance.is_some() {
         return match _displaced(one, other) {
             Some(apart) => Ok(!apart),
-            None => may_alias(one, other, known, other_known, machine),
+            None => may_alias(one, other, known, other_known, program),
         };
     }
     if (_unescaped(one) && _through_pointer(other)) || (_unescaped(other) && _through_pointer(one)) {
@@ -253,7 +254,7 @@ pub fn overlapping(
     if let Some(apart) = _displaced(&covered, &other_covered) {
         return Ok(!apart);
     }
-    may_alias(one, other, known, other_known, machine)
+    may_alias(one, other, known, other_known, program)
 }
 
 /// Python `mir._unescaped`: whether only a reference naming its objects can
@@ -488,6 +489,11 @@ pub(crate) mod tests {
     use crate::testing::{DOS, function, layout, parsed, value};
 
     pub use llrm_cycles::target::Dos;
+
+    /// `module` alone, a program for real-mode DOS.
+    pub fn dos(module: &Module) -> std::rc::Rc<llrm_mir::program::ProgramProxy> {
+        llrm_mir::program::ProgramProxy::of(module, std::rc::Rc::new(Dos))
+    }
 
     /// Every access `@f` of `text` makes, in order.
     fn accesses(module: &Module, layout: &DataLayout) -> Vec<MemRef> {
@@ -858,10 +864,37 @@ b0:
         let foreign = BTreeMap::from([(selector, interval(0xB800, 0xB800, 16))]);
         let ordinary = BTreeMap::from([(selector, interval(0x1234, 0x1234, 16))]);
 
-        assert!(!overlapping(near, text, None, Some(&foreign), Some(&Dos)).unwrap());
-        assert!(!may_alias(text, near, Some(&foreign), None, Some(&Dos)).unwrap());
-        assert!(overlapping(near, text, None, Some(&ordinary), Some(&Dos)).unwrap());
+        let dos = dos(&module);
+        assert!(!overlapping(near, text, None, Some(&foreign), Some(&dos)).unwrap());
+        assert!(!may_alias(text, near, Some(&foreign), None, Some(&dos)).unwrap());
+        assert!(overlapping(near, text, None, Some(&ordinary), Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&foreign), None).unwrap());
+    }
+
+    /// Only an address space the segment layout places program data in is
+    /// apart from foreign memory: address space 0 was taken to be, whatever
+    /// the layout.
+    #[test]
+    fn test_a_space_holding_no_program_data_may_meet_foreign_memory() {
+        let module = module(
+            "define void @f(ptr %p, i16 %sel, i16 %o) {
+b0:
+  store i16 0, ptr %p
+  %s = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %t = getelementptr i8, ptr addrspace(1) %far, i16 %o
+  store i8 0, ptr addrspace(1) %t
+  ret void
+}
+",
+        );
+        let dl = layout(&module);
+        let [near, text] = &accesses(&module, &dl)[..] else { panic!() };
+        let selector = value(function(&module, "f"), "sel");
+        let foreign = BTreeMap::from([(selector, interval(0xB800, 0xB800, 16))]);
+        let mut elsewhere = std::rc::Rc::unwrap_or_clone(dos(&module));
+        (elsewhere.segments.data_space, elsewhere.segments.stack_space) = (3, 3);
+        assert!(overlapping(near, text, None, Some(&foreign), Some(&elsewhere)).unwrap());
     }
 
     #[test]
@@ -881,6 +914,6 @@ b0:
         let [near, text] = &accesses(&module, &dl)[..] else { panic!() };
         assert_eq!(text.selector, Some(0xB800));
         assert_eq!(text.root, Some(Operand::Value(value(function(&module, "f"), "far"))));
-        assert!(!overlapping(near, text, None, None, Some(&Dos)).unwrap());
+        assert!(!overlapping(near, text, None, None, Some(&dos(&module))).unwrap());
     }
 }
