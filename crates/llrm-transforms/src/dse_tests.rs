@@ -113,3 +113,71 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     assert_eq!(results(&module, &[&[0], &[3], &[-7]]), results(&before, &[&[0], &[3], &[-7]]), "{after}");
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("call void"), "{after}");
 }
+
+/// A slot read back through its far address kept in another slot, at an
+/// unresolved offset: the load may reach an unknown object too, but it
+/// names this one, so its stores stay. They went (priced_fill), and the sum
+/// read poison.
+#[test]
+fn test_a_store_read_through_a_pointer_kept_in_memory_stays() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"
+
+define i16 @f() {
+b0:
+  %zeroed = alloca [256 x i8]
+  %holder = alloca [8 x i8]
+  %a = alloca [8 x i8]
+  store i16 1, ptr %a
+  %a1 = getelementptr inbounds i16, ptr %a, i16 1
+  store i16 2, ptr %a1
+  %far = addrspacecast ptr %a to ptr addrspace(1)
+  %field = getelementptr inbounds i8, ptr %holder, i16 4
+  store ptr addrspace(1) %far, ptr %field
+  %holderfar = addrspacecast ptr %holder to ptr addrspace(1)
+  br label %zero
+
+zero:
+  %j = phi i16 [ 0, %b0 ], [ %jn, %zeroing ]
+  %more = icmp slt i16 %j, 64
+  br i1 %more, label %zeroing, label %read
+
+zeroing:
+  %slot = getelementptr inbounds i32, ptr %zeroed, i16 %j
+  store i32 0, ptr %slot
+  %jn = add i16 %j, 1
+  br label %zero
+
+read:
+  %at = getelementptr i8, ptr addrspace(1) %holderfar, i16 4
+  %p = load ptr addrspace(1), ptr addrspace(1) %at
+  br label %sum
+
+sum:
+  %s = phi i16 [ 0, %read ], [ %sn, %add ]
+  %i = phi i16 [ 0, %read ], [ %in, %add ]
+  %go = icmp slt i16 %i, 2
+  br i1 %go, label %add, label %done
+
+add:
+  %o = shl i16 %i, 1
+  %q = getelementptr i8, ptr addrspace(1) %p, i16 %o
+  %v = load i16, ptr addrspace(1) %q
+  %sn = add i16 %s, %v
+  %in = add i16 %i, 1
+  br label %sum
+
+done:
+  ret i16 %s
+}
+";
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run(&mut module).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, &[&[]]), results(&before, &[&[]]), "{after}");
+    assert_eq!(after.matches("store i16").count(), 2, "{after}");
+}

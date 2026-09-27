@@ -180,6 +180,13 @@ fn fixed(reference: &MemRef) -> bool {
     canonical || (reference.object && reference.addr().is_some())
 }
 
+/// Whether `reference`'s provenance names an object `cell` is in: an
+/// access reaches what it names, whatever else it may also reach.
+fn names(reference: &MemRef, cell: &MemRef) -> bool {
+    let objects = |one: &MemRef| one.provenance.iter().flat_map(|provenance| provenance.slices.iter().map(|slice| slice.object.clone())).collect::<BTreeSet<_>>();
+    !objects(reference).is_disjoint(&objects(cell))
+}
+
 /// Every cell a function stores to, numbered once for its dead-store solve.
 ///
 /// A block's state is a set of these, not a map rebuilt per block: what is
@@ -296,7 +303,7 @@ impl Solve<'_, '_> {
     /// `unnamed` one cannot reach a private cell.
     fn clobber(&self, overwritten: &mut Bits, reference: &MemRef, unnamed: bool) {
         let stored = &self.stored;
-        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at));
+        let live = |at: &usize| overwritten.contains(*at) && !(unnamed && stored.private.contains(*at) && !names(reference, &stored.cells[*at]));
         let reached: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
             None => stored.index.buckets.values().flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
             Some(buckets) => buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).flat_map(IndexMap::keys).filter(|at| live(at)).copied().collect(),
