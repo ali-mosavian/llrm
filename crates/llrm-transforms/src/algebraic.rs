@@ -84,7 +84,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _offset_scaled(context, function, inst)
-        || _redundant_extension(context, function, inst)
+        || _cast_pair(context, function, inst)
         || _negated_difference(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
@@ -268,30 +268,31 @@ fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) 
     true
 }
 
-/// An extension of a truncated extension of the same kind, where the
-/// truncation kept every bit the first extension read, reads the first
-/// extension's bits: `ext(trunc(ext x))` is `trunc(ext x)`, or `ext x`.
-/// Mixed signedness is excluded.
-fn _redundant_extension(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
-    let bits = |function: &Function, operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty));
+/// Two integer casts that are one, or none: `trunc(ext x)` is `x`, a
+/// narrower `trunc x` or a narrower `ext x`; `trunc(trunc x)` is one
+/// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
+/// sign bit is clear, is one extension. `ext(trunc(ext x))` is two steps.
+fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
     let cast = |function: &Function, inst: InstId| match function.instruction(inst).opcode {
-        Opcode::Cast(op) => Some((op, function.instruction(inst).operands[0])),
+        Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt | CastOp::SExt)) => Some((op, function.instruction(inst).operands[0])),
         _ => None,
     };
-    let Some((kind @ (CastOp::ZExt | CastOp::SExt), viewed)) = cast(function, inst) else { return false };
-    let Some((CastOp::Trunc, extended)) = _definition(function, viewed).and_then(|made| cast(function, made)) else { return false };
-    let Some((first, source)) = _definition(function, extended).and_then(|made| cast(function, made)) else { return false };
-    let result = function.instruction(inst).result.expect("a value");
-    let widths = (bits(function, source), bits(function, viewed), bits(function, Operand::Value(result)), bits(function, extended));
-    let (Some(source), Some(viewed), Some(result), Some(established)) = widths else { return false };
-    if first != kind || !(source <= viewed && viewed < result && result <= established) {
-        return false;
-    }
-    if result == established {
-        _forward(function, inst, extended);
-    } else {
-        _replace(function, inst, Opcode::Cast(CastOp::Trunc), vec![extended]);
-    }
+    let Some((outer, middle)) = cast(function, inst) else { return false };
+    let Some((inner, source)) = _definition(function, middle).and_then(|made| cast(function, made)) else { return false };
+    let bits = |operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty));
+    let result = Operand::Value(function.instruction(inst).result.expect("a value"));
+    let (Some(from), Some(to)) = (bits(source), bits(result)) else { return false };
+    let op = match (inner, outer) {
+        (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) if to == from => {
+            _forward(function, inst, source);
+            return true;
+        }
+        (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) if to < from => CastOp::Trunc,
+        (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) | (CastOp::ZExt, CastOp::ZExt | CastOp::SExt) | (CastOp::SExt, CastOp::SExt) => inner,
+        (CastOp::Trunc, CastOp::Trunc) => CastOp::Trunc,
+        _ => return false,
+    };
+    _replace(function, inst, Opcode::Cast(op), vec![source]);
     true
 }
 
