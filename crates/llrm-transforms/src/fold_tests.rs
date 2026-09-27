@@ -368,3 +368,58 @@ fn a_cell_kept_across_a_readonly_call_is_folded() {
     let after = managed(&mut module, Fold);
     assert!(after.contains("  ret i16 7\n"), "{after}");
 }
+
+/// The old Fold ended in floatfold: an exact float is its constant.
+#[test]
+fn test_an_exact_float_folds() {
+    check(
+        "define i16 @f() {
+b0:
+  %x = fadd double 1.000000e+00, 2.000000e+00
+  %y = fmul double %x, 5.000000e-01
+  %i = fptosi double %y to i16
+  ret i16 %i
+}
+",
+        "define i16 @f() {
+b0:
+  %x = fadd double 1.000000e+00, 2.000000e+00
+  %y = fmul double 3.000000e+00, 5.000000e-01
+  %i = fptosi double 1.500000e+00 to i16
+  ret i16 1
+}
+",
+        &[&[]],
+    );
+}
+
+/// A counted loop's exact float stores are known past its exit, as
+/// floatfacts' exit cells say.
+#[test]
+fn test_a_float_loop_exit_is_known_after_it() {
+    let text = "@m = global [4 x i8] zeroinitializer
+
+define i32 @f() {
+b0:
+  store float 0.0, ptr @m
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b2 ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = load float, ptr @m
+  %w = fadd float %v, 48.75
+  store float %w, ptr @m
+  %n = add i16 %i, 1
+  br label %b1
+
+b3:
+  %after = load i32, ptr @m
+  ret i32 %after
+}
+";
+    check(text, &text.replace("ret i32 %after", "ret i32 1140047872").replace("store float 0.0", "store float 0.000000e+00").replace("48.75", "4.875000e+01"), &[&[]]);
+}

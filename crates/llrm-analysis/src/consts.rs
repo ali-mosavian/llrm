@@ -45,8 +45,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
+use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
+use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
@@ -254,13 +256,31 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
     Some((masked(&quotient, width), masked(&remainder, width)))
 }
 
-/// What this store puts in its cell, where that is a number.
+/// What this store puts in its cell, where that is a number: a float's
+/// bits too, which floatfacts supplies for a computed value.
 fn _put(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> Option<Known> {
     let op = unit.function.instruction(inst);
     if !matches!(op.opcode, Opcode::Store { .. }) {
         return None;
     }
-    _operand(unit, op.operands[0], known, None)
+    _operand(unit, op.operands[0], known, None).or_else(|| _float_bits(unit, op.operands[0], known))
+}
+
+/// A float operand's bits: a constant's, or what `known` says of a value.
+fn _float_bits(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Known>) -> Option<Known> {
+    let width = match unit.context.types.get(unit.operand_type(operand)?) {
+        Type::Float(FloatKind::Float) => 32,
+        Type::Float(FloatKind::Double) => 64,
+        _ => return None,
+    };
+    match operand {
+        Operand::Constant(id) => match unit.context.get(id).kind {
+            ConstantKind::Float(bits) => Some(Known::new(bits, width)),
+            _ => None,
+        },
+        Operand::Value(value) => _read(known.get(&value), width),
+        Operand::Block(_) => None,
+    }
 }
 
 /// The complete value a direct constant store writes to a contained cell.

@@ -464,3 +464,24 @@ b0:
     slot = second.clone();
     assert_eq!(*queries.resolve(&slot), second);
 }
+
+/// A float store's bits are a number in memory: an integer load of them
+/// read nothing.
+#[test]
+fn test_a_float_store_writes_its_bits() {
+    let parsed = Parsed::new(
+        "@g = global [12 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  store float 2.0, ptr @g
+  store double -0.0, ptr getelementptr (i8, ptr @g, i16 4)
+  %single = load i32, ptr @g
+  %high = load i16, ptr getelementptr (i8, ptr @g, i16 10)
+  ret void
+}
+",
+    );
+    assert_eq!(parsed.solved("single", &Calls::default()), Some(Known::new(0x4000_0000, 32)));
+    assert_eq!(parsed.solved("high", &Calls::default()), Some(Known::new(0x8000, 16)));
+}

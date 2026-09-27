@@ -14,6 +14,8 @@ pub mod cfg;
 pub mod constant_cycles;
 pub mod consts;
 pub mod effects;
+pub mod floatbounds;
+pub mod floatfacts;
 pub mod frameescape;
 pub mod induction;
 pub mod interprocedural;

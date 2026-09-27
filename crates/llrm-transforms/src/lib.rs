@@ -10,6 +10,7 @@ pub mod cfg;
 pub mod dead;
 pub mod decide;
 pub mod edges;
+pub mod floatfold;
 pub mod fold;
 pub mod gvn;
 pub mod inline;
