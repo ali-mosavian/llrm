@@ -336,6 +336,38 @@ impl Selector<'_, '_, '_> {
         Ok((quotient, remainder))
     }
 
+    /// `llvm.smul.fix` or `llvm.sdiv.fix` of i32s, as the old route lowered
+    /// FixedMul and FixedDiv: the widening `imul`'s pair shifted down by
+    /// `shrd`; the dividend's pair shifted up by `shld` and `shl`, then one
+    /// `idiv` where the quotient fits a dword, else the wrapping division.
+    pub(super) fn fixed(&mut self, divide: bool, inst: InstId, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let ty = instruction.ty;
+        let result = Held { value: self.value(instruction.result.expect("a result")), width: 4 };
+        let scale = self.constant(arguments[2], 4).filter(|scale| (1..32).contains(scale));
+        let (Some(scale), Some(32)) = (scale, self.types().int_bits(ty)) else { return refuse("a fixed point other than i32 by 1 to 31 bits") };
+        let (a, b) = (self.held(arguments[0], ty, at, out)?, self.held(arguments[1], ty, at, out)?);
+        if !divide {
+            let (low, high) = (self.half(), self.half());
+            self.put(semantics(Operation::Multiply, "imul", vec![Loc::Held(low), Loc::Held(high)], vec![Loc::Held(a), Loc::Held(b)]), at, out);
+            self.put(semantics(Operation::Funnel, "shrd", vec![Loc::Held(result)], vec![Loc::Held(low), Loc::Held(high), Self::count(scale)]), at, out);
+            return Ok(());
+        }
+        let sign = self.made(Operation::Extend, "cdq", vec![Loc::Held(a)], at, out);
+        let high = self.made(Operation::Funnel, "shld", vec![Loc::Held(sign), Loc::Held(a), Self::count(scale)], at, out);
+        let low = self.made(Operation::Binary, "shl", vec![Loc::Held(a), Self::count(scale)], at, out);
+        // A divisor of at least 1.0 cannot enlarge the dividend's magnitude.
+        let fits = self.constant(arguments[1], 4).is_some_and(|divisor| i64::from(divisor as i32).unsigned_abs() >= 1 << scale);
+        if fits {
+            let remainder = self.half();
+            self.put(semantics(Operation::Divide, "idiv", vec![Loc::Held(result), Loc::Held(remainder)], vec![Loc::Held(high), Loc::Held(low), Loc::Held(b)]), at, out);
+            return Ok(());
+        }
+        let (quotient, _) = self.divided(true, (low, high), b, at, out);
+        self.put(semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(quotient)]), at, out);
+        Ok(())
+    }
+
     /// A signed i64 divided by an i32 sign-extended: the magnitudes by two
     /// unsigned divides, high dword then low, and the sign put back. Neither
     /// divide overflows; a zero divisor faults as a 32-bit one does.

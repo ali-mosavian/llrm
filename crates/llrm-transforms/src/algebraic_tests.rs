@@ -22,10 +22,19 @@ use llrm_mir::module::Module;
 
 use crate::testing::{parsed, printed, results};
 
+/// The layout's legal integers, a 486's.
+const LEGAL: &str = "n8:16:32";
+
+/// `module` printed without its layout.
+fn bare(module: &Module) -> String {
+    printed(&Module { datalayout: None, ..module.clone() })
+}
+
 /// `text` through `Algebraic` under the verifier and preserved-analyses
 /// check.
 fn simplified(text: &str) -> (Module, Module) {
-    let before = parsed(text);
+    let mut before = parsed(text);
+    before.datalayout = Some(LEGAL.to_owned());
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
@@ -51,14 +60,14 @@ fn checked(text: &str, inputs: &[Vec<i128>]) -> String {
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     let expected = results(&before, &inputs);
     let refined = results(&after, &inputs).into_iter().zip(&expected).map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
-    assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", printed(&after));
-    printed(&after)
+    assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", bare(&after));
+    bare(&after)
 }
 
 /// `text` left as it was.
 fn unchanged(text: &str) {
     let (before, after) = simplified(text);
-    assert_eq!(printed(&after), printed(&before));
+    assert_eq!(bare(&after), bare(&before));
 }
 
 fn unary(width: u32, body: &str) -> String {
@@ -177,6 +186,30 @@ fn test_other_divisions_stay() {
     }
     unchanged("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = sdiv i16 %x, %y\n  ret i16 %r\n}\n");
     unchanged(&unary(16, "  %r = udiv i16 %x, 4\n  ret i16 %r\n"));
+}
+
+/// No legal integer is 64 bits wide, so its shifts and adds lower to more
+/// than the division: T076's fixed `/4` ran some 16 instructions for one
+/// `idiv`.
+#[test]
+fn test_a_division_wider_than_a_legal_integer_stays() {
+    unchanged(&unary(64, "  %r = sdiv i64 %x, 4\n  ret i64 %r\n"));
+}
+
+/// A fixed-point product or quotient by a whole number is the integer
+/// one: T075's `c[i, j] * fix(k)` and `fix(n) / 4` were an `imul` pair and
+/// `shrd`, and a wrapping division, where one multiply and a shift did.
+#[test]
+fn test_fixed_point_by_a_whole_number_is_integer_arithmetic() {
+    let values = edges(32);
+    for (name, factor, op) in [("smul", 768, "mul"), ("smul", -512, "mul"), ("sdiv", 768, "sdiv"), ("sdiv", -1024, "sdiv")] {
+        let text = format!("declare i32 @llvm.{name}.fix.i32(i32, i32, i32)\n\n{}", unary(32, &format!("  %r = call i32 @llvm.{name}.fix.i32(i32 %x, i32 {factor}, i32 8)\n  ret i32 %r\n")));
+        let done = checked(&text, &singles(&values));
+        assert!(!done.contains("call i32") && (done.contains(op) || done.contains("ashr")), "{done}");
+    }
+    // By -1.0 the quotient of the least value wraps; `sdiv` would be undefined.
+    unchanged(&format!("declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 -256, i32 8)\n  ret i32 %r\n")));
+    unchanged(&format!("declare i32 @llvm.smul.fix.i32(i32, i32, i32)\n\n{}", unary(32, "  %r = call i32 @llvm.smul.fix.i32(i32 %x, i32 384, i32 8)\n  ret i32 %r\n")));
 }
 
 /// The pass needs no constant propagation to drop `x + 0`.

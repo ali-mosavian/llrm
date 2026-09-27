@@ -227,12 +227,6 @@ impl Rule {
     }
 }
 
-/// The intrinsic `inst` calls, if it calls one.
-pub fn intrinsic(unit: &Unit, inst: InstId) -> Option<Intrinsic> {
-    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
-    Intrinsic::named(unit.globals.get(callee.0 as usize)?.name.as_deref()?)
-}
-
 fn nsz() -> Flags {
     Flags::NAMES.iter().find(|(_, name)| *name == "nsz").expect("nsz is a flag").0
 }
@@ -262,7 +256,7 @@ pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
         Opcode::Cast(CastOp::FPToUI) => (Operation::Truncate, vec![float(0)?], integer(false)?),
         Opcode::Load { volatile: false, .. } => (Operation::Convert, vec![returned()?], returned()?),
         Opcode::Store { volatile: false, .. } => (Operation::Convert, vec![float(0)?], float(0)?),
-        Opcode::Call(_) => match intrinsic(unit, inst)? {
+        Opcode::Call(_) => match unit.intrinsic(inst)? {
             Intrinsic::Unary(FloatFunction::Fabs) => (Operation::Abs, vec![float(0)?], returned()?),
             Intrinsic::Unary(FloatFunction::Sqrt) => (Operation::Sqrt, vec![float(0)?], returned()?),
             // As the rounding mode says: only an integral input is exact under every one.

@@ -2182,3 +2182,28 @@ two:
     assert_eq!(got.iter().filter(|line| line.contains("[bp+")).count(), 2, "{got:?}");
     assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 5, "{got:?}");
 }
+
+/// Nib's fixed point as `llvm.smul.fix` and `llvm.sdiv.fix`: the product
+/// one widening `imul` shifted down, as the old route's FixedMul; the
+/// quotient by a whole divisor one `idiv` of the dividend shifted up, as
+/// its FixedDiv. isel refused both calls.
+#[test]
+fn test_fixed_point_intrinsics_take_imul_and_idiv() {
+    let text = "declare i32 @llvm.smul.fix.i32(i32, i32, i32)
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)
+
+define i32 @scaled(i32 %0, i32 %1) addrspace(1) {
+b1:
+  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
+  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 196608, i32 16)
+  ret i32 %3
+}
+";
+    assert_eq!(
+        listing(text, "scaled"),
+        [
+            "push bp", "mov bp, sp", "L0_0:", "mov eax, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "imul ebx", "mov ebx, eax", "shrd ebx, edx, 16",
+            "mov ecx, 196608", "mov eax, ebx", "cdq", "shld edx, ebx, 16", "shl eax, 16", "idiv ecx", "shld edx, eax, 16", "pop bp", "retf",
+        ]
+    );
+}

@@ -400,6 +400,18 @@ pub struct Unit<'a> {
 }
 
 impl<'a> Unit<'a> {
+    /// The intrinsic `inst` calls, if it calls one.
+    pub fn intrinsic(&self, inst: InstId) -> Option<llrm_mir::intrinsics::Intrinsic> {
+        let callee = llrm_mir::memory::callee(self.context, self.function, inst)?;
+        llrm_mir::intrinsics::Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
+    }
+
+    /// Whether `inst` calls out: a call no intrinsic's instructions
+    /// replace, as LLVM's `isLoweredToCall` says.
+    pub fn calls_out(&self, inst: InstId) -> bool {
+        matches!(self.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && self.intrinsic(inst).is_none()
+    }
+
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
         Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None }
     }
