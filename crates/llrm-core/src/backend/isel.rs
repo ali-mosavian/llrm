@@ -15,7 +15,7 @@ use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
 
-use crate::abi::runtime::Contract;
+use crate::backend::assemble::Abi;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::target::Segments;
@@ -143,9 +143,6 @@ pub struct Selected {
     pub landing: Option<i64>,
 }
 
-/// A call's contract, asked of the ABI that knows the callee: its name,
-/// whether it pops its own arguments, and how many bytes were pushed.
-pub type Contracts<'c> = &'c dyn Fn(&str, bool, i64) -> Result<Contract, String>;
 
 /// The bytes a value of `ty` takes in a register.
 fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
@@ -251,7 +248,7 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -277,6 +274,7 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         next: 0,
         pointers: IndexMap::default(),
         fars: IndexMap::default(),
+        fields: IndexMap::default(),
         wides: IndexMap::default(),
         halves: BTreeSet::new(),
         depth: 0,
@@ -309,9 +307,10 @@ pub fn selected<'c>(module: &Module, name: &str, contracts: Contracts<'c>, pool:
         materialized: Vec::new(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
+        merges: IndexMap::default(),
         pins: IndexMap::default(),
         inputs: BTreeSet::new(),
-        contracts,
+        abi,
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         far: BTreeSet::new(),
@@ -335,6 +334,8 @@ struct Selector<'m, 'c, 'p> {
     /// legalizer expands a value no register holds into two; no offset
     /// register is offset 0.
     fars: IndexMap<ValueId, (Option<Held>, Held)>,
+    /// Each aggregate a call answers in registers: a register per field.
+    fields: IndexMap<ValueId, Vec<Held>>,
     /// Each i64 value's low and high dwords, expanded likewise.
     wides: IndexMap<ValueId, (Held, Held)>,
     /// The registers holding those halves.
@@ -402,9 +403,14 @@ struct Selector<'m, 'c, 'p> {
     edges: IndexMap<(BlockId, BlockId), Vec<i64>>,
     /// The blocks a switch's compare chain adds after its own.
     chains: IndexMap<InstId, Vec<i64>>,
+    /// Branches on the `and` (true) or `or` of two compares: a compare and
+    /// a branch each, the second in the block of `chains`.
+    merges: IndexMap<InstId, (bool, InstId, InstId)>,
     pins: IndexMap<u32, Register>,
     inputs: BTreeSet<u32>,
-    contracts: Contracts<'c>,
+    /// Each call's contract and register interface, from the ABI that
+    /// knows the callee.
+    abi: &'c dyn Abi,
     calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
@@ -469,6 +475,17 @@ impl Selector<'_, '_, '_> {
                     }
                 }
                 self.edge(block, default, leaving);
+            } else if let Some((conjunction, join, a, b)) = self.merged_condition(terminator) {
+                let [_, Operand::Block(taken), Operand::Block(otherwise)] = function.instruction(terminator).operands[..] else { unreachable!("a branch") };
+                let second = at;
+                at += 1;
+                self.chains.entry(terminator).or_default().push(second);
+                self.merges.insert(terminator, (conjunction, a, b));
+                self.consumed.extend([a, b, join]);
+                let first = if conjunction { otherwise } else { taken };
+                self.edge(block, first, from);
+                self.edge(block, taken, second);
+                self.edge(block, otherwise, second);
             } else {
                 for successor in self.successors(block) {
                     self.edge(block, successor, from);
@@ -582,11 +599,16 @@ impl Selector<'_, '_, '_> {
                     self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), blocks)?;
                     break;
                 }
+                if self.merges.contains_key(&inst) {
+                    self.merged(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), blocks)?;
+                    break;
+                }
                 let start = insns.len();
                 self.instruction(inst, &block_at, &mut insns, convention)?;
                 insns.splice(start..start, std::mem::take(&mut self.materialized));
             }
-            if function.instruction(function.terminator(block).expect("a terminator")).opcode == Opcode::Switch {
+            let terminator = function.terminator(block).expect("a terminator");
+            if function.instruction(terminator).opcode == Opcode::Switch || self.merges.contains_key(&terminator) {
                 continue;
             }
             let mut succ: Vec<i64> = Vec::new();
@@ -972,6 +994,65 @@ impl Selector<'_, '_, '_> {
         (default, cases)
     }
 
+    /// The branch `inst`'s condition as the `and` (true) or `or` of two
+    /// integer compares only it reads, from its own block, as LLVM's
+    /// FindMergedConditions takes a condition apart. A call's flags must be
+    /// read beside the call, so a compare of a call's value is left whole.
+    fn merged_condition(&self, inst: InstId) -> Option<(bool, InstId, InstId, InstId)> {
+        let function = self.function;
+        let branch = function.instruction(inst);
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else { return None };
+        if branch.opcode != Opcode::Br || taken == otherwise {
+            return None;
+        }
+        let block = function.parent(inst)?;
+        let only_in_block = |value: ValueId, reader: InstId| -> Option<InstId> {
+            let ValueDef::Instruction(def) = function.value(value).def else { return None };
+            (function.parent(def) == Some(block) && matches!(function.users(value)[..], [only] if only.user == reader)).then_some(def)
+        };
+        let join = only_in_block(condition, inst)?;
+        let conjunction = match function.instruction(join).opcode {
+            Opcode::Binary(BinaryOp::And) => true,
+            Opcode::Binary(BinaryOp::Or) => false,
+            _ => return None,
+        };
+        let compare = |operand: Operand| -> Option<InstId> {
+            let Operand::Value(value) = operand else { return None };
+            let def = only_in_block(value, join)?;
+            let compared = function.instruction(def);
+            let narrow = compared.operands.iter().all(|&one| {
+                let ty = function.operand_type(&self.module.context, one).expect("a typed operand");
+                matches!(self.types().int_bits(ty), Some(8 | 16 | 32)) || matches!(self.types().get(ty), Type::Pointer(0))
+            });
+            let called = compared.operands.iter().any(|&one| matches!(one, Operand::Value(value) if matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Call(_)))));
+            (matches!(compared.opcode, Opcode::ICmp(_)) && narrow && !called).then_some(def)
+        };
+        let operands = &function.instruction(join).operands;
+        Some((conjunction, join, compare(operands[0])?, compare(operands[1])?))
+    }
+
+    /// A branch on two compares as a compare and a branch each: the first
+    /// leaves for the second's block, or for the target the first alone
+    /// decides.
+    fn merged(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>, from: i64, mut insns: Vec<Arc<Insn>>, phis: Vec<Phi>, blocks: &mut Vec<LirBlock>) -> Result<(), Unselected> {
+        let at = self.ats[&inst];
+        let (conjunction, a, b) = self.merges[&inst];
+        let [_, Operand::Block(taken), Operand::Block(otherwise)] = self.function.instruction(inst).operands[..] else { unreachable!("a branch") };
+        let (taken, otherwise, second) = (block_at[&taken], block_at[&otherwise], self.chains[&inst][0]);
+        let (target, other) = if conjunction { (second, otherwise) } else { (taken, second) };
+        let mut branched = |this: &mut Self, compare: InstId, target: i64, insns: &mut Vec<Arc<Insn>>| -> Result<(), Unselected> {
+            let Test::One(code) = this.compare(compare, at, insns)? else { unreachable!("an integer compare is one condition") };
+            insns.push(insn(at, Semantics { target: Some(target), ..semantics(Operation::Branch, code, vec![], vec![]) }));
+            Ok(())
+        };
+        branched(self, a, target, &mut insns)?;
+        blocks.push(LirBlock { succ: vec![target, other], phis, ..LirBlock::new(from, insns) });
+        let mut tail = Vec::new();
+        branched(self, b, taken, &mut tail)?;
+        blocks.push(LirBlock { succ: vec![taken, otherwise], ..LirBlock::new(second, tail) });
+        Ok(())
+    }
+
     /// A switch as a chain of compares, as SelectionDAGBuilder makes one
     /// short of a jump table: each case its own block, the last falling to
     /// the default.
@@ -1250,7 +1331,7 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
             self.pointers.insert(address, scaled);
             return Ok(());
         }
@@ -1416,6 +1497,25 @@ impl Selector<'_, '_, '_> {
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain([wide.value]));
         Some(scaled)
+    }
+
+    /// `index` times `scale` with the index's own multiply by a constant
+    /// taken into the scale, as LLVM's address matcher folds a `mul` or
+    /// `shl` into it; one that may wrap is left as it is.
+    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64) {
+        let Operand::Value(value) = index else { return (index, scale) };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale) };
+        let instruction = self.function.instruction(inst);
+        if !instruction.flags.contains(llrm_mir::opcode::Flags::NSW) {
+            return (index, scale);
+        }
+        let width = self.width(instruction.ty).unwrap_or(0);
+        let factor = match (&instruction.opcode, self.constant(instruction.operands[1], width)) {
+            (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => factor,
+            (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => 1 << count,
+            _ => return (index, scale),
+        };
+        (instruction.operands[0], scale * factor)
     }
 
     /// The pointer `operand` offsets by constants.
@@ -1959,6 +2059,16 @@ impl Selector<'_, '_, '_> {
                 let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
                 out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
             }
+            // A field of an answer in registers: the register it came in.
+            Opcode::ExtractValue(indices) => {
+                let field = match (operands[0], &indices[..]) {
+                    (Operand::Value(aggregate), &[index]) => self.fields.get(&aggregate).and_then(|fields| fields.get(index as usize)).copied(),
+                    _ => None,
+                };
+                let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
+                let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
+            }
             Opcode::Cast(op) if self.is_far(instruction.ty) || self.is_far(type_of(operands[0])) => self.far_cast(*op, inst, at, out)?,
             Opcode::Cast(op) => {
                 let from = type_of(operands[0]);
@@ -2167,6 +2277,21 @@ impl Selector<'_, '_, '_> {
         }
         let far = far(global)?;
         let Passing { in_order, pops } = passing(convention)?;
+        // The arguments the ABI passes in registers are the call's last.
+        let registers = self.abi.registers(&name).unwrap_or_default();
+        let Some(stacked) = arguments.len().checked_sub(registers.arguments.len()) else {
+            return refuse(format!("@{name} takes {} arguments in registers", registers.arguments.len()));
+        };
+        let (arguments, in_registers) = arguments.split_at(stacked);
+        let mut requires = Vec::new();
+        for (&argument, &register) in in_registers.iter().zip(&registers.arguments) {
+            let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            let held = self.held(argument, ty, at, out)?;
+            if held.width as usize != register.size() {
+                return refuse(format!("@{name}'s {register:?} argument of {} bytes", held.width));
+            }
+            requires.push((held, register));
+        }
         let mut order: Vec<usize> = (0..arguments.len()).collect();
         if !in_order {
             order.reverse();
@@ -2226,7 +2351,7 @@ impl Selector<'_, '_, '_> {
             pushed += slot(held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
-        let contract = (self.contracts)(&name, pops, pushed).map_err(Unselected)?;
+        let contract = self.abi.contract(&name, pops, pushed).map_err(Unselected)?;
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -2237,6 +2362,21 @@ impl Selector<'_, '_, '_> {
                 }
                 self.flagged.insert(value);
             }
+        } else if let Some(value) = instruction.result.filter(|_| !registers.results.is_empty()) {
+            // Each field of the answer in the register the ABI names.
+            let Type::Struct { fields, .. } = self.types().get(instruction.ty).clone() else {
+                return refuse(format!("@{name} answers in registers but returns no aggregate"));
+            };
+            if fields.len() != registers.results.len() {
+                return refuse(format!("@{name} answers {} registers for {} fields", registers.results.len(), fields.len()));
+            }
+            let mut held = Vec::new();
+            for (field, &register) in fields.into_iter().zip(&registers.results) {
+                let one = self.fresh_held(self.width(field)?);
+                delivers.push((one, register));
+                held.push(one);
+            }
+            self.fields.insert(value, held);
         } else if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
             float = Some(Held { value: self.value(value), width: FLOAT });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
@@ -2270,6 +2410,8 @@ impl Selector<'_, '_, '_> {
             clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
+            uses: requires.iter().map(|(held, _)| held.value).collect(),
+            requires,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         }));
         // A float result is in st(0).
