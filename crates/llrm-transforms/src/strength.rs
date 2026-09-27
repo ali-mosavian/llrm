@@ -203,15 +203,17 @@ fn _plan(
     // Two ways in or out is a bigger change than this.
     let (Some(preheader), [latch]) = (_preheader(function, loop_), &loop_.latches.iter().copied().collect::<Vec<_>>()[..]) else { return None };
     let groups = BTreeMap::from([(loop_.header, _candidates(function, derived))]);
-    let group = &groups[&loop_.header];
-    if group.is_empty() {
-        return None;
-    }
     let credits = if control_recurrences {
         &_replacement_credits(view, found, &groups, facts, costs) | &_control_credits(view, found, &groups, facts, costs)
     } else {
         BTreeSet::new()
     };
+    // Carrying an address its counter indexes by bytes swaps one step for
+    // another and holds one register more, unless the counter then dies.
+    let group = &groups[&loop_.header].iter().filter(|one| !_indexed(one) || credits.contains(&one.op)).cloned().collect::<Vec<_>>();
+    if group.is_empty() {
+        return None;
+    }
     let mut room = group.len() as i64;
     let mut capacity = registers;
     let calls = loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions()).any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)));
@@ -380,6 +382,11 @@ struct _Replacement {
 }
 
 /// A formula that is its counter times its multiplier and nothing more.
+/// An invariant pointer plus the counter itself, give or take a constant.
+fn _indexed(one: &Derived) -> bool {
+    one.pointer.is_some() && matches!(&one.by, AffineOperand::Const(by) if by.n == BigInt::from(1)) && one.offsets.iter().all(|(term, _)| matches!(term, AffineOperand::Const(_)))
+}
+
 fn _bare(one: &Derived) -> bool {
     one.offsets.is_empty() && one.pointer.is_none()
 }
@@ -471,6 +478,9 @@ fn _control_credits(
     for (loop_, _basics, _derived) in found {
         let proofs = induction::counted(view, loop_, Some(facts), true);
         let [proof] = &proofs[..] else { continue };
+        if proof.zero_tested() {
+            continue;
+        }
         let candidates = groups[&loop_.header].iter().filter(|one| one.of == proof.counter).cloned().collect::<Vec<_>>();
         let covers = _roots(function, &candidates)
             .into_iter()
@@ -554,7 +564,7 @@ fn _replacement_credits(
             let proof = induction::controlling(view, loop_, affine, facts);
             let (Some(phi), Some(proof)) = (phi, proof) else { continue };
             let Some(Operand::Value(update)) = _incoming(function, phi, latch) else { continue };
-            if proof.posttested || proof.width() != affine.start.width() {
+            if proof.posttested || proof.width() != affine.start.width() || proof.zero_tested() {
                 continue;
             }
             let Some(domain) = proof.span() else { continue };

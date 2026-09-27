@@ -237,3 +237,58 @@ b5:
     let done = checked(text, &trips_and(&[0, 1, -7]));
     assert_eq!(block(&done, "b0"), ["%k = mul i16 %a, 3", "br label %b1"]);
 }
+
+/// `a(i)`, loaded under `if j <> i` in the inner of two counted loops,
+/// leaves for the inner loop's preheader: its index's bounds there keep
+/// every byte inside `@a`, so running it where the loop would not cannot
+/// fault. nbody's
+/// `posX(body)` was loaded again in every copy of the unrolled inner loop.
+#[test]
+fn a_load_its_index_bounds_keep_inside_its_object_leaves_the_loop() {
+    let text = "@a = internal global [12 x i8] zeroinitializer
+
+define i16 @f(i16 %x) {
+b0:
+  br label %outer
+
+outer:
+  %i = phi i16 [ 0, %b0 ], [ %in, %outerlatch ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %outerlatch ]
+  %go = icmp slt i16 %i, 6
+  br i1 %go, label %pre, label %done
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i16 [ 0, %pre ], [ %jn, %latch ]
+  %t = phi i16 [ %s, %pre ], [ %u, %latch ]
+  %more = icmp slt i16 %j, 6
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %other = icmp ne i16 %j, %i
+  br i1 %other, label %use, label %latch
+
+use:
+  %q = getelementptr inbounds i16, ptr @a, i16 %i
+  %v = load i16, ptr %q
+  %w = add i16 %t, %v
+  br label %latch
+
+latch:
+  %u = phi i16 [ %w, %use ], [ %t, %body ]
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %in = add i16 %i, 1
+  br label %outer
+
+done:
+  ret i16 %s
+}
+";
+    let done = checked(&format!("{}{text}", llrm_analysis::testing::DOS), &[vec![0]]);
+    assert!(block(&done, "pre").iter().any(|one| one.contains("load")), "{done}");
+}

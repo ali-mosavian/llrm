@@ -142,6 +142,12 @@ impl CountedLoop {
         self.bound.width()
     }
 
+    /// Tested against zero for inequality: the test the step's own result
+    /// answers, which no other recurrence ends the loop more cheaply on.
+    pub fn zero_tested(&self) -> bool {
+        self.test == IntPredicate::Ne && self.bound == AffineOperand::constant(0, self.width())
+    }
+
     /// The signed values the header's counter takes on a trip, lowest first.
     pub fn span(&self) -> Option<(BigInt, BigInt)> {
         let (first, last) = (self.first.as_ref()?, self.last.as_ref()?);
@@ -1309,6 +1315,60 @@ pub fn basics(unit: &Unit, loop_: &Loop) -> IndexMap<ValueId, Affine> {
         let (Some(Some(step)), Some(start)) = (steps.first(), term(unit, start)) else { continue };
         if steps.iter().all(|one| one.as_ref() == Some(step)) {
             out.insert(result, Affine { value: result, start, step: step.clone(), header: loop_.header });
+        }
+    }
+    out
+}
+
+/// A pointer phi at a loop's header stepped by constant bytes: a
+/// `getelementptr` of it with constant indices, the same on every latch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PointerRecurrence {
+    pub value: ValueId,
+    pub phi: InstId,
+    pub start: Operand,
+    pub step: BigInt,
+    pub stepping: InstId,
+}
+
+/// The loop's pointer recurrences, which `basics` leaves out.
+pub fn pointers(unit: &Unit, loop_: &Loop) -> Vec<PointerRecurrence> {
+    let function = unit.function;
+    let header = cfg::block(loop_.header);
+    let inside = &loop_.body;
+    let within = |inst: InstId| function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)));
+    let mut out = Vec::new();
+    if !function.layout().contains(&header) {
+        return out;
+    }
+    for &inst in function.block(header).instructions() {
+        let phi = function.instruction(inst);
+        if phi.opcode != Opcode::Phi {
+            break;
+        }
+        let Some(result) = phi.result.filter(|&result| unit.space(Operand::Value(result)).is_some()) else { continue };
+        let (mut start, mut stepping) = (None, None);
+        let mut agreed = true;
+        for pair in phi.operands.chunks(2) {
+            let Operand::Block(from) = pair[1] else { agreed = false; break };
+            let slot = if inside.contains(&cfg::id(from)) { &mut stepping } else { &mut start };
+            agreed &= slot.is_none_or(|one| one == pair[0]);
+            *slot = Some(pair[0]);
+        }
+        let (true, Some(start), Some(Operand::Value(update))) = (agreed, start, stepping) else { continue };
+        let Some(made) = defining(function, update).filter(|&made| within(made)) else { continue };
+        let op = function.instruction(made);
+        let Opcode::GetElementPtr { source } = op.opcode else { continue };
+        if op.operands[0] != Operand::Value(result) {
+            continue;
+        }
+        let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+        if indices.iter().any(Option::is_none) {
+            continue;
+        }
+        let (step, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
+        if variable.is_empty() && step != 0 {
+            out.push(PointerRecurrence { value: result, phi: inst, start, step: BigInt::from(step), stepping: made });
         }
     }
     out

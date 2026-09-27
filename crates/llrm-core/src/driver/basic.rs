@@ -719,8 +719,7 @@ fn procedure(
     runtime: model::RuntimeProfile,
 ) -> Result<(masm::Procedure, Option<i64>), String> {
     let global = module.global(id);
-    let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
-    let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), &contracts, pool, target)?;
+    let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), abi, pool, target)?;
     let finalized = finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let mut reserve = 0;

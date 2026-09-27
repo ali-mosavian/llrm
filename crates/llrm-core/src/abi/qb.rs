@@ -14,6 +14,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::abi::runtime::{self, Contract, Control};
+use crate::backend::assemble::Registers;
 use crate::backend::pointers;
 use crate::hir::lower::Lowered;
 use crate::hir::model;
@@ -923,7 +924,22 @@ impl HirAbi {
     }
 }
 
+/// A runtime routine's register interface beside its stack block. B$HARY
+/// takes the subscripts and their count pushed and the descriptor in BX,
+/// and answers the element's address in ES:BX: PDS71 PDHUGE.OBJ 0047..0055
+/// sets BX last and uses ES:BX at once.
+pub fn registers(name: &str) -> Option<Registers> {
+    match name {
+        "B$HARY" => Some(Registers { arguments: vec![Register::BX], results: vec![Register::BX, Register::ES] }),
+        _ => None,
+    }
+}
+
 impl crate::backend::assemble::Abi for HirAbi {
+    fn registers(&self, callee: &str) -> Option<Registers> {
+        registers(callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee))
+    }
+
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
@@ -1297,12 +1313,13 @@ pub fn physicalize(
             let ordered: Vec<Arg> = site.order.iter().map(|index| operation.args[*index as usize].clone()).collect();
             let mut fixed_arguments: Vec<Arg> = Vec::new();
             let mut stack_arguments = ordered.clone();
-            if name == "B$HARY" {
-                if ordered.len() < 3 || _bytes(&ordered[ordered.len() - 1])? != 2 {
-                    return Err(AbiError("B$HARY needs subscripts, rank, and one near descriptor".into()));
+            if let Some(registers) = registers(&name) {
+                let stacked = ordered.len().saturating_sub(registers.arguments.len());
+                if stacked < 2 || ordered[stacked..].iter().map(_bytes).collect::<Result<Vec<_>, _>>()?.iter().any(|&bytes| bytes != 2) {
+                    return Err(AbiError(format!("{name} needs subscripts, rank, and one near descriptor")));
                 }
-                stack_arguments = ordered[..ordered.len() - 1].to_vec();
-                fixed_arguments = ordered[ordered.len() - 1..].to_vec();
+                stack_arguments = ordered[..stacked].to_vec();
+                fixed_arguments = ordered[stacked..].to_vec();
             }
             // A float is held extended; the callee's parameter type says the
             // format it is passed in.
@@ -1445,17 +1462,16 @@ pub fn physicalize(
                 && semantic_type.is_some_and(|type_| type_.kind == model::TypeKind::Float)
                 && site.cleanup == model::StackCleanup::Callee
                 && site.float_return == model::FloatReturn::Pointer;
-            if name == "B$HARY" {
-                if operation.results.len() != 2
+            if let Some(registers) = registers(&name) {
+                if operation.results.len() != registers.results.len()
                     || operation.results.iter().any(|one| !matches!(one, Arg::Held(held) if held.width == 2))
                 {
-                    return Err(AbiError("B$HARY needs explicit INTEGER offset and selector results".into()));
+                    return Err(AbiError(format!("{name} needs explicit INTEGER offset and selector results")));
                 }
-                let (Arg::Held(offset), Arg::Held(selector)) = (&operation.results[0], &operation.results[1]) else {
-                    unreachable!()
-                };
-                origins.insert(offset.value.variable, Register::BX);
-                origins.insert(selector.value.variable, Register::ES);
+                for (result, register) in operation.results.iter().zip(&registers.results) {
+                    let Arg::Held(held) = result else { unreachable!() };
+                    origins.insert(held.value.variable, *register);
+                }
                 let uses = fixed_arguments
                     .iter()
                     .filter_map(|one| match one {

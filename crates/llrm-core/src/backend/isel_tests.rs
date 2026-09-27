@@ -16,8 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    let contracts = |callee: &str, pops: bool, pushed: i64| qb().contract(callee, pops, pushed);
-    isel::selected(&parsed(text), name, &contracts, &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BUILT_IN)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BUILT_IN)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -2383,4 +2382,86 @@ define void @f(ptr %p) addrspace(1) {
 ";
     let got = listing_on("386", text, "f");
     assert!(!got.iter().any(|line| line.starts_with("add") && line.ends_with(", 0")), "{got:?}");
+}
+
+/// A routine the ABI passes and answers in registers: pdhuge's B$HARY takes
+/// its descriptor in BX after its pushed subscripts and count, and answers
+/// the element in ES:BX, which the store goes through directly. It was
+/// refused as "a { i16, i16 } value".
+#[test]
+fn test_an_answer_in_registers_is_its_fields() {
+    let text = "@d = internal global [8 x i8] zeroinitializer
+declare cc1000 { i16, i16 } @llrm.qb.B$HARY(...) addrspace(1)
+define void @f(i16 %i) addrspace(1) {
+  %a = call cc1000 addrspace(1) { i16, i16 } (...) @llrm.qb.B$HARY(i16 %i, i16 1, ptr @d)
+  %o = extractvalue { i16, i16 } %a, 0
+  %s = extractvalue { i16, i16 } %a, 1
+  %t = inttoptr i16 %s to ptr addrspace(2)
+  %u = addrspacecast ptr addrspace(2) %t to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %u, i16 %o
+  store i16 123, ptr addrspace(1) %p
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let call = got.iter().position(|line| line.starts_with("call far ptr B$HARY")).unwrap_or_else(|| panic!("{got:?}"));
+    assert_eq!(got[call - 1], "mov bx, offset d", "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 2, "{got:?}");
+    assert_eq!(got[call + 1], "mov word ptr es:[bx], 123", "{got:?}");
+}
+
+/// An index the MIR scales by its own `mul nsw` is matched as the scaled
+/// index it is, as LLVM's address matcher folds a multiply into the scale:
+/// lru's `bstamp[block]` shifted a copy of `block` by 2 into a 16-bit index.
+#[test]
+fn test_an_index_multiplied_in_the_mir_is_the_scaled_index() {
+    let text = "define void @f(ptr addrspace(1) %s, i16 %i) addrspace(1) {
+entry:
+  %b = load ptr addrspace(1), ptr addrspace(1) %s, !tbaa !1
+  %c = icmp slt i16 %i, 0
+  br i1 %c, label %no, label %ok
+ok:
+  %m = mul nsw i16 %i, 4
+  %e = getelementptr inbounds i8, ptr addrspace(1) %b, i16 %m
+  store i32 7, ptr addrspace(1) %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul")), "{got:?}");
+}
+
+/// A branch on the `and` or `or` of two compares branches on each, as
+/// LLVM's FindMergedConditions splits it: rcflip's IF a = 0 AND b = 1 made
+/// both truth values, and-ed them, and tested the result.
+#[test]
+fn test_a_branch_on_two_compares_branches_on_each() {
+    for join in ["and", "or"] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %c = {join} i1 %x, %y
+  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(!got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")), "{join}: {got:?}");
+        let branches: Vec<&String> = got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
 }

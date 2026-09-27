@@ -26,6 +26,19 @@ pub trait Abi {
     /// arguments, and how many bytes were pushed.
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String>;
     fn linked(&self, name: &str) -> String;
+    /// What a call to `callee` passes and answers in registers rather than
+    /// on the stack, where its ABI names them.
+    fn registers(&self, _callee: &str) -> Option<Registers> {
+        None
+    }
+}
+
+/// A routine's register interface: its last `arguments.len()` arguments,
+/// each in its register, and its result's fields, each in its register.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Registers {
+    pub arguments: Vec<iced_x86::Register>,
+    pub results: Vec<iced_x86::Register>,
 }
 
 /// `module` as masm, its code in the segment `code`.
@@ -33,7 +46,6 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let cpu = crate::backend::cpu::profile(cpu)?;
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     names.extend(crate::hir::lower::symbol_names());
-    let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
@@ -46,7 +58,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, inline, far, popped, .. } = machined(module, name, &contracts, &pool, &target)?;
+                let Machined { body, reserve, calls, inline, far, popped, .. } = machined(module, name, abi, &pool, &target)?;
                 let body = masm::cleaned_returns(&addressvalues::converted(&body), popped)?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
@@ -131,8 +143,8 @@ pub struct Machined {
 
 /// `name` of `module` selected and run through the machine phases, float
 /// constants in `pool`.
-pub fn machined(module: &Module, name: &str, contracts: isel::Contracts<'_>, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let selected = isel::selected(module, name, contracts, &mut pool.borrow_mut(), target.cpu, target.segments);
+pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
+    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;

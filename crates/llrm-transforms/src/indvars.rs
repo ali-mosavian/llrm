@@ -34,7 +34,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::consts::{Known, masked};
-use llrm_analysis::induction::{self, Affine, AffineMap, AffineOperand, CountedLoop};
+use llrm_analysis::induction::{self, Affine, AffineMap, AffineOperand, CountedLoop, PointerRecurrence};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_graph::loops::Loop;
@@ -210,7 +210,7 @@ fn _replacement(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> Option
         };
         let counters = induction::basics(unit, &loop_);
         for proof in induction::counted(unit, &loop_, Some(facts), false) {
-            if proof.posttested || proof.first.is_none() || proof.width() != proof.counter.start.width() {
+            if proof.posttested || proof.first.is_none() || proof.width() != proof.counter.start.width() || proof.zero_tested() {
                 continue;
             }
             let Some(count) = proof.count.clone() else { continue };
@@ -541,6 +541,8 @@ struct Zeroing {
     exit: Option<BlockId>,
     preheader: BlockId,
     loop_: Loop,
+    /// A pointer candidate, first rewritten as its start and a byte offset.
+    pointer: Option<PointerRecurrence>,
 }
 
 fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<i64>) -> Result<bool, String> {
@@ -549,10 +551,18 @@ fn _zeroed(context: &mut Context, layout: &DataLayout, function: &mut Function, 
         let unit = memory::Unit::within(context, layout, function, analyses.outer());
         _zeroing(&unit, &facts, done)
     };
-    let Some(plan) = plan else {
+    let Some(mut plan) = plan else {
         return Ok(false);
     };
     done.insert(plan.loop_.header);
+    if let Some(pointer) = plan.pointer.take() {
+        let width = plan.proof.width();
+        let (phi, stepping, value) = _offset(context, function, &pointer, plan.preheader, width)?;
+        plan.candidate = Affine { value, start: AffineOperand::constant(0, width), step: plan.candidate.step.clone(), header: plan.loop_.header };
+        (plan.phi, plan.stepping) = (phi, stepping);
+        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        plan.uses = _uses(&unit, &plan.loop_, &plan.proof, &plan.candidate, false).expect("an offset read only by its address").0;
+    }
     let proof = &plan.proof;
     let width = proof.width();
     let entering = function.terminator(plan.preheader).expect("a terminated preheader");
@@ -637,7 +647,7 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
         let Some(preheader) = proof.preheader.map(cfg::block) else { continue };
         let width = proof.width();
         // Counting to zero at its header already, it may still be rotated.
-        let tested = proof.bound == AffineOperand::constant(0, width) && proof.test == IntPredicate::Ne;
+        let tested = proof.zero_tested();
         let runs = proof.count.as_ref().is_some_and(|count| count >= &BigInt::from(1)) || induction::nonempty(unit, &loop_);
         let symbolic = proof.count.is_none();
         let mut ordered = induction::basics(unit, &loop_).into_values().filter_map(|candidate| {
@@ -647,6 +657,13 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
             let moved = if unknown { uses.iter().filter(|one| matches!(one, Use::Address { .. })).count() as i64 } else { 0 };
             Some((moved - i64::from(!itself), !itself, candidate))
         }).collect::<Vec<_>>();
+        // A pointer counts as its byte offset, when that offset is an index.
+        let indexes = |one: &PointerRecurrence| unit.space(Operand::Value(one.value)).map(|space| unit.layout.pointer(space).index_bits) == Some(width);
+        let pointers = induction::pointers(unit, &loop_).into_iter().filter(indexes).map(|one| (one.value, one)).collect::<IndexMap<_, _>>();
+        ordered.extend(pointers.values().map(|one| {
+            let step = AffineOperand::constant(one.step.clone(), width);
+            (-1, true, Affine { value: one.value, start: AffineOperand::constant(0, width), step, header: loop_.header })
+        }));
         ordered.sort_by(|one, other| (one.0, one.1).cmp(&(other.0, other.1)));
         for (_, _, candidate) in ordered {
             let itself = candidate == proof.counter;
@@ -660,8 +677,11 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
             if function.users(update).iter().any(|one| one.user != phi) {
                 continue;
             }
-            let Some((uses, through)) = _uses(unit, &loop_, proof, &candidate, itself) else { continue };
-            if uses.is_empty() && !itself {
+            let pointer = pointers.get(&candidate.value).cloned();
+            // Every read of a pointer reads its start plus the offset instead.
+            let found = if pointer.is_some() { Some((Vec::new(), Vec::new())) } else { _uses(unit, &loop_, proof, &candidate, itself) };
+            let Some((uses, through)) = found else { continue };
+            if uses.is_empty() && !itself && pointer.is_none() {
                 continue;
             }
             let Some(step) = induction::_signed(&candidate.step, facts, width).filter(|step| !step.is_zero()) else { continue };
@@ -690,6 +710,11 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
             // Read after the loop, a recurrence other than the counter would
             // need its final value where a guard may have skipped it.
             let outside = function.users(candidate.value).iter().any(|one| !loop_.body.contains(&_block_of(function, one.user)));
+            // The offset's address goes before its reads: never into the header rotation leaves test-only.
+            let header_reads = |one: &PointerRecurrence| function.users(one.value).iter().any(|read| _block_of(function, read.user) == loop_.header);
+            if pointer.as_ref().is_some_and(|one| outside || header_reads(one)) {
+                continue;
+            }
             if let Some(control) = induction::zero_terminating_control(unit, &loop_, proof, &candidate, &covered, Some(facts)) {
                 let shape = rotate::_shape(function, &loop_);
                 if let Some(shape) = shape.filter(|shape| cfg::id(shape.first) == proof.latch && (itself || !outside)) {
@@ -705,6 +730,7 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
                         exit: None,
                         preheader,
                         loop_: loop_.clone(),
+                        pointer,
                     });
                 }
             }
@@ -726,10 +752,53 @@ fn _zeroing(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, done: &BTreeS
             if counter_left || candidate_left || (!itself && function.users(proof.counter.value).iter().any(|one| !loop_.body.contains(&_block_of(function, one.user)))) {
                 continue;
             }
-            return Some(Zeroing { proof: proof.clone(), candidate: candidate.clone(), phi, stepping, step, uses, rotated: None, exit: Some(exit), preheader, loop_: loop_.clone() });
+            return Some(Zeroing { proof: proof.clone(), candidate: candidate.clone(), phi, stepping, step, uses, rotated: None, exit: Some(exit), preheader, loop_: loop_.clone(), pointer });
         }
     }
     None
+}
+
+/// `pointer` as its start plus a byte offset counted from zero, which every
+/// read of it reads instead: the offset's phi, step and value.
+fn _offset(context: &mut Context, function: &mut Function, pointer: &PointerRecurrence, preheader: BlockId, width: u32) -> Result<(InstId, InstId, ValueId), String> {
+    let int = context.types.int(width);
+    let byte = context.types.int(8);
+    let pointer_ty = function.operand_type(context, Operand::Value(pointer.value)).expect("a pointer");
+    let zero = counting::constant(context, &BigInt::from(0), width);
+    let step = counting::constant(context, &pointer.step, width);
+    let phi = function.create_instruction(Opcode::Phi, int, Vec::new(), Flags::default(), None);
+    let offset = function.instruction(phi).result.expect("an offset");
+    let stepping = function.create_instruction(Opcode::Binary(BinaryOp::Add), int, vec![Operand::Value(offset), step], Flags::default(), None);
+    let next = Operand::Value(function.instruction(stepping).result.expect("a step"));
+    let incoming = arms(function, pointer.phi).into_iter().map(|(_, from)| (if from == preheader { zero } else { next }, from)).collect::<Vec<_>>();
+    function.set_operands(phi, from_arms(&incoming));
+    function.insert(phi, Position::Before(pointer.phi))?;
+    function.insert(stepping, Position::Before(pointer.stepping))?;
+    let reads = function.users(pointer.value).iter().map(|one| one.user).filter(|&user| user != pointer.stepping).collect::<Vec<_>>();
+    let before = _before_reads(function, function.parent(pointer.phi).expect("a placed phi"), &reads);
+    let address = function.create_instruction(Opcode::GetElementPtr { source: byte }, pointer_ty, vec![pointer.start, Operand::Value(offset)], Flags::default(), None);
+    function.insert(address, Position::Before(before))?;
+    function.replace_all_uses_with(pointer.value, Operand::Value(function.instruction(address).result.expect("an address")));
+    function.erase(pointer.phi)?;
+    function.erase(pointer.stepping)?;
+    Ok((phi, stepping, offset))
+}
+
+/// Where a value every one of `reads` takes goes: before the first of them
+/// in the block dominating them all, which leaves a test-only header to
+/// `rotate`. A phi reads on an edge: then the header.
+fn _before_reads(function: &Function, header: BlockId, reads: &[InstId]) -> InstId {
+    let placed = |inst: InstId| cfg::id(function.parent(inst).expect("a placed read"));
+    let mut at = cfg::id(header);
+    if let Some(&one) = reads.first() && reads.iter().all(|&read| function.instruction(read).opcode != Opcode::Phi) {
+        let dominance = cfg::Dominance::of(function);
+        at = placed(one);
+        while !reads.iter().all(|&read| dominance.dominates(at, placed(read))) {
+            at = dominance.immediate(at).expect("the header dominates its loop");
+        }
+    }
+    let instructions = function.block(cfg::block(at)).instructions();
+    instructions.iter().copied().find(|inst| reads.contains(inst)).or_else(|| instructions.iter().copied().find(|&inst| function.instruction(inst).opcode != Opcode::Phi)).expect("a terminated block")
 }
 
 /// Every read of `candidate` inside the loop as a `Use`, also through a
