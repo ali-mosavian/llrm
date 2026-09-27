@@ -367,7 +367,7 @@ clobbers = ["ax", "dx", "flags"]
 established = true
 inputs = []
 evidence = '''
-BCOM45.LIB error 00b5, BCL71ENR.LIB and VBDCL10E.LIB error 013b: `MOV AX,[b$errlin]` / `XOR DX,DX` / RETF -- ERL, a LONG whose high word is zero, and nothing more. Like B$FERR it reads only the runtime's own error state.
+error.asm, at 00b5 in BCOM45.LIB and 013b in BCL71ENR.LIB and VBDCL10E.LIB: `MOV AX,[b$errlin]` / `XOR DX,DX` / RETF -- ERL, a LONG whose high word is zero, and nothing more. Like B$FERR it reads only the runtime's own error state.
 '''
 
 ["B$FERR"]
@@ -532,7 +532,7 @@ clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
 established = true
 inputs = []
 evidence = '''
-BCL71ENR.LIB and VBDCL10E.LIB error 0046: ON LOCAL ERROR GOTO, one word, the handler's offset in the caller's code segment. It stores it in the caller's frame, [bx-0Eh] / [bx-10h] under `MOV BX,[BP]`, and RETF 2; with 0 while that frame's handler runs it jumps to the path OEGA_10 takes into B$SERR, as B$OEGA does. QB 4.5 has none.
+error.asm, at 0046 in BCL71ENR.LIB and VBDCL10E.LIB: ON LOCAL ERROR GOTO, one word, the handler's offset in the caller's code segment. It stores it in the caller's frame, [bx-0Eh] / [bx-10h] under `MOV BX,[BP]`, and RETF 2; with 0 while that frame's handler runs it jumps to the path OEGA_10 takes into B$SERR, as B$OEGA does. QB 4.5 has none.
 '''
 
 ["B$OGTA"]
