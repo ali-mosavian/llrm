@@ -307,3 +307,12 @@ fn pushed_addresses_are_not_a_long() {
         assert_eq!(printed(fixture, 3), vec![33_818_120, 67_636_240, 135_272_480], "{fixture}");
     }
 }
+
+/// rcflip's `\` of INTEGERs is `cwd / idiv cx`: a word division, not the
+/// 32-by-16 one the machine's dividend spells.
+#[test]
+fn a_sign_extended_dividend_is_a_word_division() {
+    let text = llrm_mir::print::module(&raised("rcflip-q-o.obj"));
+    let divisions: Vec<&str> = text.lines().filter(|line| line.contains(" sdiv ") || line.contains(" srem ")).collect();
+    assert!(!divisions.is_empty() && divisions.iter().all(|line| line.contains(" i16 ")), "{divisions:#?}");
+}
