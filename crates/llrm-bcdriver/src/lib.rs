@@ -10,37 +10,19 @@
 //! and the machine is the program's, both handed in rather than read from
 //! a global.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_core::abi::machine::{self, Machine};
-use llrm_core::abi::qb::HirAbi;
-use llrm_core::driver;
-use llrm_core::backend::assemble::{self, Abi, Target};
-use llrm_core::backend::constpool::Pool;
-use llrm_core::backend::cpu::{self, ProfileOrName};
-use llrm_core::backend::target::Segments;
-use llrm_core::backend::{addressvalues, globals, masm};
+use llrm_core::driver::{self, basic};
 use llrm_core::hir::model::RuntimeProfile;
-use llrm_core::model::ir::Space;
-use llrm_core::support::hash::IndexMap;
-use llrm_mir::{GlobalId, GlobalKind, Module};
+use llrm_mir::GlobalId;
 use llrm_omf::module::{self as found_module, Family};
 use llrm_omf::omf::{self, Record};
-use llrm_core::driver::basic;
 
-/// The main body's symbol, as the QB route names it.
-const MAIN: &str = "$QB$MAIN";
-/// The code segment's first byte: the module header.
-const HEADER: &str = "$QB$HEADER";
 /// The module header's size, and where the runtime enters the module.
 const HEADER_BYTES: usize = 0x30;
 
-/// Each segment the module header names, by the word that names it and
-/// the label `basic::written_basic` fixes it up to.
-const NAMED: [(usize, &str, &str); 5] =
-    [(12, "BC_DS", "$QB$DS"), (14, "BC_DATA", "$QB$DATA"), (16, "BC_FT", "$QB$FT"), (24, "COMMON", "$QB$COMMON"), (32, "BC_CN", "$QB$CN")];
 /// The header word naming the statement table, which is written afresh.
 const STATEMENTS: usize = 10;
 /// The header word holding the main body's frame size, which the main
@@ -92,7 +74,6 @@ fn linked_dgroup<'r>(modules: impl Iterator<Item = (&'r [Rc<Record>], &'r found_
 
 /// One module of a program whose DGROUP is `dgroup`, compiled again.
 fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTreeSet<String>, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
-    let profile = cpu::profile(ProfileOrName::Name(&machine.cpu))?;
     // The raise reads DGROUP from the module's own GRPDEF: a segment another
     // module groups would be carved as far data here.
     let segments = omf::segments(records);
@@ -105,150 +86,46 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
     }
     let records = records.to_vec();
     let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise(found, machine).map_err(|refusal| refusal.to_string())?;
-    let options = llrm_core::driver::Options::of(machine.clone());
-    let mut program = llrm_core::driver::linked(vec![module], runtime, &options)?;
-    llrm_core::driver::optimized(&mut program, &options)?;
-    let module = program.modules.pop().expect("one module");
-    let runtime = match found_module::family(&records) {
+    let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
+    let named = |id: GlobalId| module.global(id).name.clone().ok_or("an unnamed global");
+    let mut symbols = BTreeMap::new();
+    for (&segment, &global) in &placement.bases {
+        if segment != code_segment {
+            return Err(format!("data points into segment {segment}, which is neither data nor code"));
+        }
+        symbols.insert(named(global)?, basic::HEADER.to_owned());
+    }
+    let data = data_segments(&placement, &segments, code_segment, &named)?;
+    let private = data.iter().map(|one| &one.name).filter(|name| name.as_str() == "FDATA" || name.as_str() == "FSL_CONST").cloned().collect();
+    let object = basic::Object {
+        code,
+        header: header(found, &records, code_segment, &segments)?,
+        main: "main".to_owned(),
+        symbols,
+        segments: data,
+        constants: CONSTANTS.to_owned(),
+        private,
+    };
+    let family = match found_module::family(&records) {
         Family::Quickbasic => RuntimeProfile::Qb45,
         Family::Pds => RuntimeProfile::Pds71,
         Family::Vbdos => RuntimeProfile::Vbdos,
         other => return Err(format!("a {other:?} object")),
     };
-    let (code_segment, code_name, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
-    let abi = HirAbi { runtime, objects: Default::default(), preserved: Default::default() };
-    let mut names = globals::names(&module, &|name| abi.linked(name))?;
-    names.extend(llrm_core::hir::lower::symbol_names());
-    let main = module.named("main").ok_or("no main body")?;
-    names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
-    for (&segment, &global) in &placement.bases {
-        if segment != code_segment {
-            return Err(format!("data points into segment {segment}, which is neither data nor code"));
-        }
-        names.insert((globals::space(&module, global), i64::from(global.0)), HEADER.to_owned());
-    }
-    let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu: profile, segments: &Segments::of(machine), runtime: runtime.value(), basic: true };
-    let mut procedures = Vec::new();
-    let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
-    // The runtime enters the module right after its header.
-    let order = std::iter::once(main).chain((0..module.globals.len() as u32).map(GlobalId).filter(|&id| id != main));
-    let mut rows = Vec::new();
-    for id in order {
-        let global = module.global(id);
-        let GlobalKind::Function(function) = &global.kind else { continue };
-        if function.is_declaration() {
-            continue;
-        }
-        let name = global.name.clone().unwrap_or_default();
-        let (procedure, landing) = procedure(&module, &name, id, &names, &abi, &pool, &target, runtime)?;
-        for callee in procedure.callees.values() {
-            referenced.insert(callee.name.clone(), callee.far);
-        }
-        rows.extend(landing.map(|at| driver::landing_row(procedures.len(), at)));
-        procedures.push(procedure);
-    }
-    procedures.push(driver::statement_table(&rows));
-    let mut data = data_segments(&module, &placement, &segments, code_segment, &names)?;
-    // The constants isel keeps in memory go where BC keeps its own, as the
-    // QB route places them.
-    let mut pooled = Vec::new();
-    for (bytes, id) in pool.borrow().entries() {
-        let label = format!("$QB$D{id}");
-        names.insert((Space::Segment, id), label.clone());
-        pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
-    }
-    pooled.extend(driver::landed_data(&module));
-    if !pooled.is_empty() {
-        match data.iter_mut().find(|(name, _)| name == CONSTANTS) {
-            Some((_, datums)) => datums.extend(pooled),
-            None => data.push((CONSTANTS.to_owned(), pooled)),
-        }
-    }
-    let defined: std::collections::BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
-    let externs = referenced
-        .iter()
-        .filter(|(name, _)| !defined.contains(name.as_str()))
-        .map(|(name, &far)| (name.clone(), if far { "far" } else { "near" }.to_owned()))
-        .chain(external_data(&module, &names))
-        .collect();
-    let private = data.iter().map(|(name, _)| name).filter(|name| name.as_str() == "FDATA" || name.as_str() == "FSL_CONST").cloned().collect();
-    let assembled = masm::Module {
-        code: code_name,
-        names,
-        externs,
-        publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
-        data,
-        procedures,
-        private,
-        requests: Default::default(),
-    };
-    let header = header(found, &records, code_segment, &segments)?;
-    basic::written_basic(&assembled, header, name)
+    let options = driver::Options::of(machine.clone());
+    let mut program = driver::linked(vec![module], runtime, &options)?;
+    driver::optimized(&mut program, &options)?;
+    basic::object(&program.modules[0], &object, family, &options, name)
 }
 
-/// A defined function selected, through the machine phases, and framed as
-/// BASIC frames it: a procedure by B$ENRA and B$EXSA, the main body by
-/// them too where it needs any frame at all.
-#[allow(clippy::too_many_arguments)]
-fn procedure(
-    module: &Module,
-    name: &str,
-    id: GlobalId,
-    names: &IndexMap<(Space, i64), String>,
-    abi: &HirAbi,
-    pool: &Rc<RefCell<Pool>>,
-    target: &Target<'_>,
-    runtime: RuntimeProfile,
-) -> Result<(masm::Procedure, Option<i64>), String> {
-    let contracts = |callee: &str, pops: bool, pushed: i64| abi.contract(callee, pops, pushed);
-    let machined = assemble::machined(module, name, &contracts, pool, target)?;
-    let finalized = basic::finalized(&machined.body, machined.popped)?;
-    let mut callees = finalized.callees;
-    let is_main = names[&(Space::Segment, i64::from(id.0))] == MAIN;
-    let (body, framed) = if !driver::framed(module, id) {
-        (finalized.body, IndexMap::default())
-    } else if is_main && machined.reserve == 0 {
-        basic::_initialize_frame(&finalized.body, 0)?
-    } else {
-        basic::_runtime_frame(&finalized.body, machined.reserve, runtime, 0)?
-    };
-    callees.extend(framed);
-    for (at, callee) in &machined.calls {
-        if let Some(code) = machined.inline.get(at) {
-            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
-            continue;
-        }
-        let linked = match module.named(callee) {
-            Some(one) => names[&(globals::space(module, one), i64::from(one.0))].clone(),
-            None => abi.linked(callee),
-        };
-        callees.insert(*at, masm::Callee::new(linked, machined.far.contains(at)));
-    }
-    let global = module.global(id);
-    let procedure = masm::Procedure {
-        name: names[&(Space::Segment, i64::from(id.0))].clone(),
-        public: !is_main && global.linkage == llrm_mir::Linkage::External,
-        far: true,
-        body: addressvalues::converted(&body),
-        // B$ENRA reserves the frame; masm's own shell reserves nothing.
-        reserve: 0,
-        callees,
-        interrupt: None,
-    };
-    Ok((procedure, machined.landing))
-}
-
-/// Each data segment the object had, in its order, holding its objects'
-/// data in their order; a segment the module header names starts with the
-/// label `written_basic` fixes that word up to.
+/// Each data segment the object had, in its order, holding its objects in
+/// their order, each where the object put it.
 fn data_segments(
-    module: &Module,
     placement: &llrm_bc::Placement,
     segments: &[Option<(String, i64)>],
     code_segment: i64,
-    names: &IndexMap<(Space, i64), String>,
-) -> Result<Vec<(String, Vec<masm::Datum>)>, String> {
+    named: &dyn Fn(GlobalId) -> Result<String, &'static str>,
+) -> Result<Vec<basic::Segment>, String> {
     let mut placed: BTreeMap<i64, Vec<(i64, GlobalId)>> = BTreeMap::new();
     for &(segment, start, global) in &placement.objects {
         placed.entry(segment).or_default().push((start, global));
@@ -261,54 +138,12 @@ fn data_segments(
             continue;
         }
         let mut items = Vec::new();
-        if let Some(&(_, _, label)) = NAMED.iter().find(|(_, segment, _)| segment == name) {
-            items.push(masm::Datum::Label(masm::Label { name: label.to_owned() }));
-        }
-        let mut at = 0;
         for &(start, global) in placed.get(&index).map(Vec::as_slice).unwrap_or_default() {
-            if start != at {
-                return Err(format!("{name} has a gap at {at:#x}"));
-            }
-            let datums = globals::datums(module, global, names)?;
-            let bytes: i64 = datums.iter().map(size_of).sum();
-            for datum in &datums {
-                if let masm::Datum::Pointer(masm::Pointer { name: target, offset, .. }) = datum {
-                    if target == HEADER && *offset != 0 {
-                        return Err(format!("{name} names code at {offset:#x}, which the recompile moves"));
-                    }
-                }
-            }
-            items.extend(datums);
-            at += bytes;
+            items.push(basic::Item::Global { name: named(global)?, at: Some(start) });
         }
-        if at != *size {
-            return Err(format!("{name} holds {at:#x} of its {size:#x} bytes"));
-        }
-        out.push((name.clone(), items));
+        out.push(basic::Segment { name: name.clone(), items, size: Some(*size) });
     }
     Ok(out)
-}
-
-/// The bytes a datum occupies.
-fn size_of(datum: &masm::Datum) -> i64 {
-    match datum {
-        masm::Datum::Bytes(bytes) => bytes.len() as i64,
-        masm::Datum::Pointer(pointer) => if pointer.far { 4 } else { 2 },
-        masm::Datum::SegmentWord(_) => 2,
-        masm::Datum::Fill(fill) => fill.size,
-        _ => 0,
-    }
-}
-
-/// Each variable the module names but does not define.
-fn external_data(module: &Module, names: &IndexMap<(Space, i64), String>) -> Vec<(String, String)> {
-    module
-        .globals
-        .iter()
-        .enumerate()
-        .filter(|(_, global)| matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_none()))
-        .filter_map(|(at, _)| names.get(&(Space::External, at as i64)).filter(|name| name.as_str() != HEADER).map(|name| (name.clone(), "byte".to_owned())))
-        .collect()
 }
 
 /// The module header, MODULE_CODE: BC's own bytes, but for the words
@@ -319,7 +154,7 @@ fn header(found: &found_module::Module, records: &[Rc<omf::Record>], code_segmen
     for fixup in omf::fixups(records).into_iter().filter(|one| one.seg == Some(code_segment) && (one.offset as usize) < HEADER_BYTES) {
         let at = fixup.offset as usize;
         let named = segments.get(fixup.index as usize).and_then(Option::as_ref).map(|(name, _)| name.as_str());
-        let expected = NAMED.iter().any(|&(word, segment, _)| word == at && fixup.target == "segment" && named == Some(segment));
+        let expected = basic::NAMED.iter().any(|&(word, segment, _)| word == at && fixup.target == "segment" && named == Some(segment));
         let statements = at == STATEMENTS && fixup.target == "segment" && fixup.index == code_segment;
         if !expected && !statements {
             return Err(format!("the module header's word at {at:#x} is relocated as BASIC does not"));
