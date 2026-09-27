@@ -29,6 +29,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::manager::Registers;
+use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, liveness, ssa};
 use llrm_graph::loops::{self, Loop};
@@ -59,7 +61,14 @@ impl FunctionPass for Gvn {
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &self.costs, self.registers)) {
+        // Numbering leaves the CFG alone: every candidate has these trips.
+        let trips = if self.registers == 0 {
+            IndexMap::default()
+        } else {
+            let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()), &facts)
+        };
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &self.costs, self.registers, &trips)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -70,12 +79,13 @@ impl FunctionPass for Gvn {
 
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
-/// module and target, `accesses` what each instruction of `unit` touches.
+/// module and target, `accesses` what each instruction of `unit` touches,
+/// `trips` each loop's proven trips by latch.
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64) -> Result<bool, String> {
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, costs, registers)?;
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, costs, registers, trips)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
@@ -86,7 +96,7 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Op
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything, and whether `subexpressions` did.
-fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64) -> Result<(bool, bool), String> {
+fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, registers: i64, trips: &IndexMap<i64, i64>) -> Result<(bool, bool), String> {
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
         let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, avoid_store_crossing)?;
@@ -94,7 +104,7 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
-    let price = |one: &Function| profit::pressure_adjusted(unit.context, one, unit.callees, costs, registers, None, &liveness::live(one).live_out);
+    let price = |one: &Function| profit::pressure_adjusted(unit.context, one, unit.callees, costs, registers, Some(trips), &liveness::live(one).live_out);
     let chosen = if registers == 0 {
         crossing
     } else if let Some(crossed) = price(&crossing.0) {
