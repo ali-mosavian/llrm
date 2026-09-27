@@ -13,14 +13,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_graph::loops;
+use llrm_mir::context::Context;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
-use llrm_mir::module::{GlobalValue, InstId, ValueId};
+use llrm_mir::module::{Function, GlobalValue, InstId, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_mir::passes::Analyses;
 use llrm_support::hash::IndexMap;
 
 use crate::cfg;
-use crate::alias::{self, Procedure, Summary};
+use crate::alias::{self, Effect, Procedure, Summary};
 use crate::consts::Calls;
+use crate::manager::{Annotated, CallEffects};
 use crate::memory::{MemRef, Unit, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
@@ -71,9 +75,23 @@ impl Accesses {
     /// `unit`'s accesses as `alias` resolves them: each reference with its
     /// provenance, each call's effect instantiated from `known` callees.
     pub fn resolved(unit: &Unit, known: &IndexMap<String, Summary>) -> Result<Self, String> {
-        let references = alias::annotated(unit)?;
-        let effects = alias::calls_annotated(&Procedure::of(*unit), known)?;
-        Ok(Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone())))))
+        Ok(Self::of(unit, alias::annotated(unit)?, &alias::calls_annotated(&Procedure::of(*unit), known)?))
+    }
+
+    /// `function`'s accesses from the manager's `Annotated` and
+    /// `CallEffects`; the pipeline must require `Summaries`.
+    pub fn managed(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Result<Self, String> {
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let effects = analyses.get::<CallEffects>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        let effects = Result::as_ref(&*effects).map_err(String::clone)?;
+        Ok(Self::of(&Unit::within(context, layout, function, analyses.outer()), references.clone(), effects))
+    }
+
+    /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
+    /// call's `effects` (`alias::calls_annotated`'s).
+    pub fn of(unit: &Unit, references: IndexMap<InstId, MemRef>, effects: &IndexMap<InstId, Effect>) -> Self {
+        Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone()))))
     }
 
     /// `unit`'s accesses unresolved: each reference as the instruction

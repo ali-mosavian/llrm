@@ -17,27 +17,24 @@
 //! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
 //!   `source_backed` and `raised` marks.
 //!
-//! It is a module pass: `memory::Unit` reads the module's globals, and a
-//! call's footprint is its callee's `alias` summary, of every body the
-//! linker keeps.
+//! A call's footprint is its `CallEffects`: the pass needs `Summaries`
+//! required.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use llrm_analysis::avail::{loaded_into, stored_from};
-use llrm_analysis::alias::{self, Procedure};
-use llrm_analysis::interprocedural::_exact;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
 use llrm_graph::loops::{self, Dominance, Loop};
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{Callees, only_value};
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::ModulePass;
-use llrm_mir::GlobalId;
+use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::HashMap;
 
 use crate::edges;
@@ -47,45 +44,32 @@ pub struct LoadJoins {
     pub insert: bool,
 }
 
-impl ModulePass for LoadJoins {
+impl FunctionPass for LoadJoins {
     fn name(&self) -> &'static str {
         "loadjoins"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        let layout = match &module.datalayout {
-            Some(text) => DataLayout::parse(text).unwrap_or_else(|error| panic!("loadjoins: {error}")),
-            None => DataLayout::default(),
-        };
-        let callees = llrm_mir::memory::callees(module);
-        // What each body the linker keeps reads and writes, for its callers.
-        let known = {
-            let procedures = module
-                .globals
-                .iter()
-                .filter(|global| _exact(global.linkage))
-                .filter_map(|global| Some((global.name.clone()?, global.function().filter(|one| !one.is_declaration())?)))
-                .map(|(name, function)| (name, Procedure::of(Unit::of(module, &layout, function))))
-                .collect();
-            alias::summaries(&procedures, None).unwrap_or_else(|error| panic!("loadjoins: {error}"))
-        };
-        let mut changed = Vec::new();
-        for at in 0..module.globals.len() {
-            let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else {
-                continue;
-            };
-            let unit = Unit::of(module, &layout, function);
-            let accesses = Accesses::resolved(&unit, &known).unwrap_or_else(|error| panic!("loadjoins: {error}"));
-            let joined = planned(&unit, &callees, &accesses, self.insert);
-            if joined.is_empty() {
-                continue;
-            }
-            let GlobalKind::Function(function) = &mut module.globals[at].kind else { unreachable!("a function") };
-            applied(function, joined).unwrap_or_else(|error| panic!("loadjoins: {error}"));
-            changed.push(GlobalId(at as u32));
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let (context, layout) = (&*unit.context, unit.layout);
+        let changed = Accesses::managed(context, layout, unit.function, analyses)
+            .and_then(|accesses| reused(context, layout, unit.function, analyses.outer(), unit.callees, &accesses, self.insert));
+        match changed {
+            Ok(true) => PreservedAnalyses::none(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("loadjoins: {error}"),
         }
-        changed
     }
+}
+
+/// `function`'s join loads made phis, as `accesses` (of `function` as it
+/// stands) says what each instruction touches; whether any was.
+pub fn reused(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, callees: &Callees, accesses: &Accesses, insert: bool) -> Result<bool, String> {
+    let joined = planned(&Unit::within(context, layout, function, outer), callees, accesses, insert);
+    if joined.is_empty() {
+        return Ok(false);
+    }
+    applied(function, joined)?;
+    Ok(true)
 }
 
 /// Where a join load's value comes from on one edge.

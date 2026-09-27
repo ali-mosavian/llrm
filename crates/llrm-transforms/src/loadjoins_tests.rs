@@ -9,6 +9,7 @@ use llrm_mir::module::Module;
 use llrm_mir::passes::PassManager;
 
 use super::*;
+use llrm_analysis::manager::Summaries;
 use llrm_analysis::testing::DOS;
 
 use crate::testing::{parsed, printed, results};
@@ -19,7 +20,8 @@ const CELL: &str = "getelementptr (i8, ptr @g, i16 32)";
 fn joined(mut module: Module, insert: bool) -> Module {
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add_module(LoadJoins { insert });
+    manager.require::<Summaries>();
+    manager.add(LoadJoins { insert });
     manager.run(&mut module).expect("verifies");
     module
 }
@@ -413,8 +415,9 @@ fn test_every_corpus_module_verifies_after_loadjoins() {
     let mut changed = 0;
     for (name, mut module) in llrm_analysis::testing::corpus() {
         let mut manager = PassManager::default();
-    manager.verify_each = true;
-        manager.add_module(LoadJoins { insert: true });
+        manager.verify_each = true;
+        manager.require::<Summaries>();
+        manager.add(LoadJoins { insert: true });
         let stages = manager.run(&mut module).unwrap_or_else(|error| panic!("{name}: {error}"));
         changed += stages.len();
     }
