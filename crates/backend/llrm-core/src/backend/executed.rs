@@ -6,20 +6,30 @@
 //! the MIR estimate cannot see is counted.
 
 use crate::analysis::loops;
-use crate::model::ir::Loc;
-use crate::model::lir::LirBody;
-use crate::support::hash::IndexMap;
+use crate::model::ir::{Addr, Loc, Space};
+use crate::model::lir::{Insn, LirBody};
+use crate::support::hash::{IndexMap, IndexSet};
 
-/// Expected per call: instructions executed, and memory operands they touch.
+/// Expected per call: instructions executed, and memory operands they touch;
+/// of those instructions, the integer allocator's reloads, spill stores and
+/// remats. A reload is any read of a spill slot: most are folded into their
+/// use or lose the flag. x87 spills are left out: their restores carry none.
+#[derive(Default)]
 pub struct Executed {
     pub instructions: f64,
     pub memory: f64,
+    pub reloads: f64,
+    pub stores: f64,
+    pub remats: f64,
 }
 
 /// `executed` as one line, for the `cost` channel and dump.
 pub fn summary(body: &LirBody) -> String {
     match executed(body) {
-        Some(done) => format!("{} executes {:.0} instructions, {:.0} memory operands", body.name, done.instructions, done.memory),
+        Some(done) => format!(
+            "{} executes {:.0} instructions, {:.0} memory operands; {:.0} reloads, {:.0} spill stores, {:.0} remats",
+            body.name, done.instructions, done.memory, done.reloads, done.stores, done.remats
+        ),
         None => format!("{} executes an unbounded amount", body.name),
     }
 }
@@ -104,11 +114,37 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             right[row] -= factor * right[column];
         }
     }
-    let mut out = Executed { instructions: 0.0, memory: 0.0 };
+    let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let slots: IndexSet<Addr> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insns)
+        .filter(|one| one.spill_store && !x87(one))
+        .flat_map(|one| one.what.iter().flat_map(|what| &what.dests))
+        .filter_map(|at| match at {
+            Loc::Mem(cell) => cell.addr.filter(|addr| addr.space == Space::Frame),
+            _ => None,
+        })
+        .collect();
+    let reads_slot = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr)))))
+    };
+    let mut out = Executed::default();
     for (block, frequency) in body.blocks.iter().zip(&right) {
         let frequency = frequency.max(0.0);
         for one in block.insns.iter().filter(|one| crate::backend::masm::prints(one)) {
             out.instructions += frequency;
+            // A remat may be built as a reload; it counts as a remat.
+            let spill = match () {
+                _ if x87(one) => None,
+                _ if one.rematerialized => Some(&mut out.remats),
+                _ if one.spill_reload || reads_slot(one) => Some(&mut out.reloads),
+                _ if one.spill_store => Some(&mut out.stores),
+                _ => None,
+            };
+            if let Some(count) = spill {
+                *count += frequency;
+            }
             if let Some(what) = &one.what {
                 out.memory += frequency * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
             }
@@ -124,7 +160,7 @@ mod tests {
     use iced_x86::Register;
 
     use super::executed;
-    use crate::model::ir::{Loc, Operation, Reg, Semantics};
+    use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -147,5 +183,54 @@ mod tests {
         ];
         let body = LirBody::new("anchored", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         assert_eq!(executed(&body).expect("straight-line").instructions, 2.0);
+    }
+
+    /// Spill traffic was only visible inside loops, weighted by depth, before
+    /// loopslots promoted any of it: nothing measured what finally executes.
+    #[test]
+    fn test_reloads_stores_and_remats_are_counted_apart() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let marked = |at, reload, store, remat| {
+            let mut one = (*insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])).clone();
+            (one.spill_reload, one.spill_store, one.rematerialized) = (reload, store, remat);
+            Arc::new(one)
+        };
+        let insns = vec![
+            marked(1, true, false, false),
+            marked(2, false, true, false),
+            marked(3, true, false, true),
+            marked(4, false, false, false),
+            insn(5, Operation::Return, "ret", vec![], vec![]),
+        ];
+        let body = LirBody::new("spilled", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let done = executed(&body).expect("straight-line");
+        assert_eq!((done.reloads, done.stores, done.remats, done.instructions), (1.0, 1.0, 1.0, 5.0));
+    }
+
+    /// A reload folded into its use carries no flag: matmul's
+    /// `imul eax,[bp-520]` read its spill slot, and 57 stores showed 0 reloads.
+    #[test]
+    fn test_a_use_reading_a_spill_slot_is_a_reload() {
+        let eax = Loc::Reg(Reg { register: Register::EAX, width: 4 });
+        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -520)), 4));
+        let mut store = (*insn(1, Operation::Move, "mov", vec![cell.clone()], vec![eax.clone()])).clone();
+        store.spill_store = true;
+        let insns = vec![Arc::new(store), insn(2, Operation::Multiply, "imul", vec![eax.clone()], vec![eax, cell]), insn(3, Operation::Return, "ret", vec![], vec![])];
+        let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let done = executed(&body).expect("straight-line");
+        assert_eq!((done.stores, done.reloads), (1.0, 1.0));
+    }
+
+    /// An x87 spill store was counted while its restores, unflagged, were
+    /// not: qbdemo's BENCHMARK read 64003 stores against 5 reloads.
+    #[test]
+    fn test_x87_spill_stores_are_not_counted() {
+        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -10)), 10));
+        let mut store = (*insn(1, Operation::FloatStore, "fstp", vec![cell], vec![])).clone();
+        store.spill_store = true;
+        let insns = vec![Arc::new(store), insn(2, Operation::Return, "ret", vec![], vec![])];
+        let body = LirBody::new("x87", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        assert_eq!(executed(&body).expect("straight-line").stores, 0.0);
     }
 }
