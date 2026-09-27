@@ -32,7 +32,8 @@ use llrm_analysis::testing::{DOS, corpus};
 use llrm_graph::loops;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::Outer;
+use llrm_analysis::manager::Summaries;
+use llrm_mir::passes::{Outer, PassManager};
 
 use super::{Promote, Sroa, promoted};
 use crate::interprocedural::function_mut;
@@ -597,4 +598,45 @@ fn a_global_cell_is_promoted_across_a_readonly_call() {
         .replace("load i16, ptr @g", "load i16, ptr %e");
     let after = managed(&mut module(&aggregate), Sroa);
     assert!(after.contains("  ret i16 7\n"), "{after}");
+}
+
+/// Promote took every call to write anything, so a store before a call
+/// to a procedure that writes something else was loaded again after it. A
+/// weak body may be replaced, so what it does says nothing.
+#[test]
+fn a_call_to_a_procedure_that_does_not_write_a_cell_keeps_it_promoted() {
+    let text = |linkage: &str| {
+        format!(
+            "@x = global i16 0
+@y = global i16 0
+
+define {linkage}void @p() {{
+b0:
+  store i16 1, ptr @y
+  ret void
+}}
+
+define i16 @f(i16 %c) {{
+b0:
+  store i16 %c, ptr @x
+  call void @p()
+  %v = load i16, ptr @x
+  ret i16 %v
+}}
+"
+        )
+    };
+    let promoted = |linkage: &str| {
+        let mut module = module(&text(linkage));
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Promote);
+        manager.run(&mut module).unwrap();
+        printed(&module);
+        module
+    };
+    let internal = promoted("internal ");
+    assert_eq!(loads(&internal), 0, "{}", printed(&internal));
+    assert_eq!(results(&internal, INPUTS), results(&module(&text("internal ")), INPUTS));
+    assert_eq!(loads(&promoted("weak ")), 1);
 }

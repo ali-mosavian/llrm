@@ -158,3 +158,32 @@ b2:
 ";
     check(text, text, &[&[3, 0], &[3, 1]]);
 }
+
+/// Dead read a defined callee's effects off its attributes, which only
+/// llrm-mir's function-attrs stated: an unused call to a body that does
+/// nothing stayed. The whole-module stamp states them.
+#[test]
+fn an_unused_call_to_a_stamped_body_that_does_nothing_goes() {
+    let text = "define internal i16 @twice(i16 %x) {
+b0:
+  %y = add i16 %x, %x
+  ret i16 %y
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %r = call i16 @twice(i16 %x)
+  ret i16 %x
+}
+";
+    let calls = |module: &Module| printed(module).matches("call i16 @twice").count();
+    let mut stamped = parsed(text);
+    crate::interprocedural::stamped(&mut stamped).unwrap();
+    let before = results(&stamped, &[&[3]]);
+    assert!(deadened(&mut stamped));
+    assert_eq!(calls(&stamped), 0);
+    assert_eq!(results(&stamped, &[&[3]]), before);
+    let mut bare = parsed(text);
+    deadened(&mut bare);
+    assert_eq!(calls(&bare), 1);
+}

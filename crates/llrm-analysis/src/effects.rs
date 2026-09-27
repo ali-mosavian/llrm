@@ -75,6 +75,12 @@ pub fn touches_memory(context: &Context, declarations: &Declarations, function: 
     call(context, declarations, function, inst) != Effects::NONE
 }
 
+/// Whether the call `inst` may write memory anywhere, inaccessible
+/// memory included.
+pub fn writes_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+    call(context, declarations, function, inst).writes
+}
+
 /// Whether a raise here can reach a handler in this body, which reads memory.
 pub fn exposes_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
     matches!(function.instruction(inst).opcode, Opcode::Invoke(_)) && !states(context, declarations, function, inst, "nounwind")

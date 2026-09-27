@@ -30,7 +30,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::manager::Registers;
+use llrm_analysis::alias::PointsTo;
+use llrm_analysis::manager::{Pointers, Registers};
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, liveness, ssa};
@@ -58,8 +59,10 @@ impl FunctionPass for Gvn {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
+        let pointers = analyses.get::<Pointers>(unit.context, unit.layout, unit.function);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
+        let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
         let trips = if profit::registers(analyses.outer()).0 == 0 {
             IndexMap::default()
@@ -67,7 +70,7 @@ impl FunctionPass for Gvn {
             let facts = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
             profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()), &facts)
         };
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, &trips)) {
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -79,16 +82,17 @@ impl FunctionPass for Gvn {
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,
-/// `trips` each loop's proven trips by latch.
+/// `pointers` what each pointer points to, `trips` each loop's proven
+/// trips by latch.
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, trips: &IndexMap<i64, i64>) -> Result<bool, String> {
     let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer).0, trips)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
-    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, unit.callees, accesses, !combined)?;
+    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, unit.callees, accesses, pointers, !combined)?;
     Ok(numbered || combined || loaded)
 }
 

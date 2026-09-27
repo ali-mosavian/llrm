@@ -294,6 +294,26 @@ fn a_call_to_a_callee_that_only_reads_keeps_every_cell() {
     assert_eq!(parsed.solved("r", &Calls::default()), Some(Known::new(7, 16)));
 }
 
+/// A store's reference had no provenance, so a store to one global met a
+/// cell of every other.
+#[test]
+fn a_store_to_another_global_keeps_the_cell() {
+    let parsed = Parsed::new(
+        "@a = global i16 0
+@b = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 7, ptr @a
+  store i16 1, ptr @b
+  %r = load i16, ptr @a
+  ret i16 %r
+}
+",
+    );
+    assert_eq!(parsed.solved("r", &Calls::default()), Some(Known::new(7, 16)));
+}
+
 #[test]
 fn a_store_through_an_unknown_pointer_forgets_the_cell_it_may_hit() {
     let parsed = Parsed::new(

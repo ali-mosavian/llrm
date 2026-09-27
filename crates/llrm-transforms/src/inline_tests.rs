@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::interprocedural::pure_procedures;
+use llrm_analysis::interprocedural::stated_pure;
 use llrm_mir::context::GlobalId;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Linkage, Module};
@@ -25,13 +25,20 @@ fn private(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().filter(|(_, global, _)| matches!(global.linkage, Linkage::Internal | Linkage::Private)).map(|(id, _, _)| id).collect()
 }
 
+/// The bodies of `module` its stamp states pure.
+fn pure(module: &Module) -> BTreeSet<GlobalId> {
+    let mut stamped = module.clone();
+    crate::interprocedural::stamped(&mut stamped).unwrap();
+    stated_pure(&stamped)
+}
+
 fn costs(call: i64) -> OperationCosts {
     OperationCosts { call, ..OperationCosts::default() }
 }
 
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
-    let available = candidates(module, &call_counts(module), &private(module), &pure_procedures(module), &costs(call));
+    let available = candidates(module, &call_counts(module), &private(module), &pure(module), &costs(call));
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
     while expanded(context, function, &available, None).unwrap() {
@@ -135,7 +142,7 @@ b1:
 }
 "
     ));
-    let (private, pure) = (private(&module), pure_procedures(&module));
+    let (private, pure) = (private(&module), pure(&module));
     assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(0)), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
     assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(2)).len(), 1);
@@ -286,11 +293,11 @@ b1:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, main, &constants, &private(&module), &pure_procedures(&module), &costs(2));
+    let sites = constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(2));
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
     // Not priced above the work it clones: none.
-    assert!(constant_sites(&module, main, &constants, &private(&module), &pure_procedures(&module), &costs(1)).is_empty());
+    assert!(constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(1)).is_empty());
 }
 
 #[test]

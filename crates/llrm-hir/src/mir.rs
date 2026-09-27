@@ -38,10 +38,68 @@ pub struct Emitted {
     pub data: HashMap<i64, GlobalId>,
 }
 
+/// What a frontend's runtime promises, which its routines' declarations
+/// state: of the external data HIR marks unaddressed, the named cells, the
+/// ones a routine writes; none where it may run the program's own code.
+pub struct Runtime<'a> {
+    pub writes: &'a dyn Fn(&str) -> Option<Vec<String>>,
+}
+
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
+    emit_promised(program, None)
+}
+
+/// `emit`, with `runtime`'s promises stated: `!llrm.named` lists the named
+/// cells, and a routine that runs no program code is `nocallback` with an
+/// `!llrm.writes` node of the named cells it writes.
+pub fn emit_promised(program: &model::Program, runtime: Option<&Runtime>) -> Vec<Emitted> {
     // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
     let zeroed = program.dialect != model::Dialect::Quickr;
-    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed)).collect()
+    program
+        .modules
+        .iter()
+        .map(|one| {
+            let mut emitted = emit_module(one, program.array_order, zeroed);
+            if let Some(runtime) = runtime {
+                promised(&mut emitted, one, runtime);
+            }
+            emitted
+        })
+        .collect()
+}
+
+fn promised(emitted: &mut Emitted, hir: &model::Module, runtime: &Runtime) {
+    let module = &mut emitted.module;
+    let named = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed).map(|one| (one.name.as_str(), emitted.data[&one.id])).collect::<HashMap<_, _>>();
+    let node = |module: &mut Module, globals: Vec<GlobalId>| {
+        let operands = globals.into_iter().map(|one| MetadataOperand::Constant(module.reference(one))).collect();
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        MetadataId(module.metadata.len() as u32 - 1)
+    };
+    if !named.is_empty() {
+        let mut cells = named.values().copied().collect::<Vec<_>>();
+        cells.sort();
+        let listed = node(module, cells);
+        module.named_metadata.push(("llrm.named".to_owned(), vec![listed]));
+    }
+    let routines = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.function().is_some_and(llrm_mir::Function::is_declaration))
+        .filter_map(|(at, one)| Some((GlobalId(at as u32), one.name.as_deref()?.strip_prefix(RUNTIME)?.to_owned())))
+        .collect::<Vec<_>>();
+    let mut writes = Vec::new();
+    for (global, routine) in routines {
+        let Some(cells) = (runtime.writes)(&routine) else { continue };
+        let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a routine") };
+        function.attrs.push(Attribute::Flag("nocallback".to_owned()));
+        let written = std::iter::once(global).chain(cells.iter().filter_map(|one| named.get(one.as_str()).copied())).collect();
+        writes.push(node(module, written));
+    }
+    if !writes.is_empty() {
+        module.named_metadata.push(("llrm.writes".to_owned(), writes));
+    }
 }
 
 type Emit<T> = Result<T, String>;

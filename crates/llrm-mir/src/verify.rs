@@ -8,7 +8,7 @@ use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use crate::opcode::{BinaryOp, CastOp, Opcode};
+use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
 
 pub fn verify(module: &Module) -> Vec<String> {
@@ -89,6 +89,21 @@ impl Checker<'_> {
         let (returns, parameters, _) = self.module.signature(function.ty);
         if parameters.len() != function.parameters().len() {
             self.fail(format!("{} parameters for a type of {}", function.parameters().len(), parameters.len()));
+        }
+        for (at, attrs) in function.parameter_attrs.iter().enumerate() {
+            for attr in attrs {
+                let Attribute::Initializes(ranges) = attr else { continue };
+                if !parameters.get(at).is_some_and(|&ty| matches!(self.ty(ty), Type::Pointer(_))) {
+                    self.fail("Attribute 'initializes' applied to incompatible type!".to_owned());
+                }
+                if ranges.is_empty() {
+                    self.fail("Attribute 'initializes' does not support empty list".to_owned());
+                }
+                let ordered = ranges.iter().all(|(lower, upper)| lower < upper) && ranges.windows(2).all(|pair| pair[0].1 < pair[1].0);
+                if !ordered {
+                    self.fail("Attribute 'initializes' does not support unordered ranges".to_owned());
+                }
+            }
         }
         if function.is_declaration() {
             return;
