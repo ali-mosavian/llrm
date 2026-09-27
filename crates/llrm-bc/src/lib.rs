@@ -6,10 +6,14 @@
 //! Refusal is fatal: `raise` answers the first function it cannot express,
 //! and why.
 
+pub mod copies;
+pub mod division;
 pub mod emit;
 pub mod floats;
+pub mod longs;
 pub mod machine;
 pub mod objects;
+pub mod pairs;
 pub mod runtime;
 pub mod sites;
 

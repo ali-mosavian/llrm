@@ -219,13 +219,15 @@ fn a_call_reads_its_inputs_as_words() {
     }
 }
 
+/// What fpdeep prints: p = 12, 28, 60; k = 4; d = 12.
+const FPDEEP: [i64; 20] = [1, 144, 1, 6, 1, 512, 2, 784, 2, 14, 2, 768, 3, 3600, 3, 30, 3, 896, 144, 6];
+
 /// fpdeep: `p(i) * p(i)` holds two values from one address, and `fdivp`
-/// writes st(1) before the pop renumbers it. p = 12, 28, 60; k = 4; d = 12.
+/// writes st(1) before the pop renumbers it.
 #[test]
 fn fpdeep_keeps_two_values_on_the_stack() {
-    let expected = vec![1, 144, 1, 6, 1, 512, 2, 784, 2, 14, 2, 768, 3, 3600, 3, 30, 3, 896, 144, 6];
     for fixture in ["fpdeep-q-o.obj", "fpdeep-q-noo.obj"] {
-        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+        assert_eq!(printed(fixture, FPDEEP.len()), FPDEEP, "{fixture}");
     }
 }
 
@@ -260,5 +262,68 @@ fn a_float_function_answers_through_its_hidden_argument() {
         });
         let Val::Int { bits: got, .. } = answer else { panic!("{answer:?}") };
         assert_eq!(got as u64, expected, "{name}");
+    }
+}
+
+/// Where a word operation of a long's word is left in `function`, if any.
+fn word_arithmetic(module: &Module, function: &str) -> Option<String> {
+    let text = llrm_mir::print::module(module);
+    let body = text.split("\ndefine ").find(|one| one.contains(&format!("@{function}(")))?;
+    let found = body.lines().find(|line| ["add i16", "sub i16", "and i16", "or i16", "xor i16", "call { i16, i1 }"].iter().any(|op| line.contains(op)));
+    found.map(str::to_owned)
+}
+
+/// A long's word pairs are one `i32` operation: raised word by word, arith
+/// added its halves through `llvm.uadd.with.overflow.i16`, negnot negated
+/// through `neg / adc / neg`, and TWICE's `n + n` was an ADD/ADC pair.
+#[test]
+fn longs_are_whole_values() {
+    for (fixture, function) in [("arith-q-o.obj", "main"), ("negnot-q-o.obj", "main"), ("nots-q-o.obj", "main"), ("procs-q-o.obj", "TWICE"), ("arith-v-g3.obj", "main")] {
+        assert_eq!(word_arithmetic(&raised(fixture), function), None, "{fixture} {function}");
+    }
+}
+
+/// arith: each long operator, a carry and a borrow across the words, and
+/// two INTEGERs laid out as a long's halves. By hand from arith.bas.
+#[test]
+fn arith_prints_its_long_arithmetic() {
+    let expected = vec![33_818_120, 524_246_911, 490_428_791, 558_065_031, 52_774_761, -305_419_896, 524_246_911, 65_536, 65_535, 258, 772];
+    for fixture in ["arith-q-o.obj", "arith-p-g2.obj", "arith-v-g3.obj"] {
+        assert_eq!(printed(fixture, 11), expected, "{fixture}");
+    }
+}
+
+/// negnot and nots: NEG and NOT of longs, and EQV, IMP and NAND.
+#[test]
+fn long_negation_and_complement() {
+    assert_eq!(printed("negnot-q-o.obj", 4), vec![305_419_897, 33_818_121, -524_246_912, -33_818_120]);
+    assert_eq!(printed("nots-q-o.obj", 5), vec![-305_419_897, -490_428_792, -271_601_777, -33_818_121, -271_601_777]);
+}
+
+/// procs /G2 pushes two relocated immediates, a string's and a long's
+/// addresses, as `push imm / push imm`: read as one long of their raw
+/// bytes, REPORT dereferenced address 0. r, Twice(r), Twice(Twice(r)).
+#[test]
+fn pushed_addresses_are_not_a_long() {
+    for fixture in ["procs-p-g2.obj", "procs-v-g2.obj"] {
+        assert_eq!(printed(fixture, 3), vec![33_818_120, 67_636_240, 135_272_480], "{fixture}");
+    }
+}
+
+/// rcflip's `\` of INTEGERs is `cwd / idiv cx`: a word division, not the
+/// 32-by-16 one the machine's dividend spells.
+#[test]
+fn a_sign_extended_dividend_is_a_word_division() {
+    let text = llrm_mir::print::module(&raised("rcflip-q-o.obj"));
+    let divisions: Vec<&str> = text.lines().filter(|line| line.contains(" sdiv ") || line.contains(" srem ")).collect();
+    assert!(!divisions.is_empty() && divisions.iter().all(|line| line.contains(" i16 ")), "{divisions:#?}");
+}
+
+/// fpdeep /G2 and /V copy `d = 12`'s eight bytes with four bare `movsw`,
+/// which refused the whole program as unmodelled.
+#[test]
+fn a_string_copy_moves_its_words() {
+    for fixture in ["fpdeep-p-g2.obj", "fpdeep-v-g2.obj"] {
+        assert_eq!(printed(fixture, FPDEEP.len()), FPDEEP, "{fixture}");
     }
 }
