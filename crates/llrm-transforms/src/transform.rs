@@ -1,5 +1,5 @@
 //! Helpers adapted from llrm-core's `optimize/transform.rs`, each copied as
-//! a ported pass needs it; the pipeline itself is not ported yet.
+//! a ported pass needs it; the pipeline itself is `pipeline`.
 //! `_unreachable` is `llrm_analysis::cfg::_unreachable`.
 //!
 //! What `gvn` reads -- `_PURE`, `_computation`, `_reaches`, `_undisturbed`

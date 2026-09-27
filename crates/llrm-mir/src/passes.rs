@@ -109,6 +109,11 @@ impl PreservedAnalyses {
         self
     }
 
+    /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
+    pub fn are_all_preserved(&self) -> bool {
+        self.all
+    }
+
     fn keeps(&self, analysis: TypeId) -> bool {
         self.all || self.kept.contains(&analysis)
     }
@@ -216,7 +221,9 @@ impl Analyses {
         result
     }
 
-    fn invalidate(&mut self, preserved: &PreservedAnalyses) {
+    /// Drops what `preserved` does not keep: LLVM's
+    /// `FunctionAnalysisManager::invalidate`, for a pass running others.
+    pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
         self.cache.retain(|key, _| preserved.keeps(*key));
     }
 

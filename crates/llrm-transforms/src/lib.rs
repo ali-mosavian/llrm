@@ -31,6 +31,7 @@ pub mod loopmotion;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod peel;
+pub mod pipeline;
 pub mod profit;
 pub mod promote;
 pub mod strength;
