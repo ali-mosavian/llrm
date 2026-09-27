@@ -14,6 +14,7 @@ pub mod frameescape;
 pub mod interprocedural;
 pub mod liveness;
 pub mod memory;
+pub mod memoryssa;
 pub mod noreturn;
 pub mod occurrence;
 pub mod pointerfacts;
