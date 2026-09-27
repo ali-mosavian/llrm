@@ -235,6 +235,8 @@ fn test_division_and_variable_shifts() {
     );
 }
 
+/// A variable index is scaled, and an address only accesses read is their
+/// base plus it: `[bp+di-8]`, `[bx+si+2]`.
 #[test]
 fn test_variable_indices_are_scaled_and_added() {
     let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
@@ -254,17 +256,15 @@ fn test_variable_indices_are_scaled_and_added() {
             "mov bp, sp",
             "sub sp, 8",
             "push si",
+            "push di",
             "L0_0:",
             "mov bx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "lea cx, [eax+eax]",
-            "lea si, [bp-8]",
-            "add si, cx",
-            "mov word ptr [si], 5",
-            "add ax, ax",
-            "add bx, 2",
-            "add bx, ax",
-            "mov ax, word ptr [bx]",
+            "mov si, word ptr [bp+8]",
+            "lea di, [esi+esi]",
+            "mov word ptr ss:[bp+di-8], 5",
+            "add si, si",
+            "mov ax, word ptr [bx+si+2]",
+            "pop di",
             "pop si",
             "leave",
             "retf",
@@ -808,13 +808,12 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
             "sub sp, 4",
             "push si",
             "L0_0:",
-            "les bx, dword ptr [bp+6]",
-            "mov si, word ptr [bp+10]",
-            "add si, si",
-            "add si, bx",
-            "mov ax, word ptr es:[si]",
-            "mov word ptr es:[bx+4], ax",
-            "mov word ptr [bp-4], bx",
+            "les si, dword ptr [bp+6]",
+            "mov bx, word ptr [bp+10]",
+            "add bx, bx",
+            "mov ax, word ptr es:[bx+si]",
+            "mov word ptr es:[si+4], ax",
+            "mov word ptr [bp-4], si",
             "mov bx, es",
             "mov word ptr [bp-2], bx",
             "push ax",
@@ -1479,4 +1478,107 @@ fn test_a_far_pointer_loaded_through_a_register_is_les() {
 }
 ";
     assert!(inner(numeric).iter().all(|one| !one.starts_with("les")), "{:?}", inner(numeric));
+}
+
+/// An address only accesses read is `[base+index]`, as the old route's
+/// addressforms folds it: shellsort formed `base + (i << 1)` in a third
+/// register, and C shellsort `lea bx,[bp-132]` in every array block.
+#[test]
+fn test_an_address_only_accesses_read_is_base_plus_index() {
+    let based = "define void @f(ptr %p, i16 %i) addrspace(1) {
+  %q = getelementptr inbounds i16, ptr %p, i16 %i
+  %v = load i16, ptr %q
+  %w = add i16 %v, 1
+  %r = getelementptr inbounds i8, ptr %q, i16 2
+  store i16 %w, ptr %r
+  ret void
+}
+";
+    assert_eq!(
+        inner(based),
+        ["mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "add si, si", "mov ax, word ptr [bx+si]", "inc ax", "mov word ptr [bx+si+2], ax"]
+    );
+    let local = "define i16 @f(i16 %i) addrspace(1) {
+  %a = alloca [8 x i16]
+  %q = getelementptr inbounds [8 x i16], ptr %a, i16 0, i16 %i
+  store i16 3, ptr %q
+  %v = load i16, ptr %q
+  ret i16 %v
+}
+";
+    assert_eq!(inner(local), ["mov si, word ptr [bp+6]", "add si, si", "mov word ptr ss:[bp+si-16], 3", "mov ax, word ptr ss:[bp+si-16]"]);
+}
+
+/// An array read only past its start by index is still reserved whole:
+/// the indexed cell names no frame slot, and the frame put nothing below
+/// `[bp-6]` for the element `[bp-8]` it could not see.
+#[test]
+fn test_an_array_read_only_by_index_is_reserved_whole() {
+    let text = "define i16 @f(i16 %i) addrspace(1) {
+  %a = alloca [4 x i16]
+  %q = getelementptr inbounds [4 x i16], ptr %a, i16 0, i16 %i
+  %r = getelementptr inbounds i8, ptr %q, i16 2
+  %v = load i16, ptr %r
+  ret i16 %v
+}
+";
+    assert!(listing(text, "f").contains(&"sub sp, 8".to_owned()), "{:?}", listing(text, "f"));
+}
+
+/// An address also read as a value -- stored, or passed -- is computed.
+#[test]
+fn test_an_address_read_as_a_value_is_computed() {
+    let text = "declare void @take(ptr)
+define void @f(ptr %p, i16 %i) addrspace(1) {
+  %q = getelementptr inbounds i16, ptr %p, i16 %i
+  store i16 0, ptr %q
+  call void @take(ptr %q)
+  ret void
+}
+";
+    assert_eq!(
+        inner(text),
+        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add ax, ax", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+    );
+}
+
+/// A block laid out before the one defining the address it reads is
+/// selected after it: selected in layout order, T059 read the folded
+/// address's register, which nothing defined.
+#[test]
+fn test_an_address_folds_into_a_reader_laid_out_before_it() {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
+entry:
+  br label %def
+use:
+  %v = load i16, ptr %q
+  ret i16 %v
+def:
+  %q = getelementptr inbounds i16, ptr %p, i16 %i
+  br label %use
+}
+";
+    assert!(listing(text, "f").contains(&"mov ax, word ptr [bx+si]".to_owned()), "{:?}", listing(text, "f"));
+}
+
+/// A global element's address a phi reads is computed where it is made:
+/// folded into accesses, the phi read a register nothing defined.
+#[test]
+fn test_a_global_elements_address_a_phi_reads_is_computed() {
+    let text = "@a = internal global [8 x i16] zeroinitializer
+define i16 @f(i16 %i, i1 %c) addrspace(1) {
+entry:
+  %q = getelementptr inbounds [8 x i16], ptr @a, i16 0, i16 %i
+  br i1 %c, label %one, label %two
+one:
+  br label %join
+two:
+  br label %join
+join:
+  %r = phi ptr [ %q, %one ], [ @a, %two ]
+  %v = load i16, ptr %r
+  ret i16 %v
+}
+";
+    assert_eq!(listing(text, "f")[3..7], ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "add bx, bx", "add bx, offset a"]);
 }

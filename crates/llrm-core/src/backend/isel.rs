@@ -110,6 +110,9 @@ pub struct Selected {
     pub convention: Convention,
     pub calls: IndexMap<i64, String>,
     pub far: BTreeSet<i64>,
+    /// The bytes below BP its allocas and stack temporaries take: an
+    /// indexed access names no frame slot the frame could find it by.
+    pub depth: i64,
 }
 
 /// A call's contract, asked of the ABI that knows the callee: its name,
@@ -195,15 +198,18 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 /// Where a pointer points, when it need not be a register: a frame slot
 /// is an addressing mode, and a constant offset is its displacement.
 #[derive(Clone, Copy, Debug)]
+///
+/// An `index` is a register the address adds, `[bp+si+disp]` or
+/// `[bx+si+disp]`, where only accesses read the address: see `indexed`.
 enum Pointer {
-    Frame(i64),
-    Based { base: Held, offset: i64 },
+    Frame { disp: i64, index: Option<Held> },
+    Based { base: Held, index: Option<Held>, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one.
     Global { space: Space, index: i64, offset: i64, base: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
-    Far { selector: Held, base: Option<Held>, offset: i64 },
+    Far { selector: Held, base: Option<Held>, index: Option<Held>, offset: i64 },
 }
 
 pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mut Pool) -> Result<Selected, Unselected> {
@@ -243,7 +249,7 @@ pub fn selected(module: &Module, name: &str, contracts: Contracts<'_>, pool: &mu
         pool,
     };
     let body = selector.body(name, &convention)?;
-    Ok(Selected { body, convention, calls: selector.calls, far: selector.far })
+    Ok(Selected { body, convention, calls: selector.calls, far: selector.far, depth: selector.depth })
 }
 
 struct Selector<'m, 'c, 'p> {
@@ -314,7 +320,7 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     self.depth += size + size % 2;
-                    self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame(-self.depth));
+                    self.pointers.insert(function.instruction(inst).result.expect("an address"), Pointer::Frame { disp: -self.depth, index: None });
                 }
             }
         }
@@ -349,11 +355,11 @@ impl Selector<'_, '_, '_> {
             let ty = function.value(parameter).ty;
             if self.is_float(ty) {
                 let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
-                self.float_loaded(held, "fld", Pointer::Frame(disp), size, false, block_at[&entry], &mut prologue);
+                self.float_loaded(held, "fld", Pointer::Frame { disp, index: None }, size, false, block_at[&entry], &mut prologue);
                 continue;
             }
             if self.is_far(function.value(parameter).ty) {
-                let (offset, selector) = self.far_loaded(Pointer::Frame(disp), false, block_at[&entry], &mut prologue);
+                let (offset, selector) = self.far_loaded(Pointer::Frame { disp, index: None }, false, block_at[&entry], &mut prologue);
                 self.fars.insert(parameter, (Some(offset), selector));
                 continue;
             }
@@ -369,8 +375,27 @@ impl Selector<'_, '_, '_> {
             }
             self.phis_from(block)?;
         }
-        let mut blocks = Vec::new();
-        for &block in layout {
+        // Selected in reverse postorder, so every definition before its
+        // readers, as a folded address must be; laid out as the function is.
+        let mut order = Vec::new();
+        let (mut seen, mut stack) = (BTreeSet::new(), vec![(entry, 0)]);
+        seen.insert(entry);
+        while let Some((block, next)) = stack.pop() {
+            let successors = self.successors(block);
+            match successors.get(next) {
+                Some(&one) => {
+                    stack.push((block, next + 1));
+                    if seen.insert(one) {
+                        stack.push((one, 0));
+                    }
+                }
+                None => order.push(block),
+            }
+        }
+        order.reverse();
+        let mut made: IndexMap<BlockId, Vec<LirBlock>> = IndexMap::default();
+        for &block in &order {
+            let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
             for &inst in function.block(block).instructions() {
@@ -386,7 +411,7 @@ impl Selector<'_, '_, '_> {
                     insns.extend(self.pending.shift_remove(&block).unwrap_or_default());
                 }
                 if instruction.opcode == Opcode::Switch {
-                    self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), &mut blocks)?;
+                    self.switch(inst, &block_at, block_at[&block], std::mem::take(&mut insns), std::mem::take(&mut phis), blocks)?;
                     break;
                 }
                 self.instruction(inst, &block_at, &mut insns, convention)?;
@@ -402,7 +427,7 @@ impl Selector<'_, '_, '_> {
             }
             blocks.push(LirBlock { succ, phis, ..LirBlock::new(block_at[&block], insns) });
         }
-        let blocks = combined::combined(blocks);
+        let blocks = combined::combined(layout.iter().flat_map(|block| made.shift_remove(block).unwrap_or_default()).collect());
         let mut body = LirBody::new(name, block_at[&entry], blocks, IndexMap::default(), self.pins.clone());
         body.inputs = self.inputs.clone();
         body.ordered = true;
@@ -684,12 +709,15 @@ impl Selector<'_, '_, '_> {
     /// `held` made the address `pointer` names.
     fn address(&self, pointer: Pointer, held: Held) -> Semantics {
         match pointer {
-            Pointer::Frame(disp) => {
+            Pointer::Frame { index: Some(_), .. } | Pointer::Based { index: Some(_), .. } | Pointer::Far { index: Some(_), .. } => {
+                unreachable!("an indexed address is read only by accesses")
+            }
+            Pointer::Frame { disp, index: None } => {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
             }
             // A far pointer's offset.
-            Pointer::Based { base, offset } | Pointer::Far { base: Some(base), offset, .. } => {
+            Pointer::Based { base, offset, .. } | Pointer::Far { base: Some(base), offset, .. } => {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
@@ -714,13 +742,13 @@ impl Selector<'_, '_, '_> {
         }
         let ty = self.function.value(value).ty;
         if let Some(&(base, selector)) = self.fars.get(&value) {
-            return Ok(Pointer::Far { selector, base, offset: 0 });
+            return Ok(Pointer::Far { selector, base, index: None, offset: 0 });
         }
         if !matches!(self.types().get(ty), Type::Pointer(0)) {
             return refuse(format!("an access through a {}", self.types().display(ty)));
         }
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, offset: 0 })
+        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, offset: 0 })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -811,14 +839,36 @@ impl Selector<'_, '_, '_> {
         let address = instruction.result.expect("an address");
         let sum = sum.expect("a variable index");
         // A global's symbol is the displacement of the register holding the
-        // index: each access addresses [index+symbol].
+        // index, [index+symbol], and the address as a value their sum.
         if let Pointer::Global { space, index, offset: start, base: None } = pointer {
-            self.pointers.insert(address, Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) });
+            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) };
+            if self.only_addressed(address) {
+                self.pointers.insert(address, indexed);
+            } else {
+                let held = Held { value: self.value(address), width };
+                out.push(insn(at, self.address(indexed, held)));
+            }
             return Ok(());
         }
+        // An address only accesses read is their base plus the sum as an
+        // index, as the old route's addressforms folds `b + (c << k)` read
+        // only by cells: the add goes. Word addressing has no scale.
+        if self.only_addressed(address) {
+            let indexed = match pointer.moved(offset as i64) {
+                Pointer::Frame { disp, index: None } => Some(Pointer::Frame { disp, index: Some(sum) }),
+                Pointer::Based { base, index: None, offset } => Some(Pointer::Based { base, index: Some(sum), offset }),
+                Pointer::Far { selector, base: Some(base), index: None, offset } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), offset }),
+                Pointer::Far { selector, base: None, index: None, offset } => Some(Pointer::Far { selector, base: Some(sum), index: None, offset }),
+                _ => None,
+            };
+            if let Some(indexed) = indexed {
+                self.pointers.insert(address, indexed);
+                return Ok(());
+            }
+        }
         let start = match pointer {
-            Pointer::Based { base, offset: 0 } | Pointer::Far { base: Some(base), offset: 0, .. } if offset == 0 => Some(base),
-            Pointer::Far { base: None, offset: 0, .. } if offset == 0 => None,
+            Pointer::Based { base, index: None, offset: 0 } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
+            Pointer::Far { base: None, index: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
                 let start = Held { value: self.fresh(), width };
@@ -842,6 +892,23 @@ impl Selector<'_, '_, '_> {
         let start = start.expect("a near pointer's register");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
         Ok(())
+    }
+
+    /// Whether every reader of `value` takes it as the address of a load or
+    /// a store, directly or through a constant offset.
+    fn only_addressed(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let users = function.users(value);
+        !users.is_empty()
+            && users.iter().all(|one| match &function.instruction(one.user).opcode {
+                Opcode::Load { .. } => one.index == 0,
+                Opcode::Store { .. } => one.index == 1,
+                Opcode::GetElementPtr { source } => {
+                    let constant = self.layout.collect_offset(self.types(), *source, &self.indices(one.user)).1.is_empty();
+                    one.index == 0 && constant && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result))
+                }
+                _ => false,
+            })
     }
 
     /// `div` and `idiv` divide dx:ax, the high word made by `cwd` or zero,
@@ -880,13 +947,26 @@ impl Selector<'_, '_, '_> {
 
     fn memory(pointer: Pointer, width: u32) -> Mem {
         match pointer {
-            Pointer::Frame(disp) => frame(disp, width),
+            Pointer::Frame { disp, index: None } => frame(disp, width),
+            // As addressforms spells an indexed frame cell: BP and the index,
+            // the displacement a literal no relocation owns, through SS.
+            Pointer::Frame { disp, index: Some(index) } => Mem {
+                through: Register::BP,
+                disp_width: 2,
+                index: Some(index),
+                ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
+            },
             Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
-            Pointer::Based { base, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
-            Pointer::Far { selector, base, offset } => Mem {
+            Pointer::Based { base, index: None, offset } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
+            Pointer::Based { base, index: Some(index), offset } => {
+                Mem { base: Some(base), index: Some(index), offset, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset)), width) }
+            }
+            Pointer::Far { selector, base, index, offset } => Mem {
                 offset,
                 disp_width: 2,
                 base,
+                index,
                 selector: Some(selector),
                 ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, offset) }), width)
             },
@@ -929,7 +1009,7 @@ impl Selector<'_, '_, '_> {
             return Ok((halves[0], halves[1]));
         }
         match self.pointer(operand)? {
-            Pointer::Far { selector, base: Some(base), offset: 0 } => Ok((base, selector)),
+            Pointer::Far { selector, base: Some(base), index: None, offset: 0 } => Ok((base, selector)),
             pointer @ Pointer::Far { selector, .. } => {
                 let moved = self.fresh_held(2);
                 out.push(insn(at, self.address(pointer, moved)));
@@ -1493,7 +1573,7 @@ impl Selector<'_, '_, '_> {
         let (bulk, tail) = if length / 4 + (length % 4).count_ones() as i64 > MEMSET_STORES { (length / 4, length % 4) } else { (0, length) };
         if bulk > 0 {
             let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
-            let source = if matches!(pointer, Pointer::Frame(_)) { Register::SS } else { Register::DS };
+            let source = if matches!(pointer, Pointer::Frame { .. }) { Register::SS } else { Register::DS };
             let (stored, count, through) = (self.fresh_held(4), self.fresh_held(2), self.fresh_held(2));
             let (stepped, emptied) = (self.fresh_held(2), self.fresh_held(2));
             for what in [
@@ -1623,7 +1703,7 @@ impl Selector<'_, '_, '_> {
     /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
     fn temporary(&mut self, size: i64) -> Pointer {
         self.depth += size + size % 2;
-        Pointer::Frame(-self.depth)
+        Pointer::Frame { disp: -self.depth, index: None }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
@@ -1651,10 +1731,10 @@ impl Selector<'_, '_, '_> {
 impl Pointer {
     fn moved(self, by: i64) -> Pointer {
         match self {
-            Pointer::Frame(disp) => Pointer::Frame(disp + by),
-            Pointer::Based { base, offset } => Pointer::Based { base, offset: offset + by },
+            Pointer::Frame { disp, index } => Pointer::Frame { disp: disp + by, index },
+            Pointer::Based { base, index, offset } => Pointer::Based { base, index, offset: offset + by },
             Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
-            Pointer::Far { selector, base, offset } => Pointer::Far { selector, base, offset: offset + by },
+            Pointer::Far { selector, base, index, offset } => Pointer::Far { selector, base, index, offset: offset + by },
         }
     }
 }
