@@ -1234,7 +1234,7 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale)| self.widened(inst, index, pointer.moved(offset as i64), scale)) {
             self.pointers.insert(address, scaled);
             return Ok(());
         }
@@ -1400,6 +1400,25 @@ impl Selector<'_, '_, '_> {
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain([wide.value]));
         Some(scaled)
+    }
+
+    /// `index` times `scale` with the index's own multiply by a constant
+    /// taken into the scale, as LLVM's address matcher folds a `mul` or
+    /// `shl` into it; one that may wrap is left as it is.
+    fn unscaled(&self, index: Operand, scale: i64) -> (Operand, i64) {
+        let Operand::Value(value) = index else { return (index, scale) };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return (index, scale) };
+        let instruction = self.function.instruction(inst);
+        if !instruction.flags.contains(llrm_mir::opcode::Flags::NSW) {
+            return (index, scale);
+        }
+        let width = self.width(instruction.ty).unwrap_or(0);
+        let factor = match (&instruction.opcode, self.constant(instruction.operands[1], width)) {
+            (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => factor,
+            (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => 1 << count,
+            _ => return (index, scale),
+        };
+        (instruction.operands[0], scale * factor)
     }
 
     /// The pointer `operand` offsets by constants.

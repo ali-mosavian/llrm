@@ -2409,3 +2409,30 @@ define void @f(i16 %i) addrspace(1) {
     assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 2, "{got:?}");
     assert_eq!(got[call + 1], "mov word ptr es:[bx], 123", "{got:?}");
 }
+
+/// An index the MIR scales by its own `mul nsw` is matched as the scaled
+/// index it is, as LLVM's address matcher folds a multiply into the scale:
+/// lru's `bstamp[block]` shifted a copy of `block` by 2 into a 16-bit index.
+#[test]
+fn test_an_index_multiplied_in_the_mir_is_the_scaled_index() {
+    let text = "define void @f(ptr addrspace(1) %s, i16 %i) addrspace(1) {
+entry:
+  %b = load ptr addrspace(1), ptr addrspace(1) %s, !tbaa !1
+  %c = icmp slt i16 %i, 0
+  br i1 %c, label %no, label %ok
+ok:
+  %m = mul nsw i16 %i, 4
+  %e = getelementptr inbounds i8, ptr addrspace(1) %b, i16 %m
+  store i32 7, ptr addrspace(1) %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul")), "{got:?}");
+}
