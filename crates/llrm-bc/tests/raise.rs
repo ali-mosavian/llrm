@@ -22,9 +22,9 @@ fn cell(module: &mut Module, name: &str, bits: u32, value: i128) -> Operand {
 }
 
 /// Gives each runtime routine a body that returns nothing, and makes the
-/// end of the program a return. Each integer printed, `B$P?I2` or
-/// `B$P?I4` (a LONG pushed high word first), goes to the next word of
-/// `@printed`.
+/// end of the program a return. Each number printed, `B$P?I2`, or
+/// `B$P?I4` and `B$P?R4` (a LONG or a SINGLE's bits, pushed high word
+/// first), goes to the next word of `@printed`.
 fn stub_runtime(module: &mut Module) {
     let long = module.context.types.int(32);
     let row = module.context.types.intern(Type::Array { element: long, count: 64 });
@@ -47,7 +47,7 @@ fn stub_runtime(module: &mut Module) {
                 let word = b.parameter(0);
                 Some(b.cast(CastOp::SExt, word, long, ""))
             }
-            (true, "I4") => {
+            (true, "I4" | "R4") => {
                 let (high, low) = (b.parameter(0), b.parameter(1));
                 let high = b.cast(CastOp::ZExt, high, long, "");
                 let low = b.cast(CastOp::ZExt, low, long, "");
@@ -197,4 +197,68 @@ fn long_comparisons_order_their_operands() {
 #[test]
 fn long_divide_and_remainder_sum() {
     assert_eq!(printed("lngmix-q-o.obj", 1), vec![142_900]);
+}
+
+/// fpemu: the x87 stack as values, `B$FILD`, `B$FIST` and `B$FCMP`, from
+/// the BASIC source: q = 1073741831 \\ 1024, a = q, b = 1024, s = q, t = 4.
+#[test]
+fn fpemu_prints_its_float_results() {
+    let expected = vec![1_048_576, 1_049_600, 1_047_552, 7, 1_073_741_824, 1024, 5, 1024, 1_048_580, 4_194_304, 1_073_741_824, -1, 0];
+    for fixture in ["fpemu-p-g2.obj", "fpemu-p-g2-zd.obj", "fpemu-v-g2.obj", "fpemu-v-g3.obj"] {
+        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+    }
+}
+
+/// `B$FILD` reads AX and DX, not EAX's high word: read as both words, QB's
+/// fpemu refused main, "reads the high word of EAX after B$PEI4".
+#[test]
+fn a_call_reads_its_inputs_as_words() {
+    let expected = printed("fpemu-p-g2.obj", 13);
+    for fixture in ["fpemu-q-o.obj", "fpemu-q-noo.obj", "fpemu-q-o-zd.obj"] {
+        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+    }
+}
+
+/// fpdeep: `p(i) * p(i)` holds two values from one address, and `fdivp`
+/// writes st(1) before the pop renumbers it. p = 12, 28, 60; k = 4; d = 12.
+#[test]
+fn fpdeep_keeps_two_values_on_the_stack() {
+    let expected = vec![1, 144, 1, 6, 1, 512, 2, 784, 2, 14, 2, 768, 3, 3600, 3, 30, 3, 896, 144, 6];
+    for fixture in ["fpdeep-q-o.obj", "fpdeep-q-noo.obj"] {
+        assert_eq!(printed(fixture, expected.len()), expected, "{fixture}");
+    }
+}
+
+/// fpcse: ten times (2 + 4) * 8 + (2 + 4) / 8 is S = 487.5, a SINGLE
+/// printed by `B$PER4` as its bits.
+#[test]
+fn fpcse_prints_its_single_sum() {
+    for fixture in ["fpcse-q-o.obj", "fpcse-p-g2.obj", "fpcse-v-g3.obj"] {
+        assert_eq!(printed(fixture, 1), vec![i64::from(487.5f32.to_bits() as i32)], "{fixture}");
+    }
+}
+
+/// byref2's `Half!` and `Doubled#` store their answer through a hidden last
+/// argument and answer its address in AX: refused before as "a FUNCTION
+/// returning SINGLE". Half(4) = 2, Doubled(8) = 16.
+#[test]
+fn a_float_function_answers_through_its_hidden_argument() {
+    for (name, bits, n, expected) in [("HALF", 32, u64::from(4f32.to_bits()), u64::from(2f32.to_bits())), ("DOUBLED", 64, 8f64.to_bits(), 16f64.to_bits())] {
+        let mut module = raised("byref2-q-o.obj");
+        let n = cell(&mut module, "n", bits, i128::from(n));
+        let result = cell(&mut module, "result", bits, 0);
+        let (reference, ty) = function(&mut module, name);
+        let answer = probe(&mut module, bits, |b| {
+            let word = b.context.types.int(16);
+            let (n, at) = (b.cast(CastOp::PtrToInt, n, word, ""), b.cast(CastOp::PtrToInt, result, word, ""));
+            let answered = b.call_as(llrm_mir::opcode::BASIC, ty, Operand::Constant(reference), &[n, at], "").expect("an answer");
+            let ty = b.context.types.int(bits);
+            let stored = b.load(ty, result, false, "");
+            let same = b.icmp(llrm_mir::IntPredicate::Eq, answered, at, "");
+            let zero = b.int(bits, 0);
+            b.select(same, stored, zero, "")
+        });
+        let Val::Int { bits: got, .. } = answer else { panic!("{answer:?}") };
+        assert_eq!(got as u64, expected, "{name}");
+    }
 }

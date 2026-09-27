@@ -7,6 +7,7 @@
 //! and why.
 
 pub mod emit;
+pub mod floats;
 pub mod machine;
 pub mod objects;
 pub mod runtime;
@@ -107,6 +108,7 @@ pub fn raise_each(found: &found_module::Module) -> Result<Raised, Refusal> {
         let global = module.add_function(emit::MEMSET, ty, Linkage::External).map_err(module_refusal)?;
         intrinsics.insert(emit::MEMSET.to_owned(), (module.reference(global), ty));
     }
+    floats::declare(&facts, &mut module, &mut intrinsics).map_err(module_refusal)?;
     let mut procedures = BTreeMap::new();
     let mut functions = Vec::new();
     for (index, body) in facts.bodies.iter().enumerate() {

@@ -93,7 +93,7 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
         for node in body.nodes.values() {
             let Node::Call(call) = &**node else { continue };
             let name = call.name.as_str();
-            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() {
+            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) {
                 continue;
             }
             let Some(contract) = facts.contract(call.insn.at) else { continue };

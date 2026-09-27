@@ -31,7 +31,7 @@ use llrm_bcmachine::objectfile::module::{Addr, Space};
 use llrm_bcmachine::support::hash::IndexMap;
 use llrm_mir::build::Builder;
 use llrm_mir::{
-    BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, Flags, InstId, IntPredicate, Opcode, Operand, Position, Type, TypeId, ValueId,
+    BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, FloatKind, Flags, InstId, IntPredicate, Opcode, Operand, Position, Type, TypeId, ValueId,
 };
 
 use crate::machine::{Answer, BodyFacts, FRAME_ENTRY, FRAME_EXIT, Facts, Interface, TRACKED, never_returns, restore_pair, tracked};
@@ -67,6 +67,8 @@ pub enum Var {
     Reg(usize, Half),
     Es,
     Bit(Bit),
+    /// An x87 slot, counted from the bottom: st(i) is `St(depth - 1 - i)`.
+    St(u8),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -144,6 +146,7 @@ struct Layout {
 struct Entry {
     depth: i64,
     frame: Frame,
+    floats: u8,
 }
 
 /// A value nothing may observe: why observing it refuses the function.
@@ -161,6 +164,8 @@ pub struct Emitter<'b, 'm, 'u> {
     bits: HashMap<Bit, BitState>,
     depth: i64,
     frame: Frame,
+    /// Values on the x87 stack.
+    pub floats: u8,
     entries: HashMap<usize, Entry>,
     placeholders: Vec<(BlockId, Var, ValueId)>,
     ends: HashMap<BlockId, (HashMap<Var, Operand>, HashMap<Bit, BitState>)>,
@@ -207,6 +212,7 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts) -> Emit<()> {
         bits: HashMap::new(),
         depth: 0,
         frame: Frame::Before,
+        floats: 0,
         entries: HashMap::new(),
         placeholders: Vec::new(),
         ends: HashMap::new(),
@@ -233,7 +239,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.b.position(entry);
         self.ends.insert(entry, (self.current.clone(), self.bits.clone()));
         self.b.br(self.blocks[&seed]);
-        self.entries.insert(seed, Entry { depth: 0, frame: self.frame });
+        self.entries.insert(seed, Entry { depth: 0, frame: self.frame, floats: 0 });
         for block in self.order() {
             self.emit_block(block)?;
         }
@@ -337,6 +343,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             Var::Reg(..) => self.b.context.types.int(16),
             Var::Es => self.b.context.types.ptr(SEGMENT),
             Var::Bit(_) => self.b.context.types.int(1),
+            Var::St(_) => self.b.context.types.intern(Type::Float(FloatKind::Double)),
         }
     }
 
@@ -380,6 +387,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.bits.clear();
         self.depth = entry.depth;
         self.frame = entry.frame;
+        self.floats = entry.floats;
         let nodes: Vec<&Node> = self.body.nodes_of(block).map(|one| &**one).collect();
         let (last, rest) = match nodes.split_last() {
             Some((last, rest)) if is_transfer(last) => (Some(*last), rest),
@@ -429,9 +437,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// Records the state a successor starts in, which every edge into it must agree on.
     fn enter(&mut self, at: usize) -> Emit<BlockId> {
         let target = *self.blocks.get(&at).ok_or_else(|| format!("a jump out of the body, to {at:#06x}"))?;
-        let state = Entry { depth: self.depth, frame: self.frame };
+        let state = Entry { depth: self.depth, frame: self.frame, floats: self.floats };
         match self.entries.get(&at) {
-            Some(known) if *known != state => Err(format!("paths into {at:#06x} disagree on the stack or the frame")),
+            Some(known) if *known != state => Err(format!("paths into {at:#06x} disagree on the stack, the x87 stack or the frame")),
             _ => {
                 self.entries.insert(at, state);
                 Ok(target)
@@ -485,6 +493,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         }
         if self.depth != 0 {
             return Err("returns with bytes still pushed".to_owned());
+        }
+        if self.floats != 0 {
+            return Err("returns with values on the x87 stack".to_owned());
         }
         let Some(Ok(interface)) = &self.body.interface else { return Err("no interface".to_owned()) };
         let value = match &interface.answer {
@@ -631,7 +642,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         made
     }
 
-    fn note_pure(&mut self) {
+    pub fn note_pure(&mut self) {
         let last = *self.b.function.block(self.block).instructions().last().expect("just emitted");
         self.pure.push(last);
     }
@@ -950,6 +961,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         for (bit, _) in BITS {
             self.bits.insert(bit, BitState::Lazy(desc.clone()));
         }
+    }
+
+    /// Sets one flag to a computed value.
+    pub fn set_bit(&mut self, bit: Bit, value: Operand) {
+        self.bits.insert(bit, BitState::Value(value));
     }
 
     /// A flag's value here.
