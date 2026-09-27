@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use llrm_analysis::{cfg, occurrence};
 use llrm_graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
+use llrm_mir::context::Context;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
@@ -74,7 +75,7 @@ impl FunctionPass for Unswitch {
 /// `unit`'s function specialized and re-optimized, kept only when that
 /// removed a loop without growing the function or its price; whether it was.
 pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn FnMut(&mut Unit)) -> Result<bool, String> {
-    let Some(mut candidate) = specialized(unit.function)? else {
+    let Some(mut candidate) = specialized(unit.context, unit.function)? else {
         return Ok(false);
     };
     reoptimize(&mut Unit {
@@ -102,7 +103,7 @@ pub fn optimized(unit: &mut Unit, costs: &OperationCosts, reoptimize: &mut dyn F
 
 /// `function` with its first loop that has a pure invariant condition
 /// specialized into a copy for each way the condition goes, or `None`.
-pub fn specialized(function: &Function) -> Result<Option<Function>, String> {
+pub fn specialized(context: &mut Context, function: &Function) -> Result<Option<Function>, String> {
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let mut owners = BTreeMap::new();
@@ -140,7 +141,7 @@ pub fn specialized(function: &Function) -> Result<Option<Function>, String> {
                 continue;
             };
             _specialized(&closed, &mut copied, &loop_, entry, block.at, compare, &labels[0])?;
-            transform::_unreachable(&mut copied)?;
+            llrm_analysis::cfg::_unreachable(context, &mut copied);
             transform::_trivial_phis(&mut copied)?;
             return Ok(Some(copied));
         }

@@ -1,11 +1,8 @@
 //! Helpers adapted from llrm-core's `optimize/transform.rs`, each copied as
 //! a ported pass needs it; the pipeline itself is not ported yet.
-//!
-//! Every block ends in a terminator and a dead block leaves nothing behind:
-//! the old `_unreachable` kept a dead block's operations emptied for byte
-//! ownership, which the rich MIR does not have, so here the block goes.
+//! `_unreachable` is `llrm_analysis::cfg::_unreachable`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::Opcode;
@@ -34,40 +31,6 @@ pub fn _comparison(function: &Function, block: BlockId, branch: InstId) -> Optio
         .copied()
         .find(|&one| function.instruction(one).result == Some(condition))
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
-}
-
-/// Without the blocks the entry does not reach, nor phi inputs from them.
-pub fn _unreachable(function: &mut Function) -> Result<(), String> {
-    let entry = function.entry().expect("a defined function");
-    let (mut reached, mut pending) = (BTreeSet::new(), vec![entry]);
-    while let Some(at) = pending.pop() {
-        if reached.insert(at) {
-            pending.extend(function.successors(at));
-        }
-    }
-    let dead = function.layout().iter().copied().filter(|block| !reached.contains(block)).collect::<Vec<_>>();
-    if dead.is_empty() {
-        return Ok(());
-    }
-    for &block in &reached {
-        for phi in edges::phis(function, block) {
-            let incoming = arms(function, phi).into_iter().filter(|(_, source)| !dead.contains(source)).collect::<Vec<_>>();
-            if incoming.len() * 2 != function.instruction(phi).operands.len() {
-                function.set_operands(phi, from_arms(&incoming));
-            }
-        }
-    }
-    let instructions = dead.iter().flat_map(|&block| function.block(block).instructions().to_vec()).collect::<Vec<_>>();
-    for &inst in &instructions {
-        function.set_operands(inst, Vec::new());
-    }
-    for inst in instructions {
-        function.erase(inst)?;
-    }
-    for block in dead {
-        function.erase_block(block)?;
-    }
-    Ok(())
 }
 
 /// Resolve single-valued joins after an edge disappears: each phi keeps
@@ -103,7 +66,7 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
 mod tests {
     use crate::testing::{parsed, printed};
 
-    use super::{_trivial_phis, _unreachable};
+    use super::_trivial_phis;
 
     /// A dead arm and the block it came from go; the join it leaves with one
     /// value is that value.
@@ -125,9 +88,10 @@ b2:
 }
 ",
         );
-        let function = module.function_mut("f").unwrap().1;
-        _unreachable(function).unwrap();
-        _trivial_phis(function).unwrap();
+        let mut function = module.function_mut("f").unwrap().1.clone();
+        llrm_analysis::cfg::_unreachable(&mut module.context, &mut function);
+        _trivial_phis(&mut function).unwrap();
+        *module.function_mut("f").unwrap().1 = function;
         assert_eq!(
             printed(&module),
             "define i16 @f(i16 %x) {

@@ -50,7 +50,8 @@ fn loop_count(module: &mut Module) -> usize {
 /// `text`'s @f specialized, or `None`.
 fn specialize(text: &str) -> Option<Module> {
     let mut module = parsed(text);
-    let candidate = specialized(f(&mut module)).unwrap()?;
+    let function = f(&mut module).clone();
+    let candidate = specialized(&mut module.context, &function).unwrap()?;
     *f(&mut module) = candidate;
     Some(module)
 }
