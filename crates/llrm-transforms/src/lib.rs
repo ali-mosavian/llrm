@@ -18,6 +18,7 @@ pub mod lcssamerges;
 pub mod loadjoins;
 pub mod loopclone;
 pub mod loopsimplify;
+pub mod peel;
 pub mod profit;
 pub mod promote;
 #[cfg(test)]

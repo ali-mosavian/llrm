@@ -135,6 +135,11 @@ pub fn r#static(context: &Context, function: &Function, callees: &Callees, costs
     function.layout().iter().map(|&block| _block(context, function, callees, cfg::id(block), costs)).sum()
 }
 
+/// Whether the target prices every instruction here, which a copy's cost needs.
+pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
+    r#static(context, function, callees, costs).is_some()
+}
+
 /// Profile-free block frequencies, or `None` for conflicting proofs.
 pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let graph = cfg::graph(function);
