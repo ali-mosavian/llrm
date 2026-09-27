@@ -70,10 +70,11 @@ fn class(function: &Function, context: &Context, spaces: &[u32], hary: Option<Op
                         // The one B$HARY answers, of the descriptor in BX.
                         (Opcode::ExtractValue(indices), answer) if indices == [1] => {
                             let (Opcode::Call(_), arguments) = made(function, context, answer[0])? else { return None };
-                            if arguments.last() != hary.as_ref() {
+                            let [.., descriptor, callee] = arguments[..] else { return None };
+                            if Some(callee) != hary {
                                 return None;
                             }
-                            (offset_parts(function, context, arguments[0], 0)?, 0)
+                            (offset_parts(function, context, descriptor, 0)?, 0)
                         }
                         _ => return None,
                     };

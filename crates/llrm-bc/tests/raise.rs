@@ -414,3 +414,23 @@ fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
     let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
 }
+
+/// `B$HARY`'s words as HIR's emitter passes them: the pushed ones in push
+/// order, their count last of those, then the descriptor in BX.
+#[test]
+fn an_element_address_passes_the_descriptor_last() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/regressions/ndarr-q-o.obj");
+    let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
+    let module = llrm_bc::raise(&found, &llrm_bcmachine::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let text = llrm_mir::print::module(&module);
+    let calls: Vec<Vec<&str>> = text
+        .lines()
+        .filter_map(|line| line.split_once(" @llrm.qb.B$HARY(").filter(|_| line.contains(" = call "))?.1.strip_suffix(')'))
+        .map(|arguments| arguments.split(", ").collect())
+        .collect();
+    assert!(!calls.is_empty());
+    for words in calls {
+        let count = words.len() - 2;
+        assert_eq!(words[count], format!("i16 {count}"), "{words:?}");
+    }
+}
