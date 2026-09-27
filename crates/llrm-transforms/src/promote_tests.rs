@@ -248,12 +248,13 @@ b0:
     }
 }
 
-/// A later call cannot invalidate an earlier read; an intervening call or
-/// barrier must.
+/// A later call cannot invalidate an earlier read; an intervening call
+/// must. A volatile store elsewhere writes only its own bytes.
 #[test]
 fn test_only_an_intervening_call_invalidates_a_stored_value() {
-    for effect in ["call void @h()", "store volatile i16 1, ptr @y"] {
-        for (position, reused) in [(0, true), (1, false), (2, true)] {
+    for (effect, clobbers) in [("call void @h()", true), ("store volatile i16 1, ptr @y", false)] {
+        for (position, between) in [(0, false), (1, true), (2, false)] {
+            let reused = !(clobbers && between);
             let mut sequence = vec!["store i16 %c, ptr @x", "%v = load i16, ptr @x"];
             sequence.insert(position, effect);
             let text = format!(

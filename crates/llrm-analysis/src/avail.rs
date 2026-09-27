@@ -262,12 +262,11 @@ impl Solve<'_, '_> {
         let mut overwritten = overwritten.clone();
         for &inst in unit.function.block(cfg::block(block)).instructions().iter().rev() {
             let opcode = &unit.function.instruction(inst).opcode;
-            let volatile = matches!(opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. });
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
             // and not an address this cannot resolve.
-            let shielded = self.private.is_some() && !volatile;
-            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.writes(inst)) else {
+            let shielded = self.private.is_some();
+            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.stored(unit.function, inst)) else {
                 if shielded && call {
                     overwritten.intersect_with(&stored.private);
                 } else {

@@ -121,7 +121,9 @@ impl Accesses {
             let found = match &function.instruction(inst).opcode {
                 Opcode::Load { volatile: false, .. } => (Some(reference()), Some(Vec::new())),
                 Opcode::Store { volatile: false, .. } => (Some(Vec::new()), Some(reference())),
-                Opcode::Load { .. } | Opcode::Store { .. } => (None, None),
+                // A volatile access reads only its own bytes, and orders every write.
+                Opcode::Load { .. } => (Some(reference()), None),
+                Opcode::Store { .. } => (Some(Vec::new()), None),
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);

@@ -3,9 +3,9 @@
 //! stays. `Sroa` does it for aggregates' leaves alone.
 //! LLVM's counterpart: LICM's scalar promotion, function-wide; `Sroa`'s, SROA.
 //!
-//! Adapted from llrm-core's `optimize/promote.rs`. What an access names is
-//! `alias::annotated`'s answer, what a call writes `manager::call_effects`',
-//! and whether a write reaches a cell
+//! Adapted from llrm-core's `optimize/promote.rs`. What an instruction
+//! names and writes is `memoryssa::Accesses`' answer, and whether a write
+//! reaches a cell
 //! `regions::overlapping`'s. Globals and callees' attributes come through
 //! the outer proxy.
 //!
@@ -38,8 +38,9 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::manager::{self, Held};
-use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit, unmodeled_write};
+use llrm_analysis::manager::Held;
+use llrm_analysis::memory::{Identity, MemRef, MemoryObject, Provenance, Slice, Unit};
+use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
 use llrm_mir::datalayout::DataLayout;
@@ -235,8 +236,9 @@ pub fn promoted(context: &mut Context, layout: &DataLayout, function: &mut Funct
 /// `promoted`, `analyses` holding what is known of `function`.
 fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, aggregate_only: bool) -> Result<bool, String> {
     let plan = {
+        let accesses = Accesses::managed(context, layout, function, analyses)?;
         let held = Held::of(context, layout, function, analyses, true);
-        plan(&held.unit(context, layout, function, analyses.outer()), analyses.outer(), aggregate_only)?
+        plan(&held.unit(context, layout, function, analyses.outer()), &accesses, aggregate_only)?
     };
     if plan.loads.is_empty() {
         return Ok(false);
@@ -252,14 +254,6 @@ struct Plan {
     types: Vec<TypeId>,
     stores: HashMap<InstId, usize>,
     loads: HashMap<InstId, usize>,
-}
-
-/// What the analyses say about one function's memory.
-struct Facts {
-    /// Each load's and store's access.
-    refs: IndexMap<InstId, MemRef>,
-    /// What each call writes.
-    calls: IndexMap<InstId, Vec<MemRef>>,
 }
 
 /// The type `inst` loads or stores.
@@ -278,8 +272,8 @@ fn is_load(unit: &Unit, inst: InstId) -> bool {
 
 /// Cells whose reads can use a known stored value: touched more than once,
 /// loaded as one type, and available along every path to some load.
-fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String> {
-    let refs = unit.annotated()?.into_owned();
+fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, String> {
+    let refs = &accesses.references;
     if !refs.keys().any(|&inst| is_load(unit, inst)) {
         return Ok(Plan::default());
     }
@@ -325,8 +319,7 @@ fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String
         }
     }
     let typed = candidates.keys().map(|key| typed.get(key).cloned().flatten().flatten()).collect::<Vec<_>>();
-    let calls = manager::call_effects(unit, outer)?.into_iter().map(|(at, effect)| (at, effect.stores)).collect();
-    let usable = _available(unit, &Facts { refs, calls }, &candidates, &typed, &slots);
+    let usable = _available(unit, accesses, &candidates, &typed, &slots);
 
     let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();
     let renumbered = used.iter().enumerate().map(|(new, &old)| (old, new)).collect::<HashMap<_, _>>();
@@ -338,7 +331,7 @@ fn plan(unit: &Unit, outer: &Outer, aggregate_only: bool) -> Result<Plan, String
 
 /// Loads a stored value reaches on every path, with no write between that
 /// may reach its cell.
-fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, typed: &[Option<String>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<String>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
@@ -377,18 +370,10 @@ fn _available(unit: &Unit, facts: &Facts, cells: &IndexMap<Key, TypeId>, typed: 
         for &inst in function.block(cfg::block(at)).instructions() {
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
-            let writes = if unmodeled_write(unit, inst) {
-                match facts.calls.get(&inst) {
-                    Some(stores) => stores.iter().collect(),
-                    None => {
-                        available = Bits::new(cells.len());
-                        continue;
-                    }
-                }
-            } else if store {
-                facts.refs.get(&inst).into_iter().collect()
-            } else {
-                Vec::new()
+            // A volatile access writes its own bytes: it orders, it does not clobber.
+            let Some(writes) = accesses.stored(function, inst) else {
+                available = Bits::new(cells.len());
+                continue;
             };
             let slot = slots.get(&inst).copied();
             if let (Some(reads), Some(slot)) = (reads.as_deref_mut(), slot)

@@ -51,6 +51,44 @@ b2:
     assert!(!after.contains("store"), "{after}");
 }
 
+/// c/floats: a volatile access touches only its own bytes, so the loop
+/// counter beside a volatile cell is promoted and its stores go. It was a
+/// barrier: the counter was stored and reloaded every trip.
+#[test]
+fn a_volatile_access_leaves_another_cell_promoted() {
+    let after = promoted(
+        "define i16 @f(i16 %n) {
+b0:
+  %v = alloca i16
+  %i = alloca i16
+  store volatile i16 1, ptr %v
+  store i16 0, ptr %i
+  %m = and i16 %n, 15
+  br label %b1
+
+b1:
+  %k = load i16, ptr %i
+  %c = icmp slt i16 %k, %m
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load volatile i16, ptr %v
+  %y = add i16 %x, %k
+  store volatile i16 %y, ptr %v
+  %j = load i16, ptr %i
+  %z = add i16 %j, 1
+  store i16 %z, ptr %i
+  br label %b1
+
+b3:
+  %r = load volatile i16, ptr %v
+  ret i16 %r
+}
+",
+    );
+    assert!(!after.contains("load i16") && !after.contains("store i16") && after.matches("volatile").count() == 4, "{after}");
+}
+
 /// A store to a cell a callee reads, or that outlives the function, stays;
 /// one overwritten before anything reads it goes.
 #[test]

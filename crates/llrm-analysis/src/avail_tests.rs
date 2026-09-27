@@ -379,7 +379,8 @@ fn test_a_store_is_dead_only_when_overwritten_before_any_read() {
         ("", "store i32 2, ptr CELL", true),
         ("", "store i8 2, ptr CELL", false),
         ("", "store i16 2, ptr getelementptr (i8, ptr @g, i16 33)", false),
-        ("store volatile i16 3, ptr OTHER", "store i16 2, ptr CELL", false),
+        // A volatile store writes only its own bytes.
+        ("store volatile i16 3, ptr OTHER", "store i16 2, ptr CELL", true),
     ] {
         let parsed = Parsed::new(&format!(
             "define void @f(ptr %p) {{
