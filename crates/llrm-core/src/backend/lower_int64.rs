@@ -32,7 +32,7 @@ pub struct Legalized {
     pub inline: IndexMap<i64, Vec<Vec<u8>>>,
 }
 
-fn _helper(name: &str, inputs: BTreeSet<Reg>, clobbers: BTreeSet<Reg>) -> runtime::Contract {
+pub(crate) fn _helper(name: &str, inputs: BTreeSet<Reg>, clobbers: BTreeSet<Reg>) -> runtime::Contract {
     runtime::Contract {
         name: name.to_owned(),
         cleanup: Some(0),
@@ -87,7 +87,7 @@ static _MUL32: LazyLock<Vec<u8>> = LazyLock::new(|| {
 });
 
 /// EDX:EAX / ECX:EBX, using the Open Watcom runtime's leading-bit division.
-static _UDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
+pub(crate) static _UDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
     fromhex(concat!(
         "66 09 c9 75 2a 66 4b 0f 84 c2 00 66 43 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 ",
         "66 f7 f3 66 91 66 f7 f3 66 89 d3 66 89 ca 66 31 c9 e9 9e 00 66 39 d1 72 28 75 19 ",
@@ -100,7 +100,7 @@ static _UDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
     ))
 });
 
-static _SDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
+pub(crate) static _SDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
     fromhex(concat!(
         "66 09 d2 78 25 66 09 c9 78 06 e8 60 00 e9 27 01 66 f7 d9 66 f7 db 66 83 d9 00 e8 ",
         "50 00 66 f7 da 66 f7 d8 66 83 da 00 e9 0d 01 66 f7 da 66 f7 d8 66 83 da 00 66 09 c9 ",
@@ -118,11 +118,11 @@ static _SDIV: LazyLock<Vec<u8>> = LazyLock::new(|| {
 });
 
 /// A compile-time dword divisor: at most two hardware divisions.
-static _UDIV_CONST32: LazyLock<Vec<u8>> = LazyLock::new(|| {
+pub(crate) static _UDIV_CONST32: LazyLock<Vec<u8>> = LazyLock::new(|| {
     fromhex("66 31 c9 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 66 f7 f3 66 91 66 f7 f3 66 89 d3 66 89 ca 66 31 c9")
 });
 
-static _SDIV_CONST32: LazyLock<Vec<u8>> = LazyLock::new(|| {
+pub(crate) static _SDIV_CONST32: LazyLock<Vec<u8>> = LazyLock::new(|| {
     fromhex(concat!(
         "66 09 d2 78 24 66 31 c9 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 66 f7 f3 66 91 ",
         "66 f7 f3 66 89 d3 66 89 ca 66 31 c9 eb 40 66 f7 da 66 f7 d8 66 83 da 00 66 31 c9 ",
@@ -131,11 +131,11 @@ static _SDIV_CONST32: LazyLock<Vec<u8>> = LazyLock::new(|| {
     ))
 });
 
-fn _four_inputs() -> BTreeSet<Reg> {
+pub(crate) fn _four_inputs() -> BTreeSet<Reg> {
     BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx])
 }
 
-fn _four_clobbers() -> BTreeSet<Reg> {
+pub(crate) fn _four_clobbers() -> BTreeSet<Reg> {
     let mut out = _four_inputs();
     out.insert(Reg::Flags);
     out

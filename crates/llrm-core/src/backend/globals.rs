@@ -22,6 +22,14 @@ pub fn space(module: &Module, global: GlobalId) -> Space {
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
 /// is free, so one no assembler takes becomes `G$n`; an external one must
 /// be a symbol once mangled. An intrinsic has none.
+/// The group index naming a far variable's segment, `seg name`.
+pub fn segment_of(global: GlobalId) -> i64 {
+    SEGMENTS + i64::from(global.0)
+}
+
+/// Where `segment_of` numbers start: above DGROUP's.
+const SEGMENTS: i64 = 1 << 22;
+
 pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
     for (at, global) in module.globals.iter().enumerate() {
@@ -38,6 +46,9 @@ pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMa
         } else {
             format!("G${at}")
         };
+        if global.address_space != 0 && matches!(global.kind, GlobalKind::Variable(_)) {
+            out.insert((Space::Group, segment_of(id)), format!("seg {symbol}"));
+        }
         out.insert((space(module, id), i64::from(id.0)), symbol);
     }
     Ok(out)
