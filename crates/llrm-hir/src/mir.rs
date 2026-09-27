@@ -17,7 +17,7 @@ use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKi
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
 /// indexing by 16 bits, 16-bit segments, and 16-bit alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16";
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;

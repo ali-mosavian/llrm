@@ -480,7 +480,8 @@ fn _shared_shifts(context: &mut Context, function: &mut Function) -> bool {
 }
 
 /// Divide by a positive power of two, biasing a negative dividend to
-/// truncate toward zero: `sdiv` and `srem` by a divisor consts proves.
+/// truncate toward zero: `sdiv` and `srem` by a divisor consts proves, at
+/// a legal integer width, where the shifts cost less than the division.
 fn _divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
     let unit = Unit::within(context, layout, function, outer);
     let divisors: Vec<(InstId, u32)> = function
@@ -488,7 +489,7 @@ fn _divisions(context: &mut Context, layout: &DataLayout, function: &mut Functio
         .map(|(_, inst)| inst)
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
         .filter_map(|inst| {
-            let width = _width(context, function, inst)?;
+            let width = _width(context, function, inst).filter(|&width| layout.legal_integer(width))?;
             let fact = consts::_operand(&unit, function.instruction(inst).operands[1], facts, None)?;
             let divisor = u128::try_from(consts::masked(&fact.n, width)).ok().filter(|_| fact.width >= width)?;
             (divisor.is_power_of_two() && divisor > 1 && divisor < 1 << (width - 1)).then(|| (inst, divisor.trailing_zeros()))
