@@ -36,6 +36,7 @@ use std::sync::LazyLock;
 
 use llrm_graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::memory::Effects;
 use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
@@ -321,14 +322,78 @@ fn _tracked(unit: &Unit) -> BTreeSet<Slice> {
     _globals(unit, unit.globals_aa.into_iter().flat_map(|aa| aa.tracked_globals().iter().copied()))
 }
 
-/// What a callee nobody summarized may read and write at `at`: what a
-/// nonlocal reaches, what escaped before the call, its actuals' objects,
-/// and of the tracked globals what GlobalsAA says it names and what
+/// What the call `at` may do, as it and its callee state it: to the
+/// memory its pointer arguments point to, to any other, and through each
+/// argument. LLVM's `getMemoryEffects` of a `CallBase`.
+struct Allowed {
+    arguments: Effects,
+    other: Effects,
+    through: Vec<Effects>,
+}
+
+fn _allowed(unit: &Unit, at: InstId) -> Allowed {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else {
+        return Allowed { arguments: Effects::ANY, other: Effects::ANY, through: Vec::new() };
+    };
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+    let both = |one: Effects, other: Effects| Effects { reads: one.reads && other.reads, writes: one.writes && other.writes };
+    let (mut arguments, mut other) = llrm_mir::memory::located(&info.attrs);
+    if let Some(declared) = declared {
+        let (on_arguments, on_other) = llrm_mir::memory::located(&declared.attrs);
+        (arguments, other) = (both(arguments, on_arguments), both(other, on_other));
+    }
+    let through = (0..info.argument_attrs.len())
+        .map(|index| {
+            let parameter = declared.and_then(|one| one.parameter_attrs.get(index)).map_or(Effects::ANY, |attrs| llrm_mir::memory::through(attrs));
+            both(both(arguments, llrm_mir::memory::through(&info.argument_attrs[index])), parameter)
+        })
+        .collect();
+    Allowed { arguments, other, through }
+}
+
+/// Whether the call `at` keeps no copy of its argument `index`: `nocapture`
+/// at the site or on the callee's parameter.
+fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    let nocapture = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nocapture"));
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+    info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
+}
+
+/// What a callee nobody summarized may read and write at `at`, as far as
+/// its attributes allow: through each actual, the objects it points to;
+/// elsewhere, what a nonlocal reaches, what escaped before the call, and
+/// of the tracked globals what GlobalsAA says it names and what
 /// `callbacks` into the module do, all of them where that is unknown.
 fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance], callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let unit = &procedure.unit;
+    let allowed = _allowed(unit, at);
+    let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+    for (index, one) in actual.iter().enumerate() {
+        let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
+        let objects = _whole([one], &BTreeSet::new())?;
+        if through.reads {
+            reads.extend(objects.iter().cloned());
+        }
+        if through.writes {
+            writes.extend(objects);
+        }
+    }
+    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
+    if allowed.other.reads {
+        reads.extend(other_reads);
+    }
+    if allowed.other.writes {
+        writes.extend(other_writes);
+    }
+    Ok((reads, writes))
+}
+
+/// What an unsummarized callee may read and write at `at` other than
+/// through its arguments.
+fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let mut reads = NONLOCAL.slices.clone();
-    reads.extend(_whole(actual, &facts.escaped_before.get(&at).unwrap_or_default())?);
+    reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default())?);
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
@@ -488,7 +553,13 @@ fn _summary<'s>(unit: &Unit, known: &'s IndexMap<String, Summary>, name: &str) -
 /// functions. A body in this compilation unit always takes precedence; one
 /// that may be replaced describes no call.
 pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>) -> Result<IndexMap<String, Summary>, String> {
-    let direct = procedures.iter().map(|(name, one)| Ok((name.clone(), _direct_summary(&one.unit)?))).collect::<Result<Vec<_>, String>>()?;
+    // What a body captures grows from nothing: a call captures what its
+    // callee's summary says, so a least fixed point, as a recursive one
+    // that captures nothing proves.
+    let direct = procedures
+        .iter()
+        .map(|(name, one)| Ok((name.clone(), Summary { captures: BTreeSet::new(), .._direct_summary(&one.unit)? })))
+        .collect::<Result<Vec<_>, String>>()?;
     let mut result = known.cloned().unwrap_or_default();
     result.extend(direct);
     let recursive = _recursive_edges(procedures);
@@ -499,7 +570,8 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
             let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, &result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
             let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))?;
             let direct = _direct_summary(&procedure.unit)?;
-            let (mut reads, mut writes, mut captures) = (direct.reads, direct.writes, direct.captures);
+            let (mut reads, mut writes) = (direct.reads, direct.writes);
+            let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
             let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
             for at in call_sites(&procedure.unit) {
                 let target = procedure.calls.get(&at);
@@ -509,9 +581,6 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                     let (read, written) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
                     reads.extend(read);
                     writes.extend(written);
-                    captures.extend(
-                        actual.iter().flat_map(|provenance| provenance.slices.iter()).filter(|slice| slice.object.kind == MemoryKind::Parameter).map(|slice| slice.object.identity.clone()),
-                    );
                     continue;
                 };
                 let mut effect = callee.instantiated(&actual);
@@ -523,12 +592,6 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 writes.extend(effect.writes);
                 unknown_read |= effect.unknown_read;
                 unknown_write |= effect.unknown_write;
-                for index in &effect.captures {
-                    let index = _index(index)?;
-                    if 0 <= index && index < actual.len() as i64 {
-                        captures.extend(actual[index as usize].slices.iter().filter(|one| one.object.kind == MemoryKind::Parameter).map(|one| one.object.identity.clone()));
-                    }
-                }
             }
             let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write };
             if made != result[name] {
@@ -587,6 +650,170 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
         out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect() });
     }
     Ok(out)
+}
+
+/// Byte ranges, sorted, apart and not touching.
+type Ranges = Vec<(i64, i64)>;
+
+fn _with(ranges: &Ranges, low: i64, high: i64) -> Ranges {
+    let (mut low, mut high, mut out) = (low, high, Vec::new());
+    for &(one, other) in ranges {
+        if other < low || high < one {
+            out.push((one, other));
+        } else {
+            (low, high) = (low.min(one), high.max(other));
+        }
+    }
+    out.push((low, high));
+    out.sort_unstable();
+    out
+}
+
+fn _without(ranges: &Ranges, low: i64, high: i64) -> Ranges {
+    let mut out = Vec::new();
+    for &(one, other) in ranges {
+        if one < low.min(other) {
+            out.push((one, low.min(other)));
+        }
+        if high.max(one) < other {
+            out.push((high.max(one), other));
+        }
+    }
+    out
+}
+
+fn _common(one: &Ranges, other: &Ranges) -> Ranges {
+    let mut out = Vec::new();
+    for &(low, high) in one {
+        for &(from, to) in other {
+            if low.max(from) < high.min(to) {
+                out.push((low.max(from), high.min(to)));
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// The parameter a slice lies in.
+fn _parameter(one: &Slice) -> Option<usize> {
+    match (&one.object.kind, &one.object.identity) {
+        (MemoryKind::Parameter, Some(Identity::Int(index))) => usize::try_from(*index).ok(),
+        _ => None,
+    }
+}
+
+/// The bytes `slice` may cover, or `None` for all of them.
+fn _bytes(one: &Slice) -> Option<(i64, i64)> {
+    (one.low != memory::WHOLE_LOW && one.high != memory::WHOLE_HIGH).then(|| (one.low, one.high - 1 + one.width))
+}
+
+/// Each pointer parameter's bytes the body writes before anything reads
+/// them, on every path that returns: LLVM's `initializes`, as its
+/// FunctionAttrs infers it, backwards from each `ret`. A path that
+/// unwinds or cannot go on asks nothing; a call reads what its effect
+/// loads and writes what its `initializes` names.
+pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> Result<Vec<Ranges>, String> {
+    let unit = &procedure.unit;
+    let function = unit.function;
+    let count = function.parameters().len();
+    let facts = points_to(unit, None, None)?;
+    let effects = calls_annotated(procedure, known)?;
+    let actuals = points_to(unit, Some(&procedure.arguments), None)?;
+    // `None` is every byte: nothing asked yet.
+    type State = Vec<Option<Ranges>>;
+    let meet = |one: &State, other: &State| -> State {
+        one.iter()
+            .zip(other)
+            .map(|(one, other)| match (one, other) {
+                (None, any) | (any, None) => any.clone(),
+                (Some(one), Some(other)) => Some(_common(one, other)),
+            })
+            .collect()
+    };
+    // A read of another object that may be the parameter's reads all of it.
+    let read = |state: &mut State, one: &Slice| {
+        for (index, ranges) in state.iter_mut().enumerate() {
+            let parameter = MemoryObject { identity: Some(Identity::Int(index as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
+            let bytes = if one.object == parameter {
+                _bytes(one)
+            } else if memory::objects_may_alias(&one.object, &parameter) {
+                None
+            } else {
+                continue;
+            };
+            let held = ranges.clone().unwrap_or_else(|| vec![(i64::MIN, i64::MAX)]);
+            *ranges = Some(bytes.map_or_else(Vec::new, |(low, high)| _without(&held, low, high)));
+        }
+    };
+    let written = |state: &mut State, index: usize, low: i64, high: i64| {
+        if let Some(Some(held)) = state.get(index) {
+            state[index] = Some(_with(held, low, high));
+        }
+    };
+    let transfer = |at: i64, mut state: State| -> State {
+        for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
+            let op = function.instruction(inst);
+            if let Some(effect) = effects.get(&inst) {
+                for one in effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter()) {
+                    read(&mut state, one);
+                }
+                let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
+                let declared = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+                for (argument, operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+                    let mut ranges = llrm_mir::memory::initializes(&info.argument_attrs[argument]).to_vec();
+                    ranges.extend(declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)));
+                    let Some(pointer) = _operand(unit, *operand, &actuals.values) else { continue };
+                    let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
+                    let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
+                    for (low, high) in ranges {
+                        written(&mut state, index, one.low + low, one.low + high);
+                    }
+                }
+                continue;
+            }
+            let Some(reference) = MemRef::of(unit, inst) else { continue };
+            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices);
+            match op.opcode {
+                Opcode::Store { volatile: false, .. } => {
+                    if let [one] = slices.iter().collect::<Vec<_>>()[..]
+                        && let (Some(index), true) = (_parameter(one), one.high == one.low + 1)
+                    {
+                        written(&mut state, index, one.low, one.low + one.width);
+                    }
+                }
+                Opcode::Store { .. } => {}
+                _ => slices.iter().for_each(|one| read(&mut state, one)),
+            }
+        }
+        state
+    };
+    let graph = cfg::graph(function);
+    let exit = |at: i64| -> State {
+        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode {
+            Opcode::Ret => vec![Some(Vec::new()); count],
+            _ => vec![None; count],
+        }
+    };
+    let mut entry = graph.iter().map(|block| (block.at, vec![None; count])).collect::<IndexMap<i64, State>>();
+    loop {
+        let mut changed = false;
+        for block in graph.iter().rev() {
+            let out = block.succ.iter().fold(exit(block.at), |state, successor| meet(&state, &entry[successor]));
+            let made = transfer(block.at, out);
+            if made != entry[&block.at] {
+                entry.insert(block.at, made);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let first = graph.first().map_or_else(|| vec![None; count], |block| entry[&block.at].clone());
+    // A range reaching the sentinels was found only on paths that never return.
+    let bounded = |(low, high): &(i64, i64)| i64::MIN < *low && *high < i64::MAX && low < high;
+    Ok(first.into_iter().map(|one| one.unwrap_or_default().into_iter().filter(bounded).collect()).collect())
 }
 
 fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option<Provenance> {
@@ -939,7 +1166,7 @@ pub fn points_to(
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
                         None => {
-                            for one in &actual {
+                            for (_, one) in actual.iter().enumerate().filter(|(index, _)| !_borrowed(unit, inst, *index)) {
                                 newly.extend(one.slices.iter().map(|one| one.object.clone()));
                             }
                         }
@@ -953,7 +1180,10 @@ pub fn points_to(
                         }
                     }
                 } else {
-                    newly.extend(provenances(&op.operands, &values));
+                    // The callee's own address is no argument.
+                    let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+                    let kept = (0..count).filter(|&index| !_borrowed(unit, inst, index)).map(|index| op.operands[index]).collect::<Vec<_>>();
+                    newly.extend(provenances(&kept, &values));
                 }
             }
             newly.extend(_lost(unit, inst, &values));
@@ -1267,3 +1497,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
 #[cfg(test)]
 #[path = "alias_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "callmemory_tests.rs"]
+mod callmemory_tests;

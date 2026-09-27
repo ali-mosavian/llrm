@@ -140,6 +140,53 @@ pub fn stated(attrs: &[Attribute]) -> Effects {
     effects
 }
 
+/// What `attrs` allow on the memory a call's pointer arguments point to,
+/// and on every other location the module sees, as LLVM's `MemoryEffects`
+/// keeps them per location. `inaccessiblemem` is neither.
+pub fn located(attrs: &[Attribute]) -> (Effects, Effects) {
+    let access = |one: &str| Effects { reads: one == "read" || one == "readwrite", writes: one == "write" || one == "readwrite" };
+    let both = |one: Effects, other: Effects| Effects { reads: one.reads && other.reads, writes: one.writes && other.writes };
+    let (mut arguments, mut other) = (Effects::ANY, Effects::ANY);
+    for attr in attrs {
+        let (on_arguments, on_other) = match attr {
+            Attribute::Memory(locations) => {
+                let default = locations.iter().find(|(location, _)| location.is_none()).map_or(Effects::NONE, |(_, one)| access(one));
+                let argmem = locations.iter().find(|(location, _)| location.as_deref() == Some("argmem")).map_or(default, |(_, one)| access(one));
+                (argmem, default)
+            }
+            Attribute::Flag(_) => {
+                let one = through(std::slice::from_ref(attr));
+                (one, one)
+            }
+            _ => continue,
+        };
+        arguments = both(arguments, on_arguments);
+        other = both(other, on_other);
+    }
+    (arguments, other)
+}
+
+/// What `readnone`, `readonly` or `writeonly` among `attrs` allow, on a
+/// function or on one pointer parameter.
+pub fn through(attrs: &[Attribute]) -> Effects {
+    let mut effects = Effects::ANY;
+    for attr in attrs {
+        match attr {
+            Attribute::Flag(flag) if flag == "readnone" => effects = Effects::NONE,
+            Attribute::Flag(flag) if flag == "readonly" => effects.writes = false,
+            Attribute::Flag(flag) if flag == "writeonly" => effects.reads = false,
+            _ => {}
+        }
+    }
+    effects
+}
+
+/// The byte ranges `initializes` among `attrs` says are written before
+/// anything reads them.
+pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
+    attrs.iter().find_map(|attr| if let Attribute::Initializes(ranges) = attr { Some(ranges.as_slice()) } else { None }).unwrap_or_default()
+}
+
 /// What `inst` may do to memory.
 pub fn of(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Effects {
     let instruction = function.instruction(inst);

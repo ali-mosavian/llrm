@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use llrm_mir::passes::PassManager;
 
 use super::*;
-use crate::testing::{parsed, printed, results};
+use crate::promote::Promote;
+use crate::testing::{managed, parsed, printed, results};
 
 fn ids(module: &Module, names: &[&str]) -> BTreeSet<GlobalId> {
     names.iter().map(|name| module.named(name).unwrap_or_else(|| panic!("no @{name}"))).collect()
@@ -176,4 +177,126 @@ fn test_the_step_runs_as_a_module_pass() {
     let stages = manager.run(&mut module).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
+}
+
+const STAMPED: &str = "@slot = global ptr null
+@g = global i16 0
+
+define internal i16 @read(ptr %p) {
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+
+define internal void @write(ptr %p, i16 %x) {
+b:
+  store i16 %x, ptr %p
+  ret void
+}
+
+define internal void @keep(ptr %p) {
+b:
+  store ptr %p, ptr @slot
+  ret void
+}
+
+define internal void @calls(ptr %p, i16 %x) {
+b:
+  call void @write(ptr %p, i16 %x)
+  %v = load i16, ptr %p
+  store i16 %v, ptr @g
+  ret void
+}
+
+declare void @unknown(ptr)
+
+define internal void @hides(ptr %p) {
+b:
+  %c = alloca ptr
+  store ptr %p, ptr %c
+  call void @unknown(ptr %c)
+  ret void
+}
+
+define i16 @f(i16 %a) {
+b:
+  %cell = alloca i16
+  call void @calls(ptr %cell, i16 %a)
+  call void @keep(ptr %cell)
+  %r = call i16 @read(ptr %cell)
+  %s = load i16, ptr @g
+  %t = add i16 %r, %s
+  ret i16 %t
+}
+";
+
+/// No body stated what it does to memory, so a caller without summaries
+/// took every call to read and write everything.
+#[test]
+fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
+    let mut module = parsed(STAMPED);
+    stamped(&mut module).unwrap();
+    let text = printed(&module);
+    let defined = text.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
+    assert_eq!(
+        defined,
+        [
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) {",
+            "define internal void @keep(ptr %p) memory(write, argmem: none) {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite) {",
+            "define internal void @hides(ptr %p) {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none) {",
+        ],
+        "{text}"
+    );
+    assert_eq!(results(&module, INPUTS), results(&parsed(STAMPED), INPUTS));
+}
+
+/// Without summaries a call was taken to write every cell: only what its
+/// callee states says otherwise.
+#[test]
+fn a_cell_is_kept_across_a_call_its_stamped_callee_only_reads() {
+    let text = |call: &str| {
+        format!(
+            "@x = global i16 0
+
+declare void @unknown(ptr)
+
+define internal i16 @read(ptr %p) {{
+b:
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+
+define internal void @write(ptr %p) {{
+b:
+  store i16 1, ptr %p
+  ret void
+}}
+
+define i16 @f(i16 %c) {{
+b:
+  store i16 %c, ptr @x
+  {call}
+  %v = load i16, ptr @x
+  ret i16 %v
+}}
+"
+        )
+    };
+    let loads = |call: &str, stamp: bool| {
+        let mut module = parsed(&text(call));
+        if stamp {
+            stamped(&mut module).unwrap();
+        }
+        managed(&mut module, Promote);
+        let f = module.function_mut("f").unwrap().1;
+        f.walk().filter(|(_, inst)| matches!(f.instruction(*inst).opcode, Opcode::Load { .. })).count()
+    };
+    let read = "%r = call i16 @read(ptr @x)";
+    assert_eq!(loads(read, true), 0);
+    assert_eq!(loads(read, false), 1);
+    assert_eq!(loads("call void @write(ptr @x)", true), 1);
+    assert_eq!(loads("call void @unknown(ptr @x)", true), 1);
 }
