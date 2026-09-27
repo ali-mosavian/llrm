@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use llrm_analysis::cfg;
-use llrm_analysis::manager::Summaries;
+use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
@@ -190,6 +190,8 @@ pub fn recorded(module: &mut Module, applied: &Applied) -> Result<Vec<Stage>, St
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
     manager.target = applied.target.clone();
+    // As LLVM's O2 requires GlobalsAA before the function pipeline.
+    manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
@@ -224,6 +226,7 @@ fn rerun(module: &mut Module, id: GlobalId, fixed: &mut Fixed, target: Option<Rc
         None => DataLayout::default(),
     };
     let mut outer = Outer::of(module, target);
+    outer.require::<GlobalsAA>(module);
     outer.require::<Summaries>(module);
     let callees = llrm_mir::memory::callees(module);
     let sizes = llrm_mir::valuetracking::sizes(module, &layout);

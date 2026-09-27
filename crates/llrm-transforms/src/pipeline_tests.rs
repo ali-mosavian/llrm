@@ -56,3 +56,44 @@ fn passes_that_undo_each_other_stop_after_one_cycle() {
     fixed.passes = vec![Box::new(Commute { name: "first", constant_first: true }), Box::new(Commute { name: "last", constant_first: false })];
     crate::testing::managed(&mut module, fixed);
 }
+
+/// A loop counted in an internal global no code outside names, a
+/// `nocallback` routine called each trip: the count is proven and the
+/// loop copied out. GlobalsAA was never required, so every call wrote the
+/// counter and FPDEEP's PRINT loop stayed rolled.
+#[test]
+fn a_call_keeps_no_global_it_cannot_name() {
+    let mut module = llrm_analysis::testing::parsed(
+        "@i = internal global i16 0
+
+declare void @print(i16) nocallback
+
+define void @main() {
+b0:
+  store i16 1, ptr @i
+  br label %b1
+
+b1:
+  %v = load i16, ptr @i
+  %go = icmp sle i16 %v, 3
+  br i1 %go, label %b2, label %b3
+
+b2:
+  call void @print(i16 %v)
+  %w = load i16, ptr @i
+  %n = add i16 %w, 1
+  store i16 %n, ptr @i
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    let applied = Applied { target: Some(std::rc::Rc::new(llrm_cycles::target::Dos::default())), ..Applied::default() };
+    pipeline::applied(&mut module, &applied).unwrap();
+    let text = llrm_mir::print::module(&module);
+    for trip in 1..=3 {
+        assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
+    }
+}
