@@ -17,8 +17,8 @@
 //! - Dropped: stack slots, x87 operations, `merges`, and the `symbol`,
 //!   `source_backed` and `raised` marks.
 //!
-//! A call's footprint is its `CallEffects`: the pass needs `Summaries`
-//! required.
+//! A call's footprint is its `CallEffects`: without `Summaries` required,
+//! an unknown callee's.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

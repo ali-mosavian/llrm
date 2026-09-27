@@ -69,7 +69,8 @@ impl Analysis for Annotated {
 }
 
 /// What each call reads and writes, its callee as `Summaries` says:
-/// `alias::calls_annotated`. An error where `Summaries` was not required.
+/// `alias::calls_annotated`. Where `Summaries` was not required, each
+/// call is to an unknown callee.
 pub struct CallEffects;
 
 impl Analysis for CallEffects {
@@ -77,8 +78,14 @@ impl Analysis for CallEffects {
     const NAME: &'static str = "call-effects";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let outer = analyses.outer();
-        let summaries = outer.cached::<Summaries>().ok_or("call effects need the module's summaries: require `Summaries`")?;
-        let summaries = Result::as_ref(&*summaries).map_err(String::clone)?;
+        // As LLVM's function passes read an outer result only if cached:
+        // with no summaries, every callee is unknown.
+        let summaries = outer.cached::<Summaries>();
+        let none = IndexMap::default();
+        let summaries = match summaries.as_deref() {
+            Some(found) => found.as_ref().map_err(String::clone)?,
+            None => &none,
+        };
         alias::calls_annotated(&Procedure::of(Unit::within(context, layout, function, outer)), summaries)
     }
 }

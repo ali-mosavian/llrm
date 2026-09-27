@@ -21,7 +21,8 @@
 //! exception.
 //!
 //! What each instruction touches is `memoryssa::Accesses`, asked once
-//! before anything changes: the pass needs `Summaries` required.
+//! before anything changes; without `Summaries` required, every call is
+//! to an unknown callee.
 //! `reused_divides` has no counterpart (see `transform`).
 //!
 //! The old module had no tests of its own; `subexpressions`' are in
