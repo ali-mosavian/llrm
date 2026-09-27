@@ -75,3 +75,41 @@ fn a_bare_pass_manager_takes_every_call_for_unknown() {
     let bare = crate::testing::summarized(&module, Dse, false, &[&[0], &[5]]);
     assert!(precise.matches("store").count() == 1 && bare.matches("store").count() == 2, "{precise}\n{bare}");
 }
+
+/// NBODY's frame slots, zeroed by `llvm.memset` and then only written:
+/// every write goes, and Dead takes the slot. Only a store named a cell, so
+/// the memset, and with it the slot, stayed.
+#[test]
+fn test_a_zeroed_slot_nothing_reads_goes() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  %s = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %s, i8 0, i16 8, i1 false)
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %w = sext i16 %i to i32
+  store i32 %w, ptr %s
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, %x
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i16 %x
+}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+";
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.add(crate::dead::Dead);
+    manager.run(&mut module).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, &[&[0], &[3], &[-7]]), results(&before, &[&[0], &[3], &[-7]]), "{after}");
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("call void"), "{after}");
+}

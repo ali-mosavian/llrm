@@ -233,15 +233,16 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
     };
     let width = _width(unit, Operand::Value(op.result?))?;
     let operands = op.operands.iter().map(|&one| _operand(unit, one, known, None)).collect::<Option<Vec<_>>>()?;
-    if operands.iter().any(|fact| fact.width < width) {
+    _divided(&operands, signed, width)
+}
+
+/// `parts[0]` divided by `parts[1]` at `width`: quotient and remainder,
+/// none where the division faults.
+fn _divided(parts: &[Known], signed: bool, width: u32) -> Option<(BigInt, BigInt)> {
+    if parts.iter().any(|fact| fact.width < width) {
         return None;
     }
-    let (dividend, divisor) = if signed {
-        let sign = BigInt::from(1) << (width - 1);
-        ((masked(&operands[0].n, width) ^ &sign) - &sign, (masked(&operands[1].n, width) ^ &sign) - &sign)
-    } else {
-        (masked(&operands[0].n, width), masked(&operands[1].n, width))
-    };
+    let (dividend, divisor) = if signed { (_signed(&parts[0].n, width), _signed(&parts[1].n, width)) } else { (masked(&parts[0].n, width), masked(&parts[1].n, width)) };
     let zero = BigInt::from(0);
     if divisor == zero || (signed && dividend == -(BigInt::from(1) << (width - 1)) && divisor == BigInt::from(-1)) {
         return None;
@@ -253,6 +254,18 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
     }
     let remainder = &dividend - &quotient * &divisor;
     Some((masked(&quotient, width), masked(&remainder, width)))
+}
+
+/// `n` at `width` read as two's complement.
+fn _signed(n: &BigInt, width: u32) -> BigInt {
+    let sign = BigInt::from(1) << (width - 1);
+    (masked(n, width) ^ &sign) - sign
+}
+
+/// Whether consts computes `kind` of two known numbers: every integer
+/// operation, a division where it does not fault.
+pub fn folds(kind: BinaryOp) -> bool {
+    !matches!(kind, BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem)
 }
 
 /// What this store puts in its cell, where that is a number: a float's
@@ -627,7 +640,7 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub)) && matches!(op.operands[0], Operand::Value(_)) && op.operands[0] == op.operands[1] {
         return Some(Known::new(0, width));
     }
-    let supported = matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) || matches!(op.opcode, Opcode::Binary(kind) if ARITH.iter().any(|(one, _)| *one == kind));
+    let supported = matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) || matches!(op.opcode, Opcode::Binary(kind) if folds(kind));
     if !supported {
         return None;
     }
@@ -650,14 +663,21 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     let Opcode::Binary(kind) = op.opcode else {
         return None;
     };
-    if matches!(kind, BinaryOp::Shl | BinaryOp::LShr) {
+    if matches!(kind, BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) {
         if parts[0].width < width {
             return None;
         }
         let count = u32::try_from(&parts[1].n & BigInt::from(width - 1)).expect("a masked count");
-        let number = masked(&parts[0].n, width);
-        let shifted = if kind == BinaryOp::Shl { number << count } else { number >> count };
+        let shifted = match kind {
+            BinaryOp::Shl => masked(&parts[0].n, width) << count,
+            BinaryOp::LShr => masked(&parts[0].n, width) >> count,
+            _ => _signed(&parts[0].n, width) >> count,
+        };
         return Some(Known::new(masked(&shifted, width), width));
+    }
+    if let BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem = kind {
+        let (quotient, remainder) = _divided(&parts, matches!(kind, BinaryOp::SDiv | BinaryOp::SRem), width)?;
+        return Some(Known::new(if matches!(kind, BinaryOp::SDiv | BinaryOp::UDiv) { quotient } else { remainder }, width));
     }
     let width = parts.iter().map(|one| one.width).min().expect("parts").min(width);
     let (_, arith) = ARITH.iter().find(|(one, _)| *one == kind)?;
