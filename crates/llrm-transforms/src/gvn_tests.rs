@@ -1,6 +1,7 @@
 //! `joined`'s PRE and the `Gvn` pass, each body MIR text run by llrm-mir's
 //! interpreter before and after.
 
+use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::PassManager;
 
 use crate::testing::{f, parsed, printed, results};
@@ -147,6 +148,7 @@ fn test_gvn_numbers_then_joins() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.verify_invalidation = true;
+    manager.require::<Summaries>();
     manager.add(Gvn::default());
     manager.run(&mut module).unwrap();
     let after = printed(&module);
@@ -176,8 +178,51 @@ b0:
 ",
     );
     let mut manager = PassManager::default();
+    manager.require::<Summaries>();
     manager.add(Gvn::default());
     manager.run(&mut module).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %r = add i16 %a, %a\n"), "{after}");
+}
+
+/// `text` through `Gvn` under the pass manager, printed; what `@f` returns
+/// stays.
+fn managed(text: &str) -> String {
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.verify_invalidation = true;
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run(&mut module).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
+    after
+}
+
+/// The pass forwards a stored value to the load of its cell.
+#[test]
+fn test_gvn_forwards_a_stored_value_to_its_load() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  store i16 %x, ptr @g
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    assert!(managed(text).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"));
+    let volatile = text.replace("load i16", "load volatile i16");
+    assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
+}
+
+/// The pass makes a join's load the phi of what each arm stored.
+#[test]
+fn test_gvn_joins_the_values_each_arm_stored() {
+    let text = format!("@g = global i16 0\n\n{}", diamond("  store i16 %x, ptr @g\n", "  store i16 %y, ptr @g\n", "  %r = load i16, ptr @g\n"));
+    assert!(managed(&text).contains("b3:\n  %r1 = phi i16 [ %x, %b1 ], [ %y, %b2 ]\n  ret i16 %r1\n"), "{}", managed(&text));
+    let volatile = text.replace("load i16", "load volatile i16");
+    assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
 }

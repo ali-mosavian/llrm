@@ -496,3 +496,63 @@ b0:
     assert_eq!(parsed.solved("single", &Calls::default()), Some(Known::new(0x4000_0000, 32)));
     assert_eq!(parsed.solved("high", &Calls::default()), Some(Known::new(0x8000, 16)));
 }
+
+/// A load through a pointer is known where the one store MemorySSA finds
+/// it clobbered by wrote its bytes and its type with a known value.
+#[test]
+fn test_a_dominating_store_supplies_a_load_through_a_pointer() {
+    for (between, known) in [
+        ("", Some(Known::new(7, 16))),
+        ("store i16 9, ptr %q", None),
+        ("store i8 9, ptr %p", None),
+        ("call void @g()", None),
+        ("%s = getelementptr inbounds i8, ptr %p, i16 2\n  store i16 9, ptr %s", Some(Known::new(7, 16))),
+    ] {
+        let parsed = Parsed::new(&format!(
+            "declare void @g()
+
+define i16 @f(ptr %p, ptr %q) {{
+b0:
+  %v = add i16 3, 4
+  store i16 %v, ptr %p
+  {between}
+  %r = load i16, ptr %p
+  ret i16 %r
+}}
+"
+        ));
+        assert_eq!(parsed.solved("r", &Calls::default()), known, "{between}");
+    }
+}
+
+/// A store on one path into a join supplies nothing; a load of another
+/// type through the stored pointer is not the stored value.
+#[test]
+fn test_a_pointer_load_is_not_supplied_across_a_join_or_a_type() {
+    let joined = Parsed::new(
+        "define i16 @f(ptr %p, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 7, ptr %p
+  br label %b2
+
+b2:
+  %r = load i16, ptr %p
+  ret i16 %r
+}
+",
+    );
+    assert_eq!(joined.solved("r", &Calls::default()), None);
+    let retyped = Parsed::new(
+        "define i16 @f(ptr %p, ptr %q) {
+b0:
+  store ptr %q, ptr %p
+  %r = load i16, ptr %p
+  ret i16 %r
+}
+",
+    );
+    assert_eq!(retyped.solved("r", &Calls::default()), None);
+}

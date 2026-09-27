@@ -9,6 +9,7 @@ mod corpus_tests;
 pub mod cfg;
 pub mod counting;
 pub mod dead;
+pub mod dse;
 pub mod decide;
 pub mod edges;
 pub mod floatfold;
