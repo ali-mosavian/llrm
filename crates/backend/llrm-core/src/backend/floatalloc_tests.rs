@@ -384,7 +384,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
                     .insns
                     .iter()
                     .map(|one| match &one.what {
-                        Some(what) if what.op == Operation::Call => Arc::new(Insn { op: Some(Arc::clone(&call)), ..Insn::clone(one) }),
+                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { op: Some(Arc::clone(&call)), ..Insn::clone(one) }),
                         _ => Arc::clone(one),
                     })
                     .collect(),
@@ -427,6 +427,25 @@ fn test_a_float_live_across_a_call_is_read_again_from_its_cell() {
     let insns = with_frame(&body, &mut Frame::new(-8)).insns();
     let call = insns.iter().position(|one| what(one).op == Operation::Call).expect("the call");
     assert!(!insns[call..].iter().any(|one| name(one) == "fld" && what(one).sources == vec![m(&source)]), "{insns:#?}");
+}
+
+/// `_may_write` gave a call its listed writes or anything, but let a barrier
+/// that lists nothing write nothing: a cell loaded before it stood for the
+/// same cell loaded after it, and `b - a` became `fsub st,st`.
+#[test]
+fn test_a_value_loaded_before_a_barrier_is_not_the_cell_after_it() {
+    let (cell, out) = (frame_cell(-4, 4), frame_cell(-8, 4));
+    let body = _body(vec![
+        _load(1, &cell),
+        sem(Operation::Barrier, "", vec![], vec![]),
+        _load(2, &cell),
+        _arithmetic("fsub", 3, fl(2), fl(1)),
+        _store(&out, 3),
+    ]);
+    let insns = with_frame(&body, &mut Frame::new(-8)).insns();
+    let barrier = insns.iter().position(|one| what(one).op == Operation::Barrier).expect("the barrier");
+    // The value from before it waits in a slot of its own, not the cell the barrier may write.
+    assert!(insns[..barrier].iter().any(|one| what(one).dests.iter().any(|dest| matches!(dest, Loc::Mem(one) if *one != cell && *one != out))), "{insns:#?}");
 }
 
 #[test]

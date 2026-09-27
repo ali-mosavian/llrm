@@ -117,13 +117,14 @@ impl Insn {
         self.volatile || self.op.as_ref().is_some_and(|op| op.barrier())
     }
 
-    /// Whether it may write memory its operands do not name. A call with no
-    /// MIR operation to list what it touches may touch anything.
+    /// Whether it may write memory its operands do not name. A call or
+    /// barrier with no MIR operation to list what it touches may touch
+    /// anything, as `effects::unmodeled_write` says of one with an operation.
     #[must_use]
     pub fn unmodeled_write(&self) -> bool {
         match &self.op {
             Some(op) => crate::analysis::effects::unmodeled_write(op),
-            None => self.what.as_ref().is_some_and(|what| what.op == Operation::Call),
+            None => self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier)),
         }
     }
 

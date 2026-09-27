@@ -215,8 +215,8 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
     if what.op == Operation::Fill {
         return true;
     }
-    // A call writes what its MIR operation lists, or anything.
-    if what.op == Operation::Call {
+    // A call or barrier writes what its MIR operation lists, or anything.
+    if matches!(what.op, Operation::Call | Operation::Barrier) {
         if one.unmodeled_write() {
             return true;
         }
