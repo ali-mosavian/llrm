@@ -2436,3 +2436,32 @@ no:
     assert!(got.iter().any(|line| line.contains("*4]")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("shl") || line.starts_with("imul")), "{got:?}");
 }
+
+/// A branch on the `and` or `or` of two compares branches on each, as
+/// LLVM's FindMergedConditions splits it: rcflip's IF a = 0 AND b = 1 made
+/// both truth values, and-ed them, and tested the result.
+#[test]
+fn test_a_branch_on_two_compares_branches_on_each() {
+    for join in ["and", "or"] {
+        let text = format!(
+            "declare void @g() addrspace(1)
+define void @f(i16 %a, i16 %b) addrspace(1) {{
+entry:
+  %x = icmp eq i16 %a, 0
+  %y = icmp slt i16 %b, 5
+  %c = {join} i1 %x, %y
+  br i1 %c, label %yes, label %no
+yes:
+  call addrspace(1) void @g()
+  ret void
+no:
+  ret void
+}}
+"
+        );
+        let got = listing_on("386", &text, "f");
+        assert!(!got.iter().any(|line| line.starts_with("set") || line.starts_with("and") || line.starts_with("or ")), "{join}: {got:?}");
+        let branches: Vec<&String> = got.iter().filter(|line| line.starts_with('j') && !line.starts_with("jmp")).collect();
+        assert_eq!(branches.len(), 2, "{join}: {got:?}");
+    }
+}
