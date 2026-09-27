@@ -36,15 +36,18 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, lcssa, loopmotion, loopsimplify, peel, promote,
-    rotate, strength, unroll, unswitch,
+    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, peel,
+    promote, rotate, strength, unroll, unswitch,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
 /// is -O2.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
+    /// Off at -O0: no pass runs.
+    pub optimize: bool,
     pub limits: Limits,
+    pub inline: inline::Threshold,
     pub lcssa: bool,
     pub floatloop: bool,
     pub fold: bool,
@@ -65,7 +68,9 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            optimize: true,
             limits: Limits::default(),
+            inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
             fold: true,
@@ -86,9 +91,32 @@ impl Default for Options {
 }
 
 impl Options {
-    /// -Os: no copy grows the code.
+    /// -O0.
+    pub fn none() -> Self {
+        Self { optimize: false, ..Self::default() }
+    }
+
+    /// -O1: the scalar passes; no loop is copied or unswitched.
+    pub fn basic() -> Self {
+        Self { unroll: false, peel: false, unswitch: false, ..Self::default() }
+    }
+
+    /// -O3: LLVM's -O3 budgets, twice the unrolled size and a 250 inline threshold.
+    pub fn aggressive() -> Self {
+        let limits = Limits::default();
+        Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold(250), ..Self::default() }
+    }
+
+    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: what
+    /// it admits, a body called once or a leaf cheaper than its calls,
+    /// shrinks the code here.
     pub fn size() -> Self {
         Self { limits: Limits { grows: false, ..Limits::default() }, ..Self::default() }
+    }
+
+    /// -Oz: no loop is copied.
+    pub fn min_size() -> Self {
+        Self { unroll: false, peel: false, ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -185,6 +213,9 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
+    if !applied.options.optimize {
+        return manager.run(program);
+    }
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
@@ -198,6 +229,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
+        inline: applied.options.inline,
     });
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

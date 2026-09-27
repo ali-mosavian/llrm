@@ -56,6 +56,7 @@ pub struct Interprocedural {
     pub pipeline: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
     /// What the last run proved.
     pub proved: Option<Proved>,
+    pub inline: inline::Threshold,
 }
 
 impl ProgramPass for Interprocedural {
@@ -73,6 +74,7 @@ impl ProgramPass for Interprocedural {
             &mut modules,
             &roots,
             &costs,
+            self.inline,
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
                 Ok(())
@@ -143,6 +145,7 @@ pub fn optimized<E: From<String>>(
     modules: &mut [ModuleAnalyses],
     roots: &BTreeSet<Defined>,
     costs: &OperationCosts,
+    threshold: inline::Threshold,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
@@ -169,11 +172,11 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs);
+            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs, threshold);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &constants, &private[at], &pure[at], costs);
+                let constant = inline::constant_sites(module, caller, &constants, &private[at], &pure[at], costs, threshold);
                 let (context, function) = function_mut(module, id);
                 if !inline::expanded(context, function, &available, Some(&constant))? {
                     continue;
@@ -253,11 +256,11 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs);
+            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs, threshold);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &current, &private[at], &pure[at], costs);
+                let constant = inline::constant_sites(module, caller, &current, &private[at], &pure[at], costs, threshold);
                 let (context, function) = function_mut(module, id);
                 if !inline::expanded(context, function, &available, Some(&constant))? {
                     continue;

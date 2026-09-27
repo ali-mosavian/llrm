@@ -38,6 +38,24 @@ use llrm_support::hash::IndexMap;
 
 use crate::profit::OperationCosts;
 
+/// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
+/// for none. A callee's budget, in semantic operations, scales with it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Threshold(pub i64);
+
+impl Default for Threshold {
+    fn default() -> Self {
+        Self(225)
+    }
+}
+
+impl Threshold {
+    /// The budget for a call priced `call_cost`; None when nothing inlines.
+    fn budget(self, call_cost: i64) -> Option<i64> {
+        (self.0 > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.0 / Self::default().0)
+    }
+}
+
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
 
@@ -79,9 +97,10 @@ pub fn candidates(
     private: &BTreeSet<GlobalId>,
     pure: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
+    threshold: Threshold,
 ) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
-    let budget = 6.max(24.min(call_cost.div_euclid(2)));
+    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
     let mut out = IndexMap::default();
     for &name in private.intersection(pure) {
         let Some(body) = body(module, name) else { continue };
@@ -111,9 +130,10 @@ pub fn constant_sites(
     private: &BTreeSet<GlobalId>,
     pure: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
+    threshold: Threshold,
 ) -> IndexMap<InstId, Candidate> {
     let call_cost = costs.call;
-    let budget = 6.max(24.min(call_cost.div_euclid(2)));
+    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
     let mut out = IndexMap::default();
     for (_, at) in caller.walk() {
         let Some(name) = callee(&module.context, caller, at) else { continue };

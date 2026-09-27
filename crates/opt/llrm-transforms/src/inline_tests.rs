@@ -38,7 +38,7 @@ fn costs(call: i64) -> OperationCosts {
 
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
-    let available = candidates(module, &call_counts(module), &private(module), &pure(module), &costs(call));
+    let available = candidates(module, &call_counts(module), &private(module), &pure(module), &costs(call), Threshold::default());
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
     while expanded(context, function, &available, None).unwrap() {
@@ -143,9 +143,9 @@ b1:
 "
     ));
     let (private, pure) = (private(&module), pure(&module));
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(0)), IndexMap::default());
+    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(0), Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(2)).len(), 1);
+    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(2), Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -293,11 +293,11 @@ b1:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(2));
+    let sites = constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(2), Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
     // Not priced above the work it clones: none.
-    assert!(constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(1)).is_empty());
+    assert!(constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(1), Threshold::default()).is_empty());
 }
 
 #[test]
