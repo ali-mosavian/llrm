@@ -2,5 +2,6 @@
 //! does it there, with that pass's tests. A pass asks llrm-analysis for
 //! its facts and names nothing about the machine.
 
+pub mod canonical;
 pub mod edges;
 pub mod loopsimplify;
