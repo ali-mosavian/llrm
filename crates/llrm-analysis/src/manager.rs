@@ -4,10 +4,6 @@
 //! preserve. An entry reads its module and target through the outer proxy
 //! (`passes::Outer`), and alias's callee summaries are a module analysis
 //! there, as LLVM's `GlobalsAA`.
-//!
-//! `Annotated` and `DominatedEdges` still solve the points-to and the
-//! constants they build on themselves, rather than ask `Pointers` and
-//! `Registers`.
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -64,7 +60,10 @@ impl Analysis for Annotated {
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        alias::annotated(&Unit::within(context, layout, function, analyses.outer()))
+        let pointers = analyses.get::<Pointers>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
+        alias::annotated_with(&Unit::within(context, layout, function, analyses.outer()), pointers, &registers)
     }
 }
 
@@ -116,7 +115,8 @@ impl Analysis for DominatedEdges {
     type Result = Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String>;
     const NAME: &'static str = "dominated-edges";
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
-        ranges::dominated_edges(&Unit::within(context, layout, function, analyses.outer()))
+        let registers = analyses.get::<Registers>(context, layout, function);
+        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()), &registers)
     }
 }
 

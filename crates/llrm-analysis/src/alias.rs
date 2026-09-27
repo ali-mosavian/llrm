@@ -43,7 +43,7 @@ use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
-use crate::consts;
+use crate::consts::{self, Known};
 use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
@@ -1055,8 +1055,12 @@ fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
+    congruences_with(unit, &consts::known(unit, None, None, None))
+}
+
+/// `congruences`, given what `consts::known` finds without memory.
+pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> IndexMap<ValueId, (BigInt, BigInt)> {
     let function = unit.function;
-    let constants = consts::known(unit, None, None, None);
     let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
     let zero = BigInt::from(0);
     for loop_ in loops::loops(&cfg::graph(function), None) {
@@ -1121,10 +1125,15 @@ fn reduced(modulus: BigInt, residue: BigInt, width: u32) -> (BigInt, BigInt) {
 /// Attach solved provenance to every access of the function: each load's
 /// and store's, narrowed where a range bounds its index.
 pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
-    let facts = points_to(unit, None, None)?;
-    let bounded = ranges::bounded(unit)?;
-    let strides = congruences(unit);
-    let constants = ranges::constants(unit);
+    annotated_with(unit, &points_to(unit, None, None)?, &consts::known(unit, None, None, None))
+}
+
+/// `annotated`, given the points-to facts and what `consts::known` finds
+/// without memory.
+pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, Known>) -> Result<IndexMap<InstId, MemRef>, String> {
+    let bounded = ranges::bounded_with(unit, known)?;
+    let strides = congruences_with(unit, known);
+    let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
