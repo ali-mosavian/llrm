@@ -12,6 +12,7 @@ pub mod dead;
 pub mod dse;
 pub mod decide;
 pub mod edges;
+pub mod fill;
 pub mod floatfold;
 pub mod fold;
 pub mod gvn;
