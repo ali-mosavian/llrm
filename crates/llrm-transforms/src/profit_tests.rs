@@ -8,7 +8,7 @@ use llrm_analysis::cfg;
 
 use llrm_support::hash::IndexMap;
 
-use super::{OperationCosts, UNKNOWN_TRIPS, operation, r#static, spill_risk, weighted};
+use super::{OperationCosts, UNKNOWN_TRIPS, operation, proven_trips, r#static, spill_risk, weighted};
 
 fn risk(text: &str, capacity: i64) -> Option<i64> {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -94,6 +94,22 @@ out:
 fn a_loop_body_counts_ten_times_unless_its_trips_are_known() {
     assert_eq!(work(COUNTED, &[]), Some(1 + 4 * 10 + 1));
     assert_eq!(work(COUNTED, &[("head", 3)]), Some(1 + 4 * 3 + 1));
+}
+
+/// Profit's fallback named induction as the owner of trip counts once
+/// ported: a loop it counts is weighted by that count, not ten.
+#[test]
+fn a_loop_induction_counts_is_weighted_by_its_count() {
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let trips = |text: &str| {
+        let module = module(text);
+        let unit = llrm_analysis::memory::Unit::of(&module, &layout, function(&module));
+        let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
+        let callees = llrm_mir::memory::callees(&module);
+        (trips.len(), weighted(&module.context, function(&module), &callees, &OperationCosts::default(), Some(&trips)))
+    };
+    assert_eq!(trips(&COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3")), (1, Some(1 + 4 * 3 + 1)));
+    assert_eq!(trips(COUNTED), (0, Some(1 + 4 * 10 + 1)));
 }
 
 #[test]

@@ -24,6 +24,7 @@ pub mod promote;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
+pub mod unroll;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
