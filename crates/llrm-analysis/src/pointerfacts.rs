@@ -140,4 +140,131 @@ b:
         assert!(!facts.disjoint(location("a", 2), location("c", 2)));
         assert!(facts.same_bytes(location("b", 2), location("e", 2)));
     }
+
+    /// `@f`'s module, each `%name`'s relative offset and the checks on locations.
+    fn with_facts(text: &str, check: impl Fn(&Offsets, &dyn Fn(&str, u64) -> Location, &dyn Fn(&str) -> Operand)) {
+        let module = parsed(text);
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap();
+        let f = function(&module, "f");
+        let facts = offsets(&module.context, &layout, f);
+        let at = |name: &str| Operand::Value(value(f, name));
+        let location = |name: &str, bytes| Location { pointer: at(name), bytes };
+        check(&facts, &location, &at);
+    }
+
+    #[test]
+    fn two_unrelated_pointers_are_never_disjoint_or_the_same() {
+        with_facts(
+            "define void @f(ptr %p, ptr %q) {
+b:
+  ret void
+}
+",
+            |facts, location, _| {
+                assert!(!facts.disjoint(location("p", 2), location("q", 2)));
+                assert!(!facts.same_bytes(location("p", 2), location("q", 2)));
+                assert!(facts.same_bytes(location("p", 2), location("p", 2)));
+            },
+        );
+    }
+
+    #[test]
+    fn adjacent_and_overlapping_accesses_from_one_base() {
+        with_facts(
+            "define void @f(ptr %p) {
+b:
+  %back = getelementptr inbounds i8, ptr %p, i16 -2
+  %up = getelementptr inbounds i8, ptr %p, i16 1
+  ret void
+}
+",
+            |facts, location, at| {
+                assert_eq!(facts.relative(at("back")), Some((at("p"), -2)));
+                assert!(facts.disjoint(location("back", 2), location("p", 2)), "touching, not overlapping");
+                assert!(!facts.disjoint(location("back", 3), location("p", 2)));
+                assert!(!facts.disjoint(location("p", 2), location("up", 1)));
+                assert!(!facts.same_bytes(location("p", 2), location("up", 2)));
+                assert!(!facts.disjoint(location("p", 0), location("up", 0)), "an empty access proves nothing");
+            },
+        );
+    }
+
+    #[test]
+    fn same_address_with_different_widths_is_not_the_same_bytes() {
+        with_facts(
+            "define void @f(ptr %p) {
+b:
+  %q = getelementptr inbounds i8, ptr %p, i16 0
+  ret void
+}
+",
+            |facts, location, _| {
+                assert!(facts.same_bytes(location("p", 2), location("q", 2)));
+                assert!(!facts.same_bytes(location("p", 2), location("q", 1)));
+                assert!(!facts.disjoint(location("p", 2), location("q", 1)));
+            },
+        );
+    }
+
+    #[test]
+    fn offsets_from_a_global_are_relative_to_the_global() {
+        let module = parsed(
+            "@g = global [4 x i16] zeroinitializer
+
+define void @f() {
+b:
+  %a = getelementptr inbounds i16, ptr @g, i16 1
+  %b = getelementptr inbounds i16, ptr @g, i16 2
+  ret void
+}
+",
+        );
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).unwrap();
+        let f = function(&module, "f");
+        let facts = offsets(&module.context, &layout, f);
+        let at = |name: &str| Operand::Value(value(f, name));
+        let (base, offset) = facts.relative(at("b")).unwrap();
+        assert!(matches!(base, Operand::Constant(_)));
+        assert_eq!(offset, 4);
+        assert!(facts.disjoint(Location { pointer: at("a"), bytes: 2 }, Location { pointer: at("b"), bytes: 2 }));
+    }
+
+    #[test]
+    fn far_pointer_steps_are_followed_in_their_own_address_space() {
+        with_facts(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16\"
+
+define void @f(ptr addrspace(1) %p) {
+b:
+  %a = getelementptr inbounds i16, ptr addrspace(1) %p, i16 3
+  %b = getelementptr inbounds i8, ptr addrspace(1) %a, i16 2
+  ret void
+}
+",
+            |facts, location, at| {
+                assert_eq!(facts.relative(at("b")), Some((at("p"), 8)));
+                assert!(facts.disjoint(location("a", 2), location("b", 2)));
+            },
+        );
+    }
+
+    #[test]
+    fn an_offset_past_the_index_width_proves_nothing() {
+        with_facts(
+            "target datalayout = \"e-p:16:16\"
+
+define void @f(ptr %p) {
+b:
+  %a = getelementptr inbounds i8, ptr %p, i16 30000
+  %b = getelementptr inbounds i8, ptr %a, i16 30000
+  ret void
+}
+",
+            |facts, location, at| {
+                assert_eq!(facts.relative(at("a")), Some((at("p"), 30000)));
+                assert_eq!(facts.relative(at("b")), None);
+                assert!(!facts.disjoint(location("p", 2), location("b", 2)));
+            },
+        );
+    }
 }
