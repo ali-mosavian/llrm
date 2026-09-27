@@ -89,6 +89,40 @@ b3:
     assert!(!after.contains("load i16") && !after.contains("store i16") && after.matches("volatile").count() == 4, "{after}");
 }
 
+/// A call's `initializes` bytes are written before it reads them, so the
+/// zero fill before it goes; not where it reads them through another
+/// argument. B$ASSN's fixed-length destination was zeroed first.
+#[test]
+fn a_call_filling_a_buffer_kills_its_earlier_fill() {
+    for (source, kept) in [("%s", 0), ("%a", 1)] {
+        let after = promoted(&format!(
+            "define void @fill(ptr %d, ptr %s) {{
+b:
+  %v = load i16, ptr %s
+  store i16 %v, ptr %d
+  %e = getelementptr i8, ptr %d, i16 2
+  store i16 %v, ptr %e
+  ret void
+}}
+
+define i16 @f(i16 %x) {{
+b0:
+  %a = alloca [4 x i8]
+  %s = alloca i16
+  store i16 %x, ptr %s
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 4, i1 false)
+  call void @fill(ptr nocapture writeonly initializes((0, 4)) %a, ptr {source})
+  %v = load i16, ptr %a
+  ret i16 %v
+}}
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+"
+        ));
+        assert_eq!(after.matches("call void @llvm.memset").count(), kept, "{source}: {after}");
+    }
+}
+
 /// A store to a cell a callee reads, or that outlives the function, stays;
 /// one overwritten before anything reads it goes.
 #[test]

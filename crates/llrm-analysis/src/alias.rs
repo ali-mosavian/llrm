@@ -625,6 +625,8 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
 pub struct Effect {
     pub loads: Vec<MemRef>,
     pub stores: Vec<MemRef>,
+    /// The bytes it writes before reading any, as `initializes` states.
+    pub fills: Vec<MemRef>,
 }
 
 /// Instantiate callee effects through actual pointer provenance: each
@@ -673,9 +675,30 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
             effect.writes.extend(_tracked(&procedure.unit));
         }
-        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect() });
+        let fills = _fills(&procedure.unit, &facts, at);
+        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect(), fills });
     }
     Ok(out)
+}
+
+/// The bytes the call `at` writes through an argument before it reads
+/// any: `initializes` at the site or on the callee's parameter.
+fn _fills(unit: &Unit, facts: &PointsTo, at: InstId) -> Vec<MemRef> {
+    let op = unit.function.instruction(at);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
+    let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
+    let mut out = Vec::new();
+    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+        let declared = declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs));
+        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument]).iter().chain(declared) {
+            let Ok(width) = u32::try_from(high - low) else { continue };
+            let mut one = MemRef::at(unit, operand, width);
+            one.disp += low;
+            let provenance = facts.reference(unit, &one);
+            out.push(MemRef { provenance, ..one });
+        }
+    }
+    out
 }
 
 /// Byte ranges, sorted, apart and not touching.

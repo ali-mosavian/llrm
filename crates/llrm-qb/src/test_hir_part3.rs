@@ -143,6 +143,7 @@ fn stack_call(operands: Vec<Operand>, callee: &str, order: Vec<i64>) -> (hir::In
         distance: hir::CallDistance::Far,
         callee: None,
         float_return: hir::FloatReturn::Pointer,
+        promises: Vec::new(),
     };
     (instruction, call)
 }
@@ -2332,6 +2333,18 @@ fn test_rich_route_keys_data_rows_by_position() {
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
     assert!(text.contains("pushw 1\n    call far ptr B$RSTB"), "{text}");
+}
+
+/// B$ASSN fills a fixed-length destination: its zero fill was stored,
+/// then overwritten, on every call (runtime-frame-stack's 4096 bytes).
+#[test]
+fn a_fixed_length_assignment_fills_its_destination() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "fixed.bas", b"SUB s\nDIM t AS STRING * 8\nt = \"X\"\nPRINT t\nEND SUB\n");
+    let program = parsed(&source);
+    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %") && text.contains(", i16 1, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"), "{text}");
 }
 
 /// UBOUND's "subscript out of range" call may RESUME, so its block jumps on

@@ -70,6 +70,8 @@ pub struct Accesses {
     /// Of each instruction touching memory, what it reads and what it
     /// writes; `None` for anything.
     touched: IndexMap<InstId, Footprint>,
+    /// Of each call, the bytes it writes before reading any.
+    fills: IndexMap<InstId, Vec<MemRef>>,
 }
 
 impl Analysis for Accesses {
@@ -102,7 +104,8 @@ impl Accesses {
     /// `unit`'s accesses from `references` (`alias::annotated`'s) and each
     /// call's `effects` (`alias::calls_annotated`'s).
     pub fn of(unit: &Unit, references: IndexMap<InstId, MemRef>, effects: &IndexMap<InstId, Effect>) -> Self {
-        Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone()))))
+        let fills = effects.iter().filter(|(_, effect)| !effect.fills.is_empty()).map(|(&at, effect)| (at, effect.fills.clone())).collect();
+        Self { fills, ..Self::new(unit, references, |inst| effects.get(&inst).map(|effect| (Some(effect.loads.clone()), Some(effect.stores.clone())))) }
     }
 
     /// `unit`'s accesses unresolved: each reference as the unit has it
@@ -134,7 +137,7 @@ impl Accesses {
             };
             touched.insert(inst, found);
         }
-        Self { references, touched }
+        Self { references, touched, fills: IndexMap::default() }
     }
 
     /// What `inst` writes; `None` where it may write anything.
@@ -150,6 +153,11 @@ impl Accesses {
             Opcode::Store { volatile: true, .. } => self.references.get(&inst).map(std::slice::from_ref),
             _ => self.writes(inst),
         }
+    }
+
+    /// What the call `inst` writes before reading any: `initializes`.
+    pub fn fills(&self, inst: InstId) -> &[MemRef] {
+        self.fills.get(&inst).map_or(&[], Vec::as_slice)
     }
 
     /// What `inst` reads; `None` where it may read anything.

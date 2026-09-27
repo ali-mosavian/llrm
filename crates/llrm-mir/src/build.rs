@@ -123,6 +123,13 @@ impl Builder<'_> {
         self.function.annotate(inst, kind, node);
     }
 
+    /// Adds `attr` to argument `index` of the call just emitted.
+    pub fn argument_attr(&mut self, index: usize, attr: crate::opcode::Attribute) {
+        let block = self.block.expect("a position");
+        let inst = *self.function.block(block).instructions().last().expect("an emitted call");
+        self.function.add_argument_attr(inst, index, attr);
+    }
+
     fn value(&mut self, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags, name: &str) -> Operand {
         self.emit(opcode, ty, operands, flags, name).expect("a result")
     }

@@ -1334,10 +1334,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let callee = instruction.callee.as_deref().ok_or("a call without a callee")?;
                 let operands = self.operands(instruction)?;
                 let site = self.function.calls.iter().find(|one| one.instruction == instruction.id);
-                let arguments: Vec<Value> = match site.and_then(|site| passed(site, operands.len())) {
-                    Some(order) => order.iter().map(|&one| operands[one]).collect(),
-                    None => operands,
-                };
+                let order = site.and_then(|site| passed(site, operands.len())).unwrap_or_else(|| (0..operands.len()).collect());
+                let arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
+                let filled = site
+                    .map(|site| site.promises.iter().filter_map(|one| Some((order.iter().position(|&at| at as i64 == one.operand)?, one.bytes))).collect::<Vec<_>>())
+                    .unwrap_or_default();
                 let returns = match instruction.results[..] {
                     [result] => self.result_type(result)?,
                     [] => self.b.context.types.void(),
@@ -1354,7 +1355,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         let convention = self.tables.conventions[callee];
                         let raises = !self.tables.nounwind.iter().any(|one| one == callee);
                         let callee = Value::Constant(self.tables.callees[callee]);
-                        self.raising_call(instruction.id, raises, convention, ty, callee, &arguments)?
+                        self.raising_call(instruction.id, raises, convention, ty, callee, &arguments, &filled)?
                     }
                 };
                 if let Some(result) = result {

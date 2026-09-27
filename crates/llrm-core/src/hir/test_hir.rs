@@ -317,7 +317,7 @@ fn test_canonical_mir_dump_keeps_call_identity() {
     let void = Type::new(0, "void", TypeKind::Void, 0);
     let call_instruction = Instruction { callee: Some("TWICE&".to_owned()), ..instruction(1, Op::Call, &[], vec![]) };
     let block = returning(1, vec![call_instruction]);
-    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Pointer };
+    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Pointer, promises: Vec::new() };
     let function = Function { calls: vec![call], ..Function::new(1, "caller", 0, vec![], vec![], vec![block], 1) };
     let source = vbdos(vec![Module::new(1, "calls", vec![void], vec![function])]);
     assert!(mir_text(&lower(&source).unwrap()[0]).contains("call TWICE&()"));
@@ -409,6 +409,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             distance: CallDistance::Far,
             callee: Some(1),
             float_return: FloatReturn::Pointer,
+            promises: Vec::new(),
         }],
         ..Function::new(1, "CALLER", 0, values(&[(1, 2)]), vec![], vec![returning(1, vec![read_call])], 1)
     };
