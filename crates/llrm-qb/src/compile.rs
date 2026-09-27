@@ -1627,8 +1627,13 @@ impl Rich {
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        let target = targets::profile(ProfileOrName::Name(&llrm_core::abi::machine::current().cpu)).map_err(CompileError::Value)?;
-        llrm_transforms::pipeline::applied(&mut emitted.module, &rich_pipeline(target)).map_err(CompileError::Value)?;
+        // The one MIR target, real-mode DOS at 486 prices.
+        let applied = llrm_transforms::pipeline::Applied {
+            target: Some(Rc::new(llrm_cycles::target::Dos)),
+            dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+            ..Default::default()
+        };
+        llrm_transforms::pipeline::applied(&mut emitted.module, &applied).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
         Ok(Rich { mir: emitted.module, data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
     }
@@ -1669,42 +1674,6 @@ impl Rich {
         }
         names.extend(pool.map(|id| ((Space::Segment, id), qb[&(Space::Segment, id)].clone())));
         names
-    }
-}
-
-/// The configured machine as MIR analyses ask it: its foreign memory, and
-/// the prices and registers of `profile`.
-struct Target {
-    machine: &'static llrm_core::abi::machine::Machine,
-    profile: &'static targets::Profile,
-}
-
-impl llrm_mir::target::Machine for Target {
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
-        self.machine.foreign_span(selectors, offsets, width)
-    }
-
-    fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_cycles::target::costs(&self.profile.name)
-    }
-
-    fn registers(&self) -> i64 {
-        self.profile.register_capacity
-    }
-
-    fn call_registers(&self) -> i64 {
-        self.profile.call_register_capacity
-    }
-}
-
-/// The rich MIR pipeline configured by `profile` alone, as `flow::optimized`
-/// configures the old one. `LLRM_MIR_STAGES` names where its steps go.
-// The other frontend has the same; its home is llrm-core's `flow`.
-fn rich_pipeline(profile: &'static targets::Profile) -> llrm_transforms::pipeline::Applied {
-    llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(Target { machine: llrm_core::abi::machine::current(), profile })),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
     }
 }
 

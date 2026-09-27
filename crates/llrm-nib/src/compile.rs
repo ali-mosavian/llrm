@@ -358,7 +358,6 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
     let module = &program.modules[0];
-    let target = targets::profile(cpu)?;
     let emitted = hir::mir::emit(program).swap_remove(0);
     if let Some((name, why)) = emitted.refused.first() {
         return Err(format!("@{name}: {why}"));
@@ -371,7 +370,13 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
-    llrm_transforms::pipeline::applied(&mut mir, &rich_pipeline(target))?;
+    // The rich route's target is the one MIR target, real-mode DOS at 486 prices.
+    let applied = llrm_transforms::pipeline::Applied {
+        target: Some(Rc::new(llrm_cycles::target::Dos)),
+        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
+        ..Default::default()
+    };
+    llrm_transforms::pipeline::applied(&mut mir, &applied)?;
     let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
     let abi = HirAbi { runtime: program.runtime, objects };
     let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu)?;
@@ -380,42 +385,6 @@ pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrN
         std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
     }
     Ok(assembled)
-}
-
-/// The configured machine as MIR analyses ask it: its foreign memory, and
-/// the prices and registers of `profile`.
-struct Target {
-    machine: &'static llrm_core::abi::machine::Machine,
-    profile: &'static targets::Profile,
-}
-
-impl llrm_mir::target::Machine for Target {
-    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
-        self.machine.foreign_span(selectors, offsets, width)
-    }
-
-    fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_cycles::target::costs(&self.profile.name)
-    }
-
-    fn registers(&self) -> i64 {
-        self.profile.register_capacity
-    }
-
-    fn call_registers(&self) -> i64 {
-        self.profile.call_register_capacity
-    }
-}
-
-/// The rich MIR pipeline configured by `profile` alone, as `flow::optimized`
-/// configures the old one. `LLRM_MIR_STAGES` names where its steps go.
-// The other frontend has the same; its home is llrm-core's `flow`.
-fn rich_pipeline(profile: &'static targets::Profile) -> llrm_transforms::pipeline::Applied {
-    llrm_transforms::pipeline::Applied {
-        target: Some(Rc::new(Target { machine: llrm_core::abi::machine::current(), profile })),
-        dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into),
-        ..Default::default()
-    }
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
