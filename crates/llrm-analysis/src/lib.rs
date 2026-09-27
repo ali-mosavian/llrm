@@ -10,6 +10,7 @@ pub mod effects;
 pub mod frameescape;
 pub mod interprocedural;
 pub mod liveness;
+pub mod noreturn;
 pub mod occurrence;
 pub mod pointerfacts;
 pub mod ssa;

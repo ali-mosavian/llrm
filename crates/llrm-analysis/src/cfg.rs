@@ -1,8 +1,12 @@
 //! A function's blocks as `llrm_graph` walks them: each block by its id,
 //! in layout order, the entry first.
 
-use llrm_graph::loops::Node;
-use llrm_mir::module::{BlockId, Function};
+use std::collections::BTreeSet;
+
+use llrm_graph::loops::{self, Node};
+use llrm_mir::module::{BlockId, Function, Operand};
+use llrm_mir::opcode::Opcode;
+use llrm_mir::{Constant, ConstantKind, Context};
 
 /// A block's id and its successors' ids.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +36,54 @@ pub fn block(at: i64) -> BlockId {
 /// `function`'s graph, in layout order.
 pub fn graph(function: &Function) -> Vec<Block> {
     function.layout().iter().map(|&block| Block { at: id(block), succ: function.successors(block).into_iter().map(id).collect() }).collect()
+}
+
+/// Blocks the entry does not reach, gone, and each phi's inputs from
+/// edges that no longer exist with them.
+///
+/// Copied from llrm-core's `optimize/transform.rs` `_unreachable`. The old
+/// MIR kept a dead block as an inert byte owner; the rich MIR owns no bytes.
+pub fn _unreachable(context: &mut Context, function: &mut Function) -> bool {
+    let blocks = graph(function);
+    let Some(entry) = blocks.first().map(|block| block.at) else { return false };
+    let successors = blocks.iter().map(|block| (block.at, &block.succ)).collect::<std::collections::BTreeMap<_, _>>();
+    let (mut reached, mut pending) = (BTreeSet::new(), vec![entry]);
+    while let Some(at) = pending.pop() {
+        if reached.insert(at) {
+            pending.extend(successors[&at].iter().copied());
+        }
+    }
+    let predecessors = loops::predecessors(&blocks);
+    let mut changed = false;
+    for &at in &reached {
+        let live = |from: &Operand| matches!(from, Operand::Block(one) if reached.contains(&id(*one)) && predecessors.get(&at).is_some_and(|from| from.contains(&id(*one))));
+        for phi in function.block(block(at)).instructions().to_vec() {
+            if function.instruction(phi).opcode != Opcode::Phi {
+                break;
+            }
+            let operands = &function.instruction(phi).operands;
+            let kept: Vec<Operand> = operands.chunks(2).filter(|pair| live(&pair[1])).flatten().copied().collect();
+            if kept.len() != operands.len() {
+                function.set_operands(phi, kept);
+                changed = true;
+            }
+        }
+    }
+    let dead: Vec<BlockId> = blocks.iter().filter(|one| !reached.contains(&one.at)).map(|one| block(one.at)).collect();
+    // Values defined there are used only there, or by phis on dropped edges.
+    for &one in &dead {
+        for inst in function.block(one).instructions().to_vec().into_iter().rev() {
+            if let Some(result) = function.instruction(inst).result {
+                let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
+                function.replace_all_uses_with(result, Operand::Constant(poison));
+            }
+            function.erase(inst).expect("its uses were replaced");
+        }
+    }
+    for &one in &dead {
+        function.erase_block(one).expect("an emptied block nothing names");
+    }
+    changed || !dead.is_empty()
 }
 
 #[cfg(test)]

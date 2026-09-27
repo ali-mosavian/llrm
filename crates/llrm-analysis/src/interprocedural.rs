@@ -27,12 +27,8 @@
 //! - A frame access is one whose pointer `frameescape::framed` places in an
 //!   alloca; a static one is a constant offset (`pointerfacts`) from a near
 //!   global variable this module defines.
-//!
-//! Skipped: `terminal_calls`, the tail cut, is noreturn's
-//! `after_terminal_calls` and moves with it; so its half of
-//! `test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail`
-//! waits too. `_cannot_return` is copied here from noreturn until that port
-//! owns it.
+//! - `noreturn_procedures`, `terminal_sites` and the `terminal_calls` cut
+//!   are noreturn's facts and edit, asked for here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -46,6 +42,8 @@ use llrm_support::hash::IndexMap;
 use crate::cfg;
 use crate::effects::{self, Declarations};
 use crate::frameescape;
+use crate::noreturn;
+pub use crate::noreturn::terminal_sites;
 use crate::pointerfacts;
 
 pub type Returns = IndexMap<GlobalId, ConstantId>;
@@ -353,73 +351,17 @@ fn _readonly_effects(module: &Module, layout: &DataLayout, declarations: &Declar
     true
 }
 
-/// Direct private procedures that cannot reach a normal return.
-///
-/// Start with all private candidates and remove a body only when a normal
-/// return remains reachable.  This greatest fixed point proves a closed
-/// recursive SCC terminal when every member stops through a member of that
-/// same SCC; an unknown, external, public, or returning edge removes its
-/// owner instead of being assumed terminal.
+/// Direct private procedures that cannot reach a normal return: noreturn's
+/// fixed point over the `eligible` bodies.  An unknown, external or public
+/// callee stays a returning edge.
 pub fn noreturn_procedures(module: &Module, eligible: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    let declarations = effects::declarations(module);
-    let bodies: Vec<(GlobalId, &Function)> = _bodies(module).into_iter().filter(|(id, _)| eligible.contains(id)).collect();
-    let mut proven: BTreeSet<GlobalId> = bodies.iter().map(|(id, _)| *id).collect();
-    loop {
-        let found = bodies
-            .iter()
-            .filter(|(_, function)| _cannot_return(function, &terminal_sites(&module.context, &declarations, function, &proven)))
-            .map(|(id, _)| *id)
-            .collect::<BTreeSet<_>>();
-        if found == proven {
-            return proven;
-        }
-        proven = found;
-    }
+    noreturn::inferred(module, eligible)
 }
 
-/// Direct calls whose callee cannot return: named in `noreturn`, or stated
-/// `noreturn`. An `invoke` may still unwind to its handler, so only a call
-/// counts.
-pub fn terminal_sites(context: &Context, declarations: &Declarations, function: &Function, noreturn: &BTreeSet<GlobalId>) -> BTreeSet<InstId> {
-    function
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
-        .filter(|&inst| {
-            effects::callee(context, function, inst).is_some_and(|target| noreturn.contains(&target))
-                || effects::states(context, declarations, function, inst, "noreturn")
-        })
-        .collect()
-}
-
-/// Copied from noreturn's `_cannot_return`, until that port owns it.
-fn _cannot_return(function: &Function, terminal_calls: &BTreeSet<InstId>) -> bool {
-    let Some(entry) = function.entry() else { return false };
-    let mut pending = vec![entry];
-    let mut visited = BTreeSet::new();
-    while let Some(at) = pending.pop() {
-        if !visited.insert(at) {
-            continue;
-        }
-        let mut stopped = false;
-        for &inst in function.block(at).instructions() {
-            if function.instruction(inst).opcode == Opcode::Ret {
-                return false;
-            }
-            if terminal_calls.contains(&inst) {
-                stopped = true;
-                break;
-            }
-        }
-        if !stopped {
-            let successors = function.successors(at);
-            if successors.is_empty() {
-                return false;
-            }
-            pending.extend(successors);
-        }
-    }
-    true
+/// Noreturn's terminal-call cut, at the direct calls to `noreturn` bodies.
+pub fn terminal_calls(context: &mut Context, declarations: &Declarations, function: &mut Function, noreturn: &BTreeSet<GlobalId>) -> bool {
+    let sites = terminal_sites(context, declarations, function, noreturn);
+    noreturn::after_terminal_calls(context, function, &sites)
 }
 
 /// Remove effect-free calls whose result nothing still reads.

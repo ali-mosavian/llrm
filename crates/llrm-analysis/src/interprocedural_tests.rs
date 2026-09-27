@@ -264,9 +264,17 @@ b:
     );
     let both = names(&module, &["spin", "caller"]);
     assert_eq!(noreturn_procedures(&module, &both), both);
+    let spin = names(&module, &["spin"]);
     let caller = function(&module, "caller");
-    let sites = terminal_sites(&module.context, &effects::declarations(&module), caller, &names(&module, &["spin"]));
+    let sites = terminal_sites(&module.context, &effects::declarations(&module), caller, &spin);
     assert_eq!(sites.into_iter().collect::<Vec<_>>(), calls(caller));
+
+    let mut module = module;
+    let declarations = effects::declarations(&module);
+    let (context, caller) = module.function_mut("caller").unwrap();
+    assert!(terminal_calls(context, &declarations, caller, &spin));
+    let left: Vec<&str> = caller.walk().map(|(_, inst)| caller.instruction(inst).opcode.mnemonic()).collect();
+    assert_eq!(left, ["call", "unreachable"]);
 }
 
 #[test]
@@ -303,13 +311,13 @@ fn test_mutually_recursive_private_terminal_bodies_are_noreturn() {
         "define internal void @first() {
 b:
   call void @second()
-  unreachable
+  ret void
 }
 
 define internal void @second() {
 b:
   call void @first()
-  unreachable
+  ret void
 }
 ",
     );
@@ -323,7 +331,7 @@ fn test_noreturn_scc_rejects_a_member_with_a_normal_return() {
         "define internal void @first() {
 b:
   call void @second()
-  unreachable
+  ret void
 }
 
 define internal void @second() {
