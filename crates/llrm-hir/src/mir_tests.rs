@@ -349,10 +349,12 @@ fn a_descriptor_field_is_read_where_the_layout_puts_it() {
     assert!(text.contains("  %1 = getelementptr i8, ptr %0, i16 -4\n  %2 = load i16, ptr %1\n"), "{text}");
 }
 
-/// Nib's 16.16 fixed point: the 64-bit product shifted back down, and the
-/// dividend shifted up before a 64-bit division.
+/// Nib's 16.16 fixed point is the frontend's promise, `llvm.smul.fix` and
+/// `llvm.sdiv.fix`: spelled as sext, a 64-bit multiply or divide, a shift
+/// and a trunc, it counted five instructions to unroll's budget, and T075's
+/// loops were refused.
 #[test]
-fn fixed_point_arithmetic_is_done_at_twice_the_width() {
+fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     let mut long = Type::new(2, "long", TypeKind::Integer, 4);
     long.signed = Some(true);
     let mut byte = Type::new(3, "byte", TypeKind::Integer, 1);
@@ -373,8 +375,7 @@ fn fixed_point_arithmetic_is_done_at_twice_the_width() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = sext i32 %0 to i64\n  %3 = sext i32 %1 to i64\n  %4 = mul i64 %2, %3\n  %5 = ashr i64 %4, 16\n  %6 = trunc i64 %5 to i32\n  \
-                %7 = sext i32 %6 to i64\n  %8 = sext i32 %1 to i64\n  %9 = shl i64 %7, 16\n  %10 = sdiv i64 %9, %8\n  %11 = trunc i64 %10 to i32\n  ret i32 %11\n";
+    let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)\n  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)\n  ret i32 %3\n";
     assert!(text.contains(body), "{text}");
 }
 

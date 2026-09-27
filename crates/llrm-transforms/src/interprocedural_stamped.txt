@@ -172,7 +172,7 @@ emitted/nib-examples-logfile define internal void @std.io.File.write(ptr addrspa
 emitted/nib-examples-logfile define internal void @std.io.File.read_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.read_line(ptr addrspace(1) nocapture %0, ptr addrspace(1) %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-logfile define internal void @Log.create(ptr addrspace(1) nocapture %0, ptr nocapture readonly %1) addrspace(1)
+emitted/nib-examples-logfile define internal void @Log.create(ptr addrspace(1) nocapture %0, ptr %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @Log.write(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @Log.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1)

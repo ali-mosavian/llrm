@@ -269,6 +269,12 @@ impl<'m> Machine<'m> {
                     _ => Val::Poison,
                 }
             }
+            Intrinsic::Fixed { divide } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) = (argument(0), argument(1), argument(2)) else { return Ok(Val::Poison) };
+                let signed = |bits: u128| ((bits << (128 - width)) as i128) >> (128 - width);
+                let Some(value) = Intrinsic::fixed(divide, width, signed(a), signed(b), scale as u32) else { return undefined("a fixed-point division by zero") };
+                Val::Int { bits: value as u128 & mask(width), width }
+            }
             // Fused or not is the machine's choice, as the LangRef allows.
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;

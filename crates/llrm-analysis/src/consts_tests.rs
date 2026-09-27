@@ -592,3 +592,26 @@ b0:
     );
     assert_eq!(retyped.solved("r", &Calls::default()), None);
 }
+
+/// Fixed point of known numbers is a number: unrolled, T075's `fix(n) / 4`
+/// and `c * fix(k)` were calls of known operands no one computed.
+#[test]
+fn a_fixed_point_intrinsic_of_known_numbers_folds() {
+    let parsed = Parsed::new(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32)
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)
+
+define i32 @f(i32 %x) {
+b0:
+  %p = call i32 @llvm.smul.fix.i32(i32 %x, i32 -640, i32 8)
+  %q = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 1024, i32 8)
+  %z = call i32 @llvm.sdiv.fix.i32(i32 %x, i32 0, i32 8)
+  ret i32 %p
+}
+",
+    );
+    let x = [("x", Known::new(768, 32))];
+    assert_eq!(parsed.result("p", &x), Some(Known::new(masked(&BigInt::from(-1920), 32), 32)), "3.0 * -2.5");
+    assert_eq!(parsed.result("q", &x), Some(Known::new(192, 32)));
+    assert_eq!(parsed.result("z", &x), None, "a zero divisor is undefined");
+}

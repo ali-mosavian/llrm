@@ -89,6 +89,17 @@ fn every_trip_is_copied_and_the_loop_is_gone() {
     }
 }
 
+/// An intrinsic is instructions, not a call out: T075's fixed-point
+/// multiply, one `llvm.smul.fix`, kept its loops rolled.
+#[test]
+fn a_trip_holding_an_intrinsic_is_copied() {
+    let body = "  %fx = call i16 @llvm.smul.fix.i16(i16 %m, i16 %n, i32 4)\n  store i16 %fx, ptr @count\n";
+    let text = format!("declare i16 @llvm.smul.fix.i16(i16, i16, i32)\n\n{}", summing("4", body));
+    let (changed, mut module) = through(&text, Unroll::default());
+    assert!(changed);
+    assert_eq!(loops_of(&mut module), 0);
+}
+
 /// Two header phis swapping each trip read each other's value from before
 /// the trip, not after.
 #[test]

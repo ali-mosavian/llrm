@@ -21,6 +21,8 @@ pub struct DataLayout {
     /// Integer widths with their ABI alignment in bytes.
     ints: BTreeMap<u32, u64>,
     floats: BTreeMap<u32, u64>,
+    /// The integer widths the target computes natively: `n`.
+    legal: Vec<u32>,
     aggregate_align: u64,
     pub alloca_space: u32,
 }
@@ -33,6 +35,7 @@ impl Default for DataLayout {
             pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, index_bits: 64 })]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
             floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (128, 16)]),
+            legal: Vec::new(),
             aggregate_align: 1,
             alloca_space: 0,
         }
@@ -54,7 +57,8 @@ impl DataLayout {
             match head {
                 "e" => layout.big_endian = false,
                 "E" => layout.big_endian = true,
-                "m" | "n" | "S" | "F" | "G" | "P" | "ni" | "Fi" | "Fn" => {}
+                "n" => layout.legal = numbers(rest)?.into_iter().map(|bits| bits as u32).collect(),
+                "m" | "S" | "F" | "G" | "P" | "ni" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
@@ -79,6 +83,12 @@ impl DataLayout {
             }
         }
         Ok(layout)
+    }
+
+    /// Whether the target computes `bits`-wide integers natively: LLVM's
+    /// `isLegalInteger`, so none without an `n`.
+    pub fn legal_integer(&self, bits: u32) -> bool {
+        self.legal.contains(&bits)
     }
 
     pub fn pointer(&self, space: u32) -> PointerSpec {

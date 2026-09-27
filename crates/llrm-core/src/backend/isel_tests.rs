@@ -2137,3 +2137,74 @@ define void @f(i16 %a) addrspace(1) {
     // Only %b, computed before the call, needs a slot.
     assert_eq!(got.iter().filter(|line| line.starts_with("mov word ptr [bp-")).count(), 1, "{got:?}");
 }
+
+/// A far pointer loaded from memory only to be passed on is one dword push:
+/// loaded as two words, format.put_text read one more memory operand per
+/// call than the old route's dword.
+#[test]
+fn test_a_far_pointer_loaded_to_be_passed_is_one_push() {
+    let text = "declare void @g(ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %t) addrspace(1) {
+  %at = getelementptr i8, ptr addrspace(1) %t, i16 4
+  %p = load ptr addrspace(1), ptr addrspace(1) %at
+  %n = load i16, ptr addrspace(1) %t
+  call addrspace(1) void @g(ptr addrspace(1) %p, i16 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("push dword ptr es:[")), "{got:?}");
+}
+
+/// A dword read as two words and pushed whole in several places is one
+/// dword load: format.put read its far buffer's two words and pushed them
+/// apart on both paths, one memory operand and one push more than the old
+/// route's dword per call.
+#[test]
+fn test_a_far_pointer_pushed_whole_on_two_paths_is_one_dword() {
+    let text = "@sink = internal global ptr null
+declare void @w(ptr addrspace(1), i16) addrspace(1)
+declare ptr @a(ptr, ptr addrspace(1), i16) addrspace(1)
+define void @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
+  %s = load ptr, ptr @sink
+  %z = icmp eq ptr %s, null
+  br i1 %z, label %one, label %two
+one:
+  call addrspace(1) void @w(ptr addrspace(1) %p, i16 %n)
+  ret void
+two:
+  %r = call addrspace(1) ptr @a(ptr %s, ptr addrspace(1) %p, i16 %n)
+  store ptr %r, ptr @sink
+  ret void
+}
+";
+    let got = listing(text, "f");
+    // Three argument words in two reads, pushed as two on each path.
+    assert_eq!(got.iter().filter(|line| line.contains("[bp+")).count(), 2, "{got:?}");
+    assert_eq!(got.iter().filter(|line| line.starts_with("push") && *line != "push bp").count(), 5, "{got:?}");
+}
+
+/// Nib's fixed point as `llvm.smul.fix` and `llvm.sdiv.fix`: the product
+/// one widening `imul` shifted down, as the old route's FixedMul; the
+/// quotient by a whole divisor one `idiv` of the dividend shifted up, as
+/// its FixedDiv. isel refused both calls.
+#[test]
+fn test_fixed_point_intrinsics_take_imul_and_idiv() {
+    let text = "declare i32 @llvm.smul.fix.i32(i32, i32, i32)
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32)
+
+define i32 @scaled(i32 %0, i32 %1) addrspace(1) {
+b1:
+  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
+  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 196608, i32 16)
+  ret i32 %3
+}
+";
+    assert_eq!(
+        listing(text, "scaled"),
+        [
+            "push bp", "mov bp, sp", "L0_0:", "mov eax, dword ptr [bp+6]", "mov ebx, dword ptr [bp+10]", "imul ebx", "mov ebx, eax", "shrd ebx, edx, 16",
+            "mov ecx, 196608", "mov eax, ebx", "cdq", "shld edx, ebx, 16", "shl eax, 16", "idiv ecx", "shld edx, eax, 16", "pop bp", "retf",
+        ]
+    );
+}

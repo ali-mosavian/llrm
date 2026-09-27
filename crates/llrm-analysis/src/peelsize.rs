@@ -193,7 +193,7 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                             values.shift_remove(&value);
                         }
                         out.size += 1;
-                        out.calls |= matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_));
+                        out.calls |= unit.calls_out(inst);
                     }
                 }
                 if matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)) || memory::unmodeled_write(unit, inst) {

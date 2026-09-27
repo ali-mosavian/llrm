@@ -1997,6 +1997,7 @@ impl Selector<'_, '_, '_> {
                     self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
                 Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
+                Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
         }
