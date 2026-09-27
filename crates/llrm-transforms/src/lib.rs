@@ -23,6 +23,7 @@ pub mod loopsimplify;
 pub mod peel;
 pub mod profit;
 pub mod promote;
+pub mod strength;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;

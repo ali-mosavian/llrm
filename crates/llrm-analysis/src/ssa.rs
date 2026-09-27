@@ -5,9 +5,12 @@
 //! occurrences.  A substitution maps a [`ValueId`] to an [`Operand`], since a
 //! rich MIR value may be replaced by a constant.
 //!
+//! `constructed` rebuilt SSA for a few of the old MIR's variables, each
+//! defined in several places; [`SsaUpdater`] is that for one value, as
+//! LLVM's SSAUpdater, and places the phis where its definitions meet. Its
+//! `ConstructionError`, the old renamer's, has no counterpart.
+//!
 //! Skipped, with no meaning on SSA IR:
-//! - `constructed` and `ConstructionError`: SSA reconstruction over the old
-//!   MIR's variables.
 //! - `renumbered`: variable versions.
 //! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's
 //!   side tables; a pointer is its type here, and an instruction's metadata
@@ -24,7 +27,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use llrm_mir::module::{Function, InstId, Instruction, Operand, ValueId};
+use llrm_mir::edit::Position;
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, Use, ValueId};
+use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::types::TypeId;
+use llrm_mir::{Constant, ConstantKind, Context};
 
 use crate::occurrence::{operations, phis};
 
@@ -143,14 +150,146 @@ pub fn values(function: &Function) -> impl Iterator<Item = ValueId> + '_ {
     })
 }
 
+/// One value defined in several blocks, as LLVM's SSAUpdater: each
+/// definition is available at the end of its block, and the value anywhere
+/// else is what reaches it, a phi where definitions meet.
+///
+/// A phi whose inputs turn out to be one value is that value instead. A
+/// block nothing defines and no path from a definition reaches reads
+/// poison.
+#[derive(Clone, Debug)]
+pub struct SsaUpdater {
+    ty: TypeId,
+    name: Option<String>,
+    available: BTreeMap<BlockId, Operand>,
+    entered: BTreeMap<BlockId, Operand>,
+    visiting: BTreeSet<BlockId>,
+    inserted: Vec<InstId>,
+}
+
+impl SsaUpdater {
+    /// A value of type `ty`; its phis are named `name`.
+    pub fn new(ty: TypeId, name: Option<&str>) -> Self {
+        Self {
+            ty,
+            name: name.map(str::to_owned),
+            available: BTreeMap::new(),
+            entered: BTreeMap::new(),
+            visiting: BTreeSet::new(),
+            inserted: Vec::new(),
+        }
+    }
+
+    /// `value` is the definition at the end of `block`.
+    pub fn add_available_value(&mut self, block: BlockId, value: Operand) {
+        self.available.insert(block, value);
+        self.entered.clear();
+    }
+
+    pub fn has_value_for_block(&self, block: BlockId) -> bool {
+        self.available.contains_key(&block)
+    }
+
+    /// The value at the end of `block`.
+    pub fn value_at_end_of_block(&mut self, context: &mut Context, function: &mut Function, block: BlockId) -> Operand {
+        match self.available.get(&block) {
+            Some(&value) => value,
+            None => self.value_in_middle_of_block(context, function, block),
+        }
+    }
+
+    /// The value on entry to `block`, before any definition in it.
+    pub fn value_in_middle_of_block(&mut self, context: &mut Context, function: &mut Function, block: BlockId) -> Operand {
+        if let Some(&value) = self.entered.get(&block) {
+            return value;
+        }
+        let predecessors = function.predecessors(block);
+        if predecessors.len() == 1 {
+            // A cycle of single predecessors is unreachable.
+            if !self.visiting.insert(block) {
+                return self.poison(context);
+            }
+            let value = self.value_at_end_of_block(context, function, predecessors[0]);
+            self.visiting.remove(&block);
+            self.entered.insert(block, value);
+            return value;
+        }
+        if predecessors.is_empty() {
+            let value = self.poison(context);
+            self.entered.insert(block, value);
+            return value;
+        }
+        let phi = function.create_instruction(Opcode::Phi, self.ty, Vec::new(), Flags::default(), self.name.as_deref());
+        let first = function.block(block).instructions().first().copied();
+        function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
+        let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        self.entered.insert(block, result);
+        self.inserted.push(phi);
+        let mut operands = Vec::new();
+        for predecessor in predecessors {
+            operands.push(self.value_at_end_of_block(context, function, predecessor));
+            operands.push(Operand::Block(predecessor));
+        }
+        function.set_operands(phi, operands);
+        let mut inputs = function.instruction(phi).operands.iter().step_by(2).copied().filter(|&one| one != result);
+        let Some(single) = inputs.next() else {
+            return self.replaced(function, phi, result, self.poison(context));
+        };
+        if inputs.all(|one| one == single) {
+            return self.replaced(function, phi, result, single);
+        }
+        result
+    }
+
+    /// Makes `one` read the value where it reads: a phi's input at the end
+    /// of the block it comes from.
+    pub fn rewrite_use(&mut self, context: &mut Context, function: &mut Function, one: Use) {
+        let user = function.instruction(one.user);
+        let value = if user.opcode == Opcode::Phi {
+            let Operand::Block(from) = user.operands[one.index as usize + 1] else { unreachable!("a phi's block operand") };
+            self.value_at_end_of_block(context, function, from)
+        } else {
+            let block = function.parent(one.user).expect("a placed user");
+            self.value_in_middle_of_block(context, function, block)
+        };
+        function.set_operand(one.user, one.index as usize, value);
+    }
+
+    /// The phis placed so far that stand.
+    pub fn inserted_phis(&self) -> &[InstId] {
+        &self.inserted
+    }
+
+    fn poison(&self, context: &mut Context) -> Operand {
+        Operand::Constant(context.constant(Constant { ty: self.ty, kind: ConstantKind::Poison }))
+    }
+
+    /// `single` in place of the trivial `phi`.
+    fn replaced(&mut self, function: &mut Function, phi: InstId, result: Operand, single: Operand) -> Operand {
+        let Operand::Value(value) = result else { unreachable!("a phi's value") };
+        function.replace_all_uses_with(value, single);
+        function.set_operands(phi, Vec::new());
+        function.erase(phi).expect("its uses were replaced");
+        self.inserted.retain(|&one| one != phi);
+        for entry in self.entered.values_mut().chain(self.available.values_mut()) {
+            if *entry == result {
+                *entry = single;
+            }
+        }
+        single
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use llrm_mir::module::{Operand, ValueId};
 
-    use super::{SubstitutionError, operations, phis, provider, pruned_phis, substituted, use_index, values};
-    use crate::testing::{function, parsed, value};
+    use llrm_mir::module::Use;
+
+    use super::{SsaUpdater, SubstitutionError, operations, phis, provider, pruned_phis, substituted, use_index, values};
+    use crate::testing::{block, function, parsed, value};
 
     #[test]
     fn test_unused_phi_cycles_are_pruned_but_real_dependencies_survive() {
@@ -388,5 +527,113 @@ b0:
         let (_, _, add) = operations(f).next().unwrap();
         let swap = BTreeMap::from([(value(f, "x"), Operand::Constant(seven))]);
         assert_eq!(substituted(add, &swap).unwrap(), vec![Operand::Constant(seven); 2]);
+    }
+
+    /// @f of `text` with the value `name` reads rewritten as the updater
+    /// given `defined` (block, value) says, and the phis it placed.
+    fn updated(text: &str, reader: &str, defined: &[(&str, &str)]) -> (String, usize) {
+        let mut module = parsed(text);
+        let f = function(&module, "f");
+        let definitions = defined.iter().map(|(at, name)| (block(f, at), Operand::Value(value(f, name)))).collect::<Vec<_>>();
+        let reader = value(f, reader);
+        let user = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(reader)).expect("defined");
+        let ty = f.value(reader).ty;
+        let (context, f) = module.function_mut("f").unwrap();
+        let mut updater = SsaUpdater::new(ty, Some("v"));
+        for (at, one) in definitions {
+            updater.add_available_value(at, one);
+        }
+        updater.rewrite_use(context, f, Use { user, index: 0 });
+        assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
+        let placed = updater.inserted_phis().len();
+        (llrm_mir::print::module(&module), placed)
+    }
+
+    #[test]
+    fn a_value_defined_before_a_loop_and_in_its_latch_meets_in_a_header_phi() {
+        let (text, placed) = updated(
+            "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br label %b1
+
+b1:
+  %u = add i16 %x, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %y = add i16 %x, 1
+  br label %b1
+
+b3:
+  ret i16 %u
+}
+",
+            "u",
+            &[("b0", "x"), ("b2", "y")],
+        );
+        assert_eq!(placed, 1);
+        assert!(text.contains("b1:\n  %v = phi i16 [ %x, %b0 ], [ %y, %b2 ]\n  %u = add i16 %v, 0\n"), "{text}");
+    }
+
+    const DIAMOND: &str = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  br label %b3
+
+b2:
+  %b = add i16 %x, 2
+  br label %b3
+
+b3:
+  %r = add i16 %x, 0
+  ret i16 %r
+}
+";
+
+    #[test]
+    fn a_join_takes_each_arms_definition_or_what_reaches_it() {
+        let (text, placed) = updated(DIAMOND, "r", &[("b0", "x"), ("b1", "a")]);
+        assert_eq!(placed, 1);
+        assert!(text.contains("b3:\n  %v = phi i16 [ %a, %b1 ], [ %x, %b2 ]\n  %r = add i16 %v, 0\n"), "{text}");
+    }
+
+    #[test]
+    fn one_value_on_every_edge_needs_no_phi() {
+        let (text, placed) = updated(DIAMOND, "r", &[("b1", "x"), ("b2", "x")]);
+        assert_eq!(placed, 0);
+        assert!(text.contains("b3:\n  %r = add i16 %x, 0\n"), "{text}");
+    }
+
+    #[test]
+    fn an_edge_no_definition_reaches_brings_poison() {
+        let (text, placed) = updated(DIAMOND, "r", &[("b1", "a")]);
+        assert_eq!(placed, 1);
+        assert!(text.contains("%v = phi i16 [ %a, %b1 ], [ poison, %b2 ]"), "{text}");
+    }
+
+    #[test]
+    fn a_phi_input_reads_the_value_at_the_end_of_its_edge() {
+        let (text, placed) = updated(
+            "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  br label %b2
+
+b2:
+  %e = phi i16 [ %x, %b1 ], [ %x, %b0 ]
+  ret i16 %e
+}
+",
+            "e",
+            &[("b0", "x"), ("b1", "a")],
+        );
+        assert_eq!(placed, 0);
+        assert!(text.contains("%e = phi i16 [ %a, %b1 ], [ %x, %b0 ]"), "{text}");
     }
 }
