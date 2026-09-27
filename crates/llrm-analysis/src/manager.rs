@@ -5,6 +5,8 @@
 //! (`passes::Outer`). Module analyses there: `GlobalsAA`, which globals no
 //! outside code reaches but by name, and alias's callee summaries.
 
+use std::rc::Rc;
+
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, ValueId};
@@ -196,6 +198,39 @@ impl Analysis for DominatedEdges {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
         ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers), &registers)
+    }
+}
+
+/// What the manager holds of a function that a unit over it carries, asked
+/// while the body is as the manager last saw it: dominance and loops, what
+/// is known without memory and, where asked for, what alias finds.
+pub struct Held {
+    shape: Rc<Shape>,
+    registers: Rc<IndexMap<ValueId, Known>>,
+    pointers: Option<Rc<<Pointers as Analysis>::Result>>,
+    annotated: Option<Rc<<Annotated as Analysis>::Result>>,
+}
+
+impl Held {
+    pub fn of(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses, alias: bool) -> Self {
+        Self {
+            shape: analyses.get::<Shape>(context, layout, function),
+            registers: analyses.get::<Registers>(context, layout, function),
+            pointers: alias.then(|| analyses.get::<Pointers>(context, layout, function)),
+            annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
+        }
+    }
+
+    /// A unit over `function`, the body these were found of.
+    pub fn unit<'a>(&'a self, context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Unit<'a> {
+        let mut unit = Unit::within(context, layout, function, outer).with_shape(&self.shape).with_registers(&self.registers);
+        if let Some(Ok(pointers)) = self.pointers.as_deref() {
+            unit = unit.with_pointers(pointers);
+        }
+        if let Some(annotated) = self.annotated.as_deref() {
+            unit = unit.with_annotated(annotated);
+        }
+        unit
     }
 }
 

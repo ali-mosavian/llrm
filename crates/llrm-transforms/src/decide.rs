@@ -34,7 +34,7 @@ use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Calls, Known, masked};
-use llrm_analysis::manager::{Annotated, Pointers, Registers};
+use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_graph::loops;
@@ -76,17 +76,8 @@ fn _decided(context: &mut Context, layout: &DataLayout, function: &mut Function,
     if threaded {
         analyses.invalidate(&PreservedAnalyses::none());
     }
-    let decisions = {
-        let shape = analyses.get::<cfg::Shape>(context, layout, function);
-        let registers = analyses.get::<Registers>(context, layout, function);
-        let pointers = analyses.get::<Pointers>(context, layout, function);
-        let annotated = analyses.get::<Annotated>(context, layout, function);
-        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&annotated);
-        if let Ok(pointers) = &*pointers {
-            unit = unit.with_pointers(pointers);
-        }
-        _decisions(&unit)?
-    };
+    let held = Held::of(context, layout, function, analyses, true);
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
     if decisions.is_empty() {
         return Ok(threaded);
     }

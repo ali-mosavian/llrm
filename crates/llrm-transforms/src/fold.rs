@@ -90,17 +90,18 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
 /// `folded`, `analyses` holding what is known of `function`.
 fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
     let numbers = _numbers(context, layout, function, analyses, calls);
-    floatfold::folded(context, layout, function, analyses.outer(), calls) | numbers
+    if numbers {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    floatfold::_folded(context, layout, function, analyses, calls) | numbers
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
 fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
     let (values, edge) = {
-        let shape = analyses.get::<cfg::Shape>(context, layout, function);
-        let registers = analyses.get::<manager::Registers>(context, layout, function);
-        let annotated = analyses.get::<manager::Annotated>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&annotated);
+        let held = manager::Held::of(context, layout, function, analyses, true);
+        let unit = held.unit(context, layout, function, analyses.outer());
         let edges = floatfacts::exit_cells(&unit, calls);
         let facts = consts::known(&unit, Some(calls), Some(&edges), None);
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
