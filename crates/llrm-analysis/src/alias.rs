@@ -18,15 +18,11 @@
 //! Not ported: `named_bytes` (a cell's root is its object), the merge of a
 //! frontend's attached provenance with the derived one in
 //! `_resolved_reference` (nothing attaches one), and `annotated`'s outgoing
-//! stack excludes (no push area). Waiting for induction's port, the back
-//! edge of this dependency cycle: `congruences`, and so `annotated`'s
-//! loop-bounded and strided narrowing, which reads `ranges::bounded` and
-//! `congruences` as empty until then.
+//! stack excludes (no push area).
 //!
 //! Tests skipped: `test_outgoing_argument_stack_does_not_kill_current_frame_values`
 //! (no push area), `test_pointer_fact_does_not_hide_a_conflicting_concrete_operand_object`
-//! (no attached provenance), `annotated_narrows_a_loop_index_to_its_strided_interval`
-//! (waits for induction), `test_a_lane_form_slice_names_every_byte_it_covers`
+//! (no attached provenance), `test_a_lane_form_slice_names_every_byte_it_covers`
 //! (`named_bytes`). `test_unknown_call_reaches_nonlocals_and_only_its_pointer_actual`
 //! drops its Python `repr` order, and `test_interprocedural_modref_reaches_the_call_operation`
 //! its `memory_complete` flag: a call's effect is a side table.
@@ -39,7 +35,7 @@ use std::sync::LazyLock;
 use llrm_graph::loops;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_mir::opcode::{Attribute, CastOp, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
@@ -47,6 +43,8 @@ use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
+use crate::consts;
+use crate::induction;
 use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
 use crate::regions::ByteRange;
@@ -1052,13 +1050,80 @@ fn mod_floor(value: &BigInt, modulus: &BigInt) -> BigInt {
     ((value % modulus) + modulus) % modulus
 }
 
+/// Known `value == residue (mod modulus)` facts; modulus zero is exact.
+///
+/// A value wraps at its width, so a modulus holds only where it divides
+/// the width's: each is cut to that divisor, and an exact residue masked.
+pub fn congruences(unit: &Unit) -> IndexMap<ValueId, (BigInt, BigInt)> {
+    let function = unit.function;
+    let constants = consts::known(unit, None, None, None);
+    let mut result = IndexMap::<ValueId, (BigInt, BigInt)>::default();
+    let zero = BigInt::from(0);
+    for loop_ in loops::loops(&cfg::graph(function), None) {
+        for affine in induction::basics(unit, &loop_).values() {
+            let width = affine.start.width();
+            let (Some(start), Some(step)) = (induction::_signed(&affine.start, &constants, width), induction::_signed(&affine.step, &constants, width)) else {
+                continue;
+            };
+            if step != zero {
+                result.insert(affine.value, reduced(step, start, width));
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
+            let (Opcode::Binary(kind), [left, right], Some(width)) = (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value))) else { continue };
+            let fact = |one: Operand| match one {
+                Operand::Value(source) => result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))),
+                _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
+            };
+            let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
+            let found = match kind {
+                BinaryOp::Add | BinaryOp::Sub => {
+                    let residue = if *kind == BinaryOp::Add { a.1 + b.1 } else { a.1 - b.1 };
+                    reduced(induction::gcd(a.0, b.0), residue, width)
+                }
+                BinaryOp::Mul => {
+                    if a.0 == zero {
+                        (a, b) = (b, a);
+                    }
+                    if b.0 != zero {
+                        continue;
+                    }
+                    reduced(&a.0 * &b.1, a.1 * b.1, width)
+                }
+                BinaryOp::Shl if b.0 == zero && zero <= b.1 && b.1 < BigInt::from(width) => {
+                    let factor = BigInt::from(1) << usize::try_from(&b.1).expect("a count below the width");
+                    reduced(&a.0 * &factor, a.1 * factor, width)
+                }
+                _ => continue,
+            };
+            result.insert(value, found);
+            changed = true;
+        }
+        if !changed {
+            return result;
+        }
+    }
+}
+
+/// `residue (mod modulus)` of a `width`-bit value: the modulus cut to its
+/// greatest divisor of 2**width, 0 where that is the whole width's.
+fn reduced(modulus: BigInt, residue: BigInt, width: u32) -> (BigInt, BigInt) {
+    let whole = BigInt::from(1) << width;
+    let modulus = induction::gcd(if modulus < BigInt::from(0) { -modulus } else { modulus }, whole.clone());
+    if modulus == whole { (BigInt::from(0), mod_floor(&residue, &whole)) } else { (modulus.clone(), mod_floor(&residue, &modulus)) }
+}
+
 /// Attach solved provenance to every access of the function: each load's
 /// and store's, narrowed where a range bounds its index.
 pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
     let facts = points_to(unit, None, None)?;
-    // Waiting for induction: `ranges::bounded` and `congruences`.
-    let bounded: IndexMap<i64, IndexMap<ValueId, ranges::Interval>> = IndexMap::default();
-    let strides: IndexMap<ValueId, (BigInt, BigInt)> = IndexMap::default();
+    let bounded = ranges::bounded(unit)?;
+    let strides = congruences(unit);
     let constants = ranges::constants(unit);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {

@@ -1,10 +1,13 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use crate::context::Context;
 use crate::datalayout::DataLayout;
-use crate::module::{Change, Function, Module, Operand};
+use crate::context::GlobalId;
+use crate::module::{Change, Function, GlobalKind, Module, Operand};
+use crate::opcode::Attribute;
 use crate::parse;
-use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, PassManager, PreservedAnalyses, Unit};
+use crate::passes::{Analyses, Analysis, Dominators, FunctionPass, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses, Unit};
+use crate::target::Machine;
 
 const TEXT: &str = "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %b\nb:\n  ret i16 0\n}\n";
 
@@ -43,7 +46,7 @@ struct Counted;
 impl Analysis for Counted {
     type Result = usize;
     const NAME: &'static str = "counted";
-    fn run(_: &Context, _: &DataLayout, function: &Function) -> usize {
+    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
         COMPUTED.set(COMPUTED.get() + 1);
         function.layout().len()
     }
@@ -140,4 +143,132 @@ fn a_bisection_limit_skips_the_runs_after_it() {
     assert_eq!(stages.len(), 1);
     let printed = crate::print::module(&module);
     assert!(printed.contains("@g(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b"), "{printed}");
+}
+
+thread_local! {
+    static SEEN: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether @g reads memory at most, as the outer proxy declares it.
+struct ReadsOnly;
+
+impl Analysis for ReadsOnly {
+    type Result = bool;
+    const NAME: &'static str = "reads-only";
+    fn run(_: &Context, _: &DataLayout, _: &Function, analyses: &mut Analyses) -> bool {
+        let g = analyses.outer().globals.iter().find(|one| one.name.as_deref() == Some("g")).and_then(|one| one.function()).expect("@g");
+        g.attrs.contains(&Attribute::Flag("readonly".to_owned()))
+    }
+}
+
+/// Records what `ReadsOnly` answers, and keeps everything.
+struct Ask;
+
+impl FunctionPass for Ask {
+    fn name(&self) -> &'static str {
+        "ask"
+    }
+
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let answer = *analyses.get::<ReadsOnly>(unit.context, unit.layout, unit.function);
+        SEEN.with_borrow_mut(|seen| seen.push(answer));
+        PreservedAnalyses::all()
+    }
+}
+
+/// Marks @g `readonly`.
+struct MarkReadonly;
+
+impl ModulePass for MarkReadonly {
+    fn name(&self) -> &'static str {
+        "mark-readonly"
+    }
+
+    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
+        let g = module.named("g").unwrap();
+        let GlobalKind::Function(function) = &mut module.globals[g.0 as usize].kind else { panic!("a function") };
+        function.attrs.push(Attribute::Flag("readonly".to_owned()));
+        vec![g]
+    }
+}
+
+/// A function analysis reads its callee's declaration through the outer
+/// proxy; one kept across a change to that declaration would still say
+/// the callee may write.
+#[test]
+fn a_change_to_what_an_analysis_read_of_the_module_drops_it() {
+    let text = "declare i16 @g()\n\ndefine i16 @f() {\nentry:\n  %x = call i16 @g()\n  ret i16 %x\n}\n";
+    let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    SEEN.with_borrow_mut(Vec::clear);
+    let mut passes = PassManager::default();
+    passes.add(Ask);
+    passes.add_module(MarkReadonly);
+    passes.add(Ask);
+    passes.run(&mut module).unwrap();
+    assert_eq!(SEEN.take(), [false, true]);
+}
+
+thread_local! {
+    static SUMMED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Counts its own computations: how many functions have bodies.
+struct Bodies;
+
+impl ModuleAnalysis for Bodies {
+    type Result = usize;
+    const NAME: &'static str = "bodies";
+    fn run(module: &Module, _: &DataLayout, _: Option<&dyn Machine>) -> usize {
+        SUMMED.set(SUMMED.get() + 1);
+        module.functions().filter(|(_, _, function)| !function.is_declaration()).count()
+    }
+}
+
+/// Reads `Bodies` through the outer proxy.
+struct Counts(PreservedAnalyses);
+
+impl FunctionPass for Counts {
+    fn name(&self) -> &'static str {
+        "counts"
+    }
+
+    fn run(&mut self, _: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        assert_eq!(analyses.outer().cached::<Bodies>().as_deref(), Some(&1));
+        self.0.clone()
+    }
+}
+
+#[test]
+fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.add(Counts(PreservedAnalyses::none().preserve_module::<Bodies>()));
+    passes.add(Counts(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run(&mut module()).unwrap();
+    assert_eq!(SUMMED.get(), 2);
+}
+
+/// `-verify-analysis-invalidation` of a module analysis: a pass claiming
+/// to keep `Bodies` while it empties a body.
+#[test]
+fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
+    struct Empty;
+
+    impl FunctionPass for Empty {
+        fn name(&self) -> &'static str {
+            "empty"
+        }
+
+        fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+            *unit.function = unit.function.declaration();
+            PreservedAnalyses::all()
+        }
+    }
+
+    let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
+    passes.require::<Bodies>();
+    passes.add(Empty);
+    assert_eq!(passes.run(&mut module()).err().as_deref(), Some("empty claims to preserve bodies but changed them"));
 }

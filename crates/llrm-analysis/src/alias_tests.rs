@@ -7,7 +7,7 @@ use llrm_mir::module::{InstId, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
-use super::{_direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, nonnull_by_definition, points_to, summaries};
+use super::{_direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, nonnull_by_definition, points_to, summaries};
 use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of};
 use crate::regions::overlapping;
 use crate::testing::{DOS, function, layout, parsed, value};
@@ -531,4 +531,103 @@ fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
     assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").len(), 1);
     assert!(escaped("store ptr %a, ptr %slot\n  ret ptr null").is_empty());
     assert_eq!(escaped("store ptr %a, ptr %slot\n  ret ptr %slot").len(), 2);
+}
+
+#[test]
+fn annotated_narrows_a_loop_index_to_its_strided_interval() {
+    // `tests/test_edge_ranges.py:guarded_loop` plus a word load at @g+4
+    // indexed by the counter scaled by two.
+    let parsed = Parsed::new(
+        "@g = global [64 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b10
+
+b10:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b40 ]
+  %c = icmp slt i16 %i, 10
+  br i1 %c, label %b20, label %b50
+
+b20:
+  %g = icmp slt i16 %i, 4
+  br i1 %g, label %b30, label %b40
+
+b30:
+  %off = mul i16 %i, 2
+  %q = getelementptr i8, ptr @g, i16 %off
+  %p = getelementptr i8, ptr %q, i16 4
+  %x = load i16, ptr %p
+  br label %b40
+
+b40:
+  %next = add i16 %i, 1
+  br label %b10
+
+b50:
+  ret void
+}
+",
+    );
+    let strides = congruences(&parsed.unit());
+    assert_eq!(strides.get(&parsed.value("i")), Some(&(1.into(), 0.into())));
+    assert_eq!(strides.get(&parsed.value("off")), Some(&(2.into(), 0.into())));
+
+    let load = parsed.all(|op| matches!(op, Opcode::Load { .. }))[0];
+    let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
+    let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
+    let global = object_of(&parsed.unit(), root).expect("an object");
+    assert_eq!(tagged.slices, BTreeSet::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
+}
+
+/// A byte counter stepping by `step` for 200 trips, counting the trips
+/// where `%i urem modulus != residue`.
+fn wrapping(step: i64, check: Option<(i64, i64)>) -> String {
+    let (modulus, residue) = check.unwrap_or((1, 0));
+    format!(
+        "define i16 @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ 0, %b0 ], [ %next, %b1 ]
+  %j = phi i16 [ 0, %b0 ], [ %jnext, %b1 ]
+  %wrong = phi i16 [ 0, %b0 ], [ %worse, %b1 ]
+  %r = urem i8 %i, {modulus}
+  %off = icmp ne i8 %r, {residue}
+  %z = zext i1 %off to i16
+  %worse = add i16 %wrong, %z
+  %next = add i8 %i, {step}
+  %jnext = add i16 %j, 1
+  %c = icmp slt i16 %jnext, 200
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %w = phi i16 [ %worse, %b1 ]
+  ret i16 %w
+}}
+"
+    )
+}
+
+/// `i += 3` on a byte was `i == 0 (mod 3)`, but 255 + 3 is 2: the stride
+/// must divide the width's modulus to survive the wrap.
+#[test]
+fn a_congruence_holds_across_the_counters_wrap() {
+    for (step, strided) in [(3, false), (4, true), (-12, true)] {
+        let parsed = Parsed::new(&wrapping(step, None));
+        let (modulus, residue) = congruences(&parsed.unit())[&parsed.value("i")].clone();
+        if strided {
+            assert!(modulus > 1.into(), "{step}: {modulus}");
+        }
+        let (modulus, residue) = (i64::try_from(modulus).unwrap(), i64::try_from(residue).unwrap());
+        if modulus > 1 {
+            let checked = parsed_module(&wrapping(step, Some((modulus, residue))));
+            assert_eq!(llrm_mir::interpret::run(&checked, "f", vec![], 100_000), Ok(llrm_mir::interpret::Val::Int { bits: 0, width: 16 }), "{step}");
+        }
+    }
+}
+
+fn parsed_module(text: &str) -> Module {
+    parsed(&format!("{DOS}{text}"))
 }

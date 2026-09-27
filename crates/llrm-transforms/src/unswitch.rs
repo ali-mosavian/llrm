@@ -57,11 +57,11 @@ impl FunctionPass for Unswitch {
         "unswitch"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let passes = &mut self.passes;
         let mut reoptimize = |candidate: &mut Unit| {
             for pass in passes.iter_mut() {
-                pass.run(candidate, &mut Analyses::default());
+                pass.run(candidate, &mut analyses.fresh());
             }
         };
         match optimized(unit, &self.costs, &mut reoptimize) {

@@ -6,9 +6,8 @@
 //! Adapted from llrm-core's `optimize/promote.rs`. What an access names is
 //! `alias::annotated`'s answer, what a call writes `alias::calls_annotated`'s
 //! with every callee unknown, and whether a write reaches a cell
-//! `regions::overlapping`'s. A module pass: a function pass's unit has no
-//! globals, without which no global is an object and no callee's
-//! attributes are read.
+//! `regions::overlapping`'s. Globals and callees' attributes come through
+//! the outer proxy.
 //!
 //! What changed with the IR:
 //! - A cell is its exact leaf, or else its pointer decomposed (`Key::Ref`)
@@ -45,11 +44,11 @@ use llrm_analysis::{cfg, regions, ssa};
 use llrm_graph::loops;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::ModulePass;
+use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use llrm_mir::{Constant, ConstantKind, Context, GlobalId};
+use llrm_mir::{Constant, ConstantKind, Context};
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
@@ -196,49 +195,46 @@ pub fn _canonical_leaf_types<'a>(refs: impl IntoIterator<Item = &'a MemRef>) -> 
 
 pub struct Promote;
 
-impl ModulePass for Promote {
+impl FunctionPass for Promote {
     fn name(&self) -> &'static str {
         "promote"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        promoted(module, false).unwrap_or_else(|error| panic!("promote: {error}"))
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        run(unit, analyses, false, "promote")
     }
 }
 
 /// Scalarize proven aggregate leaves before scalar simplification.
 pub struct Sroa;
 
-impl ModulePass for Sroa {
+impl FunctionPass for Sroa {
     fn name(&self) -> &'static str {
         "sroa"
     }
 
-    fn run(&mut self, module: &mut Module) -> Vec<GlobalId> {
-        promoted(module, true).unwrap_or_else(|error| panic!("sroa: {error}"))
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        run(unit, analyses, true, "sroa")
     }
 }
 
-/// Every defined function of `module` promoted, or with `aggregate_only`
-/// only its aggregates' leaves; the functions that changed.
-pub fn promoted(module: &mut Module, aggregate_only: bool) -> Result<Vec<GlobalId>, String> {
-    let layout = match &module.datalayout {
-        Some(text) => DataLayout::parse(text)?,
-        None => DataLayout::default(),
-    };
-    let mut changed = Vec::new();
-    for at in 0..module.globals.len() {
-        let Some(function) = module.globals[at].function().filter(|one| !one.is_declaration()) else { continue };
-        let plan = plan(&Unit::of(module, &layout, function), aggregate_only)?;
-        if plan.loads.is_empty() {
-            continue;
-        }
-        let Module { context, globals, .. } = module;
-        let GlobalKind::Function(function) = &mut globals[at].kind else { unreachable!("a function a moment ago") };
-        rewrite(context, function, &plan);
-        changed.push(GlobalId(at as u32));
+fn run(unit: &mut passes::Unit, analyses: &Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
+    match promoted(unit.context, unit.layout, unit.function, analyses.outer(), aggregate_only) {
+        Ok(true) => PreservedAnalyses::none(),
+        Ok(false) => PreservedAnalyses::all(),
+        Err(error) => panic!("{name}: {error}"),
     }
-    Ok(changed)
+}
+
+/// `function` promoted, or with `aggregate_only` only its aggregates'
+/// leaves; `outer` is its module and target. Whether it changed.
+pub fn promoted(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, aggregate_only: bool) -> Result<bool, String> {
+    let plan = plan(&Unit::within(context, layout, function, outer), aggregate_only)?;
+    if plan.loads.is_empty() {
+        return Ok(false);
+    }
+    rewrite(context, function, &plan);
+    Ok(true)
 }
 
 /// What one function's promotion does: the type each cell holds, the

@@ -21,6 +21,7 @@ pub mod parse;
 pub mod passes;
 pub mod print;
 pub mod scalarevolution;
+pub mod target;
 pub mod transforms;
 pub mod types;
 pub mod valuetracking;
