@@ -26,8 +26,8 @@
 //!   `_widest` and `_width`'s word default.
 //!
 //! `Strength` then shares counters (`ivshare`), drops what died and sinks
-//! final updates to the exits (`exitsink`). Not ported yet: the rest of its
-//! tail, `loopexit::evaluated`, `indvars::rewound` and `indvars::simplified`.
+//! final updates to the exits (`exitsink`), then the rest of its tail:
+//! `loopexit::evaluated`, `indvars::rewound` and `indvars::simplified`.
 //!
 //! llrm-mir's `loopreduce` reduces, through ScalarEvolution, a sum of any
 //! of a loop's recurrences, their constant multiples and an address off
@@ -63,7 +63,7 @@ use llrm_mir::{Constant, ConstantKind};
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 use num_bigint::BigInt;
 
-use crate::{dead, exitsink, ivshare};
+use crate::{dead, exitsink, indvars, ivshare, loopexit};
 use crate::profit::OperationCosts;
 
 /// Strength reduction. `registers` of 0 leaves pressure unpriced;
@@ -86,7 +86,16 @@ impl FunctionPass for Strength {
         let reduced = reduced(unit, &outer, &facts, self.registers, self.call_registers, &self.costs, true);
         let shared = ivshare::shared(unit, &outer);
         let dead = dead::dead(unit.context, unit.callees, unit.function);
-        if exitsink::sunk(unit.function) | dead | reduced | shared {
+        let sunk = exitsink::sunk(unit.function);
+        // The tail: exit values evaluated, then the control a credited
+        // formula took over, so the counter it replaced dies.
+        let evaluated = loopexit::evaluated(unit.context, unit.layout, unit.callees, unit.function, &outer).unwrap_or_else(|error| panic!("strength: {error}"));
+        let rewound = indvars::rewound(unit.context, unit.layout, unit.function, analyses, self.registers, &self.costs);
+        let simplified = indvars::simplified(unit.context, unit.layout, unit.function, analyses).unwrap_or_else(|error| panic!("strength: {error}"));
+        let cleared = (rewound | simplified) && dead::dead(unit.context, unit.callees, unit.function);
+        if evaluated {
+            PreservedAnalyses::none()
+        } else if sunk | dead | reduced | shared | rewound | simplified | cleared {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {

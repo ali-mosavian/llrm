@@ -809,6 +809,18 @@ fn test_a_step_promised_not_to_wrap_ends_an_inclusive_symbolic_loop() {
     }
 }
 
+/// `i < n` from a known start cannot pass the width's end: CountToZero
+/// needs that bound to prove a recurrence reaches zero no earlier, and
+/// found none for a runtime `n` (the old body read it off `n`'s range).
+#[test]
+fn an_exclusive_test_is_bounded_by_its_widths_end() {
+    for (test, start, maximum) in [(IntPredicate::Ult, 0, Some(0xFFFF)), (IntPredicate::Slt, 0, Some(0x7FFF)), (IntPredicate::Ult, 5, Some(0xFFFA)), (IntPredicate::Ule, 0, None)] {
+        let parsed = looped(Some(start), None, test, 1, shaped("pre", 16));
+        let maxima = parsed.counted(false).into_iter().map(|proof| proof.maximum).collect::<Vec<_>>();
+        assert_eq!(maxima, maximum.map(|one| vec![Some(BigInt::from(one))]).unwrap_or_default(), "{test:?} {start}");
+    }
+}
+
 /// `sext` or `zext` of a counted byte counter, times 3.
 fn extended(cast: &str, start: i64, bound: i64) -> Parsed {
     Parsed::new(&format!(

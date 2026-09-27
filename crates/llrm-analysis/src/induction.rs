@@ -1012,6 +1012,10 @@ fn _unit_maximum(
         target = target.or_else(|| Some(end.clone()));
         origin = origin.or_else(|| Some(if ascending { low.clone() } else { high.clone() }));
     }
+    if !inclusive {
+        // An exclusive bound lies inside the width: the counter stops by its end.
+        target = target.or_else(|| Some(end.clone()));
+    }
     let ranged = match (&origin, &target) {
         (Some(origin), Some(target)) if low <= *origin.min(target) && *origin.max(target) <= high => {
             Some(max(BigInt::from(0), (target - origin) * step + u8::from(inclusive)))

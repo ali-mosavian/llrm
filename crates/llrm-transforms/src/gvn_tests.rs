@@ -226,3 +226,59 @@ fn test_gvn_joins_the_values_each_arm_stored() {
     let volatile = text.replace("load i16", "load volatile i16");
     assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
 }
+
+/// `@x` loaded before a loop of `bound` trips and again after a store
+/// inside it, where serving the reload holds `%a` through a point that
+/// then spills. Priced at the conventional ten trips even when proven
+/// one, the reload was always served: a spill for one saved load.
+#[test]
+fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
+    let text = |bound: &str| {
+        format!(
+            "@x = global i16 0
+@y = global i16 0
+@z = global i16 0
+
+define i16 @f(i16 %n, i16 %p) {{
+b0:
+  %a = load i16, ptr @x
+  store i16 %a, ptr @z
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
+  %more = icmp slt i16 %i, {bound}
+  br i1 %more, label %b2, label %b3
+
+b2:
+  %t1 = mul i16 %i, 3
+  %t2 = mul i16 %i, 5
+  %t3 = add i16 %t1, %t2
+  store i16 %t3, ptr @y
+  %b = load i16, ptr @x
+  store i16 %b, ptr @z
+  %i.next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %q = mul i16 %p, %p
+  %r = add i16 %q, %p
+  ret i16 %r
+}}
+"
+        )
+    };
+    let reloads = |bound: &str| {
+        let before = parsed(&text(bound));
+        let mut module = before.clone();
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn { registers: 4, ..Gvn::default() });
+        manager.run(&mut module).unwrap();
+        let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
+        assert_eq!(results(&module, inputs), results(&before, inputs));
+        printed(&module).contains("%b = load i16, ptr @x")
+    };
+    assert!(reloads("1"));
+    assert!(!reloads("%n"));
+}
