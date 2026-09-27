@@ -174,3 +174,15 @@ fn a_module_analysis_reads_function_results_from_their_managers() {
     analyses.get::<AllBlocks>(&module);
     assert_eq!(BLOCKS.take(), 1);
 }
+
+/// A declaration stands for the definition another module holds; the call
+/// graph runs through it, callees first.
+#[test]
+fn a_call_to_a_declaration_reaches_its_definition() {
+    let program = program();
+    let g = program.modules[1].named("g").unwrap();
+    assert_eq!(program.definition(0, program.modules[0].named("g").unwrap()), Some((1, g)));
+    let f = (0, program.modules[0].named("f").unwrap());
+    let order = crate::callgraph::CallGraph::of(&program).bottom_up();
+    assert!(order.iter().position(|&one| one == (1, g)) < order.iter().position(|&one| one == f), "{order:?}");
+}

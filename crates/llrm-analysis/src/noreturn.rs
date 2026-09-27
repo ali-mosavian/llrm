@@ -24,10 +24,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::callgraph::Defined;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
+use llrm_mir::program::Program;
 use llrm_mir::{Constant, ConstantKind, Context, GlobalId, Position};
 
 use crate::cfg::{self, id};
@@ -41,14 +43,33 @@ use crate::effects::{self, Declarations};
 /// nonterminal call is removed, and that removal propagates to its callers.
 /// A stated `noreturn` remains the independently established fact.
 pub fn inferred(module: &Module, declarations: &Declarations, bodies: &BTreeSet<GlobalId>) -> BTreeSet<GlobalId> {
-    let bodies: Vec<(GlobalId, &Function)> =
-        module.functions().filter(|(id, _, function)| bodies.contains(id) && !function.is_declaration()).map(|(id, _, function)| (id, function)).collect();
-    let mut proven = bodies.iter().map(|(id, _)| *id).collect::<BTreeSet<_>>();
+    let bodies: Vec<_> = module.functions().filter(|(id, _, function)| bodies.contains(id) && !function.is_declaration()).map(|(id, _, function)| (id, &module.context, declarations, function)).collect();
+    fixed(&bodies, |_, proven| proven.clone())
+}
+
+/// `inferred` over a program, `declarations` each module's: a declaration
+/// of a body proven stops as the body does.
+pub fn inferred_in(program: &Program, declarations: &[&Declarations], bodies: &BTreeSet<Defined>) -> BTreeSet<Defined> {
+    let bodies: Vec<_> = bodies
+        .iter()
+        .filter_map(|&(at, id)| {
+            let module = &program.modules[at];
+            let function = module.global(id).function().filter(|one| !one.is_declaration())?;
+            Some(((at, id), &module.context, declarations[at], function))
+        })
+        .collect();
+    fixed(&bodies, |(at, _), proven| program.local(at, proven))
+}
+
+/// The greatest set of `bodies` none of which returns, where a call stops
+/// when `local` of the set so far names its callee.
+fn fixed<K: Copy + Ord>(bodies: &[(K, &Context, &Declarations, &Function)], local: impl Fn(K, &BTreeSet<K>) -> BTreeSet<GlobalId>) -> BTreeSet<K> {
+    let mut proven = bodies.iter().map(|&(key, ..)| key).collect::<BTreeSet<_>>();
     loop {
         let found = bodies
             .iter()
-            .filter(|(_, function)| _cannot_return(function, &terminal_sites(&module.context, declarations, function, &proven)))
-            .map(|(id, _)| *id)
+            .filter(|&&(key, context, declarations, function)| _cannot_return(function, &terminal_sites(context, declarations, function, &local(key, &proven))))
+            .map(|&(key, ..)| key)
             .collect::<BTreeSet<_>>();
         if found == proven {
             return proven;

@@ -3,3 +3,4 @@ build/
 /crates/qbfront/target/
 /crates/*/target/
 .DS_Store
+._*

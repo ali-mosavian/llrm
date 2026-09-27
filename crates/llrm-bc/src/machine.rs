@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use iced_x86::{Code, Register};
 use llrm_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
+use llrm_bcmachine::abi::handlers;
 use llrm_bcmachine::abi::machine::Machine;
 use llrm_bcmachine::abi::runtime::{self, Contract, Control, Reg};
 use llrm_bcmachine::frontends::bc::blocks::{self, Block};
@@ -174,6 +175,15 @@ pub struct BodyFacts {
     pub interface: Option<Result<Interface, String>>,
     /// Its longs' pairs of nodes, by the first's address.
     pub pairs: BTreeMap<i64, Pair>,
+    /// The module's error handler, whose code runs on this body's frame.
+    pub handler: Option<Handler>,
+}
+
+/// An error handler folded into the body it serves: its seed and blocks.
+#[derive(Clone, Debug)]
+pub struct Handler {
+    pub seed: usize,
+    pub blocks: BTreeSet<usize>,
 }
 
 impl BodyFacts {
@@ -271,6 +281,12 @@ pub struct Facts<'m> {
     /// Whether the runtime enters this module's code other than by a call:
     /// an error or event handler, or a RESUME target.
     pub handlers: bool,
+    /// The handler each ON ERROR GOTO registers, by its call.
+    pub registrations: BTreeMap<i64, i64>,
+    /// The label each RESUME label continues at, by its call.
+    pub resumptions: BTreeMap<i64, i64>,
+    /// Where each statement starts, from the statement table.
+    pub statements: Vec<usize>,
 }
 
 impl<'m> Facts<'m> {
@@ -296,10 +312,11 @@ impl<'m> Facts<'m> {
             let nodes: IndexMap<i64, Arc<Node>> = one.nodes.iter().map(|node| (span(node).0 as i64, node.clone())).collect();
             let mine: Vec<Block> =
                 all.iter().filter(|block| one.body.ranges.iter().any(|&(lo, hi)| lo <= block.at && block.at < hi)).cloned().collect();
-            let mine = reachable(raising_control::terminal_edges(mine, &contracts), one.body.seed);
+            let seeds: Vec<usize> = std::iter::once(one.body.seed).chain(one.body.entries.iter().copied()).collect();
+            let mine = reachable(raising_control::terminal_edges(mine, &contracts), &seeds);
             let interface = (one.body.kind == BodyKind::Procedure).then(|| interface(&nodes, procedures.get(&one.body.seed)));
             let pairs = pairs::found(&mine, &nodes);
-            bodies.push((BodyFacts { body: one.body, blocks: mine, nodes, interface: None, pairs }, interface));
+            bodies.push((BodyFacts { body: one.body, blocks: mine, nodes, interface: None, pairs, handler: None }, interface));
         }
         // Without CodeView, a procedure answers in what its callers read after it.
         let mut read: BTreeMap<String, Words> = BTreeMap::new();
@@ -334,8 +351,12 @@ impl<'m> Facts<'m> {
         for body in &bodies {
             contracts.extend(carried(body, &contracts));
         }
-        let handlers = bodies.iter().any(|body| matches!(body.body.kind, BodyKind::ErrorHandler | BodyKind::EventHandler | BodyKind::ResumeEntry));
-        Ok(Facts { found, bodies, contracts, procedures, event_stub, handlers })
+        let bodies = folded(bodies);
+        let handlers = bodies.iter().any(|body| matches!(body.body.kind, BodyKind::ErrorHandler | BodyKind::EventHandler));
+        let registrations = handlers::error_registrations(found);
+        let resumptions = handlers::resumptions(found);
+        let statements = blocks::statements(found);
+        Ok(Facts { found, bodies, contracts, procedures, event_stub, handlers, registrations, resumptions, statements })
     }
 
     /// Whether `node` calls the event-poll adapter.
@@ -425,18 +446,31 @@ fn interface(nodes: &IndexMap<i64, Arc<Node>>, procedure: Option<&cvinfo::Proced
 
 /// `blocks` reachable from `seed`, the seed's first; a body whose seed is no
 /// block's start has none.
-fn reachable(blocks: Vec<Block>, seed: usize) -> Vec<Block> {
+/// The one error handler folded into the main body, whose frame it runs on;
+/// a second is left a body of its own, which the raise refuses.
+fn folded(mut bodies: Vec<BodyFacts>) -> Vec<BodyFacts> {
+    let handlers: Vec<usize> = bodies.iter().enumerate().filter(|(_, one)| one.body.kind == BodyKind::ErrorHandler).map(|(index, _)| index).collect();
+    let main = bodies.iter().position(|one| one.body.kind == BodyKind::Main);
+    let (&[index], Some(main)) = (&handlers[..], main) else { return bodies };
+    let handler = bodies.remove(index);
+    let main = &mut bodies[if main > index { main - 1 } else { main }];
+    main.handler = Some(Handler { seed: handler.body.seed, blocks: handler.blocks.iter().map(|block| block.at).collect() });
+    main.blocks.extend(handler.blocks);
+    main.nodes.extend(handler.nodes);
+    main.pairs.extend(handler.pairs);
+    bodies
+}
+
+fn reachable(blocks: Vec<Block>, seeds: &[usize]) -> Vec<Block> {
     let by_at: BTreeMap<usize, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
-    if !by_at.contains_key(&seed) {
+    let Some(&seed) = seeds.first().filter(|seed| by_at.contains_key(seed)) else {
         return Vec::new();
-    }
-    let mut seen = BTreeSet::from([seed]);
-    let mut order = vec![seed];
-    let mut pending = vec![seed];
+    };
+    let mut seen: BTreeSet<usize> = seeds.iter().copied().filter(|one| by_at.contains_key(one)).collect();
+    let mut pending: Vec<usize> = seen.iter().copied().collect();
     while let Some(at) = pending.pop() {
         for &next in &by_at[&at].succ {
             if by_at.contains_key(&next) && seen.insert(next) {
-                order.push(next);
                 pending.push(next);
             }
         }

@@ -14,7 +14,7 @@ pub fn fixtures() -> PathBuf {
 }
 
 /// conftest's `obj`: every committed OMF object, sorted by name. Python's
-/// `mapped_obj` is the same list: all 505 map.
+/// `mapped_obj` was the same list.
 pub fn objects() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(fixtures())
         .unwrap()
@@ -22,7 +22,7 @@ pub fn objects() -> Vec<PathBuf> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))
         .collect();
     found.sort();
-    assert_eq!(found.len(), 505);
+    assert_eq!(found.len(), 523);
     found
 }
 

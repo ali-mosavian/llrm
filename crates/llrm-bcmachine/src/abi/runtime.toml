@@ -702,6 +702,40 @@ evidence = '''
 rt/error.asm: `cProc B$RESN,<FAR,PUBLIC,FORCEFRAME>,SI`, no parameters -- RESUME NEXT. It calls B$RES_SETUP, reads b$erradr and the module's statement-address table, then leaves through RESRET to resume there, or `JMP B$CEND` when it runs off the bottom. RESRET calls B$EXSA while unwinding the abandoned frame; that may release string temporaries, hence STRINGS rather than NONE, but the routine neither receives nor constructs a pointer to arbitrary numeric caller data. It never comes back to the byte after the call; `enters_user_code` and `control=never` describe that transfer separately from its own memory footprint.
 '''
 
+["B$RES0"]
+cleanup = 0
+control = "never"
+enters_user_code = true
+raises_error = true
+error_handling = true
+writes = "ANY"
+reads = "ANY"
+direct_writes = "STRINGS"
+direct_reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+rt/error.asm: `cProc B$RES0,<FAR,PUBLIC,FORCEFRAME>`, no parameters -- RESUME. B$RES_SETUP (rt/erhandlr.asm) clears b$errnum and b$inonerr, or pops its return and `JMP B$ERR_RE` when no error is in progress, hence raises_error. B$CALCLINE finds the start of the failing statement from b$erradr; RESRET drops the return offset, calls B$EXSA and RETFs to that statement, never to the byte after the call. BCOM45.LIB error 0062..007c is that code. BCL71ENR.LIB and VBDCL10E.LIB 00b4..00f5 share it but keep the error address in the user frame ([bx-10h] / [bx-12h]); a procedure-local handler resumes by `POP CX` / `PUSH AX` / RETF without B$EXSA, and RES_SETUP at 0000 is `MOV BX,14h` / `JMP B$RUNERR`. Like B$RESN, the direct footprint is runtime state and string temporaries.
+'''
+
+["B$RESA"]
+cleanup = 0
+control = "never"
+enters_user_code = true
+raises_error = true
+error_handling = true
+writes = "ANY"
+reads = "ANY"
+direct_writes = "STRINGS"
+direct_reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = ["ax"]
+evidence = '''
+rt/error.asm: `cProc B$RESA,<FAR,PUBLIC,FORCEFRAME>`, `Entry: [AX] = Address to RESUME to` -- RESUME label, no stack parameters. B$RES_SETUP leaves AX alone (the source says so) and its XOR kills incoming flags; no error in progress is B$ERR_RE. The address is saved, B$CEvtHndlr and B$STDALCALLTMP run, and it either rewrites the frame's return offset and RETFs or joins B$RES0's RESRET, so it never returns to the byte after the call. BCOM45.LIB error 0038..0061. BCL71ENR.LIB and VBDCL10E.LIB 006a..00b3 are the same with frame-kept error state; their RES_SETUP at 0000 writes only BX, CX and memory, and the local-handler exit at 00e9 is `PUSH AX` / RETF, so ax is read in every family.
+'''
+
 ["B$RMI4"]
 cleanup = 8
 control = "returns"
@@ -806,4 +840,64 @@ documented = ["ax", "bx", "cx", "dx", "flags"]
 inputs = []
 evidence = '''
 rt/string.asm: `cProc B$STI2,<PUBLIC,FAR>` with ParmW I2Arg, `Uses: Per convention`, `Exceptions: Out of memory`. It falls into B$STR_COMMON, which sets b$VTYP, calls B$FOUTBX and then B$STALCTMPCPY -> B$STALCTMP -> B$STALC -> B$STCPCT, so it can move every live string and rewrite its descriptor. The header understates the clobber set in the direction B$CPI4's overstates it: rt/prnval.asm says B$FOUTBX `changes all registers except BP`, so si, di, ds and es are not the "per convention" survivors ifout.asm claims.
+'''
+
+["B$SPAC"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "STRINGS"
+clobbers = ["ax", "bx", "cx", "dx", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/strfcn.asm: `cProc B$SPAC,<FAR,PUBLIC>` with parmW cbDesired, `Registers: Per convention`. It calls `cProc STRING,NEAR,ES`, which borrows DI for `REP STOSW` and restores it, and allocates through B$STALCTMP -> B$STALC -> B$STCPCT; B$STALC saves everything but BX. A negative count is `JMP B$ERR_FC`, temp overflow B$ERR_ST, no room B$ERR_OS. BCOM45.LIB strfcn 0132..0165 and BCL71ENR.LIB 0000..0033 are that code, RETF 2.
+'''
+
+["B$FCHR"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "STRINGS"
+clobbers = ["ax", "bx", "cx", "dx", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/stcore.asm: `cProc B$FCHR,<FAR,PUBLIC>` with parmW val, `Registers: Per convention`. `OR AH,AH` / `JNZ ERRFC` -> B$ERR_FC; otherwise B$STALCTMP allocates one byte, `POP [BX]` stores it and AX is the descriptor. BCOM45.LIB stcore 00b5..00cf and BCL71ENR.LIB 0000..001a are that code, RETF 2.
+'''
+
+["B$FASC"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "STRINGS"
+clobbers = ["ax", "bx", "cx", "dx", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/strfcn.asm: `cProc B$FASC,<FAR,PUBLIC>,SI` with parmW psd, `Uses: Per convention`. A null string is `JZ ERRFC` -> B$ERR_FC; otherwise it reads the first byte and B$STDALCTMP frees the argument if it is a temp, a write to string space. BCOM45.LIB strfcn 001f..003e and BCL71ENR.LIB 0060..007f: PUSH SI, POP SI/BP, RETF 2; cx and dx are the header's convention, since B$STDALC reaches B$LHFLDDESCADJ unread.
+'''
+
+["B$LEFT"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "STRINGS"
+clobbers = ["ax", "bx", "cx", "dx", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/strfcn.asm: `cProc B$LEFT,<FAR,PUBLIC>` with parmW psd, parmW len, `Registers: Per convention`; it jumps into B$RGHT's `CALL LEFRIG` and RETF 4. LEFRIG: a negative length is `JL ARGERR` -> B$ERR_FC; zero frees the argument temp and returns b$nuldes; otherwise B$STALCTMPSUB (rt/nhstutil.asm), which saves ES, AX, CX, SI and DI, copies the substring and frees the source temp. BCOM45.LIB strfcn 00b8..00d9 with LEFRIG 0114..0132, and BCL71ENR.LIB 0000..0024 with 005c..007d, are that code.
 '''

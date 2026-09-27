@@ -11,11 +11,10 @@ use crate::model::ir::{Loc, Operation, St};
 use crate::model::mir::{self, Arg, Const, Held, Kind, Op, OpCode, OrderedMap, RaisedBody, Value};
 use crate::model::mir::SourceMap;
 use crate::objectfile::module::{self, Module};
-use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 
 pub fn raised(body: RaisedBody, found: &Module, contracts: &IndexMap<i64, Contract>, source: &mut SourceMap) -> RaisedBody {
-    if !omf::externals(&found.records).iter().any(|one| one == "FIDRQQ") {
+    if !module::emulated(&found.records) {
         return body;
     }
     let local = module::defines(&found.records, found.seg);

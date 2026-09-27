@@ -9,9 +9,9 @@ use std::rc::Rc;
 
 use llrm_core::backend::constpool::Pool;
 use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::backend::{addressvalues, assemble, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
+use llrm_core::backend::{addressvalues, frame as frames, jumps, lower, lower_int64, masm, omfwrite};
 use llrm_core::flow;
-use llrm_core::abi::qb::{HirAbi, physicalize};
+use llrm_core::abi::qb::physicalize;
 use llrm_core::hir::lower::{DGROUP, Lowered};
 use llrm_core::hir::{self, callmemory, model};
 use llrm_core::model::mir::{Kind, MirBody};
@@ -355,36 +355,26 @@ pub fn assembled(
 
 /// The same through the rich MIR: the HIR emitted as MIR, optimized, then
 /// selected and assembled whole.
-pub fn assembled_from_mir(program: &model::Program, entry: &str, cpu: ProfileOrName<'static>) -> Result<masm::Module, String> {
+pub fn assembled_from_mir(program: &model::Program, entry: &str, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
-    let module = &program.modules[0];
-    let emitted = hir::mir::emit(program).swap_remove(0);
-    if let Some((name, why)) = emitted.refused.first() {
-        return Err(format!("@{name}: {why}"));
+    // Each function links by its object name; the entry, `_main`, is public
+    // for the runtime to call, and a library has none. The pipeline's
+    // whole-program step reads who may call what.
+    let mut public = program.clone();
+    let module = &mut public.modules[0];
+    let library = module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External);
+    for function in &mut module.functions {
+        function.symbol = Some(object_name(function));
     }
-    let mut mir = emitted.module;
-    // The entry is public for the runtime to call; a library has none. The
-    // pipeline's whole-module step reads who may call what.
-    match mir.named(entry) {
-        Some(id) => mir.globals[id.0 as usize].linkage = llrm_mir::Linkage::External,
-        None if module.functions.iter().any(|one| one.linkage == model::FunctionLinkage::External) => {}
+    match module.functions.iter_mut().find(|one| one.name == entry) {
+        Some(function) => function.linkage = model::FunctionLinkage::External,
+        None if library => {}
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
-    let profile = targets::profile(cpu)?;
-    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
-    let mut mir = llrm_mir::program::Program::new(vec![mir], profile.target())?;
-    llrm_transforms::pipeline::applied(&mut mir, &applied)?;
-    let mir = mir.modules.pop().expect("one module");
-    let objects = module.functions.iter().map(|function| (function.name.clone(), object_name(function))).collect();
-    let abi = HirAbi { runtime: program.runtime, objects };
-    let assembled = assemble::assembled(&mir, &abi, &format!("{}_TEXT", module.name.to_uppercase()), cpu, &llrm_core::backend::target::BUILT_IN)?;
-    // Beside the MIR stages, what they became.
-    if let Some(directory) = std::env::var_os("LLRM_MIR_STAGES") {
-        std::fs::write(std::path::Path::new(&directory).join("listing.asm"), masm::text(&assembled).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-    }
-    Ok(assembled)
+    let options = llrm_core::driver::Options::of(machine.clone());
+    Ok(llrm_core::driver::compiled(&public, &options)?.swap_remove(0))
 }
 
 /// `item`'s bytes, each relocated field a pointer to what it names: data,
@@ -433,6 +423,11 @@ pub fn keep_exports(program: &mut model::Program, used: &BTreeSet<String>) {
 /// The processor objects are compiled for.
 pub const CPU: &str = "486";
 
+/// The built-in machine, priced for `CPU`.
+pub fn machine() -> llrm_core::abi::machine::Machine {
+    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }
+}
+
 pub fn written(program: &model::Program, entry: &str, source: &Path, options: &Options) -> Result<Vec<u8>, String> {
     written_as(program, entry, source, options, omfwrite::CodeLayout::OneSegment)
 }
@@ -444,8 +439,8 @@ pub fn written_as(program: &model::Program, entry: &str, source: &Path, options:
     _object(&assembled(program, entry, ProfileOrName::Name(CPU), options)?, source, layout)
 }
 
-pub fn written_from_mir(program: &model::Program, entry: &str, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
-    _object(&assembled_from_mir(program, entry, ProfileOrName::Name(CPU))?, source, layout)
+pub fn written_from_mir(program: &model::Program, entry: &str, source: &Path, layout: omfwrite::CodeLayout, machine: &llrm_core::abi::machine::Machine) -> Result<Vec<u8>, String> {
+    _object(&assembled_from_mir(program, entry, machine)?, source, layout)
 }
 
 fn _object(module: &masm::Module, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {

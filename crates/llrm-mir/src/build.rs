@@ -38,6 +38,28 @@ impl Module {
         self.add(name, linkage, GlobalKind::Variable(variable))
     }
 
+    /// Global `id` of `from` declared here under its name, external: none
+    /// where its type is one only `from` has.
+    pub fn declared(&mut self, from: &Module, id: GlobalId) -> Result<Option<GlobalId>, String> {
+        let global = from.global(id);
+        let name = global.name.as_deref().ok_or("an unnamed global")?;
+        let declared = match &global.kind {
+            GlobalKind::Variable(variable) => {
+                let Some(ty) = self.context.types.imported(&from.context.types, variable.ty) else { return Ok(None) };
+                self.add_variable(name, GlobalVariable { ty, constant: variable.constant, initializer: None, align: variable.align }, Linkage::External)?
+            }
+            GlobalKind::Function(function) => {
+                let Some(ty) = self.context.types.imported(&from.context.types, function.ty) else { return Ok(None) };
+                let declared = self.add_function(name, ty, Linkage::External)?;
+                let GlobalKind::Function(one) = &mut self.globals[declared.0 as usize].kind else { unreachable!("a function") };
+                one.calling_convention = function.calling_convention;
+                declared
+            }
+        };
+        self.globals[declared.0 as usize].address_space = global.address_space;
+        Ok(Some(declared))
+    }
+
     /// The constant pointer to a global.
     pub fn reference(&mut self, global: GlobalId) -> ConstantId {
         let ty = self.context.types.ptr(self.global(global).address_space);
@@ -64,6 +86,11 @@ impl Builder<'_> {
         let block = self.function.create_block(Some(name).filter(|one| !one.is_empty()));
         self.function.insert_block(block, None).expect("a new block");
         block
+    }
+
+    /// The block instructions go to.
+    pub fn current(&self) -> Option<BlockId> {
+        self.block
     }
 
     pub fn position(&mut self, block: BlockId) {
@@ -186,6 +213,31 @@ impl Builder<'_> {
         };
         let operands = arguments.iter().copied().chain([callee]).collect();
         self.emit(Opcode::Call(Box::new(info)), returns, operands, Flags::default(), name)
+    }
+
+    /// A call by convention `convention` that continues at `normal`, or at
+    /// `unwind` when the callee unwinds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn invoke_as(&mut self, convention: u32, function_type: TypeId, callee: Operand, arguments: &[Operand], normal: BlockId, unwind: BlockId, name: &str) -> Option<Operand> {
+        let Type::Function { returns, .. } = self.context.types.get(function_type) else { panic!("a function type") };
+        let returns = *returns;
+        let info = CallInfo {
+            function_type,
+            calling_convention: convention,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); arguments.len()],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let operands = arguments.iter().copied().chain([Operand::Block(normal), Operand::Block(unwind), callee]).collect();
+        self.emit(Opcode::Invoke(Box::new(info)), returns, operands, Flags::default(), name)
+    }
+
+    /// `landingpad ty catch clause..`, the first instruction of an unwind
+    /// destination.
+    pub fn landing_pad(&mut self, ty: TypeId, catches: &[Operand], name: &str) -> Operand {
+        let clauses = vec![crate::opcode::Clause::Catch; catches.len()];
+        self.value(Opcode::LandingPad { cleanup: false, clauses }, ty, catches.to_vec(), Flags::default(), name)
     }
 
     pub fn phi(&mut self, ty: TypeId, incoming: &[(Operand, BlockId)], name: &str) -> Operand {

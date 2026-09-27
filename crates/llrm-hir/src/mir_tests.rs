@@ -61,9 +61,9 @@ fn a_call_repeats_its_callees_convention() {
 fn a_refused_function_is_an_external_declaration() {
     let mut function = difference();
     function.linkage = FunctionLinkage::Internal;
-    function.error_handler = Some(1);
+    function.external_entries = vec![function.entry + 1];
     let emitted = emit(&program(function)).remove(0);
-    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "an ON ERROR handler".to_owned())]);
+    assert_eq!(emitted.refused, [("DIFF%".to_owned(), "an alternate entry".to_owned())]);
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
 
@@ -448,14 +448,11 @@ fn ports_are_the_targets_intrinsics() {
     assert!(text.contains("%2 = call i16 @llrm.ia16.in.i16(i16 %0)\n  call void @llrm.ia16.out.i16(i16 %0, i16 %2)"), "{text}");
 }
 
-/// The runtime's promise was the old raise's `WRITERS` table alone, so the
-/// rich MIR took every routine to write b$seg and to run program code. It
-/// is stated on the declarations: DEF SEG writes b$seg, INKEY$ writes none
-/// of the named cells, and a routine that may run program code promises
-/// nothing.
-#[test]
-fn a_runtime_promise_is_stated_on_its_routines() {
-    use crate::mir::{Runtime, emit_promised};
+/// A module calling DEF SEG, INKEY$ and RUN, with b$seg named, linked
+/// against the runtime `promises` states: its runtime module's text and
+/// the linked module's.
+fn promised(promises: &crate::model::RuntimePromises) -> (String, String) {
+    use crate::mir::{emit, runtime};
     use crate::model::{DataLinkage, DataObject};
     let call = |id, callee: &str| {
         let mut call = Instruction::new(id, Op::Call, Vec::new(), Vec::new());
@@ -468,20 +465,42 @@ fn a_runtime_promise_is_stated_on_its_routines() {
     let mut segment = DataObject::new(3, "b$seg", vec![0, 0]);
     (segment.linkage, segment.addressed) = (DataLinkage::External, false);
     program.modules[0].data = vec![segment];
-    let writes = |routine: &str| match routine {
-        "B$DSEG" => Some(vec!["b$seg".to_owned()]),
-        "B$INKY" => Some(Vec::new()),
-        _ => None,
-    };
-    let emitted = emit_promised(&program, Some(&Runtime { writes: &writes })).remove(0);
-    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
-    let text = llrm_mir::print::module(&emitted.module);
+    let emitted = emit(&program).remove(0);
+    let runtime = runtime(&[(&emitted, &program.modules[0])], promises).unwrap();
+    let text = llrm_mir::print::module(&runtime);
     assert_eq!(llrm_mir::print::module(&llrm_mir::parse::module(&text).unwrap()), text);
-    assert!(text.contains("!llrm.named = !{!5}\n!llrm.writes = !{!6, !7}\n"), "{text}");
-    assert!(text.contains("!5 = !{ptr @b$seg}\n!6 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!7 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{text}");
+    let linked = llrm_mir::program::Program::new(vec![emitted.module], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().with_runtime(runtime).unwrap();
+    assert_eq!(llrm_mir::verify::verify(&linked.modules[0]), Vec::<String>::new());
+    (text, llrm_mir::print::module(&linked.modules[0]))
+}
+
+/// `routine`'s declaration in `text`.
+fn declaration<'t>(text: &'t str, routine: &str) -> &'t str {
+    text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"))
+}
+
+/// The runtime's promise was the old raise's `WRITERS` table alone, so the
+/// rich MIR took every routine to write b$seg and to run program code. It
+/// is stated in the runtime module and so on the declarations: DEF SEG
+/// writes b$seg, INKEY$ writes none of the named cells, and a routine that
+/// may run program code promises nothing.
+#[test]
+fn a_runtime_promise_is_stated_on_its_routines() {
+    let (runtime, text) = promised(&crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], []));
+    assert!(runtime.contains("!llrm.named = !{!0}\n!llrm.writes = !{!1, !2}\n"), "{runtime}");
+    assert!(runtime.contains("!0 = !{ptr @b$seg}\n!1 = !{ptr addrspace(1) @llrm.qb.B$DSEG, ptr @b$seg}\n!2 = !{ptr addrspace(1) @llrm.qb.B$INKY}\n"), "{runtime}");
     for (routine, promised) in [("B$DSEG", true), ("B$INKY", true), ("B$RUN", false)] {
-        let line = text.lines().find(|line| line.starts_with("declare") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("{text}"));
-        assert_eq!(line.contains("nocallback"), promised, "{line}");
+        assert_eq!(declaration(&text, routine).contains("nocallback"), promised, "{text}");
+    }
+}
+
+/// The HIR emitter had no fact to state `nounwind` by, so a call to a
+/// routine that raises no error was taken to unwind.
+#[test]
+fn a_routine_that_raises_no_error_is_nounwind() {
+    let (_, text) = promised(&crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], ["B$INKY", "B$RUN"]));
+    for (routine, promised) in [("B$DSEG", false), ("B$INKY", true), ("B$RUN", true)] {
+        assert_eq!(declaration(&text, routine).contains("nounwind"), promised, "{text}");
     }
 }
 
@@ -499,4 +518,101 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+}
+
+/// A FOR loop's step promises its counter fits, and the rich route dropped
+/// the promise: its add reached MIR without `nsw`.
+#[test]
+fn a_nowrap_promise_is_nsw() {
+    let mut function = difference();
+    function.blocks[0].instructions[0].op = Op::Add;
+    function.blocks[0].instructions[0].nowrap = true;
+    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
+}
+
+/// C's promises: a type's aliasing class tags its accesses, pointer
+/// arithmetic stays inbounds, truth is one, a restrict parameter has no
+/// size, locals start indeterminate, and a value-less return gives poison.
+#[test]
+fn a_languages_promises_reach_mir() {
+    use crate::model::{AliasClass, IndirectPlace, Place, Promise, Storage};
+    let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
+    boolean.signed = Some(false);
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
+    let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
+    advance.inbounds = true;
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None });
+    let instructions = vec![
+        advance,
+        Instruction::new(2, Op::Load, vec![3], vec![at]),
+        Instruction::new(3, Op::Lt, vec![4], vec![Operand::value_ref(3), Operand::constant(1, 0)]),
+        Instruction::new(4, Op::Store, vec![], vec![Operand::place_ref(1), Operand::value_ref(4)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
+    function.parameters = vec![1];
+    function.promises = vec![Promise { parameter: 1, bytes: 0, unaliased: true, readonly: false }];
+    let mut program = program(function);
+    program.zeroed_locals = false;
+    program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
+    program.modules[0].alias_classes = vec![
+        AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },
+        AliasClass { name: "int2".to_owned(), parent: Some("root".to_owned()), types: vec![1] },
+    ];
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    assert!(text.contains(body), "{text}");
+    assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
+}
+
+/// An exported object is defined, a literal private, and another module's
+/// object of no bytes only declared; each keeps its alignment.
+#[test]
+fn data_linkage_is_the_languages() {
+    use crate::model::{DataLinkage, DataObject};
+    let mut program = program(difference());
+    let mut exported = DataObject::new(1, "shown", vec![1, 0]);
+    (exported.linkage, exported.align) = (DataLinkage::Exported, Some(2));
+    let mut literal = DataObject::new(2, "L", vec![65, 0]);
+    (literal.linkage, literal.readonly) = (DataLinkage::Private, true);
+    let mut imported = DataObject::new(3, "elsewhere", Vec::new());
+    imported.linkage = DataLinkage::External;
+    program.modules[0].data = vec![exported, literal, imported];
+
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("@shown = global [2 x i8] c\"\\01\\00\", align 2\n@L = private constant [2 x i8] c\"A\\00\"\n@elsewhere = external global [0 x i8]\n"), "{text}");
+}
+
+/// A function's address, called through: C's function pointers.
+#[test]
+fn a_call_through_a_functions_address() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut address = Instruction::new(2, Op::Address, vec![4], Vec::new());
+    address.callee = Some("DIFF%".to_owned());
+    let call = Instruction::new(3, Op::Call, vec![5], vec![Operand::value_ref(4), Operand::value_ref(3), Operand::value_ref(1)]);
+    function.blocks[0].instructions.extend([address, call]);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(5)];
+    function.values.extend([Value { id: 4, r#type: 2 }, Value { id: 5, r#type: 1 }]);
+    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "far", TypeKind::Pointer, 4));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%3 = call addrspace(1) i16 @\"DIFF%\"(i16 %2, i16 %0)"), "{text}");
+}
+
+/// A routine that only reads what its arguments reach: C's strlen.
+#[test]
+fn a_routine_reading_its_arguments_is_argmem_read() {
+    let module = llrm_mir::parse::module("declare i16 @_strlen(ptr)\ndeclare void @_puts(ptr)\n").unwrap();
+    let promises = crate::model::RuntimePromises { reads_arguments: vec!["_strlen".to_owned()], ..Default::default() };
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
 }

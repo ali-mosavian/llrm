@@ -268,8 +268,16 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
         }) {
             return Ok(None);
         }
+        // The stack saves a word or a dword: close the cycle on a move
+        // whose source is one, so that source is the slice saved.
+        let Some(wide) = cycle.iter().rposition(|one| matches!(_width(&source(one)), 2 | 4)) else {
+            return Ok(None);
+        };
+        let count = cycle.len();
+        cycle.rotate_left((wide + 1) % count);
+        let (start, last) = (&cycle[0], &cycle[cycle.len() - 1]);
         let closing_width = _width(&source(last));
-        let Loc::Reg(first) = &operands[0] else { unreachable!("checked above") };
+        let Loc::Reg(first) = dest(start) else { unreachable!("checked above") };
         let saved = Loc::Reg(Reg {
             register: target::named(first.register, i64::from(closing_width)),
             width: closing_width,
@@ -582,6 +590,19 @@ mod tests {
         assert_eq!(names(&got), ["push", "mov", "mov", "pop"]);
         assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::DX, 2)]);
         assert_eq!(got[got.len() - 1].what.as_ref().unwrap().dests, vec![reg(Register::CX, 2)]);
+    }
+
+    #[test]
+    fn test_a_mixed_width_cycle_closing_on_a_byte_saves_a_word() {
+        // rcflip's AX <- CX, CL <- AL was refused: its temporary was `push al`.
+        let body = _body(vec![grouped(reg(Register::AX, 2), reg(Register::CX, 2), 1), grouped(reg(Register::CL, 1), reg(Register::AL, 1), 1)]);
+
+        let got = scheduled(&body).unwrap().blocks[0].insns.clone();
+
+        assert_eq!(names(&got), ["push", "mov", "pop"]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::CX, 2)]);
+        assert_eq!(got[1].what.as_ref().unwrap().dests, vec![reg(Register::CL, 1)]);
+        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(Register::AX, 2)]);
     }
 
     #[test]

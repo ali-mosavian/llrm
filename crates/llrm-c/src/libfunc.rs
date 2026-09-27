@@ -47,6 +47,17 @@ pub fn summaries<'a>(names: impl IntoIterator<Item = &'a str>) -> IndexMap<Strin
     result
 }
 
+/// Of `names`, the functions that only read what their pointer arguments
+/// reach and keep none of them.
+pub fn reads_arguments<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let parameters = |items: &BTreeSet<Slice>| items.iter().all(|one| one.object.kind == MemoryKind::Parameter);
+    summaries(names)
+        .into_iter()
+        .filter(|(_, one)| !one.unknown_read && !one.unknown_write && one.writes.is_empty() && one.captures.is_empty() && parameters(&one.reads))
+        .map(|(name, _)| name)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

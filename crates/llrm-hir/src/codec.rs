@@ -165,6 +165,9 @@ impl _Plain for model::Instruction {
         if self.nowrap {
             out.insert("nowrap".to_owned(), self.nowrap._plain());
         }
+        if self.inbounds {
+            out.insert("inbounds".to_owned(), self.inbounds._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -225,6 +228,9 @@ impl _Plain for model::Function {
         if !self.promises.is_empty() {
             out.insert("promises".to_owned(), self.promises._plain());
         }
+        if self.symbol.is_some() {
+            out.insert("symbol".to_owned(), self.symbol._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -242,10 +248,58 @@ impl _Plain for model::DataRelocation {
         Json::Dict(out)
     }
 }
-plain_record!(DataObject, None, id => "id", name => "name", bytes => "bytes", readonly => "readonly",
-    relocations => "relocations", linkage => "linkage", address => "address", addressed => "addressed");
-plain_record!(Module, None, id => "id", name => "name", types => "types", functions => "functions",
-    data => "data", callables => "callables");
+// `segment` and `align` only when set, so that data reads as it always has.
+impl _Plain for model::DataObject {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("bytes".to_owned(), self.bytes._plain());
+        out.insert("readonly".to_owned(), self.readonly._plain());
+        out.insert("relocations".to_owned(), self.relocations._plain());
+        out.insert("linkage".to_owned(), self.linkage._plain());
+        out.insert("address".to_owned(), self.address._plain());
+        out.insert("addressed".to_owned(), self.addressed._plain());
+        if self.segment.is_some() {
+            out.insert("segment".to_owned(), self.segment._plain());
+        }
+        if self.align.is_some() {
+            out.insert("align".to_owned(), self.align._plain());
+        }
+        Json::Dict(out)
+    }
+}
+plain_record!(AliasClass, None, name => "name", parent => "parent", types => "types");
+// `alias_classes` only when made, so that a module reads as it always has.
+impl _Plain for model::Module {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("types".to_owned(), self.types._plain());
+        out.insert("functions".to_owned(), self.functions._plain());
+        out.insert("data".to_owned(), self.data._plain());
+        out.insert("callables".to_owned(), self.callables._plain());
+        if !self.alias_classes.is_empty() {
+            out.insert("alias_classes".to_owned(), self.alias_classes._plain());
+        }
+        Json::Dict(out)
+    }
+}
+plain_record!(CellWriters, None, cell => "cell", routines => "routines");
+// `reads_arguments` only when made, so that promises read as they always have.
+impl _Plain for model::RuntimePromises {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("calling_back".to_owned(), self.calling_back._plain());
+        out.insert("writers".to_owned(), self.writers._plain());
+        out.insert("nounwind".to_owned(), self.nounwind._plain());
+        if !self.reads_arguments.is_empty() {
+            out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
+        }
+        Json::Dict(out)
+    }
+}
 /// Float semantics are written only when they are the machine's, as before
 /// they existed.
 impl _Plain for model::Program {
@@ -260,6 +314,15 @@ impl _Plain for model::Program {
         out.insert("float_mode".to_owned(), self.float_mode._plain());
         if self.float_semantics != model::FloatSemantics::Declared {
             out.insert("float_semantics".to_owned(), self.float_semantics._plain());
+        }
+        if !self.zeroed_locals {
+            out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
+        }
+        if self.promises != model::RuntimePromises::default() {
+            out.insert("promises".to_owned(), self.promises._plain());
+        }
+        if !self.entries.is_empty() {
+            out.insert("entries".to_owned(), self.entries._plain());
         }
         Json::Dict(out)
     }
@@ -579,6 +642,8 @@ macro_rules! made_records {
 }
 
 made_records!(
+    CellWriters,
+    RuntimePromises,
     Promise,
     Type,
     Place,
@@ -593,6 +658,7 @@ made_records!(
     Function,
     DataRelocation,
     DataObject,
+    AliasClass,
     Module
 );
 
@@ -820,6 +886,7 @@ static INSTRUCTION: _Record = _Record {
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
         ("nowrap", _Hint::Bool, false),
+        ("inbounds", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::Instruction {
@@ -831,6 +898,7 @@ static INSTRUCTION: _Record = _Record {
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
             nowrap: _default(args, "nowrap", false)?,
+            inbounds: _default(args, "inbounds", false)?,
         })
     },
 };
@@ -975,6 +1043,7 @@ static FUNCTION: _Record = _Record {
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
         ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
+        ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Function {
@@ -993,6 +1062,7 @@ static FUNCTION: _Record = _Record {
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
             promises: _default(args, "promises", Vec::new())?,
+            symbol: _default(args, "symbol", None)?,
         })
     },
 };
@@ -1041,6 +1111,8 @@ static DATA_OBJECT: _Record = _Record {
         ("linkage", enum_hint!(DataLinkage), false),
         ("address", enum_hint!(AddressKind), false),
         ("addressed", _Hint::Bool, false),
+        ("segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
+        ("align", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -1052,6 +1124,8 @@ static DATA_OBJECT: _Record = _Record {
             linkage: _default(args, "linkage", model::DataLinkage::Internal)?,
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
+            segment: _default(args, "segment", None)?,
+            align: _default(args, "align", None)?,
         })
     },
 };
@@ -1065,6 +1139,7 @@ static MODULE: _Record = _Record {
         ("functions", _Hint::Tuple(&_Hint::Record(&FUNCTION)), true),
         ("data", _Hint::Tuple(&_Hint::Record(&DATA_OBJECT)), false),
         ("callables", _Hint::Tuple(&_Hint::Record(&CALLABLE)), false),
+        ("alias_classes", _Hint::Tuple(&_Hint::Record(&ALIAS_CLASS)), false),
     ],
     build: |args| {
         _object(model::Module {
@@ -1074,6 +1149,39 @@ static MODULE: _Record = _Record {
             functions: _required(args, "functions")?,
             data: _default(args, "data", Vec::new())?,
             callables: _default(args, "callables", Vec::new())?,
+            alias_classes: _default(args, "alias_classes", Vec::new())?,
+        })
+    },
+};
+
+static ALIAS_CLASS: _Record = _Record {
+    name: "AliasClass",
+    fields: &[("name", _Hint::Str, true), ("parent", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), true), ("types", INTS, true)],
+    build: |args| {
+        _object(model::AliasClass { name: _required(args, "name")?, parent: _required(args, "parent")?, types: _required(args, "types")? })
+    },
+};
+
+static CELL_WRITERS: _Record = _Record {
+    name: "CellWriters",
+    fields: &[("cell", _Hint::Str, true), ("routines", _Hint::Tuple(&_Hint::Str), true)],
+    build: |args| _object(model::CellWriters { cell: _required(args, "cell")?, routines: _required(args, "routines")? }),
+};
+
+static RUNTIME_PROMISES: _Record = _Record {
+    name: "RuntimePromises",
+    fields: &[
+        ("calling_back", _Hint::Union(&[_Hint::Tuple(&_Hint::Str), _Hint::NoneType]), false),
+        ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
+        ("nounwind", _Hint::Tuple(&_Hint::Str), false),
+        ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+    ],
+    build: |args| {
+        _object(model::RuntimePromises {
+            calling_back: _default(args, "calling_back", None)?,
+            writers: _default(args, "writers", Vec::new())?,
+            nounwind: _default(args, "nounwind", Vec::new())?,
+            reads_arguments: _default(args, "reads_arguments", Vec::new())?,
         })
     },
 };
@@ -1089,6 +1197,9 @@ static PROGRAM: _Record = _Record {
         ("array_order", enum_hint!(ArrayOrder), false),
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
+        ("zeroed_locals", _Hint::Bool, false),
+        ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
+        ("entries", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1100,6 +1211,9 @@ static PROGRAM: _Record = _Record {
             array_order: _default(args, "array_order", model::ArrayOrder::ColumnMajor)?,
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
+            zeroed_locals: _default(args, "zeroed_locals", true)?,
+            promises: _default(args, "promises", model::RuntimePromises::default())?,
+            entries: _default(args, "entries", Vec::new())?,
         })
     },
 };

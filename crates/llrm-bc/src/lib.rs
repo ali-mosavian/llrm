@@ -29,7 +29,7 @@ use llrm_bcmachine::abi::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
 use llrm_bcmachine::objectfile::module::{self as found_module, Family};
-use llrm_mir::{GlobalKind, Linkage, Module, Type};
+use llrm_mir::{GlobalId, GlobalKind, Linkage, Module, Type};
 
 use crate::emit::Unit;
 use crate::machine::{Answer, Facts, function_name};
@@ -54,6 +54,8 @@ pub const MODULE: &str = "<module>";
 /// Each body raised, or why not; a refused one is left a declaration.
 pub struct Raised {
     pub module: Module,
+    /// The runtime it links against, declarations alone.
+    pub runtime: Module,
     pub outcomes: Vec<(String, Result<(), String>)>,
     pub placement: Placement,
 }
@@ -74,18 +76,14 @@ impl Raised {
     }
 }
 
-/// The module raised whole, or the first function refused.
-pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Module, Refusal> {
-    raise_placed(found, machine).map(|(module, _)| module)
-}
-
-/// `raise`, and where the object put its globals.
-pub fn raise_placed(found: &found_module::Module, machine: &Machine) -> Result<(Module, Placement), Refusal> {
+/// The module raised whole, with its runtime and where the object put its
+/// globals, or the first function refused.
+pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
     let raised = raise_each(found, machine)?;
     let refused = raised.refusals().next();
     match refused {
         Some(refusal) => Err(refusal),
-        None => Ok((raised.module, raised.placement)),
+        None => Ok(raised),
     }
 }
 
@@ -166,13 +164,31 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
     let callees = runtime::declare(&facts, &mut module, &interfaces);
     intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));
     let family = found_module::family(&found.records);
-    let unit = Unit { facts: &facts, objects: &objects, callees: &callees, procedures, intrinsics, main_frame: main_frame(found), header: header(family) };
+    let err = if found.calls.values().any(|name| name == "B$FERR") { Some(llrm_hir::onerror::err(&mut module).map_err(module_refusal)?) } else { None };
+    let mut handled = BTreeMap::new();
+    for &(index, _, global) in &functions {
+        if facts.bodies[index].handler.is_some() {
+            handled.insert(index, llrm_hir::onerror::handled(&mut module, global).map_err(module_refusal)?);
+        }
+    }
+    // An intrinsic raises no BASIC error.
+    let raising: Vec<GlobalId> = module
+        .functions()
+        .filter(|(_, global, function)| {
+            !function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "nounwind"))
+                && !global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved)
+        })
+        .map(|(id, _, _)| id)
+        .collect();
+    let raising = raising.into_iter().map(|id| module.reference(id)).collect();
+    let unit =
+        Unit { facts: &facts, objects: &objects, callees: &callees, procedures, intrinsics, main_frame: main_frame(found), header: header(family), raising, err };
     let mut outcomes = Vec::new();
     for (index, name, global) in functions {
         let body = &facts.bodies[index];
         let outcome = {
             let mut builder = module.builder(global);
-            emit::function(&mut builder, &unit, body).map(|()| addresses::attribute(builder.function, builder.context, &objects))
+            emit::function(&mut builder, &unit, body, handled.get(&index).copied()).map(|()| addresses::attribute(builder.function, builder.context, &objects))
         };
         if outcome.is_err() {
             let GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
@@ -182,8 +198,8 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
         }
         outcomes.push((name, outcome));
     }
-    cells::promise(&mut module, &facts, &objects);
+    let runtime = cells::promise(&module, &facts, &objects).map_err(module_refusal)?;
     tags::tag(&mut module);
     let placement = objects.placement();
-    Ok(Raised { module, outcomes, placement })
+    Ok(Raised { module, runtime, outcomes, placement })
 }
