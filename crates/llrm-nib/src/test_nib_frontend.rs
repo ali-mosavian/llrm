@@ -1871,7 +1871,7 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", ProfileOrName::Name("486")).expect("assembles");
+    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &nib_compile::machine()).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
@@ -1892,7 +1892,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return a < b && !a == 0 || b == 7\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled_from_mir(&parsed(&source), "main", ProfileOrName::Name(cpu)).expect("assembles");
+        let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() }).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));

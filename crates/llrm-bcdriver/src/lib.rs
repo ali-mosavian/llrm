@@ -104,9 +104,9 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, dgroup: &BTr
     }
     let records = records.to_vec();
     let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise_placed(found, machine).map_err(|refusal| refusal.to_string())?;
-    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
-    let mut program = llrm_mir::program::Program::new(vec![module], profile.target())?.with_runtime(runtime)?;
-    llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    let options = llrm_core::driver::Options::of(machine.clone());
+    let mut program = llrm_core::driver::linked(vec![module], runtime, &options)?;
+    llrm_core::driver::optimized(&mut program, &options)?;
     let module = program.modules.pop().expect("one module");
     let errors = llrm_mir::verify::verify(&module);
     if let Some(first) = errors.first() {

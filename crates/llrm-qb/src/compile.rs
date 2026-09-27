@@ -1600,11 +1600,10 @@ impl Rich {
         if let Some((name, why)) = emitted.refused.first() {
             return emission(format!("@{name}: {why}"));
         }
-        let profile = targets::profile(ProfileOrName::Name(&machine.cpu)).map_err(CompileError::Value)?;
-        let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
         let runtime = hir::mir::runtime(&emitted, module, &hir::mir::Runtime { writes: &writes }).map_err(CompileError::Value)?;
-        let mut mir = llrm_mir::program::Program::new(vec![emitted.module], profile.target()).and_then(|one| one.with_runtime(runtime)).map_err(CompileError::Value)?;
-        llrm_transforms::pipeline::applied(&mut mir, &applied).map_err(CompileError::Value)?;
+        let options = llrm_core::driver::Options::of(machine.clone());
+        let mut mir = llrm_core::driver::linked(vec![emitted.module], runtime, &options).map_err(CompileError::Value)?;
+        llrm_core::driver::optimized(&mut mir, &options).map_err(CompileError::Value)?;
         let objects = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name))).collect();
         Ok(Rich { mir: mir.modules.pop().expect("one module"), cpu: machine.cpu.clone(), segments: Segments::of(machine), data: emitted.data, abi: HirAbi { runtime: program.runtime, objects } })
     }

@@ -387,8 +387,7 @@ impl assemble::Abi for MediumModel {
 
 /// C through the rich MIR: raised by `raise_mir`, optimized by the ported
 /// pipeline, then selected by isel. `LLRM_MIR_STAGES` dumps each pass.
-pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> Result<masm::Module, CompileError> {
-    let target = cpu::names().into_iter().find(|name| *name == target).unwrap_or("");
+pub fn selected(text: &str, module: &str, dump: Option<&Path>, machine: &llrm_core::abi::machine::Machine) -> Result<masm::Module, CompileError> {
     let unit = hir::unit(&stream::parse(text))?;
     let raise_mir::Emitted { module: mir, segments } = raise_mir::emitted(&unit)?;
     write(dump, "raised.ll", || llrm_mir::print::module(&mir))?;
@@ -396,14 +395,13 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, target: &str) -> 
     if !problems.is_empty() {
         return Err(hir::Unsupported(format!("raised MIR does not verify: {}", problems.join("; "))).into());
     }
-    let profile = cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?;
-    let applied = llrm_transforms::pipeline::Applied { dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), ..Default::default() };
     let library = libfunc::library(&mir).map_err(hir::Unsupported)?;
-    let mut program = llrm_mir::program::Program::new(vec![mir], profile.target())?.with_runtime(library)?;
-    llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    let options = llrm_core::driver::Options::of(machine.clone());
+    let mut program = llrm_core::driver::linked(vec![mir], library, &options)?;
+    llrm_core::driver::optimized(&mut program, &options)?;
     let mir = program.modules.pop().expect("one module");
     write(dump, "optimized.ll", || llrm_mir::print::module(&mir))?;
-    let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Name(target), &llrm_core::backend::target::BUILT_IN)?;
+    let mut built = assemble::assembled(&mir, &MediumModel, &format!("{}_TEXT", module.to_uppercase()), cpu::ProfileOrName::Profile(options.cpu()?), &llrm_core::backend::target::Segments::of(machine))?;
     // Data where the stream placed it, isel's float constants after DGROUP's.
     let pool = built.data.drain(..).flat_map(|(_, items)| items).skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K")));
     let pool: Vec<masm::Datum> = pool.collect();
@@ -889,6 +887,8 @@ struct Args {
     options: Options,
     include: Vec<String>,
     isel: bool,
+    /// The target: the built-in DOS unless `--machine` names another; `--cpu` prices it.
+    machine: llrm_core::abi::machine::Machine,
 }
 
 /// The code-generator stream wccq records for one C file.
@@ -923,13 +923,14 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
 }
 
 const USAGE: &str =
-    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--isel] [--cpu CPU] [-O {s,2}] source";
+    "usage: llrm-c [-h] [-o OUTPUT] [-I INCLUDE] [--dump DUMP] [--opt] [--isel] [--cpu CPU] [--machine MACHINE] [-O {s,2}] source";
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut output, mut dump, mut opt, mut cpu) =
-        (None, None, None, false, "386".to_owned());
+        (None, None, None, false, None);
     let mut include = Vec::new();
     let mut isel = false;
+    let mut machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
     let mut options = llrm_core::model::passes::O2();
     let mut rest = argv.iter();
     while let Some(one) = rest.next() {
@@ -944,7 +945,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
             "--isel" => isel = true,
-            "--cpu" => cpu = value("--cpu")?,
+            "--cpu" => cpu = Some(value("--cpu")?),
+            "--machine" => machine = llrm_core::abi::machine::Machine::load(Path::new(&value("--machine")?))?,
             level if level.starts_with("-O") => {
                 let text = if level.len() > 2 { level[2..].to_owned() } else { value("-O")? };
                 options = flow::level_option(&text).map_err(|message| format!("argument -O: {message}"))?;
@@ -957,6 +959,10 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
     }
     let source = source.ok_or("the following arguments are required: source")?;
+    if let Some(cpu) = &cpu {
+        machine.cpu = cpu.clone();
+    }
+    let cpu = machine.cpu.clone();
     Ok(Args {
         source,
         output,
@@ -966,6 +972,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         options,
         include,
         isel,
+        machine,
     })
 }
 
@@ -994,7 +1001,7 @@ pub fn main(argv: &[String]) -> i32 {
             .and_then(|one| one.to_str())
             .unwrap_or_default();
         let built = if args.isel {
-            selected(&text, module, args.dump.as_deref(), &args.cpu)?
+            selected(&text, module, args.dump.as_deref(), &args.machine)?
         } else {
             assembled(&text, module, args.opt, args.dump.as_deref(), &args.cpu, &args.options)?
         };
@@ -1237,7 +1244,7 @@ mod tests {
     #[test]
     fn test_a_void_function_is_selected() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, "486");
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
         assert!(built.is_ok(), "{:?}", built.err());
     }
 }
