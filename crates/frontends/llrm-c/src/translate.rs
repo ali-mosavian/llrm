@@ -36,9 +36,10 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     for symbol in &imports {
         keys.insert(Key::Symbol(symbol.id), (keys.len() + 1) as i64);
     }
+    let mut callables: IndexMap<String, h::Callable> = IndexMap::default();
     let mut data = Vec::new();
     for object in &objects {
-        data.push(data_object(unit, object, keys[&object.key], &keys)?);
+        data.push(data_object(unit, object, keys[&object.key], &keys, &mut callables)?);
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
@@ -46,13 +47,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let valueless: HashSet<i64> = unit.procs.iter().filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0")).map(|proc| proc.symbol).collect();
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
-    let mut callables: IndexMap<String, h::Callable> = IndexMap::default();
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
         functions.push(Body::function(&module, &mut types, &mut callables, proc, at as i64 + 1)?);
     }
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
-    let callables: Vec<h::Callable> = callables.into_values().filter(|one| !defined.contains(one.name.as_str())).collect();
+    let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, ..h::Module::new(1, name, types, functions) };
@@ -174,18 +174,25 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     Ok(out)
 }
 
-fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i64>) -> R<h::DataObject> {
+fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i64>, callables: &mut IndexMap<String, h::Callable>) -> R<h::DataObject> {
     let mut relocations = Vec::new();
     for relocation in &object.relocations {
+        let address = if relocation.far { AddressKind::Far } else { AddressKind::Near };
         if let Key::Symbol(symbol) = relocation.target
             && unit.symbols[&symbol].proc()
         {
-            return refuse(format!("{}: a code address in data", object.name));
+            let symbol = &unit.symbols[&symbol];
+            if symbol.code.is_some() || EMITTED.contains(&symbol.name.as_str()) {
+                return refuse(format!("{}: an address of inline code {}", object.name, symbol.name));
+            }
+            let defined = unit.procs.iter().any(|one| one.symbol == symbol.id);
+            let target = callable(callables, &symbol.object_name(), defined);
+            relocations.push(h::DataRelocation { at: relocation.at as i64, target, addend: relocation.offset, address, code: true });
+            continue;
         }
         let Some(&target) = keys.get(&relocation.target) else {
             return refuse(format!("{}: an address of {:?}, which the unit neither defines nor imports", object.name, relocation.target));
         };
-        let address = if relocation.far { AddressKind::Far } else { AddressKind::Near };
         relocations.push(h::DataRelocation { at: relocation.at as i64, target, addend: relocation.offset, address, code: false });
     }
     let (linkage, readonly) = match object.key {
@@ -1405,17 +1412,7 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Declares a procedure the unit calls by `name`.
     fn callable(&mut self, name: &str) {
-        let id = self.callables.len() as i64 + 1;
-        self.callables.entry(name.to_owned()).or_insert_with(|| h::Callable {
-            id,
-            name: name.to_owned(),
-            result_type: None,
-            parameter_types: Vec::new(),
-            by_value: Vec::new(),
-            segmented: Vec::new(),
-            arrays: Vec::new(),
-            defined: false,
-        });
+        callable(self.callables, name, false);
     }
 
     /// A call of `callee`, or of the function `operands[0]` points to.
@@ -1488,6 +1485,24 @@ impl<'a, 't> Body<'a, 't> {
         self.call_site(name.as_deref(), result, operands, order, cleanup, distance);
         Ok(Got::Returned(result))
     }
+}
+
+/// `name`'s callable, registered on first sight, and its id.
+fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: bool) -> i64 {
+    let id = callables.len() as i64 + 1;
+    callables
+        .entry(name.to_owned())
+        .or_insert_with(|| h::Callable {
+            id,
+            name: name.to_owned(),
+            result_type: None,
+            parameter_types: Vec::new(),
+            by_value: Vec::new(),
+            segmented: Vec::new(),
+            arrays: Vec::new(),
+            defined,
+        })
+        .id
 }
 
 /// An access through `base`, `offset` bytes in, as `ty`.

@@ -277,11 +277,6 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let reference = module.reference(global);
         tables.data.insert(object.id, reference);
     }
-    for (object, global) in defined {
-        let initializer = data_initializer(&mut module, object, sizes[&object.id], &objects, &tables.data);
-        let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
-        variable.initializer = Some(initializer);
-    }
     let mut functions = Vec::new();
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
@@ -305,6 +300,40 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             }
             refused.push((function.name.clone(), why));
         }
+    }
+    // Initialized once every function its data addresses is declared: one only addressed, far and C's.
+    let mut code = HashMap::new();
+    for callable in hir.data.iter().flat_map(|one| &one.relocations).filter(|one| one.code).filter_map(|one| hir.callables.iter().find(|callable| callable.id == one.target)) {
+        let reference = match tables.callees.get(&callable.name) {
+            Some(&reference) => reference,
+            None => {
+                let returns = module.context.types.void();
+                let ty = function_type(&mut module.context.types, returns, Vec::new());
+                match module.add_function(&callable.name, ty, Linkage::External) {
+                    Ok(global) => {
+                        place_function(&mut module, global, (0, FAR));
+                        let reference = module.reference(global);
+                        tables.callees.insert(callable.name.clone(), reference);
+                        tables.conventions.insert(callable.name.clone(), 0);
+                        reference
+                    }
+                    Err(why) => {
+                        refused.push((callable.name.clone(), why));
+                        continue;
+                    }
+                }
+            }
+        };
+        code.insert(callable.id, reference);
+    }
+    for (object, global) in defined {
+        if object.relocations.iter().any(|one| one.code && !code.contains_key(&one.target)) {
+            refused.push((object.name.clone(), "an address of undeclared code".to_owned()));
+            continue;
+        }
+        let initializer = data_initializer(&mut module, object, sizes[&object.id], &objects, &tables.data, &code);
+        let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
+        variable.initializer = Some(initializer);
     }
     let statements = hir.statements();
     let outlined = match module_handler(&mut module, &functions) {
@@ -402,11 +431,16 @@ fn data_type(types: &mut Types, object: &model::DataObject, size: i64, objects: 
     let mut fields = Vec::new();
     let mut at = 0;
     for relocation in relocations(object)? {
-        let target = objects.get(&relocation.target).ok_or_else(|| format!("a relocation to object {}", relocation.target))?;
         if relocation.at > at {
             fields.push(types.intern(Type::Array { element: byte, count: (relocation.at - at) as u64 }));
         }
-        fields.push(match (relocation.address, target.address) {
+        // Code is never addressed from DS: a near address of it is its offset.
+        let space = if relocation.code {
+            AddressKind::Far
+        } else {
+            objects.get(&relocation.target).ok_or_else(|| format!("a relocation to object {}", relocation.target))?.address
+        };
+        fields.push(match (relocation.address, space) {
             (AddressKind::Near, AddressKind::Far) => types.int(16),
             (AddressKind::Near, _) => types.ptr(0),
             (AddressKind::Far, _) => types.ptr(FAR),
@@ -459,7 +493,7 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
     global
 }
 
-fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>) -> ConstantId {
+fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>, code: &HashMap<i64, ConstantId>) -> ConstantId {
     let context = &mut module.context;
     let (byte, i16) = (context.types.int(8), context.types.int(16));
     let bytes = |context: &mut llrm_mir::Context, from: i64, to: i64| {
@@ -474,8 +508,16 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, 
         if relocation.at > at {
             members.push(bytes(context, at, relocation.at));
         }
-        let target = data[&relocation.target];
-        let space = if objects[&relocation.target].address == AddressKind::Far { FAR } else { 0 };
+        let (target, space) = if relocation.code {
+            let target = code[&relocation.target];
+            let space = match context.types.get(context.get(target).ty) {
+                Type::Pointer(space) => *space,
+                _ => FAR,
+            };
+            (target, space)
+        } else {
+            (data[&relocation.target], if objects[&relocation.target].address == AddressKind::Far { FAR } else { 0 })
+        };
         let mut address = target;
         if relocation.addend != 0 {
             let ty = context.types.ptr(space);
@@ -491,6 +533,7 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, 
         };
         members.push(match (relocation.address, space) {
             (AddressKind::Near, FAR) => cast(context, CastOp::PtrToInt, i16),
+            (AddressKind::Near, _) if relocation.code => cast(context, CastOp::PtrToInt, i16),
             _ if wanted != space => {
                 let ty = context.types.ptr(wanted);
                 cast(context, CastOp::AddrSpaceCast, ty)
