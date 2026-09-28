@@ -1834,15 +1834,12 @@ impl Selector<'_, '_, '_> {
     }
 
     /// A float stored as an integer of `to` by `name`, and loaded back. x87
-    /// stores only signed integers: an unsigned one is stored twice as
-    /// wide, and its low part read.
+    /// stores only signed words, dwords and qwords: an unsigned integer is
+    /// stored twice as wide, a byte as a word, and the low part read.
     fn float_to_integer(&mut self, operand: Operand, name: &str, result: ValueId, to: TypeId, unsigned: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let width = self.width(to)?;
-        if width == 1 {
-            return refuse("a float to a byte");
-        }
         let held = self.float(operand, at, out)?;
-        let cell = self.float_stored(held, name, if unsigned { 2 * width } else { width }, at, out);
+        let cell = self.float_stored(held, name, (if unsigned { 2 * width } else { width }).max(2), at, out);
         let into = Held { value: self.value(result), width };
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(cell, width))])));
         Ok(())
