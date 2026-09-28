@@ -7,57 +7,100 @@ on.
 
 ## 1. The runner: dosrun
 
-`dosbox-x` built from the fork's `dosrun` branch (`./build-dosrun.sh`) runs a
-job from stdin, headless, and streams JSON events to the file descriptor
-`DOSRUN_FD` names. A job is DOS command lines plus directives, ended by `.`:
+`dosbox-x` built from the fork's `dosrun` branch (`./build-dosrun.sh`) boots
+once and runs each job, from stdin, in a forked child. It streams JSON events
+to the file descriptor `DOSRUN_FD` names. A job is DOS command lines plus
+directives, ended by `.`:
 
     printf ':ms 60000\n:write C0000-C7FFF\nmount w %s\nw:\nQCPORT.EXE start.qmp -ticks 300\n.\n' "$DIR" |
       DOSRUN_FD=3 SDL_VIDEODRIVER=dummy dosbox-x -nolog -conf job.conf 3>ev.txt >/dev/null 2>&1
 
 `job.conf` is the program's usual conf with the `[autoexec]` section cut off
-and `core=normal`: every check below runs in the normal core.
+and `core=normal`: the checks below run in the normal core only.
 
 | Directive | Does |
 |---|---|
-| `:ms N` | Stops after N emulated milliseconds: `end` reason `limit`. A hang shows up as `limit`, not as a job that never returns. |
-| `:write A[-B]` | Stops at the first write into linear A..B (hex, inclusive): a `write` event, then the state as a crash. |
-| `:nowatch` | Turns the crash checks off, for a program that runs code where they would object. |
-| `:keep` | On a clean exit the machine is kept and later jobs fork from it. |
+| `:ms N` | Stops after N emulated milliseconds: `end` reason `limit`. A hang shows as `limit`, not as a job that never returns. |
+| `:write A[-B]` | Stops at the first write into linear A..B (hex, inclusive). |
+| `:nowatch` | Turns off the automatic stops, for a program that means to run code where they would object. |
+| `:keep` | On a clean exit, keeps the machine: later jobs fork from its state. |
 
-The ones QCport needed were `:ms` and `:write`.
+QCport needed `:ms` and `:write`. The source of truth is the comment at the
+top of `src/misc/dosrun.cpp`.
 
-## 2. What a stop reports
+## 2. What the fork adds to DOSBox-X
 
-Without a directive, the job stops where execution lands somewhere code
-cannot be: memory no one owns, a program's own data, empty memory (`00` or
-`FF` bytes), an unhandled #DE/#BR/#UD/#NM, or HLT with interrupts off. The
-events, in order:
+### Automatic stops
 
-- `crash` (or `write`): what stopped it, and where.
-- `state`: registers and three views of how execution got there:
-  - `stack`: frames by stack slot. A frame lives while its return address is
-    still on the stack. Wrong once the program has overwritten its stack.
-  - `calls`: the calls still open, matched by return address from the
-    transfer ring. Survives a wrecked stack.
-  - `bad_returns`: the last 16 returns that went where no open call left.
-    The first one near the stop is usually the corruption. Returns from
-    interrupt stubs whose entry was not seen, and emu87's patched returns,
-    show up here as noise.
-- `trace`: the last 10,000 transfers (call, ret or jump), oldest first, each
-  with its source and target and SP after it.
-- `end`: the reason (`exit`, `crash`, `write`, `limit`, `wall`), emulated ms,
-  and the program's executed instructions and memory operands.
+The normal core checks where execution lands after every transfer and on
+entering a new page, in real mode, and stops the job with a `crash` event at
+the first wrong place:
 
-Each place carries the linear address, the nearest public symbol and, with
-the program's CodeView info, the source line. The nearest public is the one
-before the address, so a static function reads as an offset into the public
-before it.
+- **Unowned memory:** a free DOS block, an MCB header, video memory, or
+  conventional memory past the end of the MCB chain. The interrupt table and
+  BIOS data area are never code.
+- **The program's own data:** memory its debug info or link map lays out as
+  a data class, or its load image outside any code segment.
+- **Empty memory:** four bytes of `00` or of `FF`, which no code starts with.
+- **An unhandled fault:** #DE, #BR, #UD or #NM whose vector is still the one
+  the booted machine had, so the program never meant to handle it.
+- **HLT with interrupts off**, which nothing wakes.
+
+A jump through a bad pointer, a return to a wrecked address and a call
+through a corrupt vector all land in one of these. `:nowatch` turns the
+checks off.
+
+`:write A-B` is the same stop for data. Every write the core makes goes
+through one check while a range is set. The stop comes before the write
+lands, with the address, size and value in a `write` event.
+
+### The call stack and the transfer ring
+
+Each stop is followed by a `state` event: registers, and three views of how
+execution got there.
+
+- `stack`: frames by stack slot. A frame lives while its return address is
+  still on the stack. This is wrong once the program has overwritten its
+  stack, or when code runs on a stack of its own.
+- `calls`: the calls still open. Every transfer goes into a 10,000-entry ring
+  as a call, a return or a jump. A call records the address it returns to; a
+  return pops back to the call that left its target. So the chain is what
+  actually ran, whatever the stack now holds. In snd_mix it held across the
+  sound IRQ's switch to its own 512-byte stack.
+- `bad_returns`: the last 16 returns to an address no open call left. The
+  first one near the stop is usually the corruption. Interrupt returns whose
+  entry went unseen, and emu87's returns past its patched bytes, show up as
+  noise.
+
+A `trace` event then carries the ring, oldest first, with SP after each
+transfer. `end` gives the reason (`exit`, `crash`, `write`, `limit`, `wall`)
+and the program's executed instructions and memory operands.
 
 A stop at an address that moves between runs is an interrupt, not the code
-under it. One QCport crash stopped at a `sahf` in one run and a different
-instruction in the next; the `trace` showed a "call" that dropped SP by six
-bytes (flags, CS, IP) into the startup code's handler. A null far pointer had
-written the timer vector.
+under it. One QCport crash stopped at a `sahf` in one run and elsewhere in
+the next. The ring showed a "call" that dropped SP by six bytes (flags, CS,
+IP) into the startup code's handler: a null far pointer had written the timer
+vector.
+
+### Symbols
+
+At each program load the fork reads the program's own debug info:
+
+- CodeView, TDINFO or Watcom info appended to the EXE; or
+- a `.TDS` beside it; or,
+- for an EXE only, the `.MAP` beside it (same name, `.MAP`).
+
+A `.MAP` gives publics only, no statics, sizes or lines, so it is the
+fallback. It also supplies the segment classes the data check uses. Without
+any of them, a report has only `segment:offset` and linear addresses.
+
+Every address in a report carries the linear address, the nearest symbol at
+or below it as `symbol+offset`, and the source file and line where the debug
+info has them. Where only publics are known -- a `.MAP` alone, or an object
+with no debug info of its own, as llrm's are today -- the nearest symbol is
+the last public before the address, so code in a static function reads as
+an offset into the public before it. `_snd_mix_sum+0x23D` below is the static
+`snd_mix_chan`. Name it from a listing (`llrm-c -S`).
 
 ## 3. Which module: swap llrm objects into the BCC build
 
