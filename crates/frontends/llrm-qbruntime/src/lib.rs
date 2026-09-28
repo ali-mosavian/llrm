@@ -600,6 +600,121 @@ pub struct Routine {
     pub call: Option<Call>,
     pub ends_module: bool,
     pub requires: Option<Requires>,
+    pub statement: Option<Statement>,
+    pub source: Option<Source>,
+}
+
+/// How a statement passes one source argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pass {
+    Integer,
+    Long,
+    Descriptor,
+}
+
+/// One source argument of a statement, in push order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Argument {
+    pub pass: Pass,
+    /// What is pushed when the source leaves it out.
+    pub default: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Arguments {
+    Each(Vec<Argument>),
+    /// A presence word and an INTEGER per source position, then their word count.
+    CountLed,
+}
+
+/// The QB statements that call a routine: the table's `statement`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Statement {
+    pub names: Vec<String>,
+    pub arguments: Arguments,
+    pub arity: Vec<usize>,
+    pub terminates: bool,
+    pub refuse: String,
+}
+
+impl Statement {
+    fn parse(name: &str, table: &toml::Table) -> Result<Statement, String> {
+        let at = |key: &str| format!("{name}.statement.{key}");
+        let field = |key: &str| table.get(key).ok_or_else(|| format!("{} is missing", at(key)));
+        if let Some(key) = table.keys().find(|key| !["names", "arguments", "arity", "terminates", "refuse"].contains(&key.as_str())) {
+            return Err(format!("{} is not a statement field", at(key)));
+        }
+        let arguments = match field("arguments")? {
+            toml::Value::String(form) if form == "count-led" => Arguments::CountLed,
+            toml::Value::Array(each) => Arguments::Each(
+                each.iter()
+                    .map(|one| {
+                        let one = one.as_table().ok_or_else(|| format!("{} is not a list of tables", at("arguments")))?;
+                        if let Some(key) = one.keys().find(|key| !["pass", "default"].contains(&key.as_str())) {
+                            return Err(format!("{} is not an argument field", at(key)));
+                        }
+                        let pass = match string(one.get("pass").ok_or_else(|| format!("{} is missing", at("pass")))?, &at("pass"))? {
+                            "INTEGER" => Pass::Integer,
+                            "LONG" => Pass::Long,
+                            "descriptor" => Pass::Descriptor,
+                            other => return Err(format!("{}: {other} is not INTEGER, LONG or descriptor", at("pass"))),
+                        };
+                        let default = one.get("default").map(|value| integer(value, &at("default"))).transpose()?;
+                        Ok(Argument { pass, default })
+                    })
+                    .collect::<Result<_, String>>()?,
+            ),
+            _ => return Err(format!("{} is not a list or \"count-led\"", at("arguments"))),
+        };
+        let arity = match (table.get("arity"), &arguments) {
+            (Some(arity), _) => arity
+                .as_array()
+                .ok_or_else(|| format!("{} is not a list", at("arity")))?
+                .iter()
+                .map(|one| usize::try_from(integer(one, &at("arity"))?).map_err(|_| format!("{} is negative", at("arity"))))
+                .collect::<Result<_, String>>()?,
+            (None, Arguments::Each(each)) => vec![each.len()],
+            (None, Arguments::CountLed) => return Err(format!("{} is missing", at("arity"))),
+        };
+        Ok(Statement {
+            names: strings(field("names")?, &at("names"))?,
+            arguments,
+            arity,
+            terminates: table.get("terminates").map(|value| boolean(value, &at("terminates"))).transpose()?.unwrap_or(false),
+            refuse: string(field("refuse")?, &at("refuse"))?.to_owned(),
+        })
+    }
+}
+
+/// The source form that picks a routine by its operand: the table's `source`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Source {
+    pub form: String,
+    pub type_: Option<String>,
+    pub mbf: Option<bool>,
+    pub record: Option<bool>,
+}
+
+impl Source {
+    fn parse(name: &str, table: &toml::Table) -> Result<Source, String> {
+        let at = |key: &str| format!("{name}.source.{key}");
+        if let Some(key) = table.keys().find(|key| !["form", "type", "mbf", "record"].contains(&key.as_str())) {
+            return Err(format!("{} is not a source field", at(key)));
+        }
+        Ok(Source {
+            form: string(table.get("form").ok_or_else(|| format!("{} is missing", at("form")))?, &at("form"))?.to_owned(),
+            type_: table.get("type").map(|value| string(value, &at("type")).map(str::to_owned)).transpose()?,
+            mbf: table.get("mbf").map(|value| boolean(value, &at("mbf"))).transpose()?,
+            record: table.get("record").map(|value| boolean(value, &at("record"))).transpose()?,
+        })
+    }
+
+    fn matches(&self, form: &str, type_: Option<&str>, mbf: bool, record: bool) -> bool {
+        self.form == form
+            && self.type_.as_deref().is_none_or(|one| Some(one) == type_)
+            && self.mbf.is_none_or(|one| one == mbf)
+            && self.record.is_none_or(|one| one == record)
+    }
 }
 
 /// A symbol a call makes the object reference, by one argument's constant value.
@@ -858,6 +973,8 @@ pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
                 "by_value" => routine.by_value = boolean(value, &at)?,
                 "ends_module" => routine.ends_module = boolean(value, &at)?,
                 "requires" => routine.requires = Some(Requires::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
+                "statement" => routine.statement = Some(Statement::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
+                "source" => routine.source = Some(Source::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
                 "call" => routine.call = Some(call(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?, audits)?),
                 "writes_cells" => {
                     for (of, cells) in value.as_table().ok_or_else(|| format!("{at} is not a table"))? {
@@ -888,6 +1005,19 @@ pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
         let routine = &mut routines[name.as_str()];
         routine.contract = contract;
         routine.families = families;
+    }
+    let mut statements = BTreeSet::new();
+    for (name, routine) in &routines {
+        for statement in routine.statement.iter().flat_map(|statement| &statement.names) {
+            if !statements.insert(statement) {
+                return Err(format!("{name}: statement {statement} is described twice"));
+            }
+        }
+        if let Some(source) = &routine.source {
+            if let Some((other, _)) = routines.iter().find(|(other, one)| *other != name && one.source.as_ref() == Some(source)) {
+                return Err(format!("{name} and {other} have the same source"));
+            }
+        }
     }
     Ok(routines)
 }
@@ -952,6 +1082,20 @@ pub fn module_end() -> &'static str {
 /// What a call to `routine` makes the object reference, where the table says.
 pub fn requires(routine: &str) -> Option<&'static Requires> {
     RUNTIME.get(routine)?.requires.as_ref()
+}
+
+/// The routine QB statement `name` calls, and how.
+pub fn statement(name: &str) -> Option<(&'static str, &'static Statement)> {
+    RUNTIME.iter().find_map(|(routine, one)| {
+        let statement = one.statement.as_ref()?;
+        statement.names.iter().any(|one| one == name).then_some((routine.as_str(), statement))
+    })
+}
+
+/// The routine source form `form` calls for an operand of QB type `type_`,
+/// under MBF or IEEE, with or without a record number.
+pub fn routine_for(form: &str, type_: Option<&str>, mbf: bool, record: bool) -> Option<&'static str> {
+    RUNTIME.iter().find(|(_, one)| one.source.as_ref().is_some_and(|source| source.matches(form, type_, mbf, record))).map(|(name, _)| name.as_str())
 }
 
 /// Whether a runtime entry never comes back to its caller: an established
@@ -1544,6 +1688,8 @@ mod tests {
             "[\"B$X\".call]\npushed = \"odd\"\n",
             "[\"B$X\".call]\npushed = 2\naudit = \"nowhere\"\n",
             "[\"B$X\".requires]\nargument = 1\nvalues = {}\n",
+            "[\"B$X\".statement]\nnames = [\"X\"]\narguments = [{ pass = \"SINGLE\" }]\nrefuse = \"no\"\n",
+            "[\"B$X\".statement]\nnames = [\"X\"]\narguments = []\nrefuse = \"no\"\n\n[\"B$Y\".statement]\nnames = [\"X\"]\narguments = []\nrefuse = \"no\"\n",
         ] {
             assert!(load(text).is_err(), "{text}");
         }
