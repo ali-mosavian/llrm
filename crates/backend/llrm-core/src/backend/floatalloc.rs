@@ -876,18 +876,29 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
                 insn(semantics(Operation::Move, "mov", vec![Loc::Mem(chop.clone())], vec![Loc::Held(chopped)]), at),
             ]);
         }
+        // Chopping, once switched on, stays on across what rounding cannot
+        // change, so a run of conversions switches once.
+        let mut chopping = false;
         for one in &block.insns {
-            if !fisttp(one) {
-                insns.push(Arc::clone(one));
+            if fisttp(one) {
+                if !chopping {
+                    insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]), one.at));
+                    chopping = true;
+                }
+                let mut made = (**one).clone();
+                made.what = Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
+                insns.push(Arc::new(made));
                 continue;
             }
-            let mut made = (**one).clone();
-            made.what = Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
-            insns.extend([
-                insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]), one.at),
-                Arc::new(made),
-                insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), one.at),
-            ]);
+            if chopping && !_unrounded(one) {
+                insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), one.at));
+                chopping = false;
+            }
+            insns.push(Arc::clone(one));
+        }
+        if chopping {
+            let at = block.insns.last().map_or(block.at, |last| last.at);
+            insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(saved.clone())]), at));
         }
         let mut made = block.clone();
         made.insns = insns;
@@ -896,6 +907,22 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
     let mut out = body.clone();
     out.blocks = blocks;
     Ok(out)
+}
+
+/// Whether `one` neither rounds nor leaves the block: integer work, and
+/// the x87 loads, exchanges, compares and sign changes, which are exact.
+fn _unrounded(one: &Insn) -> bool {
+    let Some(what) = &one.what else { return false };
+    let name = what.name.as_deref().unwrap_or_default();
+    match what.op {
+        Operation::Jump | Operation::Branch | Operation::Call | Operation::Return | Operation::Escape | Operation::Barrier | Operation::Restore | Operation::Data => false,
+        Operation::FloatLoad => !matches!(name, "fldpi" | "fldl2e" | "fldl2t" | "fldlg2" | "fldln2"),
+        Operation::FloatStore => false,
+        Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
+            matches!(name, "fxch" | "fcom" | "fcomp" | "fcompp" | "fucom" | "fucomp" | "fucompp" | "ftst" | "fabs" | "fchs")
+        }
+        _ => true,
+    }
 }
 
 /// Python holds the one mutable frame every machine phase shares.
