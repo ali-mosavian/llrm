@@ -2868,3 +2868,28 @@ define void @f() addrspace(1) {
     let got = listing(text, "f");
     assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.starts_with("push e")), "{got:#?}");
 }
+
+/// A far pointer tested against null, as qcport tests `if ( ent )`: its
+/// words were joined into a dword register (movzx, movzx, shl, or) to be
+/// compared. Its words are or-ed.
+#[test]
+fn test_a_far_pointer_is_tested_by_its_words() {
+    let text = "declare void @g() addrspace(1)
+define void @f(ptr addrspace(1) %p, ptr addrspace(1) %q) addrspace(1) {
+  %pi = ptrtoint ptr addrspace(1) %p to i32
+  %n = icmp eq i32 %pi, 0
+  br i1 %n, label %done, label %more
+more:
+  %qi = ptrtoint ptr addrspace(1) %q to i32
+  %e = icmp ne i32 %pi, %qi
+  br i1 %e, label %call, label %done
+call:
+  call addrspace(1) void @g()
+  br label %done
+done:
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.contains(" e")), "{got:#?}");
+}
