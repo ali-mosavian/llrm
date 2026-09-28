@@ -1298,6 +1298,22 @@ mod tests {
         assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(segment), "{body:#?}");
     }
 
+    /// qcport's d_alias.c tests a far LeafCache pointer against 0. The 0
+    /// became a near pointer made far, DGROUP:0, so a null cache passed the
+    /// test, its stores landed in the interrupt table, and the next timer
+    /// tick jumped to garbage. An integer made a far pointer is its own
+    /// segment:offset, as Borland converts it.
+    #[test]
+    fn test_an_integer_made_a_far_pointer_is_not_in_dgroup() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farnull.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "farnull", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_put proc").expect("_put");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert!(!body.iter().any(|one| one.contains("DGROUP")), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

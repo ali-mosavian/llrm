@@ -1,0 +1,57 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=18 align=1
+f1 DBSrcFile "farnull.c"
+- DBSrcCue f1 4 1
+SYM y1 name="put" base="put" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_2
+SYM y2 name="lc" base="lc" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_LONG_POINTER
+SYM y3 name="v" base="v" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INT_2
+l2 CGLastParm
+t3 CGTemp TY_INT_2
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 6 1
+n6 CGFEName y2 TY_LONG_POINTER
+n7 CGUnary O_POINTS n6 TY_LONG_POINTER
+n8 CGInteger 0 TY_INTEGER
+n9 CGCompare O_NE n7 n8 TY_LONG_POINTER
+- CGControl O_IF_FALSE n9 l4
+- DBSrcCue f1 7 1
+n10 CGFEName y2 TY_LONG_POINTER
+n11 CGUnary O_POINTS n10 TY_LONG_POINTER
+n12 CGInteger 0 TY_UNSIGNED
+n13 CGBinary O_PLUS n11 n12 TY_LONG_POINTER
+n14 CGInteger 2 TY_INTEGER
+n15 CGBinary O_PLUS n13 n14 TY_LONG_POINTER
+n16 CGFEName y3 TY_INT_2
+n17 CGUnary O_POINTS n16 TY_INT_2
+n18 CGAssign n15 n17 TY_INT_2
+- CGDone n18
+- DBSrcCue f1 8 1
+n19 CGInteger 1 TY_INT_2
+n20 CGTempName t3 TY_INT_2
+n21 CGAssign n20 n19 TY_INT_2
+- CGDone n21
+- CGControl O_GOTO n0 l5
+- DBSrcCue f1 9 1
+- CGControl O_LABEL n0 l4
+- DBSrcCue f1 10 1
+n22 CGInteger 0 TY_INT_2
+n23 CGTempName t3 TY_INT_2
+n24 CGAssign n23 n22 TY_INT_2
+- CGDone n24
+- DBSrcCue f1 11 1
+- CGControl O_LABEL n0 l5
+n25 CGTempName t3 TY_INT_2
+n26 CGUnary O_POINTS n25 TY_INT_2
+- CGReturn n26 TY_INT_2
+STOP
+FINI
