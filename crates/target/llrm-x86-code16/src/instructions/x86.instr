@@ -29,6 +29,7 @@ and      binary    rm/^0,rmi        8,16,32   alu_rr      -                     
 or       binary    rm/^0,rmi        8,16,32   alu_rr      -                      Or_rm{w}_r{w}
 xor      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Xor_rm{w}_r{w}
 shl      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Shl_rm{w}_CL
+sal      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Sal_rm{w}_CL
 shr      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Shr_rm{w}_CL
 sar      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Sar_rm{w}_CL
 rol      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Rol_rm{w}_CL
@@ -62,7 +63,10 @@ out      barrier   -/ri,r           8,16      unknown     s0=dx,s1=ax           
 stosb    fill      -/r,r,r          8         rep_stos    s0=ax,s1=di            Stosb_m8_AL
 stosw    fill      -/r,r,r          16        rep_stos    s0=ax,s1=di            Stosw_m16_AX
 stosd    fill      -/r,r,r          32        rep_stos    s0=ax,s1=di            Stosd_m32_EAX
-les      move      r,r/m            16        les         -                      Les_r16_m1616
+les      move      r,r/m            16        les         d1=es                  Les_r16_m1616
+lds      move      r,r/m            16        les         d1=ds                  Lds_r16_m1616
+lfs      move      r,r/m            16        les         d1=fs                  Lfs_r16_m1616
+lgs      move      r,r/m            16        les         d1=gs                  Lgs_r16_m1616
 fld      fload     s/ms             -         x87_load    -                      Fld_m64fp
 fild     fload     s/m              -         x87_load    -                      Fild_m32int
 fldz     fload     s/-              -         x87_load    -                      Fldz

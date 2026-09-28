@@ -60,7 +60,7 @@ const OPERATIONS: [&str; 28] = [
     "ret", "nothing", "restore", "data", "fload", "fstore", "farith", "farithp", "funary", "barrier",
 ];
 
-const REGISTERS: [&str; 9] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es"];
+const REGISTERS: [&str; 12] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs"];
 
 fn operands(text: &str, line: usize) -> Result<Vec<Operand>, String> {
     if text == "-" {
