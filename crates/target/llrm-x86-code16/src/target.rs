@@ -64,6 +64,11 @@ impl Machine for Dos {
     fn load_may_trap(&self, width: u64, align: u64) -> bool {
         crate::machine::BUILT_IN.access_may_trap(width, align)
     }
+
+    /// The description's: `dos.toml` states each device's reach.
+    fn port_touches_memory(&self, ports: (i64, i64)) -> bool {
+        crate::machine::BUILT_IN.port_memory(ports) != crate::machine::PortMemory::None
+    }
 }
 
 /// The two indexed addresses real mode has. A word one is bx or bp plus si

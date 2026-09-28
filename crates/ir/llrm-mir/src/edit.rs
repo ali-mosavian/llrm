@@ -255,6 +255,13 @@ impl Function {
         self.changes.push(Change::Rewritten(inst));
     }
 
+    /// Adds `attr` to the call `inst` itself, as LLVM's `CallBase::addFnAttr`.
+    pub fn add_call_attr(&mut self, inst: InstId, attr: crate::opcode::Attribute) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+        info.attrs.push(attr);
+        self.changes.push(Change::Rewritten(inst));
+    }
+
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));

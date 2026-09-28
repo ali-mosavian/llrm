@@ -1,7 +1,7 @@
 //! What the machine promises, whatever the source language or runtime: how a
 //! far address becomes a linear one, which segment registers the program
-//! model reserves, which memory holds no program data, which ports touch
-//! no memory, and which CPU its code is priced for. One description per target, read from TOML;
+//! model reserves, which memory holds no program data, what each I/O port
+//! may do to memory, and which CPU its code is priced for. One description per target, read from TOML;
 //! real-mode DOS is the default.
 
 use std::sync::LazyLock;
@@ -34,14 +34,32 @@ pub struct Segments {
     pub stack_is_data: bool,
 }
 
+/// What an `in` or `out` of a port may do to memory, narrowest first.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PortMemory {
+    /// Nothing: the device's registers only.
+    None,
+    /// Start a transfer that reads or writes any memory.
+    Dma,
+    /// Read and write any memory: a port the description does not list.
+    Any,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Port {
+    pub low: i64,
+    pub high: i64,
+    pub memory: PortMemory,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Machine {
     pub addressing: Addressing,
     pub segments: Segments,
     /// Linear [low, high) ranges no program data occupies.
     pub foreign: Vec<(i64, i64)>,
-    /// [low, high) port ranges whose writes change no memory.
-    pub silent_ports: Vec<(i64, i64)>,
+    /// [low, high) port ranges and what their access does to memory.
+    pub ports: Vec<Port>,
     /// The processor whose costs choose between equivalent code.
     pub cpu: String,
     /// A multi-byte access crossing a segment's last offset faults.
@@ -94,7 +112,7 @@ impl Machine {
             addressing,
             segments,
             foreign: ranges("foreign")?,
-            silent_ports: ranges("silent_ports")?,
+            ports: ports(&table)?,
             cpu: cpu.to_owned(),
             segment_end_faults,
         })
@@ -132,9 +150,37 @@ impl Machine {
         self.addressing != Addressing::Real || self.segment_end_faults && width > align
     }
 
-    pub fn silent_port(&self, port: i64) -> bool {
-        self.silent_ports.iter().any(|&(low, high)| low <= port && port < high)
+    /// What an access to any port in the inclusive range may do to memory.
+    pub fn port_memory(&self, (low, high): (i64, i64)) -> PortMemory {
+        let mut widest = PortMemory::None;
+        let mut at = low;
+        while at <= high {
+            let Some(port) = self.ports.iter().find(|port| port.low <= at && at < port.high) else { return PortMemory::Any };
+            widest = widest.max(port.memory);
+            at = port.high;
+        }
+        widest
     }
+}
+
+fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
+    let Some(rows) = table.get("ports") else { return Ok(Vec::new()) };
+    let rows = rows.as_array().ok_or("ports is not an array of tables")?;
+    rows.iter()
+        .map(|row| {
+            let bound = |name: &str| row.get(name).and_then(toml::Value::as_integer).ok_or_else(|| format!("ports needs an integer {name}"));
+            let (low, high) = (bound("low")?, bound("high")?);
+            if low >= high {
+                return Err(format!("ports: {low:#x} is not below {high:#x}"));
+            }
+            let memory = match row.get("memory").and_then(toml::Value::as_str) {
+                Some("none") => PortMemory::None,
+                Some("dma") => PortMemory::Dma,
+                other => return Err(format!("a port's memory must be \"none\" or \"dma\", not {other:?}")),
+            };
+            Ok(Port { low, high, memory })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -168,6 +214,17 @@ mod tests {
         assert_eq!(dos.foreign_span((0xB801, 0xB801), every, 1), None);
         let protected = Machine { addressing: Addressing::Protected, ..dos };
         assert_eq!(protected.foreign_span((0xA000, 0xA000), every, 1), None);
+    }
+
+    #[test]
+    fn test_a_vga_register_touches_no_memory_a_dma_port_may_and_an_unlisted_port_may_touch_any() {
+        let dos = Machine::parse(DOS).unwrap();
+        assert_eq!(dos.port_memory((0x3C4, 0x3C5)), PortMemory::None);
+        assert_eq!(dos.port_memory((0x3C0, 0x3DF)), PortMemory::None);
+        assert_eq!(dos.port_memory((0x0B, 0x0B)), PortMemory::Dma);
+        assert_eq!(dos.port_memory((0x3C9, 0x3F0)), PortMemory::Any);
+        assert_eq!(dos.port_memory((0x3F0, 0x3F8)), PortMemory::Dma);
+        assert_eq!(dos.port_memory((0x300, 0x300)), PortMemory::Any);
     }
     /// A word read at an odd offset may be the one at FFFFh, which faults on
     /// a 286 or later; an aligned one, or a byte, never traps in real mode.

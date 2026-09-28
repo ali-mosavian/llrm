@@ -9,7 +9,7 @@ use llrm_qbruntime::INLINE_TABLE;
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use llrm_x86_code16::machine::Machine;
+use llrm_x86_code16::machine::{Machine, PortMemory};
 use crate::frontends::bc::blocks::{Block, CodeMap, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
@@ -122,7 +122,7 @@ pub fn _at_devices(nodes: &[Arc<Node>], starts: &BTreeSet<usize>, machine: &Mach
         } else {
             continue;
         };
-        if port.is_some_and(|port| machine.silent_port(port)) {
+        if port.is_some_and(|port| machine.port_memory((port, port)) == PortMemory::None) {
             let mut replaced = opaque.clone();
             replaced.effects.loads = Vec::new();
             replaced.effects.stores = Vec::new();

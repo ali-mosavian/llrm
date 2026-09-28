@@ -341,6 +341,6 @@ fn test_a_port_is_silent_only_where_the_machine_says() {
     let stores = |machine| decode_body(&found, &mapped, &[block.clone()], &body, machine)[1].effects().stores.clone();
 
     assert!(stores(&BUILT_IN).is_empty());
-    let loud = Machine { silent_ports: Vec::new(), ..BUILT_IN.clone() };
+    let loud = Machine { ports: Vec::new(), ..BUILT_IN.clone() };
     assert_eq!(stores(&loud), *ANY_MEMORY);
 }

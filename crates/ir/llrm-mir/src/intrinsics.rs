@@ -89,9 +89,9 @@ struct Spec {
 
 const PURE: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "speculatable", "willreturn"];
 const NO_MEMORY: &[(Option<&str>, &str)] = &[(None, "none")];
-/// A device may read any memory a port write starts it on, as DMA does,
-/// and a port's own state is no memory the program can name.
-const PORT_MEMORY: &[(Option<&str>, &str)] = &[(None, "read"), (Some("inaccessiblemem"), "readwrite")];
+/// Any memory: a device may start DMA. `Machine::port_touches_memory`
+/// narrows a call to one that cannot.
+const PORT_MEMORY: &[(Option<&str>, &str)] = &[(None, "readwrite")];
 const PORT_ATTRS: &[&str] = &["nocallback", "nofree", "nounwind", "willreturn"];
 const INTS: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[])];
 

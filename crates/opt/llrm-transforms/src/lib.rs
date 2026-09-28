@@ -38,6 +38,7 @@ pub mod loopclone;
 pub mod loopsimplify;
 pub mod peel;
 pub mod pipeline;
+pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
