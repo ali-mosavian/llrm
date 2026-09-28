@@ -1228,6 +1228,16 @@ mod tests {
         assert!(run.iter().any(|one| one.split_whitespace().collect::<Vec<_>>() == ["call", "ax"] || one.starts_with("call word ptr [")), "{run:#?}");
     }
 
+    /// qcport's sc.c initializes `short links[5]` from a constant: an
+    /// aggregate CGAssign, refused as "a 10-byte aggregate as a value".
+    #[test]
+    fn test_a_local_array_initializer_is_copied() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/arrayinit.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "arrayinit", None, &llrm_core::driver::Options::of(machine));
+        assert!(built.is_ok(), "{:?}", built.err());
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

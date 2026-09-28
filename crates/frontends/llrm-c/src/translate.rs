@@ -1042,14 +1042,15 @@ impl<'a, 't> Body<'a, 't> {
                 Got::Value(self.converted(result, "TY_DOUBLE", type_)?)
             }
             ("CGBinary", [cg_op, left, right, type_]) => Got::Value(self.binary(cg_op, left, right, type_)?),
-            ("CGAssign", [target, source, type_]) => {
+            // Watcom emits an aggregate assignment as either.
+            ("CGAssign", [target, source, type_]) if self.types.aggregate(type_).is_none() => {
                 let value = self.value_as(source, type_)?;
                 let got = self.eval(target)?;
                 let (pointer, volatile) = self.address(got)?;
                 self.store(value, pointer, volatile, type_)?;
                 Got::Value(value)
             }
-            ("CGLVAssign", [target, source, _]) => {
+            ("CGAssign" | "CGLVAssign", [target, source, _]) => {
                 let Got::Aggregate(from, size) = self.eval(source)? else { return self.refuse("an aggregate assignment from a scalar") };
                 let got = self.eval(target)?;
                 let (into, _) = self.address(got)?;
