@@ -1505,6 +1505,16 @@ impl<'a, 't> Body<'a, 't> {
             Got::Function(symbol) => &unit.symbols[&symbol],
             _ => &unit.symbols[&call.symbol],
         };
+        // bcc -O's builtin: the library's fabs is the x87 instruction.
+        if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
+            && symbol.name == "fabs"
+            && symbol.imported()
+            && is_float(&unit.canonical_type(type_))
+            && is_float(&unit.canonical_type(&call.type_))
+        {
+            let value = self.value_as(node, type_)?;
+            return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
+        }
         let cleanup = cleanup(symbol).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
