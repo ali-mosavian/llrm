@@ -1770,6 +1770,13 @@ impl Selector<'_, '_, '_> {
             if self.only_stored(result) && self.far_words(Operand::Value(result))?.is_some() {
                 return Ok(());
             }
+            let joined = match operand {
+                Operand::Value(value) => {
+                    let held = self.value(value);
+                    self.joins.get(&held).copied()
+                }
+                _ => None,
+            };
             let pair = match (op, self.types().get(from).clone()) {
                 (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
                     let offset = self.held(operand, from, at, out)?;
@@ -1788,6 +1795,17 @@ impl Selector<'_, '_, '_> {
                     (Some(offset), selector)
                 }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
+                // A joined dword's words are the pointer's, as they are.
+                // Copied: the join's words are the call's dword registers,
+                // and a selector must be a word a segment register can take.
+                (CastOp::IntToPtr, Type::Int(32)) if let Some((low, high)) = joined => {
+                    let [offset, selector] = [low, high].map(|word| {
+                        let copy = self.fresh_held(2);
+                        out.push(mov(copy, Loc::Held(word)));
+                        copy
+                    });
+                    (Some(offset), selector)
+                }
                 (CastOp::IntToPtr, Type::Int(32)) => {
                     let dword = self.held(operand, from, at, out)?;
                     let top = self.fresh_held(4);
