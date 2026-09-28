@@ -45,6 +45,7 @@ pub mod narrow;
 pub mod nativeframe;
 pub mod omfwrite;
 pub mod parcopy;
+pub mod peep;
 pub mod peephole;
 pub mod phielim;
 pub mod pointers;
