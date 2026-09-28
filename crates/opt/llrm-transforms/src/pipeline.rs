@@ -114,6 +114,11 @@ impl Options {
         Self { limits: Limits { grows: false, ..Limits::default() }, ..Self::default() }
     }
 
+    /// Whether code size outranks speed where they conflict: -Os and -Oz.
+    pub fn prefers_size(&self) -> bool {
+        !self.limits.grows
+    }
+
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
         Self { unroll: false, peel: false, ..Self::size() }

@@ -41,6 +41,8 @@ pub struct Profile {
     // A 67h override's predecoder stall, charged apart from the prefix
     // issue cost so profitability makes the scorer's comparison.
     pub address_prefix_stall: i64,
+    // -Os: where the costs tie on nothing else, the shorter encoding.
+    pub size: bool,
 }
 
 impl Profile {
@@ -74,6 +76,7 @@ impl Profile {
             max_unroll_iterations: DEFAULT_MAX_UNROLL_ITERATIONS,
             max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
             address_prefix_stall: 0,
+            size: false,
         }
     }
 
@@ -94,6 +97,13 @@ impl Profile {
     /// set the same flags. The 386 and 486 take three clocks for the D1 shift.
     pub fn doubling(&self) -> Result<&'static str, String> {
         Ok(if self.cost("alu_rr")? < self.cost("shift_r1")? { "alu_rr" } else { "shift_r1" })
+    }
+
+    /// Whether `words` pops into a dead register clean a call's arguments
+    /// off the stack in place of `add sp,2*words`: shorter for one or two
+    /// words, and where size is not wanted, only if no slower.
+    pub fn pops_arguments(&self, words: i64) -> Result<bool, String> {
+        Ok(words <= 2 && (self.size || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
     }
 
     /// Whether this profile has an explicit ranking for a form.
@@ -298,6 +308,18 @@ static _BY_NAME: LazyLock<IndexMap<&'static str, &'static Profile>> = LazyLock::
         .map(|one| (one.name.as_str(), one))
         .collect()
 });
+
+/// Each profile again, tuned for size.
+static _SIZED: LazyLock<IndexMap<&'static str, Profile>> =
+    LazyLock::new(|| _PROFILES.iter().map(|one| (one.name.as_str(), Profile { size: true, ..one.clone() })).collect());
+
+/// `name`'s profile, tuned for size where `size`.
+pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
+    if !size {
+        return named(name);
+    }
+    _SIZED.get(name).ok_or_else(|| format!("unknown CPU target: {name}"))
+}
 
 pub fn names() -> Vec<&'static str> {
     _BY_NAME.keys().copied().collect()
