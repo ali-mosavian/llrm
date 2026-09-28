@@ -276,6 +276,9 @@ fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) 
 /// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
 /// sign bit is clear, is one extension. `ext(trunc(ext x))` is two steps.
 fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    if _address_round_trip(context, function, inst) {
+        return true;
+    }
     let cast = |function: &Function, inst: InstId| match function.instruction(inst).opcode {
         Opcode::Cast(op @ (CastOp::Trunc | CastOp::ZExt | CastOp::SExt)) => Some((op, function.instruction(inst).operands[0])),
         _ => None,
@@ -296,6 +299,25 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
         _ => return false,
     };
     _replace(function, inst, Opcode::Cast(op), vec![source]);
+    true
+}
+
+/// `ptrtoint(inttoptr x)` to x's own width is `x`, as InstCombine folds it:
+/// a far null compared as an integer is the constant 0 again.
+fn _address_round_trip(context: &Context, function: &mut Function, inst: InstId) -> bool {
+    if function.instruction(inst).opcode != Opcode::Cast(CastOp::PtrToInt) {
+        return false;
+    }
+    let Some(made) = _definition(function, function.instruction(inst).operands[0]) else { return false };
+    if function.instruction(made).opcode != Opcode::Cast(CastOp::IntToPtr) {
+        return false;
+    }
+    let source = function.instruction(made).operands[0];
+    let result = Operand::Value(function.instruction(inst).result.expect("a value"));
+    if function.operand_type(context, source) != function.operand_type(context, result) {
+        return false;
+    }
+    _forward(function, inst, source);
     true
 }
 

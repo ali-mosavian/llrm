@@ -1466,6 +1466,31 @@ mod tests {
         assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"sub sp, 8"), "{body:#?}");
     }
 
+    /// The listing of each function in `fixture`, `-Os` on a 486.
+    fn listed(fixture: &str, functions: &[&str]) -> Vec<Vec<String>> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"))).unwrap();
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let built = super::selected(&text, fixture, None, &options).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        functions
+            .iter()
+            .map(|function| {
+                let from = asm.find(&format!("{function} proc")).expect("the function");
+                asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+            })
+            .collect()
+    }
+
+    /// `p == 0` for a far `p` compared it with `ptrtoint (inttoptr 0)`:
+    /// the null's words were computed at run time, `xor ebx,ebx; shld
+    /// ecx,ebx,16`, and compared with p's instead of `or`ing p's.
+    #[test]
+    fn test_a_far_null_test_ors_the_words() {
+        for body in listed("farwords", &["_load", "_take"]) {
+            assert!(!body.iter().any(|one| one.starts_with("shld") || one.starts_with("xor e")) && body.iter().any(|one| one.starts_with("or ")), "{body:#?}");
+        }
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

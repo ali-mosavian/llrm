@@ -1,0 +1,109 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=6 align=1
+f1 DBSrcFile "/home/alim/work/personal/llrm/.claude/worktrees/agent-a34e27a392c4cf18d/tests/fixtures/c/farwords.c"
+- DBSrcCue f1 7 1
+SYM y1 name="load" base="load" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+l4 BENewLabel
+- DBSrcCue f1 9 1
+n5 CGFEName y2 TY_POINTER
+n6 CGUnary O_POINTS n5 TY_POINTER
+n7 CGInteger 0 TY_UNSIGNED
+n8 CGBinary O_PLUS n6 n7 TY_POINTER
+SYM y3 name="alloc" base="alloc" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+n9 CGFEName y3 TY_CODE_PTR
+c10 CGInitCall n9 TY_LONG_POINTER y3
+n11 CGInteger 168 TY_INT_4
+- CGAddParm c10 n11 TY_INT_4
+n12 CGCall c10
+n13 CGUnary O_POINTS n12 TY_LONG_POINTER
+n14 CGUnary O_CONVERT n13 TY_LONG_POINTER
+n15 CGAssign n8 n14 TY_LONG_POINTER
+- CGDone n15
+- DBSrcCue f1 10 1
+n16 CGFEName y2 TY_POINTER
+n17 CGUnary O_POINTS n16 TY_POINTER
+n18 CGInteger 0 TY_UNSIGNED
+n19 CGBinary O_PLUS n17 n18 TY_POINTER
+n20 CGUnary O_POINTS n19 TY_LONG_POINTER
+n21 CGInteger 0 TY_INTEGER
+n22 CGCompare O_EQ n20 n21 TY_LONG_POINTER
+- CGControl O_IF_FALSE n22 l4
+SYM y4 name="fail" base="fail" pattern="_*" attr=0xf seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+n23 CGFEName y4 TY_CODE_PTR
+c24 CGInitCall n23 TY_INTEGER y4
+b25 BENewBack y0
+SETSEG 2
+- DGLabel b25
+- DGBytes 5 6e6f6e6500
+SETSEG 0
+n26 CGBackName b25 TY_UINT_1
+n27 CGUnary O_CONVERT n26 TY_POINTER
+- CGAddParm c24 n27 TY_POINTER
+n28 CGCall c24
+- CGDone n28
+- CGControl O_LABEL n0 l4
+- DBSrcCue f1 11 1
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f1 13 1
+SYM y5 name="take" base="take" pattern="_*" attr=0x7 seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y5 TY_LONG_POINTER
+SYM y6 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_INT_4
+l29 CGLastParm
+t30 CGTemp TY_LONG_POINTER
+SYM y7 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y7 TY_LONG_POINTER
+l31 BENewLabel
+- DBSrcCue f1 15 1
+n32 CGFEName y7 TY_LONG_POINTER
+n33 CGFEName y3 TY_CODE_PTR
+c34 CGInitCall n33 TY_LONG_POINTER y3
+n35 CGFEName y6 TY_INT_4
+n36 CGUnary O_POINTS n35 TY_INT_4
+- CGAddParm c34 n36 TY_INT_4
+n37 CGCall c34
+n38 CGUnary O_POINTS n37 TY_LONG_POINTER
+n39 CGUnary O_CONVERT n38 TY_LONG_POINTER
+n40 CGAssign n32 n39 TY_LONG_POINTER
+- CGDone n40
+- DBSrcCue f1 16 1
+n41 CGFEName y7 TY_LONG_POINTER
+n42 CGUnary O_POINTS n41 TY_LONG_POINTER
+n43 CGInteger 0 TY_INTEGER
+n44 CGCompare O_EQ n42 n43 TY_LONG_POINTER
+- CGControl O_IF_FALSE n44 l31
+n45 CGFEName y4 TY_CODE_PTR
+c46 CGInitCall n45 TY_INTEGER y4
+n47 CGBackName b25 TY_UINT_1
+n48 CGUnary O_CONVERT n47 TY_POINTER
+- CGAddParm c46 n48 TY_POINTER
+n49 CGCall c46
+- CGDone n49
+- CGControl O_LABEL n0 l31
+- DBSrcCue f1 17 1
+n50 CGFEName y7 TY_LONG_POINTER
+n51 CGUnary O_POINTS n50 TY_LONG_POINTER
+n52 CGUnary O_CONVERT n51 TY_LONG_POINTER
+n53 CGTempName t30 TY_LONG_POINTER
+n54 CGAssign n53 n52 TY_LONG_POINTER
+- CGDone n54
+- DBSrcCue f1 18 1
+n55 CGTempName t30 TY_LONG_POINTER
+n56 CGUnary O_POINTS n55 TY_LONG_POINTER
+- CGReturn n56 TY_LONG_POINTER
+STOP
+FINI
