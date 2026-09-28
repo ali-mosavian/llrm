@@ -363,7 +363,15 @@ fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
                             dropped.push(Arc::clone(&one));
                             local.push(one);
                         }
-                        Out::Retire(one) => retired.push(one),
+                        Out::Retire(one) => {
+                            // A rule matches a held value's nearest definition;
+                            // dropping it is the whole value only when it is the only one.
+                            for value in &one.defines {
+                                let definers = insns.iter().filter(|other| other.defines.contains(value)).count();
+                                assert_eq!(definers, 1, "held value {value} is defined {definers} times; a retired definition must be its only one");
+                            }
+                            retired.push(one);
+                        }
                     }
                 }
                 out.extend(if dropped.is_empty() { local } else { without(&local, &dropped) });

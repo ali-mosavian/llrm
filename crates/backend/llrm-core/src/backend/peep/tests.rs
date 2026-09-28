@@ -59,3 +59,16 @@ fn a_load_read_twice_is_not_pushed_from_its_cell() {
     let out = folded(what(Operation::Move, "mov", vec![Loc::Held(other)], vec![Loc::Held(other)]), 2);
     assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2 })]);
 }
+
+/// The old pass dropped every definition of a folded value, the rule drops
+/// the one it matched: they agree only while a held value has one
+/// definition, so a second one stops the walk rather than diverging.
+#[test]
+#[should_panic(expected = "held value 1 is defined 2 times")]
+fn a_folded_value_defined_twice_is_refused() {
+    let value = Held { value: 1, width: 2 };
+    let load = |at| Arc::new(Insn::new(at, Some((at, at)), Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])), vec![1], vec![]));
+    let push = Arc::new(Insn::new(1, Some((1, 1)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]));
+    let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, 1)]);
+    super::memory_arguments_insns(&[load(0), push, load(2)], &Facts::counted(&counts));
+}
