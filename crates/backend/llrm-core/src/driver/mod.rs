@@ -41,7 +41,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::named(&self.machine.cpu)
+        cpu::tuned(&self.machine.cpu, self.pipeline.prefers_size())
     }
 }
 

@@ -157,9 +157,45 @@ impl LIRTransform for Peephole {
         let body = doubled(&body, &self.cpu)?;
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
+        let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide.
-        Ok(crate::backend::upperzero::established(&self._frame(machinedce::eliminated(body))))
+        Ok(crate::backend::upperzero::established(&self._frame(body)))
     }
+}
+
+/// A call's `add sp,2*n` as `n` pops into a dead scratch register, as BCC
+/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`).
+/// The add's flags must be dead: a pop sets none.
+pub fn popped_arguments(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
+    const SCRATCH: [Register; 4] = [Register::CX, Register::DX, Register::BX, Register::AX];
+    let arithmetic = RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
+    let exits = liveness::dead_at_exit(body);
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            let sp = Loc::Reg(reg(Register::SP, 2));
+            let words = match &one.what {
+                Some(what) if what.op == Operation::Binary && what.name.as_deref() == Some("add") && what.dests == [sp.clone()] => match what.sources.as_slice() {
+                    [first, Loc::Imm(Imm { value, address: None, .. })] if *first == sp && value % 2 == 0 && *value > 0 => value / 2,
+                    _ => 0,
+                },
+                _ => 0,
+            };
+            let dead = &dead_after[&id(one)];
+            let scratch = SCRATCH.into_iter().find(|register| _lanes(*register).is_subset(dead));
+            match scratch {
+                Some(register) if words > 0 && Lanes::flags(arithmetic).is_subset(dead) && !one.frame_adjust && cpu.pops_arguments(words)? => {
+                    let pop = || Arc::new(with_what(one, semantics(Operation::Pop, "pop", vec![Loc::Reg(reg(register, 2))], vec![])));
+                    insns.extend((0..words).map(|_| pop()));
+                }
+                _ => insns.push(Arc::clone(one)),
+            }
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    Ok(LirBody { blocks, ..body.clone() })
 }
 
 /// Pack two word halves without using the stack.

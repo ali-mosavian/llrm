@@ -1344,6 +1344,25 @@ mod tests {
         assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(|one| one.ends_with("ss")), "{body:#?}");
     }
 
+    /// A call's `add sp,2` is three bytes; BCC -Os pops the argument into CX
+    /// in one. llrm-c -Os kept the add: 1.3K of QCport's surplus over BCC.
+    /// On the 486 a pop is slower, so -O2 keeps it.
+    #[test]
+    fn test_arguments_are_popped_off_at_os_only() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/popargs.cgs")).unwrap();
+        let cleanups = |level: Level| {
+            let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+            let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_core::driver::Options::of(machine) };
+            let built = super::selected(&text, "popargs", None, &options).expect("selects");
+            let asm = llrm_core::backend::masm::text(&built).unwrap();
+            let from = asm.find("_caller proc").expect("_caller");
+            asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| one.starts_with("add sp") || *one == "pop cx").map(str::to_owned).collect::<Vec<_>>()
+        };
+        use llrm_core::driver::flags::Level;
+        assert_eq!(cleanups(Level::Os), ["pop cx", "pop cx", "pop cx"]);
+        assert_eq!(cleanups(Level::O2), ["add sp, 2", "add sp, 4"]);
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
