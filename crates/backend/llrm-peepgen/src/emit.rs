@@ -164,23 +164,42 @@ impl Rule<'_> {
     fn body(&self) -> Result<String, String> {
         let rule = self.rule;
         let mut out = String::new();
-        let len = rule.insns.len();
+        let len = rule.window;
         if rule.end {
             let _ = writeln!(out, "    if w.len() != {len} {{ return None; }}");
         }
-        for (name, var) in &rule.vars {
-            let accessor = match var.ty {
-                Ty::Name => {
-                    let _ = writeln!(out, "    let v_{name} = w.name({})?;", var.slot);
-                    continue;
-                }
-                Ty::Reg => "reg",
-                Ty::Mem => "mem",
-                Ty::Imm => "imm",
-                Ty::Held => "held",
-                Ty::Loc => "loc",
+        let bind = |out: &mut String, slots: std::ops::Range<usize>| {
+            for (name, var) in rule.vars.iter().filter(|(_, var)| slots.contains(&var.slot)) {
+                let accessor = match var.ty {
+                    Ty::Name => {
+                        let _ = writeln!(out, "    let v_{name} = w.name({})?;", var.slot);
+                        continue;
+                    }
+                    Ty::Reg => "reg",
+                    Ty::Mem => "mem",
+                    Ty::Imm => "imm",
+                    Ty::Held => "held",
+                    Ty::Loc => "loc",
+                };
+                let _ = writeln!(out, "    let v_{name} = w.{accessor}({}, {}, {})?;", var.slot, side(var.side), var.index);
+            }
+        };
+        bind(&mut out, 0..len);
+        // Each definition joins the window, once its shape is checked.
+        for (at, value) in rule.defs.iter().enumerate() {
+            let slot = len + at;
+            let insn = &rule.insns[slot];
+            let _ = writeln!(out, "    let w = w.defined(v_{value}.value)?;");
+            let heads: Vec<String> = match &insn.names {
+                Some(names) => names.iter().map(|(name, op)| format!("(Some(Operation::{op}), Some({name:?}))")).collect(),
+                None => insn.ops.iter().map(|op| format!("(Some(Operation::{op}), _)")).collect(),
             };
-            let _ = writeln!(out, "    let v_{name} = w.{accessor}({}, {}, {})?;", var.slot, side(var.side), var.index);
+            let _ = writeln!(out, "    if !matches!((w.op({slot}), w.name({slot})), {}) {{ return None; }}", heads.join(" | "));
+            for (key, values) in crate::automaton::operand_tests(insn, slot, &rule.vars) {
+                let pats: Vec<String> = values.iter().map(val_pat).collect();
+                let _ = writeln!(out, "    if !matches!({}, {}) {{ return None; }}", key_expr(key), pats.join(" | "));
+            }
+            bind(&mut out, slot..slot + 1);
         }
         for (slot, insn) in rule.insns.iter().enumerate() {
             for (s, index, operand) in &insn.operands {
@@ -219,7 +238,11 @@ impl Rule<'_> {
                 ),
             };
             let _ = writeln!(out, "    let n{index} = {made};");
-            let wrap = if matches!(item, Item::Drop { .. }) { "Out::Drop" } else { "Out::Put" };
+            let wrap = match item {
+                Item::Drop { slot } if *slot >= len => "Out::Retire",
+                Item::Drop { .. } => "Out::Drop",
+                _ => "Out::Put",
+            };
             outs.push(format!("{wrap}(n{index})"));
         }
         for one in &rule.post {
@@ -407,6 +430,13 @@ fn emit_group(program: &Program, table: &Table, group: &RGroup, automaton: &Auto
         ),
     };
     let _ = writeln!(out, "\npub fn {name}(body: &LirBody, facts: &Facts) -> LirBody {{\n    {call}\n}}");
+    if walk.kind == WalkKind::Window {
+        let _ = writeln!(
+            out,
+            "\npub fn {name}_insns(insns: &[Arc<Insn>], facts: &Facts) -> Vec<Arc<Insn>> {{\n    walk::window_insns(insns, facts, &{name}::MATCHER, {})\n}}",
+            skip(walk.skip)
+        );
+    }
     Ok(out)
 }
 

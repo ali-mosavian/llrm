@@ -275,3 +275,71 @@ rule zero_compare
     match   cmp r:reg, #0 ; ... moves(*) ; jcc ; $
     when    free(@0, tested), register_named(r), flags_dead_out(AF)
     rewrite @0: or r, r, r ; @1
+
+
+// Selection across instructions before allocation (isel::combined), on
+// held values: `def v: ...` matches the nearest instruction before the
+// window that defines v, and `drop` of it takes it out of the block once
+// the walk is done. `used_once` reads the counts combined.rs makes.
+
+meta plain = clobbers requires delivers spread
+meta pushed_word = plain uses defines volatile
+meta pushed_value = plain defines volatile
+meta loaded_word = plain volatile
+meta argument_load = plain uses
+meta held_copy = plain uses
+meta pushed_held = plain defines
+
+// Fold a single-use frame load into the push that consumes it.
+group memory_arguments
+    walk window
+
+rule memory_argument
+    match   push v:held ; def v: mov v, c:mem
+    when    free(@0, pushed_held), used_once(v), same_width(v, c), width_in(c, [16, 32]), frame_argument(c),
+            free(@1, argument_load), defines_only(@1, v), unchanged(@1, @0)
+    rewrite @0: =@0 c {uses: [], op: @1.op, symbol: @1.symbol} ; drop @1
+
+// Two word pushes of one dword's halves, the high first, as one dword
+// push: both leave the same four bytes, the low at the lower address. A
+// half may be pushed from memory or from a single-use load nothing changes
+// before the push.
+group paired_pushes
+    walk window
+
+rule paired_words
+    match   push h:mem16 ; push l:mem16
+    when    free(@0, pushed_word), free(@1, pushed_word), above(h, l), same_registers(h, l), !stack_based(l)
+    rewrite @1: =@1 dword_cell(l)
+
+rule paired_loaded_high
+    match   push hv:held16 ; push l:mem16 ; def hv: mov hv, h:mem16
+    when    free(@0, pushed_value), used_once(hv), free(@1, pushed_word),
+            free(@2, loaded_word), defines_only(@2, hv), !stack_based(h), unchanged(@2, @0),
+            above(h, l), same_registers(h, l), !stack_based(l)
+    rewrite @1: =@1 dword_cell(l) ; drop @2
+
+rule paired_loaded_low
+    match   push h:mem16 ; push lv:held16 ; def lv: mov lv, l:mem16
+    when    free(@0, pushed_word), free(@1, pushed_value), used_once(lv),
+            free(@2, loaded_word), defines_only(@2, lv), !stack_based(l), unchanged(@2, @0),
+            above(h, l), same_registers(h, l)
+    rewrite @1: =@1 dword_cell(l) {uses: @2.uses, op: @2.op, symbol: @2.symbol} ; drop @2
+
+rule paired_loads
+    match   push hv:held16 ; push lv:held16 ; def hv: mov hv, h:mem16 ; def lv: mov lv, l:mem16
+    when    free(@0, pushed_value), used_once(hv), free(@1, pushed_value), used_once(lv),
+            free(@2, loaded_word), defines_only(@2, hv), !stack_based(h), unchanged(@2, @0),
+            free(@3, loaded_word), defines_only(@3, lv), !stack_based(l), unchanged(@3, @0),
+            above(h, l), same_registers(h, l)
+    rewrite @1: =@1 dword_cell(l) {uses: @3.uses, op: @3.op, symbol: @3.symbol} ; drop @2 ; drop @3
+
+// Push a single-use immediate directly.
+group immediate_arguments
+    walk window
+
+rule immediate_argument
+    match   mov v:held, i:sym ; push v
+    when    free(@0, held_copy), free(@1, pushed_held), same_width(v, i), width_in(v, [16, 32]),
+            used_once(v), defines_only(@0, v), uses_only(@1, v)
+    rewrite @0: =@1 i {defines: [], uses: []} ; drop @1
