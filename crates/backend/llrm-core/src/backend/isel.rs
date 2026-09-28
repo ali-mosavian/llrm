@@ -19,7 +19,7 @@ use crate::backend::assemble::Abi;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::target::Segments;
-use crate::backend::{addressforms, arithmetic, division};
+use crate::backend::{addressforms, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
@@ -27,6 +27,9 @@ use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
 mod combined;
+#[cfg(test)]
+mod generator;
+mod matcher;
 mod unwind;
 mod wide;
 
@@ -1506,15 +1509,6 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
-    /// The shifts and adds a multiply by `factor` is, where the target
-    /// prices them below `imul`: the old route's `_scaled`.
-    fn scaled(&self, factor: Operand, ty: TypeId) -> Result<Option<Vec<(&'static str, i64)>>, Unselected> {
-        let width = self.width(ty)?;
-        let Some(n) = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n) else { return Ok(None) };
-        let chain = arithmetic::scale(n, self.cpu).map_err(Unselected)?;
-        Ok(chain.filter(|chain| chain.iter().all(|&(name, count)| name != "shl" || count < i64::from(width) * 8)))
-    }
-
     /// Whether every reader of `value` takes it as the address of a load or
     /// a store, directly or through a constant offset.
     fn only_addressed(&self, value: ValueId) -> bool {
@@ -1982,331 +1976,85 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
         convention: &Convention,
     ) -> Result<(), Unselected> {
+        self.selected_by_pattern(inst, block_at, out, convention)
+    }
+
+    fn branch(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
-        let instruction = function.instruction(inst);
-        let at = self.ats[&inst];
-        let operands = &instruction.operands;
-        let type_of = |operand: Operand| function.operand_type(&self.module.context, operand).expect("a typed operand");
-        match &instruction.opcode {
-            Opcode::Alloca { .. } => {}
-            // Selected where its reader is: see fold.
-            _ if self.cells.contains(&inst) || self.stored.contains(&inst) || self.tested.contains(&inst) || self.consumed.contains(&inst) => {}
-            Opcode::Load { .. } if self.words.contains_key(&inst) => {
-                let pointer = self.pointer(operands[0])?;
-                let mut made: IndexMap<i64, Held> = IndexMap::default();
-                let mut halves = self.words[&inst].clone();
-                halves.sort_by_key(|&(offset, _)| offset);
-                for (offset, result) in halves {
-                    let held = Held { value: self.value(result), width: 2 };
-                    let source = match made.get(&offset) {
-                        Some(&earlier) => Loc::Held(earlier),
-                        None => Loc::Mem(Self::memory(pointer.moved(offset), 2)),
-                    };
-                    made.entry(offset).or_insert(held);
-                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![source])));
-                }
+        let operands = &function.instruction(inst).operands;
+        match operands[..] {
+            [Operand::Block(target)] => {
+                out.push(insn(at, jump(block_at[&target])));
             }
-            // What a poison store leaves may be anything, so it stays as is.
-            Opcode::Store { volatile: false, .. } if matches!(operands[0], Operand::Constant(one) if self.module.context.get(one).kind == ConstantKind::Poison) => {}
-            Opcode::Store { volatile, .. } if matches!(operands[0], Operand::Value(value) if self.converted(value).is_some()) => {
-                let Operand::Value(value) = operands[0] else { unreachable!("a converted value") };
-                let conversion = self.converted(value).expect("a stored conversion");
-                let pointer = self.pointer(operands[1])?;
-                self.store_converted(conversion, pointer, *volatile, at, out)?;
+            [Operand::Value(_), Operand::Block(taken), Operand::Block(otherwise)] if taken == otherwise => {
+                out.push(insn(at, jump(block_at[&taken])));
             }
-            Opcode::GetElementPtr { source } => {
-                if self.folded(instruction.result.expect("an address"))?.is_none() {
-                    self.indexed(inst, *source, at, out)?;
-                }
-            }
-            Opcode::Cast(op) if self.is_wide(instruction.ty) || self.is_wide(type_of(operands[0])) => self.wide_cast(*op, inst, at, out)?,
-            Opcode::Binary(op) if self.is_wide(instruction.ty) => self.wide_binary(*op, inst, at, out)?,
-            Opcode::Load { volatile, .. } if self.is_float(instruction.ty) => {
-                let (pointer, size) = (self.pointer(operands[0])?, self.size(instruction.ty)?);
-                let held = Held { value: self.value(instruction.result.expect("a load's value")), width: FLOAT };
-                self.float_loaded(held, "fld", pointer, size, *volatile, at, out);
-            }
-            Opcode::Store { volatile, .. } if self.is_float(type_of(operands[0])) => {
-                let (pointer, size) = (self.pointer(operands[1])?, self.size(type_of(operands[0]))?);
-                let what = match operands[0] {
-                    Operand::Constant(id) => {
-                        // A constant is its bits, stored as integers are.
-                        let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
-                        let bits = if size == 4 { u128::from(bits as u32) } else { u128::from(bits) };
-                        let low = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer, 4))], vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })]);
-                        if size == 8 {
-                            out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, low) }));
-                            let high = Loc::Imm(Imm { value: (bits >> 32) as u32 as i64, width: 4, address: None });
-                            semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(4), 4))], vec![high])
-                        } else {
-                            low
-                        }
-                    }
-                    value => {
-                        let held = self.float(value, at, out)?;
-                        semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(Self::memory(pointer, size))], vec![Loc::Held(held)])
+            [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
+                let code = match self.fused_compare(condition) {
+                    Some(compare) => match self.compare(compare, at, out)? {
+                        Test::One(code) => code,
+                        _ => unreachable!("only a one-condition compare is fused"),
+                    },
+                    None => {
+                        let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
+                        let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
+                        out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
+                        "jne"
                     }
                 };
-                out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
+                let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, code, vec![], vec![]) };
+                out.push(insn(at, branch));
             }
-            Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) => {
-                let name = match op {
-                    BinaryOp::FAdd => "fadd",
-                    BinaryOp::FSub => "fsub",
-                    BinaryOp::FMul => "fmul",
-                    _ => "fdiv",
-                };
-                let (a, b) = (self.float(operands[0], at, out)?, self.float(operands[1], at, out)?);
-                let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                out.push(insn(at, semantics(Operation::FloatArith, name, vec![Loc::Held(result)], vec![Loc::Held(a), Loc::Held(b)])));
-            }
-            Opcode::FNeg => {
-                let a = self.float(operands[0], at, out)?;
-                let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
-                out.push(insn(at, semantics(Operation::FloatUnary, "fchs", vec![Loc::Held(result)], vec![Loc::Held(a)])));
-            }
-            Opcode::Cast(op) if self.is_float(instruction.ty) || self.is_float(type_of(operands[0])) => self.float_cast(*op, inst, at, out)?,
-            Opcode::Load { volatile, .. } if self.is_far(instruction.ty) => {
-                let pointer = self.pointer(operands[0])?;
-                let (offset, selector) = self.far_loaded(pointer, *volatile, at, out);
-                self.fars.insert(instruction.result.expect("a load's value"), (Some(offset), selector));
-            }
-            Opcode::Store { volatile, .. } if self.is_far(type_of(operands[0])) => {
-                let words = match self.far_words(operands[0])? {
-                    Some(words) => words,
-                    None => self.far(operands[0], at, out).map(|(offset, selector)| [Loc::Held(offset), Loc::Held(selector)])?,
-                };
-                let pointer = self.pointer(operands[1])?;
-                for (word, by) in words.into_iter().zip([0, 2]) {
-                    let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 2))], vec![word]);
-                    out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
-                }
-            }
-            Opcode::Load { volatile, .. } => {
-                let width = self.width(instruction.ty)?;
-                let cell = Self::memory(self.pointer(operands[0])?, width);
-                let held = Held { value: self.value(instruction.result.expect("a load's value")), width };
-                let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(cell)]);
-                out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
-            }
-            Opcode::Store { volatile, .. } => {
-                let ty = type_of(operands[0]);
-                let width = self.width(ty)?;
-                let stored = self.source(operands[0], ty, at, out)?;
-                let cell = Self::memory(self.pointer(operands[1])?, width);
-                let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![stored]);
-                out.push(Arc::new(Insn { volatile: *volatile, ..insn_of(at, what) }));
-            }
-            Opcode::Binary(op) => {
-                let (operation, name, commutes) = match op {
-                    BinaryOp::Add => (Operation::Binary, "add", true),
-                    BinaryOp::Sub => (Operation::Binary, "sub", false),
-                    BinaryOp::And => (Operation::Binary, "and", true),
-                    BinaryOp::Or => (Operation::Binary, "or", true),
-                    BinaryOp::Xor => (Operation::Binary, "xor", true),
-                    BinaryOp::Mul => (Operation::Multiply, "imul", true),
-                    BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem => return self.divide(*op, inst, out),
-                    BinaryOp::Shl => (Operation::Binary, "shl", false),
-                    BinaryOp::LShr => (Operation::Binary, "shr", false),
-                    BinaryOp::AShr => (Operation::Binary, "sar", false),
-                    _ => return refuse(instruction.opcode.mnemonic()),
-                };
-                let ty = instruction.ty;
-                if self.types().int_bits(ty) == Some(1) && !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) {
-                    return refuse("arithmetic on an i1");
-                }
-                let (mut a, mut b) = (operands[0], operands[1]);
-                if *op == BinaryOp::Sub && self.constant(a, self.width(ty)?) == Some(0) {
-                    let negated = Loc::Held(self.held(b, ty, at, out)?);
-                    let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
-                    out.push(insn(at, semantics(Operation::Unary, "neg", vec![Loc::Held(result)], vec![negated])));
-                    return Ok(());
-                }
-                if commutes && matches!(a, Operand::Constant(_)) {
-                    std::mem::swap(&mut a, &mut b);
-                }
-                let a = Loc::Held(self.held(a, ty, at, out)?);
-                if *op == BinaryOp::Mul
-                    && let Some(chain) = self.scaled(b, ty)?
-                {
-                    // Shifts and adds of the source, as the old route's _scaled selects.
-                    let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
-                    let mut current = a.clone();
-                    for (index, &(name, count)) in chain.iter().enumerate() {
-                        let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
-                        let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
-                        out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
-                        current = Loc::Held(into);
-                    }
-                    return Ok(());
-                }
-                let b = match (self.source(b, ty, at, out)?, name) {
-                    // A shift counts from cl: its count is a byte.
-                    (Loc::Held(count), "shl" | "shr" | "sar") => Loc::Held(Held { width: 1, ..count }),
-                    (b, _) => b,
-                };
-                let result = Held { value: self.value(instruction.result.expect("a result")), width: self.width(ty)? };
-                out.push(insn(at, semantics(operation, name, vec![Loc::Held(result)], vec![a, b])));
-            }
-            // A field of an answer in registers: the register it came in.
-            Opcode::ExtractValue(indices) => {
-                let field = match (operands[0], &indices[..]) {
-                    (Operand::Value(aggregate), &[index]) => self.fields.get(&aggregate).and_then(|fields| fields.get(index as usize)).copied(),
-                    _ => None,
-                };
-                let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
-                let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
-                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
-            }
-            Opcode::Cast(op) if self.is_far(instruction.ty) || self.is_far(type_of(operands[0])) => self.far_cast(*op, inst, at, out)?,
-            Opcode::Cast(op) => {
-                let from = type_of(operands[0]);
-                let (to, from_width) = (self.width(instruction.ty)?, self.width(from)?);
-                let boolean = self.types().int_bits(from) == Some(1);
-                let result = Held { value: self.value(instruction.result.expect("a result")), width: to };
-                let what = match op {
-                    CastOp::Trunc if self.types().int_bits(instruction.ty) == Some(1) => {
-                        let source = self.held(operands[0], from, at, out)?;
-                        let one = Loc::Imm(Imm { value: 1, width: 1, address: None });
-                        semantics(Operation::Binary, "and", vec![Loc::Held(result)], vec![Loc::Held(Held { width: 1, ..source }), one])
-                    }
-                    CastOp::Trunc => {
-                        let source = self.held(operands[0], from, at, out)?;
-                        // A joined dword's low word is the word it was joined from.
-                        let source = match self.joins.get(&source.value) {
-                            Some(&(low, _)) if to <= 2 => low,
-                            _ => source,
-                        };
-                        semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: to, ..source })])
-                    }
-                    // An i1's byte is already 0 or 1: its sign extension is its negation.
-                    CastOp::SExt | CastOp::ZExt if boolean => {
-                        let source = self.held(operands[0], from, at, out)?;
-                        let widened = if *op == CastOp::SExt { Held { value: self.fresh(), width: to } } else { result };
-                        let what = if to == 1 {
-                            semantics(Operation::Move, "mov", vec![Loc::Held(widened)], vec![Loc::Held(source)])
-                        } else {
-                            semantics(Operation::Extend, "movzx", vec![Loc::Held(widened)], vec![Loc::Held(source)])
-                        };
-                        if *op == CastOp::ZExt {
-                            what
-                        } else {
-                            out.push(insn(at, what));
-                            semantics(Operation::Unary, "neg", vec![Loc::Held(result)], vec![Loc::Held(widened)])
-                        }
-                    }
-                    CastOp::SExt | CastOp::ZExt => {
-                        let source = self.held(operands[0], from, at, out)?;
-                        let name = if *op == CastOp::SExt { "movsx" } else { "movzx" };
-                        semantics(Operation::Extend, name, vec![Loc::Held(result)], vec![Loc::Held(source)])
-                    }
-                    CastOp::PtrToInt | CastOp::IntToPtr if to == from_width => {
-                        let source = self.source(operands[0], from, at, out)?;
-                        semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![source])
-                    }
-                    _ => return refuse(instruction.opcode.mnemonic()),
-                };
-                out.push(insn(at, what));
-            }
-            Opcode::ICmp(_) | Opcode::FCmp(_) if self.fused.contains(&inst) => {}
-            // SETcc, as LLVM selects a comparison it keeps as a value.
-            Opcode::ICmp(_) | Opcode::FCmp(_) => {
-                let test = self.compare(inst, at, out)?;
-                let result = Held { value: self.value(instruction.result.expect("a result")), width: 1 };
-                let set = |code: &str, into: Held| insn(at, semantics(Operation::Unary, &format!("set{}", &code[1..]), vec![Loc::Held(into)], vec![]));
-                match test {
-                    Test::One(code) => out.push(set(code, result)),
-                    Test::Both(a, b) | Test::Either(a, b) => {
-                        let (first, second) = (self.fresh_held(1), self.fresh_held(1));
-                        out.extend([set(a, first), set(b, second)]);
-                        let join = if matches!(test, Test::Both(..)) { "and" } else { "or" };
-                        out.push(insn(at, semantics(Operation::Binary, join, vec![Loc::Held(result)], vec![Loc::Held(first), Loc::Held(second)])));
-                    }
-                }
-            }
-            Opcode::Br => match operands[..] {
-                [Operand::Block(target)] => {
-                    out.push(insn(at, jump(block_at[&target])));
-                }
-                [Operand::Value(_), Operand::Block(taken), Operand::Block(otherwise)] if taken == otherwise => {
-                    out.push(insn(at, jump(block_at[&taken])));
-                }
-                [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] => {
-                    let code = match self.fused_compare(condition) {
-                        Some(compare) => match self.compare(compare, at, out)? {
-                            Test::One(code) => code,
-                            _ => unreachable!("only a one-condition compare is fused"),
-                        },
-                        None => {
-                            let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
-                            let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
-                            out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
-                            "jne"
-                        }
-                    };
-                    let branch = Semantics { target: Some(block_at[&taken]), ..semantics(Operation::Branch, code, vec![], vec![]) };
-                    out.push(insn(at, branch));
-                }
-                [Operand::Constant(_), ..] => {
-                    let block = function.parent(inst).expect("a placed branch");
-                    out.push(insn(at, jump(block_at[&self.successors(block)[0]])));
-                }
-                _ => return refuse("a branch of no form"),
-            },
-            Opcode::Ret => {
-                let what = semantics(Operation::Return, "", vec![], vec![]);
-                let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
-                if let Some(&value) = operands.first().filter(|&&one| self.is_float(type_of(one))) {
-                    // Left in st(0).
-                    let held = self.float(value, at, out)?;
-                    out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
-                } else if let Some(&value) = operands.first().filter(|&&one| self.is_wide(type_of(one))) {
-                    // edx:eax.
-                    let (low, high) = self.wide(value, at, out)?;
-                    one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
-                    one.uses = vec![low.value, high.value];
-                } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
-                    let (offset, selector) = self.far(value, at, out)?;
-                    let [low, high] = convention.returns[..] else { return refuse("a far result the convention has no pair for") };
-                    one.requires = vec![(offset, low), (selector, high)];
-                    one.uses = vec![offset.value, selector.value];
-                } else if let Some(&value) = operands.first() {
-                    let held = self.held(value, type_of(value), at, out)?;
-                    one.requires = match convention.returns[..] {
-                        [register] => vec![(held, register)],
-                        // A dword result in a word pair: the words it was joined from.
-                        [low, high] if held.width == 4 && self.joins.contains_key(&held.value) => {
-                            let (low_word, high_word) = self.joins[&held.value];
-                            vec![(low_word, low), (high_word, high)]
-                        }
-                        // Else its low word, and its high word shifted down.
-                        [low, high] if held.width == 4 => {
-                            let top = Held { value: self.fresh(), width: 4 };
-                            let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
-                            out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
-                            vec![(Held { width: 2, ..held }, low), (Held { width: 2, ..top }, high)]
-                        }
-                        _ => return refuse("a result the convention has no registers for"),
-                    };
-                    one.uses = one.requires.iter().map(|(held, _)| held.value).collect();
-                }
-                out.push(Arc::new(one));
-            }
-            Opcode::Call(info) => {
-                in_the_frame(&info.argument_attrs)?;
-                self.call(inst, info.calling_convention, at, out)?;
-            }
-            Opcode::Invoke(info) => {
-                in_the_frame(&info.argument_attrs)?;
-                self.call(inst, info.calling_convention, at, out)?;
-                let block = function.parent(inst).expect("a placed invoke");
+            [Operand::Constant(_), ..] => {
+                let block = function.parent(inst).expect("a placed branch");
                 out.push(insn(at, jump(block_at[&self.successors(block)[0]])));
             }
-            Opcode::LandingPad { .. } => self.landing_pad(inst, at, out)?,
-            // Nothing runs after it: the block ends with what came before.
-            Opcode::Unreachable => {}
-            _ => return refuse(instruction.opcode.mnemonic()),
+            _ => return refuse("a branch of no form"),
         }
+        Ok(())
+    }
+
+    fn ret(&mut self, inst: InstId, convention: &Convention, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let function = self.function;
+        let operands = &function.instruction(inst).operands;
+        let type_of = |operand: Operand| function.operand_type(&self.module.context, operand).expect("a typed operand");
+        let what = semantics(Operation::Return, "", vec![], vec![]);
+        let mut one = Insn { reads_complete: true, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) };
+        if let Some(&value) = operands.first().filter(|&&one| self.is_float(type_of(one))) {
+            // Left in st(0).
+            let held = self.float(value, at, out)?;
+            out.push(insn(at, semantics(Operation::FloatStore, "", vec![], vec![Loc::Held(held)])));
+        } else if let Some(&value) = operands.first().filter(|&&one| self.is_wide(type_of(one))) {
+            // edx:eax.
+            let (low, high) = self.wide(value, at, out)?;
+            one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
+            one.uses = vec![low.value, high.value];
+        } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
+            let (offset, selector) = self.far(value, at, out)?;
+            let [low, high] = convention.returns[..] else { return refuse("a far result the convention has no pair for") };
+            one.requires = vec![(offset, low), (selector, high)];
+            one.uses = vec![offset.value, selector.value];
+        } else if let Some(&value) = operands.first() {
+            let held = self.held(value, type_of(value), at, out)?;
+            one.requires = match convention.returns[..] {
+                [register] => vec![(held, register)],
+                // A dword result in a word pair: the words it was joined from.
+                [low, high] if held.width == 4 && self.joins.contains_key(&held.value) => {
+                    let (low_word, high_word) = self.joins[&held.value];
+                    vec![(low_word, low), (high_word, high)]
+                }
+                // Else its low word, and its high word shifted down.
+                [low, high] if held.width == 4 => {
+                    let top = Held { value: self.fresh(), width: 4 };
+                    let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+                    out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
+                    vec![(Held { width: 2, ..held }, low), (Held { width: 2, ..top }, high)]
+                }
+                _ => return refuse("a result the convention has no registers for"),
+            };
+            one.uses = one.requires.iter().map(|(held, _)| held.value).collect();
+        }
+        out.push(Arc::new(one));
         Ok(())
     }
 

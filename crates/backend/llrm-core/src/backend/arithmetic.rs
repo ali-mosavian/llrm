@@ -44,11 +44,23 @@ pub fn immediate_multiply<'a>(
     cost(cpu, "imul_r32")
 }
 
-/// Binary and signed-digit chains, including destructive-operand copies.
+/// Binary and signed-digit chains, including destructive-operand copies,
+/// where the target prices them below `imul`.
 pub fn scale<'a>(
     number: i64,
     cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    let target = targets::profile(cpu)?;
+    let Some((best, clocks)) = cheapest_chain(number, target)? else { return Ok(None) };
+    Ok((clocks < immediate_multiply(target, number)?).then_some(best))
+}
+
+/// The cheaper of the binary and signed-digit chains a multiply by
+/// `number` is, and its clocks.
+pub fn cheapest_chain<'a>(
+    number: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+) -> Result<Option<(Vec<(&'static str, i64)>, i64)>, String> {
     let target = targets::profile(cpu)?;
     if number <= 1 {
         return Ok(None);
@@ -109,12 +121,7 @@ pub fn scale<'a>(
     // `min(..., key=clocks)`: the first of equal keys wins.
     let (unsigned, signed) = (chain(false), chain(true));
     let (first, second) = (clocks(&unsigned)?, clocks(&signed)?);
-    let best = if second < first { signed } else { unsigned };
-    Ok(if clocks(&best)? < immediate_multiply(target, number)? {
-        Some(best)
-    } else {
-        None
-    })
+    Ok(Some(if second < first { (signed, second) } else { (unsigned, first) }))
 }
 
 #[cfg(test)]
