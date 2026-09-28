@@ -2695,3 +2695,22 @@ b5:\n  %8 = add nsw i16 %1, 1\n  br label %b2\n\
 b7:\n  %9 = phi i16 [ -1, %b2 ], [ %1, %b4 ]\n  ret i16 %9\n}\n";
     assert!(selected(text, "_action_for").is_ok());
 }
+
+/// x87 stores no byte integer: loadscr.c's palette `(char)(6 + f * 62)` and
+/// part.c were refused as "a float to a byte". A word is stored, and its
+/// low byte read.
+#[test]
+fn test_a_float_to_a_byte_is_a_stored_word_low_byte() {
+    let text = "define void @f(float %x, ptr %p) addrspace(1) {
+  %s = fptosi float %x to i8
+  store i8 %s, ptr %p
+  %q = getelementptr i8, ptr %p, i16 1
+  %u = fptoui float %x to i8
+  store i8 %u, ptr %q
+  ret void
+}
+";
+    let got = listing(text, "f");
+    let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fistp")).collect();
+    assert!(stores.len() == 2 && stores.iter().all(|one| one.starts_with("fistp word ptr")), "{got:#?}");
+}
