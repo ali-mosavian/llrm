@@ -8,7 +8,7 @@ unset DEBUG
 DEST="$1"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
 JWASM_COMMIT=9fd1afd1a0d6fcebeba975f6586e33356e319e32
-JWLINK_COMMIT=08eb9b74a1879c065372937e3cdcd7897ffa04b1
+JWLINK_COMMIT=4dfdd7896c39b9567f4ea9bfbb7eda601277311e
 
 # checkout NAME COMMIT: the fork at COMMIT, its build outputs dropped when it moved.
 checkout() {
