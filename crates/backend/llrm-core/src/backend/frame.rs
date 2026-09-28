@@ -75,6 +75,8 @@ pub struct Frame {
     // Capacity belongs to the stack object, not to whichever virtual value
     // first received it.
     pub capacities: IndexMap<i64, i64>,
+    /// Bytes just below BP, above the allocas, that spill slots fill first.
+    pub hole: i64,
 }
 
 impl Frame {
@@ -86,13 +88,24 @@ impl Frame {
             native: None,
             native_pins: IndexMap::default(),
             capacities: IndexMap::default(),
+            hole: 0,
         }
     }
 
     /// How many bytes the prologue has to reserve beyond BC's own.
     #[must_use]
     pub fn size(&self) -> i64 {
-        -(self.slots.values().copied().min().unwrap_or(self.floor) - self.floor)
+        -(self.lowest() - self.floor)
+    }
+
+    /// The lowest home, or the floor.
+    fn lowest(&self) -> i64 {
+        self.slots.values().copied().min().map_or(self.floor, |lowest| lowest.min(self.floor))
+    }
+
+    /// Whether `disp` is in spill storage: below the floor, or in the hole.
+    pub fn spills_at(&self, disp: i64) -> bool {
+        disp < self.floor || (-self.hole..0).contains(&disp)
     }
 
     /// This value's displacement, creating one where it has none.
@@ -105,9 +118,10 @@ impl Frame {
             ));
         }
         if !self.slots.contains_key(&value) {
-            let lowest = self.slots.values().copied().min().unwrap_or(self.floor);
             let capacity = width.max(WORD);
-            self.slots.insert(value.clone(), lowest - capacity);
+            let filled = self.slots.values().copied().filter(|home| *home >= -self.hole).min().unwrap_or(0);
+            let home = if filled - capacity >= -self.hole { filled - capacity } else { self.lowest() - capacity };
+            self.slots.insert(value.clone(), home);
             self.capacities.insert(self.slots[&value], capacity);
         }
         Ok(self.slots[&value])

@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false, 0)
 }
 
 /// The module's text, once its object is written: a listing that does not

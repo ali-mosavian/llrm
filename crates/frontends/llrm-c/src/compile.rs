@@ -1376,6 +1376,25 @@ mod tests {
         assert!(body.contains(&"fabs") && !body.iter().any(|one| one.starts_with("call")), "{body:#?}");
     }
 
+    /// Spill slots went below the allocas: past a 200-byte array, each of
+    /// their accesses took a two-byte displacement. QCport had 3,088 such.
+    #[test]
+    fn test_spill_slots_sit_above_a_big_frame_array() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/spillnear.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "spillnear", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_spills proc").expect("_spills");
+        let far: Vec<&str> = asm[from..]
+            .lines()
+            .map(str::trim)
+            .take_while(|one| !one.ends_with("endp"))
+            .filter(|one| !one.starts_with("lea"))
+            .filter(|one| one.split("[bp-").nth(1).and_then(|rest| rest.split(']').next()?.parse::<i64>().ok()).is_some_and(|disp| disp > 128))
+            .collect();
+        assert!(far.is_empty(), "{far:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

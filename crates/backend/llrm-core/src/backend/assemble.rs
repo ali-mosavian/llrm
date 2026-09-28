@@ -145,13 +145,46 @@ pub struct Machined {
 
 /// `name` of `module` selected and run through the machine phases, float
 /// constants in `pool`.
+///
+/// Where spill slots end up past a one-byte displacement below allocas,
+/// the function is selected again with the allocas below a hole the spill
+/// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
+    let (first, frame) = phased(module, name, abi, pool, target, 0)?;
+    let spilled = frame.floor + first.reserve;
+    let far = far_frame(&first.body);
+    if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
+        return Ok(first);
+    }
+    let (second, _) = phased(module, name, abi, pool, target, spilled)?;
+    Ok(if far_frame(&second.body) < far { second } else { first })
+}
+
+/// The frame operands a one-byte displacement does not reach.
+fn far_frame(body: &LirBody) -> usize {
+    use crate::model::ir::Loc;
+    body.insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|place| match place {
+            Loc::Mem(cell) => cell.addr,
+            Loc::Address(address) => address.addr,
+            _ => None,
+        })
+        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
+        .count()
+}
+
+/// `machined` with `hole` bytes left above the allocas; and the frame.
+fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, zeroed);
+    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, zeroed, hole);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
+    frame.hole = hole;
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
@@ -171,7 +204,7 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
             println!("{}", crate::tools::stages::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
     }
-    let frame = frame.borrow();
+    let frame = frame.borrow().clone();
     let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
     let (body, landing) = match landing {
         Some(marker) => {
@@ -180,7 +213,7 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
         }
         None => (body, None),
     };
-    Ok(Machined { body, reserve, calls, inline, far, popped: convention.popped, landing })
+    Ok((Machined { body, reserve, calls, inline, far, popped: convention.popped, landing }, frame))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:
