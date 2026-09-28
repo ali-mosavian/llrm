@@ -923,7 +923,7 @@ fn _proven_local_frame(reference: &MemRef) -> bool {
 
 /// Whether the MIR operation may change `cell`; in a `sealed` body an
 /// incoming argument changes only where a frame store names it.
-fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
+pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     let op = one.op.as_deref();
     let written = _written(one, cell);
     if sealed && _incoming_frame(cell) {
