@@ -2421,10 +2421,50 @@ impl Selector<'_, '_, '_> {
         if self.is_wide(ty) {
             return self.wide_compare(predicate, a, b, at, out);
         }
+        if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)
+            && let Some(test) = self.compared_by_words(predicate, a, b, at, out)
+        {
+            return Ok(test);
+        }
         let a = Loc::Held(self.held(a, ty, at, out)?);
         let b = self.source(b, ty, at, out)?;
         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
         Ok(Test::One(condition_code(predicate)))
+    }
+
+    /// Equality of a dword joined from two words, against a constant or
+    /// another such dword, as its words: or-ed against zero, else each
+    /// pair xor-ed and the two or-ed. Joining it costs more than the compare.
+    fn compared_by_words(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Option<Test> {
+        let words = |selector: &mut Self, operand: Operand| match operand {
+            Operand::Value(value) => {
+                let held = selector.value(value);
+                selector.joins.get(&held).map(|&(low, high)| [Loc::Held(low), Loc::Held(high)])
+            }
+            _ => None,
+        };
+        let a = words(self, a)?;
+        let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+        let b = match self.constant(b, 4) {
+            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            None => words(self, b)?,
+        };
+        let mut word_op = |selector: &mut Self, name: &str, sources: Vec<Loc>| {
+            let into = selector.fresh_held(2);
+            let operation = if name == "mov" { Operation::Move } else { Operation::Binary };
+            out.push(insn(at, semantics(operation, name, vec![Loc::Held(into)], sources)));
+            Loc::Held(into)
+        };
+        let low = word_op(self, "mov", vec![a[0].clone()]);
+        if b.iter().all(|one| matches!(one, Loc::Imm(Imm { value: 0, .. }))) {
+            word_op(self, "or", vec![low, a[1].clone()]);
+        } else {
+            let low = word_op(self, "xor", vec![low, b[0].clone()]);
+            let high = word_op(self, "mov", vec![a[1].clone()]);
+            let high = word_op(self, "xor", vec![high, b[1].clone()]);
+            word_op(self, "or", vec![low, high]);
+        }
+        Some(Test::One(condition_code(predicate)))
     }
 
     /// Whether the flags `value`'s call leaves are still those the compare
