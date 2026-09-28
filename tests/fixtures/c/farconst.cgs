@@ -1,0 +1,26 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "farconst.c"
+- DBSrcCue f1 2 1
+SYM y1 name="ticks" base="ticks" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_UINT_4
+l2 CGLastParm
+t3 CGTemp TY_UINT_4
+- DBSrcCue f1 4 1
+n4 CGInteger 4194412 TY_LONG_POINTER
+n5 CGUnary O_POINTS n4 TY_UINT_4
+n6 CGUnary O_CONVERT n5 TY_UINT_4
+n7 CGTempName t3 TY_UINT_4
+n8 CGAssign n7 n6 TY_UINT_4
+- CGDone n8
+- DBSrcCue f1 5 1
+n9 CGTempName t3 TY_UINT_4
+n10 CGUnary O_POINTS n9 TY_UINT_4
+- CGReturn n10 TY_UINT_4
+STOP
+FINI

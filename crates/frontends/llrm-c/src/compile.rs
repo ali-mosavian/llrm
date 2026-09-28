@@ -1282,6 +1282,22 @@ mod tests {
         assert!(ticks.contains(&"db 00fh,031h".to_owned()), "{ticks:#?}");
     }
 
+    /// qcport's sys_time.c reads the BIOS tick count through the constant
+    /// far pointer 0040:006Ch. The constant was made a word, its segment
+    /// lost, and the read went to DGROUP:006Ch: the tick never changed and
+    /// calibration spun forever.
+    #[test]
+    fn test_a_far_pointer_constant_keeps_its_segment() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farconst.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "farconst", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_ticks proc").expect("_ticks");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let segment = |one: &&str| one.ends_with(", 64") || one.ends_with(&format!(", {}", 0x0040_006C));
+        assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(segment), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
