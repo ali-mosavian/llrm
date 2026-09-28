@@ -29,7 +29,7 @@ use crate::backend::{liveness, select, spiller};
 use crate::backend::peephole::{_lanes, Lanes};
 use crate::backend::target;
 use crate::support::hash::IndexMap;
-use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::{LIRTransform, OperationCosts};
 use crate::objectfile::module::Addr;
@@ -339,9 +339,18 @@ fn saving(one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
     i64::from(reads) * costs.load + i64::from(writes) * costs.store - i64::from(plain) * costs.r#move
 }
 
-/// A register every write of which, inside `one`, reloads the one slot the
-/// loop never writes, and which nothing reads before that reload.
-fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<i64> {
+/// What a hoistable register is loaded from: a frame slot, or a constant.
+#[derive(PartialEq)]
+enum Source {
+    Slot(i64),
+    Constant(Imm),
+}
+
+/// A register every write of which, inside `one`, loads one source the loop
+/// never writes -- a slot, or a constant -- and which nothing reads before
+/// that load. A constant counts: a segment register takes one only as
+/// `push / pop`, which qbdemo's PLASMA ran every pixel.
+fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
     let lanes = _lanes(root);
     if !entering.is_disjoint(&lanes) {
         return None;
@@ -354,28 +363,30 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
                 continue;
             }
             let what = insn.what.as_ref()?;
-            let slot = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+            let source = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
                 (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)])
                     if ir::root(reg.register) == ir::root(root) && reg.width == WORD && mem.width == WORD =>
                 {
-                    slot(mem)?
+                    Source::Slot(slot(mem)?)
+                }
+                (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == WORD => {
+                    Source::Constant(imm.clone())
                 }
                 _ => return None,
             };
-            if from.is_some_and(|one| one != slot) {
+            if from.as_ref().is_some_and(|one| *one != source) {
                 return None;
             }
-            from = Some(slot);
+            from = Some(source);
         }
     }
-    let from = from?;
     let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
-    let kept = if spills.contains(&from) {
-        !insns().any(|insn| touch(insn).writes.contains(&from))
-    } else {
-        insns().all(|insn| spares(insn, from))
+    let kept = match from.as_ref()? {
+        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(insn).writes.contains(at)),
+        Source::Slot(at) => insns().all(|insn| spares(insn, *at)),
+        Source::Constant(_) => true,
     };
-    kept.then_some(from)
+    kept.then_some(from?)
 }
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
