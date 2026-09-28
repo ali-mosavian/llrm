@@ -358,6 +358,24 @@ fn _allowed(unit: &Unit, at: InstId) -> Allowed {
     Allowed { arguments, other, through }
 }
 
+/// Per argument of the call `at`, its pointer operand, where the callee may
+/// read through it.
+pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
+    let op = unit.function.instruction(at);
+    let count = match op.opcode {
+        Opcode::Call(_) => op.operands.len() - 1,
+        Opcode::Invoke(_) => op.operands.len() - 3,
+        _ => return Vec::new(),
+    };
+    let allowed = _allowed(unit, at);
+    op.operands[..count]
+        .iter()
+        .enumerate()
+        .filter(|(index, one)| is_pointer(unit, **one) && allowed.through.get(*index).is_none_or(|effects| effects.reads))
+        .map(|(_, one)| *one)
+        .collect()
+}
+
 /// Whether the call `at` keeps no copy of its argument `index`: `nocapture`
 /// at the site or on the callee's parameter.
 fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
