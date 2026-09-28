@@ -1491,6 +1491,18 @@ mod tests {
         }
     }
 
+    /// A long returned in DX:AX and cast to a far pointer was joined into
+    /// one register (`shl`, `shrd`) and split again (`shld`) to be stored.
+    #[test]
+    fn test_a_long_made_a_far_pointer_is_stored_as_its_words() {
+        let [body] = listed("farwords", &["_keep"]).try_into().expect("one");
+        assert!(!body.iter().any(|one| one.starts_with("shl") || one.starts_with("shrd") || one.starts_with("shld")), "{body:#?}");
+        // Taken as they were, the words kept the call's dword width: a
+        // selector went to EAX, `byte ptr eax:[...]`, and d_sky.c crashed.
+        let [body] = listed("farwords", &["_copyrows"]).try_into().expect("one");
+        assert!(!body.iter().any(|one| one.contains("ptr e") && one.contains("x:")), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

@@ -16,3 +16,25 @@ char far *take( long n )
     if ( p == 0 ) fail( "none" );
     return p;
 }
+
+long memalloc( long n );
+
+/* A long result cast to a far pointer, as qcport's QGLMEMALLOC. */
+void keep( Slot *s, long n )
+{
+    s->p = (char far *) memalloc( n );
+    s->n = 1;
+}
+
+long rowptr( long surface, short y );
+
+/* Reduced from qcport's d_sky.c: rows from long results, both dereferenced. */
+void copyrows( long from, long to )
+{
+    short y, x;
+    for ( y = 0; y < 4; y++ ) {
+        unsigned char far *a = (unsigned char far *) rowptr( from, y );
+        unsigned char far *b = (unsigned char far *) rowptr( to, y );
+        for ( x = 0; x < 128; x++ ) if ( a[x] ) b[x + 128] = a[x + 128];
+    }
+}
