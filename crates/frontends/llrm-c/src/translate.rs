@@ -45,7 +45,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         let id = keys[&Key::Symbol(symbol.id)];
         data.push(h::DataObject { linkage: DataLinkage::External, address: address(space(unit, Key::Symbol(symbol.id))), ..h::DataObject::new(id, &symbol.object_name(), Vec::new()) });
     }
-    let valueless: HashSet<i64> = unit.procs.iter().filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0")).map(|proc| proc.symbol).collect();
+    let valueless: HashSet<i64> = unit
+        .procs
+        .iter()
+        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc))
+        .map(|proc| proc.symbol)
+        .collect();
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -182,7 +187,7 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
             && unit.symbols[&symbol].proc()
         {
             let symbol = &unit.symbols[&symbol];
-            if symbol.code.is_some() || EMITTED.contains(&symbol.name.as_str()) {
+            if inline(symbol) {
                 return refuse(format!("{}: an address of inline code {}", object.name, symbol.name));
             }
             let defined = unit.procs.iter().any(|one| one.symbol == symbol.id);
@@ -396,6 +401,31 @@ struct Body<'a, 't> {
     selects: IndexMap<String, (Vec<(i64, String)>, Option<String>)>,
     calls: Vec<h::CallAbi>,
     instructions: i64,
+    /// What the last statement's inline code left in dx:ax.
+    inlined: Option<i64>,
+}
+
+/// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
+fn inline(symbol: &hir::Symbol) -> bool {
+    symbol.code.is_some() || EMITTED.contains(&symbol.name.as_str())
+}
+
+/// The inline code a statement runs as its last call, if it is a
+/// `CGDone` of one.
+fn inline_statement(unit: &hir::Unit, one: &hir::Statement) -> bool {
+    let (Some(node), "CGDone") = (one.args.first(), one.call.as_str()) else { return false };
+    let Some(tree) = unit.nodes.get(&hir::handle(node)) else { return false };
+    let Some(call) = tree.args.first().filter(|_| tree.call == "CGCall").and_then(|call| unit.calls.get(&hir::handle(call))) else { return false };
+    unit.nodes.get(&hir::handle(&call.target)).is_some_and(|target| {
+        target.call == "CGFEName" && target.args.first().and_then(|symbol| unit.symbols.get(&hir::handle(symbol))).is_some_and(inline)
+    })
+}
+
+/// Whether a value-less return of `proc` follows inline code: Borland's
+/// convention returns what that code left in dx:ax.
+fn answered_by_inline_code(unit: &hir::Unit, proc: &hir::Proc) -> bool {
+    let statements: Vec<&hir::Statement> = proc.body.iter().filter(|one| one.call != "DBSrcCue").collect();
+    statements.windows(2).any(|two| two[1].call == "CGReturn" && two[1].args[0] == "n0" && inline_statement(unit, two[0]))
 }
 
 fn value_ref(value: i64) -> Operand {
@@ -451,6 +481,7 @@ impl<'a, 't> Body<'a, 't> {
             selects: IndexMap::default(),
             calls: Vec::new(),
             instructions: 0,
+            inlined: None,
         };
         let entry = body.block();
         body.current = entry;
@@ -740,6 +771,9 @@ impl<'a, 't> Body<'a, 't> {
 
     fn statement(&mut self, one: &hir::Statement) -> R<()> {
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
+        if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
+            self.inlined = None;
+        }
         match (one.call.as_str(), &args[..]) {
             ("CGControl", ["O_LABEL", _, label]) => {
                 let block = self.label(label);
@@ -797,6 +831,11 @@ impl<'a, 't> Body<'a, 't> {
                 self.eval(node)?;
             }
             self.terminate(TerminatorKind::Return, Vec::new(), Vec::new());
+            return Ok(());
+        }
+        if let (Some(answer), "n0") = (self.inlined, node) {
+            let value = self.converted(answer, "TY_UINT_4", &self.proc.type_.clone())?;
+            self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
             return Ok(());
         }
         if node == "n0" {
@@ -944,6 +983,9 @@ impl<'a, 't> Body<'a, 't> {
             Got::Value(value) | Got::Volatile(value) | Got::Aggregate(value, _) | Got::Returned(Some(value)) => Ok(value),
             Got::Function(symbol) => {
                 let symbol = &self.unit.symbols[&symbol];
+                if inline(symbol) {
+                    return self.refuse(format!("an address of inline code {}", symbol.name));
+                }
                 let ty = self.types.pointer(space(self.unit, Key::Symbol(symbol.id)));
                 let value = self.value(ty);
                 self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(symbol.object_name());
@@ -1128,9 +1170,6 @@ impl<'a, 't> Body<'a, 't> {
         }
         let symbol = &self.unit.symbols[&hir::handle(token)];
         if symbol.proc() {
-            if symbol.code.is_some() || EMITTED.contains(&symbol.name.as_str()) {
-                return self.refuse(format!("inline code {} is not raised to the rich MIR", symbol.name));
-            }
             return Ok(Got::Function(symbol.id));
         }
         match self.shared.keys.get(&Key::Symbol(symbol.id)) {
@@ -1425,9 +1464,50 @@ impl<'a, 't> Body<'a, 't> {
         self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register, promises: Vec::new() });
     }
 
+    /// Inline code as a call of `llrm.ia16.code`, each frame place it names
+    /// an argument; `__emit__`'s are its constant arguments' bytes.
+    fn inline_code(&mut self, call: &hir::Call, symbol: &hir::Symbol) -> R<Got> {
+        let code = match &symbol.code {
+            Some(code) => code.clone(),
+            None => {
+                let byte = |node: &String| match self.unit.nodes.get(&hir::handle(node)).map(|tree| (tree.call.as_str(), tree.args.first())) {
+                    Some(("CGInteger", Some(value))) => u8::try_from(hir::int(value)).ok(),
+                    _ => None,
+                };
+                let Some(data) = call.parms.iter().rev().map(|(node, _)| byte(node)).collect::<Option<Vec<u8>>>() else {
+                    return self.refuse(format!("{} of anything but constant bytes", symbol.name));
+                };
+                hir::Code { data, fixups: Vec::new() }
+            }
+        };
+        let mut places = Vec::new();
+        let mut operands = Vec::new();
+        for fixup in &code.fixups {
+            let key = format!("y{}", fixup.symbol);
+            let (Some(&slot), "offset") = (self.slots.get(&key), fixup.kind.as_str()) else {
+                return self.refuse(format!("inline code's {} of {}", fixup.kind, self.unit.symbols[&fixup.symbol].name));
+            };
+            places.push((fixup.at as usize, fixup.offset));
+            operands.push(value_ref(self.address_of(slot)));
+        }
+        let name = llrm_mir::intrinsics::code_name(&code.data, &places);
+        self.callable(&name);
+        let result = self.types.int(4, false);
+        let result = self.value(result);
+        let order = (0..operands.len() as i64).rev().collect();
+        self.call_site(Some(&name), Some(result), operands, order, StackCleanup::Caller, CallDistance::Near);
+        self.inlined = Some(result);
+        Ok(Got::Returned(Some(result)))
+    }
+
     fn call(&mut self, call: &hir::Call) -> R<Got> {
         let target = self.eval(&call.target)?;
         let unit = self.unit;
+        if let Got::Function(symbol) = target
+            && inline(&unit.symbols[&symbol])
+        {
+            return self.inline_code(call, &unit.symbols[&symbol]);
+        }
         let symbol = match target {
             Got::Function(symbol) => &unit.symbols[&symbol],
             _ => &unit.symbols[&call.symbol],

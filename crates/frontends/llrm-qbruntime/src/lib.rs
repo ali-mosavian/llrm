@@ -368,6 +368,22 @@ pub fn worst(name: &str) -> Contract {
     }
 }
 
+/// Inline machine code: it returns, pops nothing, may touch any memory and
+/// any register, and answers in ax or dx:ax.
+pub fn inline_code(name: &str) -> Contract {
+    Contract {
+        cleanup: Some(0),
+        control: Control::Returns,
+        enters_user_code: false,
+        raises_error: false,
+        established: true,
+        evidence: "inline assembly: every register assumed clobbered, the result left in AX or DX:AX".to_owned(),
+        inputs: Some(BTreeSet::new()),
+        flags_result: false,
+        ..worst(name)
+    }
+}
+
 pub fn preserves(routine: &Contract) -> BTreeSet<Reg> {
     EVERY.difference(&routine.clobbers).copied().collect()
 }

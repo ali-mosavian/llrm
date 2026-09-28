@@ -30,6 +30,41 @@ pub enum Intrinsic {
     PortIn,
     /// A value written to an I/O port.
     PortOut,
+    /// Inline machine code, laid down where it is called: its name carries
+    /// the bytes, and each argument is a frame place whose displacement it
+    /// reads at a byte offset the name gives. It answers what it leaves in
+    /// dx:ax, and may read, write or clobber anything.
+    Code,
+}
+
+/// What names inline code: `llrm.ia16.code.<hex bytes>` and, per argument,
+/// `.<offset>` of the word that takes its displacement, `p<n>` or `m<n>`
+/// added.
+const CODE: &str = "llrm.ia16.code.";
+
+/// Inline code's name: `bytes`, and each argument's word offset and addend.
+pub fn code_name(bytes: &[u8], places: &[(usize, i64)]) -> String {
+    let hex: String = bytes.iter().map(|one| format!("{one:02x}")).collect();
+    let places: String = places.iter().map(|(at, addend)| format!(".{at}{}{}", if *addend < 0 { 'm' } else { 'p' }, addend.unsigned_abs())).collect();
+    format!("{CODE}{hex}{places}")
+}
+
+/// Inline code's bytes, and each argument's word offset and addend.
+pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
+    let mut parts = name.strip_prefix(CODE)?.split('.');
+    let hex = parts.next()?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes = (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect::<Option<Vec<u8>>>()?;
+    let places = parts
+        .map(|part| {
+            let split = part.find(['p', 'm'])?;
+            let (at, addend) = (part[..split].parse::<usize>().ok()?, part[split + 1..].parse::<i64>().ok()?);
+            (at + 2 <= bytes.len()).then_some((at, if part.as_bytes()[split] == b'm' { -addend } else { addend }))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((bytes, places))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -255,6 +290,9 @@ impl Intrinsic {
 
     /// The intrinsic `name` declares, its type suffixes aside.
     pub fn named(name: &str) -> Option<Intrinsic> {
+        if name.starts_with(CODE) {
+            return Some(Intrinsic::Code);
+        }
         TABLE
             .iter()
             .filter(|spec| name.strip_prefix(spec.name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
@@ -264,6 +302,9 @@ impl Intrinsic {
 
     /// The function's attributes and each parameter's.
     pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
+        if self == Intrinsic::Code {
+            return (vec![Attribute::Flag("nounwind".to_owned())], Vec::new());
+        }
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
         let mut attrs = flags(spec.attrs);
@@ -274,8 +315,18 @@ impl Intrinsic {
     /// Checks that `function_type` is this intrinsic's, overloaded as
     /// `name` mangles it; the error is LLVM's.
     pub fn check(self, name: &str, types: &Types, function_type: TypeId) -> Result<(), String> {
-        let spec = self.spec();
         let Type::Function { returns, parameters, variadic } = types.get(function_type) else { unreachable!("a function's type") };
+        if self == Intrinsic::Code {
+            let (_, places) = code(name).ok_or("Inline code's name does not parse!")?;
+            if types.int_bits(*returns) != Some(32) {
+                return Err("Intrinsic has incorrect return type!".to_owned());
+            }
+            if *variadic || parameters.len() != places.len() || !parameters.iter().all(|one| matches!(types.get(*one), Type::Pointer(_))) {
+                return Err("Intrinsic has incorrect argument type!".to_owned());
+            }
+            return Ok(());
+        }
+        let spec = self.spec();
         let mut bound: Vec<Option<TypeId>> = vec![None; spec.overloads.len()];
         let mut matches = |slot: Slot, ty: TypeId| -> bool {
             let mut overload = |at: usize, ty: TypeId| {
