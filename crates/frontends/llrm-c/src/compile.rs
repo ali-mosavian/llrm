@@ -1411,6 +1411,20 @@ mod tests {
         assert_eq!(stored, 5, "{body:#?}");
     }
 
+    /// A local array read only by a variable index: DSE dropped its
+    /// initializing stores. QCport's sc_selftest returned -109.
+    #[test]
+    fn test_an_array_read_by_index_keeps_its_initializer() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/indexread.cgs")).unwrap();
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let built = super::selected(&text, "indexread", None, &options).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_test proc").expect("_test");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let stored: Vec<&&str> = body.iter().filter(|one| one.starts_with("mov") && one.contains("ptr [bp-") && one.contains("],")).collect();
+        assert!(stored.len() >= 3, "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
