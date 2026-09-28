@@ -32,6 +32,16 @@
 #                  by the constant value of one argument: `values` maps each
 #                  symbol to its values, `none` needs nothing, `otherwise`
 #                  answers any other value or a non-constant argument
+#   statement      the QB statements that call it: `names`, the source
+#                  `arguments` in push order -- each passed as an INTEGER, a
+#                  LONG or a string descriptor, `default` standing in when
+#                  the source leaves it out -- or "count-led": a presence word
+#                  and an INTEGER per position, then their word count; `arity`
+#                  the source argument counts it accepts, `refuse` what any
+#                  other count gets ({name} is the statement's), `terminates`
+#                  when control never comes back
+#   source         the source form that picks it by operand: `form`, and
+#                  `type`, `mbf` or `record` where the choice depends on them
 # A table named `PREFIX*` gives its facts to every routine with that prefix.
 
 # How a typed source call to a routine is described: its `call` table.
@@ -175,6 +185,14 @@ inputs = []
 evidence = '''
 rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not return.` -- END and SYSTEM. It zeroes b$errnum and branches to the END executor, closing files and terminating the runtime.
 '''
+
+["B$CEND".statement]
+# B$CEND does not return: labels after it are detached side entries,
+# notably ON ERROR handlers.
+names = ["END", "SYSTEM"]
+arguments = []
+terminates = true
+refuse = "{name} takes no arguments"
 
 ["B$CENP"]
 ends_module = true
@@ -474,6 +492,12 @@ enters_user_code = true
 evidence = '''
 {evidence} QB45 rt/erproc.asm declares one word errnum, and measured VBDOS LOCERR.OBJ uses the identical one-word far call; B$SERR validates it and jumps to B$RUNERR. Its documented exit is either the installed handler or fatal termination, never the instruction after the call.
 '''
+
+["B$SERR".statement]
+names = ["ERROR"]
+arguments = [{ pass = "INTEGER" }]
+terminates = true
+refuse = "ERROR expects one error number"
 
 ["B$SIN4"]
 cleanup = 0
@@ -993,6 +1017,11 @@ rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination fo
 pushed = 4
 audit = "read"
 
+# READ and INPUT destinations.
+["B$RDI2".source]
+form = "READ"
+type = "INTEGER"
+
 ["B$RDI4"]
 cleanup = 4
 control = "returns"
@@ -1012,6 +1041,10 @@ rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination fo
 pushed = 4
 audit = "read"
 
+["B$RDI4".source]
+form = "READ"
+type = "LONG"
+
 ["B$RDR4"]
 cleanup = 4
 control = "returns"
@@ -1030,6 +1063,10 @@ rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination fo
 ["B$RDR4".call]
 pushed = 4
 audit = "read"
+
+["B$RDR4".source]
+form = "READ"
+type = "SINGLE"
 
 ["B$RESN"]
 calls_program = true
@@ -1239,6 +1276,10 @@ inputs = []
 evidence = '''
 rt/string.asm: `cProc B$STI2,<PUBLIC,FAR>` with ParmW I2Arg, `Uses: Per convention`, `Exceptions: Out of memory`. It falls into B$STR_COMMON, which sets b$VTYP, calls B$FOUTBX and then B$STALCTMPCPY -> B$STALCTMP -> B$STALC -> B$STCPCT, so it can move every live string and rewrite its descriptor. The header understates the clobber set in the direction B$CPI4's overstates it: rt/prnval.asm says B$FOUTBX `changes all registers except BP`, so si, di, ds and es are not the "per convention" survivors ifout.asm claims.
 '''
+
+["B$STI2".source]
+form = "STR$"
+type = "INTEGER"
 
 ["B$SPAC"]
 cleanup = 2
@@ -1459,6 +1500,10 @@ VBDCL10E.LIB: dvgetput.asm 0043 enters local 00a4 with stacked position words; i
 pushed = 8
 audit = "record-3"
 
+["B$GET3".source]
+form = "GET"
+record = false
+
 ["B$GET4".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
@@ -1468,6 +1513,10 @@ VBDCL10E.LIB: dvgetput.asm 0064 reads the record position and OR CX,CX at 006c o
 ["B$GET4".call]
 pushed = 12
 audit = "record-4"
+
+["B$GET4".source]
+form = "GET"
+record = true
 
 ["B$SACT".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1484,6 +1533,10 @@ VBDCL10E.LIB: dvgetput.asm 005d sets AL=5 and joins GET3 at 0048, calling local 
 ["B$PUT3".call]
 pushed = 8
 audit = "record-3"
+
+["B$PUT3".source]
+form = "PUT"
+record = false
 
 ["B$SMID".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1571,6 +1624,10 @@ pushed = "any"
 family = "vbdos"
 audit = "string-of-float"
 
+["B$STR4".source]
+form = "STR$"
+type = "SINGLE"
+
 ["B$STR8".vbdos]
 from = "B$STR4.vbdos"
 
@@ -1578,6 +1635,10 @@ from = "B$STR4.vbdos"
 pushed = "any"
 family = "vbdos"
 audit = "string-of-float"
+
+["B$STR8".source]
+form = "STR$"
+type = "DOUBLE"
 
 ["B$INT4".vbdos]
 cleanup = 0
@@ -1656,6 +1717,14 @@ evidence = '''
 {evidence} The audited one-mode SCREEN source form emits two count-led parameter words plus the count; SYS.OBJ 0787..0792 shows six bytes and the shared cleanup removes exactly that block. Display, alias and error effects remain conservative.
 '''
 
+["B$CSCN".statement]
+# SYS.OBJ 0787..0792 shows SCREEN 0 as the VBDOS count-led block
+# [present=1, mode=0, count=2].
+names = ["SCREEN"]
+arguments = "count-led"
+arity = [1]
+refuse = "the audited SCREEN form requires one mode"
+
 ["B$WIDT".vbdos]
 cleanup = 4
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1669,6 +1738,11 @@ evidence = '''
 {evidence} QB45 runtime/rt/iotty.asm declares width and height as two Pascal words; the typed source site supplies exactly those four bytes.
 '''
 
+["B$WIDT".statement]
+names = ["WIDTH"]
+arguments = [{ pass = "INTEGER" }, { pass = "INTEGER" }]
+refuse = "the audited WIDTH form requires columns and rows"
+
 ["B$SLEP".vbdos]
 cleanup = 4
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1679,6 +1753,12 @@ VBDCL10E.LIB: VBDCL10E evtkey.asm 00b3 establishes BP; local 0157 CMP kills inco
 ["B$SLEP".call]
 pushed = 4
 audit = "statement"
+
+["B$SLEP".statement]
+names = ["SLEEP"]
+arguments = [{ pass = "LONG", default = 0 }]
+arity = [0, 1]
+refuse = "SLEEP expects zero or one duration"
 
 ["B$FRI2".vbdos]
 cleanup = 2
@@ -1694,6 +1774,10 @@ evidence = '''
 VBDCL10E.LIB: VBDCL10E farstr/string.asm 000f reads the long at BP+6 through STR_COMMON 001e. FOUTBX (ifout.asm 0000) kills incoming flags with CMP at 0003; integer path returns near at 0050. Common copy via StrAlcTmpCopy (strutil.asm 01f5..0209) balances its local saves; public POP BP / RETF 4 at 001a. Formatting, heap allocation, aliases and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$STI4".source]
+form = "STR$"
+type = "LONG"
+
 ["B$FMKI".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1704,6 +1788,10 @@ VBDCL10E.LIB: rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, 
 ["B$FMKI".call]
 pushed = 2
 audit = "string"
+
+["B$FMKI".source]
+form = "MK$"
+type = "INTEGER"
 
 ["B$FMKL".vbdos]
 cleanup = 4
@@ -1716,6 +1804,10 @@ VBDCL10E.LIB: rt/strnum.asm 0073..0085: SI addresses the dword argument at BP+6,
 pushed = 4
 audit = "string"
 
+["B$FMKL".source]
+form = "MK$"
+type = "LONG"
+
 ["B$FCVI".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1727,6 +1819,10 @@ VBDCL10E.LIB: rt/strnum.asm 0024..0041: XOR CH,CH at 0029 replaces incoming arit
 pushed = 2
 audit = "string"
 
+["B$FCVI".source]
+form = "CV"
+type = "INTEGER"
+
 ["B$FCVS".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1737,6 +1833,11 @@ VBDCL10E.LIB: rt/strnum.asm 0044..005b: XOR CH,CH at 0049 replaces incoming arit
 ["B$FCVS".call]
 pushed = 2
 audit = "string"
+
+["B$FCVS".source]
+form = "CV"
+type = "SINGLE"
+mbf = false
 
 ["B$RGHT".vbdos]
 cleanup = 4
@@ -1953,6 +2054,14 @@ evidence = '''
 {evidence} QB45 rt/gwscr.asm declares B$SCLS with one ScnNum word; its Pascal far entry consumes that selector. VBDOS uses the same typed runtime entry.
 '''
 
+["B$SCLS".statement]
+# QB45 rt/gwscr.asm increments the argument and treats -1 as the
+# no-parameter form.
+names = ["CLS"]
+arguments = [{ pass = "INTEGER", default = -1 }]
+arity = [0, 1]
+refuse = "CLS expects zero or one screen selector"
+
 ["B$INKY".qb45]
 cleanup = 0
 enters_user_code = false
@@ -2070,9 +2179,19 @@ writes_cells = { qb45 = ["b$seg"] }
 pushed = 0
 audit = "statement"
 
+["B$BEEP".statement]
+names = ["BEEP"]
+arguments = []
+refuse = "BEEP takes no arguments"
+
 ["B$PAL2".call]
 pushed = 6
 audit = "graphics"
+
+["B$PAL2".statement]
+names = ["PALETTE"]
+arguments = [{ pass = "INTEGER" }, { pass = "LONG" }]
+refuse = "PALETTE expects an attribute and color"
 
 ["B$N1I2".call]
 pushed = 4
@@ -2143,9 +2262,18 @@ audit = "graphics"
 pushed = 2
 audit = "string"
 
+["B$FCVD".source]
+form = "CV"
+type = "DOUBLE"
+mbf = false
+
 ["B$FCVL".call]
 pushed = 2
 audit = "string"
+
+["B$FCVL".source]
+form = "CV"
+type = "LONG"
 
 ["B$FHEX".call]
 pushed = 4
@@ -2155,17 +2283,37 @@ audit = "string"
 pushed = 8
 audit = "string"
 
+["B$FMKD".source]
+form = "MK$"
+type = "DOUBLE"
+mbf = false
+
 ["B$FMKS".call]
 pushed = 4
 audit = "string"
+
+["B$FMKS".source]
+form = "MK$"
+type = "SINGLE"
+mbf = false
 
 ["B$FMDF".call]
 pushed = 8
 audit = "string"
 
+["B$FMDF".source]
+form = "MK$"
+type = "DOUBLE"
+mbf = true
+
 ["B$FMSF".call]
 pushed = 4
 audit = "string"
+
+["B$FMSF".source]
+form = "MK$"
+type = "SINGLE"
+mbf = true
 
 ["B$FOCT".call]
 pushed = 4
@@ -2183,9 +2331,19 @@ audit = "string"
 pushed = 2
 audit = "string"
 
+["B$MCVD".source]
+form = "CV"
+type = "DOUBLE"
+mbf = true
+
 ["B$MCVS".call]
 pushed = 2
 audit = "string"
+
+["B$MCVS".source]
+form = "CV"
+type = "SINGLE"
+mbf = true
 
 ["B$SCPY".call]
 pushed = 2
@@ -2204,13 +2362,31 @@ audit = "string"
 pushed = "even >= 2"
 audit = "screen-parameters"
 
+["B$COLR".statement]
+names = ["COLOR"]
+arguments = "count-led"
+arity = [0, 1, 2, 3]
+refuse = "COLOR expects at most three positional arguments"
+
 ["B$LOCT".call]
 pushed = "even >= 2"
 audit = "screen-parameters"
 
+["B$LOCT".statement]
+# VBDOS LOCATE.OBJ records each source position as a presence word plus an
+# optional INTEGER value, then appends the number of preceding words.
+names = ["LOCATE"]
+arguments = "count-led"
+arity = [0, 1, 2, 3, 4, 5]
+refuse = "LOCATE expects at most five positional arguments"
+
 ["B$PUT4".call]
 pushed = 12
 audit = "record-4"
+
+["B$PUT4".source]
+form = "PUT"
+record = true
 
 ["B$POKE".call]
 pushed = 4
@@ -2245,6 +2421,10 @@ evidence = '''
 pushed = 4
 audit = "read"
 
+["B$RDR8".source]
+form = "READ"
+type = "DOUBLE"
+
 ["B$LBND".call]
 pushed = 4
 audit = "bounds"
@@ -2254,6 +2434,10 @@ pushed = 6
 evidence = '''
 {evidence} QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-string length; shared return removes 6 bytes.
 '''
+
+["B$RDSD".source]
+form = "READ"
+type = "STRING"
 
 ["B$FRSD".call]
 pushed = 2
@@ -2279,11 +2463,24 @@ evidence = '''
 {evidence} QB45 runtime/rt/grview.asm declares TopLine and BotLine as two Pascal words; VBDOS VIEWP.OBJ independently confirms that call shape.
 '''
 
+["B$VWPT".statement]
+# VBDOS prview.asm's B$VWPT takes (top, bottom), cleans four bytes, and
+# uses -1, -1 for VIEW PRINT with no bounds. [bp+8] is top, [bp+6] bottom.
+names = ["VIEW_PRINT"]
+arguments = [{ pass = "INTEGER", default = -1 }, { pass = "INTEGER", default = -1 }]
+arity = [0, 2]
+refuse = "VIEW PRINT expects zero or two row bounds"
+
 ["B$SPLY".call]
 pushed = 2
 evidence = '''
 {evidence} QB45 runtime/rt/gwplays.asm declares one near string descriptor; VBDOS PLAY.OBJ independently confirms that call shape.
 '''
+
+["B$SPLY".statement]
+names = ["PLAY"]
+arguments = [{ pass = "descriptor" }]
+refuse = "PLAY expects one command string"
 
 ["B$USNG".call]
 pushed = 2

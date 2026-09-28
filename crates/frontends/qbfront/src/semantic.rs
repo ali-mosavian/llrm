@@ -3146,16 +3146,13 @@ impl Compiler {
                         Operand::Value(address),
                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
                     ]);
-                    self.emit_runtime_call(
-                        match (*write, position.is_some()) {
-                            (false, false) => "B$GET3",
-                            (true, false) => "B$PUT3",
-                            (false, true) => "B$GET4",
-                            (true, true) => "B$PUT4",
-                        },
-                        Vec::new(),
-                        operands,
-                    );
+                    let form = if *write { "PUT" } else { "GET" };
+                    let Some(callee) =
+                        llrm_qbruntime::routine_for(form, None, self.options.mbf, position.is_some())
+                    else {
+                        return self.fail(format!("{form} has no runtime routine for this form"));
+                    };
+                    self.emit_runtime_call(callee, Vec::new(), operands);
                 }
                 Statement::Seek { file, position, .. } => {
                     let (file, file_type) = self.expression(file)?;
@@ -3332,22 +3329,8 @@ impl Compiler {
                     }
                     for (place, type_id) in resolved_destinations {
                         let address = self.far_address(place, type_id);
-                        let (callee, operands) = match type_id {
-                            INTEGER | BOOLEAN | BYTE => ("B$RDI2", vec![Operand::Value(address)]),
-                            LONG => ("B$RDI4", vec![Operand::Value(address)]),
-                            SINGLE => ("B$RDR4", vec![Operand::Value(address)]),
-                            DOUBLE => ("B$RDR8", vec![Operand::Value(address)]),
-                            _ if self.string_width(type_id).is_some() => {
-                                let width = self.string_width(type_id).unwrap_or(0);
-                                (
-                                    "B$RDSD",
-                                    vec![
-                                        Operand::Value(address),
-                                        Operand::Constant(INTEGER, Number::Integer(width as i64)),
-                                    ],
-                                )
-                            }
-                            _ => return self.fail("INPUT destination has an unsupported type"),
+                        let Some((callee, operands)) = self.destination_reader(address, type_id) else {
+                            return self.fail("INPUT destination has an unsupported type");
                         };
                         self.emit_runtime_call(callee, Vec::new(), operands);
                     }
@@ -3368,22 +3351,8 @@ impl Compiler {
                         let (place, type_id) = self.destination(destination)?;
                         let (place, type_id, original) = self.staged_destination(place, type_id)?;
                         let address = self.far_address(place.clone(), type_id);
-                        let (callee, operands) = match type_id {
-                            INTEGER | BOOLEAN | BYTE => ("B$RDI2", vec![Operand::Value(address)]),
-                            LONG => ("B$RDI4", vec![Operand::Value(address)]),
-                            SINGLE => ("B$RDR4", vec![Operand::Value(address)]),
-                            DOUBLE => ("B$RDR8", vec![Operand::Value(address)]),
-                            _ if self.string_width(type_id).is_some() => {
-                                let width = self.string_width(type_id).unwrap_or(0);
-                                (
-                                    "B$RDSD",
-                                    vec![
-                                        Operand::Value(address),
-                                        Operand::Constant(INTEGER, Number::Integer(width as i64)),
-                                    ],
-                                )
-                            }
-                            _ => return self.fail("READ destination has an unsupported type"),
+                        let Some((callee, operands)) = self.destination_reader(address, type_id) else {
+                            return self.fail("READ destination has an unsupported type");
                         };
                         self.emit_runtime_call(callee, Vec::new(), operands);
                         self.unstage(place, type_id, original)?;
@@ -3450,75 +3419,6 @@ impl Compiler {
                 Statement::Runtime {
                     name, arguments, ..
                 } => match name.as_str() {
-                    "BEEP" => {
-                        if !arguments.is_empty() {
-                            return self.fail("BEEP takes no arguments");
-                        }
-                        self.emit_runtime_call("B$BEEP", Vec::new(), Vec::new());
-                    }
-                    "ERROR" => {
-                        if arguments.len() != 1 {
-                            return self.fail("ERROR expects one error number");
-                        }
-                        let (number, type_id) = self.expression(&arguments[0])?;
-                        let number = self.convert(number, type_id, INTEGER)?;
-                        self.emit_runtime_call("B$SERR", Vec::new(), vec![number]);
-                        self.terminate("unreachable", Vec::new(), Vec::new())?;
-                        let continuation = self.new_block();
-                        self.select_block(continuation);
-                    }
-                    "CLS" => {
-                        if arguments.len() > 1 {
-                            return self.fail("CLS expects zero or one screen selector");
-                        }
-                        let selector = if let Some(argument) = arguments.first() {
-                            let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, INTEGER)?
-                        } else {
-                            // QB45 rt/gwscr.asm increments the argument and
-                            // treats -1 as the no-parameter form.
-                            Operand::Constant(INTEGER, Number::Integer(-1))
-                        };
-                        self.emit_runtime_call("B$SCLS", Vec::new(), vec![selector]);
-                    }
-                    "VIEW_PRINT" => {
-                        // VBDOS prview.asm's B$VWPT takes (top, bottom) as
-                        // INTEGERs, cleans four bytes, and uses -1, -1 for
-                        // VIEW PRINT with no bounds. Its source order is the
-                        // push order: [bp+8] is top, [bp+6] is bottom.
-                        let bounds = match arguments.as_slice() {
-                            [] => vec![
-                                Operand::Constant(INTEGER, Number::Integer(-1)),
-                                Operand::Constant(INTEGER, Number::Integer(-1)),
-                            ],
-                            [top, bottom] => {
-                                let (top, top_type) = self.expression(top)?;
-                                let top = self.convert(top, top_type, INTEGER)?;
-                                let (bottom, bottom_type) = self.expression(bottom)?;
-                                let bottom = self.convert(bottom, bottom_type, INTEGER)?;
-                                vec![top, bottom]
-                            }
-                            _ => return self.fail("VIEW PRINT expects zero or two row bounds"),
-                        };
-                        self.emit_runtime_call("B$VWPT", Vec::new(), bounds);
-                    }
-                    "PLAY" => {
-                        let [commands] = arguments.as_slice() else {
-                            return self.fail("PLAY expects one command string");
-                        };
-                        let commands = self.string_descriptor(commands)?;
-                        self.emit_runtime_call("B$SPLY", Vec::new(), vec![commands]);
-                    }
-                    "PALETTE" => {
-                        let [attribute, color] = arguments.as_slice() else {
-                            return self.fail("PALETTE expects an attribute and color");
-                        };
-                        let (attribute, attribute_type) = self.expression(attribute)?;
-                        let attribute = self.convert(attribute, attribute_type, INTEGER)?;
-                        let (color, color_type) = self.expression(color)?;
-                        let color = self.convert(color, color_type, LONG)?;
-                        self.emit_runtime_call("B$PAL2", Vec::new(), vec![attribute, color]);
-                    }
                     "CIRCLE" => {
                         if arguments.len() < 3 || arguments.len() > 7 {
                             return self.fail("CIRCLE expects coordinates, radius, and optional color, angles, and aspect");
@@ -3792,24 +3692,6 @@ impl Compiler {
                             self.emit("store", Vec::new(), vec![right, Operand::Value(left_value)]);
                         }
                     }
-                    "COLOR" => {
-                        if arguments.len() > 3 {
-                            return self.fail("COLOR expects at most three positional arguments");
-                        }
-                        let operands = self.count_led_positional_arguments(arguments)?;
-                        self.emit_runtime_call("B$COLR", Vec::new(), operands);
-                    }
-                    "LOCATE" => {
-                        if arguments.len() > 5 {
-                            return self.fail("LOCATE expects at most five positional arguments");
-                        }
-                        // VBDOS LOCATE.OBJ records each source position as a
-                        // presence word plus an optional INTEGER value, then
-                        // appends the number of preceding words. This is the
-                        // same variable-sized convention as COLOR.
-                        let operands = self.count_led_positional_arguments(arguments)?;
-                        self.emit_runtime_call("B$LOCT", Vec::new(), operands);
-                    }
                     "RESTORE" => {
                         let row = match arguments.as_slice() {
                             [] => None,
@@ -3830,63 +3712,52 @@ impl Compiler {
                             vec![Operand::Constant(INTEGER, Number::Integer(0))],
                         );
                     }
-                    "SCREEN" => {
-                        if arguments.len() != 1 {
-                            return self.fail("the audited SCREEN form requires one mode");
-                        }
-                        let (mode, mode_type) = self.expression(&arguments[0])?;
-                        let mode = self.convert(mode, mode_type, INTEGER)?;
-                        // SYS.OBJ 0787..0792 shows SCREEN 0 as the VBDOS
-                        // count-led block [present=1, mode=0, count=2].
-                        self.emit_runtime_call(
-                            "B$CSCN",
-                            Vec::new(),
-                            vec![
-                                Operand::Constant(INTEGER, Number::Integer(1)),
-                                mode,
-                                Operand::Constant(INTEGER, Number::Integer(2)),
-                            ],
-                        );
-                    }
-                    "WIDTH" => {
-                        if arguments.len() != 2 {
-                            return self.fail("the audited WIDTH form requires columns and rows");
-                        }
-                        let mut operands = Vec::new();
-                        for argument in arguments {
-                            let (value, type_id) = self.expression(argument)?;
-                            operands.push(self.convert(value, type_id, INTEGER)?);
-                        }
-                        self.emit_runtime_call("B$WIDT", Vec::new(), operands);
-                    }
-                    "SLEEP" => {
-                        if arguments.len() > 1 {
-                            return self.fail("SLEEP expects zero or one duration");
-                        }
-                        let duration = if let Some(argument) = arguments.first() {
-                            let (value, type_id) = self.expression(argument)?;
-                            self.convert(value, type_id, LONG)?
-                        } else {
-                            Operand::Constant(LONG, Number::Integer(0))
-                        };
-                        self.emit_runtime_call("B$SLEP", Vec::new(), vec![duration]);
-                    }
-                    "END" | "SYSTEM" => {
-                        if !arguments.is_empty() {
-                            return self.fail(format!("{name} takes no arguments"));
-                        }
-                        self.emit_runtime_call("B$CEND", Vec::new(), Vec::new());
-                        // B$CEND does not return. Keep following labels as
-                        // detached side entries (notably ON ERROR handlers)
-                        // instead of inventing a fallthrough from END.
-                        self.terminate("unreachable", Vec::new(), Vec::new())?;
-                        let continuation = self.new_block();
-                        self.select_block(continuation);
-                    }
                     _ => {
-                        return self.fail(format!(
-                            "{name} is parsed as a runtime statement but has no audited ABI contract"
-                        ));
+                        let Some((routine, statement)) = llrm_qbruntime::statement(name) else {
+                            return self.fail(format!(
+                                "{name} is parsed as a runtime statement but has no audited ABI contract"
+                            ));
+                        };
+                        if !statement.arity.contains(&arguments.len()) {
+                            return self.fail(statement.refuse.replace("{name}", name));
+                        }
+                        let operands = match &statement.arguments {
+                            llrm_qbruntime::Arguments::CountLed => {
+                                self.count_led_positional_arguments(arguments)?
+                            }
+                            llrm_qbruntime::Arguments::Each(each) => {
+                                let mut operands = Vec::new();
+                                for (index, passed) in each.iter().enumerate() {
+                                    let target = match passed.pass {
+                                        llrm_qbruntime::Pass::Integer => INTEGER,
+                                        llrm_qbruntime::Pass::Long => LONG,
+                                        llrm_qbruntime::Pass::Descriptor => STRING,
+                                    };
+                                    operands.push(match (arguments.get(index), passed.default) {
+                                        (Some(argument), _) if target == STRING => {
+                                            self.string_descriptor(argument)?
+                                        }
+                                        (Some(argument), _) => {
+                                            let (value, type_id) = self.expression(argument)?;
+                                            self.convert(value, type_id, target)?
+                                        }
+                                        (None, Some(default)) => {
+                                            Operand::Constant(target, Number::Integer(default))
+                                        }
+                                        (None, None) => {
+                                            return self.fail(statement.refuse.replace("{name}", name))
+                                        }
+                                    });
+                                }
+                                operands
+                            }
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), operands);
+                        if statement.terminates {
+                            self.terminate("unreachable", Vec::new(), Vec::new())?;
+                            let continuation = self.new_block();
+                            self.select_block(continuation);
+                        }
                     }
                 },
                 Statement::Exit(ExitTarget::Sub | ExitTarget::Function, _) => {
@@ -5751,12 +5622,8 @@ impl Compiler {
             }
             if intrinsic.is_some_and(|one| one.lowering == Lowering::StringNumber) {
                 let (mut operand, type_id) = self.numeric_argument(&arguments[0])?;
-                let callee = match type_id {
-                    INTEGER | BOOLEAN | BYTE => "B$STI2",
-                    LONG => "B$STI4",
-                    SINGLE => "B$STR4",
-                    DOUBLE => "B$STR8",
-                    _ => return self.fail("STR$ requires a numeric argument"),
+                let Some(callee) = self.runtime_routine("STR$", type_id) else {
+                    return self.fail("STR$ requires a numeric argument");
                 };
                 if matches!(type_id, SINGLE | DOUBLE) {
                     // Runtime STR4/STR8 consume the declared 4/8-byte value,
@@ -5780,12 +5647,15 @@ impl Compiler {
                 )
             }) {
                 let lowering = intrinsic.unwrap().lowering;
-                let (target, callee) = match lowering {
-                    Lowering::PackInteger => (INTEGER, "B$FMKI"),
-                    Lowering::PackLong => (LONG, "B$FMKL"),
-                    Lowering::PackSingle => (SINGLE, if self.options.mbf { "B$FMSF" } else { "B$FMKS" }),
-                    Lowering::PackDouble => (DOUBLE, if self.options.mbf { "B$FMDF" } else { "B$FMKD" }),
+                let target = match lowering {
+                    Lowering::PackInteger => INTEGER,
+                    Lowering::PackLong => LONG,
+                    Lowering::PackSingle => SINGLE,
+                    Lowering::PackDouble => DOUBLE,
                     _ => unreachable!("matched binary packer"),
+                };
+                let Some(callee) = self.runtime_routine("MK$", target) else {
+                    return self.fail("MK$ has no runtime routine for this type");
                 };
                 let (operand, type_id) = self.expression(&arguments[0])?;
                 let mut operand = self.convert(operand, type_id, target)?;
@@ -7377,11 +7247,10 @@ impl Compiler {
             let integer = intrinsic.lowering == Lowering::UnpackInteger;
             let type_id = if integer { INTEGER } else { LONG };
             let result = self.value(type_id);
-            self.emit_runtime_call(
-                if integer { "B$FCVI" } else { "B$FCVL" },
-                vec![result],
-                vec![descriptor],
-            );
+            let Some(callee) = self.runtime_routine("CV", type_id) else {
+                return self.fail("CV has no runtime routine for this type");
+            };
+            self.emit_runtime_call(callee, vec![result], vec![descriptor]);
             return Ok(Some((Operand::Value(result), type_id)));
         }
         if matches!(
@@ -7391,11 +7260,8 @@ impl Compiler {
             let descriptor = self.string_descriptor(&arguments[0])?;
             let single = intrinsic.lowering == Lowering::UnpackSingle;
             let type_id = if single { SINGLE } else { DOUBLE };
-            let callee = match (self.options.mbf, single) {
-                (false, true) => "B$FCVS",
-                (false, false) => "B$FCVD",
-                (true, true) => "B$MCVS",
-                (true, false) => "B$MCVD",
+            let Some(callee) = self.runtime_routine("CV", type_id) else {
+                return self.fail("CV has no runtime routine for this type");
             };
             // strnum.asm returns AX = the near address of the converted value
             // in the runtime accumulator.  Keep the following load explicit:
@@ -7472,6 +7338,35 @@ impl Compiler {
         let result = self.value(type_id);
         self.emit("fadd", vec![result], vec![integral, correction]);
         Ok((Operand::Value(result), type_id))
+    }
+
+    /// The runtime description's name for a QB type, as a routine's `source` selects on it.
+    fn runtime_type(&self, type_id: u32) -> Option<&'static str> {
+        match type_id {
+            INTEGER | BOOLEAN | BYTE => Some("INTEGER"),
+            LONG => Some("LONG"),
+            SINGLE => Some("SINGLE"),
+            DOUBLE => Some("DOUBLE"),
+            _ if self.string_width(type_id).is_some() => Some("STRING"),
+            _ => None,
+        }
+    }
+
+    /// The runtime routine source form `form` calls for an operand of `type_id`.
+    fn runtime_routine(&self, form: &str, type_id: u32) -> Option<&'static str> {
+        llrm_qbruntime::routine_for(form, Some(self.runtime_type(type_id)?), self.options.mbf, false)
+    }
+
+    /// The READ routine storing into a destination at `address`, and its operands:
+    /// a fixed string also passes its width.
+    fn destination_reader(&self, address: u32, type_id: u32) -> Option<(&'static str, Vec<Operand>)> {
+        let callee = self.runtime_routine("READ", type_id)?;
+        let mut operands = vec![Operand::Value(address)];
+        if self.runtime_type(type_id) == Some("STRING") {
+            let width = self.string_width(type_id).unwrap_or(0);
+            operands.push(Operand::Constant(INTEGER, Number::Integer(width as i64)));
+        }
+        Some((callee, operands))
     }
 
     fn count_led_positional_arguments(
