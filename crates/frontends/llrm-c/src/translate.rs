@@ -1265,18 +1265,12 @@ impl<'a, 't> Body<'a, 't> {
             (Shape::Float(_), Shape::Float(_)) => self.op(Op::Convert, ty, vec![value_ref(value)]),
             (Shape::Pointer(a), Shape::Pointer(b)) if a == b => value,
             (Shape::Pointer(_), Shape::Pointer(_)) => self.op(Op::Convert, ty, vec![value_ref(value)]),
+            // An integer is the pointer's own bits, extended to its width as
+            // Borland does: a far one is segment:offset, 0 the null pointer.
             (Shape::Int(..) | Shape::Bool, Shape::Pointer(width)) => {
-                // A word is a near pointer, into DGROUP; a dword segment:offset.
-                let (bytes, near) = if width == 4 && self.bits(value).is_some_and(|one| one >= 32) { (4, false) } else { (2, true) };
-                let int = self.types.int(bytes, false);
-                let value = self.resized(value, false, int);
-                if near {
-                    let pointer = self.types.pointer(0);
-                    let near = self.op(Op::Convert, pointer, vec![value_ref(value)]);
-                    if width == 2 { near } else { self.op(Op::Convert, ty, vec![value_ref(near)]) }
-                } else {
-                    self.op(Op::Convert, ty, vec![value_ref(value)])
-                }
+                let int = self.types.int(width, false);
+                let value = self.resized(value, source_signed, int);
+                self.op(Op::Convert, ty, vec![value_ref(value)])
             }
             (Shape::Pointer(width), Shape::Int(..)) => {
                 let int = self.types.int(width, false);
