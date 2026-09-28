@@ -10,7 +10,7 @@ use crate::abi::machine::Machine;
 use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-march=CPU] [-mtune=CPU] [--cpu CPU] [--machine MACHINE] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +91,8 @@ pub struct Flags {
     passes: Vec<(usize, bool)>,
     cpu: Option<String>,
     machine: Option<PathBuf>,
+    /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
+    stack_is_data: Option<bool>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
@@ -98,7 +100,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, output: None, assembly: false }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false }
     }
 }
 
@@ -122,6 +124,8 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
+            "-mstack-is-data" => self.stack_is_data = Some(true),
+            "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "--cpu" => self.cpu = Some(value("--cpu")?),
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
@@ -189,6 +193,9 @@ impl Flags {
         };
         if let Some(cpu) = &self.cpu {
             machine.cpu = cpu.clone();
+        }
+        if let Some(stack_is_data) = self.stack_is_data {
+            machine.segments.stack_is_data = stack_is_data;
         }
         Ok(machine)
     }

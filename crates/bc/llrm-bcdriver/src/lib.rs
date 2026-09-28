@@ -58,9 +58,9 @@ pub fn compiled(data: &[u8], cpu: &str, name: &str) -> Result<Vec<u8>, String> {
     Ok(written.remove(0))
 }
 
-/// The built-in machine with its code priced for `cpu`.
+/// BASIC's machine with its code priced for `cpu`.
 fn on(cpu: &str) -> Machine {
-    Machine { cpu: cpu.to_owned(), ..machine::BUILT_IN.clone() }
+    Machine { cpu: cpu.to_owned(), ..machine::BASIC.clone() }
 }
 
 /// One module of a program whose segments `layout` lays out, compiled again.

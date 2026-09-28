@@ -11,6 +11,11 @@ pub const DOS: &str = include_str!("machines/dos.toml");
 /// The built-in description, which nothing can change.
 pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS).expect("the built-in DOS description parses"));
 
+/// The built-in description as a BASIC runtime runs it: compiled code only
+/// ever runs on the program's stack, which is in the data group.
+pub static BASIC: LazyLock<Machine> =
+    LazyLock::new(|| Machine { segments: Segments { stack_is_data: true, ..BUILT_IN.segments.clone() }, ..BUILT_IN.clone() });
+
 /// The processors a description may name. `llrm-core` checks that the
 /// backend prices exactly these.
 pub const CPUS: [&str; 8] = ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"];

@@ -55,7 +55,7 @@ pub(super) fn listing(program: &Program) -> String {
 
 /// `listing` on the default route: the rich MIR, selected by isel.
 pub(super) fn rich_listing(program: &Program) -> String {
-    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
     let module = qb_compile::assembled_by(program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
     masm::text(&module).expect("prints")
 }

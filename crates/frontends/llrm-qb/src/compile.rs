@@ -985,7 +985,7 @@ pub fn optimized(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options, &machine::BUILT_IN, &mut None, "")
+    _optimized(program, function, body, options, &machine::BASIC, &mut None, "")
 }
 
 /// Optimize MIR introduced by ABI physicalization.
@@ -999,7 +999,7 @@ pub fn optimized_physical(
     body: &Lowered,
     options: &Options,
 ) -> Result<Lowered, CompileError> {
-    _optimized(program, function, body, options, &machine::BUILT_IN, &mut None, "")
+    _optimized(program, function, body, options, &machine::BASIC, &mut None, "")
 }
 
 /// Give the one-entry machine pipeline a temporary external-entry switch.
@@ -1350,7 +1350,7 @@ pub fn assembled(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<masm::Module, CompileError> {
-    assembled_by(program, observer, options, Route::Lowered, &driver::Options::of(machine::BUILT_IN.clone()))
+    assembled_by(program, observer, options, Route::Lowered, &driver::Options::of(machine::BASIC.clone()))
 }
 
 /// A function in machine form: its LIR with returns cleaned, the inline
@@ -1661,7 +1661,7 @@ pub fn object_bytes(
     observer: Option<&mut StageObserver<'_>>,
     options: &Options,
 ) -> Result<Vec<u8>, CompileError> {
-    object_bytes_by(program, source, observer, options, Route::Lowered, &driver::Options::of(machine::BUILT_IN.clone()))
+    object_bytes_by(program, source, observer, options, Route::Lowered, &driver::Options::of(machine::BASIC.clone()))
 }
 
 pub fn object_bytes_by(
