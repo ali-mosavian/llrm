@@ -890,11 +890,15 @@ fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: 
         return true;
     }
     let written = _written(one, cell);
-    holds
-        && !_may_write(one, cell, sealed)
-        && !written
-            .iter()
-            .any(|dest| dest.addr.is_none() || _addresses_meet(cell.addr, cell.width, dest.addr, dest.width))
+    // Sealed, an incoming argument cell is reached by the frame's own stores alone.
+    let meets = |dest: &Mem| {
+        if sealed && _incoming_frame(cell) {
+            _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+        } else {
+            dest.addr.is_none() || _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+        }
+    };
+    holds && !_may_write(one, cell, sealed) && !written.iter().any(meets)
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
