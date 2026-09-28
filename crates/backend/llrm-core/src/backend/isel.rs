@@ -2153,6 +2153,14 @@ impl Selector<'_, '_, '_> {
                 out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(word)], vec![Loc::Held(held)])));
                 held = word;
             }
+            // A dword joined from two words goes as those words, high first.
+            if let Some(&(low, high)) = self.joins.get(&held.value).filter(|_| held.width == 4) {
+                for word in [high, low] {
+                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(word)])));
+                }
+                pushed += 4;
+                continue;
+            }
             pushed += slot(held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
