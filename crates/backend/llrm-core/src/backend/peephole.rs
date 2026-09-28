@@ -110,7 +110,7 @@ impl Peephole {
                 {
                     return body;
                 }
-                if address.is_some_and(|address| address.space == Space::Frame && address.disp < frame.floor) {
+                if address.is_some_and(|address| address.space == Space::Frame && frame.spills_at(address.disp)) {
                     return body;
                 }
             }

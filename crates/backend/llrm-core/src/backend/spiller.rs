@@ -728,7 +728,8 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
         .map(|home| (*home, frame.capacities.get(home).map_or(WORD, |one| *one as u32)))
         .collect();
     let mut unknown = false;
-    let floor = frame.floor;
+    let (floor, hole) = (frame.floor, frame.hole);
+    let frame_spills = |disp: i64| disp < floor || (-hole..0).contains(&disp);
 
     let mut slot = |operand: &Loc, capacities: &mut IndexMap<i64, u32>| -> Option<u32> {
         let Loc::Mem(cell) = operand else {
@@ -744,8 +745,7 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
             capacities.insert(home, had.max(cell.width).max(WORD));
             return Some(*found);
         }
-        // Anything below the floor is part of spill storage.
-        if home < floor {
+        if frame_spills(home) {
             unknown = true;
         }
         None

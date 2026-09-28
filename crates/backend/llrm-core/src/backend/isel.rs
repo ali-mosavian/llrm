@@ -269,7 +269,8 @@ enum Pointer {
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
 }
 
-pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool) -> Result<Selected, Unselected> {
+/// `hole` bytes below BP are left free, above the allocas, for spill slots.
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -301,7 +302,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         wides: IndexMap::default(),
         halves: BTreeSet::new(),
         folded: BTreeSet::new(),
-        depth: 0,
+        depth: hole,
         allocas: 0,
         scratch: 0,
         ats: IndexMap::default(),
