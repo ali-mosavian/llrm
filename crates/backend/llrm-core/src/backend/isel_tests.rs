@@ -2714,3 +2714,67 @@ fn test_a_float_to_a_byte_is_a_stored_word_low_byte() {
     let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fistp")).collect();
     assert!(stores.len() == 2 && stores.iter().all(|one| one.starts_with("fistp word ptr")), "{got:#?}");
 }
+
+/// mathlib.c's `ent_step_to`: a compare consuming one operand and keeping
+/// the other, with seven more floats live. floatassign missed the consumed
+/// operand's slot and floatalloc refused "floating instruction requires too
+/// many stack operands".
+#[test]
+fn test_a_compare_counts_the_operand_it_pops() {
+    let text = "declare float @_q_rsqrt(float) addrspace(1)
+define i16 @_ent_step_to(ptr addrspace(1) %0, ptr addrspace(1) %1, float %2) addrspace(1) {
+b1:
+  %3 = getelementptr inbounds i8, ptr addrspace(1) %1, i16 0
+  %4 = load float, ptr addrspace(1) %3
+  %5 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 0
+  %6 = load float, ptr addrspace(1) %5
+  %7 = fsub float %4, %6
+  %8 = getelementptr inbounds i8, ptr addrspace(1) %1, i16 4
+  %9 = load float, ptr addrspace(1) %8
+  %10 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 4
+  %11 = load float, ptr addrspace(1) %10
+  %12 = fsub float %9, %11
+  %13 = getelementptr inbounds i8, ptr addrspace(1) %1, i16 8
+  %14 = load float, ptr addrspace(1) %13
+  %15 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 8
+  %16 = load float, ptr addrspace(1) %15
+  %17 = fsub float %14, %16
+  %18 = fmul float %7, %7
+  %19 = fmul float %12, %12
+  %20 = fadd float %18, %19
+  %21 = fmul float %17, %17
+  %22 = fadd float %20, %21
+  %23 = fmul float %2, %2
+  %24 = fcmp ole float %22, %23
+  br i1 %24, label %b3, label %b2
+
+b2:
+  %25 = call addrspace(1) float @_q_rsqrt(float %22)
+  %26 = fmul float %2, %25
+  %27 = fmul float %7, %26
+  %28 = fadd float %6, %27
+  store float %28, ptr addrspace(1) %5
+  %29 = fmul float %12, %26
+  %30 = fadd float %11, %29
+  store float %30, ptr addrspace(1) %10
+  %31 = fmul float %17, %26
+  %32 = fadd float %16, %31
+  store float %32, ptr addrspace(1) %15
+  br label %b4
+
+b3:
+  store float %4, ptr addrspace(1) %5
+  %33 = load float, ptr addrspace(1) %8
+  store float %33, ptr addrspace(1) %10
+  %34 = load float, ptr addrspace(1) %13
+  store float %34, ptr addrspace(1) %15
+  br label %b4
+
+b4:
+  %35 = phi i16 [ 0, %b2 ], [ 1, %b3 ]
+  ret i16 %35
+}
+";
+    let got = listing(text, "_ent_step_to");
+    assert!(got.iter().any(|one| one == "call far ptr _q_rsqrt"), "{got:#?}");
+}

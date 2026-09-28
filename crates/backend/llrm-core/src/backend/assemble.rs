@@ -164,8 +164,8 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
             in_ssa = false;
         }
         body = flow::checked(body, phase.as_mut(), in_ssa).map_err(|error| match error {
-            flow::Checked::Refused(raised) => raised.message,
-            flow::Checked::Malformed(malformed) => malformed.0,
+            flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
+            flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
         if std::env::var_os("ISEL_DUMP").is_some() {
             println!("{}", crate::tools::stages::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));

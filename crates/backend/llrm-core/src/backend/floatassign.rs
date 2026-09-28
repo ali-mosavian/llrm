@@ -1192,7 +1192,11 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
                     _ => 0,
                 })
                 .sum();
-            if after[index].union(&made).count() + duplicated > REGISTERS {
+            // What a step reads is on the stack while it runs: a compare
+            // duplicating one operand still holds the other, which it pops.
+            let read = group.iter().filter_map(|one| one.what.as_ref()).flat_map(|what| _held_floats(&what.sources));
+            let before: BTreeSet<u32> = after[index].difference(&made).copied().chain(read).collect();
+            if after[index].union(&made).count().max(before.len() + duplicated) > REGISTERS {
                 return Some((block.at, first));
             }
         }
