@@ -1,0 +1,84 @@
+# The x86 instructions llrm selects, one form per line: LLVM's X86InstrInfo.td
+# for this target. Read by `parse.rs`, at build time by generators and at run
+# time by `instructions::FORMS`.
+#
+# Columns, whitespace separated, `-` for none:
+#   name       the mnemonic, as LIR's Semantics.name spells it. `{cc}` makes one
+#              form per condition code (o no b ae e ne be a s ns p np l ge le g).
+#   operation  what it computes, as ir::Operation::as_str spells it.
+#   shape      LIR's operands, dests/sources, comma separated. Each operand is
+#              the kinds it may be: r register, m memory, i immediate, a address
+#              (lea's), s an x87 value. `^N` ties a source to dest N's register.
+#   widths     the operand widths in bits it has forms for.
+#   cost       the profile key that prices it (cpu.rs, timings.rs).
+#   fixed      operands pinned to a register when they are one: dN or sN=REG.
+#   iced       iced-x86's Code, `{w}` the width and `{cc}` the condition; the
+#              flags it reads and writes are iced's (instructions::flags).
+#
+# name   operation shape            widths    cost        fixed                  iced
+mov      move      rm/rmi           8,16,32   mov_rr      -                      Mov_rm{w}_r{w}
+movzx    extend    r/rm             16,32     movzx       -                      Movzx_r{w}_rm8
+movsx    extend    r/rm             16,32     movzx       -                      Movsx_r{w}_rm8
+lea      addr      r/a              16,32     lea         -                      Lea_r{w}_m
+xchg     xchg      r,rm/^1,^0       8,16,32   alu_rr      -                      Xchg_rm{w}_r{w}
+add      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Add_rm{w}_r{w}
+adc      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Adc_rm{w}_r{w}
+sub      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Sub_rm{w}_r{w}
+sbb      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Sbb_rm{w}_r{w}
+and      binary    rm/^0,rmi        8,16,32   alu_rr      -                      And_rm{w}_r{w}
+or       binary    rm/^0,rmi        8,16,32   alu_rr      -                      Or_rm{w}_r{w}
+xor      binary    rm/^0,rmi        8,16,32   alu_rr      -                      Xor_rm{w}_r{w}
+shl      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Shl_rm{w}_CL
+shr      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Shr_rm{w}_CL
+sar      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Sar_rm{w}_CL
+rol      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Rol_rm{w}_CL
+ror      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Ror_rm{w}_CL
+rcl      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Rcl_rm{w}_CL
+rcr      binary    rm/^0,ri         8,16,32   shift_ri    s1=cx                  Rcr_rm{w}_CL
+shld     funnel    rm/^0,r,ri       16,32     shift_ri    s2=cx                  Shld_rm{w}_r{w}_CL
+shrd     funnel    rm/^0,r,ri       16,32     shift_ri    s2=cx                  Shrd_rm{w}_r{w}_CL
+neg      unary     rm/^0            8,16,32   alu_rr      -                      Neg_rm{w}
+not      unary     rm/^0            8,16,32   alu_rr      -                      Not_rm{w}
+inc      unary     rm/^0            8,16,32   alu_rr      -                      Inc_rm{w}
+dec      unary     rm/^0            8,16,32   alu_rr      -                      Dec_rm{w}
+imul     mul       r/^0,rmi         16,32     imul_r32    -                      Imul_r{w}_rm{w}
+imul     mul       r/rm,i           16,32     imul_r32    -                      Imul_r{w}_rm{w}_imm{w}
+imul     mul       r,r/r,rm         8,16,32   mul_r16     d0=ax,d1=dx,s0=ax      Imul_rm{w}
+mul      mul       r,r/r,rm         8,16,32   mul_r16     d0=ax,d1=dx,s0=ax      Mul_rm{w}
+idiv     div       r,r/r,r,rm       8,16,32   idiv_r32    d0=ax,d1=dx,s0=dx,s1=ax Idiv_rm{w}
+div      div       r,r/r,r,rm       8,16,32   div_r16     d0=ax,d1=dx,s0=dx,s1=ax Div_rm{w}
+cwd      extend    r/r              16        cdq         d0=dx,s0=ax            Cwd
+cdq      extend    r/r              32        cdq         d0=dx,s0=ax            Cdq
+cmp      cmp       -/rm,rmi         8,16,32   alu_rr      -                      Cmp_rm{w}_r{w}
+test     cmp       -/rm,ri          8,16,32   alu_rr      -                      Test_rm{w}_r{w}
+set{cc}  unary     rm/-             8         alu_rr      -                      Set{cc}_rm8
+j{cc}    branch    -/-              -         jcc         -                      J{cc}_rel16
+jmp      jump      -/-              -         jmp_short   -                      Jmp_rel16
+call     call      -/-              -         call_far    -                      Call_rel16
+push     push      -/rmi            16,32     push_r      -                      Push_r{w}
+pop      pop       rm/-             16,32     pop_r       -                      Pop_r{w}
+in       barrier   r/ri             8,16      unknown     d0=ax,s0=dx            In_AL_DX
+out      barrier   -/ri,r           8,16      unknown     s0=dx,s1=ax            Out_DX_AL
+stosb    fill      -/r,r,r          8         rep_stos    s0=ax,s1=di            Stosb_m8_AL
+stosw    fill      -/r,r,r          16        rep_stos    s0=ax,s1=di            Stosw_m16_AX
+stosd    fill      -/r,r,r          32        rep_stos    s0=ax,s1=di            Stosd_m32_EAX
+les      move      r,r/m            16        les         -                      Les_r16_m1616
+fld      fload     s/ms             -         x87_load    -                      Fld_m64fp
+fild     fload     s/m              -         x87_load    -                      Fild_m32int
+fldz     fload     s/-              -         x87_load    -                      Fldz
+fld1     fload     s/-              -         x87_load    -                      Fld1
+fstp     fstore    m/s              -         x87_store   -                      Fstp_m64fp
+fistp    fstore    m/s              -         x87_convert_store -                Fistp_m32int
+fisttp   fstore    m/s              -         x87_convert_store -                Fisttp_m32int
+fadd     farith    s/s,ms           -         x87_add     -                      Fadd_m64fp
+fsub     farith    s/s,ms           -         x87_add     -                      Fsub_m64fp
+fmul     farith    s/s,ms           -         x87_mul     -                      Fmul_m64fp
+fdiv     farith    s/s,ms           -         x87_div     -                      Fdiv_m64fp
+fchs     funary    s/s              -         x87_add     -                      Fchs
+fabs     funary    s/s              -         x87_add     -                      Fabs
+fsqrt    funary    s/s              -         x87_div     -                      Fsqrt
+frndint  funary    s/s              -         x87_add     -                      Frndint
+fsin     funary    s/s              -         x87_div     -                      Fsin
+fcos     funary    s/s              -         x87_div     -                      Fcos
+fcom     cmp       -/s,ms           -         x87_add     -                      Fcom_m64fp
+fxch     xchg      s,s/s,s          -         x87_exchange -                     Fxch_st0_sti

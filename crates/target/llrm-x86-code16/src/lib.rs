@@ -2,6 +2,7 @@
 //! for the passes, and the machine description a program is built for.
 
 pub mod cycles;
+pub mod instructions;
 pub mod machine;
 pub mod target;
 pub mod timings;
