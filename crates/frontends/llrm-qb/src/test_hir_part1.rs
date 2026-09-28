@@ -40,7 +40,7 @@ fn lowered(program: &model::Program) -> Vec<hir::Lowered> {
 /// `namespace["dumped"](source, output, dialect=..., runtime=..., includes=())`.
 fn dumped(source: &std::path::Path, output: &std::path::Path, dialect: &str, runtime: &str) {
     let frontend = super::driver::Frontend::new(dialect, runtime);
-    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("dumps");
+    qbstages::dumped(source, output, &frontend, &O2(), crate::compile::Route::Lowered, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("dumps");
 }
 
 fn machine(
@@ -58,7 +58,7 @@ fn machine(
         BTreeSet::new(),
         Some(contracts),
         "386",
-        &llrm_core::backend::target::BUILT_IN,
+        &llrm_core::backend::target::BASIC,
         lower_mir::Lowered { occurrences: Some(&occurrences), pointer_model, ..Default::default() },
     )
     .expect("lowers")
@@ -115,7 +115,16 @@ fn test_qb_cli_reads_the_machine_it_is_given() {
     std::fs::write(&path, llrm_core::abi::machine::DOS.replace("cpu = \"486\"", "cpu = \"386\"")).expect("writes");
     let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
     assert_eq!(args.codegen.machine.cpu, "386");
-    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BUILT_IN);
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BASIC);
+}
+
+/// BASIC's runtime runs compiled code on the program's stack, in the data
+/// group, unless -mno-stack-is-data says otherwise.
+#[test]
+fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
+    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.stack_is_data;
+    assert!(stack_is_data(&["probe.bas"]));
+    assert!(!stack_is_data(&["probe.bas", "-mno-stack-is-data"]));
 }
 
 #[test]

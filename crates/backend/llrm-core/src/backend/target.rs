@@ -425,6 +425,9 @@ impl Segments {
 /// The built-in machine's.
 pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&machine::BUILT_IN));
 
+/// The segment registers of `machine::BASIC`.
+pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&machine::BASIC));
+
 /// Whether `one` needs the data segment register to hold the data group: it
 /// calls, returns, traps or is opaque; it is an x87 instruction, whose
 /// emulator fixup spells the segment itself; or it is a string instruction,
@@ -615,15 +618,15 @@ mod tests {
     /// al and ah share eax and share no byte.
     #[test]
     fn test_segment_registers_follow_the_machine() {
-        assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);
-        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, Some(Register::SS)));
-        let apart = crate::abi::machine::Machine {
-            segments: crate::abi::machine::Segments { stack_is_data: false, ..machine::BUILT_IN.segments.clone() },
+        assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS]);
+        assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, None));
+        let joined = crate::abi::machine::Machine {
+            segments: crate::abi::machine::Segments { stack_is_data: true, ..machine::BUILT_IN.segments.clone() },
             ..machine::BUILT_IN.clone()
         };
-        let apart = Segments::of(&apart);
-        assert_eq!(apart.selectors, [Register::ES, Register::FS, Register::GS]);
-        assert_eq!((apart.data, apart.through), (Register::DS, None));
+        let joined = Segments::of(&joined);
+        assert_eq!(joined.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);
+        assert_eq!((joined.data, joined.through), (Register::DS, Some(Register::SS)));
     }
 
     #[test]

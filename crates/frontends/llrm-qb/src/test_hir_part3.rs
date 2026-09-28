@@ -95,7 +95,7 @@ fn machine(
         BTreeSet::new(),
         Some(contracts),
         "386",
-        &llrm_core::backend::target::BUILT_IN,
+        &llrm_core::backend::target::BASIC,
         lower_mir::Lowered { occurrences: Some(&occurrences), pointer_model, ..Default::default() },
     )
     .expect("lowers")
@@ -2387,7 +2387,7 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("assembles");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2403,7 +2403,7 @@ fn test_the_runtime_frame_zeroes_the_locals() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "zeroed.bas", b"DECLARE SUB Report (n AS LONG)\nCALL Report(1)\nSUB Report (n AS LONG)\nDIM buffer AS STRING * 4096\nDIM counts(3) AS INTEGER\nbuffer = \"X\"\ncounts(n) = 1\nPRINT buffer; counts(1)\nEND SUB\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("assembles");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
     assert!(report.contains("call far ptr B$ENRA"), "{report}");
@@ -2416,7 +2416,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/suite/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
+        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
 
@@ -2428,7 +2428,7 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("compiles");
+    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
@@ -2575,7 +2575,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())).expect("assembles");
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
 
@@ -2586,7 +2586,7 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
     let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
     let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
     let mut offset = 0;

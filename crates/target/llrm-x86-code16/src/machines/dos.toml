@@ -16,12 +16,15 @@ cpu = "486"
 
 # The segment registers the program model reserves: the data group every
 # unprefixed access reads, the stack and the code. The rest hold selectors.
-# The stack lives in the data group, so ss: reaches the data too.
+# The stack need not be in the data group: an interrupt handler may call
+# code on a stack of its own with DS the data group, as Watcom's -zu
+# allows. -mstack-is-data promises it is, so ss: reaches the data and ds is
+# free between the points that need it.
 [segments]
 data = "ds"
 stack = "ss"
 code = "cs"
-stack_is_data = true
+stack_is_data = false
 
 # Linear [low, high) ranges no program's own data occupies. A write there
 # reaches no variable, array or runtime cell.

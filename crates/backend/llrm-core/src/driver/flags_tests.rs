@@ -74,3 +74,13 @@ fn output_and_assembly() {
     assert_eq!(flags.output, Some(PathBuf::from("out.asm")));
     assert_eq!(parsed(&["--output=a.obj"]).unwrap().output, Some(PathBuf::from("a.obj")));
 }
+
+/// The stack is apart from the data group unless -mstack-is-data says it
+/// is not: qcport's sound IRQ calls C on a stack of its own.
+#[test]
+fn stack_is_data_only_when_asked() {
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().segments.stack_is_data;
+    assert!(!machine(&[]));
+    assert!(machine(&["-mstack-is-data"]));
+    assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
+}

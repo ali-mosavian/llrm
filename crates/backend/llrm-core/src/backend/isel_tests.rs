@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BUILT_IN, false)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -32,14 +32,14 @@ fn borland() -> HirAbi {
     HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect() }
 }
 
-/// The module's text as `cpu` prices it.
+/// The module's text as `cpu` prices it, for BASIC's runtime.
 fn assembled_on(cpu: &str, text: &str) -> String {
-    assembled_by(&qb(), cpu, text)
+    assembled_by(&qb(), &crate::backend::target::BASIC, cpu, text)
 }
 
-/// The module's text under `abi`, as `cpu` prices it.
-fn assembled_by(abi: &HirAbi, cpu: &str, text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), &crate::backend::target::BUILT_IN).expect("assembles");
+/// The module's text under `abi` and `segments`, as `cpu` prices it.
+fn assembled_by(abi: &HirAbi, segments: &crate::backend::target::Segments, cpu: &str, text: &str) -> String {
+    let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
     crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
@@ -2817,7 +2817,7 @@ b2:
   ret void
 }
 ";
-    let text = assembled_by(&borland(), "386", text);
+    let text = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "386", text);
     let from = text.find("f proc").expect("the procedure");
     let got: Vec<String> = text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect();
     let writes_ax = |one: &str| one.split_once(' ').is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"));

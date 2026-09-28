@@ -1314,6 +1314,22 @@ mod tests {
         assert!(!body.iter().any(|one| one.contains("DGROUP")), "{body:#?}");
     }
 
+    /// qcport's snd_mix_paint runs from dsp.asm's IRQ on its own stack, DS
+    /// loaded with DGROUP and SS not. It read the mixer's fields through ss:
+    /// and set DS from SS, painted through a pointer read from the IRQ's
+    /// stack segment, and wrote the VGA BIOS ROM 107k times.
+    #[test]
+    fn test_near_data_is_reached_through_ds_alone() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/nearviads.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "nearviads", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_paint proc").expect("_paint");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let through_stack = |one: &&str| one.contains("ss:[") || one.contains("mov ds,") || one.starts_with("lds ") || one.starts_with("pop ds");
+        assert!(!body.iter().any(through_stack), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

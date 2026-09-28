@@ -101,7 +101,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     if mir && flags.output.is_some() {
         return Err("--mir and --output cannot be used together".into());
     }
-    let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BUILT_IN.clone())?);
+    let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BASIC.clone())?);
     Ok(Arguments { source, frontend, dump_hir, mir, options: flags.legacy(), flags, dump, route, codegen })
 }
 
