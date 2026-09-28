@@ -569,8 +569,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "helper endp",
             "MAIN proc far",
             "L1_0:",
-            "mov ax, word ptr count",
-            "push ax",
+            "push word ptr count",
             "call far ptr helper",
             "retf",
             "MAIN endp",
@@ -2918,3 +2917,25 @@ define void @f(i16 %a, i16 %b, i16 %c, i16 %d, ptr %p) addrspace(1) {
     assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:#?}");
 }
 
+
+/// A spill reload whose only reader is a push is the push's memory
+/// operand: qcport's savegame_load reloaded each spilled argument into ax to
+/// push it, a byte more each than BCC's `push [bp-n]`.
+#[test]
+fn test_a_reload_pushed_is_pushed_from_memory() {
+    let mut text = String::from("declare i16 @h(i16) addrspace(1)\ndeclare void @k(i16) addrspace(1)\ndefine void @f() addrspace(1) {\n");
+    for n in 0..8 {
+        text += &format!("  %x{n} = call addrspace(1) i16 @h(i16 {n})\n");
+    }
+    for n in 0..8 {
+        text += &format!("  call addrspace(1) void @k(i16 %x{n})\n");
+    }
+    text += "  ret void\n}\n";
+    let got = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "386", &text);
+    let from = got.find("f proc").expect("f");
+    let body: Vec<&str> = got[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+    let reloaded_then_pushed = body.windows(2).any(|two| {
+        two[0].starts_with("mov ") && two[0].contains("ptr [bp-") && two[1] == format!("push {}", two[0][4..].split(',').next().unwrap_or(""))
+    });
+    assert!(!reloaded_then_pushed, "{body:#?}");
+}

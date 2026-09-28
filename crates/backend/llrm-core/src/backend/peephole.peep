@@ -187,6 +187,12 @@ rule fused_operand
     when    free(@0, dropped), free(@1, settled), same_width(r, c), !same_root(d, r), dead(@1, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: op d, d, c
 
+// A load whose only reader is a push is the push's memory operand.
+rule fused_push
+    match   mov r:reg, c:mem ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, c), width_in(c, [16, 32]), dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: push c
+
 rule fused_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r, r ; mov c2:mem, r
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
