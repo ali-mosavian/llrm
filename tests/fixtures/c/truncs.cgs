@@ -1,0 +1,47 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/home/alim/scratch/qcfix/tests/fixtures/c/truncs.c"
+- DBSrcCue f1 2 1
+SYM y1 name="truncs" base="truncs" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_SINGLE
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_SINGLE
+SYM y4 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+- DBSrcCue f1 4 1
+n4 CGFEName y4 TY_POINTER
+n5 CGUnary O_POINTS n4 TY_POINTER
+n6 CGInteger 0 TY_INTEGER
+n7 CGInteger 2 TY_INTEGER
+n8 CGBinary O_TIMES n6 n7 TY_INTEGER
+n9 CGBinary O_PLUS n5 n8 TY_POINTER
+n10 CGFEName y2 TY_SINGLE
+n11 CGUnary O_POINTS n10 TY_SINGLE
+n12 CGUnary O_CONVERT n11 TY_INT_2
+n13 CGAssign n9 n12 TY_INT_2
+- CGDone n13
+- DBSrcCue f1 5 1
+n14 CGFEName y4 TY_POINTER
+n15 CGUnary O_POINTS n14 TY_POINTER
+n16 CGInteger 1 TY_INTEGER
+n17 CGInteger 2 TY_INTEGER
+n18 CGBinary O_TIMES n16 n17 TY_INTEGER
+n19 CGBinary O_PLUS n15 n18 TY_POINTER
+n20 CGFEName y3 TY_SINGLE
+n21 CGUnary O_POINTS n20 TY_SINGLE
+n22 CGUnary O_CONVERT n21 TY_INT_2
+n23 CGAssign n19 n22 TY_INT_2
+- CGDone n23
+- DBSrcCue f1 6 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

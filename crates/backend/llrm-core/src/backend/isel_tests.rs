@@ -751,11 +751,7 @@ b3:
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp", "mov bp, sp", "sub sp, 6", "L0_0:", "fnstcw word ptr [bp-4]", "mov ax, word ptr [bp-4]", "or ax, 3072", "mov word ptr [bp-6], ax", "L0_1:",
-            "fld dword ptr $K1", "fadd dword ptr $K2", "fldcw word ptr [bp-6]", "fistp word ptr [bp-2]", "fldcw word ptr [bp-4]",
-            "mov ax, word ptr [bp-2]", "leave", "retf",
-        ]
+        ["push bp", "mov bp, sp", "sub sp, 6", "L0_0:", "fnstcw word ptr [bp-4]", "mov ax, word ptr [bp-4]", "or ax, 3072", "mov word ptr [bp-6], ax", "L0_1:", "fld dword ptr $K1", "fadd dword ptr $K2", "fldcw word ptr [bp-6]", "fistp word ptr [bp-2]", "mov ax, word ptr [bp-2]", "fldcw word ptr [bp-4]", "leave", "retf"]
     );
 }
 
@@ -961,28 +957,7 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "sub sp, 8",
-            "L0_0:",
-            "fnstcw word ptr [bp-6]",
-            "mov ax, word ptr [bp-6]",
-            "or ax, 3072",
-            "mov word ptr [bp-8], ax",
-            "fld qword ptr [bp+6]",
-            "fld st(0)",
-            "fldcw word ptr [bp-8]",
-            "fistp word ptr [bp-2]",
-            "fldcw word ptr [bp-6]",
-            "mov ax, word ptr [bp-2]",
-            "fldcw word ptr [bp-8]",
-            "fistp dword ptr [bp-4]",
-            "fldcw word ptr [bp-6]",
-            "add ax, word ptr [bp-4]",
-            "leave",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "sub sp, 8", "L0_0:", "fnstcw word ptr [bp-6]", "mov ax, word ptr [bp-6]", "or ax, 3072", "mov word ptr [bp-8], ax", "fld qword ptr [bp+6]", "fld st(0)", "fldcw word ptr [bp-8]", "fistp word ptr [bp-2]", "mov ax, word ptr [bp-2]", "fistp dword ptr [bp-4]", "mov bx, word ptr [bp-4]", "add ax, bx", "fldcw word ptr [bp-6]", "leave", "retf"]
     );
 }
 
@@ -1306,26 +1281,7 @@ define void @f(double %x) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "sub sp, 4",
-            "L0_0:",
-            "fnstcw word ptr [bp-2]",
-            "mov ax, word ptr [bp-2]",
-            "or ax, 3072",
-            "mov word ptr [bp-4], ax",
-            "fld qword ptr [bp+6]",
-            "fld st(0)",
-            "fldcw word ptr [bp-4]",
-            "fistp word ptr b",
-            "fldcw word ptr [bp-2]",
-            "fld st(0)",
-            "fistp word ptr b",
-            "fstp dword ptr o",
-            "leave",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "sub sp, 4", "L0_0:", "fnstcw word ptr [bp-2]", "mov ax, word ptr [bp-2]", "or ax, 3072", "mov word ptr [bp-4], ax", "fld qword ptr [bp+6]", "fld st(0)", "fldcw word ptr [bp-4]", "fistp word ptr b", "fld st(0)", "fldcw word ptr [bp-2]", "fistp word ptr b", "fstp dword ptr o", "leave", "retf"]
     );
 }
 

@@ -235,7 +235,7 @@ fn test_truncation_saves_the_control_word_once_per_body() {
         names,
         vec![
             (0, vec!["fnstcw", "mov", "or", "mov"]),
-            (5, vec!["fldcw", "fistp", "fldcw", "fldcw", "fistp", "fldcw"]),
+            (5, vec!["fldcw", "fistp", "fistp", "fldcw"]),
         ]
     );
 }

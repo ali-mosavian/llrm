@@ -1425,6 +1425,19 @@ mod tests {
         assert!(stored.len() >= 3, "{body:#?}");
     }
 
+    /// Each float-to-int conversion switched the rounding mode to chop and
+    /// back: two conversions in a row loaded the control word four times.
+    #[test]
+    fn test_conversions_in_a_row_switch_the_rounding_mode_once() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/truncs.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "truncs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_truncs proc").expect("_truncs");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert_eq!(body.iter().filter(|one| one.starts_with("fldcw")).count(), 2, "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
