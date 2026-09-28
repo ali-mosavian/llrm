@@ -25,9 +25,21 @@ fn assembled(text: &str) -> String {
     assembled_on("486", text)
 }
 
+/// Borland C's medium model: a call keeps all but ax, bx, cx, dx, es and the flags.
+fn borland() -> HirAbi {
+    use crate::abi::runtime::{EVERY, Reg};
+    let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect() }
+}
+
 /// The module's text as `cpu` prices it.
 fn assembled_on(cpu: &str, text: &str) -> String {
-    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name(cpu), &crate::backend::target::BUILT_IN).expect("assembles");
+    assembled_by(&qb(), cpu, text)
+}
+
+/// The module's text under `abi`, as `cpu` prices it.
+fn assembled_by(abi: &HirAbi, cpu: &str, text: &str) -> String {
+    let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), &crate::backend::target::BUILT_IN).expect("assembles");
     crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
@@ -2777,4 +2789,46 @@ b4:
 ";
     let got = listing(text, "_ent_step_to");
     assert!(got.iter().any(|one| one == "call far ptr _q_rsqrt"), "{got:#?}");
+}
+
+/// r_walk.c's `r_recursive_world_node`: three values live across a float
+/// compare, one spilled and reloaded into ax between `fnstsw ax` and
+/// `sahf`. The branch went on garbage flags and the far wall was not drawn.
+#[test]
+fn test_nothing_writes_ax_between_fnstsw_and_sahf() {
+    let text = "declare float @g() addrspace(1)
+declare i16 @k() addrspace(1)
+declare void @h(i16, i16, i16) addrspace(1)
+define void @f() addrspace(1) {
+b0:
+  %y = call addrspace(1) i16 @k()
+  %z = call addrspace(1) i16 @k()
+  %w = call addrspace(1) i16 @k()
+  %x = call addrspace(1) float @g()
+  %c = fcmp oge float %x, 0.000000e+00
+  br i1 %c, label %b1, label %b2
+b1:
+  call addrspace(1) void @h(i16 %y, i16 %z, i16 %w)
+  call addrspace(1) void @h(i16 %z, i16 %w, i16 %y)
+  ret void
+b2:
+  call addrspace(1) void @h(i16 %w, i16 %y, i16 %z)
+  call addrspace(1) void @h(i16 %y, i16 %z, i16 %w)
+  ret void
+}
+";
+    let text = assembled_by(&borland(), "386", text);
+    let from = text.find("f proc").expect("the procedure");
+    let got: Vec<String> = text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect();
+    let writes_ax = |one: &str| one.split_once(' ').is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"));
+    let mut status = false;
+    for one in &got {
+        if one == "fnstsw ax" {
+            status = true;
+        } else if one == "sahf" {
+            status = false;
+        } else {
+            assert!(!(status && writes_ax(one)), "{one} between fnstsw and sahf:\n{got:#?}");
+        }
+    }
 }

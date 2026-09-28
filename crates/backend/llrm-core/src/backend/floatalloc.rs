@@ -142,6 +142,7 @@ struct _Stack {
     out: Vec<Arc<Insn>>,
     one: Option<Arc<Insn>>,
     absorbed: HashSet<i64>, // later copies of a group already taken
+    fresh: u32,             // the next value no instruction names
 }
 
 impl _Stack {
@@ -157,6 +158,7 @@ impl _Stack {
             out: Vec::new(),
             one: None,
             absorbed: HashSet::default(),
+            fresh: 0,
         }
     }
 
@@ -540,8 +542,23 @@ impl _Stack {
         word.clobbers = std::collections::BTreeSet::from([Register::AX]);
         word.delivers = one.delivers.clone();
         word.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
+        // sahf reads the status word from AH: it stays in AX until then.
+        let held = match word.delivers.iter().find(|(_, register)| *register == Register::AX) {
+            Some(&(held, _)) => held,
+            None => {
+                let held = Held { value: self.fresh, width: 2 };
+                self.fresh += 1;
+                word.defines.push(held.value);
+                word.delivers.push((held, Register::AX));
+                word.widths.push((held.value, 2));
+                held
+            }
+        };
         self.out.push(Arc::new(word));
-        self.insert(semantics(Operation::Nothing, "sahf", Vec::new(), Vec::new()));
+        let mut sahf = inserted(at, semantics(Operation::Nothing, "sahf", Vec::new(), Vec::new()));
+        sahf.uses = vec![held.value];
+        sahf.requires = vec![(held, Register::AX)];
+        self.out.push(Arc::new(sahf));
         Ok(())
     }
 
@@ -670,6 +687,12 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
     let mut stack = _Stack::new(floating.clone());
+    stack.fresh = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().chain(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)))))
+        .max()
+        .map_or(0, |most| most + 1);
     let mut made: IndexMap<i64, LirBlock> = IndexMap::default();
     let (order, _) = _reverse_postorder(body);
     for at in order {
