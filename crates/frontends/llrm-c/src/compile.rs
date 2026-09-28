@@ -1238,6 +1238,50 @@ mod tests {
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
+    /// qcport's dbg.c, sys_time.c, d_poly.c and ent.c use `_asm` and
+    /// `__emit__`: "inline code F.0 is not raised to the rich MIR". The code
+    /// is laid down with each frame place it names at that place's slot, and
+    /// a value-less return after it answers what it left in dx:ax.
+    #[test]
+    fn test_inline_code_reads_and_writes_its_frame_places() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "inlinecode", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let body = |name: &str| -> Vec<String> {
+            let from = asm.find(&format!("{name} proc")).expect("the procedure");
+            asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+        };
+        // Each db line decoded: the code's own instructions, displacements patched.
+        let decoded = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .map(|line| match line.strip_prefix("db ") {
+                    Some(bytes) => {
+                        let bytes: Vec<u8> = bytes.split(',').map(|one| u8::from_str_radix(one.trim_end_matches('h'), 16).unwrap()).collect();
+                        let mut decoder = iced_x86::Decoder::new(16, &bytes, iced_x86::DecoderOptions::NONE);
+                        let mut formatter = iced_x86::NasmFormatter::new();
+                        iced_x86::Formatter::options_mut(&mut formatter).set_number_base(iced_x86::NumberBase::Decimal);
+                        decoder.iter().map(|one| {
+                            let mut text = String::new();
+                            iced_x86::Formatter::format(&mut formatter, &one, &mut text);
+                            text
+                        }).collect::<Vec<_>>().join("; ")
+                    }
+                    None => line.clone(),
+                })
+                .collect()
+        };
+        let sine = decoded(&body("_sine"));
+        let slot = |line: &str| line.split_once('[').map(|(_, rest)| rest.trim_end_matches(']').replace(' ', "").to_lowercase());
+        let stored = sine.iter().find(|one| one.starts_with("fstp qword ptr")).and_then(|one| slot(one)).expect("rad's slot");
+        let code = sine.iter().find(|one| one.contains("fsin")).expect("the code");
+        let returned = sine.iter().rev().find(|one| one.starts_with("fld qword ptr")).and_then(|one| slot(one)).expect("result's slot");
+        assert!(code.starts_with(&format!("fld qword [{stored}]")) && code.ends_with(&format!("fstp qword [{returned}]")), "{sine:#?}");
+        let ticks = body("_ticks");
+        assert!(ticks.contains(&"db 00fh,031h".to_owned()), "{ticks:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

@@ -1,0 +1,57 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "inlinecode.c"
+- DBSrcCue f1 3 1
+SYM y1 name="sine" base="sine" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_DOUBLE
+SYM y2 name="rad" base="rad" pattern="_*" attr=0xc20 seg=2
+- CGParmDecl y2 TY_DOUBLE
+l2 CGLastParm
+t3 CGTemp TY_DOUBLE
+SYM y3 name="result" base="result" pattern="_*" attr=0xc20 seg=2
+- CGAutoDecl y3 TY_DOUBLE
+- DBSrcCue f1 6 1
+SYM y4 name="F.0" base="F.0" pattern="*_" attr=0xf seg=1
+CALLCONV y4 class=0x0 target=0x1000004 parms=[ff:0] ret=0:0
+CODE y4 bytes=dd860000d9fedd9e0000 fix=2:offset:y2:0,8:offset:y3:0
+n4 CGFEName y4 TY_CODE_PTR
+c5 CGInitCall n4 TY_INTEGER y4
+n6 CGCall c5
+- CGDone n6
+- DBSrcCue f1 14 1
+n7 CGFEName y3 TY_DOUBLE
+n8 CGUnary O_POINTS n7 TY_DOUBLE
+n9 CGUnary O_CONVERT n8 TY_DOUBLE
+n10 CGTempName t3 TY_DOUBLE
+n11 CGAssign n10 n9 TY_DOUBLE
+- CGDone n11
+- DBSrcCue f1 15 1
+n12 CGTempName t3 TY_DOUBLE
+n13 CGUnary O_POINTS n12 TY_DOUBLE
+- CGReturn n13 TY_DOUBLE
+- DBSrcCue f1 17 1
+SYM y5 name="ticks" base="ticks" pattern="_*" attr=0x7 seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y5 TY_UINT_4
+l14 CGLastParm
+t15 CGTemp TY_UINT_4
+- DBSrcCue f1 19 1
+SYM y6 name="__emit__" base="__emit__" pattern="_*" attr=0xf seg=1
+CALLCONV y6 class=0x80 target=0x716 parms=[] ret=0:0
+n16 CGFEName y6 TY_CODE_PTR
+c17 CGInitCall n16 TY_INTEGER y6
+n18 CGInteger 49 TY_INTEGER
+- CGAddParm c17 n18 TY_INTEGER
+n19 CGInteger 15 TY_INTEGER
+- CGAddParm c17 n19 TY_INTEGER
+n20 CGCall c17
+- CGDone n20
+- DBSrcCue f1 20 1
+- CGReturn n0 TY_UINT_4
+STOP
+FINI

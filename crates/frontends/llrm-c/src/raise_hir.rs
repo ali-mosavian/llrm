@@ -2320,32 +2320,7 @@ impl<'a> _Raise<'a> {
         self.inline.insert(site, parts);
         self.calls.insert(site, callee.object_name());
         self.callees.insert(site, callee.clone());
-        self.contracts.insert(
-            site,
-            runtime::Contract {
-                name: callee.object_name(),
-                cleanup: Some(0),
-                control: runtime::Control::Returns,
-                enters_user_code: false,
-                raises_error: false,
-                error_handling: false,
-                writes: runtime::Memory::Any,
-                reads: runtime::Memory::Any,
-                clobbers: runtime::EVERY.clone(),
-                established: true,
-                evidence: "inline assembly: every register assumed clobbered, the result left in AX or DX:AX"
-                    .to_owned(),
-                documented: None,
-                inputs: Some(BTreeSet::new()),
-                direct_inputs: None,
-                clobbers_reached: false,
-                caller_cleanup: 0,
-                i386: false,
-                direct_writes: None,
-                flags_result: false,
-                direct_reads: None,
-            },
-        );
+        self.contracts.insert(site, runtime::inline_code(&callee.object_name()));
         Ok(Got::Returned(Returned { low, high }))
     }
 

@@ -82,10 +82,12 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
-/// What a call calls: a named routine, far or near, or the code a pointer addresses.
+/// What a call calls: a named routine, far or near, the code a pointer
+/// addresses, or inline code laid down in its place.
 enum Callee {
     Direct(String, bool),
     Indirect(Loc),
+    Inline(String, Vec<u8>),
 }
 
 /// Refuses an argument passed in the frame's own bytes: its slot would be
@@ -2014,6 +2016,7 @@ impl Selector<'_, '_, '_> {
                 }
                 Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
+                Some(Intrinsic::Code) => self.inline_code(inst, convention, name, arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
         }
@@ -2041,11 +2044,22 @@ impl Selector<'_, '_, '_> {
         self.called(inst, convention, Callee::Indirect(target), arguments, at, out)
     }
 
+    /// Inline code, its bytes laid down at the site with each frame place
+    /// its arguments name patched in as a displacement from BP.
+    fn inline_code(&mut self, inst: InstId, convention: u32, name: String, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let Some((mut bytes, places)) = llrm_mir::intrinsics::code(&name) else { return refuse(format!("@{name} does not parse")) };
+        for (&argument, (offset, addend)) in arguments.iter().zip(places) {
+            let Pointer::Frame { disp, index: None, .. } = self.pointer(argument)? else { return refuse("inline code naming other than a frame place") };
+            bytes[offset..offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+        }
+        self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
+    }
+
     fn called(&mut self, inst: InstId, convention: u32, callee: Callee, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
         let name = match &callee {
-            Callee::Direct(name, _) => name.clone(),
+            Callee::Direct(name, _) | Callee::Inline(name, _) => name.clone(),
             Callee::Indirect(_) => String::new(),
         };
         let Passing { in_order, pops } = passing(convention)?;
@@ -2123,7 +2137,10 @@ impl Selector<'_, '_, '_> {
             pushed += slot(held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
-        let contract = self.abi.contract(&name, pops, pushed).map_err(Unselected)?;
+        let contract = match callee {
+            Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            _ => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
+        };
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -2175,7 +2192,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let (what, through) = match &callee {
-            Callee::Direct(..) => (semantics(Operation::Call, "call", vec![], vec![]), None),
+            Callee::Direct(..) | Callee::Inline(..) => (semantics(Operation::Call, "call", vec![], vec![]), None),
             Callee::Indirect(target) => {
                 let through = match target {
                     Loc::Held(held) => Some(held.value),
@@ -2199,11 +2216,18 @@ impl Selector<'_, '_, '_> {
         if let Some(held) = float {
             out.push(insn(at, semantics(Operation::FloatLoad, "", vec![Loc::Held(held)], vec![])));
         }
-        if let Callee::Direct(name, far) = callee {
-            self.calls.insert(at, name);
-            if far {
-                self.far.insert(at);
+        match callee {
+            Callee::Direct(name, far) => {
+                self.calls.insert(at, name);
+                if far {
+                    self.far.insert(at);
+                }
             }
+            Callee::Inline(name, bytes) => {
+                self.calls.insert(at, name);
+                self.inline.insert(at, bytes);
+            }
+            Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
             let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
