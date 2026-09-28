@@ -596,7 +596,94 @@ pub struct Routine {
     pub error_funnel: Option<BTreeSet<Reg>>,
     pub by_value: bool,
     pub writes_cells: IndexMap<&'static str, Vec<String>>,
+    /// How a typed source call to it is described.
+    pub call: Option<Call>,
 }
+
+/// The stack bytes a `Call` matches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pushed {
+    Exactly(i64),
+    Any,
+    EvenFrom(i64),
+}
+
+impl Pushed {
+    fn parse(value: &toml::Value, at: &str) -> Result<Pushed, String> {
+        if let Some(bytes) = value.as_integer() {
+            return Ok(Pushed::Exactly(bytes));
+        }
+        match string(value, at)?.split_whitespace().collect::<Vec<_>>()[..] {
+            ["any"] => Ok(Pushed::Any),
+            ["even", ">=", least] => least.parse().map(Pushed::EvenFrom).map_err(|_| format!("{at}: {least} is not an int")),
+            _ => Err(format!("{at} is not a number, \"any\" or \"even >= N\"")),
+        }
+    }
+
+    pub fn matches(self, pushed: i64) -> bool {
+        match self {
+            Pushed::Exactly(bytes) => pushed == bytes,
+            Pushed::Any => true,
+            Pushed::EvenFrom(least) => pushed >= least && pushed % 2 == 0,
+        }
+    }
+}
+
+/// How a typed source call to a routine is described: the table's `call`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Call {
+    pub pushed: Pushed,
+    pub family: Option<&'static str>,
+    pub label: bool,
+    pub control: Control,
+    pub enters_user_code: bool,
+    pub error_handling: Option<bool>,
+    pub inputs: BTreeSet<Reg>,
+    pub results: Option<Vec<Reg>>,
+    pub evidence: String,
+}
+
+fn call(name: &str, table: &toml::Table, audits: Option<&toml::Table>) -> Result<Call, String> {
+    let at = |key: &str| format!("{name}.call.{key}");
+    let mut one = Call {
+        pushed: Pushed::Any,
+        family: None,
+        label: false,
+        control: Control::Returns,
+        enters_user_code: false,
+        error_handling: None,
+        inputs: BTreeSet::new(),
+        results: None,
+        evidence: String::new(),
+    };
+    if !table.contains_key("pushed") {
+        return Err(format!("{} is missing", at("pushed")));
+    }
+    for (key, value) in table {
+        let at = at(key);
+        match key.as_str() {
+            "pushed" => one.pushed = Pushed::parse(value, &at)?,
+            "family" => one.family = Some(family(string(value, &at)?).ok_or_else(|| format!("{at} is not a family"))?),
+            "label" => one.label = boolean(value, &at)?,
+            "control" => one.control = Control::from_value(string(value, &at)?)?,
+            "enters_user_code" => one.enters_user_code = boolean(value, &at)?,
+            "error_handling" => one.error_handling = Some(boolean(value, &at)?),
+            "inputs" => one.inputs = regs(value, &at)?,
+            "results" => one.results = Some(strings(value, &at)?.iter().map(|one| Reg::from_value(one)).collect::<Result<_, _>>()?),
+            "evidence" => one.evidence = string(value, &at)?.trim().to_owned(),
+            "audit" => {
+                let named = string(value, &at)?;
+                let text = audits.and_then(|audits| audits.get(named)).ok_or_else(|| format!("{at}: no audit {named}"))?;
+                one.evidence = string(text, &at)?.trim().to_owned();
+            }
+            _ => return Err(format!("{at} is not a call field")),
+        }
+    }
+    Ok(one)
+}
+
+/// The table of evidence texts `call` tables share, not a routine.
+const AUDITS: &str = "audits";
 
 const CONTRACT_FIELDS: [&str; 19] = [
     "from", "cleanup", "control", "enters_user_code", "raises_error", "error_handling", "writes", "reads", "clobbers",
@@ -706,8 +793,12 @@ fn row(name: &str, table: &toml::Table, base: bool, tables: &toml::Table, routin
 /// in it is a fact about the routine, and a key that is neither is refused.
 pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
     let tables: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
+    let audits = match tables.get(AUDITS) {
+        Some(audits) => Some(audits.as_table().ok_or_else(|| format!("{AUDITS} is not a table"))?),
+        None => None,
+    };
     let mut routines: IndexMap<String, Routine> = IndexMap::default();
-    for (name, table) in &tables {
+    for (name, table) in tables.iter().filter(|(name, _)| *name != AUDITS) {
         let table = table.as_table().ok_or_else(|| format!("{} is not a table", pyrepr::string(name)))?;
         let mut routine = Routine::default();
         for (key, value) in table {
@@ -718,6 +809,7 @@ pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
                 "never_returns" => routine.never_returns = boolean(value, &at)?,
                 "error_funnel" => routine.error_funnel = Some(regs(value, &at)?),
                 "by_value" => routine.by_value = boolean(value, &at)?,
+                "call" => routine.call = Some(call(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?, audits)?),
                 "writes_cells" => {
                     for (of, cells) in value.as_table().ok_or_else(|| format!("{at} is not a table"))? {
                         let of = family(of).ok_or_else(|| format!("{at}.{of} is not a family"))?;
@@ -730,7 +822,7 @@ pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
         }
         routines.insert(name.clone(), routine);
     }
-    for (name, table) in &tables {
+    for (name, table) in tables.iter().filter(|(name, _)| *name != AUDITS) {
         let table = table.as_table().expect("checked above");
         let contract = if table.keys().any(|key| CONTRACT_FIELDS.contains(&key.as_str())) {
             Some(row(name, table, true, &tables, &routines, 0)?)
@@ -772,6 +864,36 @@ pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
 /// Routines that hand control back to the program: the table's `calls_program`.
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| RUNTIME.iter().filter(|(_, routine)| routine.calls_program).map(|(name, _)| name.as_str()).collect());
+
+/// The contract of a typed source call to `routine` removing `pushed` bytes,
+/// where its `call` table matches: its row under `family` refined by it.
+/// `label` is whether the call is the label form of the routine.
+pub fn typed_call(routine: &str, family: &str, pushed: i64, label: bool) -> Option<Contract> {
+    let call = RUNTIME.get(routine)?.call.as_ref()?;
+    if call.label != label || call.family.is_some_and(|only| only != family) || !call.pushed.matches(pushed) {
+        return None;
+    }
+    let found = per_call(&IndexMap::from_iter([(0, routine.to_owned())]), family, &BTreeSet::new()).swap_remove(&0)?;
+    let evidence = call.evidence.replace("{name}", routine).replace("{pushed}", &pushed.to_string()).replace("{evidence}", &found.evidence);
+    Some(Contract {
+        cleanup: Some(pushed),
+        control: call.control,
+        enters_user_code: call.enters_user_code,
+        error_handling: call.error_handling.unwrap_or(found.error_handling),
+        established: true,
+        inputs: Some(call.inputs.clone()),
+        evidence,
+        ..found
+    })
+}
+
+/// The registers a typed source call to `routine` takes and answers in beside
+/// its stack block, where its `call` table names results.
+pub fn call_registers(routine: &str) -> Option<(Vec<Reg>, Vec<Reg>)> {
+    let call = RUNTIME.get(routine)?.call.as_ref()?;
+    let results = call.results.clone()?;
+    Some((SLOTS.into_iter().filter(|one| call.inputs.contains(one)).collect(), results))
+}
 
 /// Whether a runtime entry never comes back to its caller: an established
 /// NEVER row, or a routine the table says `never_returns`.
@@ -1360,6 +1482,8 @@ mod tests {
             "[\"B$X\".qb45]\nby_value = true\n",
             "[\"B$X\"]\nfrom = \"B$X\"\n",
             "[\"B$X\"]\nfrom = \"B$Y.vbdos\"\n",
+            "[\"B$X\".call]\npushed = \"odd\"\n",
+            "[\"B$X\".call]\npushed = 2\naudit = \"nowhere\"\n",
         ] {
             assert!(load(text).is_err(), "{text}");
         }
