@@ -11,7 +11,7 @@ use super::{Set, field};
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_lanes, _register_effects};
 use crate::backend::{select, target};
-use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg};
+use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Space};
 use crate::model::lir::Insn;
 
 /// Anything with a width in bytes; zero for an operand that has none.
@@ -71,7 +71,8 @@ pub fn free(_: &Cx, one: &Insn, fields: u32) -> bool {
         || has(field::DEFINES) && !one.defines.is_empty()
         || has(field::USES) && !one.uses.is_empty()
         || has(field::POINT) && one.covers.is_none_or(|(start, end)| start != end)
-        || has(field::UNOWNED) && one.covers.is_some_and(|(start, end)| start != end))
+        || has(field::UNOWNED) && one.covers.is_some_and(|(start, end)| start != end)
+        || has(field::VOLATILE) && one.volatile)
 }
 
 /// Every lane in `lanes` is dead after `one`.
@@ -304,4 +305,53 @@ pub fn next_word(_: &Cx, low: &Mem, high: &Mem) -> bool {
 pub fn moves(_: &Cx, one: &Arc<Insn>) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov"))
         && one.clobbers.is_empty()
+}
+
+/// The caller counted `value` read once.
+pub fn used_once(cx: &Cx, value: Held) -> bool {
+    cx.facts.count(value.value) == 1
+}
+
+pub fn defines_only(_: &Cx, one: &Insn, value: Held) -> bool {
+    one.defines == [value.value]
+}
+
+pub fn uses_only(_: &Cx, one: &Insn, value: Held) -> bool {
+    one.uses == [value.value]
+}
+
+/// Nothing between `definition` and `at` writes memory or a register,
+/// clobbers one, or is a barrier, call or return: the loaded value still
+/// stands where it was read.
+pub fn unchanged(cx: &Cx, definition: &Arc<Insn>, at: &Arc<Insn>) -> bool {
+    cx.insns[cx.place(definition) + 1..cx.place(at)].iter().all(|one| {
+        one.clobbers.is_empty()
+            && one.what.as_ref().is_some_and(|what| {
+                !what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_) | Loc::Reg(_)))
+                    && !matches!(what.op, Operation::Barrier | Operation::Call | Operation::Return)
+            })
+    })
+}
+
+/// `high` is the word above `low`.
+pub fn above(_: &Cx, high: &Mem, low: &Mem) -> bool {
+    *high == Mem { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() }
+}
+
+/// Both cells are reached through the same registers.
+pub fn same_registers(_: &Cx, one: &Mem, other: &Mem) -> bool {
+    (one.through, one.index_through) == (other.through, other.index_through)
+}
+
+/// The cell is reached through the stack pointer.
+pub fn stack_based(_: &Cx, cell: &Mem) -> bool {
+    ir::root(cell.through) == Register::ESP
+}
+
+/// A frame cell at or above the arguments, reached without the stack pointer.
+pub fn frame_argument(_: &Cx, cell: &Mem) -> bool {
+    cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp >= 4)
+        && ir::root(cell.through) != Register::ESP
+        && ir::root(cell.index_through) != Register::ESP
+        && !cell.stack_argument
 }

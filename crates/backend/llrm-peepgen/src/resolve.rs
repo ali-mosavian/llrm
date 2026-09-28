@@ -11,7 +11,7 @@ use crate::syntax::{
 use crate::table::{self, Shape, Table};
 
 /// The metadata fields `free(@k, SET)` can require empty.
-pub const FIELDS: [&str; 14] = [
+pub const FIELDS: [&str; 15] = [
     "clobbers",
     "clobbers_high",
     "requires",
@@ -26,10 +26,11 @@ pub const FIELDS: [&str; 14] = [
     "uses",
     "point",
     "unowned",
+    "volatile",
 ];
 
 /// Fields an override may set.
-pub const OVERRIDES: [&str; 6] = ["at", "covers", "symbol", "defines", "uses", "widths"];
+pub const OVERRIDES: [&str; 7] = ["at", "covers", "symbol", "defines", "uses", "widths", "op"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Side {
@@ -81,6 +82,10 @@ pub struct RRule {
     pub items: Vec<Item>,
     /// How many operands of each new item are destinations.
     pub item_dests: Vec<usize>,
+    /// The instructions the window holds; `insns` past them are the
+    /// definitions of the held values in `defs`, in order.
+    pub window: usize,
+    pub defs: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -241,7 +246,7 @@ fn resolve_group(cx: &Ctx, group: &Group, seen: &mut IndexSet<String>) -> Result
             }
         }
     }
-    let longest = rules.iter().map(|rule| rule.insns.len()).max().unwrap_or(0);
+    let longest = rules.iter().map(|rule| rule.window).max().unwrap_or(0);
     let width = longest + usize::from(rules.iter().any(|rule| rule.end));
     Ok(RGroup { name: group.name.clone(), walk, rules, width })
 }
@@ -310,11 +315,22 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
     let mut gap = None;
     let mut end = false;
     let mut vars: IndexMap<String, Var> = IndexMap::new();
+    let mut defs: Vec<String> = Vec::new();
     for (at, element) in rule.pattern.iter().enumerate() {
         if end {
             return fail("'$' ends the pattern".into());
         }
+        if !defs.is_empty() && !matches!(element, Element::Def(..)) {
+            return fail("definitions follow the window's instructions".into());
+        }
         match element {
+            Element::Def(value, pattern) => {
+                if vars.get(value).is_none_or(|var| var.ty != Ty::Held) {
+                    return fail(format!("def {value}: {value} is not a held value the window binds"));
+                }
+                defs.push(value.clone());
+                insns.push(resolve_insn(cx, rule, pattern, insns.len(), &mut vars)?);
+            }
             Element::End => {
                 if insns.is_empty() {
                     return fail("'$' follows an instruction".into());
@@ -330,8 +346,12 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
             Element::Insn(pattern) => insns.push(resolve_insn(cx, rule, pattern, insns.len(), &mut vars)?),
         }
     }
-    if insns.is_empty() {
+    let window = insns.len() - defs.len();
+    if window == 0 {
         return fail("matches nothing".into());
+    }
+    if !defs.is_empty() && (walk.kind != WalkKind::Window || gap.is_some() || end) {
+        return fail("only a window walk matches definitions".into());
     }
     if gap.is_some() && insns.len() < 2 {
         return fail("a gap needs an instruction after it".into());
@@ -355,8 +375,8 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
 
     // In place, each item is what one matched slot becomes, in order.
     let in_place = matches!(walk.kind, WalkKind::Each | WalkKind::Slide | WalkKind::Gap);
-    if in_place && rule.rewrite.len() != insns.len() {
-        return fail(format!("rewrites {} instructions in place into {} items", insns.len(), rule.rewrite.len()));
+    if in_place && rule.rewrite.len() != window {
+        return fail(format!("rewrites {window} instructions in place into {} items", rule.rewrite.len()));
     }
     let mut item_dests = Vec::new();
     for (index, item) in rule.rewrite.iter().enumerate() {
@@ -373,6 +393,9 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
         };
         if slot >= insns.len() {
             return fail(format!("@{slot} is past the pattern's {} instructions", insns.len()));
+        }
+        if slot >= window && !matches!(item, Item::Drop { .. }) {
+            return fail(format!("@{slot} is a definition, which a rewrite can only drop"));
         }
         if in_place && slot != index {
             return fail(format!("item {index} rewrites @{slot}; in place, item i rewrites @i"));
@@ -402,7 +425,7 @@ fn resolve_rule(cx: &Ctx, rule: &Rule, walk: &Walk) -> Result<RRule, String> {
         check_call(cx, rule, &guard.call, &vars, insns.len(), rule.rewrite.len(), true, false)?;
         if reads_built(&guard.call) { post.push(guard.clone()) } else { pre.push(guard.clone()) }
     }
-    Ok(RRule { name: rule.name.clone(), line: rule.line, insns, gap, end, vars, pre, post, items: rule.rewrite.clone(), item_dests })
+    Ok(RRule { name: rule.name.clone(), line: rule.line, insns, gap, end, vars, pre, post, items: rule.rewrite.clone(), item_dests, window, defs })
 }
 
 fn reads_built(call: &Call) -> bool {

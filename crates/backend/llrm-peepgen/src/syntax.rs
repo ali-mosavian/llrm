@@ -93,6 +93,9 @@ pub enum Element {
     Insn(InsnPat),
     Gap(Call),
     End,
+    /// `def v: mov v, c:mem`: the nearest instruction before the window
+    /// that defines held value `v`.
+    Def(String, InsnPat),
 }
 
 #[derive(Clone, Debug)]
@@ -425,6 +428,14 @@ impl Parser<'_> {
         }
         if self.eat("$") {
             return Ok(Element::End);
+        }
+        if self.keyword("def") {
+            let value = self.ident()?;
+            self.expect(":")?;
+            let Element::Insn(pattern) = self.element()? else {
+                return self.error("a def names an instruction");
+            };
+            return Ok(Element::Def(value, pattern));
         }
         let bind = if matches!(self.peek_at(1), Some(Tok::Punct("="))) {
             let name = self.ident()?;

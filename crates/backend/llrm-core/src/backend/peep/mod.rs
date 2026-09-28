@@ -43,6 +43,8 @@ pub mod field {
     pub const POINT: u32 = 1 << 12;
     /// `covers` is no range: absent or one point.
     pub const UNOWNED: u32 = 1 << 13;
+    /// `volatile` is false.
+    pub const VOLATILE: u32 = 1 << 14;
 }
 
 #[allow(clippy::all, unused_imports, unused_variables, unreachable_patterns)]
@@ -61,3 +63,6 @@ mod generated {
 }
 
 pub use generated::*;
+
+#[cfg(test)]
+mod tests;

@@ -61,3 +61,15 @@ fn rules_sharing_a_prefix_share_its_states() {
     // Two only adds its own mnemonic test and accepting state.
     assert_eq!(automaton.states(), one + 2);
 }
+
+/// A definition is found by the held value a window instruction binds; one
+/// for a register would search a value no instruction defines.
+#[test]
+fn a_definition_of_no_held_value_is_refused() {
+    let refused = compiled(
+        "group g\n    walk window\nrule r\n    match push v:reg ; def v: mov v, c:mem\n    rewrite @0: =@0 c ; drop @1\n",
+    )
+    .err()
+    .expect("refused");
+    assert_eq!(refused, "test.peep:3: rule r: def v: v is not a held value the window binds");
+}

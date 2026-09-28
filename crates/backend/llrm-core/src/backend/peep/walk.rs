@@ -52,11 +52,13 @@ impl Skip {
     }
 }
 
-/// One rewritten instruction: what takes a matched one's place, or one to
-/// drop with `lir::without`.
+/// One rewritten instruction: what takes a matched one's place, one to
+/// drop with `lir::without`, or a matched definition to drop from the block
+/// once the walk is done.
 pub enum Out {
     Put(Arc<Insn>),
     Drop(Arc<Insn>),
+    Retire(Arc<Insn>),
 }
 
 /// What a rule makes of the `len` instructions it matched.
@@ -75,13 +77,30 @@ pub struct Matcher {
     pub cross: Option<fn(&Cx, &Window, &Arc<Insn>, u32) -> bool>,
 }
 
-/// The instructions a rule sees: the first, then those after any gap.
+/// The instructions a rule sees: the first, then those after any gap, then
+/// any definitions it asked for; where each stands in `list`.
+#[derive(Clone)]
 pub struct Window<'a> {
     insns: Vec<&'a Arc<Insn>>,
+    at: Vec<usize>,
+    list: &'a [Arc<Insn>],
     gap: &'a [Arc<Insn>],
 }
 
 impl<'a> Window<'a> {
+    fn new(list: &'a [Arc<Insn>], at: Vec<usize>, gap: &'a [Arc<Insn>]) -> Self {
+        Self { insns: at.iter().map(|one| &list[*one]).collect(), at, list, gap }
+    }
+
+    /// This window and the nearest instruction before it that defines `value`.
+    pub fn defined(&self, value: u32) -> Option<Self> {
+        let at = self.list[..self.at[0]].iter().rposition(|one| one.defines.contains(&value))?;
+        let mut made = self.clone();
+        made.insns.push(&self.list[at]);
+        made.at.push(at);
+        Some(made)
+    }
+
     pub fn len(&self) -> usize {
         self.insns.len()
     }
@@ -188,8 +207,10 @@ impl<'a> Window<'a> {
 
 /// What the rules may ask of the body, each computed once when first asked.
 pub struct Facts<'a> {
-    pub body: &'a LirBody,
+    pub body: Option<&'a LirBody>,
     pub cpu: Option<&'a Profile>,
+    /// How many times each value is read, where the caller counted.
+    counts: Option<&'a Counter>,
     exits: OnceCell<IndexMap<i64, Lanes>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
@@ -197,19 +218,29 @@ pub struct Facts<'a> {
 
 impl<'a> Facts<'a> {
     pub fn new(body: &'a LirBody, cpu: Option<&'a Profile>) -> Self {
-        Self { body, cpu, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+    }
+
+    /// For instructions outside a body, with the caller's read counts.
+    pub fn counted(counts: &'a Counter) -> Self {
+        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+    }
+
+    fn body(&self) -> &'a LirBody {
+        self.body.expect("a group reading the body runs on one")
     }
 
     /// How many instructions and phis read each value.
     pub fn users(&self) -> &Counter {
         self.users.get_or_init(|| {
+            let body = self.body();
             let mut users = Counter::default();
-            for one in self.body.blocks.iter().flat_map(|block| &block.insns) {
+            for one in body.blocks.iter().flat_map(|block| &block.insns) {
                 for value in &one.uses {
                     *users.entry(*value).or_insert(0) += 1;
                 }
             }
-            for phi in self.body.blocks.iter().flat_map(|block| &block.phis) {
+            for phi in body.blocks.iter().flat_map(|block| &block.phis) {
                 for (_, value) in &phi.incoming {
                     *users.entry(*value).or_insert(0) += 1;
                 }
@@ -217,32 +248,53 @@ impl<'a> Facts<'a> {
             users
         })
     }
+
+    /// How many times the caller counted `value` read.
+    pub fn count(&self, value: u32) -> i64 {
+        self.counts.expect("a group counting reads is given the counts").get(&value).copied().unwrap_or(0)
+    }
 }
 
 /// One block's facts, as the walk found the block.
 pub struct Cx<'a> {
     pub facts: &'a Facts<'a>,
-    pub block: &'a LirBlock,
+    pub block: Option<&'a LirBlock>,
+    /// The instructions walked.
+    pub insns: &'a [Arc<Insn>],
     dead: OnceCell<DeadAfter>,
+    places: OnceCell<HashMap<usize, usize>>,
 }
 
-impl Cx<'_> {
+impl<'a> Cx<'a> {
+    fn new(facts: &'a Facts<'a>, block: Option<&'a LirBlock>, insns: &'a [Arc<Insn>]) -> Self {
+        Self { facts, block, insns, dead: OnceCell::new(), places: OnceCell::new() }
+    }
+
+    fn block(&self) -> &'a LirBlock {
+        self.block.expect("a group reading liveness walks a block")
+    }
+
     /// The register and flag lanes dead after `one`, an instruction of the block as found.
     pub fn dead_after(&self, one: &Arc<Insn>) -> Lanes {
         let dead = self.dead.get_or_init(|| {
-            let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body));
-            regthrash::_dead_after(self.block, exits[&self.block.at])
+            let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
+            regthrash::_dead_after(self.block(), exits[&self.block().at])
         });
         dead[&id(one)]
     }
 
     /// The flag lanes something may read after the block.
     pub fn flags_out(&self) -> Lanes {
-        self.facts.flags_out.get_or_init(|| peephole::_flags_live_out(self.facts.body))[&self.block.at]
+        self.facts.flags_out.get_or_init(|| peephole::_flags_live_out(self.facts.body()))[&self.block().at]
     }
 
     pub fn cpu(&self) -> &Profile {
         self.facts.cpu.expect("a group that prices asks with a CPU")
+    }
+
+    /// Where `one` stands among the instructions walked.
+    pub fn place(&self, one: &Arc<Insn>) -> usize {
+        self.places.get_or_init(|| self.insns.iter().enumerate().map(|(at, one)| (id(one), at)).collect())[&id(one)]
     }
 }
 
@@ -254,77 +306,80 @@ fn run(cx: &Cx, matcher: &Matcher, window: &Window) -> Option<Rewrite> {
 }
 
 fn blocks(body: &LirBody, facts: &Facts, mut each: impl FnMut(&Cx) -> Vec<Arc<Insn>>) -> LirBody {
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| block.with_insns(each(&Cx { facts, block, dead: OnceCell::new() })))
-        .collect();
+    let blocks = body.blocks.iter().map(|block| block.with_insns(each(&Cx::new(facts, Some(block), &block.insns)))).collect();
     body.with_blocks(blocks)
 }
 
 /// Every instruction alone, replaced in place.
 pub fn each(body: &LirBody, facts: &Facts, matcher: &Matcher) -> LirBody {
     blocks(body, facts, |cx| {
-        cx.block
-            .insns
-            .iter()
-            .map(|one| {
-                let window = Window { insns: vec![one], gap: &[] };
-                match run(cx, matcher, &window).map(|made| made.out) {
-                    Some(mut out) => match out.pop() {
-                        Some(Out::Put(made)) => made,
-                        _ => unreachable!("an each rule puts one instruction"),
-                    },
-                    None => Arc::clone(one),
-                }
+        (0..cx.insns.len())
+            .map(|at| match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
+                Some(mut out) => match out.pop() {
+                    Some(Out::Put(made)) => made,
+                    _ => unreachable!("an each rule puts one instruction"),
+                },
+                None => Arc::clone(&cx.insns[at]),
             })
             .collect()
     })
 }
 
-/// A rewrite's instructions, those it drops given to `lir::without`.
-fn spliced(out: Vec<Out>) -> Vec<Arc<Insn>> {
-    let dropped: Vec<Arc<Insn>> = out.iter().filter_map(|one| if let Out::Drop(one) = one { Some(Arc::clone(one)) } else { None }).collect();
-    let all: Vec<Arc<Insn>> = out.into_iter().map(|one| match one {
-        Out::Put(one) | Out::Drop(one) => one,
-    }).collect();
-    if dropped.is_empty() {
-        return all;
-    }
-    lir::without(&all, |one| dropped.iter().any(|dropped| Arc::ptr_eq(dropped, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+fn without(insns: &[Arc<Insn>], dropped: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
+    lir::without(insns, |one| dropped.iter().any(|dropped| Arc::ptr_eq(dropped, one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
 }
 
 /// Runs of consecutive instructions, those `skip` names stepped over; a
 /// match consumes what it matched, and skipped instructions inside it
-/// follow the rewrite.
+/// follow the rewrite. A rewrite's drops leave it through `lir::without`;
+/// definitions it retires leave the block that way once the walk is done.
 pub fn window(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip) -> LirBody {
-    blocks(body, facts, |cx| {
-        let insns = &cx.block.insns;
-        let code: Vec<usize> = (0..insns.len()).filter(|at| !skip.skips(&insns[*at])).collect();
-        let mut out = Vec::with_capacity(insns.len());
-        let (mut next, mut at) = (0, 0);
-        while at < code.len() {
-            out.extend(insns[next..code[at]].iter().cloned());
-            let taken = &code[at..(at + matcher.width).min(code.len())];
-            let window = Window { insns: taken.iter().map(|one| &insns[*one]).collect(), gap: &[] };
-            match run(cx, matcher, &window) {
-                Some(made) => {
-                    let last = code[at + made.len - 1];
-                    out.extend(spliced(made.out));
-                    out.extend(insns[code[at] + 1..last].iter().filter(|one| skip.skips(one)).cloned());
-                    next = last + 1;
-                    at += made.len;
+    blocks(body, facts, |cx| windows(cx, matcher, skip))
+}
+
+/// `window` over instructions outside a body.
+pub fn window_insns(insns: &[Arc<Insn>], facts: &Facts, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
+    windows(&Cx::new(facts, None, insns), matcher, skip)
+}
+
+fn windows(cx: &Cx, matcher: &Matcher, skip: Skip) -> Vec<Arc<Insn>> {
+    let insns = cx.insns;
+    let code: Vec<usize> = (0..insns.len()).filter(|at| !skip.skips(&insns[*at])).collect();
+    let mut out = Vec::with_capacity(insns.len());
+    let mut retired = Vec::new();
+    let (mut next, mut at) = (0, 0);
+    while at < code.len() {
+        out.extend(insns[next..code[at]].iter().cloned());
+        let taken = code[at..(at + matcher.width).min(code.len())].to_vec();
+        match run(cx, matcher, &Window::new(insns, taken, &[])) {
+            Some(made) => {
+                let last = code[at + made.len - 1];
+                let mut local = Vec::new();
+                let mut dropped = Vec::new();
+                for one in made.out {
+                    match one {
+                        Out::Put(one) => local.push(one),
+                        Out::Drop(one) => {
+                            dropped.push(Arc::clone(&one));
+                            local.push(one);
+                        }
+                        Out::Retire(one) => retired.push(one),
+                    }
                 }
-                None => {
-                    out.push(Arc::clone(&insns[code[at]]));
-                    next = code[at] + 1;
-                    at += 1;
-                }
+                out.extend(if dropped.is_empty() { local } else { without(&local, &dropped) });
+                out.extend(insns[(code[at] + 1).min(last)..last].iter().filter(|one| skip.skips(one)).cloned());
+                next = last + 1;
+                at += made.len;
+            }
+            None => {
+                out.push(Arc::clone(&insns[code[at]]));
+                next = code[at] + 1;
+                at += 1;
             }
         }
-        out.extend(insns[next..].iter().cloned());
-        out
-    })
+    }
+    out.extend(insns[next..].iter().cloned());
+    if retired.is_empty() { out } else { without(&out, &retired) }
 }
 
 /// Windows of `width` rewritten in place, moving on `advance` after a
@@ -332,7 +387,7 @@ pub fn window(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip) -> L
 /// once the walk is done.
 pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -> LirBody {
     blocks(body, facts, |cx| {
-        let mut insns = cx.block.insns.clone();
+        let mut insns = cx.insns.to_vec();
         let mut removed: HashSet<usize> = HashSet::new();
         let mut at = 0;
         while at + matcher.width <= insns.len() {
@@ -340,15 +395,14 @@ pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -
                 at += 1;
                 continue;
             }
-            let window = Window { insns: insns[at..at + matcher.width].iter().collect(), gap: &[] };
-            let Some(made) = run(cx, matcher, &window) else {
+            let Some(made) = run(cx, matcher, &Window::new(&insns, (at..at + matcher.width).collect(), &[])) else {
                 at += 1;
                 continue;
             };
             for (offset, one) in made.out.into_iter().enumerate() {
                 match one {
                     Out::Put(one) => insns[at + offset] = one,
-                    Out::Drop(one) => {
+                    Out::Drop(one) | Out::Retire(one) => {
                         removed.insert(id(&one));
                     }
                 }
@@ -367,23 +421,26 @@ pub fn slide(body: &LirBody, facts: &Facts, matcher: &Matcher, advance: usize) -
 pub fn gap(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip, first_original: bool, resume_past: bool) -> LirBody {
     let cross = matcher.cross.expect("a gap group says what it may cross");
     blocks(body, facts, |cx| {
-        let original = &cx.block.insns;
-        let mut insns = original.clone();
+        let original = cx.insns;
+        let mut insns = original.to_vec();
         let work: Vec<usize> = (0..original.len()).filter(|at| !skip.skips(&original[*at])).collect();
         let mut at = 0;
         while at < work.len() {
             let first = if first_original { Arc::clone(&original[work[at]]) } else { Arc::clone(&insns[work[at]]) };
             let mut next = at + 1;
-            let state = (matcher.head)(&Window { insns: vec![&first], gap: &[] });
+            let head = Window { insns: vec![&first], at: vec![work[at]], list: &insns, gap: &[] };
+            let state = (matcher.head)(&head);
             if state != 0 {
                 for candidate in at + 1..work.len() {
                     let rest = &work[candidate..(candidate + matcher.width - 1).min(work.len())];
                     let window = Window {
                         insns: std::iter::once(&first).chain(rest.iter().map(|one| &insns[*one])).collect(),
+                        at: std::iter::once(work[at]).chain(rest.iter().copied()).collect(),
+                        list: &insns,
                         gap: &insns[work[at] + 1..work[candidate]],
                     };
                     if let Some(made) = (matcher.tail)(cx, &window, state) {
-                        let places: Vec<usize> = std::iter::once(work[at]).chain(rest.iter().copied()).collect();
+                        let places = window.at.clone();
                         if resume_past {
                             next = candidate + made.len - 1;
                         }

@@ -138,44 +138,8 @@ fn ty_kind(ty: Ty) -> Option<&'static str> {
 /// allow, so that a mnemonic is only ever tested under its own operation.
 pub fn tests(insns: &[RInsn], vars: &indexmap::IndexMap<String, Var>) -> Vec<Tests> {
     let mut out = Tests::new();
-    let mut one = |key: Key, value: Val| {
-        out.insert(key, BTreeSet::from([value]));
-    };
     for (slot, insn) in insns.iter().enumerate() {
-        one(Key::Dests(slot), Val::Count(insn.dests));
-        if let Some(sources) = insn.sources {
-            one(Key::Sources(slot), Val::Count(sources));
-        }
-        for (side, index, operand) in &insn.operands {
-            let key = |part| Key::Operand(slot, *side, *index, part);
-            match operand {
-                OperandPat::Wild => {}
-                OperandPat::Lit { value, width } => {
-                    one(key(Part::Kind), Val::Kind("Imm"));
-                    one(key(Part::Bare), Val::Bool(true));
-                    one(key(Part::Value), Val::Int(*value));
-                    if let Some(width) = width {
-                        one(key(Part::Width), Val::Width(*width));
-                    }
-                }
-                OperandPat::Bind { kind: Some((class, width)), .. } => {
-                    if let Some(kind) = kind_of(*class) {
-                        one(key(Part::Kind), Val::Kind(kind));
-                    }
-                    if *class == Class::Imm {
-                        one(key(Part::Bare), Val::Bool(true));
-                    }
-                    if let Some(width) = width {
-                        one(key(Part::Width), Val::Width(*width));
-                    }
-                }
-                OperandPat::Bind { name, kind: None } => {
-                    if let Some(kind) = ty_kind(vars[name].ty) {
-                        one(key(Part::Kind), Val::Kind(kind));
-                    }
-                }
-            }
-        }
+        out.extend(operand_tests(insn, slot, vars));
     }
     let mut rows = vec![out];
     for (slot, insn) in insns.iter().enumerate() {
@@ -195,6 +159,49 @@ pub fn tests(insns: &[RInsn], vars: &indexmap::IndexMap<String, Var>) -> Vec<Tes
             .collect();
     }
     rows
+}
+
+/// The tests on one instruction's operand counts and operands.
+pub fn operand_tests(insn: &RInsn, slot: usize, vars: &indexmap::IndexMap<String, Var>) -> Tests {
+    let mut out = Tests::new();
+    let mut one = |key: Key, value: Val| {
+        out.insert(key, BTreeSet::from([value]));
+    };
+    one(Key::Dests(slot), Val::Count(insn.dests));
+    if let Some(sources) = insn.sources {
+        one(Key::Sources(slot), Val::Count(sources));
+    }
+    for (side, index, operand) in &insn.operands {
+        let key = |part| Key::Operand(slot, *side, *index, part);
+        match operand {
+            OperandPat::Wild => {}
+            OperandPat::Lit { value, width } => {
+                one(key(Part::Kind), Val::Kind("Imm"));
+                one(key(Part::Bare), Val::Bool(true));
+                one(key(Part::Value), Val::Int(*value));
+                if let Some(width) = width {
+                    one(key(Part::Width), Val::Width(*width));
+                }
+            }
+            OperandPat::Bind { kind: Some((class, width)), .. } => {
+                if let Some(kind) = kind_of(*class) {
+                    one(key(Part::Kind), Val::Kind(kind));
+                }
+                if *class == Class::Imm {
+                    one(key(Part::Bare), Val::Bool(true));
+                }
+                if let Some(width) = width {
+                    one(key(Part::Width), Val::Width(*width));
+                }
+            }
+            OperandPat::Bind { name, kind: None } => {
+                if let Some(kind) = ty_kind(vars[name].ty) {
+                    one(key(Part::Kind), Val::Kind(kind));
+                }
+            }
+        }
+    }
+    out
 }
 
 #[derive(Default)]
@@ -278,7 +285,7 @@ pub fn build(group: &RGroup) -> Automaton {
         .rules
         .iter()
         .enumerate()
-        .flat_map(|(at, rule)| tests(&rule.insns, &rule.vars).into_iter().map(move |one| (at, one)))
+        .flat_map(|(at, rule)| tests(&rule.insns[..rule.window], &rule.vars).into_iter().map(move |one| (at, one)))
         .collect();
     let root = builder.build(rows);
     Automaton { nodes: builder.nodes, root }
