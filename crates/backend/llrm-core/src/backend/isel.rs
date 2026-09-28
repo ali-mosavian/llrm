@@ -296,11 +296,9 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         depth: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
-        cells: BTreeSet::new(),
-        stored: BTreeSet::new(),
+        covered: IndexMap::default(),
         words: IndexMap::default(),
         joins: IndexMap::default(),
-        tested: BTreeSet::new(),
         consumed: BTreeSet::new(),
         paired: IndexMap::default(),
         callees: llrm_mir::memory::callees(module),
@@ -364,16 +362,12 @@ struct Selector<'m, 'c, 'p> {
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
     fused: BTreeSet<InstId>,
-    /// Loads whose only reader takes their cell as its memory operand.
-    cells: BTreeSet<InstId>,
-    /// Conversions whose only reader is a store: x87 stores them itself.
-    stored: BTreeSet<InstId>,
+    /// Instructions a pattern rooted elsewhere selects: each one's root.
+    covered: IndexMap<InstId, InstId>,
     /// Dword loads read only as words: each word's offset and the value it is.
     words: IndexMap<InstId, Vec<(i64, ValueId)>>,
     /// A dword joined from two words: those words, low then high.
     joins: IndexMap<u32, (Held, Held)>,
-    /// ANDs only a comparison with zero reads: a `test`.
-    tested: BTreeSet<InstId>,
     /// What another instruction's selection made: a narrowed load's
     /// readers, the second of a quotient and remainder.
     consumed: BTreeSet<InstId>,
@@ -556,9 +550,8 @@ impl Selector<'_, '_, '_> {
         for &block in layout {
             for &inst in function.block(block).instructions() {
                 self.fuse(block, inst);
-                self.fold(inst);
+                self.covered_by_pattern(inst, &block_at, convention);
                 self.narrowed(inst);
-                self.test(inst);
                 self.pair(inst);
             }
             self.phis_from(block)?;
@@ -737,51 +730,6 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    /// Where x87 reads or writes only memory, the cell a value comes from or
-    /// goes to is the operand, as the old route placed a MIR cell operand
-    /// (`lower::_place`): an integer load only `sitofp` reads is `fild`'s
-    /// cell, a float load only a comparison reads second is `fcom`'s, and a
-    /// conversion only a store reads is stored by `fistp`, `fisttp` or
-    /// `fstp` into the store's cell.
-    fn fold(&mut self, inst: InstId) {
-        let function = self.function;
-        let instruction = function.instruction(inst);
-        match (&instruction.opcode, instruction.operands.first()) {
-            (Opcode::Cast(CastOp::SIToFP), Some(&Operand::Value(value))) => {
-                let ValueDef::Instruction(load) = function.value(value).def else { return };
-                let fild = matches!(self.types().int_bits(function.value(value).ty), Some(16 | 32));
-                if fild && matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, inst) {
-                    self.cells.insert(load);
-                }
-            }
-            (Opcode::FCmp(predicate), Some(_)) => {
-                let Some((swapped, _)) = float_conditions(*predicate) else { return };
-                let Operand::Value(value) = instruction.operands[usize::from(!swapped)] else { return };
-                let ValueDef::Instruction(load) = function.value(value).def else { return };
-                // A comparison a branch reads is made beside the branch.
-                let Some(block) = function.parent(inst) else { return };
-                let at = if self.fused.contains(&inst) { function.terminator(block).expect("a terminator") } else { inst };
-                if matches!(function.instruction(load).opcode, Opcode::Load { volatile: false, .. }) && self.only_reader(value, inst) && self.unwritten(load, at) {
-                    self.cells.insert(load);
-                }
-            }
-            (Opcode::Store { .. }, Some(&Operand::Value(value))) => {
-                let ValueDef::Instruction(conversion) = function.value(value).def else { return };
-                let converting = function.instruction(conversion);
-                let by_x87 = match &converting.opcode {
-                    Opcode::Cast(CastOp::FPToSI) => matches!(self.types().int_bits(converting.ty), Some(16 | 32)),
-                    Opcode::Cast(CastOp::FPTrunc) => true,
-                    Opcode::Call(_) => self.lrint(conversion) && matches!(self.types().int_bits(converting.ty), Some(16 | 32)),
-                    _ => false,
-                };
-                if by_x87 && self.only_reader(value, inst) {
-                    self.stored.insert(conversion);
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// A dword load read only through its words is those words loaded, as
     /// the old route's narrow selects: `trunc` reads the low word, `trunc`
     /// of a shift right by 16 the high.
@@ -815,25 +763,6 @@ impl Selector<'_, '_, '_> {
         if !halves.is_empty() {
             self.words.insert(inst, halves);
             self.consumed.extend(readers);
-        }
-    }
-
-    /// An AND only a comparison with zero reads is `test`: its result is
-    /// dead, and its flags are the comparison's, as the old route's
-    /// _flag_test selects.
-    fn test(&mut self, inst: InstId) {
-        let function = self.function;
-        let instruction = function.instruction(inst);
-        if !matches!(instruction.opcode, Opcode::ICmp(_)) {
-            return;
-        }
-        let (a, b) = (instruction.operands[0], instruction.operands[1]);
-        let Some(Operand::Value(value)) = [(a, b), (b, a)].into_iter().find(|&(_, zero)| self.constant(zero, 4) == Some(0)).map(|(value, _)| value) else { return };
-        let ValueDef::Instruction(and) = function.value(value).def else { return };
-        let anding = function.instruction(and);
-        let registers = anding.operands.iter().all(|one| matches!(one, Operand::Value(_)));
-        if anding.opcode == Opcode::Binary(BinaryOp::And) && registers && matches!(self.types().int_bits(anding.ty), Some(16 | 32)) && self.only_reader(value, inst) {
-            self.tested.insert(and);
         }
     }
 
@@ -1623,7 +1552,7 @@ impl Selector<'_, '_, '_> {
             ValueDef::Argument(_) => true,
             ValueDef::Instruction(inst) => {
                 matches!(function.instruction(inst).opcode, Opcode::Load { .. })
-                    && !self.cells.contains(&inst)
+                    && !self.covered.contains_key(&inst)
                     && !self.consumed.contains(&inst)
                     && !self.words.contains_key(&inst)
             }
@@ -1878,12 +1807,6 @@ impl Selector<'_, '_, '_> {
                 let into = Held { value: self.value(result), width: FLOAT };
                 self.float_loaded(into, "fld", cell, 4, false, at, out);
             }
-            CastOp::SIToFP if self.cell(operand).is_some() => {
-                let load = self.cell(operand).expect("a folded load");
-                let (pointer, width) = (self.pointer(self.function.instruction(load).operands[0])?, self.width(from)?);
-                let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fild", pointer, width, false, at, out);
-            }
             CastOp::SIToFP => {
                 let mut held = self.held(operand, from, at, out)?;
                 // fild reads a word, a dword or a qword.
@@ -1923,33 +1846,9 @@ impl Selector<'_, '_, '_> {
     fn cell(&self, operand: Operand) -> Option<InstId> {
         let Operand::Value(value) = operand else { return None };
         match self.function.value(value).def {
-            ValueDef::Instruction(load) if self.cells.contains(&load) => Some(load),
+            ValueDef::Instruction(load) if self.covered.contains_key(&load) => Some(load),
             _ => None,
         }
-    }
-
-    /// The conversion `value` is, if the store reading it stores it.
-    fn converted(&self, value: ValueId) -> Option<InstId> {
-        match self.function.value(value).def {
-            ValueDef::Instruction(conversion) if self.stored.contains(&conversion) => Some(conversion),
-            _ => None,
-        }
-    }
-
-    /// A conversion stored by x87 into the cell at `pointer`: `fisttp` toward
-    /// zero, `fistp` as lrint rounds, `fstp` narrowing to a float.
-    fn store_converted(&mut self, conversion: InstId, pointer: Pointer, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
-        let instruction = self.function.instruction(conversion);
-        let (name, operand) = match instruction.opcode {
-            Opcode::Cast(CastOp::FPToSI) => ("fisttp", instruction.operands[0]),
-            Opcode::Cast(CastOp::FPTrunc) => ("fstp", instruction.operands[0]),
-            _ => ("fistp", instruction.operands[0]),
-        };
-        let size = self.size(instruction.ty)?;
-        let held = self.float(operand, at, out)?;
-        let what = semantics(Operation::FloatStore, name, vec![Loc::Mem(Self::memory(pointer, size))], vec![Loc::Held(held)]);
-        out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
-        Ok(())
     }
 
     /// `into` made of a low and a high word, and dropped if only its words
@@ -2414,7 +2313,7 @@ impl Selector<'_, '_, '_> {
         }
         if let Operand::Value(value) = a
             && let ValueDef::Instruction(and) = self.function.value(value).def
-            && self.tested.contains(&and)
+            && self.covered.contains_key(&and)
         {
             let operands = self.function.instruction(and).operands.clone();
             let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));

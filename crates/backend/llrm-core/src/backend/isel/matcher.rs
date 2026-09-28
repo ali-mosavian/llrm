@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
 
-use super::{insn, insn_of, refuse, semantics, Convention, Selector, Test, Unselected, FLOAT};
+use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Selector, Test, Unselected, FLOAT};
 use crate::backend::arithmetic;
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
@@ -55,27 +55,46 @@ fn choose<E>(candidates: &[usize], groups: &[Option<usize>], mut holds: impl FnM
 
 impl Selector<'_, '_, '_> {
     pub(super) fn selected_by_pattern(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>, out: &mut Vec<Arc<Insn>>, convention: &Convention) -> Result<(), Unselected> {
+        let m = self.matched(inst, block_at, convention);
+        let candidates = self.candidates(&m);
+        let Some(chosen) = self.chosen(candidates, &m)? else { return refuse(self.function.instruction(inst).opcode.mnemonic()) };
+        self.pattern_emit(chosen, &m, out)
+    }
+
+    fn matched<'a>(&self, inst: InstId, block_at: &'a IndexMap<BlockId, i64>, convention: &'a Convention) -> Match<'a> {
         let instruction = self.function.instruction(inst);
-        let mnemonic = instruction.opcode.mnemonic();
         let mut ops = instruction.operands.clone();
-        if COMMUTATIVE.contains(&mnemonic) && matches!(ops.first(), Some(Operand::Constant(_))) {
+        if COMMUTATIVE.contains(&instruction.opcode.mnemonic()) && matches!(ops.first(), Some(Operand::Constant(_))) {
             ops.swap(0, 1);
         }
         let volatile = matches!(instruction.opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. });
-        let m = Match { inst, at: self.ats[&inst], ops, volatile, block_at, convention };
-        let features = self.features(&m);
+        Match { inst, at: self.ats[&inst], ops, volatile, block_at, convention }
+    }
+
+    /// The patterns the automaton leaves standing for `m`, in file order.
+    fn candidates(&self, m: &Match) -> &'static [usize] {
+        let features = self.features(m);
         let mut state = ROOT;
-        let candidates: &[usize] = loop {
+        loop {
             match state.map(|one| &STATES[one]) {
-                None => break &[],
-                Some(State::Leaf(patterns)) => break patterns,
+                None => return &[],
+                Some(State::Leaf(patterns)) => return patterns,
                 Some(State::Test { feature, edges, default }) => {
                     state = edges.iter().find(|(value, _)| *value == features[*feature]).map_or(*default, |&(_, next)| Some(next));
                 }
             }
-        };
-        let Some(chosen) = self.chosen(candidates, &m)? else { return refuse(mnemonic) };
-        self.pattern_emit(chosen, &m, out)
+        }
+    }
+
+    /// The cover phase at `inst`: the first covering pattern that holds
+    /// marks what it covers, which is then selected by it alone.
+    pub(super) fn covered_by_pattern(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>, convention: &Convention) {
+        let m = self.matched(inst, block_at, convention);
+        for &one in self.candidates(&m) {
+            if COVERS[one] && self.pattern_covers(one, &m) {
+                return;
+            }
+        }
     }
 
     fn chosen(&mut self, candidates: &[usize], m: &Match) -> Result<Option<usize>, Unselected> {
@@ -133,6 +152,42 @@ impl Selector<'_, '_, '_> {
     fn literal(&self, operand: Operand) -> Option<i64> {
         let width = self.width(self.type_of(operand)).ok()?;
         self.constant(operand, width)
+    }
+
+    /// Whether `operand` is of one of `kinds` and `types`.
+    fn operand_is(&self, operand: Operand, kinds: Option<&[&str]>, types: Option<&[&str]>) -> bool {
+        kinds.is_none_or(|kinds| kinds.contains(&self.kind(operand))) && types.is_none_or(|types| types.contains(&self.class(self.function.operand_type(&self.module.context, operand))))
+    }
+
+    /// The instruction defining `operand`.
+    fn definition(&self, operand: Operand) -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function.value(value).def {
+            ValueDef::Instruction(inst) => Some(inst),
+            ValueDef::Argument(_) => None,
+        }
+    }
+
+    /// Whether an instruction of one of `opcodes`, of one of `types` and
+    /// with at least `operands` operands, defines `operand`.
+    fn defines(&self, operand: Operand, opcodes: &[&str], types: Option<&[&str]>, operands: usize) -> bool {
+        self.definition(operand).is_some_and(|inst| {
+            let instruction = self.function.instruction(inst);
+            opcodes.contains(&instruction.opcode.mnemonic()) && types.is_none_or(|types| types.contains(&self.class(Some(instruction.ty)))) && instruction.operands.len() >= operands
+        })
+    }
+
+    /// Operand `index` of the instruction defining `operand`.
+    fn inner(&self, operand: Operand, index: usize) -> Operand {
+        self.function.instruction(self.definition(operand).expect("a nested instruction")).operands[index]
+    }
+
+    fn cover(&mut self, operand: Operand, root: InstId) {
+        self.covered.insert(self.definition(operand).expect("a nested instruction"), root);
+    }
+
+    fn covered_by(&self, operand: Operand, root: InstId) -> bool {
+        self.definition(operand).is_some_and(|inst| self.covered.get(&inst) == Some(&root))
     }
 
     fn emitted(&self, m: &Match, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, volatile: bool) -> Arc<Insn> {
@@ -218,6 +273,13 @@ impl Selector<'_, '_, '_> {
         Ok(Loc::Mem(Self::memory(pointer, self.size(self.accessed(m))?)))
     }
 
+    /// The cell the load defining `value` reads.
+    fn op_loaded(&mut self, _: &Match, _: &mut Vec<Arc<Insn>>, value: Operand) -> Result<Loc, Unselected> {
+        let loaded = self.function.instruction(self.definition(value).expect("a load"));
+        let pointer = self.pointer(loaded.operands[0])?;
+        Ok(Loc::Mem(Self::memory(pointer, self.size(loaded.ty)?)))
+    }
+
     /// The cell an integer load or store reaches: its register's bytes.
     fn op_access(&mut self, m: &Match, _: &mut Vec<Arc<Insn>>, pointer: Operand) -> Result<Loc, Unselected> {
         let width = self.width(self.accessed(m))?;
@@ -231,8 +293,36 @@ impl Selector<'_, '_, '_> {
     // Predicates.
 
     fn is_selected_elsewhere(&self, m: &Match) -> bool {
-        let inst = m.inst;
-        self.cells.contains(&inst) || self.stored.contains(&inst) || self.tested.contains(&inst) || self.consumed.contains(&inst)
+        self.covered.contains_key(&m.inst) || self.consumed.contains(&m.inst)
+    }
+
+    /// Whether `value` is read once, by the root, in its block.
+    fn is_only_reader(&self, m: &Match, value: Operand) -> bool {
+        matches!(value, Operand::Value(value) if self.only_reader(value, m.inst))
+    }
+
+    fn is_nonvolatile(&self, _: &Match, load: Operand) -> bool {
+        self.definition(load).is_some_and(|inst| matches!(self.function.instruction(inst).opcode, Opcode::Load { volatile: false, .. }))
+    }
+
+    /// Whether nothing may write memory between the load defining `value`
+    /// and where the root is made: beside the branch, for a fused compare.
+    fn is_unwritten(&self, m: &Match, value: Operand) -> bool {
+        let Some(load) = self.definition(value) else { return false };
+        let Some(block) = self.function.parent(m.inst) else { return false };
+        let at = if self.fused.contains(&m.inst) { self.function.terminator(block).expect("a terminator") } else { m.inst };
+        self.unwritten(load, at)
+    }
+
+    /// Whether `value` is what the float comparison compares second, as
+    /// its row in FLOAT_CONDITIONS orders the operands.
+    fn is_compared_second(&self, m: &Match, value: Operand) -> bool {
+        let Opcode::FCmp(predicate) = *self.opcode(m) else { return false };
+        float_conditions(predicate).is_some_and(|(swapped, _)| m.ops[usize::from(!swapped)] == value)
+    }
+
+    fn is_lrint(&self, _: &Match, call: Operand) -> bool {
+        self.definition(call).is_some_and(|inst| self.lrint(inst))
     }
 
     fn is_narrowed(&self, m: &Match) -> bool {
@@ -241,10 +331,6 @@ impl Selector<'_, '_, '_> {
 
     fn is_volatile(&self, m: &Match) -> bool {
         m.volatile
-    }
-
-    fn is_converted(&self, _: &Match, value: Operand) -> bool {
-        matches!(value, Operand::Value(value) if self.converted(value).is_some())
     }
 
     fn is_fused(&self, m: &Match) -> bool {
@@ -328,13 +414,6 @@ impl Selector<'_, '_, '_> {
         self.width(instruction.ty)?;
         self.width(self.type_of(instruction.operands[0]))?;
         refuse(instruction.opcode.mnemonic())
-    }
-
-    fn hook_store_converted(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, value: Operand, pointer: Operand) -> Result<(), Unselected> {
-        let Operand::Value(value) = value else { unreachable!("a converted value") };
-        let conversion = self.converted(value).expect("a stored conversion");
-        let pointer = self.pointer(pointer)?;
-        self.store_converted(conversion, pointer, m.volatile, m.at, out)
     }
 
     /// A dword load read only as words: each word loaded once.

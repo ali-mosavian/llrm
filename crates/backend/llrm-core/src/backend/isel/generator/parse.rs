@@ -35,6 +35,15 @@ pub struct OperandPattern {
     pub types: Option<Vec<String>>,
     /// An integer constant of exactly this value.
     pub literal: Option<i64>,
+    /// A value an instruction of this shape defines.
+    pub nested: Option<Box<Nested>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nested {
+    pub opcodes: Vec<String>,
+    pub result: Option<Vec<String>>,
+    pub operands: Vec<OperandPattern>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +81,8 @@ pub struct Pattern {
     pub group: Option<String>,
     pub when: Vec<Call>,
     pub cost: Option<Call>,
+    /// Nested instructions this pattern selects in its root's place.
+    pub covers: Vec<String>,
     pub body: Vec<Step>,
 }
 
@@ -201,14 +212,51 @@ fn types(line: usize, names: Vec<String>) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+fn opcodes(lexer: &mut Lexer) -> Result<Vec<String>, String> {
+    let mut opcodes = Vec::new();
+    for name in lexer.alternatives()? {
+        if let Some((_, set)) = OPCODE_SETS.iter().find(|(set, _)| *set == name) {
+            opcodes.extend(set.iter().map(|one| one.to_string()));
+        } else if OPCODES.contains(&name.as_str()) {
+            opcodes.push(name);
+        } else {
+            return error(lexer.line, format!("no MIR opcode `{name}`"));
+        }
+    }
+    Ok(opcodes)
+}
+
+fn operands(lexer: &mut Lexer) -> Result<Vec<OperandPattern>, String> {
+    let mut out = Vec::new();
+    if lexer.eat("(") && !lexer.eat(")") {
+        loop {
+            out.push(operand(lexer)?);
+            if lexer.eat(")") {
+                break;
+            }
+            lexer.expect(",")?;
+        }
+    }
+    Ok(out)
+}
+
 fn operand(lexer: &mut Lexer) -> Result<OperandPattern, String> {
     let line = lexer.line;
-    let mut one = OperandPattern { binding: None, kinds: None, types: None, literal: None };
+    let mut one = OperandPattern { binding: None, kinds: None, types: None, literal: None, nested: None };
     if lexer.eat("#") {
         one.literal = Some(lexer.int()?);
         one.kinds = Some(vec!["int".into()]);
     } else if !lexer.eat("_") {
         one.binding = Some(lexer.name()?.to_owned());
+        if lexer.eat("=") {
+            let opcodes = opcodes(lexer)?;
+            let result = if lexer.eat(".") { Some(types(line, lexer.alternatives()?)?) } else { None };
+            let operands = operands(lexer)?;
+            one.kinds = Some(vec!["value".into()]);
+            one.types = result.clone();
+            one.nested = Some(Box::new(Nested { opcodes, result, operands }));
+            return Ok(one);
+        }
     }
     if lexer.eat(".") {
         one.types = Some(types(line, lexer.alternatives()?)?);
@@ -226,39 +274,31 @@ fn operand(lexer: &mut Lexer) -> Result<OperandPattern, String> {
 fn matched(pattern: &mut Pattern, text: &str, line: usize) -> Result<(), String> {
     let mut lexer = Lexer { text, at: 0, line };
     if !lexer.eat("*") {
-        let mut opcodes = Vec::new();
-        for name in lexer.alternatives()? {
-            if let Some((_, set)) = OPCODE_SETS.iter().find(|(set, _)| *set == name) {
-                opcodes.extend(set.iter().map(|one| one.to_string()));
-            } else if OPCODES.contains(&name.as_str()) {
-                opcodes.push(name);
-            } else {
-                return error(line, format!("no MIR opcode `{name}`"));
-            }
-        }
-        pattern.opcodes = Some(opcodes);
+        pattern.opcodes = Some(opcodes(&mut lexer)?);
     }
     if lexer.eat(".") {
         pattern.result = Some(types(line, lexer.alternatives()?)?);
     }
-    if lexer.eat("(") && !lexer.eat(")") {
-        loop {
-            pattern.operands.push(operand(&mut lexer)?);
-            if lexer.eat(")") {
-                break;
-            }
-            lexer.expect(",")?;
-        }
-    }
+    pattern.operands = operands(&mut lexer)?;
     if !lexer.done() {
         return error(line, format!("`{}` after the match", &lexer.text[lexer.at..]));
     }
-    let mut seen = Vec::new();
-    for binding in pattern.operands.iter().filter_map(|one| one.binding.as_ref()) {
-        if seen.contains(&binding) {
-            return error(line, format!("`{binding}` bound twice"));
+    fn bound<'a>(operands: &'a [OperandPattern], into: &mut Vec<&'a String>) -> Option<&'a String> {
+        for one in operands {
+            if let Some(binding) = &one.binding {
+                if into.contains(&binding) {
+                    return Some(binding);
+                }
+                into.push(binding);
+            }
+            if let Some(twice) = one.nested.as_ref().and_then(|nested| bound(&nested.operands, into)) {
+                return Some(twice);
+            }
         }
-        seen.push(binding);
+        None
+    }
+    if let Some(twice) = bound(&pattern.operands, &mut Vec::new()) {
+        return error(line, format!("`{twice}` bound twice"));
     }
     Ok(())
 }
@@ -328,7 +368,7 @@ fn instances(lines: &[(usize, String)], pairs: &[(String, String)]) -> Vec<Vec<(
 }
 
 fn pattern(name: &str, line: usize, lines: &[(usize, String)]) -> Result<Pattern, String> {
-    let mut pattern = Pattern { name: name.to_owned(), line, opcodes: None, result: None, operands: Vec::new(), group: None, when: Vec::new(), cost: None, body: Vec::new() };
+    let mut pattern = Pattern { name: name.to_owned(), line, opcodes: None, result: None, operands: Vec::new(), group: None, when: Vec::new(), cost: None, covers: Vec::new(), body: Vec::new() };
     let mut matches = 0;
     for (line, text) in lines {
         let line = *line;
@@ -337,6 +377,16 @@ fn pattern(name: &str, line: usize, lines: &[(usize, String)]) -> Result<Pattern
             "match" => {
                 matches += 1;
                 matched(&mut pattern, rest, line)?;
+            }
+            "cover" => {
+                let mut lexer = Lexer { text: rest, at: 0, line };
+                loop {
+                    pattern.covers.push(lexer.name()?.to_owned());
+                    if lexer.done() {
+                        break;
+                    }
+                    lexer.expect(",")?;
+                }
             }
             "group" => pattern.group = Some(Lexer { text: rest, at: 0, line }.name()?.to_owned()),
             "when" => {
@@ -365,6 +415,13 @@ fn pattern(name: &str, line: usize, lines: &[(usize, String)]) -> Result<Pattern
     }
     if pattern.body.is_empty() {
         return error(line, format!("pattern `{name}` selects nothing; say `nothing` if it means to"));
+    }
+    let nested: Vec<&String> = pattern.operands.iter().filter(|one| one.nested.is_some()).filter_map(|one| one.binding.as_ref()).collect();
+    if let Some(bad) = pattern.covers.iter().find(|one| !nested.contains(one)) {
+        return error(line, format!("pattern `{name}` covers `{bad}`, which is no instruction its match nests"));
+    }
+    if !pattern.covers.is_empty() && pattern.group.is_some() {
+        return error(line, format!("pattern `{name}` covers and competes; a cover is decided before costs are"));
     }
     if pattern.cost.is_some() != pattern.group.is_some() {
         return error(line, format!("pattern `{name}`: a group member has a cost, and only it"));
