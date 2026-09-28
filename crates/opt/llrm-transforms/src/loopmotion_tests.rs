@@ -262,3 +262,21 @@ fn test_a_call_writing_elsewhere_keeps_the_seed() {
     let after = crate::testing::summarized(&module, super::LoopMotion, true, TRIPS);
     assert!(after.contains("b3:\n  store i16 %s, ptr @acc\n"), "{after}");
 }
+
+/// savegame.c: an accumulator loop behind a long run of if/else, loops in
+/// its arms. Whether the cell holds the phi's entry value was asked once
+/// per path to the entry, 2^40 here, and llrm-c ran past 300 s.
+#[test]
+fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
+    let diamonds: String = (0..40)
+        .map(|at| {
+            let join = if at == 0 { "b0".to_owned() } else { format!("j{}", at - 1) };
+            format!("{join}:\n  br i1 %p, label %t{at}, label %e{at}\n\nt{at}:\n  br i1 %p, label %t{at}, label %j{at}\n\ne{at}:\n  br label %j{at}\n\n")
+        })
+        .collect();
+    let text = accumulator("  %p = icmp eq i16 %k, 3\n").replace("b0:\n  %p = icmp eq i16 %k, 3\n  br label %b1\n", &format!("{diamonds}j39:\n  br label %b1\n")).replace("[ 0, %b0 ]", "[ 0, %j39 ]").replace("[ 5, %b0 ]", "[ 5, %j39 ]");
+    let text = text.replace("b0:\n  br i1 %p", "b0:\n  store i16 5, ptr @acc\n  %p = icmp eq i16 %k, 3\n  br i1 %p");
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(sunk(&text, TRIPS)).unwrap());
+    assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "loopmotion ran past 20 s");
+}

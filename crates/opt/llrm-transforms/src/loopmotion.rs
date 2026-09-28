@@ -39,7 +39,7 @@ use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use llrm_support::hash::IndexMap;
+use llrm_support::hash::{HashMap, IndexMap};
 use num_bigint::BigInt;
 
 use crate::counting;
@@ -223,7 +223,7 @@ impl _Exit<'_> {
                 continue;
             }
             let from = |at: i64| incoming.iter().find(|(_, block)| cfg::id(*block) == at).expect("an arm").0;
-            if self.stored_at(reference, entry, from(entry), &[]) && self.stored_at(reference, latch, from(latch), &[]) {
+            if self.stored_at(reference, entry, from(entry)) && self.stored_at(reference, latch, from(latch)) {
                 return Ok(function.instruction(phi).result);
             }
         }
@@ -232,33 +232,54 @@ impl _Exit<'_> {
 
     /// Whether `reference` holds `expected` as block `at` ends, on every
     /// path into it.
-    fn stored_at(&mut self, reference: &MemRef, at: i64, expected: Operand, active: &[(i64, Operand)]) -> bool {
+    fn stored_at(&mut self, reference: &MemRef, at: i64, expected: Operand) -> bool {
+        self.stored_on(reference, at, expected, &[], &mut HashMap::default()).0
+    }
+
+    /// `stored_at`, and the shallowest query on the path it assumed true,
+    /// as Tarjan's lowlink. A block's answer is asked once, or a run of
+    /// if/else is 2^n paths: a false one is final, and so is a true one
+    /// assuming nothing shallower than itself.
+    fn stored_on(&mut self, reference: &MemRef, at: i64, expected: Operand, active: &[(i64, Operand)], known: &mut HashMap<(i64, Operand), bool>) -> (bool, usize) {
         let key = (at, expected);
-        if active.contains(&key) {
-            return true; // inductive backedge; every entry path still needs a matching store
+        if let Some(depth) = active.iter().position(|one| *one == key) {
+            return (true, depth); // inductive backedge; every entry path still needs a matching store
         }
+        if let Some(&answer) = known.get(&key) {
+            return (answer, usize::MAX);
+        }
+        let (answer, lowest) = self.stored_in(reference, at, expected, active, known);
+        if !answer || lowest >= active.len() {
+            known.insert(key, answer);
+            return (answer, usize::MAX);
+        }
+        (answer, lowest)
+    }
+
+    fn stored_in(&mut self, reference: &MemRef, at: i64, expected: Operand, active: &[(i64, Operand)], known: &mut HashMap<(i64, Operand), bool>) -> (bool, usize) {
+        let key = (at, expected);
         let unit = self.unit;
         let function = unit.function;
         let block = cfg::block(at);
         for &inst in operations(function, block).iter().rev() {
             let op = function.instruction(inst);
-            let Some(writes) = self.accesses.stored(function, inst) else { return false };
+            let Some(writes) = self.accesses.stored(function, inst) else { return (false, usize::MAX) };
             let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
             if !writes.iter().any(overlaps) {
                 continue;
             }
-            let (Opcode::Store { volatile: false, .. }, Some(written)) = (&op.opcode, self.accesses.references.get(&inst)) else { return false };
+            let (Opcode::Store { volatile: false, .. }, Some(written)) = (&op.opcode, self.accesses.references.get(&inst)) else { return (false, usize::MAX) };
             if let Some(wanted) = _known(unit, expected) {
                 let fact = consts::initialized(unit, inst, reference).or_else(|| self.after(inst, reference));
                 if fact == Some(wanted) {
-                    return true;
+                    return (true, usize::MAX);
                 }
             }
-            return _same_cell(reference, written) && op.operands[0] == expected;
+            return (_same_cell(reference, written) && op.operands[0] == expected, usize::MAX);
         }
         let parents = self.predecessors.get(&at).cloned().unwrap_or_default();
         if at == self.entry || parents.is_empty() {
-            return false;
+            return (false, usize::MAX);
         }
         let phi = match expected {
             Operand::Value(value) => edges::phis(function, block).into_iter().find(|&phi| function.instruction(phi).result == Some(value)),
@@ -266,14 +287,18 @@ impl _Exit<'_> {
         };
         let incoming = phi.map(|phi| arms(function, phi));
         if incoming.as_ref().is_some_and(|incoming| incoming.iter().map(|(_, from)| cfg::id(*from)).collect::<BTreeSet<_>>() != parents) {
-            return false;
+            return (false, usize::MAX);
         }
         let mut active = active.to_vec();
         active.push(key);
-        parents.into_iter().all(|parent| {
+        let mut lowest = usize::MAX;
+        let answer = parents.into_iter().all(|parent| {
             let next = incoming.as_ref().map_or(expected, |incoming| incoming.iter().find(|(_, from)| cfg::id(*from) == parent).expect("an arm per parent").0);
-            self.stored_at(reference, parent, next, &active)
-        })
+            let (answer, low) = self.stored_on(reference, parent, next, &active, known);
+            lowest = lowest.min(low);
+            answer
+        });
+        (answer, lowest)
     }
 
     /// What memory says `reference` holds once `inst` has run.
