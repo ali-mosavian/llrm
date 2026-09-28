@@ -1025,17 +1025,16 @@ impl<'a, 't> Body<'a, 't> {
             ("CGInteger" | "CGInt64", [value, type_]) => {
                 let value: BigInt = value.trim().parse().map_err(|_| Unsupported(format!("not an integer: {value}")))?;
                 let ty = self.ty(type_)?;
+                let wrapped = |width: i64| (value & ((BigInt::from(1) << (width * 8)) - BigInt::from(1))).to_u64().expect("a wrapped integer fits") as i64;
                 match self.types.shape(ty) {
-                    Shape::Int(width, _) => {
-                        let wrapped: BigInt = value & ((BigInt::from(1) << (width * 8)) - BigInt::from(1));
-                        let wrapped = wrapped.to_u64().expect("a wrapped integer fits") as i64;
-                        Got::Value(self.constant(ty, Number::Int(wrapped)))
+                    Shape::Int(width, _) => Got::Value(self.constant(ty, Number::Int(wrapped(width)))),
+                    // A pointer constant is an integer as wide: a far one segment:offset.
+                    Shape::Pointer(width) => {
+                        let int = self.types.int(width, false);
+                        let value = self.constant(int, Number::Int(wrapped(width)));
+                        Got::Value(self.converted(value, &format!("TY_UINT_{width}"), type_)?)
                     }
-                    _ => {
-                        let word = self.types.int(2, false);
-                        let value = self.constant(word, Number::Int(value.to_i64().unwrap_or(0)));
-                        Got::Value(self.converted(value, "TY_UINT_2", type_)?)
-                    }
+                    other => return self.refuse(format!("an integer constant as {other:?}")),
                 }
             }
             ("CGFloat", [text, type_]) if is_float(type_) => {
