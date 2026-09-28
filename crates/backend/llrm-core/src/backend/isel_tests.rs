@@ -2657,3 +2657,25 @@ done:
     let doubled = |line: &&String| line.split_once(' ').is_some_and(|(op, rest)| op == "add" && rest.split(", ").collect::<Vec<_>>().windows(2).any(|pair| pair[0] == pair[1]));
     assert!(!got.iter().any(|line| doubled(&line) || line.starts_with("shl e") || line.starts_with("lea ")), "{got:?}");
 }
+
+/// qbdemo's PLASMA, array-merged: the video segment, a constant spilled
+/// where every selector is taken, was rematerialized at its store inside
+/// the pixel loop, `push 0A000h / pop ds` every trip.
+#[test]
+fn test_a_constant_selector_is_loaded_outside_the_loop_that_uses_it() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/mir/plasma.ll")).unwrap();
+    let got = listing(&text, "PLASMA");
+    let video = |line: &String| line.contains("-24576") || line.contains("40960") || line.contains("0A000h");
+    let loops: Vec<(usize, usize)> = got
+        .iter()
+        .enumerate()
+        .filter_map(|(bottom, line)| {
+            let target = line.split_whitespace().nth(1).filter(|_| line.starts_with('j'))?;
+            Some((got[..bottom].iter().position(|one| *one == format!("{target}:"))?, bottom))
+        })
+        .collect();
+    for (top, bottom) in &loops {
+        let innermost = !loops.iter().any(|(other, below)| (other, below) != (top, bottom) && top <= other && below <= bottom);
+        assert!(!innermost || !got[*top..*bottom].iter().any(video), "{:#?}", &got[*top..=*bottom]);
+    }
+}
