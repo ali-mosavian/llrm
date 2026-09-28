@@ -44,5 +44,5 @@ Peephole rules and the Nib grammar wait until these land.
   one decision automaton per group over `x86.instr`. `constants` (a
   register-contents dataflow) and `tested` (moves an instruction across a
   block edge) are not window rewrites and stay code, as do the passes the
-  task left out. `isel/combined.rs` is the old route's and waits for its
-  deletion.
+  task left out. `isel/combined.rs`'s passes run
+  on pre-allocation LIR and wait for use-count guards.
