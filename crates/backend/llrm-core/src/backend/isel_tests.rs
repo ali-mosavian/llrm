@@ -887,30 +887,30 @@ small:
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 36",
+            "sub sp, 32",
             "L1_0:",
             "mov ax, word ptr [bp+6]",
             "mov word ptr [bp-2], ax",
             "fild word ptr [bp-2]",
-            "fst qword ptr [bp-10]",
-            "push dword ptr [bp-6]",
-            "push dword ptr [bp-10]",
-            "fstp qword ptr [bp-18]",
-            "push dword ptr [bp-14]",
-            "push dword ptr [bp-18]",
+            "fst qword ptr [bp-8]",
+            "push dword ptr [bp-4]",
+            "push dword ptr [bp-8]",
+            "fst qword ptr [bp-16]",
+            "push dword ptr [bp-12]",
+            "push dword ptr [bp-16]",
+            "fstp qword ptr [bp-24]",
             "call far ptr scale",
             "add sp, 16",
-            "fst dword ptr [bp-22]",
-            "fld dword ptr [bp-22]",
+            "fst dword ptr [bp-4]",
+            "fld dword ptr [bp-4]",
             "fst dword ptr out",
-            "fstp dword ptr [bp-26]",
-            "push dword ptr [bp-26]",
-            "fstp qword ptr [bp-36]",
+            "fstp dword ptr [bp-4]",
+            "push dword ptr [bp-4]",
+            "fstp qword ptr [bp-32]",
             "call far ptr show",
-            "fld qword ptr [bp-36]",
-            "fild word ptr [bp-2]",
-            "fld st(1)",
-            "fcompp",
+            "fld qword ptr [bp-32]",
+            "fld st(0)",
+            "fcomp qword ptr [bp-24]",
             "fnstsw ax",
             "sahf",
             "ja L1_8",
@@ -920,8 +920,8 @@ small:
             "leave",
             "retf",
             "L1_8:",
-            "fistp word ptr [bp-28]",
-            "mov ax, word ptr [bp-28]",
+            "fistp word ptr [bp-2]",
+            "mov ax, word ptr [bp-2]",
             "leave",
             "retf",
         ]
@@ -968,22 +968,22 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 10",
+            "sub sp, 8",
             "L0_0:",
-            "fnstcw word ptr [bp-8]",
-            "mov ax, word ptr [bp-8]",
+            "fnstcw word ptr [bp-6]",
+            "mov ax, word ptr [bp-6]",
             "or ax, 3072",
-            "mov word ptr [bp-10], ax",
+            "mov word ptr [bp-8], ax",
             "fld qword ptr [bp+6]",
             "fld st(0)",
-            "fldcw word ptr [bp-10]",
+            "fldcw word ptr [bp-8]",
             "fistp word ptr [bp-2]",
-            "fldcw word ptr [bp-8]",
+            "fldcw word ptr [bp-6]",
             "mov ax, word ptr [bp-2]",
-            "fldcw word ptr [bp-10]",
-            "fistp dword ptr [bp-6]",
             "fldcw word ptr [bp-8]",
-            "add ax, word ptr [bp-6]",
+            "fistp dword ptr [bp-4]",
+            "fldcw word ptr [bp-6]",
+            "add ax, word ptr [bp-4]",
             "leave",
             "retf",
         ]
@@ -2831,4 +2831,22 @@ b2:
             assert!(!(status && writes_ax(one)), "{one} between fnstsw and sahf:\n{got:#?}");
         }
     }
+}
+
+/// A stack temporary lives within the instruction that made it: qcport's
+/// ai_pain took a fresh 8-byte cell for every double it passed, 60 bytes of
+/// frame where one cell served them all.
+#[test]
+fn test_stack_temporaries_share_one_cell() {
+    let text = "declare void @g(double) addrspace(1)
+define void @f(double %a, double %b) addrspace(1) {
+  %x = fadd double %a, %b
+  call addrspace(1) void @g(double %x)
+  %y = fmul double %a, %b
+  call addrspace(1) void @g(double %y)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one == "sub sp, 8"), "{got:#?}");
 }
