@@ -254,6 +254,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-omf",
+ "llrm-peepgen",
  "llrm-qbruntime",
  "llrm-support",
  "llrm-transforms",
@@ -307,6 +308,16 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "llrm-support",
+]
+
+[[package]]
+name = "llrm-peepgen"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "serde",
+ "toml",
 ]
 
 [[package]]
