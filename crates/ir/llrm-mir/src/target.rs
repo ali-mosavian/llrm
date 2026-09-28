@@ -30,6 +30,12 @@ pub trait Machine {
     fn load_may_trap(&self, _width: u64, _align: u64) -> bool {
         true
     }
+
+    /// Whether an I/O access to a port in the inclusive range `ports` may
+    /// read or write memory. By default any may.
+    fn port_touches_memory(&self, _ports: (i64, i64)) -> bool {
+        true
+    }
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.

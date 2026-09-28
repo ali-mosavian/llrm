@@ -279,7 +279,7 @@ Unknown readers and live flag dependencies retain the original computation.
 ```mermaid
 flowchart LR
     In["raised MirBody"] --> Split["split packed far dereferences<br/>into offset + selector SSA"]
-    Split --> SROA["sroa"] --> Fold["fold"] --> Decide["decide"] --> LoopSimplify["loopsimplify"]
+    Split --> SROA["sroa"] --> Fold["fold"] --> Ports["ports"] --> Decide["decide"] --> LoopSimplify["loopsimplify"]
     LoopSimplify --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> DS["drop_stores"]
     DS --> GVN["gvn<br/>scalar + memory PRE<br/>divide reuse"] --> Promote["promote"]
     Promote --> Strength["strength"] --> Algebraic["algebraic"]
@@ -299,6 +299,7 @@ Pass responsibilities are intentionally narrow:
 | --- | --- | --- |
 | Structural memory form | `split_pointers`, `sroa` | Which address operands and aggregate leaves are independently optimizable SSA values? |
 | Scalar simplification | `fold`, `decide`, `algebraic`, `dead` | What value or control edge is already determined? |
+| Target facts | `ports` | What may a port call do to memory, as `dos.toml` describes its device? Also run over every body before the pipeline. |
 | Memory/value reuse | `drop_stores`, `gvn`, `promote` | Can existing data replace work here? |
 | Loop optimization | `hoist`, `strength`, `unroll`, `lcssa` | What can leave, stride through, duplicate around, or cross the exit of a loop? |
 | Placement in program order | `place` | Where may a surviving definition execute without changing meaning? |

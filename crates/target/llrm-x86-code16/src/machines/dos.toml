@@ -48,9 +48,156 @@ name = "system BIOS ROM and the HMA FFFF:FFFF reaches, where DOS=HIGH keeps DOS"
 low = 0xF0000
 high = 0x10FFF0
 
-# I/O ports a write to changes no memory. The VGA DAC: PEL mask, read
-# index, write index, data; the palette is mapped at no address.
-[[silent_ports]]
-name = "VGA DAC"
-low = 0x3C6
-high = 0x3CA
+# I/O ports [low, high), and what an `in` or `out` of one may do to memory:
+# "none", device registers only; "dma", start a transfer that reads or
+# writes any memory. An unlisted port may read and write any memory.
+# A register that changes what a VRAM access does, as the map mask or a
+# bank select, acts only on VGA memory, which is foreign above.
+# Sources: Ralf Brown's Interrupt List, PORTS.A and PORTS.B, by entry.
+
+# PORTS.A "0000-001F - DMA 1".
+[[ports]]
+name = "8237 DMA controller 1"
+low = 0x000
+high = 0x020
+memory = "dma"
+
+# PORTS.A "0020-003F - PIC 1"; 22h up are chipset configuration.
+[[ports]]
+name = "8259 PIC 1"
+low = 0x020
+high = 0x022
+memory = "none"
+
+# PORTS.A "0040-005F - PIT".
+[[ports]]
+name = "8253/8254 PIT"
+low = 0x040
+high = 0x044
+memory = "none"
+
+# PORTS.A "0060-006F - KEYBOARD CONTROLLER"; its A20 gate only changes what FFFF:xxxx, foreign, reaches.
+[[ports]]
+name = "keyboard controller and system control port B"
+low = 0x060
+high = 0x065
+memory = "none"
+
+# PORTS.A "0070-007F - CMOS RAM/RTC".
+[[ports]]
+name = "CMOS RAM and RTC"
+low = 0x070
+high = 0x072
+memory = "none"
+
+# PORTS.A "0080-008F - DMA PAGE REGISTERS".
+[[ports]]
+name = "DMA page registers"
+low = 0x080
+high = 0x090
+memory = "dma"
+
+# PORTS.A "00A0-00AF - PIC 2".
+[[ports]]
+name = "8259 PIC 2"
+low = 0x0A0
+high = 0x0A2
+memory = "none"
+
+# PORTS.A "00C0-00DF - DMA 2".
+[[ports]]
+name = "8237 DMA controller 2"
+low = 0x0C0
+high = 0x0E0
+memory = "dma"
+
+# PORTS.B "0200-020F - Game port"; 208h up are EMS page registers on some chipsets.
+[[ports]]
+name = "game port"
+low = 0x201
+high = 0x202
+memory = "none"
+
+# PORTS.B "0220-022F - Soundblaster PRO".
+[[ports]]
+name = "Sound Blaster: the DSP starts DMA"
+low = 0x220
+high = 0x230
+memory = "dma"
+
+# PORTS.B "0278-027A - PARALLEL PRINTER PORT".
+[[ports]]
+name = "LPT"
+low = 0x278
+high = 0x27B
+memory = "none"
+
+# PORTS.B "02F8-02FF - serial port".
+[[ports]]
+name = "COM2"
+low = 0x2F8
+high = 0x300
+memory = "none"
+
+# PORTS.B "0370-0377 - FDC 2".
+[[ports]]
+name = "floppy controller 2"
+low = 0x370
+high = 0x378
+memory = "dma"
+
+# PORTS.B "0378-037A - PARALLEL PRINTER PORT".
+[[ports]]
+name = "LPT"
+low = 0x378
+high = 0x37B
+memory = "none"
+
+# PORTS.B "0388-0389 - AdLib".
+[[ports]]
+name = "AdLib FM"
+low = 0x388
+high = 0x38A
+memory = "none"
+
+# PORTS.B "03B0-03BF - MDA", "03BC-03BF - PARALLEL PRINTER PORT", "03BF - Hercules".
+[[ports]]
+name = "MDA, Hercules and VGA monochrome CRTC, status, LPT"
+low = 0x3B0
+high = 0x3C0
+memory = "none"
+
+# PORTS.B "03C0-03C1", "03C2-03CF", "03C4-03C5", "03C6-03C9", "03CA-03CD", "03CE-03CF".
+[[ports]]
+name = "VGA attribute, miscellaneous, sequencer, DAC, graphics controller"
+low = 0x3C0
+high = 0x3D0
+memory = "none"
+
+# PORTS.B "03D0-03D3", "03D4-03D5", "03D6-03D7", "03D8-03DF".
+[[ports]]
+name = "CGA and VGA colour CRTC, mode and status"
+low = 0x3D0
+high = 0x3E0
+memory = "none"
+
+# PORTS.B "03E8-03EF - serial port".
+[[ports]]
+name = "COM3"
+low = 0x3E8
+high = 0x3F0
+memory = "none"
+
+# PORTS.B "03F0-03F7 - FDC 1".
+[[ports]]
+name = "floppy controller 1"
+low = 0x3F0
+high = 0x3F8
+memory = "dma"
+
+# PORTS.B "03F8-03FF - Serial port".
+[[ports]]
+name = "COM1"
+low = 0x3F8
+high = 0x400
+memory = "none"

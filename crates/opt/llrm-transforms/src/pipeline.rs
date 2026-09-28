@@ -37,7 +37,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, peel,
-    promote, rotate, strength, unroll, unswitch,
+    ports, promote, rotate, strength, unroll, unswitch,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -164,6 +164,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // CFG pass asks what is constant, redundant, or loop invariant.
         Box::new(promote::Sroa),
         Box::new(fold::Fold),
+        // Before anything asks what a port call does to memory.
+        Box::new(ports::Ports),
         Box::new(decide::Decide),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
@@ -222,6 +224,11 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.require_program::<ProgramSummaries>();
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
+    // Over every body first, so a caller's pipeline sees each callee's
+    // port calls narrowed.
+    if applied.options.wanted("ports") {
+        manager.add(ports::Ports);
+    }
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.

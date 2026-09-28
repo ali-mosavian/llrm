@@ -1758,9 +1758,14 @@ fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
 
 /// The listing of `name`'s loop around its POKE: its label through its back edge.
 fn poke_loop(text: &str, name: &str) -> String {
+    loop_around(text, name, |line| line.contains("mov") && line.contains("byte ptr") && line.contains(":["))
+}
+
+/// The loop in `name` around the first line `marks`.
+fn loop_around(text: &str, name: &str, marks: impl Fn(&str) -> bool) -> String {
     let function = between(text, &format!("{name} proc"), &format!("{name} endp"));
     let lines = function.lines().collect::<Vec<_>>();
-    let store = lines.iter().position(|line| line.contains("mov") && line.contains("byte ptr") && line.contains(":[")).expect("the POKE");
+    let store = lines.iter().position(|line| marks(line)).expect("the marked line");
     let top = lines[..store].iter().rposition(|line| line.ends_with(':')).expect("the loop's label");
     let label = lines[top].trim_end_matches(':');
     let bottom = store + lines[store..].iter().position(|line| line.trim_start().starts_with('j') && line.ends_with(label)).expect("the back edge");
@@ -1792,6 +1797,26 @@ FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\
     );
     let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
     assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
+}
+
+/// `t`'s loop: OUT to `port` a shared element plus the counter.
+fn out_loop(port: &str) -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = format!("DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n");
+    let source = written(&directory, "T.BAS", text.as_bytes());
+    loop_around(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
+}
+
+/// An OUT to the VGA DAC reaches no memory, so the shared element it
+/// writes stays in a register; one to the 8237's mode register may start
+/// a DMA transfer, which OUT counted as never writing memory, so the
+/// element was never reloaded after it.
+#[test]
+fn test_an_out_reloads_memory_only_where_its_device_may_reach_it() {
+    let vga = out_loop("&H3C9");
+    assert!(!vga.contains("YY%"), "{vga}");
+    let dma = out_loop("&HB");
+    assert!(dma.contains("YY%"), "{dma}");
 }
 
 /// qbdemo's PLASMA scaled its masked `fuh` index with an `add` per pixel:
