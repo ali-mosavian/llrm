@@ -302,6 +302,8 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         halves: BTreeSet::new(),
         folded: BTreeSet::new(),
         depth: 0,
+        allocas: 0,
+        scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
         covered: IndexMap::default(),
@@ -367,6 +369,11 @@ struct Selector<'m, 'c, 'p> {
     /// Products an address's scale took, made only where something else reads them.
     folded: BTreeSet<u32>,
     depth: i64,
+    /// Where the allocas end, below which the stack temporaries go.
+    allocas: i64,
+    /// The temporaries' bytes the instruction being selected has taken:
+    /// a temporary lives only within the instruction that made it.
+    scratch: i64,
     ats: IndexMap<InstId, i64>,
     /// Comparisons a branch reads as flags, made beside it.
     fused: BTreeSet<InstId>,
@@ -487,6 +494,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.private = crate::model::mir::outside(&reach);
+        self.allocas = self.depth;
         if self.zeroed {
             let prezeroed = self.prezeroed();
             self.consumed.extend(prezeroed);
@@ -634,9 +642,11 @@ impl Selector<'_, '_, '_> {
                     break;
                 }
                 let start = insns.len();
+                self.scratch = 0;
                 self.instruction(inst, &block_at, &mut insns, convention)?;
                 insns.splice(start..start, std::mem::take(&mut self.materialized));
             }
+            self.scratch = 0;
             let terminator = function.terminator(block).expect("a terminator");
             if function.instruction(terminator).opcode == Opcode::Switch || self.merges.contains_key(&terminator) {
                 continue;
@@ -2483,8 +2493,9 @@ impl Selector<'_, '_, '_> {
 
     /// A fresh frame cell of `size` bytes, as a DAG's stack temporary.
     fn temporary(&mut self, size: i64) -> Pointer {
-        self.depth += size + size % 2;
-        Pointer::Frame { disp: -self.depth, index: None, scale: 1 }
+        self.scratch += size + size % 2;
+        self.depth = self.depth.max(self.allocas + self.scratch);
+        Pointer::Frame { disp: -(self.allocas + self.scratch), index: None, scale: 1 }
     }
 
     /// A float's `size` bytes stored to a stack temporary, where a push or
