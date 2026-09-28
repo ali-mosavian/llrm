@@ -598,6 +598,53 @@ pub struct Routine {
     pub writes_cells: IndexMap<&'static str, Vec<String>>,
     /// How a typed source call to it is described.
     pub call: Option<Call>,
+    pub ends_module: bool,
+    pub requires: Option<Requires>,
+}
+
+/// A symbol a call makes the object reference, by one argument's constant value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Requires {
+    pub argument: usize,
+    pub values: Vec<(String, Vec<i64>)>,
+    pub none: Vec<i64>,
+    pub otherwise: String,
+}
+
+impl Requires {
+    /// The symbol a call whose argument is `value` requires; None for a non-constant.
+    pub fn symbol(&self, value: Option<i64>) -> Option<&str> {
+        let Some(value) = value else { return Some(&self.otherwise) };
+        if self.none.contains(&value) {
+            return None;
+        }
+        Some(self.values.iter().find(|(_, values)| values.contains(&value)).map_or(&self.otherwise, |(symbol, _)| symbol))
+    }
+
+    fn parse(name: &str, table: &toml::Table) -> Result<Requires, String> {
+        let at = |key: &str| format!("{name}.requires.{key}");
+        let field = |key: &str| table.get(key).ok_or_else(|| format!("{} is missing", at(key)));
+        let integers = |value: &toml::Value, at: &str| -> Result<Vec<i64>, String> {
+            value.as_array().ok_or_else(|| format!("{at} is not a list"))?.iter().map(|one| integer(one, at)).collect()
+        };
+        if let Some(key) = table.keys().find(|key| !["argument", "values", "none", "otherwise"].contains(&key.as_str())) {
+            return Err(format!("{} is not a requires field", at(key)));
+        }
+        Ok(Requires {
+            argument: usize::try_from(integer(field("argument")?, &at("argument"))?).map_err(|_| format!("{} is negative", at("argument")))?,
+            values: field("values")?
+                .as_table()
+                .ok_or_else(|| format!("{} is not a table", at("values")))?
+                .iter()
+                .map(|(symbol, values)| Ok((symbol.clone(), integers(values, &at("values"))?)))
+                .collect::<Result<_, String>>()?,
+            none: match table.get("none") {
+                Some(none) => integers(none, &at("none"))?,
+                None => Vec::new(),
+            },
+            otherwise: string(field("otherwise")?, &at("otherwise"))?.to_owned(),
+        })
+    }
 }
 
 /// The stack bytes a `Call` matches.
@@ -809,6 +856,8 @@ pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
                 "never_returns" => routine.never_returns = boolean(value, &at)?,
                 "error_funnel" => routine.error_funnel = Some(regs(value, &at)?),
                 "by_value" => routine.by_value = boolean(value, &at)?,
+                "ends_module" => routine.ends_module = boolean(value, &at)?,
+                "requires" => routine.requires = Some(Requires::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
                 "call" => routine.call = Some(call(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?, audits)?),
                 "writes_cells" => {
                     for (of, cells) in value.as_table().ok_or_else(|| format!("{at} is not a table"))? {
@@ -893,6 +942,16 @@ pub fn call_registers(routine: &str) -> Option<(Vec<Reg>, Vec<Reg>)> {
     let call = RUNTIME.get(routine)?.call.as_ref()?;
     let results = call.results.clone()?;
     Some((SLOTS.into_iter().filter(|one| call.inputs.contains(one)).collect(), results))
+}
+
+/// The routine a BASIC module body's fallthrough calls: the table's `ends_module`.
+pub fn module_end() -> &'static str {
+    RUNTIME.iter().find(|(_, routine)| routine.ends_module).map(|(name, _)| name.as_str()).expect("runtime.toml names the module end")
+}
+
+/// What a call to `routine` makes the object reference, where the table says.
+pub fn requires(routine: &str) -> Option<&'static Requires> {
+    RUNTIME.get(routine)?.requires.as_ref()
 }
 
 /// Whether a runtime entry never comes back to its caller: an established
@@ -1484,6 +1543,7 @@ mod tests {
             "[\"B$X\"]\nfrom = \"B$Y.vbdos\"\n",
             "[\"B$X\".call]\npushed = \"odd\"\n",
             "[\"B$X\".call]\npushed = 2\naudit = \"nowhere\"\n",
+            "[\"B$X\".requires]\nargument = 1\nvalues = {}\n",
         ] {
             assert!(load(text).is_err(), "{text}");
         }
