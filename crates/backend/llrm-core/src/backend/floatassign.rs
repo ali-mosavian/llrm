@@ -959,7 +959,7 @@ fn _aliased(body: &LirBody) -> LirBody {
 /// Values a block reads from a cell nothing writes before their last
 /// reader: GCC's memory equivalence, read again rather than kept.
 fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
-    let (_, live_out) = live(body);
+    let (live_in, live_out) = live(body);
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in one.defines.iter().filter(|value| floating.contains(value)) {
@@ -973,7 +973,13 @@ fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
                 continue;
             }
             let Some(Loc::Held(result)) = one.what.as_ref().and_then(|what| what.dests.first()) else { continue };
-            if live_out[&block.at].contains(&result.value) || defined.get(&result.value) != Some(&1) {
+            if defined.get(&result.value) != Some(&1) {
+                continue;
+            }
+            if live_out[&block.at].contains(&result.value) {
+                if _rereadable_across(body, block, position, result.value, &live_in) {
+                    homes.insert(result.value, Arc::clone(one));
+                }
                 continue;
             }
             let reads: VecDeque<i64> = block.insns[position + 1..]
@@ -990,6 +996,35 @@ fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
         }
     }
     homes
+}
+
+/// Whether the load at `position` of `block`, whose value leaves the block,
+/// may be read again wherever the value is read: a cell named by constants
+/// alone, which nothing in the body writes, and which no instruction that
+/// can raise precedes a read of, on any block the value is live in.
+fn _rereadable_across(body: &LirBody, block: &LirBlock, position: usize, value: u32, live_in: &Live) -> bool {
+    let load = &block.insns[position];
+    if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || load.volatile() {
+        return false;
+    }
+    let cell = cell_of(load);
+    if !_stable(cell) || cell.base.is_some() || cell.index.is_some() || cell.selector.is_some() {
+        return false;
+    }
+    // As the integer spiller asks it: in a sealed body only the frame's own
+    // stores reach an incoming argument's cell.
+    let written = |one: &Insn| crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
+    if body.blocks.iter().flat_map(|one| &one.insns).any(|one| !Arc::ptr_eq(one, load) && written(one)) {
+        return false;
+    }
+    let what = load.what.as_ref().expect("checked above");
+    if name_is(what, "fild") || cell.width == 10 {
+        return true;
+    }
+    let reads = |one: &Insn| one.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&value));
+    let quiet_until_read = |insns: &[Arc<Insn>]| insns.iter().take_while(|one| !reads(one)).all(|one| !_may_raise(one));
+    quiet_until_read(&block.insns[position + 1..])
+        && body.blocks.iter().filter(|one| live_in[&one.at].contains(&value)).all(|one| quiet_until_read(&one.insns))
 }
 
 impl Plan<'_> {
