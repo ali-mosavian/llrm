@@ -24,8 +24,7 @@ a small driver (8,200 test lines).
 
 ## Found on the way
 
-- No non-test users: `copyprop`, `copysink`, `machinecse`, `spillforward`,
-  `storecombine`; qbruntime's `_print` and `_read`.
+- No non-test users: qbruntime's `_print` and `_read` (since removed).
 - The commutative set is written out seven times and the pure set in several
   forms, and they already disagree. Description 4 exists mainly to end that.
 - `consts.rs`'s `ARITH` shift entries are unreachable and hard-wired to 32 bits.
