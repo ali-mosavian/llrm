@@ -95,7 +95,9 @@ fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<MemoryObject> {
         }
         let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) else { continue };
         let Some(provenance) = reference.provenance.clone().or_else(|| pointers.reference(unit, &reference)) else { continue };
-        if !(MemRef { provenance: Some(provenance.clone()), ..reference }).named() {
+        // As `avail::dead_stores` asks it: of the access itself, not of what
+        // points-to resolves. A variable index into a local is not a name.
+        if !reference.named() {
             published.extend(provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown));
         }
     }
