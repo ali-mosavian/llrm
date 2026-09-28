@@ -287,6 +287,18 @@ fn folds(hold: &Hold) -> &[(usize, usize, i64)] {
     }
 }
 
+/// `one` no longer naming the values in `gone`, which dropped reloads defined.
+fn unread(one: &Arc<Insn>, gone: &BTreeSet<u32>) -> Arc<Insn> {
+    if !one.uses.iter().chain(one.requires.iter().map(|(held, _)| &held.value)).any(|value| gone.contains(value)) {
+        return Arc::clone(one);
+    }
+    Arc::new(Insn {
+        uses: one.uses.iter().copied().filter(|value| !gone.contains(value)).collect(),
+        requires: one.requires.iter().copied().filter(|(held, _)| !gone.contains(&held.value)).collect(),
+        ..(**one).clone()
+    })
+}
+
 fn made(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
     let what = Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) };
     Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
@@ -615,15 +627,9 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
                         let what = insn.what.as_ref().expect("a plain reader");
                         let swap = |place: &Loc| if plain_word(place, *root) { home.clone() } else { place.clone() };
                         let what = Semantics { sources: what.sources.iter().map(swap).collect(), ..what.clone() };
-                        let reader = Insn {
-                            what: Some(what),
-                            uses: insn.uses.iter().copied().filter(|value| !gone.contains(value)).collect(),
-                            requires: insn.requires.iter().copied().filter(|(held, _)| !gone.contains(&held.value)).collect(),
-                            ..(**insn).clone()
-                        };
-                        insns.push(rewritten(&Arc::new(reader), &homes));
+                        insns.push(rewritten(&unread(&Arc::new(Insn { what: Some(what), ..(**insn).clone() }), &gone), &homes));
                     }
-                    None => insns.push(rewritten(insn, &homes)),
+                    None => insns.push(rewritten(&unread(insn, &gone), &homes)),
                 }
             }
             blocks[index[at]] = block.with_insns(insns);
@@ -675,4 +681,72 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         taken.extend(one.body.iter().copied());
     }
     body.with_blocks(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    use iced_x86::Register;
+
+    use super::{cell, made, promoted};
+    use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    fn reg(register: Register) -> Loc {
+        Loc::Reg(Reg { register, width: 2 })
+    }
+
+    fn with(one: Arc<Insn>, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
+        Arc::new(Insn { defines, uses, ..(*one).clone() })
+    }
+
+    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+        LirBlock { succ, ..LirBlock::new(at, insns) }
+    }
+
+    /// qbdemo's PLASMA once DS stopped being a selector: a slot's reload in
+    /// a loop was folded into the register made its home, and an empty
+    /// marker after it still named the reload's value. Verification refused
+    /// "value#255 is read but never defined".
+    #[test]
+    fn test_a_dropped_reload_leaves_no_reader_of_its_value() {
+        let one = Imm { value: 1, width: 2, address: None };
+        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())]);
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(
+                    0x10,
+                    vec![
+                        bump(0x10, Register::BX),
+                        bump(0x11, Register::DX),
+                        bump(0x12, Register::DI),
+                        with(made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(-4))]), vec![5], vec![]),
+                        with(Arc::new(Insn::new(0x13, Some((0x13, 0x13)), Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }), vec![], vec![])), vec![], vec![5]),
+                        with(made(0x14, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), reg(Register::SI)]), vec![], vec![5]),
+                        with(made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(-4))]), vec![6], vec![]),
+                        with(made(0x15, Operation::Binary, "add", vec![reg(Register::BX)], vec![reg(Register::BX), reg(Register::SI)]), vec![], vec![6]),
+                        bump(0x15, Register::CX),
+                        Arc::new(Insn::new(0x16, Some((0x16, 0x17)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                    ],
+                    vec![0x10, 0x20],
+                ),
+                block(0x20, vec![made(0x20, Operation::Move, "mov", vec![Loc::Reg(Reg { register: Register::ESI, width: 4 })], vec![Loc::Imm(Imm { width: 4, ..one.clone() })]), made(0x21, Operation::Return, "ret", vec![], vec![])], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
+        let out = promoted(&body, &BTreeSet::from([-4]), costs, 2);
+        let reloads = |body: &LirBody| body.insns().iter().filter(|one| one.defines.contains(&5)).count();
+        assert_eq!(reloads(&body), 1);
+        assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
+        let said = crate::backend::verify::verify(&out, false);
+        assert!(said.is_empty(), "{said:?}");
+    }
 }
