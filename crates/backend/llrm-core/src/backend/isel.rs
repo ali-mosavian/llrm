@@ -1763,8 +1763,17 @@ impl Selector<'_, '_, '_> {
                 (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
                     let offset = self.held(operand, from, at, out)?;
                     let selector = self.fresh_held(2);
-                    let (space, index) = crate::hir::lower::DGROUP;
-                    out.push(mov(selector, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })));
+                    // A frame object is in the stack's segment, which need not be DGROUP.
+                    let (base, _) = llrm_mir::valuetracking::underlying(&self.module.context, &self.layout, self.function, operand);
+                    let framed = matches!(base, Operand::Value(value) if matches!(self.function.value(value).def,
+                        ValueDef::Instruction(def) if matches!(self.function.instruction(def).opcode, Opcode::Alloca { .. })));
+                    let segment = if framed {
+                        Loc::Reg(Reg { register: Register::SS, width: 2 })
+                    } else {
+                        let (space, index) = crate::hir::lower::DGROUP;
+                        Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
+                    };
+                    out.push(mov(selector, segment));
                     (Some(offset), selector)
                 }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),

@@ -1330,6 +1330,20 @@ mod tests {
         assert!(!body.iter().any(through_stack), "{body:#?}");
     }
 
+    /// qcport's savegame.c passes stack locals as far pointers. Their segment
+    /// was DGROUP, wrong wherever the stack is not in it, as dsp.asm's IRQ
+    /// stack is not.
+    #[test]
+    fn test_a_far_pointer_to_a_local_is_in_the_stack_segment() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/localfar.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "localfar", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_caller proc").expect("_caller");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert!(!body.iter().any(|one| one.contains("DGROUP")) && body.iter().any(|one| one.ends_with("ss")), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
