@@ -26,6 +26,12 @@
 #   by_value       its stack arguments are values, not caller pointers
 #   writes_cells   per family, the runtime cells a program names by EXTDEF
 #                  that it writes, where the runtime source settles it
+#   ends_module    a BASIC module body's fallthrough calls it, and every
+#                  module references it
+#   requires       a symbol a call to it makes the object reference, chosen
+#                  by the constant value of one argument: `values` maps each
+#                  symbol to its values, `none` needs nothing, `otherwise`
+#                  answers any other value or a non-constant argument
 # A table named `PREFIX*` gives its facts to every routine with that prefix.
 
 # How a typed source call to a routine is described: its `call` table.
@@ -171,6 +177,7 @@ rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exception
 '''
 
 ["B$CENP"]
+ends_module = true
 calls_program = true
 cleanup = 0
 control = "never"
@@ -1620,6 +1627,16 @@ VBDCL10E.LIB pr0a.asm 0055: PUSH BP / MOV BP,SP; reads channel at [bp+6], calls 
 ["B$CHOU".call]
 pushed = 2
 audit = "output"
+
+# BC references a mode-specific public for a constant SCREEN mode and
+# B$GRPUSED for an expression. The reference is a linker switch, not a call:
+# without it B$CSCN is present but has no device implementation and reports
+# BASIC error 5.
+["B$CSCN".requires]
+argument = 1
+values = { "B$CGAUSED" = [1, 2], "B$HRCUSED" = [3], "B$OLIUSED" = [4], "B$EGAUSED" = [7, 8, 9, 10], "B$VGAUSED" = [11, 12, 13] }
+none = [0]
+otherwise = "B$GRPUSED"
 
 ["B$CSCN".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
