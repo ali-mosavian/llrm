@@ -1109,43 +1109,28 @@ pub(crate) fn _alias_annotated(
         .map_err(|error| EmissionError(error).into())
 }
 
-#[allow(non_snake_case)]
-fn _SCREEN_DRIVER(mode: i64) -> Option<&'static str> {
-    Some(match mode {
-        1 | 2 => "B$CGAUSED",
-        3 => "B$HRCUSED",
-        4 => "B$OLIUSED",
-        7..=10 => "B$EGAUSED",
-        11..=13 => "B$VGAUSED",
-        _ => return None,
-    })
-}
-
-/// Name the runtime graphics modules selected by source SCREEN calls.
-///
-/// Microsoft BC emits a reference to a mode-specific public for a constant
-/// mode and B$GRPUSED for an expression.  The reference is a linker switch,
-/// not a call: without it B$CSCN is present but has no device implementation
-/// and reports BASIC error 5.
-fn _graphics_dependencies(module: &model::Module) -> BTreeSet<String> {
+/// The symbols the module's runtime calls make it reference beside the
+/// routines themselves, as the runtime description's `requires` says: a
+/// linker switch, not a call.
+fn _required_symbols(module: &model::Module) -> BTreeSet<String> {
     let mut required: BTreeSet<String> = BTreeSet::new();
     for function in &module.functions {
         for block in &function.blocks {
             for instruction in &block.instructions {
-                if instruction.op != model::Op::Call || instruction.callee.as_deref() != Some("B$CSCN") {
+                if instruction.op != model::Op::Call {
                     continue;
                 }
-                let model::Operand::Constant(mode) = &instruction.operands[1] else {
-                    required.insert("B$GRPUSED".to_owned());
+                let Some(requires) = instruction.callee.as_deref().and_then(llrm_core::abi::runtime::requires) else {
                     continue;
                 };
-                let number = match mode.value {
-                    model::Number::Int(one) => one,
-                    model::Number::Float(one) => one.trunc() as i64,
+                let value = match instruction.operands.get(requires.argument) {
+                    Some(model::Operand::Constant(constant)) => Some(match constant.value {
+                        model::Number::Int(one) => one,
+                        model::Number::Float(one) => one.trunc() as i64,
+                    }),
+                    _ => None,
                 };
-                if number != 0 {
-                    required.insert(_SCREEN_DRIVER(number).unwrap_or("B$GRPUSED").to_owned());
-                }
+                required.extend(requires.symbol(value).map(str::to_owned));
             }
         }
     }
@@ -1297,7 +1282,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
     }
     let rows = (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
     let read_data = _read_data_items(module, rows)?;
-    let graphics = _graphics_dependencies(module);
+    let graphics = _required_symbols(module);
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
@@ -1387,7 +1372,7 @@ pub fn assembled_by(
         return rich_assembled(program, codegen);
     }
     let module = &program.modules[0];
-    let graphics = _graphics_dependencies(module);
+    let graphics = _required_symbols(module);
     let functions: Vec<&model::Function> = module.functions.iter().collect();
     let semantic = hir::lower::lower(program).map_err(|error| CompileError::Value(error.0))?;
     if semantic.len() != functions.len() {
@@ -1477,8 +1462,8 @@ pub fn assembled_by(
             let (framed, runtime_frame) =
                 _runtime_frame(&final_body, reserve, program.runtime, _temporary_string_slots(module, function))?;
             final_body = framed;
+            referenced_calls.extend(runtime_frame.values().map(|callee| callee.name.clone()));
             callees.extend(runtime_frame);
-            referenced_calls.extend(["B$ENRA".to_owned(), "B$EXSA".to_owned()]);
         } else {
             // A module body normally has no frame in BC output.  When our
             // allocator needs spill space, however, a merely native BP frame
@@ -1491,7 +1476,7 @@ pub fn assembled_by(
             let initialize;
             if reserve != 0 {
                 (final_body, initialize) = _runtime_frame(&final_body, reserve, program.runtime, 0)?;
-                referenced_calls.extend(["B$ENRA".to_owned(), "B$EXSA".to_owned()]);
+                referenced_calls.extend(initialize.values().map(|callee| callee.name.clone()));
             } else {
                 (final_body, initialize) = _initialize_frame(&final_body, reserve)?;
             }
@@ -1505,7 +1490,7 @@ pub fn assembled_by(
             let exits;
             (final_body, exits) = basic::ends_program(&final_body);
             callees.extend(exits);
-            referenced_calls.insert("B$CENP".to_owned());
+            referenced_calls.insert(llrm_core::abi::runtime::module_end().to_owned());
         }
         let final_body = _drop_resume_successors(&final_body, &machined.calls);
         let procedure_number = procedures.len();
