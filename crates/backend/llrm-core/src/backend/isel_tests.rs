@@ -2850,3 +2850,21 @@ define void @f(double %a, double %b) addrspace(1) {
     let got = listing(text, "f");
     assert!(got.iter().any(|one| one == "sub sp, 8"), "{got:#?}");
 }
+
+/// A far pointer passed as a long, as qcport's qgl calls take
+/// `(long) (void far *) &local`: its words were joined into a dword register
+/// (movzx, movzx, shl, or: 13 bytes) only to push it. Its words are pushed.
+#[test]
+fn test_a_joined_dword_is_pushed_as_its_words() {
+    let text = "@v = internal global i16 0
+declare void @g(i32) addrspace(1)
+define void @f() addrspace(1) {
+  %p = addrspacecast ptr @v to ptr addrspace(1)
+  %n = ptrtoint ptr addrspace(1) %p to i32
+  call addrspace(1) void @g(i32 %n)
+  ret void
+}
+";
+    let got = listing(text, "f");
+    assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.starts_with("push e")), "{got:#?}");
+}
