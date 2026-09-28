@@ -1395,6 +1395,22 @@ mod tests {
         assert!(far.is_empty(), "{far:#?}");
     }
 
+    /// A frame object passed to a call is read by it. DSE took it for
+    /// private and dropped every store before the call that `test` did not
+    /// read back itself: QCport's ls_selftest returned -2.
+    #[test]
+    fn test_stores_a_callee_reads_through_its_argument_stay() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/argread.cgs")).unwrap();
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let built = super::selected(&text, "argread", None, &options).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_test proc").expect("_test");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let calls: Vec<usize> = body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
+        let stored = body[calls[0]..calls[1]].iter().filter(|one| one.starts_with("mov") && one.contains("ptr [bp-")).count();
+        assert_eq!(stored, 5, "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

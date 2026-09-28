@@ -28,7 +28,7 @@ use std::borrow::Cow;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::Function;
+use llrm_mir::module::{Function, Operand};
 use llrm_mir::passes::{Analyses, Analysis};
 
 use crate::alias::PointsTo;
@@ -82,9 +82,17 @@ impl Analysis for Published {
 /// what its provenance holds, the old `observers` rule for an access
 /// through a pointer. A slot read back through its address kept in memory
 /// is not private to its name.
+///
+/// So is what a call may read through an argument: `nocapture` keeps the
+/// address from escaping, not the callee from reading it during the call.
 fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<MemoryObject> {
     let mut published = BTreeSet::new();
     for (_, inst) in unit.function.walk() {
+        for argument in crate::alias::read_arguments(unit, inst) {
+            let Operand::Value(value) = argument else { continue };
+            let passed = pointers.values.get(&value).into_iter().flat_map(|provenance| provenance.slices.iter());
+            published.extend(passed.map(|one| one.object.clone()).filter(|one| one.kind != MemoryKind::Unknown));
+        }
         let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) else { continue };
         let Some(provenance) = reference.provenance.clone().or_else(|| pointers.reference(unit, &reference)) else { continue };
         if !(MemRef { provenance: Some(provenance.clone()), ..reference }).named() {
