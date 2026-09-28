@@ -26,7 +26,11 @@ use crate::model::passes::{Exception, LIRTransform};
 const NO_OP: &str = "'NoneType' object has no attribute 'op'";
 
 /// Settle allocated tails and edges after every machine-shaping phase.
-pub struct ControlFlow;
+/// `size`: blocks placed for short branches, at the cost of a jump on a
+/// hot path (-Os).
+pub struct ControlFlow {
+    pub size: bool,
+}
 
 impl LIRTransform for ControlFlow {
     fn class_name(&self) -> &'static str {
@@ -38,17 +42,17 @@ impl LIRTransform for ControlFlow {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        optimized(&body).map_err(|error| error.0)
+        optimized(&body, self.size).map_err(|error| error.0)
     }
 
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        Ok(optimized(&body)?)
+        Ok(optimized(&body, self.size)?)
     }
 }
 
 /// Choose the cheapest common-tail fixed point without adding hot work.
-pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    let mut candidate = placed(&_hoisted(body))?;
+pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
+    let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
@@ -74,6 +78,11 @@ pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
+    _placed(body, false)
+}
+
+/// `placed`, and where `size`, each block near what branches to it.
+fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     let mut explicit = Vec::new();
     for block in &body.blocks {
         let mut block = block.clone();
@@ -124,11 +133,12 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         }
         if current.is_none_or(|at| done.contains(&at) || !by_at.contains_key(&at)) {
             let waiting: Vec<&LirBlock> = explicit.iter().filter(|block| !done.contains(&block.at)).collect();
-            // Next to the block last placed that reaches it: a trace started
+            // For size, next to the block last placed that reaches it: a trace started
             // in source order may land far past its branch.
             let placed_at: IndexMap<i64, usize> = order.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
             let nearest = waiting
                 .iter()
+                .filter(|_| size)
                 .filter(|block| !block.cold)
                 .filter_map(|block| predecessors.get(&block.at)?.iter().filter_map(|from| placed_at.get(from)).max().map(|last| (*last, *block)))
                 .max_by_key(|(last, _)| *last)
@@ -145,10 +155,10 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
                 continue;
             }
         }
-        // A join's other arm goes just before it, once everything reaching the
+        // For size, a join's other arm goes just before it, once everything reaching the
         // arm is placed: the arm falls into the join and the placed side jumps
         // over it. Left for later, it lands after the return, both of its jumps long.
-        let arm = explicit.iter().find(|one| {
+        let arm = explicit.iter().filter(|_| size).find(|one| {
             one.at != at && !one.cold && !done.contains(&one.at) && one.succ == [at] && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
         });
         if let Some(arm) = arm {

@@ -1438,18 +1438,33 @@ mod tests {
         assert_eq!(body.iter().filter(|one| one.starts_with("fldcw")).count(), 2, "{body:#?}");
     }
 
+    /// The listing of `_diamond`, at `level` on a 486.
+    fn diamond(level: llrm_core::driver::flags::Level) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_core::driver::Options::of(machine) };
+        let built = super::selected(&text, "diamond", None, &options).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_diamond proc").expect("_diamond");
+        asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
     /// An if/else's other arm was placed after the return: in a large
     /// function its branch and its jump back were both near, 4 and 3 bytes.
     /// QCport had 1,829 near branches past a return.
     #[test]
-    fn test_both_arms_of_an_if_else_come_before_the_return() {
-        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
-        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "diamond", None, &llrm_core::driver::Options::of(machine)).expect("selects");
-        let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find("_diamond proc").expect("_diamond");
-        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+    fn test_both_arms_of_an_if_else_come_before_the_return_at_os() {
+        let body = diamond(llrm_core::driver::flags::Level::Os);
         assert!(body.last().is_some_and(|last| last.starts_with("ret")), "{body:#?}");
+    }
+
+    /// Placing the other arm before the join cost the first arm a jump
+    /// over it at every level: deedlines' marks 3 and 5 ran 0.8% slower.
+    #[test]
+    fn test_the_first_arm_falls_into_its_join_at_o2() {
+        let body = diamond(llrm_core::driver::flags::Level::O2);
+        let jumps = body.iter().filter(|one| one.starts_with("jmp")).count();
+        assert!(!body.last().is_some_and(|last| last.starts_with("ret")) && jumps == 1, "{body:#?}");
     }
 
     /// A float argument read across a call went to a fresh 8-byte slot:
