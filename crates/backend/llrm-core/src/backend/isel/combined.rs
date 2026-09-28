@@ -131,11 +131,13 @@ fn dword_pairs(mut made: IndexMap<i64, Vec<Arc<Insn>>>, uses: &IndexMap<u32, i64
         .filter(|((high, low), times)| high != low && count(uses, *high) == **times && count(uses, *low) == **times)
         .filter(|((high, low), _)| {
             let (Some((high_at, high_index, high_cell)), Some((low_at, low_index, low_cell))) = (loads.get(high), loads.get(low)) else { return false };
+            if high_at != low_at {
+                return false;
+            }
             let above = ir::Mem { addr: low_cell.addr.map(|addr| addr.plus(2)), offset: if low_cell.addr.is_some() { low_cell.offset } else { low_cell.offset + 2 }, ..low_cell.clone() };
             // Loaded together, nothing between may change either half.
             let between = &made[high_at][(*high_index).min(*low_index) + 1..(*high_index).max(*low_index)];
-            high_at == low_at
-                && *high_cell == above
+            *high_cell == above
                 && (high_cell.through, high_cell.index_through) == (low_cell.through, low_cell.index_through)
                 && between.iter().all(|one| {
                     one.what.as_ref().is_some_and(|what| {
