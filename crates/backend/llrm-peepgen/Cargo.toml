@@ -1,0 +1,12 @@
+[package]
+name = "llrm-peepgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Compiles llrm's peephole rules and instruction table into a decision-automaton matcher"
+
+[dependencies]
+iced-x86 = { workspace = true }
+indexmap = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
