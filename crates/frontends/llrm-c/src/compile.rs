@@ -1211,6 +1211,23 @@ mod tests {
         }
     }
 
+    /// qcport's sys.c, item.c and mdl_ai.c keep near and far function
+    /// pointers in static tables; the rich route refused all three with
+    /// "a code address in data".
+    #[test]
+    fn test_code_addresses_in_data_are_called_through() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/codeptrs.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "codeptrs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        assert!(lines.contains(&"dw _twice") && lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
+        let from = asm.find("_run proc").expect("_run");
+        let run: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert!(run.iter().any(|one| one.starts_with("call dword ptr [")), "{run:#?}");
+        assert!(run.iter().any(|one| one.split_whitespace().collect::<Vec<_>>() == ["call", "ax"] || one.starts_with("call word ptr [")), "{run:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]

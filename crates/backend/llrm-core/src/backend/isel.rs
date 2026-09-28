@@ -82,6 +82,12 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
+/// What a call calls: a named routine, far or near, or the code a pointer addresses.
+enum Callee {
+    Direct(String, bool),
+    Indirect(Loc),
+}
+
 /// Refuses an argument passed in the frame's own bytes: its slot would be
 /// addressable, which `sealed_arguments` denies, and the bytes are not what
 /// a push of the pointer passes.
@@ -1984,9 +1990,15 @@ impl Selector<'_, '_, '_> {
         let (callee, arguments) = instruction.operands.split_last().expect("a callee");
         // An invoke's two destinations are not arguments.
         let arguments = if matches!(instruction.opcode, Opcode::Invoke(_)) { &arguments[..arguments.len() - 2] } else { arguments };
-        let Operand::Constant(callee) = *callee else { return refuse("an indirect call") };
-        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return refuse("a call of a constant") };
-        let global = self.module.global(global);
+        let global = match *callee {
+            Operand::Constant(constant) => match self.module.context.get(constant).kind {
+                ConstantKind::Global(global) => Some(self.module.global(global)),
+                _ => None,
+            },
+            Operand::Value(_) => None,
+            Operand::Block(_) => return refuse("a call of a block"),
+        };
+        let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
         let name = global.name.clone().unwrap_or_default();
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
@@ -2011,7 +2023,34 @@ impl Selector<'_, '_, '_> {
         if let Some(declared) = global.function() {
             in_the_frame(&declared.parameter_attrs)?;
         }
-        let far = far(global)?;
+        self.called(inst, convention, Callee::Direct(name, far(global)?), arguments, at, out)
+    }
+
+    /// A call through a code pointer: near through its word, far through a
+    /// stack temporary holding offset then selector, the only operand
+    /// `call m16:16` has.
+    fn indirect(&mut self, inst: InstId, convention: u32, callee: Operand, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let ty = self.function.operand_type(&self.module.context, callee).expect("a typed callee");
+        let target = if self.is_far(ty) {
+            let (offset, selector) = self.far(callee, at, out)?;
+            let cell = self.temporary(4);
+            for (held, by) in [(offset, 0), (selector, 2)] {
+                out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 2))], vec![Loc::Held(held)])));
+            }
+            Loc::Mem(Self::memory(cell, 4))
+        } else {
+            Loc::Held(self.held(callee, ty, at, out)?)
+        };
+        self.called(inst, convention, Callee::Indirect(target), arguments, at, out)
+    }
+
+    fn called(&mut self, inst: InstId, convention: u32, callee: Callee, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let name = match &callee {
+            Callee::Direct(name, _) => name.clone(),
+            Callee::Indirect(_) => String::new(),
+        };
         let Passing { in_order, pops } = passing(convention)?;
         // The arguments the ABI passes in registers are the call's last.
         let registers = self.abi.registers(&name).unwrap_or_default();
@@ -2138,7 +2177,16 @@ impl Selector<'_, '_, '_> {
                 ref registers => delivers = vec![(held, registers[0])],
             }
         }
-        let what = semantics(Operation::Call, "call", vec![], vec![]);
+        let (what, through) = match &callee {
+            Callee::Direct(..) => (semantics(Operation::Call, "call", vec![], vec![]), None),
+            Callee::Indirect(target) => {
+                let through = match target {
+                    Loc::Held(held) => Some(held.value),
+                    _ => None,
+                };
+                (Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![target.clone()]) }, through)
+            }
+        };
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             op: Some(self.listed(at, effects)),
@@ -2146,7 +2194,7 @@ impl Selector<'_, '_, '_> {
             clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
-            uses: requires.iter().map(|(held, _)| held.value).collect(),
+            uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),
             requires,
             ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
         }));
@@ -2154,9 +2202,11 @@ impl Selector<'_, '_, '_> {
         if let Some(held) = float {
             out.push(insn(at, semantics(Operation::FloatLoad, "", vec![Loc::Held(held)], vec![])));
         }
-        self.calls.insert(at, name);
-        if far {
-            self.far.insert(at);
+        if let Callee::Direct(name, far) = callee {
+            self.calls.insert(at, name);
+            if far {
+                self.far.insert(at);
+            }
         }
         if contract.caller_cleanup > 0 {
             let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
