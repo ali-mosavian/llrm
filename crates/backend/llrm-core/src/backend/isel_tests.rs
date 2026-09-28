@@ -821,27 +821,24 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 4",
             "push si",
             "L0_0:",
-            "les si, dword ptr [bp+6]",
             "mov bx, word ptr [bp+10]",
             "add bx, bx",
+            "les si, dword ptr [bp+6]",
             "mov ax, word ptr es:[bx+si]",
-            "mov word ptr es:[si+4], ax",
-            "mov word ptr [bp-4], si",
-            "mov bx, es",
-            "mov word ptr [bp-2], bx",
+            "mov bx, word ptr [bp+6]",
+            "mov word ptr es:[bx+4], ax",
             "push ax",
             "pushw DGROUP",
             "push offset buf",
             "call take",
             "add sp, 6",
-            "mov ax, word ptr [bp-4]",
+            "mov ax, word ptr [bp+6]",
             "add ax, 4",
-            "mov dx, word ptr [bp-2]",
+            "mov dx, word ptr [bp+8]",
             "pop si",
-            "leave",
+            "pop bp",
             "retf",
         ]
     );
@@ -2893,3 +2890,31 @@ done:
     let got = listing(text, "f");
     assert!(!got.iter().any(|one| one.starts_with("movzx") || one.starts_with("shl") || one.contains(" e")), "{got:#?}");
 }
+
+/// A parameter live across calls and stores through pointers is reloaded
+/// from its own argument cell, which no pointer reaches: qcport's
+/// savegame_load copied every parameter into a frame slot first, 608 copies
+/// over QCport, each read far from bp.
+#[test]
+fn test_a_parameter_spills_to_its_own_argument_cell() {
+    let text = "declare void @g(i16) addrspace(1)
+define void @f(i16 %a, i16 %b, i16 %c, i16 %d, ptr %p) addrspace(1) {
+  call addrspace(1) void @g(i16 1)
+  store i16 7, ptr %p
+  call addrspace(1) void @g(i16 %a)
+  call addrspace(1) void @g(i16 %b)
+  call addrspace(1) void @g(i16 %c)
+  call addrspace(1) void @g(i16 %d)
+  call addrspace(1) void @g(i16 %a)
+  call addrspace(1) void @g(i16 %b)
+  call addrspace(1) void @g(i16 %c)
+  call addrspace(1) void @g(i16 %d)
+  ret void
+}
+";
+    let got = assembled_by(&borland(), &crate::backend::target::BUILT_IN, "386", text);
+    let from = got.find("f proc").expect("f");
+    let body: Vec<&str> = got[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+    assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:#?}");
+}
+
